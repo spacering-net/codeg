@@ -720,6 +720,49 @@ describe("ConfigSyncSettings — a remote snapshot this machine has not seen", (
     expect(screen.getByRole("alert")).toBeInTheDocument()
   })
 
+  /// The confirmation is for the snapshot it names. A background status
+  /// event that reports a different one while the dialog is open must not
+  /// turn the click into an overwrite of that other snapshot.
+  it("confirms the snapshot it showed, not one reported while it was open", async () => {
+    vi.mocked(getConfigSyncState).mockResolvedValue({
+      lastUploadedSha256: null,
+      lastUploadedTarget: null,
+      lastSyncAt: null,
+      lastError: null,
+      conflict,
+    })
+    vi.mocked(uploadConfigNow).mockResolvedValueOnce({
+      uploaded: false,
+      sha256: "local",
+      counts: {},
+      syncedAt: "",
+      conflict: { ...conflict, sha256: "newer", sourceDevice: "home-pc" },
+    })
+    await renderLoaded()
+    fireEvent.click(screen.getByRole("button", { name: t.conflictOverwrite }))
+    const confirm = await screen.findByRole("button", {
+      name: t.overwriteConfirmAction,
+    })
+    act(() => {
+      statusHandler?.({
+        lastSyncAt: null,
+        lastError: null,
+        conflict: { ...conflict, sha256: "newer", sourceDevice: "home-pc" },
+      })
+    })
+    // The open dialog still names what the user was asked about.
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(/work-laptop/)
+    fireEvent.click(confirm)
+    await waitFor(() =>
+      expect(uploadConfigNow).toHaveBeenLastCalledWith({
+        overwriteRemoteSha256: "remote-sha",
+      })
+    )
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(t.conflictChanged)
+    )
+  })
+
   it("shows the background uploader holding back, and restoring clears it", async () => {
     await renderLoaded()
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()

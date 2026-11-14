@@ -96,6 +96,9 @@ export async function mirrorAppearanceNow(): Promise<void> {
   }
 }
 
+/** What `<ThemeProvider enableSystem>` accepts (next-themes' default list). */
+const THEME_MODES = new Set(["light", "dark", "system"])
+
 const MIRROR_DELAY_MS = 1000
 let mirrorTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -121,6 +124,11 @@ export function mirrorAppearanceOnLaunch(): void {
  * `null` = drop the key.
  */
 function clean(key: string, value: string): string | null {
+  if (key === "theme") {
+    // next-themes puts this straight into the root element's class list; a
+    // value with a space in it throws there, on every launch after.
+    return THEME_MODES.has(value) ? value : null
+  }
   if (key === "codeg-custom-css") {
     if (value === "") return value
     return sanitizeCustomCss(value).css

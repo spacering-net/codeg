@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const env = vi.hoisted(() => ({ localDesktop: false }))
-const call = vi.hoisted(() => vi.fn(async () => null))
+const call = vi.hoisted(() =>
+  vi.fn<(command: string, args?: unknown) => Promise<null>>(async () => null)
+)
 
 vi.mock("@/lib/platform", async () => {
   const actual =

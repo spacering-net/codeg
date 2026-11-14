@@ -191,7 +191,12 @@ export function ConfigSyncSettings() {
   /** The remote holds a snapshot this machine has not seen, so uploads are
    *  held back until the user restores it or chooses to replace it. */
   const [conflict, setConflict] = useState<RemoteConflict | null>(null)
-  const [overwriteOpen, setOverwriteOpen] = useState(false)
+  /** The snapshot the open overwrite confirmation names. Fixed when the
+   *  dialog opens: a status event that replaces `conflict` meanwhile must not
+   *  quietly change what the user is about to confirm. */
+  const [overwriteTarget, setOverwriteTarget] = useState<RemoteConflict | null>(
+    null
+  )
 
   const [busy, setBusy] = useState<
     | null
@@ -437,7 +442,7 @@ export function ConfigSyncSettings() {
       if (!mounted.current) return
       if (outcome.conflict) {
         setConflict(outcome.conflict)
-        setOverwriteOpen(true)
+        setOverwriteTarget(outcome.conflict)
         return
       }
       setConflict(null)
@@ -456,9 +461,9 @@ export function ConfigSyncSettings() {
   /** Replace exactly the snapshot the user was shown. If another machine
    *  has replaced it in the meantime, that is a new decision, not this one. */
   const handleConfirmOverwrite = useCallback(async () => {
-    if (!conflict) return
-    const named = conflict.sha256
-    setOverwriteOpen(false)
+    if (!overwriteTarget) return
+    const named = overwriteTarget.sha256
+    setOverwriteTarget(null)
     setBusy("upload")
     try {
       const outcome = await uploadConfigNow({ overwriteRemoteSha256: named })
@@ -479,7 +484,7 @@ export function ConfigSyncSettings() {
     } finally {
       if (mounted.current) setBusy(null)
     }
-  }, [conflict, localize, t])
+  }, [overwriteTarget, localize, t])
 
   /** Look before overwriting: the confirmation names the machine and time the
    *  remote snapshot came from. */
@@ -614,6 +619,11 @@ export function ConfigSyncSettings() {
   const conflictDevice = conflict?.sourceDevice ?? t("conflictUnknownDevice")
   const conflictTime =
     formatTimestamp(conflict?.createdAt ?? null) ?? t("rollbackUnknownTime")
+  const overwriteDevice =
+    overwriteTarget?.sourceDevice ?? t("conflictUnknownDevice")
+  const overwriteTime =
+    formatTimestamp(overwriteTarget?.createdAt ?? null) ??
+    t("rollbackUnknownTime")
   // Only the hosted services need a setup note; "custom" has nothing to say.
   const presetHint = preset === "custom" ? null : t(`presetHint.${preset}`)
   const remoteBusy = busy === "upload" || busy === "download"
@@ -1094,7 +1104,7 @@ export function ConfigSyncSettings() {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setOverwriteOpen(true)}
+                    onClick={() => setOverwriteTarget(conflict)}
                     disabled={busy !== null}
                   >
                     {t("conflictOverwrite")}
@@ -1216,14 +1226,19 @@ export function ConfigSyncSettings() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={overwriteOpen} onOpenChange={setOverwriteOpen}>
+      <AlertDialog
+        open={overwriteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setOverwriteTarget(null)
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{t("overwriteConfirmTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
               {t("overwriteConfirmBody", {
-                device: conflictDevice,
-                time: conflictTime,
+                device: overwriteDevice,
+                time: overwriteTime,
               })}
             </AlertDialogDescription>
           </AlertDialogHeader>

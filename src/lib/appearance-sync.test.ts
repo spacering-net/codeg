@@ -112,6 +112,20 @@ describe("adoptSyncedAppearance", () => {
     )
   })
 
+  /// next-themes adds the stored mode to <html>'s class list, which throws on
+  /// a value with whitespace — on adoption and on every launch after it.
+  it("adopts only a theme mode next-themes accepts", () => {
+    window.localStorage.setItem("theme", "light")
+    for (const bad of ["dark light", "", "Dark", "<x>"]) {
+      expect(adoptSyncedAppearance({ theme: bad })).toBe(0)
+      expect(window.localStorage.getItem("theme")).toBe("light")
+    }
+    for (const good of ["dark", "system", "light"]) {
+      adoptSyncedAppearance({ theme: good })
+      expect(window.localStorage.getItem("theme")).toBe(good)
+    }
+  })
+
   it("re-checks a custom theme instead of trusting the snapshot", () => {
     adoptSyncedAppearance({ "codeg-custom-theme": "{not json" })
     expect(window.localStorage.getItem("codeg-custom-theme")).toBeNull()
