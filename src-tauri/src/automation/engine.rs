@@ -11,7 +11,7 @@
 //! - The idle sweep is NOT a hazard: an in-flight turn sits in `Prompting`, which
 //!   `sweep_idle` already skips (it only reaps `Connected`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -79,6 +79,18 @@ pub fn engine() -> Option<Arc<AutomationEngine>> {
     ENGINE.get().cloned()
 }
 
+/// A run held open for its agent's background work (see
+/// [`AutomationEngine::held`]).
+struct HeldRun {
+    /// Ends the wait early: a later turn on the connection that did not end
+    /// normally.
+    stop: CancellationToken,
+    /// The turns that ended on the connection after the held one.
+    later: turn_end_hold::LaterTurns,
+    /// The waiter is settling the run; later turns no longer change it.
+    settling: bool,
+}
+
 pub struct AutomationEngine {
     db: AppDatabase,
     manager: ConnectionManager,
@@ -94,8 +106,9 @@ pub struct AutomationEngine {
     /// (a background shell, the turn Claude Code starts on its own to read it,
     /// a delegation), held open instead of settled — settling ends the
     /// connection and the work with it (see `acp::turn_end_hold`). The hold's
-    /// waiter settles the run once that work is done.
-    held: Arc<Mutex<HashSet<String>>>,
+    /// waiter settles the run once that work is done, and drops the entry only
+    /// after that settle.
+    held: Arc<Mutex<HashMap<String, HeldRun>>>,
     /// Per-automation fire lock. Serializes the overlap-check + run-row insert (and
     /// the whole launch) so a manual run-now, a scheduled fire, and a double-click
     /// can't all pass `has_active_run` and start duplicate concurrent runs.
@@ -163,7 +176,7 @@ pub fn build_engine(
         bus,
         data_dir,
         index: Arc::new(Mutex::new(HashMap::new())),
-        held: Arc::new(Mutex::new(HashSet::new())),
+        held: Arc::new(Mutex::new(HashMap::new())),
         automation_locks: Arc::new(Mutex::new(HashMap::new())),
         root_locks: Arc::new(Mutex::new(HashMap::new())),
         _engine_lock: engine_lock,
@@ -766,8 +779,17 @@ impl AutomationEngine {
             return; // not an automation run
         };
         // A later turn on a connection already held for its agent's background
-        // work (one Grok started on its own): the waiter settles the run.
-        if self.held.lock().await.contains(&conn_id) {
+        // work (one Grok started on its own, or a prompt sent to the session):
+        // the waiter settles the run — with this turn's answer, if it is the
+        // newest, and as this turn ended, if it did not end normally.
+        if self.held.lock().await.contains_key(&conn_id) {
+            let reply = self.capture_summary(&conn_id).await;
+            let mut held = self.held.lock().await;
+            if let Some(run) = held.get_mut(&conn_id).filter(|run| !run.settling) {
+                if run.later.record(stop_reason, reply, Utc::now()) {
+                    run.stop.cancel();
+                }
+            }
             return;
         }
         let summary = self.capture_summary(&conn_id).await;
@@ -810,26 +832,37 @@ impl AutomationEngine {
             "[automation] run {run_id} turn ended with work still going; holding \
              connection={conn_id} until it finishes"
         );
-        self.held.lock().await.insert(conn_id.clone());
+        let stop = CancellationToken::new();
+        self.held.lock().await.insert(
+            conn_id.clone(),
+            HeldRun {
+                stop: stop.clone(),
+                later: turn_end_hold::LaterTurns::default(),
+                settling: false,
+            },
+        );
         let since = Utc::now();
         let engine = Arc::clone(self);
         tokio::spawn(async move {
-            let result = turn_end_hold::wait_until_settled(
-                &engine.manager,
-                &conn_id,
-                timing,
-                &CancellationToken::new(),
-            )
-            .await;
-            tracing::info!(
-                "[automation] run {run_id} hold on connection={conn_id} ended: {}",
-                result.outcome.as_str()
-            );
+            let result =
+                turn_end_hold::wait_until_settled(&engine.manager, &conn_id, timing, &stop).await;
             // Still marked held while it settles: the reconcile tick, seeing
             // the connection gone, would otherwise settle the run from the
             // conversation first, without the stop reason or the reply.
+            let later = match engine.held.lock().await.get_mut(&conn_id) {
+                Some(run) => {
+                    run.settling = true;
+                    std::mem::take(&mut run.later)
+                }
+                None => turn_end_hold::LaterTurns::default(),
+            };
+            let stop_reason = later.ended.clone().unwrap_or(stop_reason);
+            tracing::info!(
+                "[automation] run {run_id} hold on connection={conn_id} ended: {} ({stop_reason})",
+                result.outcome.as_str()
+            );
             if engine.index.lock().await.contains_key(&conn_id) {
-                let summary = match result.follow_up_reply(since) {
+                let summary = match result.latest_reply(since, &later) {
                     Some(reply) => Some(reply),
                     None => engine.capture_summary(&conn_id).await.or(summary),
                 };
@@ -924,7 +957,7 @@ impl AutomationEngine {
                 }
                 // Held for its background work: the waiter sees the connection
                 // go and settles the run itself.
-                if self.held.lock().await.contains(conn_id) {
+                if self.held.lock().await.contains_key(conn_id) {
                     continue;
                 }
                 // Connection gone but still Running: the TurnComplete can never

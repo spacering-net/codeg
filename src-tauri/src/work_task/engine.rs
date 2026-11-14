@@ -224,6 +224,9 @@ struct TurnEndHold {
     signal: Option<TurnSignal>,
     since: chrono::DateTime<chrono::Utc>,
     stop: CancellationToken,
+    /// The turns that ended on the connection after the held one — see
+    /// [`TaskEngine::on_held_turn_complete`].
+    later: turn_end_hold::LaterTurns,
     /// The waiter is settling the generation: the wait is over, and a cancel
     /// arriving now is decided by the settle's CAS like any other race with a
     /// turn's end.
@@ -3184,10 +3187,9 @@ impl TaskEngine {
         };
         // A later turn on a connection already held for its agent's background
         // work — one Grok started on its own, or a prompt someone sent the
-        // task's session meanwhile. The hold's waiter settles the generation
-        // once everything is quiet, and reads the latest answer then.
+        // task's session meanwhile. The hold's waiter settles the generation.
         if self.holds.lock().await.contains_key(conn_id) {
-            self.turn_signals.lock().await.remove(conn_id);
+            self.on_held_turn_complete(conn_id, stop_reason).await;
             return;
         }
 
@@ -3206,6 +3208,7 @@ impl TaskEngine {
                 signal,
                 since: chrono::Utc::now(),
                 stop: CancellationToken::new(),
+                later: turn_end_hold::LaterTurns::default(),
                 settling: false,
             };
             self.begin_hold(conn_id, hold, timing, probe).await;
@@ -3213,6 +3216,38 @@ impl TaskEngine {
         }
         self.finish_generation(conn_id, task_id, run_seq, stop_reason, summary, signal)
             .await;
+    }
+
+    /// A later turn ended on a connection held for its agent's background
+    /// work. Its answer and the error it reported are now the latest on the
+    /// generation, for the waiter's settle; and a turn that did not end
+    /// normally — stopped, refused, failed — ends the wait, the generation
+    /// settling as that turn ended, as it would have for the held turn itself.
+    /// Nothing changes once the waiter is settling: that settle is under way
+    /// with what it had.
+    async fn on_held_turn_complete(&self, conn_id: &str, stop_reason: &str) {
+        let reply = self.capture_summary(conn_id).await;
+        let signal = self.turn_signals.lock().await.remove(conn_id);
+        let mut holds = self.holds.lock().await;
+        let Some(hold) = holds.get_mut(conn_id).filter(|hold| !hold.settling) else {
+            return;
+        };
+        // The baseline stays the held turn's: "did this round change
+        // anything" is measured from the round's prompt.
+        if let Some(later) = signal {
+            match hold.signal.as_mut() {
+                Some(held) => held.error = later.error,
+                None => hold.signal = Some(later),
+            }
+        }
+        if hold.later.record(stop_reason, reply, chrono::Utc::now()) {
+            tracing::info!(
+                "[work_task] task {} held connection={conn_id}: a later turn ended \
+                 ({stop_reason}); settling now",
+                hold.task_id
+            );
+            hold.stop.cancel();
+        }
     }
 
     /// Whether the generation whose turn on `conn_id` just ended must be held
@@ -3310,19 +3345,25 @@ impl TaskEngine {
                     hold.summary.take(),
                     hold.signal.take(),
                     hold.since,
+                    std::mem::take(&mut hold.later),
                 )
             })
         };
-        let Some((task_id, run_seq, stop_reason, held_summary, signal, since)) = claimed else {
+        let Some((task_id, run_seq, held_stop_reason, held_summary, signal, since, later)) = claimed
+        else {
             return; // canceled: the cancel owns the teardown
         };
-        tracing::info!(
-            "[work_task] task {task_id} hold on connection={conn_id} ended: {}",
-            result.outcome.as_str()
-        );
+        // A later turn that ended otherwise than normally decides how the
+        // generation ends, and names how the wait did.
+        let stop_reason = later.ended.clone().unwrap_or(held_stop_reason);
+        let outcome = later
+            .ended
+            .as_deref()
+            .unwrap_or(result.outcome.as_str());
+        tracing::info!("[work_task] task {task_id} hold on connection={conn_id} ended: {outcome}");
         let mut payload = serde_json::json!({
             "run_seq": run_seq,
-            "outcome": result.outcome.as_str(),
+            "outcome": outcome,
             "waited_secs": (chrono::Utc::now() - since).num_seconds().max(0),
         });
         if !result.leftover().is_empty() {
@@ -3336,10 +3377,10 @@ impl TaskEngine {
             Some(payload),
         )
         .await;
-        // Newest first: what the agent answered in a turn of its own once its
-        // work finished, then the session's last prompt-turn answer (a later
-        // turn Grok started itself), then the answer the held turn ended on.
-        let summary = match result.follow_up_reply(since) {
+        // The newest answer since the hold began — from a turn the agent ran on
+        // its own once its work finished, or from a later turn on the
+        // connection — else the answer the held turn ended on.
+        let summary = match result.latest_reply(since, &later) {
             Some(reply) => Some(reply),
             None => self.capture_summary(&conn_id).await.or(held_summary),
         };
@@ -3370,11 +3411,16 @@ impl TaskEngine {
     /// interrupted — the work it was waiting on died with the old process
     /// either way. Runs before the boot reconcile, which would otherwise fail
     /// it, and does not pump the queue: that reconcile has yet to clear the
-    /// rows the pump would trip over.
+    /// rows the pump would trip over. A held merge generation only has its wait
+    /// closed here: the reconcile's merge recovery settles it from git.
     async fn settle_interrupted_holds(self: &Arc<Self>) {
         let rows = work_task_service::list_by_status(
             &self.db.conn,
-            &[WorkTaskStatus::Running, WorkTaskStatus::AwaitingInput],
+            &[
+                WorkTaskStatus::Running,
+                WorkTaskStatus::AwaitingInput,
+                WorkTaskStatus::Merging,
+            ],
         )
         .await
         .unwrap_or_default();
@@ -3392,6 +3438,9 @@ impl TaskEngine {
                 Some(serde_json::json!({ "run_seq": task.run_seq, "outcome": "interrupted" })),
             )
             .await;
+            if task.status == WorkTaskStatus::Merging {
+                continue;
+            }
             let summary = wait
                 .get("summary")
                 .and_then(|s| s.as_str())
@@ -11356,6 +11405,7 @@ mod tests {
                 signal: None,
                 since: chrono::Utc::now(),
                 stop: CancellationToken::new(),
+                later: Default::default(),
                 settling: true,
             },
         );
@@ -11389,6 +11439,75 @@ mod tests {
         settles_to(&engine, task_id, WorkTaskStatus::Review).await;
     }
 
+    /// A later turn on the held connection that is stopped ends the run the
+    /// way stopping the held turn would have: canceled, now, not into review
+    /// once the background work is done.
+    #[tokio::test]
+    async fn a_later_turn_that_is_stopped_cancels_the_held_run() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::Grok).await;
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "cancelled"))
+            .await;
+        settles_to(&engine, task_id, WorkTaskStatus::Canceled).await;
+        let ends = event_payloads(&engine, task_id, "background_wait_end").await;
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0]["outcome"], "cancelled");
+        assert_eq!(ends[0]["leftover"], serde_json::json!(["run b1"]));
+        hold_dropped(&engine).await;
+    }
+
+    /// A later turn that fails ends the run failed, with the error that turn
+    /// reported rather than the held turn's clean `end_turn`.
+    #[tokio::test]
+    async fn a_later_turn_that_fails_fails_the_held_run_with_its_error() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::Grok).await;
+        engine.turn_signals.lock().await.insert(
+            PARENT_CONN.into(),
+            TurnSignal {
+                error: Some("quota exhausted".into()),
+                baselined: false,
+                baseline: None,
+            },
+        );
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "refusal"))
+            .await;
+        settles_to(&engine, task_id, WorkTaskStatus::Failed).await;
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task");
+        assert_eq!(task.last_error.as_deref(), Some("quota exhausted"));
+    }
+
+    /// The run's result is the newest answer, whichever kind: a prompt sent
+    /// to the session during the hold answered after the agent's own report
+    /// on its background work, so that answer is the one settled on.
+    #[tokio::test]
+    async fn a_later_turns_answer_outranks_an_older_background_reply() {
+        let (engine, task_id, _rx) = turn_ends_with_a_running_shell(AgentType::ClaudeCode).await;
+        apply_live(&engine, follow_up_activity("The gate failed.")).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        {
+            let state = engine.manager.get_state(PARENT_CONN).await.expect("state");
+            state.write().await.last_assistant_text = Some("Fixed it; the gate passes now.".into());
+        }
+        engine
+            .on_event(&turn_complete_envelope(PARENT_CONN, 2, "end_turn"))
+            .await;
+        assert_eq!(status_of(&engine, task_id).await, WorkTaskStatus::Running);
+        apply_live(&engine, async_task("b1", "shell", "completed", false)).await;
+        settles_to(&engine, task_id, WorkTaskStatus::Review).await;
+        let task = work_task_service::get_model(&engine.db.conn, task_id)
+            .await
+            .expect("task");
+        assert_eq!(
+            task.result_summary.as_deref(),
+            Some("Fixed it; the gate passes now.")
+        );
+        let ends = event_payloads(&engine, task_id, "background_wait_end").await;
+        assert_eq!(ends[0]["outcome"], "drained");
+    }
+
     /// The reconcile tick leaves a held run to its waiter, which settles it
     /// with what the agent last said once it sees the connection gone — also
     /// while the waiter is settling it, the connection already let go.
@@ -11407,6 +11526,7 @@ mod tests {
                     signal: None,
                     since: chrono::Utc::now(),
                     stop: CancellationToken::new(),
+                    later: Default::default(),
                     settling,
                 },
             );
@@ -14413,6 +14533,7 @@ mod tests {
                 signal: None,
                 since: chrono::Utc::now(),
                 stop: CancellationToken::new(),
+                later: Default::default(),
                 settling: false,
             },
         );
@@ -14422,6 +14543,39 @@ mod tests {
         let task = row(&f.engine, f.task_id).await;
         assert_eq!(task.status, WorkTaskStatus::Merging, "left alone");
         assert!(f.engine.index.lock().await.contains_key(HELD_CONN));
+    }
+
+    /// A merge generation held when the process died has its wait closed at
+    /// boot like any other — its timeline must not show a wait that never
+    /// ended — but is left in `merging` for the merge recovery to settle from
+    /// git.
+    #[tokio::test]
+    async fn a_merge_hold_lost_to_a_restart_is_closed_and_left_to_recovery() {
+        let f = delivery_fixture(FakeForge::default()).await;
+        interrupt_merge(&f, "conn-of-a-held-merge", false).await;
+        let run_seq = row(&f.engine, f.task_id).await.run_seq;
+        work_task_service::record_event(
+            &f.engine.db.conn,
+            f.task_id,
+            "background_wait",
+            "engine",
+            Some(serde_json::json!({ "run_seq": run_seq, "tasks": ["run b1"] })),
+        )
+        .await
+        .expect("event");
+
+        f.engine.settle_interrupted_holds().await;
+
+        assert_eq!(row(&f.engine, f.task_id).await.status, WorkTaskStatus::Merging);
+        let ends = event_payloads(&f.engine, f.task_id, "background_wait_end").await;
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0]["outcome"], "interrupted");
+        assert!(
+            work_task_service::open_background_wait(&f.engine.db.conn, f.task_id, run_seq)
+                .await
+                .expect("query")
+                .is_none()
+        );
     }
 
     /// Retiring one generation must not disarm another. The outstanding-request
