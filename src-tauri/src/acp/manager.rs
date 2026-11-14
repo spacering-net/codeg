@@ -2484,35 +2484,72 @@ impl ConnectionManager {
 
         // Resolve the fork point BEFORE the cancellation shield below: this is
         // a read-only parse, so a caller that disappears here has changed
-        // nothing. Failing to resolve is not an error — it degrades to the tail
-        // fork rather than refusing the user's click.
+        // nothing.
+        //
+        // `resolve_fork_point`'s `Err` is REFUSED rather than quietly moved to
+        // the tail: the user picked that turn and codeg cannot honour it, and
+        // forking somewhere else while reporting success is how a branch ends
+        // up on the wrong message. That arm is `Custom(_)`-only, so this
+        // refusal cannot change a built-in agent. `Ok(None)` is the other case
+        // and stays a tail fork — the retained behaviour of the twelve built-in
+        // agents, which this change does not touch.
+        let agent_type = state_arc.read().await.agent_type;
         let fork_point = match fork_from_turn_id {
             None => None,
-            Some(turn_id) => {
-                let agent_type = state_arc.read().await.agent_type;
+            Some(ref turn_id) => {
                 match crate::commands::conversations::get_folder_conversation_core(
                     &db.conn,
                     conversation_id,
                 )
                 .await
                 {
-                    Ok((detail, _)) => {
-                        let point = crate::acp::fork::resolve_fork_point(
-                            &detail.turns,
-                            &turn_id,
-                            agent_type,
-                        );
-                        if point.is_none() {
-                            tracing::info!(
+                    Ok((detail, _)) => match crate::acp::fork::resolve_fork_point(
+                        &detail.turns,
+                        turn_id,
+                        agent_type,
+                    ) {
+                        Ok(point) => {
+                            if point.is_none() {
+                                tracing::info!(
+                                    connection_id = %conn_id,
+                                    turn_id = %turn_id,
+                                    agent = %agent_type,
+                                    "[ACP] no fork point for this turn; forking at the tail"
+                                );
+                            }
+                            point
+                        }
+                        Err(e) => {
+                            tracing::warn!(
                                 connection_id = %conn_id,
                                 turn_id = %turn_id,
                                 agent = %agent_type,
-                                "[ACP] no fork point for this turn; forking at the tail"
+                                "[ACP] refusing the fork: {e}"
                             );
+                            return Err(AcpError::Protocol(format!(
+                                "cannot fork at the selected turn: {e}"
+                            )));
                         }
-                        point
-                    }
+                    },
                     Err(e) => {
+                        // A custom agent must not fall back here either: the user
+                        // named a turn and codeg cannot even read the
+                        // conversation to look it up, so a tail fork would be a
+                        // different branch reported as success. Every built-in
+                        // agent keeps the tail fork it has always had, which is
+                        // why this is scoped by agent type and not by the error.
+                        if matches!(&agent_type, AgentType::Custom(_)) {
+                            tracing::warn!(
+                                connection_id = %conn_id,
+                                turn_id = %turn_id,
+                                agent = %agent_type,
+                                "[ACP] could not read the conversation to resolve a fork \
+                                 point ({e}); refusing the fork"
+                            );
+                            return Err(AcpError::Protocol(format!(
+                                "cannot read this conversation to locate the selected turn: {e}"
+                            )));
+                        }
                         tracing::warn!(
                             connection_id = %conn_id,
                             turn_id = %turn_id,
@@ -2524,6 +2561,54 @@ impl ConnectionManager {
                 }
             }
         };
+
+        // A custom agent can only fork at a turn its CURRENT session holds. The
+        // fork point above comes from the transcript CHAIN, which still shows
+        // the turns recorded before a failed `session/load` moved the
+        // conversation onto a new agent session: the user still reads them, but
+        // the agent does not have them any more, and naming one of their ids is
+        // answered `invalid_params: Fork point message … was not found in
+        // session …`. Refuse it HERE, where the reason can be put into words,
+        // rather than sending a point the agent cannot resolve.
+        //
+        // Refused only when codeg can PROVE the current session's transcript
+        // does not contain that id — see `session_lacks_message_id`, which
+        // answers false for every case codeg cannot tell about, so this can
+        // never refuse a fork that would have worked.
+        //
+        // Nothing is lost by refusing: ACP's fork acts on the connection's live
+        // session, so there is no way to fork at a turn that session no longer
+        // contains. Saying so is the honest answer; the tail fork this would
+        // otherwise degrade to is a different branch reported as success.
+        if let (Some(point), AgentType::Custom(_)) = (fork_point.as_ref(), &agent_type) {
+            let current_sid = state_arc.read().await.external_id.clone();
+            if let Some(current_sid) = current_sid.filter(|sid| !sid.is_empty()) {
+                if crate::acp::fork::session_lacks_message_id(
+                    agent_type,
+                    &current_sid,
+                    &point.message_id,
+                ) {
+                    tracing::warn!(
+                        connection_id = %conn_id,
+                        turn_id = %fork_from_turn_id.as_deref().unwrap_or_default(),
+                        agent = %agent_type,
+                        session_id = %current_sid,
+                        message_id = %point.message_id,
+                        "[ACP] refusing the fork: the agent's current session does not \
+                         record this message"
+                    );
+                    // Says what codeg knows and what follows from it, and stops
+                    // there: the transcript is codeg's own record, so claiming
+                    // where the turn came from would be asserting more than the
+                    // check established.
+                    return Err(AcpError::Protocol(
+                        "cannot fork at the selected turn: the agent's current session does \
+                         not record this message, so it may not be able to fork at its id"
+                            .into(),
+                    ));
+                }
+            }
+        }
 
         // Reject if a turn is already in flight. `prompt_lock` is FREE between a
         // prompt's enqueue and its `TurnComplete` (it is released the moment the

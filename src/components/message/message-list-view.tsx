@@ -232,6 +232,13 @@ interface MessageListViewProps {
    */
   onForkFromTurn?: (turnId: string) => void
   /**
+   * A fork this surface started is still running. The host's ref is the
+   * synchronous guard; this is what RENDERS, so a second activation is refused
+   * visibly instead of looking like it did nothing — which is what makes a user
+   * click again.
+   */
+  forkInFlight?: boolean
+  /**
    * The connection's work that can outlive a turn, for the "N running" chip
    * on the live activity row above the composer (see `LiveRunsChip`). Every
    * surface with a connection passes it — the conversation page, a canvas
@@ -1542,6 +1549,7 @@ export function MessageListView({
   onAskSelection,
   onSaveNoteSelection,
   onForkFromTurn,
+  forkInFlight = false,
   liveRuns = null,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
@@ -1891,7 +1899,7 @@ export function MessageListView({
                 onRoundOpenChange={handleRoundOpenChange}
                 foldEpoch={fold.epoch}
                 onForkFromTurn={onForkFromTurn}
-                forkDisabled={forkBusy}
+                forkDisabled={forkBusy || forkInFlight}
                 isThreadTail={item.isThreadTail}
               />
             </div>
@@ -1928,6 +1936,7 @@ export function MessageListView({
       handleRoundOpenChange,
       onForkFromTurn,
       forkBusy,
+      forkInFlight,
     ]
   )
 

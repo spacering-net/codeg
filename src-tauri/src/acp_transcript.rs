@@ -226,6 +226,14 @@ type AckSender = tokio::sync::oneshot::Sender<()>;
 enum PendingRecord {
     Header(TranscriptHeader),
     Entry(TranscriptEntry),
+    /// Publish a staged replay as this session's transcript.
+    ///
+    /// Not a line: it is a BARRIER. The writer dequeues it in order, so every
+    /// record queued before it is already on disk, and the "is the transcript
+    /// still header-only" test plus the rename happen at that queue position —
+    /// where nothing else can append between them. Checking anywhere else would
+    /// be a TOCTOU race with exactly the writes this is meant to protect.
+    Publish { sidecar: PathBuf },
 }
 
 impl PendingRecord {
@@ -233,6 +241,8 @@ impl PendingRecord {
         match self {
             PendingRecord::Header(h) => serde_json::to_string(h).unwrap_or_default(),
             PendingRecord::Entry(e) => serde_json::to_string(e).unwrap_or_default(),
+            // Never reaches a line: `accept` handles it before it is buffered.
+            PendingRecord::Publish { .. } => String::new(),
         }
     }
 
@@ -253,6 +263,8 @@ impl PendingRecord {
         match self {
             PendingRecord::Header(_) => true,
             PendingRecord::Entry(e) => matches!(e.k, EntryKind::Prompt | EntryKind::TurnEnd),
+            // A barrier by nature; it is never buffered anyway.
+            PendingRecord::Publish { .. } => true,
         }
     }
 }
@@ -431,6 +443,25 @@ impl SessionWriter {
         if self.poisoned {
             return; // dropping `ack` (and the guard) reports the failure
         }
+        // A publish is handled here, at its queue position, and never joins
+        // `pending`: everything queued before it is flushed first, so the replay
+        // it carries lands after the records that came before it and before any
+        // that come after. See `PendingRecord::Publish`.
+        if let PendingRecord::Publish { sidecar } = &queued.record {
+            self.flush();
+            // A flush that failed leaves this writer poisoned and its records off
+            // the disk, so publishing now would replace the transcript with a
+            // replay that is not the whole history either. Refuse, and clean up
+            // the sidecar this call took ownership of.
+            if self.poisoned {
+                let _ = std::fs::remove_file(sidecar);
+                return; // a dropped `ack` reports the refusal
+            }
+            if self.publish_sidecar(sidecar) {
+                let _ = queued.ack.send(());
+            }
+            return; // a dropped `ack` reports the refusal
+        }
         if matches!(queued.record, PendingRecord::Header(_)) && self.header_already_stands() {
             // A reconnect to the same session id. The original header carries
             // the conversation's real start time and cwd, so it wins.
@@ -464,6 +495,65 @@ impl SessionWriter {
             self.header_written = true;
         }
         stands
+    }
+
+    /// Publish a staged replay as this session's transcript.
+    ///
+    /// Runs on the writer thread, which is the only writer for this path, so the
+    /// "still header-only" test and the rename cannot be interleaved by an
+    /// append — the race a check made anywhere else would have. Refuses when the
+    /// transcript has gained entries: those belong to whoever wrote them, and
+    /// renaming over them would lose history. Either way the sidecar is gone
+    /// afterwards, because it is not a transcript.
+    fn publish_sidecar(&mut self, sidecar: &Path) -> bool {
+        if !self.path_holds_only_its_header() {
+            let _ = std::fs::remove_file(sidecar);
+            return false;
+        }
+        match std::fs::rename(sidecar, &self.path) {
+            Ok(()) => {
+                self.header_written = true;
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "[acp-transcript] could not publish {} over {} ({e})",
+                    sidecar.display(),
+                    self.path.display()
+                );
+                let _ = std::fs::remove_file(sidecar);
+                false
+            }
+        }
+    }
+
+    /// Whether the transcript still holds nothing but its header — one line, or
+    /// no file at all.
+    ///
+    /// Reads at most two lines, and answers `false` for a file it cannot read:
+    /// overwriting something codeg could not inspect is the one outcome that
+    /// loses history.
+    fn path_holds_only_its_header(&self) -> bool {
+        use std::io::BufRead as _;
+        let Ok(file) = std::fs::File::open(&self.path) else {
+            return !self.path.exists();
+        };
+        let mut reader = std::io::BufReader::new(file);
+        let mut line = String::new();
+        let mut lines = 0usize;
+        while lines < 2 {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if !line.trim().is_empty() {
+                        lines += 1;
+                    }
+                }
+                Err(_) => return false,
+            }
+        }
+        lines <= 1
     }
 
     /// When this writer next needs attention, or `None` while it holds nothing.
@@ -981,6 +1071,146 @@ pub fn append_line_in(root: &Path, agent_dir: &str, session_id: &str, line: &str
 /// Read one session's transcript. Missing file → empty transcript. Malformed
 /// lines are skipped so a single truncated write (e.g. a hard kill mid-append)
 /// cannot poison the rest of the history.
+/// A `session/load` replay being recorded beside its transcript, published only
+/// once the replay is complete.
+///
+/// Why a sidecar rather than appending to the transcript as the replay arrives:
+/// [`has_recorded_history`] reads the FILE, so anything appended directly counts
+/// as history the moment it lands. A replay that stops early — a writer stall,
+/// or the process dying mid-drain — would then leave a transcript that looks
+/// complete, is permanently short, and is ineligible for the very retry that
+/// gate exists to allow. Nothing here touches the real transcript until
+/// [`HydrationStaging::publish`], so a run that dies before then leaves it
+/// exactly as it was, and the next load hydrates it again from scratch.
+///
+/// The rename is what makes the publish atomic: on one filesystem a reader sees
+/// the transcript as it was, or the whole replay — never a prefix of it.
+pub struct HydrationStaging {
+    /// Where the replay is written while it is incomplete.
+    sidecar: PathBuf,
+    /// Where it is renamed to once it is complete.
+    target: PathBuf,
+    file: Option<std::io::BufWriter<std::fs::File>>,
+    entries: usize,
+    published: bool,
+}
+
+impl HydrationStaging {
+    /// Start staging a replay for `session_id`, headed by `header`.
+    ///
+    /// `None` when the sidecar cannot be opened; the caller reports that as a
+    /// branch opening without its history, and the transcript is untouched. A
+    /// sidecar left behind by an earlier run is truncated — it never became a
+    /// transcript, so it is stale by definition.
+    pub fn begin(agent_dir: &str, session_id: &str, header: &TranscriptHeader) -> Option<Self> {
+        Self::begin_in(
+            &crate::paths::codeg_acp_transcripts_root(),
+            agent_dir,
+            session_id,
+            header,
+        )
+    }
+
+    /// Root-injectable core of [`HydrationStaging::begin`].
+    pub fn begin_in(
+        root: &Path,
+        agent_dir: &str,
+        session_id: &str,
+        header: &TranscriptHeader,
+    ) -> Option<Self> {
+        let target = transcript_path_in(root, agent_dir, session_id)?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).ok()?;
+        }
+        let sidecar = target.with_extension("jsonl.hydrating");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&sidecar)
+            .ok()?;
+        let line = serde_json::to_string(header).ok()?;
+        let mut staging = Self {
+            sidecar,
+            target,
+            file: Some(std::io::BufWriter::new(file)),
+            entries: 0,
+            published: false,
+        };
+        staging.write_line(&line)?;
+        Some(staging)
+    }
+
+    /// Stage one replayed entry. `false` once the sidecar can no longer be
+    /// written, after which the replay must not be published.
+    pub fn push(&mut self, entry: &TranscriptEntry) -> bool {
+        let Ok(line) = serde_json::to_string(entry) else {
+            return false;
+        };
+        if self.write_line(&line).is_none() {
+            return false;
+        }
+        self.entries += 1;
+        true
+    }
+
+    /// How many entries the replay has staged.
+    pub fn entries(&self) -> usize {
+        self.entries
+    }
+
+    /// Make the staged replay this session's transcript.
+    ///
+    /// The handover goes through the session's own transcript writer rather than
+    /// renaming here: that writer is the only writer for this path, so the
+    /// "still header-only" test and the rename happen at a queue position where
+    /// no append can slip between them. Renaming here would leave exactly the
+    /// window this is meant to close.
+    ///
+    /// `None` when the replay could not be handed over at all (a sidecar that
+    /// never flushed, or an id the writer will not accept). Otherwise the
+    /// receiver reports the outcome: a dropped sender means the writer refused —
+    /// which is what happens when the transcript gained entries meanwhile.
+    pub fn publish(mut self) -> Option<tokio::sync::oneshot::Receiver<()>> {
+        use std::io::Write as _;
+        let flushed = self.file.as_mut().is_some_and(|f| f.flush().is_ok());
+        // Closed before the handover, so what lands is complete on disk.
+        self.file = None;
+        if !flushed {
+            return None;
+        }
+        // The sidecar belongs to the writer now: published or removed on
+        // refusal, either way not `Drop`'s to delete.
+        self.published = true;
+        Some(enqueue(
+            self.target.clone(),
+            PendingRecord::Publish {
+                sidecar: self.sidecar.clone(),
+            },
+        ))
+    }
+
+    fn write_line(&mut self, line: &str) -> Option<()> {
+        use std::io::Write as _;
+        let file = self.file.as_mut()?;
+        file.write_all(line.as_bytes()).ok()?;
+        file.write_all(b"\n").ok()?;
+        Some(())
+    }
+}
+
+impl Drop for HydrationStaging {
+    fn drop(&mut self) {
+        if self.published {
+            return;
+        }
+        // A replay that never published must leave nothing behind: the sidecar
+        // is not the transcript, and a leftover would be read as one.
+        self.file = None;
+        let _ = std::fs::remove_file(&self.sidecar);
+    }
+}
+
 pub fn read_transcript(agent_dir: &str, session_id: &str) -> Transcript {
     read_transcript_in(
         &crate::paths::codeg_acp_transcripts_root(),
@@ -1146,6 +1376,74 @@ pub fn has_entries_in(root: &Path, agent_dir: &str, session_id: &str) -> bool {
         !found
     });
     found
+}
+
+/// Whether this session's OWN transcript records `message_id` on an entry —
+/// the `continues_from` chain deliberately NOT followed, which is the whole
+/// point (see [`session_records_message_id_in`]).
+pub fn session_records_message_id(
+    agent_dir: &str,
+    session_id: &str,
+    message_id: &str,
+) -> Option<bool> {
+    session_records_message_id_in(
+        &crate::paths::codeg_acp_transcripts_root(),
+        agent_dir,
+        session_id,
+        message_id,
+    )
+}
+
+/// Root-injectable core of [`session_records_message_id`]: `Some(true)` present,
+/// `Some(false)` PROVEN absent (the file was read to its end), `None` unknown.
+///
+/// Reads only the session's own file, so the answer is "what the agent session
+/// this id belongs to actually recorded". A `session/load` that failed leaves
+/// the conversation running under a NEW agent session while the OLD turns stay
+/// readable through the chain — those turns are gone from the agent, and this is
+/// how a caller tells the two apart.
+///
+/// The three states exist because only one of them may refuse a fork. A file
+/// that is missing, unopenable, or stops mid-read is NOT evidence that the id is
+/// absent — it is evidence that codeg cannot tell, and a caller that read it as
+/// absence would refuse forks that would have worked. `Some(false)` is the one
+/// answer that means the file was scanned to its end.
+///
+/// A substring test on the raw line rather than a parse: the entries carry the
+/// ACP updates verbatim, so the id appears as the `messageId` field it was
+/// recorded from, and this runs on a file that can be tens of megabytes. The id
+/// is JSON-encoded into the needle, so a value carrying a quote or a backslash
+/// is searched for exactly as it was written. It errs toward "present" — a false
+/// hit costs nothing (the agent still gets the last word and answers
+/// `invalid_params`), where a false "absent" is the expensive mistake.
+pub fn session_records_message_id_in(
+    root: &Path,
+    agent_dir: &str,
+    session_id: &str,
+    message_id: &str,
+) -> Option<bool> {
+    use std::io::BufRead as _;
+    let path = transcript_path_in(root, agent_dir, session_id)?;
+    // A file codeg cannot open is unknown, never "absent".
+    let file = std::fs::File::open(&path).ok()?;
+    let encoded = serde_json::to_string(message_id).ok()?;
+    let needle = format!("\"messageId\":{encoded}");
+    let mut reader = std::io::BufReader::new(file);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            // End of file: the whole file was read and the id is not in it.
+            Ok(0) => return Some(false),
+            Ok(_) => {
+                if String::from_utf8_lossy(&buf).contains(&needle) {
+                    return Some(true);
+                }
+            }
+            // A read that fails partway proves nothing about the rest.
+            Err(_) => return None,
+        }
+    }
 }
 
 /// Bound on how far [`read_chain_in`] follows `continues_from`. One link is
@@ -1331,6 +1629,284 @@ mod tests {
             p: payload,
         })
         .unwrap()
+    }
+
+    /// The chain link is what makes this check necessary, so it is also what the
+    /// test pins: the SAME id, recorded in the parent, must NOT answer for the
+    /// child that continues from it. A fork naming that id is one the agent
+    /// answers `invalid_params` to, and this is how codeg tells beforehand.
+    #[test]
+    fn only_a_sessions_own_file_answers_for_its_message_ids() {
+        let root = temp_root();
+        append_line_in(&root, "goose", "parent", &header_line("parent"));
+        append_line_in(
+            &root,
+            "goose",
+            "parent",
+            &entry_line(
+                EntryKind::Update,
+                serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "hi"},
+                    "messageId": "42:1",
+                }),
+            ),
+        );
+        // The child continues from the parent and recorded nothing of its own —
+        // exactly the shape a failed `session/load` leaves behind.
+        let child_header = serde_json::to_string(
+            &TranscriptHeader::new("goose", "child", "/repo", 1_750_000_000_000)
+                .continuing("parent"),
+        )
+        .unwrap();
+        append_line_in(&root, "goose", "child", &child_header);
+
+        assert_eq!(
+            session_records_message_id_in(&root, "goose", "parent", "42:1"),
+            Some(true)
+        );
+        assert_eq!(
+            session_records_message_id_in(&root, "goose", "child", "42:1"),
+            Some(false),
+            "a turn the chain still shows is not in the agent's current session"
+        );
+        // No file at all is UNKNOWN, not absence — the caller must not refuse on
+        // it, or a fork that would have worked is refused for a file that simply
+        // is not there yet.
+        assert_eq!(
+            session_records_message_id_in(&root, "goose", "missing", "42:1"),
+            None
+        );
+        // A different id in the same file is a proven absence, not a hit.
+        assert_eq!(
+            session_records_message_id_in(&root, "goose", "parent", "42:2"),
+            Some(false)
+        );
+        // The needle is JSON-encoded, so a value carrying a quote is searched for
+        // as it was written rather than as a bare substring.
+        append_line_in(
+            &root,
+            "goose",
+            "parent",
+            &entry_line(
+                EntryKind::Update,
+                serde_json::json!({
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "hi"},
+                    "messageId": "we\"ird",
+                }),
+            ),
+        );
+        assert_eq!(
+            session_records_message_id_in(&root, "goose", "parent", "we\"ird"),
+            Some(true)
+        );
+    }
+
+    fn staged_entry(message_id: &str) -> TranscriptEntry {
+        TranscriptEntry {
+            t: 1_750_000_000_001,
+            k: EntryKind::Update,
+            steer: false,
+            p: serde_json::json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": "hi"},
+                "messageId": message_id,
+            }),
+        }
+    }
+
+    /// The reason staging exists: nothing a replay writes is visible as the
+    /// session's transcript until the replay is COMPLETE. A drain that dies
+    /// part-way — which is what dropping the staging stands in for — must leave
+    /// the transcript exactly as it was, so `has_recorded_history` still answers
+    /// "no history" and the next load hydrates it again from scratch instead of
+    /// inheriting a permanently short one.
+    #[test]
+    fn a_replay_becomes_the_transcript_only_when_it_is_complete() {
+        let root = temp_root();
+        // What the caller left behind: a header, and no entries.
+        append_line_in(&root, "goose", "child", &header_line("child"));
+        assert!(!has_entries_in(&root, "goose", "child"));
+
+        let header = TranscriptHeader::new("custom:goose", "child", "/repo", 1_750_000_000_000);
+        {
+            let mut staging = HydrationStaging::begin_in(&root, "goose", "child", &header).unwrap();
+            assert!(staging.push(&staged_entry("42:1")));
+            assert_eq!(staging.entries(), 1);
+            // Dropped without publishing, exactly as an interrupted drain would.
+        }
+        assert!(
+            !has_entries_in(&root, "goose", "child"),
+            "an unpublished replay must not count as history"
+        );
+        assert_eq!(
+            session_records_message_id_in(&root, "goose", "child", "42:1"),
+            Some(false)
+        );
+
+        {
+            let mut staging = HydrationStaging::begin_in(&root, "goose", "child", &header).unwrap();
+            assert!(staging.push(&staged_entry("42:1")));
+            let ack = staging.publish().expect("handed to the transcript writer");
+            assert!(
+                ack.blocking_recv().is_ok(),
+                "a clean publish is acknowledged by the writer"
+            );
+        }
+        assert!(has_entries_in(&root, "goose", "child"));
+        assert_eq!(
+            session_records_message_id_in(&root, "goose", "child", "42:1"),
+            Some(true)
+        );
+        // The header rode along in the staged file, so the branch keeps its cwd
+        // and start time as well as its turns.
+        assert_eq!(
+            read_header_in(&root, "goose", "child").map(|h| h.cwd),
+            Some("/repo".to_string())
+        );
+
+        // A transcript that gained entries while the replay was staging belongs
+        // to whoever wrote them — the reconnect ladder records through the same
+        // writer — so the publish must refuse rather than rename over that
+        // history. The writer is what decides, at the queue position where no
+        // append can slip between the test and the rename.
+        // Through the production entry point, and awaited, so the entry is
+        // certainly on disk before the publish is queued behind it.
+        record_entry_in(
+            &root,
+            "goose",
+            "child",
+            EntryKind::Prompt,
+            serde_json::json!([]),
+        )
+        .blocking_recv()
+        .expect("the append lands before the publish is queued");
+        {
+            let mut staging = HydrationStaging::begin_in(&root, "goose", "child", &header).unwrap();
+            assert!(staging.push(&staged_entry("43:1")));
+            let ack = staging.publish().expect("handed to the transcript writer");
+            assert!(
+                ack.blocking_recv().is_err(),
+                "a publish must not overwrite a transcript recorded elsewhere"
+            );
+        }
+        assert_eq!(
+            session_records_message_id_in(&root, "goose", "child", "43:1"),
+            Some(false),
+            "the refused replay's entries are not in the transcript"
+        );
+        assert_eq!(
+            session_records_message_id_in(&root, "goose", "child", "42:1"),
+            Some(true),
+            "and what was already there is untouched"
+        );
+    }
+
+    /// Verifies QUEUE ORDER, not a paused interleaving: records queued around a
+    /// publish are all handled by the writer in that order, and the publish
+    /// refuses rather than replace anything that reached the transcript first.
+    ///
+    /// That is enough because the queue IS the mutual exclusion — `run_writer` is
+    /// one thread draining one `mpsc` channel, and it owns a `SessionWriter` per
+    /// path, so the "still header-only" test and the rename in `publish_sidecar`
+    /// cannot be interleaved by an append: every append is performed by this same
+    /// thread, at its own place in this same queue. A paused-window test would
+    /// have to reproduce a window that cannot open.
+    ///
+    /// The records go through `record_entry_in`, the production entry point, so
+    /// what is exercised is the real queue and not a side door into the file.
+    #[test]
+    fn records_queued_around_a_publish_all_survive_it() {
+        let root = temp_root();
+        append_line_in(&root, "goose", "child2", &header_line("child2"));
+        let header = TranscriptHeader::new("custom:goose", "child2", "/repo", 1_750_000_000_000);
+
+        let mut staging = HydrationStaging::begin_in(&root, "goose", "child2", &header).unwrap();
+        assert!(staging.push(&staged_entry("44:1")));
+        // A record already buffered when the publish arrives. The publish's own
+        // flush is what lands it — and landing it makes the transcript more than
+        // a header, so the publish then REFUSES: that record is history, and
+        // renaming the replay over it would lose it.
+        let before_ack = record_entry_in(
+            &root,
+            "goose",
+            "child2",
+            EntryKind::Prompt,
+            serde_json::json!([{ "type": "text", "text": "before" }]),
+        );
+        let publish_ack = staging.publish().expect("handed to the transcript writer");
+        let append_ack = record_entry_in(
+            &root,
+            "goose",
+            "child2",
+            EntryKind::Prompt,
+            serde_json::json!([]),
+        );
+
+        assert!(
+            before_ack.blocking_recv().is_ok(),
+            "a record queued ahead of the publish is still acknowledged"
+        );
+        assert!(
+            publish_ack.blocking_recv().is_err(),
+            "and its landing is what makes the publish refuse, rather than replace it"
+        );
+        assert!(
+            append_ack.blocking_recv().is_ok(),
+            "a record queued behind the publish is acknowledged too"
+        );
+
+        let transcript = read_transcript_in(&root, "goose", "child2");
+        assert_eq!(
+            transcript
+                .entries
+                .iter()
+                .filter(|e| e.k == EntryKind::Prompt)
+                .count(),
+            2,
+            "both records survive the publish"
+        );
+        assert_eq!(
+            session_records_message_id_in(&root, "goose", "child2", "44:1"),
+            Some(false),
+            "and the refused replay is not in the transcript"
+        );
+    }
+
+    /// A publish must not replace the transcript when the writer cannot verify
+    /// what is there. The target is turned into a directory, which is exactly the
+    /// case `path_holds_only_its_header` answers `false` for — it opens, but it
+    /// cannot be read as lines — so the writer must refuse, leave the target
+    /// alone, and take the sidecar with it.
+    #[test]
+    fn a_publish_that_cannot_be_verified_is_refused_and_cleans_up() {
+        let root = temp_root();
+        append_line_in(&root, "goose", "child3", &header_line("child3"));
+        let target = root.join("goose").join("child3.jsonl");
+        let sidecar = root.join("goose").join("child3.jsonl.hydrating");
+
+        let header = TranscriptHeader::new("custom:goose", "child3", "/repo", 1_750_000_000_000);
+        let mut staging = HydrationStaging::begin_in(&root, "goose", "child3", &header).unwrap();
+        assert!(staging.push(&staged_entry("45:1")));
+
+        // Unreadable as a transcript, and un-renameable onto as well.
+        std::fs::remove_file(&target).unwrap();
+        std::fs::create_dir(&target).unwrap();
+
+        let ack = staging.publish().expect("handed to the transcript writer");
+        assert!(
+            ack.blocking_recv().is_err(),
+            "a publish the writer cannot verify must be refused"
+        );
+        assert!(
+            target.is_dir(),
+            "the refused publish must leave the target exactly as it was"
+        );
+        assert!(
+            !sidecar.exists(),
+            "and the sidecar it owned must not be left behind"
+        );
     }
 
     #[test]
@@ -1768,6 +2344,8 @@ mod tests {
             .filter_map(|r| match r {
                 PendingRecord::Entry(e) => Some(e.clone()),
                 PendingRecord::Header(_) => None,
+                // Not a line, so it contributes nothing to the projected file.
+                PendingRecord::Publish { .. } => None,
             })
             .collect();
 
@@ -2018,6 +2596,7 @@ mod tests {
             .map(|r| match r {
                 PendingRecord::Entry(e) => queued(PendingRecord::Entry(e.clone())),
                 PendingRecord::Header(_) => unreachable!(),
+                PendingRecord::Publish { .. } => unreachable!(),
             })
             .collect();
         let (lines, compactable) = compact_batch(&pending, false);

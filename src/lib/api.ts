@@ -401,8 +401,10 @@ export async function acpFork(
   conversationId?: number | null,
   folderId?: number | null,
   // "Fork from here": the rendered turn to fork at. The UI always passes one;
-  // omitting it forks at the tail, which the backend also falls back to for a
-  // turn the agent cannot name — its call, see `resolve_fork_point`.
+  // omitting it asks for a tail fork on purpose. A turn the agent cannot name
+  // is NOT a silent fallback for a custom agent any more — the backend refuses
+  // and this call rejects, which is the point: a branch that lands somewhere
+  // else is worse than one that does not happen. See `resolve_fork_point`.
   forkFromTurnId?: string | null
 ): Promise<ForkResult> {
   try {

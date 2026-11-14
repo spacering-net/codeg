@@ -346,6 +346,26 @@ struct PendingTurn {
     usage: Option<TurnUsage>,
     duration_ms: Option<u64>,
     model: Option<String>,
+    /// The LAST non-empty `messageId` this turn's `agent_message_chunk`s
+    /// carried — the id of the last assistant message the stream NAMED inside
+    /// this turn, which is not provably the turn's end.
+    ///
+    /// A custom agent's reply has no other name. Every built-in parser reads a
+    /// message id back out of that agent's own session store, but a custom agent
+    /// has no store — this transcript IS its history — so an id dropped here is
+    /// gone for good. `acp::fork` resolves a "fork from here" point against
+    /// exactly this field.
+    ///
+    /// LAST, not first: the id names ONE `assistant/message`, and openma's
+    /// `locateForkPoint` truncates the history inclusively AT that message, so
+    /// keeping the FIRST would cut the branch before the rest of the reply, its
+    /// tool calls and their results. Last is still an approximation — a later
+    /// chunk may carry no id at all, and events after the last named message
+    /// stay outside the fork — but it is the closest this one field can get.
+    ///
+    /// Per turn: `PendingTurn::new` starts it empty, so the next turn cannot
+    /// adopt the previous one's.
+    agent_message_id: Option<String>,
     has_content: bool,
 }
 
@@ -624,7 +644,7 @@ fn flush(pending: &mut Option<PendingTurn>, turns: &mut Vec<MessageTurn>, seq: &
             .or_else(|| p.last_at_ms.checked_sub(p.started_at_ms)),
         model: p.model,
         completed_at: Some(epoch_ms_to_utc(p.last_at_ms)),
-    agent_message_id: None,
+        agent_message_id: p.agent_message_id,
     });
     *seq += 1;
 }
@@ -770,6 +790,18 @@ fn apply_update(
             *prompt_just_recorded = false;
             let p = open_turn!();
             p.last_at_ms = at_ms;
+            // The id is optional on the wire (`ContentChunk::message_id`) and
+            // repeats across the chunks of one message, so an empty one must not
+            // erase a name already recorded and a later non-empty one must
+            // replace it — see the field's comment for why LAST, not first.
+            if let Some(id) = chunk
+                .message_id
+                .as_ref()
+                .map(|id| id.to_string())
+                .filter(|id| !id.trim().is_empty())
+            {
+                p.agent_message_id = Some(id);
+            }
             match &chunk.content {
                 agent_client_protocol::schema::v1::ContentBlock::Image(image) => {
                     p.has_content = true;
@@ -1183,6 +1215,87 @@ mod tests {
             "sessionUpdate": kind,
             "content": { "type": "text", "text": text }
         })
+    }
+
+    /// A `messageId`-stamped chunk, the shape a real transcript carries:
+    /// `{"sessionUpdate":"agent_message_chunk","content":{…},"messageId":"78:1"}`.
+    fn named_chunk(t: u64, text: &str, message_id: &str) -> TranscriptEntry {
+        update(
+            t,
+            serde_json::json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": text },
+                "messageId": message_id
+            }),
+        )
+    }
+
+    fn assistant_turns(entries: &[TranscriptEntry]) -> Vec<MessageTurn> {
+        project_turns(entries)
+            .into_iter()
+            .filter(|t| matches!(t.role, TurnRole::Assistant))
+            .collect()
+    }
+
+    /// The id names ONE `assistant/message` and openma truncates the history AT
+    /// it, so a turn the agent split across several messages is forkable only at
+    /// the LAST one — keeping the first would cut the branch before the rest of
+    /// the reply, its tool calls and their results. This is the COMMON case, not
+    /// a corner: a real DSH transcript carried 19 of 21 turns with more than one
+    /// id, up to 45 of them (`78:1` … `78:45`).
+    #[test]
+    fn the_last_named_message_wins_over_the_first() {
+        let turns = assistant_turns(&[
+            prompt(100, "P"),
+            named_chunk(150, "first", "77:1"),
+            named_chunk(160, "second", "77:2"),
+        ]);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].agent_message_id.as_deref(), Some("77:2"));
+    }
+
+    /// The chunks of ONE message repeat its id, and a later chunk may carry no
+    /// id at all — or a blank one. Neither may erase the name already recorded.
+    #[test]
+    fn a_blank_id_never_erases_a_recorded_one() {
+        let turns = assistant_turns(&[
+            prompt(100, "P"),
+            named_chunk(150, "a", "77:1"),
+            named_chunk(155, "b", "77:1"),
+            update(160, text_chunk("agent_message_chunk", "unnamed")),
+            named_chunk(165, "c", "   "),
+        ]);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].agent_message_id.as_deref(), Some("77:1"));
+    }
+
+    /// A turn the agent never named stays unnamed. `acp::fork` turns that into a
+    /// REFUSAL when the user picked the turn, so it must never be confused with
+    /// a turn the user asked to fork at the tail.
+    #[test]
+    fn a_turn_the_agent_never_named_has_no_id() {
+        let turns = assistant_turns(&[
+            prompt(100, "P"),
+            update(150, text_chunk("agent_thought_chunk", "thinking")),
+            update(160, text_chunk("agent_message_chunk", "reply")),
+        ]);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].agent_message_id, None);
+    }
+
+    /// The name belongs to the turn that carried it: the next prompt opens a
+    /// fresh turn, which must not inherit its predecessor's id.
+    #[test]
+    fn the_next_turn_does_not_inherit_the_previous_id() {
+        let turns = assistant_turns(&[
+            prompt(100, "P1"),
+            named_chunk(150, "first", "77:1"),
+            prompt(200, "P2"),
+            update(250, text_chunk("agent_message_chunk", "second")),
+        ]);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].agent_message_id.as_deref(), Some("77:1"));
+        assert_eq!(turns[1].agent_message_id, None);
     }
 
     #[test]

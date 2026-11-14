@@ -1807,7 +1807,7 @@ fn pi_runtime_outdated_message() -> String {
 ///
 /// Custom ACP agents and ZCode use Codeg-owned transcripts. Agents with
 /// native store parsers are excluded to avoid duplicate history.
-fn transcript_dir_for(agent_type: AgentType) -> Option<&'static str> {
+pub(crate) fn transcript_dir_for(agent_type: AgentType) -> Option<&'static str> {
     agent_type
         .uses_acp_transcript()
         .then(|| registry::registry_id_for(agent_type))
@@ -2099,6 +2099,292 @@ async fn record_hydrated_update(
             );
             false
         }
+    }
+}
+
+/// How long the fork hydration waits for the next replayed line before it treats
+/// the drain as finished.
+///
+/// Sound only because the replay is already written when the load response
+/// arrives — see [`hydrate_forked_transcript`], which is the only caller. It is
+/// a window for the pipe and this session's channel to hand over what has
+/// already been sent, never a guess about how far the agent has got.
+const HYDRATION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// The transcript entry one replayed update is recorded as.
+///
+/// `Ok(None)` for the updates the live path does not record either — they are
+/// not history. `Err` when an update that SHOULD be recorded cannot be
+/// serialized, which the caller must not read as "nothing to record": the replay
+/// would then be published missing that entry, and the branch would keep the
+/// hole for good.
+///
+/// Mirrors `queue_transcript_update`, minus the queue: a replay is staged in a
+/// file of its own and published in one rename (see
+/// `acp_transcript::HydrationStaging`), so there is nothing to back-pressure —
+/// and a write that fails ends the replay instead of leaving a hole in the
+/// middle of it.
+fn hydration_entry(
+    update: &SessionUpdate,
+) -> Result<Option<crate::acp_transcript::TranscriptEntry>, serde_json::Error> {
+    if !crate::parsers::acp_native::is_recorded_update(update) {
+        return Ok(None);
+    }
+    Ok(Some(crate::acp_transcript::TranscriptEntry {
+        t: crate::acp_transcript::now_epoch_ms(),
+        k: crate::acp_transcript::EntryKind::Update,
+        p: serde_json::to_value(update)?,
+        steer: false,
+    }))
+}
+
+/// Record a forked custom-agent session's own history into its transcript.
+///
+/// `session/fork` seeds the child on the AGENT side — it copies the parent's log
+/// up to the fork point — but it sends none of those events back: the response
+/// carries the new session id and its settings and nothing else. For a built-in
+/// agent that is enough, because the history the user sees is read from the
+/// agent's own store, which the fork already wrote. A custom agent has no store:
+/// codeg's transcript IS the branch's history, and at this point the child's
+/// file holds only the header its caller just wrote, so the branch would open
+/// empty — the fork worked and there is nothing to show for it.
+///
+/// `session/load` is what makes the agent hand that history over: it restores
+/// the session from its persisted log and REPLAYS it (the harness's
+/// `restoreSession(..., { replay: true })`; its `resumeSession` deliberately
+/// does not, which is why the resume the caller already sent cannot do this).
+/// This drains that replay through the same recording path the reconnect ladder
+/// uses, so the branch renders the turns it actually forked from.
+///
+/// The history is taken from the AGENT rather than copied out of the parent's
+/// transcript because the agent owns the fork boundary: its own
+/// `inclusiveHistoryPrefix` decided which events the child keeps, and codeg's
+/// turn-wide approximation cannot reproduce that (see `resolve_fork_point`).
+/// The parent's transcript is not even the same history — after a failed
+/// `session/load` the chain still carries turns the agent's session no longer
+/// has — and copying those into a branch is what leaves a later fork naming a
+/// message id the agent cannot find.
+///
+/// Best effort, deliberately: the fork has already succeeded and its sibling row
+/// exists. A load that fails, or a drain that stalls, costs the branch its
+/// history — where it already was before this call — never the session.
+async fn hydrate_forked_transcript(
+    cx: &ConnectionTo<Agent>,
+    session: &mut AgentSession,
+    emitter: &EventEmitter,
+    state: &Arc<RwLock<SessionState>>,
+    agent_type: AgentType,
+    new_sid: &str,
+    cwd: &std::path::Path,
+    mcp_servers: &[McpServer],
+) {
+    // An agent with its own store reads its history from there, and its fork
+    // already wrote it. Only codeg's own transcript needs this.
+    let Some(dir) = transcript_dir_for(agent_type) else {
+        return;
+    };
+    // Nothing to hydrate if the child already recorded turns — the same gate the
+    // reconnect ladder uses, and it reads the FILE, where the header just
+    // written does not count as history.
+    if crate::acp_transcript::has_recorded_history(dir, new_sid) {
+        return;
+    }
+    let claude = state.read().await.claude_session_options();
+    let req = build_load_session_request(
+        agent_type,
+        SessionId::new(new_sid),
+        cwd,
+        mcp_servers.to_vec(),
+        &claude,
+    );
+    if let Err(e) = cx.send_request_to(Agent, req).block_task().await {
+        tracing::warn!(
+            "[ACP] could not load the forked session {new_sid} to hydrate its transcript \
+             ({e}); the branch opens without its history"
+        );
+        return;
+    }
+    // Every frame that becomes this branch's HISTORY is written before the load
+    // RESPONSE arrives, and that is what makes the drain's completion criterion
+    // evidence rather than a guess.
+    //
+    // The ground is that the replay is sent by ONE type-independent loop, so the
+    // ordering cannot differ per frame kind. openma's `restoreSession` runs
+    // `for (const update of replay.updates) notify(sessionId, update)` inside the
+    // `session/load` handler before it returns — whatever the update is — and its
+    // `notify` goes through `waitUntilInitialized`, which is `Promise.resolve()`
+    // once the connection is initialized, so each frame is a plain microtask
+    // queued ahead of the handler's continuation that writes the response.
+    // oh-my-pi's `loadSession` awaits `#replaySessionHistory` outright before
+    // returning, and that replay awaits every `sessionUpdate`. Both write through
+    // the SDK's serial `writeQueue` (`sendWireMessage`), which preserves call
+    // order.
+    //
+    // Measured on the wire for the kinds a tool-using turn produces — five
+    // recordable frames, in arrival order:
+    //
+    //   notif:user_message_chunk, agent_message_chunk ×2,
+    //   tool_call, tool_call_update,          ← the recordable five
+    //   resp:<the load>                       ← the response
+    //   notif:available_commands_update       ← and this one trails it
+    //
+    // The trailing frame is a commands publish: not history (`is_recorded_update`
+    // does not accept it), and this loop forwards it to the UI rather than
+    // recording it. So the replay's RECORDABLE part is complete when the response
+    // resolves, and HYDRATION_IDLE_TIMEOUT covers the rest of the handover,
+    // including that trailing publish.
+    //
+    // The response bounds what is RECORDED; it is not a promise that nothing else
+    // ever arrives, which is why this is a window and not a single read.
+    //
+    // The replay is STAGED beside the transcript and published in one rename at
+    // the end, never appended to the transcript as it arrives:
+    // `has_recorded_history` reads the FILE, so a half-written replay would look
+    // like history, stay permanently short, and never be retried. See
+    // `acp_transcript::HydrationStaging`.
+    let header = crate::acp_transcript::TranscriptHeader::new(
+        &agent_type.as_wire(),
+        new_sid,
+        &cwd.to_string_lossy(),
+        crate::acp_transcript::now_epoch_ms(),
+    );
+    let Some(mut staging) = crate::acp_transcript::HydrationStaging::begin(dir, new_sid, &header)
+    else {
+        tracing::warn!(
+            "[ACP] could not stage a replay for the forked session {new_sid}; the branch \
+             opens without its history"
+        );
+        return;
+    };
+    // How the drain ended decides whether the replay may be published. Only a
+    // quiet channel MAY: a drain that ended because the session's channel closed,
+    // because an entry would not serialize, or because handling a dispatch failed
+    // is a replay codeg did not take in full — publishing it would produce exactly
+    // the truncated history the staging exists to prevent, and
+    // `has_recorded_history` would then treat it as history and never retry.
+    enum DrainEnd {
+        /// The channel went quiet after the load response: everything the agent
+        /// wrote before answering has been read. See the note above.
+        Quiet,
+        /// The session's channel closed, so the rest of the replay is unreachable.
+        Closed,
+    }
+    let mut drained = 0u32;
+    // Staging stopped, but the drain goes on: the replay has to be CONSUMED even
+    // when it cannot be kept, or the leftover frames reach the live loop and get
+    // rendered as a turn that is not happening now.
+    let mut failed = false;
+    let end = loop {
+        match tokio::time::timeout(HYDRATION_IDLE_TIMEOUT, session.read_update()).await {
+            // Idle: the agent wrote the whole replay before it answered, and this
+            // is the handover window closing.
+            Err(_) => break DrainEnd::Quiet,
+            Ok(Err(_)) => break DrainEnd::Closed,
+            Ok(Ok(dispatch)) => {
+                // Not history positions: a task announced in a past session is
+                // not running now, and a notice is explicitly outside session
+                // history. Dropped here so neither is recorded as this branch's
+                // past.
+                if air_async_task_delta(&dispatch).is_some()
+                    || grok_workflow_task_delta(&dispatch, agent_type).is_some()
+                    || session_notice(&dispatch).is_some()
+                {
+                    continue;
+                }
+                drained += 1;
+                let st = Arc::clone(state);
+                let h = emitter.clone();
+                // `staged` is the failure signal this API can carry: the
+                // dispatcher reports a notification handler's error by logging it
+                // ("notification errors are logged without a wire reply") and
+                // hands back the builder, so a failure that happens OUTSIDE this
+                // closure cannot be observed here — and the only thing inside it
+                // that can fail is staging, which is exactly what this records.
+                let mut staged = true;
+                let _ = MatchDispatch::new(dispatch)
+                    .if_notification(async |notif: SessionNotification| {
+                        if !failed {
+                            match hydration_entry(&notif.update) {
+                                Ok(Some(entry)) => staged = staging.push(&entry),
+                                Ok(None) => {}
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "[ACP] a replayed update for {new_sid} could not be \
+                                         serialized ({e}); the replay will not be published"
+                                    );
+                                    staged = false;
+                                }
+                            }
+                        }
+                        // The one update the reconnect ladder forwards, so a
+                        // forked session offers the same commands its parent did.
+                        // Throwaway state, exactly as that path uses: this update
+                        // never carries tool output or tool-call titles.
+                        if matches!(notif.update, SessionUpdate::AvailableCommandsUpdate(_)) {
+                            let mut replay_cache = ToolCallOutputCache::default();
+                            let mut replay_cb_state = CodeBuddyLiveState::default();
+                            emit_conversation_update(
+                                &st,
+                                &h,
+                                agent_type,
+                                notif.update,
+                                None,
+                                &mut replay_cache,
+                                &mut replay_cb_state,
+                            )
+                            .await;
+                        }
+                        Ok(())
+                    })
+                    .await;
+                if !staged {
+                    failed = true;
+                }
+            }
+        }
+    };
+    // Published only when the drain ended quiet AND every entry that should have
+    // been staged was. Otherwise `staging` is dropped, which removes the sidecar
+    // and leaves the header the caller already recorded — the state a retry
+    // starts from.
+    match end {
+        DrainEnd::Quiet if failed => tracing::warn!(
+            "[ACP] the replay for the forked session {new_sid} was not recorded in full \
+             ({drained} updates read); nothing was published and the next load will hydrate \
+             it again"
+        ),
+        // Nothing recordable in the replay: the header the caller wrote stands.
+        DrainEnd::Quiet if staging.entries() == 0 => {}
+        DrainEnd::Quiet => {
+            // The handover goes through the session's transcript writer, so this
+            // waits for ITS verdict — published, or refused because the
+            // transcript gained entries meanwhile. HYDRATION_ACK_TIMEOUT is the
+            // same wedged-filesystem bound the drain uses: a writer that never
+            // answers must not hold the fork open.
+            let published = match staging.publish() {
+                Some(ack) => matches!(
+                    tokio::time::timeout(HYDRATION_ACK_TIMEOUT, ack).await,
+                    Ok(Ok(()))
+                ),
+                None => false,
+            };
+            if published {
+                tracing::info!(
+                    "[ACP] hydrated the forked session {new_sid} from {drained} replayed updates"
+                );
+            } else {
+                tracing::warn!(
+                    "[ACP] the replay for the forked session {new_sid} was not published (the \
+                     transcript gained entries, or the writer refused it); the branch opens \
+                     without it and the next load will hydrate it again"
+                );
+            }
+        }
+        DrainEnd::Closed => tracing::warn!(
+            "[ACP] the session channel closed while hydrating the forked session {new_sid} \
+             ({drained} updates read); nothing was published and the next load will hydrate \
+             it again"
+        ),
     }
 }
 
@@ -13673,7 +13959,34 @@ async fn handle_fork_or_exit(
     // A fork is a new session id, hence a new transcript file. Its history
     // starts empty and accumulates from the fork point — the pre-fork turns
     // stay in the parent's transcript, which is what forking means.
+    //
+    // NOT `continues_from`, which is the tempting shortcut and is wrong here.
+    // That link carries no boundary: `read_chain_in` re-reads the parent's
+    // transcript WHOLE on every load, so the child would also pick up whatever
+    // the parent appended AFTER the fork. The sibling row `persist_fork_outcome`
+    // keeps is `PendingReview` — meant to be reopened — so a parent that keeps
+    // growing is not hypothetical. A custom agent's forked conversation
+    // therefore starts with no history, and showing it the parent's LATER turns
+    // instead is not the answer: the branch gets its own history from the agent,
+    // which is what `hydrate_forked_transcript` below records.
     record_transcript_header(agent_type, &new_sid, cwd_string);
+    // Before `SessionStarted`, not after: the frontend opens the sibling row and
+    // reads this transcript as soon as it sees that event, so history that lands
+    // afterwards is a branch the user can open empty — and one whose own turns
+    // look unnameable to a second fork, because a turn with no parsed
+    // `messageId` has no fork point. The header is on disk first (above) so the
+    // replay lands as entries under it rather than replacing it.
+    hydrate_forked_transcript(
+        &cx,
+        &mut session,
+        emitter,
+        state,
+        agent_type,
+        &new_sid,
+        cwd,
+        mcp_servers,
+    )
+    .await;
     emit_with_state(
         state,
         emitter,
