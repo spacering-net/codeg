@@ -8690,6 +8690,20 @@
         "level_memory": {
           "title": "記憶の更新",
           "hint": "アシスタントが記憶・人格設定・ルールを変えました。"
+        },
+        "plans": {
+          "title": "計画",
+          "hint": "アシスタントが大きな作業をステップに分けた計画。",
+          "auto": "組み立てたらすぐ開始",
+          "ask": "先に見せて（「開始」で進める）"
+        },
+        "level_plan": {
+          "title": "計画の完了",
+          "hint": "計画のステップがすべて終わりました。"
+        },
+        "level_plan_stuck": {
+          "title": "計画の停止",
+          "hint": "ステップが失敗し、そのままになっています。"
         }
       },
       "workdir": {
@@ -9373,7 +9387,9 @@
         "dropWorkdir": "作業ディレクトリも削除する",
         "workdirCustom": "このディレクトリはあなたが選んだものなので、codeg は手を付けません。",
         "cancel": "キャンセル",
-        "confirm": "削除"
+        "confirm": "削除",
+        "plans": "計画 {count} 件が止まります：{titles}。",
+        "planSteps": "他の計画の {count} ステップがこのアシスタントに割り当てられています：{steps}。その番が来たら、各計画のアシスタントが別の担当を選びます。"
       }
     },
     "face": {
@@ -9718,7 +9734,10 @@
         "pr_merged": "PR マージ済み",
         "pr": "見守り中の PR",
         "memory": "覚えました",
-        "memoryUndone": "覚えたが取り消し"
+        "memoryUndone": "覚えたが取り消し",
+        "plan_stuck": "計画が止まっています",
+        "routine_paused": "ルーティン停止中",
+        "used_up": "差し戻してもまだ不十分"
       },
       "session": {
         "permission": "承認待ち",
@@ -10479,6 +10498,70 @@
         "sessions": "会話",
         "tasks": "タスク",
         "messages": "メッセージ"
+      }
+    },
+    "plan": {
+      "title": "計画",
+      "progress": "{done}/{total} ステップ",
+      "sep": "、",
+      "after": "ステップ {steps} の後",
+      "doneWhen": "完了条件：",
+      "changes": "変更",
+      "undo": "元に戻す",
+      "undone": "元に戻しました",
+      "undoneKept": "元に戻しました——ステップ {steps} は始まっていたため、この変更のままです",
+      "state": {
+        "draft": "開始待ち",
+        "running": "進行中",
+        "stuck": "止まっています",
+        "stopped": "停止中",
+        "done": "完了",
+        "canceled": "終了"
+      },
+      "step": {
+        "pending": "前のステップ待ち",
+        "ready": "まもなく開始",
+        "confirm": "確認待ち",
+        "running": "実行中",
+        "done": "完了",
+        "failed": "失敗",
+        "canceled": "キャンセル",
+        "stopped": "未開始"
+      },
+      "hint": {
+        "draft": "「開始」を押すまで何も渡しません。開始後、codeg が依存関係に沿って一つずつ渡します。",
+        "stopped": "停止中：新しいステップは渡しません。実行中のものは最後まで続きます。",
+        "stuck": "ステップ {seq}「{title}」で止まっています：失敗し、アシスタントも立て直せませんでした。これに依存しないステップは進みます。",
+        "stuckCanceled": "ステップ {seq}「{title}」はキャンセルされました：これに依存するステップは始まりません。"
+      },
+      "act": {
+        "start": "開始",
+        "change": "変更を頼む",
+        "cancel": "キャンセル",
+        "stop": "停止",
+        "resume": "再開",
+        "end": "計画を終了",
+        "open": "開く",
+        "confirm": "確認",
+        "cancelStep": "キャンセル"
+      },
+      "change": {
+        "added": "ステップ {seq}「{title}」を追加",
+        "removed": "ステップ {seq}「{title}」を削除",
+        "retry": "ステップ {seq}「{title}」をやり直し",
+        "changed": "ステップ {seq}「{title}」を変更：{fields}",
+        "title": "名前を「{title}」に変更",
+        "goal": "目標を変更"
+      },
+      "field": {
+        "title": "タイトル",
+        "who": "担当",
+        "mode": "方式",
+        "project": "プロジェクト",
+        "deliverable": "成果物",
+        "prompt": "内容",
+        "done_when": "完了条件",
+        "depends_on": "依存"
       }
     }
   }

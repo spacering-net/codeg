@@ -224,6 +224,9 @@ pub enum MessageAuth {
     Card { notice_id: i32 },
     /// Outside any delivery and any card.
     Direct,
+    /// codeg's own step under a stable operation id (a plan's step handed
+    /// to a work assistant, 7.6): one on record already is not sent again.
+    Op { op_id: String },
 }
 
 /// What a `bot_message` call came to.
@@ -504,7 +507,7 @@ impl PersonalAgentEngine {
     }
 
     /// The assistant a `to` names: an id, or a name (any case).
-    async fn receiver(&self, to: &str) -> Result<agent_entity::Model, String> {
+    pub(super) async fn receiver(&self, to: &str) -> Result<agent_entity::Model, String> {
         let to = to.trim().trim_start_matches('#');
         if let Ok(id) = to.parse::<i32>() {
             return match svc::get_bot_any(&self.db.conn, id)
@@ -712,6 +715,7 @@ impl PersonalAgentEngine {
                 None,
             ),
             MessageAuth::Direct => (None, None, None),
+            MessageAuth::Op { op_id } => (Some(LedgerSlot::outside(op_id.clone())), None, None),
         };
         let new = msvc::NewMessage {
             from: me.id,
@@ -763,6 +767,8 @@ impl PersonalAgentEngine {
         }
         if let Some(a) = &sent.answered {
             self.refresh_lines(a.id, "replied").await;
+            // The answer to a plan's step is its conclusion (7.6).
+            self.plan_message_answered(a.id).await;
         }
         self.emit(PersonalAgentChange::Status);
         self.emit_for(to.id, PersonalAgentChange::Status);
@@ -1346,7 +1352,7 @@ impl PersonalAgentEngine {
     }
 
     /// A stopped message's sender no longer waits for its answer.
-    async fn drop_waiting(&self, m: &message_entity::Model) {
+    pub(super) async fn drop_waiting(&self, m: &message_entity::Model) {
         let Some(line) = msvc::lines_of_message(&self.db.conn, m.id)
             .await
             .unwrap_or_default()

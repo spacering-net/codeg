@@ -283,7 +283,9 @@ codeg work (shorter replies, ask before dispatching code changes, …), `prefs_u
 `assistant_update` change the work assistants and the executor configs (or make one). \
 `forge_comment`, `issue_close` and `pr_merge` act on a forge — a merge only of the version that \
 should be merged, its checks passed. `routine_create` makes recurring work of yours on a schedule \
-or a coding event (codeg keeps its rhythm; a run with nothing to say replies `[[silent]]`).";
+or a coding event (codeg keeps its rhythm; a run with nothing to say replies `[[silent]]`). Big \
+work in pieces is a plan: `plan_create` lays its steps out (who, what, done when, after which), and \
+codeg hands each out once the steps it waits for are done; `plan_update` changes it.";
 
 /// When and how the agent writes cards, in every handoff card (9.3): the
 /// skill says it at length, and its `ui-render.md` is the format; an agent

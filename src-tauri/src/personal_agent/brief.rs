@@ -1008,6 +1008,7 @@ fn why_waits(kind: &str) -> &'static str {
         "reminder" => "a reminder of theirs came due",
         "proposal" | "rule" => "a suggestion waits for their yes",
         "routine_paused" => "a routine was paused and waits for them",
+        "plan_stuck" => "a plan is stuck on a step that failed",
         _ => "it waits on them",
     }
 }

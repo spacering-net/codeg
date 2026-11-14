@@ -224,6 +224,24 @@ export function waitsForOwner(row: TimelineRow): boolean {
         fix?.state === "gave_up")
     )
   }
+  // A plan the owner is to start, one with a step for them to confirm, or
+  // one stuck on a step (7.6).
+  if (row.kind === "notice" && data?.notice === "plan") {
+    const plan = data?.plan as
+      | {
+          state?: string
+          steps?: { state?: string; ready?: boolean; confirmed?: boolean }[]
+        }
+      | undefined
+    return (
+      plan?.state === "draft" ||
+      plan?.state === "stuck" ||
+      (plan?.state === "running" &&
+        (plan.steps ?? []).some(
+          (s) => s.state === "pending" && s.ready && !s.confirmed
+        ))
+    )
+  }
   if (row.kind !== "notice" || data?.state !== "open") return false
   if (data?.why === "suggest") return false
   const kind = data?.notice

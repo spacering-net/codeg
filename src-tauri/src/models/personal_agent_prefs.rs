@@ -616,6 +616,12 @@ pub const NEWS: &[(&str, Level, &str)] = &[
         Level::Low,
         "what an assistant changed in its memory, persona or rules",
     ),
+    ("plan", Level::Normal, "a plan carried out to its end"),
+    (
+        "plan_stuck",
+        Level::Urgent,
+        "a plan stuck on a step that failed and stayed failed",
+    ),
 ];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -700,6 +706,10 @@ pub struct Prefs {
     /// put to the owner on a confirm card first.
     #[serde(default, deserialize_with = "lenient")]
     pub routine_dispatch: AskFirst,
+    /// A plan an assistant lays out (7.6): started at once, or shown to the
+    /// owner first and started on their [Start].
+    #[serde(default, deserialize_with = "lenient")]
+    pub plans: AskFirst,
     /// A watched pull request whose checks failed (7.4): fixed by its task,
     /// the owner asked first, or only told.
     #[serde(default, deserialize_with = "lenient")]
@@ -806,6 +816,10 @@ pub struct Prefs {
     pub level_brief: Level,
     #[serde(default = "low", deserialize_with = "lenient_low")]
     pub level_memory: Level,
+    #[serde(default, deserialize_with = "lenient")]
+    pub level_plan: Level,
+    #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
+    pub level_plan_stuck: Level,
     /// codeg's proposal rules (6.7), each on or off, with how long before
     /// it says something. A rule the owner muted from a card is off here.
     #[serde(default, deserialize_with = "lenient")]
@@ -956,6 +970,7 @@ impl Default for Prefs {
             issue_close: AskFirst::default(),
             pr_merge: AskFirst::default(),
             routine_dispatch: AskFirst::default(),
+            plans: AskFirst::default(),
             ci_failure: CiFailure::default(),
             pr_conflict: AskFirst::default(),
             review_feedback: AskFirst::default(),
@@ -997,6 +1012,8 @@ impl Default for Prefs {
             level_proposal_low: Level::Low,
             level_brief: Level::Normal,
             level_memory: Level::Low,
+            level_plan: Level::Normal,
+            level_plan_stuck: Level::Urgent,
             rule_failed: OnOff::On,
             rule_failed_hours: RULE_FAILED_HOURS,
             rule_review: OnOff::On,
@@ -1176,6 +1193,11 @@ pub const PREFS: &[PrefSpec] = &[
         key: "routine_dispatch",
         kind: PrefKind::Choice(&["auto", "ask"]),
         label: "the work your dispatch routines hand out",
+    },
+    PrefSpec {
+        key: "plans",
+        kind: PrefKind::Choice(&["auto", "ask"]),
+        label: "the plans you lay out",
     },
     PrefSpec {
         key: "ci_failure",
@@ -1384,6 +1406,16 @@ pub const PREFS: &[PrefSpec] = &[
         key: "level_memory",
         kind: PrefKind::Choice(LEVELS),
         label: "how urgent an assistant's memory changes are",
+    },
+    PrefSpec {
+        key: "level_plan",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent a plan carried out to its end is",
+    },
+    PrefSpec {
+        key: "level_plan_stuck",
+        kind: PrefKind::Choice(LEVELS),
+        label: "how urgent a stuck plan is",
     },
     PrefSpec {
         key: "rule_failed",
@@ -1696,6 +1728,7 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("issue_close", json!("auto")),
             ("pr_merge", json!("auto")),
             ("routine_dispatch", json!("auto")),
+            ("plans", json!("auto")),
             ("ci_failure", json!("fix")),
             ("pr_conflict", json!("auto")),
             ("review_feedback", json!("auto")),
@@ -1714,6 +1747,7 @@ pub fn automation_preset(level: &str) -> Option<Vec<(&'static str, Value)>> {
             ("issue_close", json!("ask")),
             ("pr_merge", json!("ask")),
             ("routine_dispatch", json!("ask")),
+            ("plans", json!("ask")),
             ("ci_failure", json!("ask")),
             ("pr_conflict", json!("ask")),
             ("review_feedback", json!("ask")),
@@ -1832,6 +1866,8 @@ impl Prefs {
             "proposal_low" => &mut self.level_proposal_low,
             "brief" => &mut self.level_brief,
             "memory" => &mut self.level_memory,
+            "plan" => &mut self.level_plan,
+            "plan_stuck" => &mut self.level_plan_stuck,
             _ => return false,
         };
         *slot = level;
@@ -1905,6 +1941,8 @@ impl Prefs {
             "proposal_low" => self.level_proposal_low,
             "brief" => self.level_brief,
             "memory" => self.level_memory,
+            "plan" => self.level_plan,
+            "plan_stuck" => self.level_plan_stuck,
             _ => Level::Normal,
         }
     }
@@ -2090,6 +2128,14 @@ fn brain_value(key: &str, value: &Value) -> String {
             "a dispatch routine's work is put to the owner on a confirm card first; it runs once \
              they confirm"
                 .into()
+        }
+        ("plans", "auto") => {
+            "a plan starts as soon as you lay it out: codeg hands out each step once the steps it \
+             depends on are done"
+                .into()
+        }
+        ("plans", "ask") => {
+            "a plan is shown to the owner first; codeg starts it once they press Start".into()
         }
         ("accept_revise", "ask") => {
             "put to the owner on the acceptance card, with what you would send back".into()

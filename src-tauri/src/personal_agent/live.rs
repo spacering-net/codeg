@@ -312,6 +312,13 @@ async fn needs_of(
                 {
                     "changed"
                 }
+                // A plan the owner is to start, or one stuck on a step
+                // (7.6): its card keeps where it stands.
+                NoticeKind::Plan => match payload["state"].as_str() {
+                    Some("draft") | Some("confirm") => "confirm",
+                    Some("stuck") => "plan_stuck",
+                    _ => return None,
+                },
                 _ => return None,
             };
             Some((n, kind))

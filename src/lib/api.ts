@@ -3143,6 +3143,13 @@ export type NoticeAction =
   | "ask_first"
   | "hide"
   | "delete"
+  // A plan's card (7.6): start (or go on), stop, end; a step confirmed or
+  // canceled; a change taken back (`undo:<change>`).
+  | "start"
+  | "stop"
+  | "cancel"
+  | `confirm:${number}`
+  | `cancel_step:${number}`
 
 export async function personalAgentAnswerQuestion(
   questionId: string,

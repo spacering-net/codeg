@@ -388,6 +388,10 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
         "routine_list" => engine.routine_list_call().await,
         "routine_create" => engine.routine_create_call(&args).await,
         "routine_update" => engine.routine_update_call(&args).await,
+        // Plans (7.6). Boxed: deep futures, and this match is every tool's.
+        "plan_create" => Box::pin(engine.plan_create_call(&args)).await,
+        "plan_update" => Box::pin(engine.plan_update_call(&args)).await,
+        "plan_read" => Box::pin(engine.plan_read_call(&args)).await,
         // "That's it for today" (6.5).
         "wrap_up" => engine.wrap_up_call().await,
         "overview" => engine.overview_call().await,

@@ -1109,6 +1109,9 @@ impl PersonalAgentEngine {
         let Some(d) = w.dispatch_id else {
             return;
         };
+        // A plan's step done with its pull request merged, or stuck on one
+        // closed (7.6).
+        self.plan_dispatch_moved(d).await;
         // A round codeg ran on the pull request has no matter of its own:
         // the work that made it does.
         let item = match svc::item_of_dispatch(&self.db.conn, d).await {

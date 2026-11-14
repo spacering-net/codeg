@@ -137,6 +137,31 @@ export function BotDeleteDialog({
                 {t("messages", { count: impact.unanswered_messages })}
               </p>
             ) : null}
+            {(impact.plans ?? []).length > 0 ? (
+              <p className="text-xs text-muted-foreground" data-pa-delete-plans>
+                {t("plans", {
+                  count: impact.plans.length,
+                  titles: impact.plans
+                    .slice(0, 3)
+                    .map((p) => p.title)
+                    .join(t("listJoiner")),
+                })}
+              </p>
+            ) : null}
+            {(impact.plan_steps ?? []).length > 0 ? (
+              <p
+                className="text-xs text-muted-foreground"
+                data-pa-delete-plan-steps
+              >
+                {t("planSteps", {
+                  count: impact.plan_steps.length,
+                  steps: impact.plan_steps
+                    .slice(0, 3)
+                    .map((s) => `${s.plan_title} · ${s.seq}. ${s.title}`)
+                    .join(t("listJoiner")),
+                })}
+              </p>
+            ) : null}
             {impact.division.length > 0 ? (
               <p className="text-xs text-muted-foreground">
                 {t("division", {

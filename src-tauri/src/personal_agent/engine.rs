@@ -408,6 +408,9 @@ pub struct PersonalAgentEngine {
     pub(super) watch_lock: Mutex<()>,
     /// The clock's read of the watches is running (`spawn_watch_tick`).
     pub(super) watch_busy: AtomicBool,
+    /// Serializes carrying out the plans (7.6): one look at a plan at a
+    /// time, so a step is started once and its news told once.
+    pub(super) plan_lock: Mutex<()>,
     /// Its assistant was deleted: nothing more is read or told.
     pub(super) retired: AtomicBool,
     /// The owner's zone at the clock's last look: a change moves the
@@ -459,6 +462,7 @@ impl PersonalAgentEngine {
             accept_lock: Mutex::new(()),
             watch_lock: Mutex::new(()),
             watch_busy: AtomicBool::new(false),
+            plan_lock: Mutex::new(()),
             retired: AtomicBool::new(false),
             clock_zone: std::sync::Mutex::new(None),
             routine_check_at: std::sync::Mutex::new(None),
@@ -764,6 +768,9 @@ impl PersonalAgentEngine {
                     self.reconcile_dispatches().await;
                     self.ask_tick().await;
                     self.spawn_watch_tick();
+                    // The plans (7.6): what a hook missed, and a failure
+                    // left waiting on a turn that never came.
+                    self.plan_tick().await;
                 }
                 _ = due.tick() => {
                     self.due_tick().await;
@@ -3900,6 +3907,9 @@ impl PersonalAgentEngine {
         // The brief or wrap-up it wrote is the owner's to have (6.4).
         self.settle_brief_batch(turn.batch_id, interrupted, canceled, turn.reply_row_id)
             .await;
+        // A plan's step it was woken for is stuck once its turn is over,
+        // unless the turn picked it up (7.6).
+        self.plans_after_turn(turn.batch_id).await;
         self.after_turn_bookkeeping(&turn).await;
     }
 

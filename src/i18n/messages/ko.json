@@ -8690,6 +8690,20 @@
         "level_memory": {
           "title": "기억 변경",
           "hint": "어시스턴트가 기억, 페르소나 또는 규칙을 바꿨어요."
+        },
+        "plans": {
+          "title": "계획",
+          "hint": "어시스턴트가 큰 작업을 단계로 나눈 계획.",
+          "auto": "세우면 바로 시작",
+          "ask": "먼저 보여 줘(「시작」을 누르면 진행)"
+        },
+        "level_plan": {
+          "title": "계획 완료",
+          "hint": "계획의 모든 단계가 끝났어요."
+        },
+        "level_plan_stuck": {
+          "title": "계획 막힘",
+          "hint": "한 단계가 실패한 채로 남아 있어요."
         }
       },
       "workdir": {
@@ -9373,7 +9387,9 @@
         "dropWorkdir": "작업 디렉터리도 삭제",
         "workdirCustom": "직접 고른 디렉터리이므로 codeg는 건드리지 않습니다.",
         "cancel": "취소",
-        "confirm": "삭제"
+        "confirm": "삭제",
+        "plans": "계획 {count}개가 멈춰요: {titles}.",
+        "planSteps": "다른 계획의 {count}단계가 이 어시스턴트에게 맡겨져 있어요: {steps}. 차례가 오면 각 계획의 어시스턴트가 다른 담당을 골라요."
       }
     },
     "face": {
@@ -9718,7 +9734,10 @@
         "pr_merged": "PR 병합됨",
         "pr": "지켜보는 PR",
         "memory": "기억했어요",
-        "memoryUndone": "기억했다가 되돌림"
+        "memoryUndone": "기억했다가 되돌림",
+        "plan_stuck": "계획 막힘",
+        "routine_paused": "루틴 일시 중지됨",
+        "used_up": "되돌려도 아직 부족"
       },
       "session": {
         "permission": "승인 대기",
@@ -10479,6 +10498,70 @@
         "sessions": "대화",
         "tasks": "작업",
         "messages": "메시지"
+      }
+    },
+    "plan": {
+      "title": "계획",
+      "progress": "{done}/{total}단계",
+      "sep": ", ",
+      "after": "{steps}단계 이후",
+      "doneWhen": "완료 기준:",
+      "changes": "변경",
+      "undo": "되돌리기",
+      "undone": "되돌렸어요",
+      "undoneKept": "되돌렸어요 — {steps}단계는 이미 시작해서 이 변경을 유지해요",
+      "state": {
+        "draft": "시작 대기",
+        "running": "진행 중",
+        "stuck": "막힘",
+        "stopped": "중지됨",
+        "done": "완료",
+        "canceled": "종료"
+      },
+      "step": {
+        "pending": "앞 단계 대기",
+        "ready": "곧 시작",
+        "confirm": "확인 대기",
+        "running": "진행 중",
+        "done": "완료",
+        "failed": "실패",
+        "canceled": "취소됨",
+        "stopped": "시작 안 함"
+      },
+      "hint": {
+        "draft": "「시작」을 누르기 전에는 아무것도 보내지 않아요. 시작하면 codeg가 의존 관계에 따라 한 단계씩 보내요.",
+        "stopped": "중지됨: 새 단계는 보내지 않고, 진행 중인 단계는 끝까지 실행돼요.",
+        "stuck": "{seq}단계 「{title}」에서 막혔어요: 실패했고 어시스턴트도 이어가지 못했어요. 이 단계에 의존하지 않는 단계는 계속 진행돼요.",
+        "stuckCanceled": "{seq}단계 「{title}」이(가) 취소됐어요: 이 단계에 의존하는 단계는 시작하지 않아요."
+      },
+      "act": {
+        "start": "시작",
+        "change": "수정 요청",
+        "cancel": "취소",
+        "stop": "중지",
+        "resume": "계속",
+        "end": "계획 종료",
+        "open": "열기",
+        "confirm": "확인",
+        "cancelStep": "취소"
+      },
+      "change": {
+        "added": "{seq}단계 「{title}」 추가",
+        "removed": "{seq}단계 「{title}」 삭제",
+        "retry": "{seq}단계 「{title}」 다시 진행",
+        "changed": "{seq}단계 「{title}」 변경: {fields}",
+        "title": "이름을 「{title}」(으)로 변경",
+        "goal": "목표 변경"
+      },
+      "field": {
+        "title": "제목",
+        "who": "담당",
+        "mode": "방식",
+        "project": "프로젝트",
+        "deliverable": "결과물",
+        "prompt": "할 일",
+        "done_when": "완료 기준",
+        "depends_on": "의존"
       }
     }
   }

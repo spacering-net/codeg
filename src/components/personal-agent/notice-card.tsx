@@ -82,6 +82,7 @@ import { CollapsedText } from "./event-card"
 import { ExchangeSheet } from "./exchange-sheet"
 import { ForgeCard } from "./forge-card"
 import { MemoryCard } from "./memory-card"
+import { PlanCard } from "./plan-card"
 import { PrCard } from "./pr-card"
 import { RoutineCard } from "./routine-card"
 import { RuleCard } from "./rule-card"
@@ -165,6 +166,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "rule") return <RuleCard item={item} />
   if (kind === "brief") return <BriefCard item={item} />
   if (kind === "memory") return <MemoryCard item={item} />
+  if (kind === "plan") return <PlanCard item={item} />
   return null
 }
 

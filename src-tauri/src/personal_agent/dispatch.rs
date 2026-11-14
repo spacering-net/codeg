@@ -1386,6 +1386,8 @@ impl PersonalAgentEngine {
         }
         // A routine's run comes to what its work came to (6.9).
         self.routine_dispatch_ended(d).await;
+        // A plan's step moves with its work (7.6).
+        self.plan_dispatch_moved(d.id).await;
         if let (DispatchState::Completed, Some(t), Some(host)) =
             (d.state, task.as_ref(), self.host_ref())
         {

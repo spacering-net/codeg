@@ -218,6 +218,8 @@ describe("deleting a work assistant", () => {
     unanswered_messages: 2,
     executor: { id: 3, name: "Reviewer", shared_with: [] },
     division: ["review"],
+    plans: [],
+    plan_steps: [],
     workdir: "/data/personal-agent-bots/u9",
     workdir_custom: false,
   }
@@ -246,6 +248,29 @@ describe("deleting a work assistant", () => {
     )
     await waitFor(() => expect(closed).toHaveBeenCalledWith(false))
     expect(usePersonalAgentUi.getState().viewBot).toBeNull()
+  })
+
+  it("names its plans that stop and the steps of other plans handed to it", async () => {
+    api.personalAgentBotImpact.mockResolvedValue({
+      ...impact,
+      plans: [{ plan_id: 1, title: "Ship 2.0" }],
+      plan_steps: [
+        {
+          plan_id: 2,
+          plan_title: "Split the parser",
+          bot_name: "Aide",
+          seq: 3,
+          title: "Review it",
+        },
+      ],
+    })
+    wrap(<BotDeleteDialog botId={9} onOpenChange={() => {}} />)
+    expect(await screen.findByText("Its plan stops: Ship 2.0.")).toBeTruthy()
+    expect(
+      screen.getByText(
+        /A step of another plan is handed to it: Split the parser · 3\. Review it\./
+      )
+    ).toBeTruthy()
   })
 
   it("keeps an executor config another assistant uses", async () => {

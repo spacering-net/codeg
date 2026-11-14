@@ -38,7 +38,9 @@ pub struct Names {
 }
 
 static OWN_TOOL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:^|[\s_.:/-])(dispatch_followup|dispatch|bot_message)(?:$|[\s(:)])")
+    Regex::new(
+        r"(?i)(?:^|[\s_.:/-])(dispatch_followup|dispatch|bot_message|plan_create|plan_update)(?:$|[\s(:)])",
+    )
         .expect("valid regex")
 });
 static TEST_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
@@ -281,6 +283,14 @@ fn own_tool(
         "dispatch_followup" => {
             line.kind = "followup".into();
             line.dispatch_id = input.and_then(|i| i.get("dispatch_id")).and_then(as_i32);
+        }
+        // Laying out or changing a plan (7.6): "drawing up a plan".
+        "plan_create" | "plan_update" => {
+            line.kind = "plan".into();
+            line.target = input
+                .and_then(|i| i.get("title"))
+                .and_then(|t| t.as_str())
+                .and_then(short);
         }
         _ => {
             line.kind = "message".into();

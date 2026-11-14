@@ -605,6 +605,9 @@ impl PersonalAgentEngine {
             NoticeKind::Brief => return Err("a brief has nothing to answer".into()),
             // What a turn changed in its memory (7.7).
             NoticeKind::Memory => return self.act_on_memory(&notice, action).await,
+            // A plan (7.6): start, stop, cancel, a step confirmed or
+            // canceled, a change taken back.
+            NoticeKind::Plan => return Box::pin(self.act_on_plan(&notice, action)).await,
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.

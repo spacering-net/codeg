@@ -8690,6 +8690,20 @@
         "level_memory": {
           "title": "Changements de mémoire",
           "hint": "Un assistant a modifié sa mémoire, sa personnalité ou ses règles."
+        },
+        "plans": {
+          "title": "Plans",
+          "hint": "Un gros travail qu’un assistant découpe en étapes.",
+          "auto": "Démarrer dès qu’il est prêt",
+          "ask": "Me le montrer d’abord (démarre sur mon Démarrer)"
+        },
+        "level_plan": {
+          "title": "Plan terminé",
+          "hint": "Toutes les étapes d’un plan sont terminées."
+        },
+        "level_plan_stuck": {
+          "title": "Plan bloqué",
+          "hint": "Une étape a échoué et reste en échec."
         }
       },
       "workdir": {
@@ -9373,7 +9387,9 @@
         "dropWorkdir": "Supprimer aussi son répertoire de travail",
         "workdirCustom": "Vous avez choisi ce répertoire, codeg n'y touche donc pas.",
         "cancel": "Annuler",
-        "confirm": "Supprimer"
+        "confirm": "Supprimer",
+        "plans": "{count, plural, one {Son plan s’arrête} other {Ses # plans s’arrêtent}} : {titles}.",
+        "planSteps": "{count, plural, one {Une étape d’un autre plan lui est confiée} other {# étapes d’autres plans lui sont confiées}} : {steps}. Le moment venu, leurs assistants en choisiront un autre."
       }
     },
     "face": {
@@ -9718,7 +9734,10 @@
         "pr_merged": "PR fusionnée",
         "pr": "PR surveillée",
         "memory": "Mémorisé",
-        "memoryUndone": "Mémorisé, puis annulé"
+        "memoryUndone": "Mémorisé, puis annulé",
+        "plan_stuck": "Plan bloqué",
+        "routine_paused": "Routine en pause",
+        "used_up": "Toujours pas bon"
       },
       "session": {
         "permission": "Attend votre approbation",
@@ -10479,6 +10498,70 @@
         "sessions": "Conversations",
         "tasks": "Tâches",
         "messages": "Messages"
+      }
+    },
+    "plan": {
+      "title": "Plan",
+      "progress": "{done}/{total} étapes",
+      "sep": ", ",
+      "after": "après l’étape {steps}",
+      "doneWhen": "Terminé quand :",
+      "changes": "Modifications",
+      "undo": "Annuler",
+      "undone": "Annulée",
+      "undoneKept": "Annulée — l’étape {steps} avait commencé et la garde",
+      "state": {
+        "draft": "attend votre démarrage",
+        "running": "en cours",
+        "stuck": "bloqué",
+        "stopped": "arrêté",
+        "done": "terminé",
+        "canceled": "clos"
+      },
+      "step": {
+        "pending": "attend ses étapes",
+        "ready": "va partir",
+        "confirm": "attend votre confirmation",
+        "running": "en cours",
+        "done": "terminée",
+        "failed": "échec",
+        "canceled": "annulée",
+        "stopped": "non commencée"
+      },
+      "hint": {
+        "draft": "Rien ne part avant que vous appuyiez sur Démarrer ; ensuite codeg confie chaque étape dès que celles dont elle dépend sont terminées.",
+        "stopped": "Arrêté : aucune nouvelle étape ne part ; celles en cours vont jusqu’au bout.",
+        "stuck": "Bloqué à l’étape {seq} « {title} » : elle a échoué et l’assistant n’a pas pu la reprendre. Les étapes qui n’en dépendent pas continuent.",
+        "stuckCanceled": "L’étape {seq} « {title} » a été annulée : les étapes qui en dépendent ne commenceront pas."
+      },
+      "act": {
+        "start": "Démarrer",
+        "change": "Modifier",
+        "cancel": "Annuler",
+        "stop": "Arrêter",
+        "resume": "Reprendre",
+        "end": "Clore le plan",
+        "open": "Ouvrir",
+        "confirm": "Confirmer",
+        "cancelStep": "Annuler"
+      },
+      "change": {
+        "added": "ajout de l’étape {seq} « {title} »",
+        "removed": "retrait de l’étape {seq} « {title} »",
+        "retry": "l’étape {seq} « {title} » repart",
+        "changed": "étape {seq} « {title} » modifiée : {fields}",
+        "title": "renommé « {title} »",
+        "goal": "objectif modifié"
+      },
+      "field": {
+        "title": "titre",
+        "who": "qui la fait",
+        "mode": "mode",
+        "project": "projet",
+        "deliverable": "livrable",
+        "prompt": "quoi faire",
+        "done_when": "terminé quand",
+        "depends_on": "ce qu’elle attend"
       }
     }
   }

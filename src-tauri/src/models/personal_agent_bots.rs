@@ -191,9 +191,30 @@ pub struct BotImpact {
     pub executor: Option<ImpactExecutor>,
     /// The kinds of work the division names it first for.
     pub division: Vec<String>,
+    /// Its plans still going: they stop (7.6).
+    pub plans: Vec<ImpactPlan>,
+    /// Steps of other assistants' plans handed to it, not done yet: their
+    /// assistants pick another when they come up.
+    pub plan_steps: Vec<ImpactPlanStep>,
     pub workdir: String,
     /// The owner picked the directory: deleting it is not offered.
     pub workdir_custom: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImpactPlan {
+    pub plan_id: i32,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImpactPlanStep {
+    pub plan_id: i32,
+    pub plan_title: String,
+    /// Whose plan it is.
+    pub bot_name: String,
+    pub seq: i32,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

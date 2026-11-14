@@ -8689,6 +8689,20 @@
         "level_memory": {
           "title": "Memory changes",
           "hint": "An assistant changed what it remembers, its persona or its rules."
+        },
+        "plans": {
+          "title": "Plans",
+          "hint": "Big work an assistant lays out in steps.",
+          "auto": "Start once laid out",
+          "ask": "Show me first (start on my Start)"
+        },
+        "level_plan": {
+          "title": "Plan done",
+          "hint": "Every step of a plan finished."
+        },
+        "level_plan_stuck": {
+          "title": "Plan stuck",
+          "hint": "A step failed and stayed failed."
         }
       },
       "workdir": {
@@ -9373,7 +9387,9 @@
         "dropWorkdir": "Also delete its working directory",
         "workdirCustom": "You picked this directory, so codeg leaves it alone.",
         "cancel": "Cancel",
-        "confirm": "Delete"
+        "confirm": "Delete",
+        "plans": "{count, plural, one {Its plan stops} other {Its # plans stop}}: {titles}.",
+        "planSteps": "{count, plural, one {A step of another plan is} other {# steps of other plans are}} handed to it: {steps}. Their assistants pick another when it comes up."
       }
     },
     "face": {
@@ -9718,7 +9734,10 @@
         "pr_merged": "PR merged",
         "pr": "Watched PR",
         "memory": "Remembered",
-        "memoryUndone": "Remembered, then taken back"
+        "memoryUndone": "Remembered, then taken back",
+        "plan_stuck": "Plan stuck",
+        "routine_paused": "Routine paused",
+        "used_up": "Still not right"
       },
       "session": {
         "permission": "Waits for your approval",
@@ -10479,6 +10498,70 @@
         "sessions": "Conversations",
         "tasks": "Tasks",
         "messages": "Messages"
+      }
+    },
+    "plan": {
+      "title": "Plan",
+      "progress": "{done}/{total} steps",
+      "sep": ", ",
+      "after": "after step {steps}",
+      "doneWhen": "Done when:",
+      "changes": "Changes",
+      "undo": "Undo",
+      "undone": "Taken back",
+      "undoneKept": "Taken back — step {steps} had started and kept it",
+      "state": {
+        "draft": "waiting for you to start",
+        "running": "running",
+        "stuck": "stuck",
+        "stopped": "stopped",
+        "done": "done",
+        "canceled": "ended"
+      },
+      "step": {
+        "pending": "waits for its steps",
+        "ready": "about to go",
+        "confirm": "waits for your confirmation",
+        "running": "running",
+        "done": "done",
+        "failed": "failed",
+        "canceled": "canceled",
+        "stopped": "not started"
+      },
+      "hint": {
+        "draft": "Nothing goes out until you press Start; then codeg hands out each step once the steps it waits for are done.",
+        "stopped": "Stopped: no new step goes out; the steps under way run to their end.",
+        "stuck": "Stuck on step {seq} “{title}”: it failed and the assistant couldn’t carry it on. Steps that don’t wait for it go on.",
+        "stuckCanceled": "Step {seq} “{title}” was canceled: the steps that wait for it won’t start."
+      },
+      "act": {
+        "start": "Start",
+        "change": "Change",
+        "cancel": "Cancel",
+        "stop": "Stop",
+        "resume": "Go on",
+        "end": "End plan",
+        "open": "Open",
+        "confirm": "Confirm",
+        "cancelStep": "Cancel"
+      },
+      "change": {
+        "added": "added step {seq} “{title}”",
+        "removed": "removed step {seq} “{title}”",
+        "retry": "step {seq} “{title}” goes again",
+        "changed": "changed step {seq} “{title}”: {fields}",
+        "title": "renamed it “{title}”",
+        "goal": "changed its goal"
+      },
+      "field": {
+        "title": "title",
+        "who": "who does it",
+        "mode": "mode",
+        "project": "project",
+        "deliverable": "deliverable",
+        "prompt": "what to do",
+        "done_when": "done when",
+        "depends_on": "what it waits for"
       }
     }
   }

@@ -52,6 +52,7 @@ pub mod menubar;
 pub mod messages;
 pub mod notices;
 pub mod options;
+pub mod plans;
 pub mod pr_auto;
 pub mod prefs;
 pub mod presence;

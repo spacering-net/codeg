@@ -8690,6 +8690,20 @@
         "level_memory": {
           "title": "Gedächtnisänderungen",
           "hint": "Ein Assistent hat sein Gedächtnis, seine Persona oder seine Regeln geändert."
+        },
+        "plans": {
+          "title": "Pläne",
+          "hint": "Große Arbeit, die ein Assistent in Schritte aufteilt.",
+          "auto": "Sofort starten",
+          "ask": "Erst zeigen (startet mit meinem Start)"
+        },
+        "level_plan": {
+          "title": "Plan erledigt",
+          "hint": "Alle Schritte eines Plans sind fertig."
+        },
+        "level_plan_stuck": {
+          "title": "Plan hängt fest",
+          "hint": "Ein Schritt ist fehlgeschlagen und blieb es."
         }
       },
       "workdir": {
@@ -9373,7 +9387,9 @@
         "dropWorkdir": "Auch sein Arbeitsverzeichnis löschen",
         "workdirCustom": "Dieses Verzeichnis hast du gewählt, daher lässt codeg es unangetastet.",
         "cancel": "Abbrechen",
-        "confirm": "Löschen"
+        "confirm": "Löschen",
+        "plans": "{count, plural, one {Sein Plan stoppt} other {Seine # Pläne stoppen}}: {titles}.",
+        "planSteps": "{count, plural, one {Ein Schritt eines anderen Plans ist} other {# Schritte anderer Pläne sind}} ihm zugeteilt: {steps}. Wenn sie dran sind, wählen deren Assistenten jemand anderen."
       }
     },
     "face": {
@@ -9718,7 +9734,10 @@
         "pr_merged": "PR gemergt",
         "pr": "Beobachteter PR",
         "memory": "Gemerkt",
-        "memoryUndone": "Gemerkt, dann zurückgenommen"
+        "memoryUndone": "Gemerkt, dann zurückgenommen",
+        "plan_stuck": "Plan hängt fest",
+        "routine_paused": "Routine pausiert",
+        "used_up": "Immer noch nicht richtig"
       },
       "session": {
         "permission": "Wartet auf deine Freigabe",
@@ -10479,6 +10498,70 @@
         "sessions": "Unterhaltungen",
         "tasks": "Aufgaben",
         "messages": "Nachrichten"
+      }
+    },
+    "plan": {
+      "title": "Plan",
+      "progress": "{done}/{total} Schritte",
+      "sep": ", ",
+      "after": "nach Schritt {steps}",
+      "doneWhen": "Fertig, wenn:",
+      "changes": "Änderungen",
+      "undo": "Rückgängig",
+      "undone": "Zurückgenommen",
+      "undoneKept": "Zurückgenommen — Schritt {steps} hatte schon begonnen und behält sie",
+      "state": {
+        "draft": "wartet auf deinen Start",
+        "running": "läuft",
+        "stuck": "hängt fest",
+        "stopped": "gestoppt",
+        "done": "erledigt",
+        "canceled": "beendet"
+      },
+      "step": {
+        "pending": "wartet auf seine Schritte",
+        "ready": "geht gleich los",
+        "confirm": "wartet auf deine Bestätigung",
+        "running": "läuft",
+        "done": "erledigt",
+        "failed": "fehlgeschlagen",
+        "canceled": "abgebrochen",
+        "stopped": "nicht begonnen"
+      },
+      "hint": {
+        "draft": "Nichts geht raus, bis du auf Start drückst; dann gibt codeg jeden Schritt aus, sobald die Schritte erledigt sind, auf die er wartet.",
+        "stopped": "Gestoppt: Kein neuer Schritt geht raus; laufende Schritte laufen zu Ende.",
+        "stuck": "Hängt bei Schritt {seq} „{title}“ fest: Er ist fehlgeschlagen, und der Assistent konnte ihn nicht fortsetzen. Schritte, die nicht von ihm abhängen, laufen weiter.",
+        "stuckCanceled": "Schritt {seq} „{title}“ wurde abgebrochen: Die Schritte, die auf ihn warten, beginnen nicht."
+      },
+      "act": {
+        "start": "Start",
+        "change": "Ändern",
+        "cancel": "Abbrechen",
+        "stop": "Stopp",
+        "resume": "Weiter",
+        "end": "Plan beenden",
+        "open": "Öffnen",
+        "confirm": "Bestätigen",
+        "cancelStep": "Abbrechen"
+      },
+      "change": {
+        "added": "Schritt {seq} „{title}“ hinzugefügt",
+        "removed": "Schritt {seq} „{title}“ entfernt",
+        "retry": "Schritt {seq} „{title}“ geht noch einmal raus",
+        "changed": "Schritt {seq} „{title}“ geändert: {fields}",
+        "title": "in „{title}“ umbenannt",
+        "goal": "Ziel geändert"
+      },
+      "field": {
+        "title": "Titel",
+        "who": "wer ihn macht",
+        "mode": "Modus",
+        "project": "Projekt",
+        "deliverable": "Ergebnis",
+        "prompt": "was zu tun ist",
+        "done_when": "fertig, wenn",
+        "depends_on": "worauf er wartet"
       }
     }
   }

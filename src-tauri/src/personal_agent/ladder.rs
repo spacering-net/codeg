@@ -219,10 +219,10 @@ pub fn diff_phrase(t: &work_task::Model) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn task(status: WorkTaskStatus) -> work_task::Model {
+    pub(crate) fn task(status: WorkTaskStatus) -> work_task::Model {
         let now = chrono::Utc::now();
         work_task::Model {
             id: 7,

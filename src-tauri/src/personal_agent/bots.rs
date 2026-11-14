@@ -1012,6 +1012,10 @@ impl PersonalAgentEngine {
             .map(|(k, _)| k)
             .collect();
         let dir = workdir::workdir_of_bot(&self.data_dir, &row);
+        // Its plans stop; steps of other plans handed to it are picked
+        // again by their plans' assistants (7.6).
+        let plans = super::plans::impact_plans(&self.db, id).await;
+        let plan_steps = super::plans::impact_steps(&self.db, id).await;
         Ok(BotImpact {
             bot_id: id,
             name: display_name(&row),
@@ -1019,6 +1023,8 @@ impl PersonalAgentEngine {
             unanswered_messages: unanswered,
             executor,
             division,
+            plans,
+            plan_steps,
             workdir: dir.to_string_lossy().into_owned(),
             workdir_custom: row.workdir.as_deref().is_some_and(|w| !w.trim().is_empty()),
         })
@@ -1135,6 +1141,8 @@ impl PersonalAgentEngine {
                 self.stop_dispatch(d).await;
             }
         }
+        // Its plans stop where they are: nothing new is handed out (7.6).
+        super::plans::retire_plans_of(&self.db, id).await;
         // The messages it has not answered go back to their senders.
         let unanswered = msvc::messages_to(
             &self.db.conn,

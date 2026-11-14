@@ -407,6 +407,20 @@ pub async fn get_message(
     Ok(message::Entity::find_by_id(id).one(conn).await?)
 }
 
+/// The latest answer to message `id` from whoever it was written to.
+pub async fn reply_of(
+    conn: &DatabaseConnection,
+    id: i32,
+    from_bot: i32,
+) -> Result<Option<message::Model>, DbError> {
+    Ok(message::Entity::find()
+        .filter(message::Column::ReplyTo.eq(id))
+        .filter(message::Column::FromBotId.eq(from_bot))
+        .order_by_desc(message::Column::Id)
+        .one(conn)
+        .await?)
+}
+
 pub async fn messages_by_ids(
     conn: &DatabaseConnection,
     ids: &[i32],

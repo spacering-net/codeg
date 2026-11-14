@@ -87,6 +87,10 @@ pub enum NoticeKind {
     /// (7.7): the files and the diff, and the way to take it back.
     #[sea_orm(string_value = "memory")]
     Memory,
+    /// A plan (7.6): its steps, who carries each out, what each waits for,
+    /// how far it got — and stop, start, cancel, take back a change.
+    #[sea_orm(string_value = "plan")]
+    Plan,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

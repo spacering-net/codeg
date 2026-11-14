@@ -8690,6 +8690,20 @@
         "level_memory": {
           "title": "記憶更新",
           "hint": "助手改了它的記憶、人設或規則。"
+        },
+        "plans": {
+          "title": "計畫",
+          "hint": "助手把大事拆成步驟的計畫。",
+          "auto": "拆好就開始",
+          "ask": "先給我看（按了「開始」才推進）"
+        },
+        "level_plan": {
+          "title": "計畫完成",
+          "hint": "一個計畫的步驟全部做完。"
+        },
+        "level_plan_stuck": {
+          "title": "計畫卡住",
+          "hint": "有一步失敗了，而且一直沒做成。"
         }
       },
       "workdir": {
@@ -9373,7 +9387,9 @@
         "dropWorkdir": "一起刪除它的工作目錄",
         "workdirCustom": "這個目錄是你選的，codeg 不會動它。",
         "cancel": "取消",
-        "confirm": "刪除"
+        "confirm": "刪除",
+        "plans": "它的 {count} 個計畫會停下：{titles}。",
+        "planSteps": "別的計畫裡有 {count} 步交給了它：{steps}。輪到時，由那個計畫的助手另挑一個。"
       }
     },
     "face": {
@@ -9718,7 +9734,10 @@
         "pr_merged": "PR 已合併",
         "pr": "看護的 PR",
         "memory": "記住了",
-        "memoryUndone": "記住了，又撤銷了"
+        "memoryUndone": "記住了，又撤銷了",
+        "plan_stuck": "計畫卡住",
+        "routine_paused": "例程已暫停",
+        "used_up": "退回幾輪仍不對"
       },
       "session": {
         "permission": "等你核准",
@@ -10479,6 +10498,70 @@
         "sessions": "對話",
         "tasks": "看板任務",
         "messages": "助手訊息"
+      }
+    },
+    "plan": {
+      "title": "計畫",
+      "progress": "{done}/{total} 步",
+      "sep": "、",
+      "after": "在第 {steps} 步之後",
+      "doneWhen": "驗收標準：",
+      "changes": "改動",
+      "undo": "撤銷",
+      "undone": "已撤銷",
+      "undoneKept": "已撤銷——第 {steps} 步已經開始，保留了這次改動",
+      "state": {
+        "draft": "等你開始",
+        "running": "進行中",
+        "stuck": "卡住了",
+        "stopped": "已停止",
+        "done": "已完成",
+        "canceled": "已結束"
+      },
+      "step": {
+        "pending": "等前面的步驟",
+        "ready": "馬上派出",
+        "confirm": "等你確認",
+        "running": "在做",
+        "done": "已完成",
+        "failed": "失敗",
+        "canceled": "已取消",
+        "stopped": "沒開始"
+      },
+      "hint": {
+        "draft": "按「開始」之前什麼都不派；開始後，codeg 按依賴一步步派出。",
+        "stopped": "已停止：不再派新的步驟，在跑的照常跑完。",
+        "stuck": "卡在第 {seq} 步「{title}」：它失敗了，助手也沒能接著做下去。不依賴它的步驟照常推進。",
+        "stuckCanceled": "第 {seq} 步「{title}」已取消：依賴它的步驟不會開始。"
+      },
+      "act": {
+        "start": "開始",
+        "change": "改一下",
+        "cancel": "取消",
+        "stop": "停止",
+        "resume": "繼續",
+        "end": "結束計畫",
+        "open": "打開",
+        "confirm": "確認",
+        "cancelStep": "取消"
+      },
+      "change": {
+        "added": "加了第 {seq} 步「{title}」",
+        "removed": "刪了第 {seq} 步「{title}」",
+        "retry": "第 {seq} 步「{title}」重新來",
+        "changed": "改了第 {seq} 步「{title}」：{fields}",
+        "title": "改名為「{title}」",
+        "goal": "改了目標"
+      },
+      "field": {
+        "title": "標題",
+        "who": "交給誰",
+        "mode": "方式",
+        "project": "專案",
+        "deliverable": "交付物",
+        "prompt": "要求",
+        "done_when": "驗收標準",
+        "depends_on": "依賴"
       }
     }
   }

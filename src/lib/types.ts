@@ -2934,6 +2934,9 @@ export interface PersonalAgentPrefs {
   pr_merge: "auto" | "ask"
   /** The work a dispatch routine hands out (6.9). */
   routine_dispatch: "auto" | "ask"
+  /** A plan an assistant lays out (7.6): started at once, or shown to the
+   *  owner first and started on their Start. */
+  plans: "auto" | "ask"
   /** A watched pull request whose checks failed (7.4): fixed by its task,
    *  the owner asked first, or only told. */
   ci_failure: "fix" | "ask" | "tell"
@@ -3006,6 +3009,9 @@ export interface PersonalAgentPrefs {
   level_brief: PersonalAgentNewsLevel
   /** What an assistant changed in its memory, persona or rules (7.7). */
   level_memory: PersonalAgentNewsLevel
+  /** A plan carried out to its end, and a stuck one (7.6). */
+  level_plan: PersonalAgentNewsLevel
+  level_plan_stuck: PersonalAgentNewsLevel
   /** codeg's proposal rules (6.7): each on or off, with its threshold. */
   rule_failed: "on" | "off"
   rule_failed_hours: number
@@ -3689,6 +3695,8 @@ export interface BotNeedsYou {
     | "routine_paused"
     /** A watched pull request codeg fixed as often as allowed (7.4). */
     | "pr_gave_up"
+    /** A plan stuck on a step (7.6). */
+    | "plan_stuck"
     | string
   text: string
   since: string
@@ -3837,8 +3845,103 @@ export interface BotImpact {
   unanswered_messages: number
   executor: { id: number; name: string; shared_with: string[] } | null
   division: string[]
+  /** Its plans still going: they stop (7.6). */
+  plans: { plan_id: number; title: string }[]
+  /** Steps of other assistants' plans handed to it, not done yet. */
+  plan_steps: {
+    plan_id: number
+    plan_title: string
+    bot_name: string
+    seq: number
+    title: string
+  }[]
   workdir: string
   workdir_custom: boolean
+}
+
+/** Where a plan stands (7.6). */
+export type PlanState =
+  | "draft"
+  | "running"
+  | "stuck"
+  | "stopped"
+  | "done"
+  | "canceled"
+
+/** Where a plan's step stands. */
+export type PlanStepState =
+  | "pending"
+  | "running"
+  | "done"
+  | "failed"
+  | "canceled"
+  | "stopped"
+
+/** One step of a plan, as its card shows it. */
+export interface PlanStepView {
+  seq: number
+  title: string
+  target_kind: "bot" | "assistant"
+  target_id: number
+  target_name: string
+  agent_type?: AgentType
+  face?: unknown
+  mode: DispatchMode | null
+  project_id: number | null
+  project_name: string | null
+  deliverable: "change" | "report" | null
+  prompt: string
+  done_when: string | null
+  depends_on: number[]
+  state: PlanStepState
+  confirmed: boolean
+  ready: boolean
+  ladder: string | null
+  dispatch_id: number | null
+  message_id: number | null
+  work_task_id: number | null
+  conversation_id: number | null
+  conversation_folder_id: number | null
+  result: string | null
+  error: string | null
+  started_at: string | null
+  ended_at: string | null
+}
+
+/** One line of a change to a plan. */
+export interface PlanChangeItem {
+  kind: "added" | "changed" | "removed" | "retry" | "title" | "goal" | string
+  seq?: number
+  title?: string
+  fields?: string[]
+}
+
+/** A change made to a plan, as its card lists it. */
+export interface PlanChangeView {
+  index: number
+  at: string
+  by: "assistant" | "owner" | string
+  items: PlanChangeItem[]
+  reason: string | null
+  undoable: boolean
+  undone: boolean
+  kept: number[]
+}
+
+/** A plan, as its card shows it (7.6). */
+export interface PlanView {
+  id: number
+  title: string
+  goal: string | null
+  state: PlanState
+  stuck_reason: string | null
+  steps: PlanStepView[]
+  changes: PlanChangeView[]
+  done: number
+  total: number
+  created_at: string
+  started_at: string | null
+  ended_at: string | null
 }
 
 export interface BotDeleteOptions {

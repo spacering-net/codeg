@@ -326,7 +326,10 @@ impl CompanionFeatures {
             | "routine_update"
             | "wrap_up"
             | "history_search"
-            | "pr_feedback_forward" => self.personal_agent,
+            | "pr_feedback_forward"
+            | "plan_create"
+            | "plan_update"
+            | "plan_read" => self.personal_agent,
             "browser_list_tabs"
             | "browser_snapshot"
             | "browser_console_messages"
@@ -1571,7 +1574,10 @@ async fn build_tools_call_spawn(
         | "routine_update"
         | "wrap_up"
         | "history_search"
-        | "pr_feedback_forward" => {
+        | "pr_feedback_forward"
+        | "plan_create"
+        | "plan_update"
+        | "plan_read" => {
             // Shape only: the app owns every rule (which assistants exist,
             // which projects may be targeted, which states allow a
             // follow-up), so the companion forwards the arguments as given.
@@ -5933,7 +5939,7 @@ mod tests {
         computer_clipboard: false,
     };
 
-    const PERSONAL_AGENT_TOOLS: [&str; 32] = [
+    const PERSONAL_AGENT_TOOLS: [&str; 35] = [
         "assistant_list",
         "project_list",
         "dispatch",
@@ -5966,6 +5972,9 @@ mod tests {
         "wrap_up",
         "history_search",
         "pr_feedback_forward",
+        "plan_create",
+        "plan_update",
+        "plan_read",
     ];
 
     #[tokio::test]

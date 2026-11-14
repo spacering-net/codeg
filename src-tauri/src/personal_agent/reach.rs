@@ -243,6 +243,14 @@ pub enum What {
         rules: bool,
         user: bool,
     },
+    /// A plan carried out to its end (7.6): its title.
+    PlanDone {
+        text: String,
+    },
+    /// A plan stuck on a step: its title and the step's.
+    PlanStuck {
+        text: String,
+    },
     /// The reply's first words (none: it said nothing in words).
     Reply {
         text: Option<String>,
@@ -535,6 +543,10 @@ struct Words {
     memory_rules: &'static str,
     memory_user: &'static str,
     why_memory: &'static str,
+    plan_done: &'static str,
+    plan_stuck: &'static str,
+    why_plan: &'static str,
+    why_plan_stuck: &'static str,
 }
 
 const EN: Words = Words {
@@ -609,6 +621,10 @@ const EN: Words = Words {
     memory_rules: "rules",
     memory_user: "your profile",
     why_memory: "It changed what it remembers; the card can undo it.",
+    plan_done: "Plan done: {text}",
+    plan_stuck: "Plan stuck: {text}",
+    why_plan: "It carried out a plan it laid out for you.",
+    why_plan_stuck: "A step failed and stayed failed; what doesn't wait on it goes on.",
 };
 
 const ZH_CN: Words = Words {
@@ -683,6 +699,10 @@ const ZH_CN: Words = Words {
     memory_rules: "规则",
     memory_user: "你的资料",
     why_memory: "它改了记忆，卡片上可以撤销。",
+    plan_done: "计划完成：{text}",
+    plan_stuck: "计划卡住了：{text}",
+    why_plan: "它按为你拟的计划一步步做完了。",
+    why_plan_stuck: "有一步失败了，助手也没能接着做下去；不依赖这一步的照常推进。",
 };
 
 const ZH_TW: Words = Words {
@@ -757,6 +777,10 @@ const ZH_TW: Words = Words {
     memory_rules: "規則",
     memory_user: "你的資料",
     why_memory: "它改了記憶，卡片上可以撤銷。",
+    plan_done: "計畫完成：{text}",
+    plan_stuck: "計畫卡住了：{text}",
+    why_plan: "它按為你擬的計畫一步步做完了。",
+    why_plan_stuck: "有一步失敗了，助手也沒能接著做下去；不依賴這一步的照常推進。",
 };
 
 const JA: Words = Words {
@@ -831,6 +855,10 @@ const JA: Words = Words {
     memory_rules: "ルール",
     memory_user: "あなたのプロフィール",
     why_memory: "記憶を更新しました。カードから元に戻せます。",
+    plan_done: "計画が完了しました：{text}",
+    plan_stuck: "計画が止まっています：{text}",
+    why_plan: "あなたのために立てた計画を最後までやり終えました。",
+    why_plan_stuck: "失敗したステップがあり、アシスタントでも立て直せませんでした。それに依存しないステップは進みます。",
 };
 
 const KO: Words = Words {
@@ -905,6 +933,10 @@ const KO: Words = Words {
     memory_rules: "규칙",
     memory_user: "당신의 프로필",
     why_memory: "기억을 바꿨어요. 카드에서 되돌릴 수 있어요.",
+    plan_done: "계획 완료: {text}",
+    plan_stuck: "계획이 막혔어요: {text}",
+    why_plan: "당신을 위해 세운 계획을 끝까지 해냈어요.",
+    why_plan_stuck: "실패한 단계를 어시스턴트도 이어가지 못했어요. 이 단계에 의존하지 않는 단계는 계속 진행돼요.",
 };
 
 const ES: Words = Words {
@@ -979,6 +1011,10 @@ const ES: Words = Words {
     memory_rules: "reglas",
     memory_user: "tu perfil",
     why_memory: "Cambió lo que recuerda; la tarjeta permite deshacerlo.",
+    plan_done: "Plan terminado: {text}",
+    plan_stuck: "Plan atascado: {text}",
+    why_plan: "Llevó a cabo un plan que preparó para ti.",
+    why_plan_stuck: "Un paso falló y siguió fallando; lo que no depende de él sigue adelante.",
 };
 
 const DE: Words = Words {
@@ -1053,6 +1089,10 @@ const DE: Words = Words {
     memory_rules: "Regeln",
     memory_user: "dein Profil",
     why_memory: "Es hat sein Gedächtnis geändert; auf der Karte lässt sich das rückgängig machen.",
+    plan_done: "Plan erledigt: {text}",
+    plan_stuck: "Plan hängt fest: {text}",
+    why_plan: "Es hat einen Plan, den es für dich aufgestellt hat, zu Ende gebracht.",
+    why_plan_stuck: "Ein Schritt ist fehlgeschlagen und blieb es; was nicht davon abhängt, läuft weiter.",
 };
 
 const FR: Words = Words {
@@ -1128,6 +1168,10 @@ const FR: Words = Words {
     memory_rules: "règles",
     memory_user: "votre profil",
     why_memory: "Il a modifié sa mémoire ; la carte permet d’annuler.",
+    plan_done: "Plan terminé : {text}",
+    plan_stuck: "Plan bloqué : {text}",
+    why_plan: "Il a mené à bien un plan qu’il avait préparé pour vous.",
+    why_plan_stuck: "Une étape a échoué et reste en échec ; ce qui n’en dépend pas continue.",
 };
 
 const PT: Words = Words {
@@ -1203,6 +1247,10 @@ const PT: Words = Words {
     memory_rules: "regras",
     memory_user: "seu perfil",
     why_memory: "Mudou o que lembra; o cartão permite desfazer.",
+    plan_done: "Plano concluído: {text}",
+    plan_stuck: "Plano travado: {text}",
+    why_plan: "Concluiu um plano que preparou para você.",
+    why_plan_stuck: "Uma etapa falhou e continuou falhando; o que não depende dela segue em frente.",
 };
 
 const AR: Words = Words {
@@ -1277,6 +1325,10 @@ const AR: Words = Words {
     memory_rules: "القواعد",
     memory_user: "ملفك الشخصي",
     why_memory: "غيّر ما يتذكره؛ يمكنك التراجع من البطاقة.",
+    plan_done: "اكتملت الخطة: {text}",
+    plan_stuck: "الخطة متوقفة: {text}",
+    why_plan: "نفّذ خطة أعدّها لك حتى النهاية.",
+    why_plan_stuck: "فشلت خطوة وبقيت فاشلة؛ ما لا يعتمد عليها يستمر.",
 };
 
 fn words(locale: AppLocale) -> &'static Words {
@@ -1373,6 +1425,8 @@ fn main_line(w: &Words, what: &What) -> String {
             }
             fill(w.memory, &glimpse(&parts.join(", ")), 0, "")
         }
+        What::PlanDone { text } => fill(w.plan_done, text, 0, ""),
+        What::PlanStuck { text } => fill(w.plan_stuck, text, 0, ""),
         What::Reply { text } => text.clone().unwrap_or_else(|| w.reply_empty.to_string()),
         What::Plain { text } => text.clone(),
     }
@@ -1414,6 +1468,8 @@ fn reason(w: &Words, kind: &str, what: &What) -> Option<String> {
             _ => w.why_brief.into(),
         },
         "memory" => w.why_memory.into(),
+        "plan" => w.why_plan.into(),
+        "plan_stuck" => w.why_plan_stuck.into(),
         _ => return None,
     };
     Some(line)
@@ -1742,6 +1798,8 @@ pub fn need_kind(n: &NeedsYou) -> Option<&'static str> {
         "routine_paused" => "routine_paused",
         // A watched pull request codeg fixed as often as allowed (7.4).
         "pr_gave_up" => "used_up",
+        // A plan stuck on a step (7.6).
+        "plan_stuck" => "plan_stuck",
         _ => return None,
     })
 }
@@ -1754,7 +1812,7 @@ fn news_of_need(bot: i32, n: &NeedsYou, key: &str) -> Option<News> {
     let kind = need_kind(n).filter(|k| {
         !matches!(
             *k,
-            "waiting" | "acceptance" | "pr_ready" | "routine_paused" | "used_up"
+            "waiting" | "acceptance" | "pr_ready" | "routine_paused" | "used_up" | "plan_stuck"
         )
     })?;
     let what = if kind == "approval" {

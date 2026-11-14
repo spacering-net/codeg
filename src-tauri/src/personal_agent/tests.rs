@@ -16109,3 +16109,808 @@ async fn clearing_what_was_learned_starts_the_count_of_dismissed_cards_anew() {
         "three since: lowered"
     );
 }
+
+// ── plans (7.6) ─────────────────────────────────────────────────────────────
+
+use crate::db::entities::personal_agent_plan::PlanState;
+use crate::db::entities::personal_agent_plan_step::StepState;
+use crate::db::service::personal_agent_plan_service as psvc;
+
+async fn plan_steps(
+    engine: &PersonalAgentEngine,
+    plan: i32,
+) -> Vec<crate::db::entities::personal_agent_plan_step::Model> {
+    psvc::steps_of(&engine.db.conn, plan).await.unwrap()
+}
+
+async fn plan_row(
+    engine: &PersonalAgentEngine,
+    plan: i32,
+) -> crate::db::entities::personal_agent_plan::Model {
+    psvc::get(&engine.db.conn, plan).await.unwrap().unwrap()
+}
+
+/// Wait for a plan's look a hook set off (it runs on its own task).
+async fn until_step(
+    engine: &PersonalAgentEngine,
+    plan: i32,
+    seq: i32,
+    want: StepState,
+) -> crate::db::entities::personal_agent_plan_step::Model {
+    for _ in 0..200 {
+        if let Some(s) = plan_steps(engine, plan)
+            .await
+            .into_iter()
+            .find(|s| s.seq == seq)
+        {
+            if s.state == want {
+                return s;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!(
+        "step {seq} never became {want:?}: {:?}",
+        plan_steps(engine, plan)
+            .await
+            .into_iter()
+            .find(|s| s.seq == seq)
+    );
+}
+
+async fn plan_card(
+    engine: &PersonalAgentEngine,
+    plan: i32,
+) -> (
+    crate::db::entities::personal_agent_notice::Model,
+    serde_json::Value,
+) {
+    let p = plan_row(engine, plan).await;
+    let n = svc::get_notice(&engine.db.conn, p.notice_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let row = svc::get_row(&engine.db.conn, n.timeline_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    (n, data_of(&row))
+}
+
+/// The plan event of a step's failure, as the assistant's turn takes it:
+/// delivered in a batch, and the batch done.
+async fn turn_takes_plan_events(engine: &PersonalAgentEngine) {
+    let seg = open_segment(engine).await;
+    let batch = svc::create_batch(
+        &engine.db.conn,
+        engine.bot().await,
+        seg,
+        BatchKind::Delivery,
+        None,
+    )
+    .await
+    .unwrap();
+    let ids: Vec<i32> = svc::pending_events(&engine.db.conn, engine.bot().await)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == super::plans::PLAN_EVENT)
+        .map(|e| e.id)
+        .collect();
+    svc::mark_events_delivered(&engine.db.conn, &ids, batch.id)
+        .await
+        .unwrap();
+    svc::finish_batch_events(&engine.db.conn, batch.id)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_plan_hands_each_step_out_once_the_steps_it_waits_for_are_done_and_ends_with_a_summary() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    let out = call(
+        &primary,
+        "plan_create",
+        json!({
+            "title": "Split the parser",
+            "goal": "A faster parser.",
+            "steps": [
+                { "title": "Survey", "bot": "Dev", "prompt": "Find the slow paths.", "done_when": "A list of the slow paths." },
+                { "title": "Write it up", "bot": w, "prompt": "Write the plan up.", "depends_on": [1] },
+                { "title": "Check it", "bot": "Dev", "prompt": "Check the write-up.", "depends_on": [1, 2] }
+            ]
+        }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["plan"]["id"].as_i64().unwrap() as i32;
+    assert_eq!(plan_row(&primary, id).await.state, PlanState::Running);
+    // Only the step that waits for nothing went out: a message wanting an
+    // answer, carrying what done looks like and its place in the plan.
+    let steps = plan_steps(&primary, id).await;
+    assert_eq!(
+        steps.iter().map(|s| s.state).collect::<Vec<_>>(),
+        vec![StepState::Running, StepState::Pending, StepState::Pending]
+    );
+    let m1 = message(&primary, steps[0].message_id.unwrap()).await;
+    assert!(m1.wants_reply);
+    assert_eq!(m1.to_bot_id, w);
+    for part in [
+        "Find the slow paths.",
+        "Done when:\nA list of the slow paths.",
+        "step 1 of 3 of the plan \"Split the parser\"",
+        "reply_to",
+    ] {
+        assert!(m1.body.contains(part), "{part} in {}", m1.body);
+    }
+    let (n, data) = plan_card(&primary, id).await;
+    assert_eq!(
+        n.kind,
+        crate::db::entities::personal_agent_notice::NoticeKind::Plan
+    );
+    assert_eq!(data["plan"]["steps"][0]["state"], "running");
+    // Its answer is the step's conclusion: the next step goes, with it.
+    let back = say(&worker, json!({ "reply_to": format!("m{}", m1.id), "text": "Slow: the tokenizer and the AST walk." })).await;
+    assert!(back.ok, "{}", back.text);
+    let s1 = until_step(&primary, id, 1, StepState::Done).await;
+    assert_eq!(
+        s1.result.as_deref(),
+        Some("Slow: the tokenizer and the AST walk.")
+    );
+    let s2 = until_step(&primary, id, 2, StepState::Running).await;
+    assert_eq!(
+        plan_steps(&primary, id).await[2].state,
+        StepState::Pending,
+        "step 3 waits for step 2 too"
+    );
+    let m2 = message(&primary, s2.message_id.unwrap()).await;
+    assert!(
+        m2.body.contains("Slow: the tokenizer and the AST walk."),
+        "{}",
+        m2.body
+    );
+    say(
+        &worker,
+        json!({ "reply_to": format!("m{}", m2.id), "text": "Written up." }),
+    )
+    .await;
+    let s3 = until_step(&primary, id, 3, StepState::Running).await;
+    say(
+        &worker,
+        json!({ "reply_to": format!("m{}", s3.message_id.unwrap()), "text": "Looks right." }),
+    )
+    .await;
+    until_step(&primary, id, 3, StepState::Done).await;
+    for _ in 0..200 {
+        if plan_row(&primary, id).await.state == PlanState::Done {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let p = plan_row(&primary, id).await;
+    assert_eq!(p.state, PlanState::Done);
+    // The assistant is woken to write the summary, with what each came to.
+    let done = svc::pending_events(&primary.db.conn, primary.bot().await)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| {
+            e.kind == super::plans::PLAN_EVENT && e.source_key.ends_with(&format!("plan:{id}:done"))
+        })
+        .expect("the summary is asked for");
+    assert!(done.wake);
+    assert!(
+        done.summary.contains("summary card") && done.summary.contains("Looks right."),
+        "{}",
+        done.summary
+    );
+    let (n, data) = plan_card(&primary, id).await;
+    assert_eq!(
+        n.state,
+        crate::db::entities::personal_agent_notice::NoticeState::Acted
+    );
+    assert_eq!(data["plan"]["done"], 3);
+}
+
+#[tokio::test]
+async fn a_plan_shown_first_starts_on_the_owners_start_and_a_stop_hands_nothing_new_out() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    primary
+        .apply_settings(&[change("prefs.plans", json!("ask"))])
+        .await
+        .unwrap();
+    let out = call(
+        &primary,
+        "plan_create",
+        json!({ "title": "Two things", "steps": [
+            { "title": "One", "bot": w, "prompt": "Do one." },
+            { "title": "Two", "bot": w, "prompt": "Do two." },
+            { "title": "Three", "bot": w, "prompt": "Do three.", "depends_on": [1] }
+        ] }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    assert!(out.text.contains("Start"), "{}", out.text);
+    let id = out.data["plan"]["id"].as_i64().unwrap() as i32;
+    assert_eq!(plan_row(&primary, id).await.state, PlanState::Draft);
+    assert!(plan_steps(&primary, id)
+        .await
+        .iter()
+        .all(|s| s.state == StepState::Pending && s.message_id.is_none()));
+    // Waits on the owner as a card to confirm.
+    let needs = super::live::needs_for_test(&primary.db, primary.bot().await).await;
+    assert!(needs.iter().any(|n| n.kind == "confirm"), "{needs:?}");
+    // The clock does not start it either.
+    primary.plan_tick().await;
+    assert!(plan_steps(&primary, id)
+        .await
+        .iter()
+        .all(|s| s.state == StepState::Pending));
+    let (n, _) = plan_card(&primary, id).await;
+    primary.act_on_notice(n.id, "start").await.unwrap();
+    let steps = plan_steps(&primary, id).await;
+    assert_eq!(
+        steps.iter().map(|s| s.state).collect::<Vec<_>>(),
+        vec![StepState::Running, StepState::Running, StepState::Pending]
+    );
+    assert!(
+        !super::live::needs_for_test(&primary.db, primary.bot().await)
+            .await
+            .iter()
+            .any(|n| n.kind == "confirm")
+    );
+    // Stopped: what runs runs on, nothing new goes out.
+    primary.act_on_notice(n.id, "stop").await.unwrap();
+    assert_eq!(plan_row(&primary, id).await.state, PlanState::Stopped);
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    say(
+        &worker,
+        json!({ "reply_to": format!("m{}", steps[0].message_id.unwrap()), "text": "One done." }),
+    )
+    .await;
+    until_step(&primary, id, 1, StepState::Done).await;
+    primary.plan_tick().await;
+    let s3 = plan_steps(&primary, id).await.remove(2);
+    assert_eq!(s3.state, StepState::Stopped, "not handed out while stopped");
+    assert!(s3.message_id.is_none());
+    // A step under way canceled from the card.
+    primary.act_on_notice(n.id, "cancel_step:2").await.unwrap();
+    assert_eq!(plan_steps(&primary, id).await[1].state, StepState::Canceled);
+    assert_eq!(
+        message(&primary, steps[1].message_id.unwrap()).await.state,
+        MessageState::Stopped
+    );
+    // Picked up again: step 3 goes.
+    primary.act_on_notice(n.id, "start").await.unwrap();
+    let s3 = plan_steps(&primary, id).await.remove(2);
+    assert_eq!(s3.state, StepState::Running);
+    // Step 2 was the owner's to cancel: stuck, but nobody is told urgently.
+    let p = plan_row(&primary, id).await;
+    assert_eq!(p.state, PlanState::Stuck);
+    assert!(
+        p.stuck_reason.as_deref().unwrap().contains("was canceled"),
+        "{:?}",
+        p.stuck_reason
+    );
+    assert!(super::plans::told_for_test(&p).stuck.is_empty());
+}
+
+#[tokio::test]
+async fn a_step_still_failed_after_its_assistants_turn_makes_the_plan_stuck_until_it_is_picked_up()
+{
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let researcher = role_assistant(&primary, "Researcher", true).await;
+    let out = call(
+        &primary,
+        "plan_create",
+        json!({ "title": "Research", "steps": [
+            { "title": "Look", "assistant_id": researcher, "mode": "chat", "prompt": "Look it up." },
+            { "title": "Tell", "bot": w, "prompt": "Write it down.", "depends_on": [1] },
+            { "title": "Aside", "bot": w, "prompt": "Unrelated." }
+        ] }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["plan"]["id"].as_i64().unwrap() as i32;
+    let s1 = plan_steps(&primary, id).await.remove(0);
+    let d = s1.dispatch_id.expect("dispatched");
+    assert!(dispatch_state(&primary, d)
+        .await
+        .prompt
+        .contains("step 1 of 3 of the plan \"Research\""));
+    // Its work fails.
+    let started = settled(&primary, d).await;
+    if started.state != DispatchState::Failed {
+        let failed = svc::update_dispatch(
+            &primary.db.conn,
+            d,
+            None,
+            DispatchWrite {
+                state: Some(DispatchState::Failed),
+                error: Some(Some("boom".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        primary
+            .record_progress(&failed, None, Some("boom".into()), "turn")
+            .await;
+    }
+    let s1 = until_step(&primary, id, 1, StepState::Failed).await;
+    assert_eq!(s1.failures, 1);
+    // Its assistant is woken; the plan is not stuck while that turn is to
+    // come, and what does not wait on the step went on.
+    let ev = svc::pending_events(&primary.db.conn, primary.bot().await)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|e| e.kind == super::plans::PLAN_EVENT)
+        .expect("woken");
+    assert!(ev.wake);
+    assert!(
+        ev.summary
+            .contains(&format!("dispatch_followup on dispatch #{d}")),
+        "{}",
+        ev.summary
+    );
+    primary.plan_tick().await;
+    assert_eq!(plan_row(&primary, id).await.state, PlanState::Running);
+    assert_eq!(
+        plan_steps(&primary, id).await[2].state,
+        StepState::Running,
+        "the step aside went on"
+    );
+    assert_eq!(plan_steps(&primary, id).await[1].state, StepState::Pending);
+    // Its turn went by with the step still failed: stuck, told once.
+    turn_takes_plan_events(&primary).await;
+    primary.plan_tick().await;
+    let p = plan_row(&primary, id).await;
+    assert_eq!(p.state, PlanState::Stuck);
+    assert!(
+        p.stuck_reason
+            .as_deref()
+            .unwrap()
+            .starts_with("step 1 \"Look\" failed"),
+        "{:?}",
+        p.stuck_reason
+    );
+    assert_eq!(super::plans::told_for_test(&p).stuck.len(), 1);
+    let needs = super::live::needs_for_test(&primary.db, primary.bot().await).await;
+    assert!(needs.iter().any(|n| n.kind == "plan_stuck"), "{needs:?}");
+    primary.plan_tick().await;
+    assert_eq!(
+        super::plans::told_for_test(&plan_row(&primary, id).await)
+            .stuck
+            .len(),
+        1,
+        "told once"
+    );
+    // Handed to a work assistant instead: running again.
+    let out = call(
+        &primary,
+        "plan_update",
+        json!({ "plan_id": id, "reason": "the researcher is down", "steps": [ { "id": 1, "bot": w } ] }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let s1 = until_step(&primary, id, 1, StepState::Running).await;
+    assert!(s1.message_id.is_some());
+    assert_eq!(s1.attempt, 2);
+    let p = plan_row(&primary, id).await;
+    assert_eq!(p.state, PlanState::Running);
+    assert!(p.stuck_reason.is_none());
+    let (_, data) = plan_card(&primary, id).await;
+    assert_eq!(
+        data["plan"]["changes"][0]["items"][0]["fields"],
+        json!(["who", "mode"])
+    );
+    assert_eq!(
+        data["plan"]["changes"][0]["reason"],
+        "the researcher is down"
+    );
+}
+
+#[tokio::test]
+async fn a_plan_is_checked_as_its_dispatches_would_be_and_a_change_to_steps_not_started_can_be_taken_back(
+) {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let off = role_assistant(&primary, "Off", false).await;
+    let refused = call(
+        &primary,
+        "plan_create",
+        json!({ "title": "X", "steps": [ { "title": "A", "assistant_id": off, "mode": "chat", "prompt": "a" } ] }),
+    )
+    .await;
+    assert!(!refused.ok);
+    assert!(refused.text.starts_with("step 1:"), "{}", refused.text);
+    let circle = call(
+        &primary,
+        "plan_create",
+        json!({ "title": "X", "steps": [
+            { "title": "A", "bot": w, "prompt": "a", "depends_on": [2] },
+            { "title": "B", "bot": w, "prompt": "b", "depends_on": [1] }
+        ] }),
+    )
+    .await;
+    assert!(
+        !circle.ok && circle.text.contains("circle"),
+        "{}",
+        circle.text
+    );
+    let me = call(
+        &primary,
+        "plan_create",
+        json!({ "title": "X", "steps": [ { "title": "A", "bot": primary.bot().await, "prompt": "a" } ] }),
+    )
+    .await;
+    assert!(!me.ok && me.text.contains("that is you"), "{}", me.text);
+    let out = call(
+        &primary,
+        "plan_create",
+        json!({ "title": "Ship", "steps": [
+            { "title": "Build", "bot": w, "prompt": "Build it." },
+            { "title": "Test", "bot": w, "prompt": "Test it.", "depends_on": [1] }
+        ] }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["plan"]["id"].as_i64().unwrap() as i32;
+    // Step 1 runs: it cannot change; step 2 can, and a step is added.
+    let busy = call(
+        &primary,
+        "plan_update",
+        json!({ "plan_id": id, "steps": [ { "id": 1, "prompt": "Other." } ] }),
+    )
+    .await;
+    assert!(!busy.ok && busy.text.contains("under way"), "{}", busy.text);
+    let out = call(
+        &primary,
+        "plan_update",
+        json!({ "plan_id": id, "steps": [
+            { "id": 2, "prompt": "Test it on Windows too." },
+            { "title": "Release", "bot": w, "prompt": "Release it.", "depends_on": [2] }
+        ] }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let steps = plan_steps(&primary, id).await;
+    assert_eq!(steps.len(), 3);
+    assert_eq!(steps[1].prompt, "Test it on Windows too.");
+    assert_eq!(steps[2].deps(), vec![2]);
+    // Removing step 2 lets step 3 wait for nothing it had.
+    let out = call(
+        &primary,
+        "plan_update",
+        json!({ "plan_id": id, "steps": [ { "id": 2, "remove": true } ] }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let steps = plan_steps(&primary, id).await;
+    assert_eq!(steps.iter().map(|s| s.seq).collect::<Vec<_>>(), vec![1, 3]);
+    assert!(steps[1].deps().is_empty());
+    // Step 3 is free now and goes; the removal is taken back: step 2 comes
+    // back, step 3 had started and keeps it.
+    until_step(&primary, id, 3, StepState::Running).await;
+    let (n, data) = plan_card(&primary, id).await;
+    assert_eq!(data["plan"]["changes"][1]["undoable"], true);
+    primary.act_on_notice(n.id, "undo:1").await.unwrap();
+    let steps = plan_steps(&primary, id).await;
+    assert_eq!(
+        steps.iter().map(|s| s.seq).collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(steps[1].prompt, "Test it on Windows too.");
+    assert!(
+        steps[2].deps().is_empty(),
+        "step 3 started: it keeps the change"
+    );
+    let (_, data) = plan_card(&primary, id).await;
+    assert_eq!(data["plan"]["changes"][1]["undone"], true);
+    assert_eq!(data["plan"]["changes"][1]["kept"], json!([3]));
+    // The first change's step 2 part is undone too; its step 3 started.
+    primary.act_on_notice(n.id, "undo:0").await.unwrap();
+    let steps = plan_steps(&primary, id).await;
+    assert_eq!(steps[1].prompt, "Test it.");
+    assert_eq!(steps.len(), 3, "the added step had started: kept");
+}
+
+/// Fail a plan step's dispatch as its work would.
+async fn fail_dispatch(engine: &PersonalAgentEngine, d: i32) {
+    let started = settled(engine, d).await;
+    if started.state == DispatchState::Failed {
+        return;
+    }
+    let failed = svc::update_dispatch(
+        &engine.db.conn,
+        d,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Failed),
+            error: Some(Some("boom".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    engine
+        .record_progress(&failed, None, Some("boom".into()), "turn")
+        .await;
+}
+
+#[tokio::test]
+async fn a_failed_step_followed_up_goes_on_and_a_change_delivered_again_is_made_once() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let researcher = role_assistant(&primary, "Researcher", true).await;
+    let out = call(
+        &primary,
+        "plan_create",
+        json!({ "title": "Research", "steps": [
+            { "title": "Look", "assistant_id": researcher, "mode": "chat", "prompt": "Look it up." },
+            { "title": "Tell", "bot": w, "prompt": "Write it down.", "depends_on": [1] }
+        ] }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["plan"]["id"].as_i64().unwrap() as i32;
+    let d = plan_steps(&primary, id).await[0].dispatch_id.unwrap();
+    fail_dispatch(&primary, d).await;
+    until_step(&primary, id, 1, StepState::Failed).await;
+    // Its assistant follows the dispatch up: the step is under way again.
+    let again = svc::update_dispatch(
+        &primary.db.conn,
+        d,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Running),
+            error: Some(None),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    primary
+        .record_progress(&again, None, None, "followup")
+        .await;
+    let s1 = until_step(&primary, id, 1, StepState::Running).await;
+    assert!(s1.error.is_none());
+    // Its work done: the step is, and the next goes.
+    let done = svc::update_dispatch(
+        &primary.db.conn,
+        d,
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Completed),
+            result_excerpt: Some(Some("Found it.".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    primary
+        .record_progress(&done, Some("Found it.".into()), None, "turn")
+        .await;
+    let s1 = until_step(&primary, id, 1, StepState::Done).await;
+    assert_eq!(s1.result.as_deref(), Some("Found it."));
+    until_step(&primary, id, 2, StepState::Running).await;
+    for _ in 0..50 {
+        if plan_row(&primary, id).await.state == PlanState::Running {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        plan_row(&primary, id).await.state,
+        PlanState::Running,
+        "never stuck"
+    );
+    // A change made in a turn, then the same call again — in that turn, and
+    // in the turn that delivers it again: one step added.
+    let (_, first) = owner_turn(&primary, "pa-plan").await;
+    let change = json!({ "plan_id": id, "reason": "one more", "steps": [ { "title": "Ship", "bot": w, "prompt": "Ship it." } ] });
+    let a = call(&primary, "plan_update", change.clone()).await;
+    assert!(a.ok && a.data["changed"] == json!(true), "{}", a.text);
+    let b = call(
+        &primary,
+        "plan_update",
+        json!({ "plan_id": id, "reason": "worded afresh", "steps": [ { "title": "Ship", "bot": w, "prompt": "Ship it." } ] }),
+    )
+    .await;
+    assert_eq!(b.data["earlier"], json!(true), "{}", b.text);
+    let (_, redelivery) = owner_turn(&primary, "pa-plan").await;
+    primary
+        .set_ledger_scope_for_test(vec![redelivery, first])
+        .await;
+    let c = call(&primary, "plan_update", change).await;
+    assert_eq!(c.data["earlier"], json!(true), "{}", c.text);
+    assert_eq!(plan_steps(&primary, id).await.len(), 3);
+    assert_eq!(changes_count(&primary, id).await, 1);
+}
+
+async fn changes_count(engine: &PersonalAgentEngine, plan: i32) -> usize {
+    serde_json::from_str::<Vec<serde_json::Value>>(&plan_row(engine, plan).await.changes)
+        .unwrap()
+        .len()
+}
+
+#[tokio::test]
+async fn a_step_number_is_never_given_twice_and_a_restart_leaves_no_plan_without_its_card_or_summary(
+) {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    primary
+        .apply_settings(&[change("prefs.plans", json!("ask"))])
+        .await
+        .unwrap();
+    let out = call(
+        &primary,
+        "plan_create",
+        json!({ "title": "Two", "steps": [
+            { "title": "One", "bot": w, "prompt": "Do one." },
+            { "title": "Two", "bot": w, "prompt": "Do two." }
+        ] }),
+    )
+    .await;
+    let id = out.data["plan"]["id"].as_i64().unwrap() as i32;
+    // Step 2 removed, then a new step: it is step 3, not step 2 again.
+    assert!(
+        call(
+            &primary,
+            "plan_update",
+            json!({ "plan_id": id, "steps": [ { "id": 2, "remove": true } ] })
+        )
+        .await
+        .ok
+    );
+    let added = call(&primary, "plan_update", json!({ "plan_id": id, "steps": [ { "title": "Three", "bot": w, "prompt": "Do three." } ] })).await;
+    assert!(added.ok, "{}", added.text);
+    let steps = plan_steps(&primary, id).await;
+    assert_eq!(
+        steps
+            .iter()
+            .map(|s| (s.seq, s.title.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(1, "One"), (3, "Three")]
+    );
+    // Taking the removal back brings step 2 back as it was; step 3 stays.
+    let (n, _) = plan_card(&primary, id).await;
+    primary.act_on_notice(n.id, "undo:0").await.unwrap();
+    let steps = plan_steps(&primary, id).await;
+    assert_eq!(
+        steps
+            .iter()
+            .map(|s| (s.seq, s.title.as_str(), s.prompt.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, "One", "Do one."),
+            (2, "Two", "Do two."),
+            (3, "Three", "Do three.")
+        ]
+    );
+    // A restart between making a plan and raising its card: the clock's
+    // look raises it, and it waits on the owner as one to start.
+    let bare = match psvc::create(
+        &primary.db.conn,
+        psvc::NewPlan {
+            bot_id: primary.bot().await,
+            title: "Bare".into(),
+            goal: None,
+            state: PlanState::Draft,
+            origin_batch_id: None,
+            for_input: None,
+            origin_bot_id: None,
+            origin_row_id: None,
+            thread_id: None,
+        },
+        vec![psvc::NewStep::of(&plan_steps(&primary, id).await[0])],
+        None,
+        None,
+    )
+    .await
+    .unwrap()
+    {
+        svc::Ledgered::New(p) => p,
+        svc::Ledgered::Earlier(_) => unreachable!(),
+    };
+    assert!(bare.notice_id.is_none());
+    primary.plan_tick().await;
+    let (n, data) = plan_card(&primary, bare.id).await;
+    assert_eq!(
+        n.kind,
+        crate::db::entities::personal_agent_notice::NoticeKind::Plan
+    );
+    assert_eq!(data["plan"]["title"], "Bare");
+    // A restart between a plan's end and what its end owes: the summary is
+    // asked for by the clock's look, once.
+    psvc::update(
+        &primary.db.conn,
+        bare.id,
+        None,
+        psvc::PlanWrite {
+            state: Some(PlanState::Done),
+            // However long ago.
+            ended_at: Some(Some(super::clock::now() - chrono::Duration::days(3))),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    primary.plan_tick().await;
+    primary.plan_tick().await;
+    let asked: Vec<_> = svc::pending_events(&primary.db.conn, primary.bot().await)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.source_key.ends_with(&format!("plan:{}:done", bare.id)))
+        .collect();
+    assert_eq!(asked.len(), 1);
+    assert!(super::plans::told_for_test(&plan_row(&primary, bare.id).await).done);
+    // A card raised before a restart cut off its link: linked, not raised
+    // again.
+    let orphan = match psvc::create(
+        &primary.db.conn,
+        psvc::NewPlan {
+            bot_id: primary.bot().await,
+            title: "Orphan".into(),
+            goal: None,
+            state: PlanState::Draft,
+            origin_batch_id: None,
+            for_input: None,
+            origin_bot_id: None,
+            origin_row_id: None,
+            thread_id: None,
+        },
+        vec![psvc::NewStep::of(&plan_steps(&primary, id).await[0])],
+        None,
+        None,
+    )
+    .await
+    .unwrap()
+    {
+        svc::Ledgered::New(p) => p,
+        svc::Ledgered::Earlier(_) => unreachable!(),
+    };
+    let (raised, _) = svc::create_notice_with_row(
+        &primary.db.conn,
+        primary.bot().await,
+        svc::NewNotice {
+            kind: crate::db::entities::personal_agent_notice::NoticeKind::Plan,
+            subject_key: Some(format!("plan:{}", orphan.id)),
+            level: crate::db::entities::personal_agent_notice::NoticeLevel::Normal,
+            batch_id: None,
+            payload: json!({ "plan_id": orphan.id, "state": "draft" }),
+        },
+        NewRow::new(TimelineKind::Notice, "Plan"),
+    )
+    .await
+    .unwrap();
+    primary.plan_tick().await;
+    assert_eq!(
+        plan_row(&primary, orphan.id).await.notice_id,
+        Some(raised.id)
+    );
+    let cards = notice_rows(&primary)
+        .await
+        .into_iter()
+        .filter(|r| {
+            data_of(r)["plan"]["id"] == json!(orphan.id)
+                || r.ref_id.as_deref() == Some(&raised.id.to_string())
+        })
+        .count();
+    assert_eq!(cards, 1, "one card for it");
+    let (_, data) = plan_card(&primary, orphan.id).await;
+    assert_eq!(
+        data["plan"]["title"], "Orphan",
+        "the linked card shows the plan"
+    );
+}

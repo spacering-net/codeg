@@ -461,6 +461,7 @@ pub fn notice_kind_name(k: NoticeKind) -> &'static str {
         NoticeKind::Rule => "rule",
         NoticeKind::Brief => "brief",
         NoticeKind::Memory => "memory",
+        NoticeKind::Plan => "plan",
     }
 }
 

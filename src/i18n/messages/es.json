@@ -8690,6 +8690,20 @@
         "level_memory": {
           "title": "Cambios en la memoria",
           "hint": "Un asistente cambió lo que recuerda, su personalidad o sus reglas."
+        },
+        "plans": {
+          "title": "Planes",
+          "hint": "Trabajo grande que un asistente divide en pasos.",
+          "auto": "Empezar en cuanto esté listo",
+          "ask": "Enséñamelo antes (empieza al pulsar Iniciar)"
+        },
+        "level_plan": {
+          "title": "Plan terminado",
+          "hint": "Todos los pasos de un plan terminaron."
+        },
+        "level_plan_stuck": {
+          "title": "Plan atascado",
+          "hint": "Un paso falló y sigue fallando."
         }
       },
       "workdir": {
@@ -9373,7 +9387,9 @@
         "dropWorkdir": "Eliminar también su directorio de trabajo",
         "workdirCustom": "Elegiste este directorio, así que codeg no lo toca.",
         "cancel": "Cancelar",
-        "confirm": "Eliminar"
+        "confirm": "Eliminar",
+        "plans": "{count, plural, one {Su plan se detiene} other {Sus # planes se detienen}}: {titles}.",
+        "planSteps": "{count, plural, one {Tiene asignado un paso de otro plan} other {Tiene asignados # pasos de otros planes}}: {steps}. Cuando les toque, sus asistentes elegirán a otro."
       }
     },
     "face": {
@@ -9718,7 +9734,10 @@
         "pr_merged": "PR fusionada",
         "pr": "PR vigilada",
         "memory": "Recordado",
-        "memoryUndone": "Recordado y luego deshecho"
+        "memoryUndone": "Recordado y luego deshecho",
+        "plan_stuck": "Plan atascado",
+        "routine_paused": "Rutina en pausa",
+        "used_up": "Aún no está bien"
       },
       "session": {
         "permission": "Espera tu aprobación",
@@ -10479,6 +10498,70 @@
         "sessions": "Conversaciones",
         "tasks": "Tareas",
         "messages": "Mensajes"
+      }
+    },
+    "plan": {
+      "title": "Plan",
+      "progress": "{done}/{total} pasos",
+      "sep": ", ",
+      "after": "tras el paso {steps}",
+      "doneWhen": "Listo cuando:",
+      "changes": "Cambios",
+      "undo": "Deshacer",
+      "undone": "Deshecho",
+      "undoneKept": "Deshecho — el paso {steps} ya había empezado y lo conserva",
+      "state": {
+        "draft": "esperando a que lo inicies",
+        "running": "en marcha",
+        "stuck": "atascado",
+        "stopped": "detenido",
+        "done": "terminado",
+        "canceled": "cerrado"
+      },
+      "step": {
+        "pending": "espera a sus pasos",
+        "ready": "a punto de salir",
+        "confirm": "espera tu confirmación",
+        "running": "en marcha",
+        "done": "hecho",
+        "failed": "falló",
+        "canceled": "cancelado",
+        "stopped": "sin empezar"
+      },
+      "hint": {
+        "draft": "No sale nada hasta que pulses Iniciar; luego codeg reparte cada paso cuando estén hechos los pasos de los que depende.",
+        "stopped": "Detenido: no sale ningún paso nuevo; los que están en marcha terminan.",
+        "stuck": "Atascado en el paso {seq} «{title}»: falló y el asistente no pudo continuarlo. Los pasos que no dependen de él siguen.",
+        "stuckCanceled": "El paso {seq} «{title}» se canceló: los pasos que dependen de él no empezarán."
+      },
+      "act": {
+        "start": "Iniciar",
+        "change": "Cambiar",
+        "cancel": "Cancelar",
+        "stop": "Detener",
+        "resume": "Continuar",
+        "end": "Cerrar plan",
+        "open": "Abrir",
+        "confirm": "Confirmar",
+        "cancelStep": "Cancelar"
+      },
+      "change": {
+        "added": "añadió el paso {seq} «{title}»",
+        "removed": "quitó el paso {seq} «{title}»",
+        "retry": "el paso {seq} «{title}» vuelve a salir",
+        "changed": "cambió el paso {seq} «{title}»: {fields}",
+        "title": "lo renombró «{title}»",
+        "goal": "cambió su objetivo"
+      },
+      "field": {
+        "title": "título",
+        "who": "quién lo hace",
+        "mode": "modo",
+        "project": "proyecto",
+        "deliverable": "entregable",
+        "prompt": "qué hacer",
+        "done_when": "listo cuando",
+        "depends_on": "de qué depende"
       }
     }
   }
