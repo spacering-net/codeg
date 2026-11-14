@@ -189,6 +189,24 @@ describe("frontend memory diagnostics collector", () => {
     })
   })
 
+  it("records visibility and focus as numbers without keeping page metadata", () => {
+    let state = { hidden: true, focused: false }
+    const tracker = createFrontendMemoryTracker({
+      reporterId: "12345678-1234-4234-8234-123456789abc",
+      documentState: () => state,
+      send: async () => {},
+    })
+    expect(tracker.sample().metrics).toMatchObject({
+      documentHidden: 1,
+      documentFocused: 0,
+    })
+    state = { hidden: false, focused: true }
+    expect(tracker.sample().metrics).toMatchObject({
+      documentHidden: 0,
+      documentFocused: 1,
+    })
+  })
+
   it("makes retirement tracking a no-op when WeakRef is unavailable", () => {
     vi.stubGlobal("WeakRef", undefined)
     const tracker = createFrontendMemoryTracker({

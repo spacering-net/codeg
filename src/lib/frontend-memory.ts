@@ -44,6 +44,8 @@ export const MEMORY_METRIC_KEYS = [
   "highlightCacheEstimatedBytes",
   "highlightInFlight",
   "highlightWaiting",
+  "documentHidden",
+  "documentFocused",
   "overlayFoldRefetchEntries",
   "selectorsCacheEntries",
   "iframeCount",
@@ -80,6 +82,7 @@ export function createFrontendMemoryTracker(options: {
   send: (sample: FrontendMemorySample) => Promise<void>
   now?: () => number
   iframeCount?: () => number
+  documentState?: () => { hidden: boolean; focused: boolean }
 }) {
   const weakReference = (
     globalThis as typeof globalThis & {
@@ -271,6 +274,17 @@ export function createFrontendMemoryTracker(options: {
         /* detached DOM */
       }
     }
+    if (options.documentState) {
+      try {
+        const state = options.documentState()
+        merge({
+          documentHidden: state.hidden ? 1 : 0,
+          documentFocused: state.focused ? 1 : 0,
+        })
+      } catch {
+        /* page is navigating */
+      }
+    }
     const elapsed = now() - started
     metrics.sampleDurationMicros = Number.isFinite(elapsed)
       ? Math.min(
@@ -333,6 +347,10 @@ function tracker(): Tracker | undefined {
     singleton = createFrontendMemoryTracker({
       reporterId: crypto.randomUUID(),
       iframeCount: () => document.querySelectorAll("iframe").length,
+      documentState: () => ({
+        hidden: document.hidden,
+        focused: document.hasFocus(),
+      }),
       send: async (sample) => {
         // Always use the LOCAL shell transport; never send machine diagnostics
         // to a configured remote desktop/server or any external destination.
