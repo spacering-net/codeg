@@ -1618,6 +1618,7 @@ mod tests {
                 source: Default::default(),
                 version_probe: None,
                 supports_mcp: true,
+                model_env: None,
             }
         }
 
