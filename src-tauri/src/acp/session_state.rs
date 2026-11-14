@@ -730,6 +730,14 @@ pub struct SessionState {
     /// `delegation_call_id`-bound child outcome. Cleared on the next prompt.
     pub last_assistant_text: Option<String>,
 
+    /// When the last turn's `TurnComplete` was applied here — the moment
+    /// [`Self::last_assistant_text`] was captured, so the two read together
+    /// say which answer came when. Stamped here rather than where a consumer
+    /// reads the event, which can lag the bus: an engine comparing this answer
+    /// with [`Self::last_background_reply`] (see `acp::turn_end_hold`) needs
+    /// both on the same clock. Backend-internal; not serialized.
+    pub last_turn_completed_at: Option<DateTime<Utc>>,
+
     /// The just-completed turn's tool-call progress ([`Self::turn_progress`]),
     /// captured at TurnComplete beside `last_assistant_text` — by the time the
     /// delegation broker records a finished child's result, the turn's tool
@@ -982,6 +990,7 @@ impl SessionState {
             async_tasks: BTreeMap::new(),
             async_task_activity_at: None,
             last_assistant_text: None,
+            last_turn_completed_at: None,
             last_turn_progress: None,
             pending_user_message: None,
             pending_user_message_started_at: None,
@@ -1573,6 +1582,7 @@ impl SessionState {
                 if self.turn_in_flight || self.live_message.is_some() {
                     self.last_assistant_text = None;
                     self.last_turn_progress = self.turn_progress();
+                    self.last_turn_completed_at = Some(Utc::now());
                 }
                 if let Some(live) = self.live_message.as_ref() {
                     let after_last_tool_call = live
@@ -5505,6 +5515,34 @@ mod tests {
             agent_type: "codex".into(),
         });
         assert_eq!(s.last_assistant_text, None);
+    }
+
+    /// The turn's end is stamped beside its answer, once: a repeated
+    /// `TurnComplete` (the cancel path can bring a second) keeps both.
+    #[test]
+    fn turn_complete_stamps_when_the_answer_was_captured() {
+        let mut s = fresh_state();
+        assert!(s.last_turn_completed_at.is_none());
+        s.live_message = Some(LiveMessage {
+            id: "m1".into(),
+            role: MessageRole::Assistant,
+            content: vec![LiveContentBlock::Text {
+                text: "done".into(),
+                parent_tool_use_id: None,
+            }],
+            started_at: Utc::now(),
+        });
+        let complete = AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        };
+        s.apply_event(&complete);
+        let stamped = s.last_turn_completed_at.expect("stamped");
+        assert_eq!(s.last_assistant_text.as_deref(), Some("done"));
+        s.apply_event(&complete);
+        assert_eq!(s.last_turn_completed_at, Some(stamped), "a repeat keeps it");
+        assert_eq!(s.last_assistant_text.as_deref(), Some("done"));
     }
 
     /// A turn that never opened a live message has no text of its own either.

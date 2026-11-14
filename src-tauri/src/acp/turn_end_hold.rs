@@ -115,6 +115,11 @@ pub(crate) struct TurnEndProbe {
     pub activity: (Option<DateTime<Utc>>, Option<DateTime<Utc>>),
     /// See [`SessionState::last_background_reply`].
     pub last_background_reply: Option<(DateTime<Utc>, String)>,
+    /// When the connection's last turn ended
+    /// ([`SessionState::last_turn_completed_at`]), with the answer it gave, if
+    /// any — on the same clock as `last_background_reply`, so the two can be
+    /// ordered.
+    pub last_turn: Option<(DateTime<Utc>, Option<String>)>,
     /// The background work still running, one short description each.
     pub running: Vec<String>,
 }
@@ -266,6 +271,13 @@ pub(crate) fn probe(
         blocker: turn_end_blocker(state, agent_type, now, child_live),
         activity: (state.background_activity_at, state.async_task_activity_at),
         last_background_reply: state.last_background_reply.clone(),
+        last_turn: state.last_turn_completed_at.map(|at| {
+            let reply = state
+                .last_assistant_text
+                .clone()
+                .filter(|text| !text.trim().is_empty());
+            (at, reply)
+        }),
         running: running_work(state, agent_type),
     })
 }
@@ -320,33 +332,37 @@ impl HoldOutcome {
     }
 }
 
-/// What the turns that ended on a held connection after the held one leave
+impl TurnEndProbe {
+    /// When the turn this probe followed ended — the start of a hold begun on
+    /// it, on the clock its answers are stamped with
+    /// ([`HoldResult::latest_reply`]). Now, for a connection that never
+    /// recorded one.
+    pub(crate) fn turn_ended_at(&self) -> DateTime<Utc> {
+        self.last_turn
+            .as_ref()
+            .map(|(at, _)| *at)
+            .unwrap_or_else(Utc::now)
+    }
+}
+
+/// How the turns that ended on a held connection after the held one ended,
 /// for its settle. A turn the agent starts on its own (Grok), or a prompt
 /// someone sends the task's session while it waits, ends with a
-/// `TurnComplete` of its own — that is the latest word on the run, and the
-/// held turn's `end_turn` and answer no longer are.
+/// `TurnComplete` of its own — a later word on the run than the held turn's
+/// `end_turn`. (Their answers need no record here: the probe reads the latest
+/// from the session, stamped when it arrived.)
 #[derive(Debug, Default)]
 pub(crate) struct LaterTurns {
-    /// The latest such turn's answer, and when it was read.
-    pub reply: Option<(DateTime<Utc>, String)>,
     /// How the first such turn that did not end normally (`end_turn`) ended:
     /// stopped, refused, failed. The run settles that way.
     pub ended: Option<String>,
 }
 
 impl LaterTurns {
-    /// Note a later turn's end, its answer read `at`. `true` when it ends the
-    /// wait: a turn that was stopped or failed is how the run ends now, as it
-    /// would have been for the held turn itself.
-    pub(crate) fn record(
-        &mut self,
-        stop_reason: &str,
-        reply: Option<String>,
-        at: DateTime<Utc>,
-    ) -> bool {
-        if let Some(text) = reply {
-            self.reply = Some((at, text));
-        }
+    /// Note a later turn's end. `true` when it ends the wait: a turn that was
+    /// stopped or failed is how the run ends now, as it would have been for
+    /// the held turn itself.
+    pub(crate) fn record(&mut self, stop_reason: &str) -> bool {
         if stop_reason == "end_turn" {
             return false;
         }
@@ -366,20 +382,26 @@ pub(crate) struct HoldResult {
 }
 
 impl HoldResult {
-    /// The newest answer the agent gave after `since` (the hold's start), if
-    /// any: what it wrote in a turn of its own (the result it read once its
-    /// background work finished), or the answer of a later turn on the
-    /// connection ([`LaterTurns::reply`]) — whichever came last. Either is
-    /// newer than anything the held turn said.
-    pub(crate) fn latest_reply(&self, since: DateTime<Utc>, later: &LaterTurns) -> Option<String> {
-        let background = self
-            .last
+    /// The newest answer the agent gave after `since` — the held turn's end
+    /// ([`TurnEndProbe::turn_ended_at`]) — if any: what it wrote in a turn of
+    /// its own (the result it read once its background work finished), or the
+    /// answer of a later turn on the connection, whichever came last. Both are
+    /// stamped by the session as they arrive, so the order is theirs, not
+    /// that of whoever read them.
+    pub(crate) fn latest_reply(&self, since: DateTime<Utc>) -> Option<String> {
+        let probe = self.last.as_ref()?;
+        let background = probe
+            .last_background_reply
             .as_ref()
-            .and_then(|probe| probe.last_background_reply.as_ref())
-            .filter(|(at, _)| *at >= since);
-        [background, later.reply.as_ref()]
+            .map(|(at, text)| (*at, text));
+        let turn = probe
+            .last_turn
+            .as_ref()
+            .and_then(|(at, text)| Some((*at, text.as_ref()?)));
+        [background, turn]
             .into_iter()
             .flatten()
+            .filter(|(at, _)| *at > since)
             .max_by_key(|(at, _)| *at)
             .map(|(_, text)| text.clone())
     }
@@ -749,78 +771,102 @@ mod tests {
         let result = waiter.await.expect("waiter");
         assert_eq!(result.outcome, HoldOutcome::ConnectionLost);
         assert_eq!(
-            result
-                .latest_reply(since, &LaterTurns::default())
-                .as_deref(),
+            result.latest_reply(since).as_deref(),
             Some("all green"),
             "what the agent said before going away is kept"
         );
     }
 
-    #[test]
-    fn a_follow_up_reply_counts_only_after_the_hold_began() {
-        let since = Utc::now();
-        let with_reply = |at: DateTime<Utc>| HoldResult {
+    fn answered(
+        background: Option<(DateTime<Utc>, &str)>,
+        turn: Option<(DateTime<Utc>, Option<&str>)>,
+    ) -> HoldResult {
+        HoldResult {
             outcome: HoldOutcome::Drained,
             last: Some(TurnEndProbe {
                 blocker: None,
                 activity: (None, None),
-                last_background_reply: Some((at, "all green".into())),
+                last_background_reply: background.map(|(at, text)| (at, text.to_string())),
+                last_turn: turn.map(|(at, text)| (at, text.map(str::to_string))),
                 running: Vec::new(),
             }),
-        };
-        let none = LaterTurns::default();
+        }
+    }
+
+    #[test]
+    fn a_follow_up_reply_counts_only_after_the_hold_began() {
+        let since = Utc::now();
+        let secs = chrono::Duration::seconds;
         assert_eq!(
-            with_reply(since + chrono::Duration::seconds(5)).latest_reply(since, &none),
+            answered(Some((since + secs(5), "all green")), None).latest_reply(since),
             Some("all green".to_string())
         );
         assert_eq!(
-            with_reply(since - chrono::Duration::seconds(5)).latest_reply(since, &none),
+            answered(Some((since - secs(5), "all green")), None).latest_reply(since),
             None,
             "an answer from before the hold is the turn's own, already captured"
+        );
+        assert_eq!(
+            answered(None, Some((since, Some("still running")))).latest_reply(since),
+            None,
+            "the held turn's own answer is not a later one"
         );
     }
 
     /// A background reply and a later turn's answer: the newer one is the
-    /// run's result, whichever kind it is.
+    /// run's result, whichever kind it is — by when the session stamped each.
     #[test]
     fn the_newest_of_the_two_kinds_of_answer_wins() {
         let since = Utc::now();
         let at = |secs: i64| since + chrono::Duration::seconds(secs);
-        let result = HoldResult {
-            outcome: HoldOutcome::Drained,
-            last: Some(TurnEndProbe {
-                blocker: None,
-                activity: (None, None),
-                last_background_reply: Some((at(5), "gate failed".into())),
-                running: Vec::new(),
-            }),
-        };
-        let mut later = LaterTurns::default();
-        assert!(!later.record("end_turn", Some("gate passed".into()), at(9)));
+        let background = Some((at(5), "gate failed"));
         assert_eq!(
-            result.latest_reply(since, &later).as_deref(),
+            answered(background, Some((at(9), Some("gate passed"))))
+                .latest_reply(since)
+                .as_deref(),
             Some("gate passed")
         );
-        later.reply = Some((at(2), "looking into it".into()));
         assert_eq!(
-            result.latest_reply(since, &later).as_deref(),
+            answered(background, Some((at(2), Some("looking into it"))))
+                .latest_reply(since)
+                .as_deref(),
             Some("gate failed")
+        );
+        assert_eq!(
+            answered(background, Some((at(9), None)))
+                .latest_reply(since)
+                .as_deref(),
+            Some("gate failed"),
+            "a later turn that said nothing leaves the answer before it standing"
         );
     }
 
     /// A later turn that ended otherwise than normally ends the wait, and the
-    /// first such end is the one the run settles on. One without an answer
-    /// leaves the answer before it standing.
+    /// first such end is the one the run settles on.
     #[test]
     fn a_later_turn_that_did_not_end_normally_ends_the_wait() {
-        let now = Utc::now();
         let mut later = LaterTurns::default();
-        assert!(!later.record("end_turn", Some("on it".into()), now));
+        assert!(!later.record("end_turn"));
         assert!(later.ended.is_none());
-        assert!(later.record("cancelled", None, now));
-        assert!(later.record("refusal", None, now));
+        assert!(later.record("cancelled"));
+        assert!(later.record("refusal"));
         assert_eq!(later.ended.as_deref(), Some("cancelled"));
-        assert_eq!(later.reply.map(|(_, text)| text).as_deref(), Some("on it"));
+    }
+
+    /// The probe reads the last turn's answer with the time the session
+    /// stamped it, and a hold begun on that turn starts from that time.
+    #[tokio::test]
+    async fn the_last_turn_is_read_with_the_sessions_stamp() {
+        let manager = connection(AgentType::ClaudeCode).await;
+        let ended = Utc::now() - chrono::Duration::seconds(3);
+        {
+            let state = manager.get_state(CONN).await.expect("state");
+            let mut s = state.write().await;
+            s.last_assistant_text = Some("done".into());
+            s.last_turn_completed_at = Some(ended);
+        }
+        let probe = manager.turn_end_probe(CONN).await.expect("probe");
+        assert_eq!(probe.last_turn, Some((ended, Some("done".to_string()))));
+        assert_eq!(probe.turn_ended_at(), ended);
     }
 }

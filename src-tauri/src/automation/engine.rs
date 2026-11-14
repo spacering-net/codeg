@@ -782,29 +782,27 @@ impl AutomationEngine {
         // work (one Grok started on its own, or a prompt sent to the session):
         // the waiter settles the run — with this turn's answer, if it is the
         // newest, and as this turn ended, if it did not end normally.
-        if self.held.lock().await.contains_key(&conn_id) {
-            let reply = self.capture_summary(&conn_id).await;
+        {
             let mut held = self.held.lock().await;
-            if let Some(run) = held.get_mut(&conn_id).filter(|run| !run.settling) {
-                if run.later.record(stop_reason, reply, Utc::now()) {
+            if let Some(run) = held.get_mut(&conn_id) {
+                if !run.settling && run.later.record(stop_reason) {
                     run.stop.cancel();
                 }
+                return;
             }
-            return;
         }
         let summary = self.capture_summary(&conn_id).await;
         if let Some(timing) = turn_end_hold::HoldTiming::from_env() {
-            if turn_end_hold::should_hold(&self.manager, &conn_id, stop_reason)
-                .await
-                .is_some()
+            if let Some(probe) =
+                turn_end_hold::should_hold(&self.manager, &conn_id, stop_reason).await
             {
                 self.hold_run(
                     conn_id,
-                    run_id,
-                    automation_id,
+                    (run_id, automation_id),
                     stop_reason.clone(),
                     summary,
                     timing,
+                    probe.turn_ended_at(),
                 )
                 .await;
                 return;
@@ -822,11 +820,11 @@ impl AutomationEngine {
     async fn hold_run(
         self: &Arc<Self>,
         conn_id: String,
-        run_id: i32,
-        automation_id: i32,
+        (run_id, automation_id): (i32, i32),
         stop_reason: String,
         summary: Option<String>,
         timing: turn_end_hold::HoldTiming,
+        since: chrono::DateTime<Utc>,
     ) {
         tracing::info!(
             "[automation] run {run_id} turn ended with work still going; holding \
@@ -841,7 +839,6 @@ impl AutomationEngine {
                 settling: false,
             },
         );
-        let since = Utc::now();
         let engine = Arc::clone(self);
         tokio::spawn(async move {
             let result =
@@ -862,7 +859,7 @@ impl AutomationEngine {
                 result.outcome.as_str()
             );
             if engine.index.lock().await.contains_key(&conn_id) {
-                let summary = match result.latest_reply(since, &later) {
+                let summary = match result.latest_reply(since) {
                     Some(reply) => Some(reply),
                     None => engine.capture_summary(&conn_id).await.or(summary),
                 };

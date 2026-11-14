@@ -3206,7 +3206,7 @@ impl TaskEngine {
                 stop_reason: stop_reason.to_string(),
                 summary,
                 signal,
-                since: chrono::Utc::now(),
+                since: probe.turn_ended_at(),
                 stop: CancellationToken::new(),
                 later: turn_end_hold::LaterTurns::default(),
                 settling: false,
@@ -3219,14 +3219,14 @@ impl TaskEngine {
     }
 
     /// A later turn ended on a connection held for its agent's background
-    /// work. Its answer and the error it reported are now the latest on the
-    /// generation, for the waiter's settle; and a turn that did not end
-    /// normally — stopped, refused, failed — ends the wait, the generation
-    /// settling as that turn ended, as it would have for the held turn itself.
-    /// Nothing changes once the waiter is settling: that settle is under way
-    /// with what it had.
+    /// work. The error it reported is now the latest on the generation, for
+    /// the waiter's settle (its answer the waiter reads from the session,
+    /// stamped when it arrived — see `HoldResult::latest_reply`); and a turn
+    /// that did not end normally — stopped, refused, failed — ends the wait,
+    /// the generation settling as that turn ended, as it would have for the
+    /// held turn itself. Nothing changes once the waiter is settling: that
+    /// settle is under way with what it had.
     async fn on_held_turn_complete(&self, conn_id: &str, stop_reason: &str) {
-        let reply = self.capture_summary(conn_id).await;
         let signal = self.turn_signals.lock().await.remove(conn_id);
         let mut holds = self.holds.lock().await;
         let Some(hold) = holds.get_mut(conn_id).filter(|hold| !hold.settling) else {
@@ -3240,7 +3240,7 @@ impl TaskEngine {
                 None => hold.signal = Some(later),
             }
         }
-        if hold.later.record(stop_reason, reply, chrono::Utc::now()) {
+        if hold.later.record(stop_reason) {
             tracing::info!(
                 "[work_task] task {} held connection={conn_id}: a later turn ended \
                  ({stop_reason}); settling now",
@@ -3380,7 +3380,7 @@ impl TaskEngine {
         // The newest answer since the hold began — from a turn the agent ran on
         // its own once its work finished, or from a later turn on the
         // connection — else the answer the held turn ended on.
-        let summary = match result.latest_reply(since, &later) {
+        let summary = match result.latest_reply(since) {
             Some(reply) => Some(reply),
             None => self.capture_summary(&conn_id).await.or(held_summary),
         };
@@ -11488,8 +11488,12 @@ mod tests {
         apply_live(&engine, follow_up_activity("The gate failed.")).await;
         tokio::time::sleep(Duration::from_millis(20)).await;
         {
+            // What applying that turn's `TurnComplete` leaves in the session:
+            // its answer, stamped then.
             let state = engine.manager.get_state(PARENT_CONN).await.expect("state");
-            state.write().await.last_assistant_text = Some("Fixed it; the gate passes now.".into());
+            let mut s = state.write().await;
+            s.last_assistant_text = Some("Fixed it; the gate passes now.".into());
+            s.last_turn_completed_at = Some(chrono::Utc::now());
         }
         engine
             .on_event(&turn_complete_envelope(PARENT_CONN, 2, "end_turn"))
