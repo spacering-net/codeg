@@ -8704,6 +8704,12 @@
         "level_plan_stuck": {
           "title": "Plan hängt fest",
           "hint": "Ein Schritt ist fehlgeschlagen und blieb es."
+        },
+        "rule_division": {
+          "title": "Wer es besser macht",
+          "hint": "Eine andere Ausführungskonfiguration schafft eine Art Arbeit deutlich öfter beim ersten Mal als ihre erste Wahl in der Arbeitsteilung (20 Punkte oder mehr, mit mindestens 5 erledigten auf jeder Seite).",
+          "on": "An",
+          "off": "Aus"
         }
       },
       "workdir": {
@@ -8883,7 +8889,12 @@
         "firstPass": "beim ersten Mal {rate} % ({pass}/{settled})",
         "average": "im Schnitt {time}",
         "minutes": "{n} Min.",
-        "hours": "{h} Std. {m} Min."
+        "hours": "{h} Std. {m} Min.",
+        "apart": "Nach Konfiguration und Art",
+        "byExecutor": "Nach Ausführungskonfiguration und Art",
+        "byBot": "Nach Assistent und Art",
+        "someone": "Frühere Arbeit",
+        "unjudged": "{count} vergeben, noch keine erledigt"
       }
     },
     "statusWord": {
@@ -9015,7 +9026,8 @@
       "doneWhen": "Fertig, wenn",
       "check": "Abnahmeprüfung",
       "checkRound": "Abnahmeprüfung · Runde {round}",
-      "checkVia": "mit der Ausführungskonfiguration von {name} geprüft"
+      "checkVia": "mit der Ausführungskonfiguration von {name} geprüft",
+      "why": "Warum: {why}"
     },
     "event": {
       "someone": "Ein Assistent",
@@ -10255,7 +10267,8 @@
         "new_project": "Ein neues Projekt",
         "behind": "Branch im Rückstand, mit Konflikten",
         "undo": "Rückgängig gemachte Änderungen",
-        "idle_bot": "Ein untätiger Arbeitsassistent"
+        "idle_bot": "Ein untätiger Arbeitsassistent",
+        "division": "Wer es besser macht"
       },
       "wait": {
         "permission": "Wartet auf deine Freigabe",
@@ -10297,6 +10310,9 @@
         "idle_bot": {
           "hide": "Ausblenden",
           "delete": "Löschen …"
+        },
+        "division": {
+          "switch": "Zuerst an {name} geben"
         }
       },
       "done": {
@@ -10310,7 +10326,9 @@
         "rebasing": "Zum Rebase zurückgegeben.",
         "asking_first": "Änderungen, um die du bittest, kommen jetzt zuerst als Karte.",
         "hidden": "Ausgeblendet. Er ist weiter unter den ausgeblendeten Assistenten.",
-        "deleted": "Gelöscht."
+        "deleted": "Gelöscht.",
+        "switched": "{kind} geht jetzt zuerst an {name}.",
+        "undone": "Zurückgenommen: Die Arbeitsteilung ist wie vorher."
       },
       "hand": {
         "failed": "„{title}“ ist fehlgeschlagen, und niemand hat sich darum gekümmert. Sieh nach, was schiefging, und sag mir, was du vorschlägst.",
@@ -10380,10 +10398,17 @@
         "idle_bot": {
           "title": "Untätige Arbeitsassistenten",
           "hint": "Im Wochenrückblick: ein Arbeitsassistent, den zwei Wochen niemand geweckt hat — ausblenden oder löschen?"
+        },
+        "division": {
+          "title": "Wer es besser macht",
+          "hint": "Eine andere Ausführungskonfiguration schafft eine Art Arbeit deutlich öfter beim ersten Mal als ihre erste Wahl in der Arbeitsteilung (20 Punkte oder mehr, mit mindestens 5 erledigten auf jeder Seite)."
         }
       },
       "undoDetail": "Du hast {undone} der {made} auf dein Wort hin gemachten Änderungen der letzten zwei Wochen rückgängig gemacht.",
-      "idleBotDetail": "Seit zwei Wochen hat ihn niemand geweckt."
+      "idleBotDetail": "Seit zwei Wochen hat ihn niemand geweckt.",
+      "undoSwitch": "Rückgängig",
+      "divisionDetail": "Letzte {days} Tage: {to} gelang {pass} von {settled} beim ersten Mal ({rate} %); {from}, jetzt erste Wahl, {fromPass} von {fromSettled} ({fromRate} %).",
+      "divisionDetailAuto": "Letzte {days} Tage: {to} gelang {pass} von {settled} beim ersten Mal ({rate} %); die anderen zusammen {fromPass} von {fromSettled} ({fromRate} %). Es gibt gerade keine erste Wahl."
     },
     "brief": {
       "title": "Morgen-Briefing",
@@ -10561,7 +10586,8 @@
         "deliverable": "Ergebnis",
         "prompt": "was zu tun ist",
         "done_when": "fertig, wenn",
-        "depends_on": "worauf er wartet"
+        "depends_on": "worauf er wartet",
+        "kind": "Art der Arbeit"
       }
     }
   }

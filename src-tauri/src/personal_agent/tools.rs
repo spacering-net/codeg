@@ -135,8 +135,12 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             // Whose each one is: the work assistants bound to it (4.4).
             let me = engine.bot().await;
             let bots = svc::list_bots(&db.conn).await.unwrap_or_default();
-            // How each one's work went lately: who to hand work to (5.2).
-            let (_, grades) = super::profile::grades(db, crate::personal_agent::clock::now()).await;
+            // How each one's work went lately: who to hand work to (5.2),
+            // and apart by mode and by the kind of work (7.9).
+            let work = super::profile::graded_recent(db, crate::personal_agent::clock::now()).await;
+            let (_, grades) = super::profile::grades_of(&work);
+            let by_mode = super::profile::by_mode(&work);
+            let by_kind = super::profile::by_kind(&work);
             let mut rows: Vec<Value> = Vec::new();
             let mut open_lines = Vec::new();
             let mut closed_lines = Vec::new();
@@ -179,6 +183,16 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     "projects": usage.projects,
                     "bound_to": owners.iter().map(|b| b.id).collect::<Vec<_>>(),
                     "grade": grades.get(&a.id),
+                    "grade_by_mode": by_mode
+                        .iter()
+                        .filter(|((e, _), _)| *e == a.id)
+                        .map(|((_, m), g)| (super::engine::enum_str(m), g))
+                        .collect::<std::collections::BTreeMap<_, _>>(),
+                    "grade_by_kind": by_kind
+                        .iter()
+                        .filter(|((e, _), _)| *e == a.id)
+                        .map(|((_, k), g)| (k.clone(), g))
+                        .collect::<std::collections::BTreeMap<_, _>>(),
                 }));
                 let what = if a.description.trim().is_empty() {
                     String::new()
@@ -188,7 +202,12 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 let grade = grades
                     .get(&a.id)
                     .and_then(super::profile::grade_words)
-                    .map(|g| format!(" [{g}]"))
+                    .map(
+                        |g| match super::profile::grade_apart_words(a.id, &by_mode, &by_kind) {
+                            Some(apart) => format!(" [{g}; {apart}]"),
+                            None => format!(" [{g}]"),
+                        },
+                    )
                     .unwrap_or_default();
                 let line = format!(
                     "#{} {} ({}){what}{}{grade}{whose}",
@@ -289,6 +308,8 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 report: report || (mode != DispatchMode::Task && args.get("deliverable").is_some()),
                 on_done: string(&args, "on_done"),
                 done_when: string(&args, "done_when"),
+                kind: string(&args, "kind"),
+                why: string(&args, "why"),
             };
             let mut valid = match engine.validate_dispatch(&req).await {
                 Ok(v) => v,
@@ -385,9 +406,11 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
         "bot_update" => engine.bot_update_call(&args).await,
         "assistant_update" => engine.assistant_update_call(&args).await,
         "bot_list" => engine.bot_list_call().await,
-        "routine_list" => engine.routine_list_call().await,
-        "routine_create" => engine.routine_create_call(&args).await,
-        "routine_update" => engine.routine_update_call(&args).await,
+        // Boxed, as the plan tools are: a routine's run hands out work, and
+        // the futures down that way are deep (a test's 2 MB stack).
+        "routine_list" => Box::pin(engine.routine_list_call()).await,
+        "routine_create" => Box::pin(engine.routine_create_call(&args)).await,
+        "routine_update" => Box::pin(engine.routine_update_call(&args)).await,
         // Plans (7.6). Boxed: deep futures, and this match is every tool's.
         "plan_create" => Box::pin(engine.plan_create_call(&args)).await,
         "plan_update" => Box::pin(engine.plan_update_call(&args)).await,

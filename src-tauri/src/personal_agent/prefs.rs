@@ -76,6 +76,17 @@ pub struct Applied {
     pub picked: Option<Vec<crate::models::personal_agent_bots::PickedOption>>,
 }
 
+/// What putting a switched division pick back came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PutBack {
+    /// It is what it was again.
+    Done,
+    /// It already was: nothing to do.
+    Already,
+    /// It was changed again since: it stays.
+    ChangedSince,
+}
+
 /// Whether a key is the account's (on the primary's row).
 fn is_account(key: &str) -> bool {
     key.starts_with("prefs.") || key.starts_with("team.")
@@ -429,6 +440,50 @@ impl PersonalAgentEngine {
             })?;
         super::bots::check_brain(&config)?;
         Ok((config, picked))
+    }
+
+    /// A division pick switched from a card (7.9), put back to what it was
+    /// — only while it still is what the switch made it: the check and the
+    /// write are one statement, so a pick the owner saved meanwhile stays.
+    pub(super) async fn put_division_back(&self, switched: &Applied) -> Result<PutBack, String> {
+        let Some(kind) = switched.key.strip_prefix("team.division.") else {
+            return Err("not a division pick".into());
+        };
+        if !crate::models::personal_agent_prefs::DIVISION.contains(&kind) {
+            return Err(format!("no kind of work `{kind}`"));
+        }
+        // What it was must still be there to go back to.
+        if let Some(pick) = switched.from.as_str() {
+            self.check_pick(pick)
+                .await
+                .map_err(|e| format!("{e}; the pick stays as it is"))?;
+        }
+        let primary = svc::primary_bot(&self.db.conn)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("set the primary assistant up first")?;
+        let wrote = svc::patch_settings_if(
+            &self.db.conn,
+            primary.id,
+            &format!("$.team.division.{kind}"),
+            switched.to.as_str(),
+            &json!({ "team": { "division": { kind: switched.from } } }),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        if !wrote {
+            let now = self.account().await.team.division.get(kind).cloned();
+            let now = now.map(Value::from).unwrap_or(Value::Null);
+            return Ok(if now == switched.from {
+                PutBack::Already
+            } else {
+                PutBack::ChangedSince
+            });
+        }
+        for b in svc::list_bots(&self.db.conn).await.unwrap_or_default() {
+            self.emit_for(b.id, PersonalAgentChange::Agent);
+        }
+        Ok(PutBack::Done)
     }
 
     /// A division pick names someone who is there.

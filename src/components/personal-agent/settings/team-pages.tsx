@@ -4,7 +4,9 @@
  * The team pages every assistant shares (10.5): the work assistants, the
  * executor configs — moved here from Collaboration as they were, with what
  * each is doing, whether it keeps failing, its last two weeks, and how the
- * assistants may use it — and the division of work.
+ * assistants may use it — and the division of work. Each row's grade opens
+ * apart (7.9): an assistant's by executor config and mode, an executor
+ * config's by assistant and mode.
  */
 
 import {
@@ -20,6 +22,7 @@ import {
   AlertTriangle,
   Bot,
   Briefcase,
+  ChartColumn,
   Layers,
   Loader2,
   MoreHorizontal,
@@ -64,15 +67,16 @@ import {
   personalAgentSettingsPatch,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { DIVISION_KINDS } from "@/lib/types"
 import type {
   AssistantInfo,
   DispatchMode,
-  DivisionKind,
   ExecutorUsage,
   ExecutorView,
   PersonalAgentAccount,
   PersonalAgentBotSummary,
   PersonalAgentGrade,
+  PersonalAgentGradeCell,
   PersonalAgentGrades,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -89,17 +93,6 @@ import { PageHead } from "./pref-pages"
 import { useBots, useExecutors, useSettingsPatch } from "./use-settings"
 
 const MODES: DispatchMode[] = ["task", "chat", "session"]
-
-export const DIVISION_KINDS: DivisionKind[] = [
-  "code",
-  "review",
-  "test",
-  "fix_ci",
-  "docs",
-  "release",
-  "research",
-  "check",
-]
 
 const DEFAULT_USAGE: ExecutorUsage = {
   dispatch: true,
@@ -156,6 +149,50 @@ export function useGradeText(): (
     }
     return parts.join(" · ")
   }
+}
+
+/** A grade apart (7.9): the work by executor config and mode (`by:
+ *  "executor"`, an assistant's) or by assistant and mode (`by: "bot"`, an
+ *  executor config's), the most work first. */
+function GradeCells({
+  cells,
+  by,
+}: {
+  cells: readonly PersonalAgentGradeCell[]
+  by: "executor" | "bot"
+}) {
+  const t = useTranslations("PersonalAgent.settings.grade")
+  const tMode = useTranslations("PersonalAgent.mode")
+  const gradeText = useGradeText()
+  const bots = useBots()
+  const botName = useBotName()
+  const nameOf = (c: PersonalAgentGradeCell) => {
+    if (by === "executor") return c.executor_name
+    const b = (bots ?? []).find((x) => x.id === c.bot_id)
+    return b ? botName(b) : t("someone")
+  }
+  return (
+    <div data-pa-grade-cells={by}>
+      <p className="px-2 pt-1 pb-1 text-[0.6875rem] font-medium text-muted-foreground">
+        {by === "executor" ? t("byExecutor") : t("byBot")}
+      </p>
+      {cells.map((c) => (
+        <div
+          key={`${c.bot_id ?? "-"}:${c.executor}:${c.mode}`}
+          data-pa-grade-cell={`${c.bot_id ?? ""}:${c.executor}:${c.mode}`}
+          className="flex items-baseline gap-2 rounded-md px-2 py-1 text-xs"
+        >
+          <span className="min-w-0 flex-1 truncate">
+            {nameOf(c)}
+            <span className="text-muted-foreground"> · {tMode(c.mode)}</span>
+          </span>
+          <span className="shrink-0 text-muted-foreground">
+            {gradeText(c.grade) ?? t("unjudged", { count: c.grade.dispatches })}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 // ── work assistants ─────────────────────────────────────────────────────────
@@ -283,6 +320,29 @@ export function WorkersPage({
                     ) : null}
                   </span>
                 </button>
+                {(grades?.cells ?? []).some((c) => c.bot_id === w.id) ? (
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        aria-label={t("grade.apart")}
+                        title={t("grade.apart")}
+                        data-pa-worker-cells={w.id}
+                      >
+                        <ChartColumn aria-hidden />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent align="end" className="w-80 p-1.5">
+                      <GradeCells
+                        by="executor"
+                        cells={(grades?.cells ?? []).filter(
+                          (c) => c.bot_id === w.id
+                        )}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                ) : null}
                 <Button
                   size="xs"
                   variant="ghost"
@@ -564,10 +624,28 @@ function ExecutorLine({
   }
   const grade = gradeText(view.grade)
   if (grade) {
+    const cells = view.grade_cells ?? []
     chips.push(
-      <span key="grade" data-pa-executor-grade={view.assistant_id}>
-        {grade}
-      </span>
+      cells.length > 0 ? (
+        <Popover key="grade">
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              data-pa-executor-grade={view.assistant_id}
+              className="rounded-sm underline decoration-dotted underline-offset-2 hover:text-foreground"
+            >
+              {grade}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80 p-1.5">
+            <GradeCells by="bot" cells={cells} />
+          </PopoverContent>
+        </Popover>
+      ) : (
+        <span key="grade" data-pa-executor-grade={view.assistant_id}>
+          {grade}
+        </span>
+      )
     )
   }
   for (const w of view.workers) {

@@ -8704,6 +8704,12 @@
         "level_plan_stuck": {
           "title": "Plan bloqué",
           "hint": "Une étape a échoué et reste en échec."
+        },
+        "rule_division": {
+          "title": "Qui le fait le mieux",
+          "hint": "Une autre configuration d’exécution réussit un type de travail du premier coup nettement plus souvent que son premier choix dans la répartition (20 points ou plus, avec au moins 5 travaux terminés de chaque côté).",
+          "on": "Activé",
+          "off": "Désactivé"
         }
       },
       "workdir": {
@@ -8883,7 +8889,12 @@
         "firstPass": "du premier coup {rate} % ({pass}/{settled})",
         "average": "{time} en moyenne",
         "minutes": "{n} min",
-        "hours": "{h} h {m} min"
+        "hours": "{h} h {m} min",
+        "apart": "Par configuration et mode",
+        "byExecutor": "Par configuration d’exécution et mode",
+        "byBot": "Par assistant et mode",
+        "someone": "Travail antérieur",
+        "unjudged": "{count} confiés, aucun terminé pour l’instant"
       }
     },
     "statusWord": {
@@ -9015,7 +9026,8 @@
       "doneWhen": "Terminé quand",
       "check": "Vérification de validation",
       "checkRound": "Vérification de validation · tour {round}",
-      "checkVia": "vérifié avec la configuration d'exécution de {name}"
+      "checkVia": "vérifié avec la configuration d'exécution de {name}",
+      "why": "Pourquoi : {why}"
     },
     "event": {
       "someone": "Un assistant",
@@ -10255,7 +10267,8 @@
         "new_project": "Un nouveau projet",
         "behind": "Branche en retard, avec conflits",
         "undo": "Changements annulés",
-        "idle_bot": "Un assistant de travail inactif"
+        "idle_bot": "Un assistant de travail inactif",
+        "division": "Qui le fait le mieux"
       },
       "wait": {
         "permission": "Attend votre approbation",
@@ -10297,6 +10310,9 @@
         "idle_bot": {
           "hide": "Le masquer",
           "delete": "Le supprimer…"
+        },
+        "division": {
+          "switch": "Le confier d’abord à {name}"
         }
       },
       "done": {
@@ -10310,7 +10326,9 @@
         "rebasing": "Renvoyé pour un rebase.",
         "asking_first": "Les changements demandés vous seront d'abord montrés sur une carte.",
         "hidden": "Masqué. Il reste parmi les assistants masqués.",
-        "deleted": "Supprimé."
+        "deleted": "Supprimé.",
+        "switched": "{kind} va désormais d’abord à {name}.",
+        "undone": "Annulé : la répartition est comme avant."
       },
       "hand": {
         "failed": "« {title} » a échoué et personne ne s'en est occupé. Regarde ce qui n'a pas marché et dis-moi ce que tu proposes.",
@@ -10380,10 +10398,17 @@
         "idle_bot": {
           "title": "Assistants de travail inactifs",
           "hint": "Dans le bilan de la semaine : un assistant de travail que personne n'a réveillé depuis deux semaines — le masquer ou le supprimer ?"
+        },
+        "division": {
+          "title": "Qui le fait le mieux",
+          "hint": "Une autre configuration d’exécution réussit un type de travail du premier coup nettement plus souvent que son premier choix dans la répartition (20 points ou plus, avec au moins 5 travaux terminés de chaque côté)."
         }
       },
       "undoDetail": "Vous avez annulé {undone} des {made} changements faits à votre demande ces deux dernières semaines.",
-      "idleBotDetail": "Personne ne l'a réveillé depuis deux semaines."
+      "idleBotDetail": "Personne ne l'a réveillé depuis deux semaines.",
+      "undoSwitch": "Annuler",
+      "divisionDetail": "{days} derniers jours : {to} a réussi du premier coup {pass} sur {settled} ({rate} %) ; {from}, le premier choix actuel, {fromPass} sur {fromSettled} ({fromRate} %).",
+      "divisionDetailAuto": "{days} derniers jours : {to} a réussi du premier coup {pass} sur {settled} ({rate} %) ; les autres ensemble, {fromPass} sur {fromSettled} ({fromRate} %). Il n’y a pas de premier choix pour l’instant."
     },
     "brief": {
       "title": "Point du matin",
@@ -10561,7 +10586,8 @@
         "deliverable": "livrable",
         "prompt": "quoi faire",
         "done_when": "terminé quand",
-        "depends_on": "ce qu’elle attend"
+        "depends_on": "ce qu’elle attend",
+        "kind": "type de travail"
       }
     }
   }

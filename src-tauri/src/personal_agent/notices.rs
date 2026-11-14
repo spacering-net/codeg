@@ -599,7 +599,7 @@ impl PersonalAgentEngine {
             NoticeKind::Forge => return self.act_on_forge(&notice, action).await,
             NoticeKind::Pr => return self.act_on_pr(&notice, action).await,
             // A routine made, changed, suggested, offered or paused (6.9).
-            NoticeKind::Routine => return self.act_on_routine(&notice, action).await,
+            NoticeKind::Routine => return Box::pin(self.act_on_routine(&notice, action)).await,
             // One of codeg's proposal rules (6.7).
             NoticeKind::Rule => return self.act_on_rule(&notice, action, text).await,
             NoticeKind::Brief => return Err("a brief has nothing to answer".into()),

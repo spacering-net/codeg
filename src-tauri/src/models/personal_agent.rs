@@ -669,6 +669,8 @@ pub struct ExecutorView {
     pub usage: super::personal_agent_prefs::ExecutorUsage,
     /// How its work went over the last 30 days (2.11).
     pub grade: crate::personal_agent::profile::Grade,
+    /// And apart, by who handed it out and how (7.9), the most work first.
+    pub grade_cells: Vec<crate::personal_agent::profile::GradeCell>,
 }
 
 /// One of the persona/memory files of the working directory.

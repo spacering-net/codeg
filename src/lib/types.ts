@@ -3027,6 +3027,9 @@ export interface PersonalAgentPrefs {
   rule_idle_days: number
   rule_new_project: "on" | "off"
   rule_behind: "on" | "off"
+  /** Another executor config clearly does a kind of work better than its
+   *  pick in the division (7.9). */
+  rule_division: "on" | "off"
   rule_repeat: "on" | "off"
   rule_repeat_count: number
   /** The assistants' own suggestions (`suggest: true`). */
@@ -3084,6 +3087,7 @@ export const PROPOSAL_RULES = [
   "idle",
   "new_project",
   "behind",
+  "division",
   "repeat",
   "suggest",
   "undo",
@@ -3512,11 +3516,24 @@ export interface PersonalAgentGrade {
   avg_minutes: number | null
 }
 
+/** The work one assistant handed to one executor config one way (7.9). */
+export interface PersonalAgentGradeCell {
+  /** Who handed it out; `null` from before there were several. */
+  bot_id: number | null
+  executor: number
+  /** The executor config's name when the work was handed out. */
+  executor_name: string
+  mode: DispatchMode
+  grade: PersonalAgentGrade
+}
+
 export interface PersonalAgentGrades {
   /** By assistant id. */
   bots: Record<string, PersonalAgentGrade>
   /** By executor config id. */
   executors: Record<string, PersonalAgentGrade>
+  /** Apart: assistant × executor config × mode, the most work first. */
+  cells: PersonalAgentGradeCell[]
 }
 
 /** A change on the "about you" page (5.3). */
@@ -3584,6 +3601,19 @@ export type DivisionKind =
   | "release"
   | "research"
   | "check"
+
+/** Every kind, in the division's order — also what a dispatch names as its
+ *  kind of work (7.9). */
+export const DIVISION_KINDS: readonly DivisionKind[] = [
+  "code",
+  "review",
+  "test",
+  "fix_ci",
+  "docs",
+  "release",
+  "research",
+  "check",
+]
 
 export interface PersonalAgentTeam {
   /** A kind of work → `bot:<uid>` or `assistant:<uid>`; left out = auto. */
@@ -3890,6 +3920,8 @@ export interface PlanStepView {
   project_id: number | null
   project_name: string | null
   deliverable: "change" | "report" | null
+  /** The kind of work (7.9). */
+  kind?: DivisionKind
   prompt: string
   done_when: string | null
   depends_on: number[]
@@ -3981,6 +4013,8 @@ export interface ExecutorView {
   usage: ExecutorUsage
   /** How its work went over the last 30 days (2.11). */
   grade: PersonalAgentGrade
+  /** And apart, by who handed it out and how (7.9). */
+  grade_cells: PersonalAgentGradeCell[]
 }
 
 /** One of the personal agent's files: a fixed one (`SOUL.md`, `AGENTS.md`,

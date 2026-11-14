@@ -8703,6 +8703,12 @@
         "level_plan_stuck": {
           "title": "Plan stuck",
           "hint": "A step failed and stayed failed."
+        },
+        "rule_division": {
+          "title": "Who does it better",
+          "hint": "Another executor config passes a kind of work the first time clearly more often than its first pick in the division (20 points or more, with at least 5 pieces done on each side).",
+          "on": "On",
+          "off": "Off"
         }
       },
       "workdir": {
@@ -8883,7 +8889,12 @@
         "firstPass": "first time {rate}% ({pass}/{settled})",
         "average": "{time} on average",
         "minutes": "{n} min",
-        "hours": "{h} h {m} min"
+        "hours": "{h} h {m} min",
+        "apart": "By executor config and mode",
+        "byExecutor": "By executor config and mode",
+        "byBot": "By assistant and mode",
+        "someone": "Earlier work",
+        "unjudged": "{count} handed out, none done yet"
       }
     },
     "statusWord": {
@@ -9015,7 +9026,8 @@
       "doneWhen": "Done when",
       "check": "Acceptance check",
       "checkRound": "Acceptance check · round {round}",
-      "checkVia": "checked with {name}'s executor config"
+      "checkVia": "checked with {name}'s executor config",
+      "why": "Why: {why}"
     },
     "event": {
       "someone": "An assistant",
@@ -10255,7 +10267,8 @@
         "new_project": "A new project",
         "behind": "A branch behind, with conflicts",
         "undo": "Changes you undid",
-        "idle_bot": "An idle work assistant"
+        "idle_bot": "An idle work assistant",
+        "division": "Who does it better"
       },
       "wait": {
         "permission": "Waiting for your approval",
@@ -10297,6 +10310,9 @@
         "idle_bot": {
           "hide": "Hide it",
           "delete": "Delete it…"
+        },
+        "division": {
+          "switch": "Give it to {name} first"
         }
       },
       "done": {
@@ -10310,7 +10326,9 @@
         "rebasing": "Sent back to be rebased.",
         "asking_first": "Changes you ask for now come to you as a card first.",
         "hidden": "Hidden. It is still there under the hidden assistants.",
-        "deleted": "Deleted."
+        "deleted": "Deleted.",
+        "switched": "{kind} now goes to {name} first.",
+        "undone": "Taken back: the division is as it was."
       },
       "hand": {
         "failed": "\"{title}\" failed and nobody has picked it up. Look into what went wrong and tell me what you suggest.",
@@ -10380,10 +10398,17 @@
         "idle_bot": {
           "title": "Idle work assistants",
           "hint": "In the weekly review: a work assistant nobody woke for two weeks — hide it or delete it?"
+        },
+        "division": {
+          "title": "Who does it better",
+          "hint": "Another executor config passes a kind of work the first time clearly more often than its first pick in the division (20 points or more, with at least 5 pieces done on each side)."
         }
       },
       "undoDetail": "You undid {undone} of the {made} changes made at your word in the last two weeks.",
-      "idleBotDetail": "Nobody has woken it for two weeks."
+      "idleBotDetail": "Nobody has woken it for two weeks.",
+      "undoSwitch": "Undo",
+      "divisionDetail": "Last {days} days: {to} passed {pass} of {settled} the first time ({rate}%); {from}, the first pick now, {fromPass} of {fromSettled} ({fromRate}%).",
+      "divisionDetailAuto": "Last {days} days: {to} passed {pass} of {settled} the first time ({rate}%); the others together {fromPass} of {fromSettled} ({fromRate}%). Nobody is the first pick now."
     },
     "brief": {
       "title": "Morning brief",
@@ -10561,7 +10586,8 @@
         "deliverable": "deliverable",
         "prompt": "what to do",
         "done_when": "done when",
-        "depends_on": "what it waits for"
+        "depends_on": "what it waits for",
+        "kind": "kind of work"
       }
     }
   }

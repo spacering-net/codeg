@@ -292,6 +292,39 @@ pub async fn patch_settings(
     Ok(agent::Entity::find_by_id(id).one(conn).await?)
 }
 
+/// [`patch_settings`], only while the value at JSON `path` (`$.a.b`) is
+/// `expect` (`None`: absent or null) — the check and the write one
+/// statement, so a save in between is never overwritten. Whether it wrote.
+pub async fn patch_settings_if(
+    conn: &impl ConnectionTrait,
+    id: i32,
+    path: &str,
+    expect: Option<&str>,
+    patch: &serde_json::Value,
+) -> Result<bool, DbError> {
+    let at: Vec<sea_orm::Value> = vec![path.to_string().into(), expect.map(str::to_string).into()];
+    let res = agent::Entity::update_many()
+        .col_expr(
+            agent::Column::Settings,
+            Expr::cust_with_values(SETTINGS_PATCH_SQL, [patch.to_string()]),
+        )
+        .col_expr(agent::Column::UpdatedAt, Expr::value(Utc::now()))
+        .col_expr(
+            agent::Column::Revision,
+            Expr::col(agent::Column::Revision).add(1),
+        )
+        .filter(agent::Column::Id.eq(id))
+        .filter(agent::Column::DeletedAt.is_null())
+        .filter(Expr::cust_with_values(
+            "json_extract(CASE WHEN json_valid(settings) AND json_type(settings) = 'object' \
+             THEN settings ELSE '{}' END, ?) IS ?",
+            at,
+        ))
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
 /// A change to how an assistant sits on the roster (4.14). Not a setting:
 /// neither the revision nor `updated_at` moves, so a settings view open on
 /// it is not told someone else changed it.
@@ -2644,6 +2677,8 @@ pub struct NewDispatch {
     pub done_when: Option<String>,
     /// A round codeg starts to fix a watched pull request (7.4), as JSON.
     pub pr_fix: Option<String>,
+    /// The kind of work it is (7.9).
+    pub kind: Option<String>,
 }
 
 /// Where an input's chain started — an assistant and its timeline row (an
@@ -2699,6 +2734,7 @@ fn dispatch_active(new: NewDispatch) -> dispatch::ActiveModel {
         round_op_id: Set(None),
         done_when: Set(new.done_when),
         pr_fix: Set(new.pr_fix),
+        kind: Set(new.kind),
     }
 }
 

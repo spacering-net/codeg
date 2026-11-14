@@ -227,6 +227,13 @@ pub enum What {
         rule: String,
         text: String,
     },
+    /// codeg's division rule (7.9): another executor config (`to`) does a
+    /// kind of work better than its pick (`from`, none with no pick).
+    Division {
+        kind: String,
+        to: String,
+        from: Option<String>,
+    },
     /// The morning brief is ready: how many things wait on the owner.
     Brief {
         needs: usize,
@@ -530,6 +537,12 @@ struct Words {
     rule_idle: &'static str,
     rule_new_project: &'static str,
     rule_behind: &'static str,
+    /// codeg's division rule (7.9): `{kind}`, `{to}` and, with a pick,
+    /// `{from}`.
+    rule_division: &'static str,
+    rule_division_from: &'static str,
+    /// The division's kinds of work, in its order (`DIVISION`).
+    kinds: [&'static str; 8],
     why_proposal: &'static str,
     why_proposal_low: &'static str,
     brief: &'static str,
@@ -608,6 +621,9 @@ const EN: Words = Words {
     rule_idle: "Gone quiet: {text}",
     rule_new_project: "New project: {text}",
     rule_behind: "Behind its target, with conflicts: {text}",
+    rule_division: "{kind}: {to} passes the first time more often",
+    rule_division_from: "{kind}: {to} passes the first time more often than {from}",
+    kinds: ["Writing code", "Review", "Testing", "Fixing CI", "Docs", "Releases", "Research", "Checking"],
     why_proposal: "codeg noticed it; the card has a next step.",
     why_proposal_low: "codeg noticed it; nothing urgent.",
     brief: "Good morning — {n} waiting on you",
@@ -686,6 +702,18 @@ const ZH_CN: Words = Words {
     rule_idle: "很久没动了：{text}",
     rule_new_project: "新项目：{text}",
     rule_behind: "落后目标分支且有冲突：{text}",
+    rule_division: "{kind}：{to} 一次过得更多",
+    rule_division_from: "{kind}：{to} 比 {from} 一次过得更多",
+    kinds: [
+        "写代码",
+        "评审",
+        "测试",
+        "修 CI",
+        "文档",
+        "发布",
+        "调研",
+        "检查",
+    ],
     why_proposal: "codeg 发现的，卡片上有下一步。",
     why_proposal_low: "codeg 发现的，不急。",
     brief: "早上好，{n} 件需要你",
@@ -764,6 +792,18 @@ const ZH_TW: Words = Words {
     rule_idle: "很久沒動了：{text}",
     rule_new_project: "新專案：{text}",
     rule_behind: "落後目標分支且有衝突：{text}",
+    rule_division: "{kind}：{to} 一次過得更多",
+    rule_division_from: "{kind}：{to} 比 {from} 一次過得更多",
+    kinds: [
+        "寫程式",
+        "審查",
+        "測試",
+        "修 CI",
+        "文件",
+        "發布",
+        "調查",
+        "檢查",
+    ],
     why_proposal: "codeg 發現的，卡片上有下一步。",
     why_proposal_low: "codeg 發現的，不急。",
     brief: "早安，{n} 件需要你",
@@ -842,6 +882,9 @@ const JA: Words = Words {
     rule_idle: "しばらく動きがありません：{text}",
     rule_new_project: "新しいプロジェクト：{text}",
     rule_behind: "ターゲットより遅れていて競合があります：{text}",
+    rule_division: "{kind}：{to} のほうが一度で通ることが多いです",
+    rule_division_from: "{kind}：{from} より {to} のほうが一度で通ることが多いです",
+    kinds: ["コードを書く", "レビュー", "テスト", "CI の修正", "ドキュメント", "リリース", "調査", "チェック"],
     why_proposal: "codeg が気づきました。カードに次の一歩があります。",
     why_proposal_low: "codeg が気づきました。急ぎではありません。",
     brief: "おはようございます — 対応が必要なことが {n} 件",
@@ -920,6 +963,9 @@ const KO: Words = Words {
     rule_idle: "한동안 진행이 없어요: {text}",
     rule_new_project: "새 프로젝트: {text}",
     rule_behind: "대상 브랜치보다 뒤처져 있고 충돌이 있어요: {text}",
+    rule_division: "{kind}: {to}이(가) 한 번에 통과하는 경우가 더 많아요",
+    rule_division_from: "{kind}: {to}이(가) {from}보다 한 번에 통과하는 경우가 더 많아요",
+    kinds: ["코드 작성", "리뷰", "테스트", "CI 수정", "문서", "릴리스", "조사", "검사"],
     why_proposal: "codeg가 발견했어요. 카드에 다음 단계가 있어요.",
     why_proposal_low: "codeg가 발견했어요. 급하지 않아요.",
     brief: "좋은 아침이에요 — {n}건이 당신을 기다려요",
@@ -998,6 +1044,9 @@ const ES: Words = Words {
     rule_idle: "Sin movimiento hace tiempo: {text}",
     rule_new_project: "Proyecto nuevo: {text}",
     rule_behind: "Detrás de su rama destino, con conflictos: {text}",
+    rule_division: "{kind}: {to} sale bien a la primera más a menudo",
+    rule_division_from: "{kind}: {to} sale bien a la primera más a menudo que {from}",
+    kinds: ["Escribir código", "Revisión", "Pruebas", "Arreglar CI", "Documentación", "Lanzamientos", "Investigación", "Comprobación"],
     why_proposal: "codeg lo notó; la tarjeta tiene el siguiente paso.",
     why_proposal_low: "codeg lo notó; nada urgente.",
     brief: "Buenos días: {n} cosas te necesitan",
@@ -1076,6 +1125,9 @@ const DE: Words = Words {
     rule_idle: "Seit Längerem unverändert: {text}",
     rule_new_project: "Neues Projekt: {text}",
     rule_behind: "Hinter dem Zielbranch, mit Konflikten: {text}",
+    rule_division: "{kind}: {to} gelingt öfter beim ersten Mal",
+    rule_division_from: "{kind}: {to} gelingt öfter beim ersten Mal als {from}",
+    kinds: ["Code schreiben", "Review", "Tests", "CI reparieren", "Dokumentation", "Releases", "Recherche", "Prüfung"],
     why_proposal: "codeg hat es bemerkt; die Karte hat einen nächsten Schritt.",
     why_proposal_low: "codeg hat es bemerkt; nichts Dringendes.",
     brief: "Guten Morgen – {n} Dinge brauchen dich",
@@ -1155,6 +1207,9 @@ const FR: Words = Words {
     rule_idle: "Plus de mouvement depuis un moment : {text}",
     rule_new_project: "Nouveau projet : {text}",
     rule_behind: "En retard sur sa branche cible, avec des conflits : {text}",
+    rule_division: "{kind} : {to} réussit plus souvent du premier coup",
+    rule_division_from: "{kind} : {to} réussit plus souvent du premier coup que {from}",
+    kinds: ["Écrire du code", "Revue", "Tests", "Réparer la CI", "Documentation", "Publications", "Recherche", "Vérification"],
     why_proposal: "codeg l'a remarqué ; la carte propose la suite.",
     why_proposal_low: "codeg l'a remarqué ; rien d'urgent.",
     brief: "Bonjour — {n} choses vous attendent",
@@ -1234,6 +1289,9 @@ const PT: Words = Words {
     rule_idle: "Parado há um tempo: {text}",
     rule_new_project: "Projeto novo: {text}",
     rule_behind: "Atrás do branch de destino, com conflitos: {text}",
+    rule_division: "{kind}: {to} acerta de primeira com mais frequência",
+    rule_division_from: "{kind}: {to} acerta de primeira com mais frequência que {from}",
+    kinds: ["Escrever código", "Revisão", "Testes", "Corrigir CI", "Documentação", "Lançamentos", "Pesquisa", "Verificação"],
     why_proposal: "O codeg percebeu; o cartão tem o próximo passo.",
     why_proposal_low: "O codeg percebeu; nada urgente.",
     brief: "Bom dia — {n} coisas precisam de você",
@@ -1312,6 +1370,9 @@ const AR: Words = Words {
     rule_idle: "لم يتحرك منذ مدة: {text}",
     rule_new_project: "مشروع جديد: {text}",
     rule_behind: "متأخر عن الفرع الهدف وبه تعارضات: {text}",
+    rule_division: "{kind}: ينجح {to} من المرة الأولى أكثر",
+    rule_division_from: "{kind}: ينجح {to} من المرة الأولى أكثر من {from}",
+    kinds: ["كتابة الكود", "المراجعة", "الاختبار", "إصلاح CI", "التوثيق", "الإصدارات", "البحث", "الفحص"],
     why_proposal: "لاحظ codeg ذلك؛ في البطاقة الخطوة التالية.",
     why_proposal_low: "لاحظ codeg ذلك؛ ليس عاجلًا.",
     brief: "صباح الخير — {n} أمور تحتاجك",
@@ -1399,6 +1460,21 @@ fn main_line(w: &Words, what: &What) -> String {
                 _ => "{text}",
             };
             fill(t, text, 0, "")
+        }
+        What::Division { kind, to, from } => {
+            let label = crate::models::personal_agent_prefs::DIVISION
+                .iter()
+                .position(|k| k == kind)
+                .map(|i| w.kinds[i])
+                .unwrap_or(kind.as_str());
+            match from {
+                Some(from) => w
+                    .rule_division_from
+                    .replace("{kind}", label)
+                    .replace("{to}", to)
+                    .replace("{from}", from),
+                None => w.rule_division.replace("{kind}", label).replace("{to}", to),
+            }
         }
         What::Brief { needs: 0 } => w.brief_none.to_string(),
         What::Brief { needs } => fill(w.brief, "", *needs as i64, ""),

@@ -8703,6 +8703,12 @@
         "level_plan_stuck": {
           "title": "计划卡住",
           "hint": "有一步失败了，而且一直没做成。"
+        },
+        "rule_division": {
+          "title": "分工建议",
+          "hint": "某类活另一个执行配置的一次过率明显高于分工里的首选（高 20 个百分点以上，两边各至少 5 件做完的）。",
+          "on": "开",
+          "off": "关"
         }
       },
       "workdir": {
@@ -8883,7 +8889,12 @@
         "firstPass": "一次过 {rate}%（{pass}/{settled}）",
         "average": "平均 {time}",
         "minutes": "{n} 分钟",
-        "hours": "{h} 小时 {m} 分"
+        "hours": "{h} 小时 {m} 分",
+        "apart": "按执行配置和方式",
+        "byExecutor": "按执行配置和方式",
+        "byBot": "按助手和方式",
+        "someone": "早先的派活",
+        "unjudged": "派了 {count} 件，还没有做完的"
       }
     },
     "statusWord": {
@@ -9015,7 +9026,8 @@
       "doneWhen": "验收标准",
       "check": "验收检查",
       "checkRound": "验收检查 · 第 {round} 轮",
-      "checkVia": "用 {name} 的执行配置检查"
+      "checkVia": "用 {name} 的执行配置检查",
+      "why": "为什么交给它：{why}"
     },
     "event": {
       "someone": "岗位助手",
@@ -10255,7 +10267,8 @@
         "new_project": "新项目",
         "behind": "分支落后且有冲突",
         "undo": "你撤销的改动",
-        "idle_bot": "闲着的工作助手"
+        "idle_bot": "闲着的工作助手",
+        "division": "分工建议"
       },
       "wait": {
         "permission": "等你批准",
@@ -10297,6 +10310,9 @@
         "idle_bot": {
           "hide": "隐藏",
           "delete": "删掉…"
+        },
+        "division": {
+          "switch": "改成先交给 {name}"
         }
       },
       "done": {
@@ -10310,7 +10326,9 @@
         "rebasing": "已派人 rebase。",
         "asking_first": "以后你要改的设置会先给你看，点了才改。",
         "hidden": "已隐藏，在隐藏的助手里还能找到。",
-        "deleted": "已删掉。"
+        "deleted": "已删掉。",
+        "switched": "已改：{kind}先交给 {name}。",
+        "undone": "已撤销，分工回到原来的样子。"
       },
       "hand": {
         "failed": "「{title}」失败了，一直没人处理。帮我看看是怎么回事，告诉我你的建议。",
@@ -10380,10 +10398,17 @@
         "idle_bot": {
           "title": "闲着的工作助手",
           "hint": "周回顾里：两周都没被叫醒的工作助手，问你要不要隐藏或删掉。"
+        },
+        "division": {
+          "title": "分工建议",
+          "hint": "某类活另一个执行配置的一次过率明显高于分工里的首选（高 20 个百分点以上，两边各至少 5 件做完的）。"
         }
       },
       "undoDetail": "最近两周按你的话直接做的 {made} 处改动，你撤销了 {undone} 处。",
-      "idleBotDetail": "已经两周没被叫醒了。"
+      "idleBotDetail": "已经两周没被叫醒了。",
+      "undoSwitch": "撤销",
+      "divisionDetail": "最近 {days} 天，{to} 一次过 {pass}/{settled}（{rate}%）；现在的首选 {from} 是 {fromPass}/{fromSettled}（{fromRate}%）。",
+      "divisionDetailAuto": "最近 {days} 天，{to} 一次过 {pass}/{settled}（{rate}%）；其他执行配置合计 {fromPass}/{fromSettled}（{fromRate}%）。现在没有首选。"
     },
     "brief": {
       "title": "晨报",
@@ -10561,7 +10586,8 @@
         "deliverable": "交付物",
         "prompt": "要求",
         "done_when": "验收标准",
-        "depends_on": "依赖"
+        "depends_on": "依赖",
+        "kind": "活的种类"
       }
     }
   }

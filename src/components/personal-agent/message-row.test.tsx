@@ -1267,6 +1267,40 @@ describe("DispatchAttachments", () => {
   })
 })
 
+describe("the kind of work and why this executor (7.9)", () => {
+  it("says what kind of work it is and why the assistant picked it, not on a follow-up", () => {
+    pa.dispatchById = new Map()
+    const { container } = draw(
+      <DispatchAttachments
+        rows={[
+          row(20, "dispatch", {
+            body: "Look into Y",
+            data: {
+              executor: "Researcher",
+              state: "queued",
+              kind: "research",
+              why: "It passed 9 of 10 research jobs the first time.",
+            },
+          }),
+          row(21, "dispatch", {
+            body: "Look into Y",
+            data: { followup: true, kind: "research", why: "again" },
+          }),
+          row(22, "dispatch", {
+            body: "Something",
+            data: { executor: "Builder", state: "queued", kind: "cooking" },
+          }),
+        ]}
+      />
+    )
+    const lines = container.querySelectorAll("[data-pa-dispatch-why]")
+    expect(lines).toHaveLength(1)
+    expect(lines[0].textContent).toBe(
+      "Research · Why: It passed 9 of 10 research jobs the first time."
+    )
+  })
+})
+
 describe("acceptance on the work handed out (7.5)", () => {
   it("shows the assistant's acceptance criteria under its pill", () => {
     pa.dispatchById = new Map([

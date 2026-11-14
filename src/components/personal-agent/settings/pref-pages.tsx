@@ -80,6 +80,7 @@ import {
   UserX,
   Waypoints,
   Wrench,
+  Scale,
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
@@ -199,6 +200,7 @@ export const DEFAULT_PREFS: PersonalAgentPrefs = {
   rule_idle_days: 7,
   rule_new_project: "on",
   rule_behind: "on",
+  rule_division: "on",
   rule_repeat: "on",
   rule_repeat_count: 3,
   rule_suggest: "on",
@@ -321,6 +323,7 @@ function rulePreset(
     rule_idle_days: time(7),
     rule_new_project: keep(all),
     rule_behind: keep(all),
+    rule_division: keep(all),
     rule_repeat: keep(all),
   }
 }
@@ -540,6 +543,7 @@ const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   rule_idle_days: Timer,
   rule_new_project: FolderPlus,
   rule_behind: GitBranch,
+  rule_division: Scale,
   rule_repeat: Repeat,
   rule_repeat_count: Timer,
   rule_suggest: Lightbulb,
@@ -624,6 +628,7 @@ export const RULE_ITEMS: PersonalAgentPrefKey[] = [
   "rule_idle_days",
   "rule_new_project",
   "rule_behind",
+  "rule_division",
   "rule_repeat",
   "rule_repeat_count",
   "rule_suggest",

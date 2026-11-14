@@ -8704,6 +8704,12 @@
         "level_plan_stuck": {
           "title": "計畫卡住",
           "hint": "有一步失敗了，而且一直沒做成。"
+        },
+        "rule_division": {
+          "title": "分工建議",
+          "hint": "某類工作另一個執行配置的一次過率明顯高於分工裡的首選（高 20 個百分點以上，兩邊各至少 5 件做完的）。",
+          "on": "開",
+          "off": "關"
         }
       },
       "workdir": {
@@ -8883,7 +8889,12 @@
         "firstPass": "一次過 {rate}%（{pass}/{settled}）",
         "average": "平均 {time}",
         "minutes": "{n} 分鐘",
-        "hours": "{h} 小時 {m} 分"
+        "hours": "{h} 小時 {m} 分",
+        "apart": "按執行配置和方式",
+        "byExecutor": "按執行配置和方式",
+        "byBot": "按助手和方式",
+        "someone": "早先的派工",
+        "unjudged": "派了 {count} 件，還沒有做完的"
       }
     },
     "statusWord": {
@@ -9015,7 +9026,8 @@
       "doneWhen": "驗收標準",
       "check": "驗收檢查",
       "checkRound": "驗收檢查 · 第 {round} 輪",
-      "checkVia": "用 {name} 的執行配置檢查"
+      "checkVia": "用 {name} 的執行配置檢查",
+      "why": "為什麼交給它：{why}"
     },
     "event": {
       "someone": "職務助理",
@@ -10255,7 +10267,8 @@
         "new_project": "新專案",
         "behind": "分支落後且有衝突",
         "undo": "你撤銷的改動",
-        "idle_bot": "閒著的工作助手"
+        "idle_bot": "閒著的工作助手",
+        "division": "分工建議"
       },
       "wait": {
         "permission": "等你核准",
@@ -10297,6 +10310,9 @@
         "idle_bot": {
           "hide": "隱藏",
           "delete": "刪掉…"
+        },
+        "division": {
+          "switch": "改成先交給 {name}"
         }
       },
       "done": {
@@ -10310,7 +10326,9 @@
         "rebasing": "已派人 rebase。",
         "asking_first": "以後你要改的設定會先給你看，點了才改。",
         "hidden": "已隱藏，在隱藏的助手裡還能找到。",
-        "deleted": "已刪掉。"
+        "deleted": "已刪掉。",
+        "switched": "已改：{kind}先交給 {name}。",
+        "undone": "已撤銷，分工回到原來的樣子。"
       },
       "hand": {
         "failed": "「{title}」失敗了，一直沒人處理。幫我看看是怎麼回事，告訴我你的建議。",
@@ -10380,10 +10398,17 @@
         "idle_bot": {
           "title": "閒著的工作助手",
           "hint": "週回顧裡：兩週都沒被叫醒的工作助手，問你要不要隱藏或刪掉。"
+        },
+        "division": {
+          "title": "分工建議",
+          "hint": "某類工作另一個執行配置的一次過率明顯高於分工裡的首選（高 20 個百分點以上，兩邊各至少 5 件做完的）。"
         }
       },
       "undoDetail": "最近兩週按你的話直接做的 {made} 處改動，你撤銷了 {undone} 處。",
-      "idleBotDetail": "已經兩週沒被叫醒了。"
+      "idleBotDetail": "已經兩週沒被叫醒了。",
+      "undoSwitch": "撤銷",
+      "divisionDetail": "最近 {days} 天，{to} 一次過 {pass}/{settled}（{rate}%）；現在的首選 {from} 是 {fromPass}/{fromSettled}（{fromRate}%）。",
+      "divisionDetailAuto": "最近 {days} 天，{to} 一次過 {pass}/{settled}（{rate}%）；其他執行配置合計 {fromPass}/{fromSettled}（{fromRate}%）。現在沒有首選。"
     },
     "brief": {
       "title": "晨報",
@@ -10561,7 +10586,8 @@
         "deliverable": "交付物",
         "prompt": "要求",
         "done_when": "驗收標準",
-        "depends_on": "依賴"
+        "depends_on": "依賴",
+        "kind": "工作的種類"
       }
     }
   }

@@ -8704,6 +8704,12 @@
         "level_plan_stuck": {
           "title": "계획 막힘",
           "hint": "한 단계가 실패한 채로 남아 있어요."
+        },
+        "rule_division": {
+          "title": "업무 분담 제안",
+          "hint": "어떤 종류의 일에서 다른 실행 구성의 한 번에 통과하는 비율이 업무 분담의 1순위보다 확실히 높을 때(20%p 이상, 양쪽 모두 끝난 일 5건 이상).",
+          "on": "켜기",
+          "off": "끄기"
         }
       },
       "workdir": {
@@ -8883,7 +8889,12 @@
         "firstPass": "한 번에 통과 {rate}% ({pass}/{settled})",
         "average": "평균 {time}",
         "minutes": "{n}분",
-        "hours": "{h}시간 {m}분"
+        "hours": "{h}시간 {m}분",
+        "apart": "실행 구성·방식별",
+        "byExecutor": "실행 구성·방식별",
+        "byBot": "어시스턴트·방식별",
+        "someone": "예전 작업",
+        "unjudged": "{count}건 맡김, 아직 끝난 일 없음"
       }
     },
     "statusWord": {
@@ -9015,7 +9026,8 @@
       "doneWhen": "검수 기준",
       "check": "검수 확인",
       "checkRound": "검수 확인 · {round}차",
-      "checkVia": "{name}의 실행 구성으로 확인"
+      "checkVia": "{name}의 실행 구성으로 확인",
+      "why": "고른 이유: {why}"
     },
     "event": {
       "someone": "어시스턴트",
@@ -10255,7 +10267,8 @@
         "new_project": "새 프로젝트",
         "behind": "브랜치가 뒤처지고 충돌이 있어요",
         "undo": "되돌린 변경",
-        "idle_bot": "쉬고 있는 작업 어시스턴트"
+        "idle_bot": "쉬고 있는 작업 어시스턴트",
+        "division": "업무 분담 제안"
       },
       "wait": {
         "permission": "승인 대기",
@@ -10297,6 +10310,9 @@
         "idle_bot": {
           "hide": "숨기기",
           "delete": "삭제…"
+        },
+        "division": {
+          "switch": "먼저 {name}에게 맡기기"
         }
       },
       "done": {
@@ -10310,7 +10326,9 @@
         "rebasing": "rebase를 맡겼어요.",
         "asking_first": "이제 요청하신 변경은 먼저 카드로 보여 드려요.",
         "hidden": "숨겼어요. 숨긴 어시스턴트에서 다시 찾을 수 있어요.",
-        "deleted": "삭제했어요."
+        "deleted": "삭제했어요.",
+        "switched": "변경했어요: {kind}은(는) 이제 먼저 {name}에게 맡겨요.",
+        "undone": "되돌렸어요. 업무 분담이 원래대로예요."
       },
       "hand": {
         "failed": "“{title}”이(가) 실패했는데 아무도 처리하지 않았어요. 무엇이 잘못됐는지 살펴보고 제안해 줘.",
@@ -10380,10 +10398,17 @@
         "idle_bot": {
           "title": "쉬고 있는 작업 어시스턴트",
           "hint": "주간 회고에서: 2주 동안 한 번도 깨우지 않은 작업 어시스턴트를 숨길지 삭제할지 물어봐요."
+        },
+        "division": {
+          "title": "업무 분담 제안",
+          "hint": "어떤 종류의 일에서 다른 실행 구성의 한 번에 통과하는 비율이 업무 분담의 1순위보다 확실히 높을 때(20%p 이상, 양쪽 모두 끝난 일 5건 이상)."
         }
       },
       "undoDetail": "최근 2주 동안 말씀대로 바로 한 변경 {made}개 중 {undone}개를 되돌렸어요.",
-      "idleBotDetail": "2주 동안 아무도 깨우지 않았어요."
+      "idleBotDetail": "2주 동안 아무도 깨우지 않았어요.",
+      "undoSwitch": "되돌리기",
+      "divisionDetail": "최근 {days}일: {to}은(는) 한 번에 통과 {pass}/{settled}({rate}%), 지금 1순위인 {from}은(는) {fromPass}/{fromSettled}({fromRate}%).",
+      "divisionDetailAuto": "최근 {days}일: {to}은(는) 한 번에 통과 {pass}/{settled}({rate}%), 나머지 실행 구성은 합쳐서 {fromPass}/{fromSettled}({fromRate}%). 지금은 1순위가 없어요."
     },
     "brief": {
       "title": "아침 브리핑",
@@ -10561,7 +10586,8 @@
         "deliverable": "결과물",
         "prompt": "할 일",
         "done_when": "완료 기준",
-        "depends_on": "의존"
+        "depends_on": "의존",
+        "kind": "일의 종류"
       }
     }
   }

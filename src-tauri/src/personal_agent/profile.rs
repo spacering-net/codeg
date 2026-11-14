@@ -13,7 +13,9 @@
 //!   and what was lowered is back.
 //! - **Grades** ([`grades`]): each assistant's and each executor config's
 //!   handed-out work over [`GRADE_DAYS`] days — how much passed the first
-//!   time (one round, nothing sent back) and how long it took.
+//!   time (one round, nothing sent back) and how long it took; and apart by
+//!   who handed it out, who ran it and how ([`cells`]), and by the kind of
+//!   work each executor did ([`by_kind`], 7.9).
 //! - **Their corrections**: their hours (they win over what is learned,
 //!   even with the record off), the projects codeg is not to mind. Kept
 //!   until they change them; "clear" forgets what codeg learned, not them.
@@ -558,6 +560,8 @@ pub struct Graded {
     pub executor: i32,
     pub executor_name: String,
     pub mode: DispatchMode,
+    /// The kind of work it is (7.9), when named.
+    pub kind: Option<String>,
     pub state: DispatchState,
     pub rounds: i32,
     /// Its acceptance sent it back once at least.
@@ -675,6 +679,7 @@ pub async fn graded_between(
                 executor: executor.assistant_id,
                 executor_name: executor.name,
                 mode: d.mode,
+                kind: d.kind,
                 state: d.state,
                 rounds: n,
                 revised,
@@ -685,21 +690,30 @@ pub async fn graded_between(
         .collect()
 }
 
+/// The work the grades judge: handed out in the last [`GRADE_DAYS`] days.
+pub async fn graded_recent(db: &AppDatabase, now: DateTime<Utc>) -> Vec<Graded> {
+    graded_between(
+        db,
+        now - Duration::days(GRADE_DAYS),
+        now + Duration::seconds(1),
+    )
+    .await
+}
+
 /// The grades over the last [`GRADE_DAYS`] days: by assistant, and by
 /// executor config.
 pub async fn grades(
     db: &AppDatabase,
     now: DateTime<Utc>,
 ) -> (HashMap<i32, Grade>, HashMap<i32, Grade>) {
-    let work = graded_between(
-        db,
-        now - Duration::days(GRADE_DAYS),
-        now + Duration::seconds(1),
-    )
-    .await;
+    grades_of(&graded_recent(db, now).await)
+}
+
+/// `work`'s grades by assistant, and by executor config.
+pub fn grades_of(work: &[Graded]) -> (HashMap<i32, Grade>, HashMap<i32, Grade>) {
     let mut bots: HashSet<i32> = HashSet::new();
     let mut executors: HashSet<i32> = HashSet::new();
-    for w in &work {
+    for w in work {
         if let Some(b) = w.bot_id {
             bots.insert(b);
         }
@@ -714,6 +728,142 @@ pub async fn grades(
         .map(|e| (e, grade_of(work.iter().filter(|w| w.executor == e))))
         .collect();
     (by_bot, by_executor)
+}
+
+/// One cell of the grades (7.9): the work one assistant handed to one
+/// executor config one way.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GradeCell {
+    /// Who handed it out (none: from before there were several).
+    pub bot_id: Option<i32>,
+    pub executor: i32,
+    /// The executor config's name when the work was handed out.
+    pub executor_name: String,
+    pub mode: DispatchMode,
+    pub grade: Grade,
+}
+
+/// `work` apart by assistant × executor config × mode, the most work
+/// first.
+pub fn cells(work: &[Graded]) -> Vec<GradeCell> {
+    let mut keys: Vec<(Option<i32>, i32, DispatchMode)> = Vec::new();
+    for w in work {
+        let k = (w.bot_id, w.executor, w.mode);
+        if !keys.contains(&k) {
+            keys.push(k);
+        }
+    }
+    let mut out: Vec<GradeCell> = keys
+        .into_iter()
+        .map(|(bot_id, executor, mode)| {
+            let mine: Vec<&Graded> = work
+                .iter()
+                .filter(|w| w.bot_id == bot_id && w.executor == executor && w.mode == mode)
+                .collect();
+            GradeCell {
+                bot_id,
+                executor,
+                // The latest name it went by.
+                executor_name: mine
+                    .last()
+                    .map(|w| w.executor_name.clone())
+                    .unwrap_or_default(),
+                mode,
+                grade: grade_of(mine.into_iter()),
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.grade
+            .dispatches
+            .cmp(&a.grade.dispatches)
+            .then(a.executor.cmp(&b.executor))
+            .then(a.bot_id.cmp(&b.bot_id))
+    });
+    out
+}
+
+/// Each executor config's grade on each kind of work it was named for
+/// (7.9).
+pub fn by_kind(work: &[Graded]) -> HashMap<(i32, String), Grade> {
+    let mut keys: HashSet<(i32, String)> = HashSet::new();
+    for w in work {
+        if let Some(k) = &w.kind {
+            keys.insert((w.executor, k.clone()));
+        }
+    }
+    keys.into_iter()
+        .map(|(e, k)| {
+            let g = grade_of(
+                work.iter()
+                    .filter(|w| w.executor == e && w.kind.as_deref() == Some(k.as_str())),
+            );
+            ((e, k), g)
+        })
+        .collect()
+}
+
+/// Each executor config's grade in each mode.
+pub fn by_mode(work: &[Graded]) -> HashMap<(i32, DispatchMode), Grade> {
+    let mut keys: Vec<(i32, DispatchMode)> = Vec::new();
+    for w in work {
+        if !keys.contains(&(w.executor, w.mode)) {
+            keys.push((w.executor, w.mode));
+        }
+    }
+    keys.into_iter()
+        .map(|(e, m)| {
+            let g = grade_of(work.iter().filter(|w| w.executor == e && w.mode == m));
+            ((e, m), g)
+        })
+        .collect()
+}
+
+/// An executor config's grade apart, for the brain (7.9): by mode, and by
+/// the kind of work — "task 6 of 8, chat 2 of 2; research 9 of 10". `None`
+/// with nothing judged.
+pub fn grade_apart_words(
+    executor: i32,
+    modes: &HashMap<(i32, DispatchMode), Grade>,
+    kinds: &HashMap<(i32, String), Grade>,
+) -> Option<String> {
+    let mut by_mode: Vec<(DispatchMode, &Grade)> = modes
+        .iter()
+        .filter(|((e, _), g)| *e == executor && g.settled > 0)
+        .map(|((_, m), g)| (*m, g))
+        .collect();
+    by_mode.sort_by_key(|(m, _)| super::engine::enum_str(m));
+    let mut by_kind: Vec<(&str, &Grade)> = kinds
+        .iter()
+        .filter(|((e, _), g)| *e == executor && g.settled > 0)
+        .map(|((_, k), g)| (k.as_str(), g))
+        .collect();
+    by_kind.sort_by(|a, b| b.1.settled.cmp(&a.1.settled).then(a.0.cmp(b.0)));
+    let part =
+        |label: &str, g: &Grade| format!("{label} {} of {} first time", g.first_pass, g.settled);
+    let mut parts = Vec::new();
+    // One mode only says nothing the whole does not.
+    if by_mode.len() > 1 {
+        parts.push(format!(
+            "by mode: {}",
+            by_mode
+                .iter()
+                .map(|(m, g)| part(&super::engine::enum_str(m), g))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !by_kind.is_empty() {
+        parts.push(format!(
+            "by kind of work: {}",
+            by_kind
+                .iter()
+                .map(|(k, g)| part(k, g))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    (!parts.is_empty()).then(|| parts.join("; "))
 }
 
 /// A grade for the brain, in a few words; `None` with nothing to judge.
@@ -906,6 +1056,7 @@ mod tests {
             executor: 7,
             executor_name: "Dev".into(),
             mode: DispatchMode::Session,
+            kind: None,
             state,
             rounds,
             revised,
@@ -939,5 +1090,65 @@ mod tests {
         assert!(grade_words(&g)
             .unwrap()
             .starts_with("25% passed the first time (1 of 4"));
+    }
+
+    #[test]
+    fn the_grades_come_apart_by_who_handed_out_who_ran_how_and_what_kind() {
+        let at = |bot: i32, executor: i32, mode: DispatchMode, kind: Option<&str>, ok: bool| {
+            let mut w = work(
+                if ok {
+                    DispatchState::Completed
+                } else {
+                    DispatchState::Failed
+                },
+                1,
+                false,
+                Some(10),
+            );
+            w.bot_id = Some(bot);
+            w.executor = executor;
+            w.executor_name = format!("E{executor}");
+            w.mode = mode;
+            w.kind = kind.map(str::to_string);
+            w
+        };
+        let all = vec![
+            at(1, 7, DispatchMode::Task, Some("code"), true),
+            at(1, 7, DispatchMode::Task, Some("code"), false),
+            at(1, 7, DispatchMode::Chat, Some("research"), true),
+            at(2, 7, DispatchMode::Task, None, true),
+            at(1, 8, DispatchMode::Chat, Some("research"), true),
+        ];
+        let c = cells(&all);
+        assert_eq!(c.len(), 4, "one cell per assistant × executor × mode");
+        assert_eq!(
+            (c[0].bot_id, c[0].executor, c[0].mode),
+            (Some(1), 7, DispatchMode::Task),
+            "the most work first"
+        );
+        assert_eq!((c[0].grade.settled, c[0].grade.first_pass), (2, 1));
+        assert_eq!(c[0].executor_name, "E7");
+        let k = by_kind(&all);
+        assert_eq!(k[&(7, "code".to_string())].first_pass, 1);
+        assert_eq!(k[&(8, "research".to_string())].settled, 1);
+        assert!(
+            !k.contains_key(&(7, String::new())),
+            "unnamed work has no kind"
+        );
+        let m = by_mode(&all);
+        assert_eq!(m[&(7, DispatchMode::Task)].settled, 3);
+        let words = grade_apart_words(7, &m, &k).unwrap();
+        assert!(
+            words.contains("by mode: chat 1 of 1 first time, task 2 of 3 first time"),
+            "{words}"
+        );
+        assert!(
+            words.contains("by kind of work: code 1 of 2 first time"),
+            "{words}"
+        );
+        // One mode and no kind: nothing the whole does not say.
+        assert_eq!(grade_apart_words(9, &m, &k), None);
+        let only = vec![at(1, 9, DispatchMode::Chat, None, true)];
+        assert_eq!(grade_apart_words(9, &by_mode(&only), &by_kind(&only)), None);
     }
 }

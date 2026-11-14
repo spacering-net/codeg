@@ -8704,6 +8704,12 @@
         "level_plan_stuck": {
           "title": "計画の停止",
           "hint": "ステップが失敗し、そのままになっています。"
+        },
+        "rule_division": {
+          "title": "役割分担の提案",
+          "hint": "ある種類の仕事で、別の実行設定の一発合格率が役割分担の第一候補より明らかに高いとき（20 ポイント以上、双方とも 5 件以上完了）。",
+          "on": "オン",
+          "off": "オフ"
         }
       },
       "workdir": {
@@ -8883,7 +8889,12 @@
         "firstPass": "一発合格 {rate}%（{pass}/{settled}）",
         "average": "平均 {time}",
         "minutes": "{n} 分",
-        "hours": "{h} 時間 {m} 分"
+        "hours": "{h} 時間 {m} 分",
+        "apart": "実行設定・方法別",
+        "byExecutor": "実行設定・方法別",
+        "byBot": "アシスタント・方法別",
+        "someone": "以前の依頼",
+        "unjudged": "{count} 件依頼、まだ完了なし"
       }
     },
     "statusWord": {
@@ -9015,7 +9026,8 @@
       "doneWhen": "完了条件",
       "check": "検収の確認",
       "checkRound": "検収の確認 · {round} 回目",
-      "checkVia": "{name} の実行設定で確認"
+      "checkVia": "{name} の実行設定で確認",
+      "why": "選んだ理由：{why}"
     },
     "event": {
       "someone": "アシスタント",
@@ -10255,7 +10267,8 @@
         "new_project": "新しいプロジェクト",
         "behind": "ブランチが遅れていて競合あり",
         "undo": "取り消した変更",
-        "idle_bot": "使われていない作業アシスタント"
+        "idle_bot": "使われていない作業アシスタント",
+        "division": "役割分担の提案"
       },
       "wait": {
         "permission": "承認待ち",
@@ -10297,6 +10310,9 @@
         "idle_bot": {
           "hide": "非表示にする",
           "delete": "削除…"
+        },
+        "division": {
+          "switch": "まず {name} に任せる"
         }
       },
       "done": {
@@ -10310,7 +10326,9 @@
         "rebasing": "rebase を依頼しました。",
         "asking_first": "今後の変更はまずカードでお見せします。",
         "hidden": "非表示にしました。非表示のアシスタントから戻せます。",
-        "deleted": "削除しました。"
+        "deleted": "削除しました。",
+        "switched": "変更しました：{kind}はまず {name} に任せます。",
+        "undone": "元に戻しました。役割分担は以前のとおりです。"
       },
       "hand": {
         "failed": "「{title}」が失敗したまま誰も対応していません。何が起きたか調べて、どうするか提案して。",
@@ -10380,10 +10398,17 @@
         "idle_bot": {
           "title": "使われていない作業アシスタント",
           "hint": "週の振り返りで：2 週間呼ばれていない作業アシスタントを、非表示にするか削除するか尋ねます。"
+        },
+        "division": {
+          "title": "役割分担の提案",
+          "hint": "ある種類の仕事で、別の実行設定の一発合格率が役割分担の第一候補より明らかに高いとき（20 ポイント以上、双方とも 5 件以上完了）。"
         }
       },
       "undoDetail": "この 2 週間、言われたとおりに行った変更 {made} 件のうち {undone} 件を取り消しました。",
-      "idleBotDetail": "2 週間誰も呼んでいません。"
+      "idleBotDetail": "2 週間誰も呼んでいません。",
+      "undoSwitch": "元に戻す",
+      "divisionDetail": "直近 {days} 日：{to} は一発合格 {pass}/{settled}（{rate}%）、現在の第一候補 {from} は {fromPass}/{fromSettled}（{fromRate}%）。",
+      "divisionDetailAuto": "直近 {days} 日：{to} は一発合格 {pass}/{settled}（{rate}%）、ほかの実行設定は合計 {fromPass}/{fromSettled}（{fromRate}%）。今は第一候補がありません。"
     },
     "brief": {
       "title": "朝のまとめ",
@@ -10561,7 +10586,8 @@
         "deliverable": "成果物",
         "prompt": "内容",
         "done_when": "完了条件",
-        "depends_on": "依存"
+        "depends_on": "依存",
+        "kind": "仕事の種類"
       }
     }
   }

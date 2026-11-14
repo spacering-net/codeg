@@ -283,6 +283,8 @@ fn request(mode: DispatchMode, assistant_id: i32, project_id: Option<i32>) -> Di
         report: false,
         on_done: Some("remind the owner".into()),
         done_when: None,
+        kind: None,
+        why: None,
     }
 }
 
@@ -371,6 +373,7 @@ async fn the_owner_writing_in_a_dispatched_conversation_takes_it_over() {
             lineage: Default::default(),
             done_when: None,
             pr_fix: None,
+            kind: None,
         },
     )
     .await
@@ -517,6 +520,7 @@ async fn session_dispatch(engine: &PersonalAgentEngine, state: DispatchState, co
             lineage: Default::default(),
             done_when: None,
             pr_fix: None,
+            kind: None,
         },
     )
     .await
@@ -596,6 +600,7 @@ async fn a_put_back_event_lists_what_the_interrupted_turn_dispatched() {
             lineage: Default::default(),
             done_when: None,
             pr_fix: None,
+            kind: None,
         },
     )
     .await
@@ -2013,6 +2018,7 @@ async fn live_session_dispatch(
             lineage: Default::default(),
             done_when: None,
             pr_fix: None,
+            kind: None,
         },
     )
     .await
@@ -2800,6 +2806,7 @@ async fn a_task_follow_up_is_settled_by_the_claim_record() {
             lineage: Default::default(),
             done_when: None,
             pr_fix: None,
+            kind: None,
         },
     )
     .await
@@ -2903,6 +2910,8 @@ async fn a_proposal_card_runs_exactly_what_it_shows() {
             report: false,
             on_done: None,
             done_when: None,
+            kind: None,
+            why: None,
         })
         .await
         .unwrap();
@@ -2953,6 +2962,8 @@ async fn a_card_cut_off_mid_run_is_settled_by_its_entry_after_a_restart() {
             report: false,
             on_done: None,
             done_when: None,
+            kind: None,
+            why: None,
         })
         .await
         .unwrap();
@@ -3308,6 +3319,7 @@ async fn two_workers_keep_their_records_apart() {
             lineage: Default::default(),
             done_when: None,
             pr_fix: None,
+            kind: None,
         },
     )
     .await
@@ -4989,6 +5001,8 @@ async fn follow_ups_and_messages_wait_for_the_owner_when_they_asked() {
             report: false,
             on_done: None,
             done_when: None,
+            kind: None,
+            why: None,
         })
         .await
         .unwrap();
@@ -5158,6 +5172,8 @@ async fn the_executor_view_shows_what_each_runs_and_what_keeps_failing() {
                 report: false,
                 on_done: None,
                 done_when: None,
+                kind: None,
+                why: None,
             })
             .await
             .unwrap();
@@ -5679,6 +5695,7 @@ async fn a_work_assistants_dispatch_runs_on_its_own_executor_and_says_who_sent_i
             lineage: Default::default(),
             done_when: None,
             pr_fix: None,
+            kind: None,
         },
     )
     .await
@@ -6262,6 +6279,7 @@ async fn task_dispatch(
             lineage: Default::default(),
             done_when: None,
             pr_fix: None,
+            kind: None,
         },
     )
     .await
@@ -9919,6 +9937,7 @@ async fn work_in_review(engine: &Arc<PersonalAgentEngine>, tmp: &tempfile::TempD
                 lineage: Default::default(),
                 done_when: None,
                 pr_fix: None,
+                kind: None,
             },
         )
         .await
@@ -12866,6 +12885,7 @@ async fn failed_dispatch(
             lineage: Default::default(),
             done_when: None,
             pr_fix: None,
+            kind: None,
         },
     )
     .await
@@ -15158,6 +15178,7 @@ async fn time_machine_steps() {
                 lineage: Default::default(),
                 done_when: None,
                 pr_fix: None,
+                kind: None,
             },
         )
         .await
@@ -15667,6 +15688,7 @@ async fn profile_steps() {
         lineage: Default::default(),
         done_when: None,
         pr_fix: None,
+        kind: None,
     };
     let mut made = Vec::new();
     for (i, (state, turns, minutes)) in [
@@ -15695,6 +15717,17 @@ async fn profile_steps() {
     assert_eq!(by_exec[&7].dispatches, 3);
     let executors = crate::commands::personal_agent::personal_agent_grades_core(db).await;
     assert_eq!(executors.bots[&w].first_pass, 1);
+    // Apart (7.9): this assistant's chats on Dev, one cell.
+    assert_eq!(executors.cells.len(), 1);
+    assert_eq!(
+        (
+            executors.cells[0].bot_id,
+            executors.cells[0].executor,
+            executors.cells[0].mode
+        ),
+        (Some(w), 7, DispatchMode::Chat)
+    );
+    assert_eq!(executors.cells[0].grade.settled, 3);
 
     // ── 4. the week ────────────────────────────────────────────────────────
     // Four changes made at the owner's word, three undone.
@@ -16913,4 +16946,448 @@ async fn a_step_number_is_never_given_twice_and_a_restart_leaves_no_plan_without
         data["plan"]["title"], "Orphan",
         "the linked card shows the plan"
     );
+}
+
+// ── 3.3: the dispatch adviser (7.9) ─────────────────────────────────────────
+
+/// A piece of `kind` work an executor config did, ended: done the first
+/// time, or failed.
+async fn kind_work(
+    engine: &PersonalAgentEngine,
+    executor: i32,
+    name: &str,
+    kind: &str,
+    passed: bool,
+) -> i32 {
+    use sea_orm::{ActiveModelTrait, Set};
+    let d = svc::create_dispatch(
+        &engine.db.conn,
+        NewDispatch {
+            bot_id: engine.bot().await,
+            mode: DispatchMode::Chat,
+            executor_assistant_id: executor,
+            executor_snapshot_json: json!({
+                "assistant_id": executor, "name": name, "agent_type": "codex"
+            })
+            .to_string(),
+            folder_id: None,
+            deliverable: None,
+            title: format!("{kind} work"),
+            prompt: "Do it.".into(),
+            origin_batch_id: None,
+            on_done: None,
+            lineage: Default::default(),
+            done_when: None,
+            pr_fix: None,
+            kind: Some(kind.into()),
+        },
+    )
+    .await
+    .unwrap();
+    let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = d.clone().into();
+    am.state = Set(if passed {
+        DispatchState::Completed
+    } else {
+        DispatchState::Failed
+    });
+    am.turns = Set(1);
+    am.finished_at = Set(Some(d.created_at + chrono::Duration::minutes(12)));
+    am.update(&engine.db.conn).await.unwrap();
+    d.id
+}
+
+async fn division_of(engine: &PersonalAgentEngine, kind: &str) -> Option<String> {
+    engine.account().await.team.division.get(kind).cloned()
+}
+
+#[tokio::test]
+async fn a_kind_of_work_another_does_clearly_better_gets_a_card_that_switches_and_undoes_the_pick()
+{
+    let (host, _w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let slow = role_assistant(&primary, "Claude Research", true).await;
+    let good = role_assistant(&primary, "Codex Research", true).await;
+    let slow_uid = uid_of(&primary, slow).await;
+    let good_uid = uid_of(&primary, good).await;
+    primary
+        .apply_settings(&[change(
+            "team.division.research",
+            json!(format!("assistant:{slow_uid}")),
+        )])
+        .await
+        .unwrap();
+    // The pick: 2 of 5 the first time. The other: 4 done, too few to judge.
+    for passed in [true, true, false, false, false] {
+        kind_work(&primary, slow, "Claude Research", "research", passed).await;
+    }
+    for _ in 0..4 {
+        kind_work(&primary, good, "Codex Research", "research", true).await;
+    }
+    // Work of another kind, or of none, counts for nothing here.
+    kind_work(&primary, good, "Codex Research", "check", true).await;
+    let mut now = super::clock::now();
+    host.rules_tick_at(now).await;
+    assert!(
+        rule_cards(&primary, "division").await.is_empty(),
+        "4 is too few"
+    );
+    // The fifth: 5 of 5 against 2 of 5 — a card, the primary's, low.
+    kind_work(&primary, good, "Codex Research", "research", true).await;
+    now += chrono::Duration::minutes(2);
+    host.rules_tick_at(now).await;
+    assert!(
+        rule_cards(&primary, "division").await.is_empty(),
+        "a month of work is read every half hour"
+    );
+    now += chrono::Duration::minutes(31);
+    host.rules_tick_at(now).await;
+    let cards = rule_cards(&primary, "division").await;
+    assert_eq!(cards.len(), 1);
+    let d = data_of(&cards[0]);
+    assert_eq!(d["facts"]["kind"], "research");
+    assert_eq!(d["facts"]["to"]["id"], good);
+    assert_eq!(d["facts"]["to"]["grade"]["first_pass"], 5);
+    assert_eq!(d["facts"]["from"]["executor_id"], slow);
+    assert_eq!(d["facts"]["from"]["grade"]["first_pass_rate"], 40);
+    let n = notice_of(&primary, &cards[0]).await;
+    assert_eq!(
+        n.subject_key.as_deref(),
+        Some(format!("rule:division:research:assistant:{slow_uid}:{good_uid}").as_str())
+    );
+    assert_eq!(
+        n.level,
+        crate::db::entities::personal_agent_notice::NoticeLevel::Low
+    );
+    // Looked at again: the same card.
+    now += chrono::Duration::minutes(31);
+    host.rules_tick_at(now).await;
+    assert_eq!(rule_cards(&primary, "division").await.len(), 1);
+    // [Switch]: the better one is the pick.
+    let row = primary.act_on_notice(n.id, "switch").await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["state"], "switched");
+    assert_eq!(
+        division_of(&primary, "research").await,
+        Some(format!("assistant:{good_uid}"))
+    );
+    assert_eq!(
+        notice_of(&primary, &cards[0]).await.state,
+        NoticeState::Acted
+    );
+    // [Undo]: as it was.
+    let row = primary.act_on_notice(n.id, "undo").await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["state"], "undone");
+    assert_eq!(
+        division_of(&primary, "research").await,
+        Some(format!("assistant:{slow_uid}"))
+    );
+    assert_eq!(
+        notice_of(&primary, &cards[0]).await.state,
+        NoticeState::Undone
+    );
+    assert!(primary.act_on_notice(n.id, "undo").await.is_err());
+    // Taken back, the same occurrence is not offered again.
+    now += chrono::Duration::minutes(31);
+    host.rules_tick_at(now).await;
+    assert_eq!(rule_cards(&primary, "division").await.len(), 1);
+}
+
+#[tokio::test]
+async fn with_no_pick_the_better_one_is_offered_and_a_card_whose_case_is_gone_expires() {
+    let (host, _w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let a = role_assistant(&primary, "Alpha", true).await;
+    let b = role_assistant(&primary, "Beta", true).await;
+    let closed = role_assistant(&primary, "Gamma", true).await;
+    let b_uid = uid_of(&primary, b).await;
+    let closed_uid = uid_of(&primary, closed).await;
+    // Gamma is the best, but not for the assistants' dispatches.
+    primary
+        .apply_settings(&[change(
+            &format!("team.usage.{closed_uid}"),
+            json!({ "dispatch": false, "modes": ["task", "chat", "session"], "projects": null }),
+        )])
+        .await
+        .unwrap();
+    for i in 0..5 {
+        kind_work(&primary, a, "Alpha", "code", i == 0).await;
+        kind_work(&primary, b, "Beta", "code", true).await;
+        kind_work(&primary, closed, "Gamma", "code", true).await;
+    }
+    let mut now = super::clock::now();
+    host.rules_tick_at(now).await;
+    let cards = rule_cards(&primary, "division").await;
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    let d = data_of(&cards[0]);
+    assert_eq!(d["facts"]["to"]["id"], b, "not one closed to dispatches");
+    assert_eq!(d["facts"]["from"]["pick"], serde_json::Value::Null);
+    // Against everyone else together: Alpha 1 of 5 and Gamma 5 of 5.
+    assert_eq!(d["facts"]["from"]["grade"]["settled"], 10);
+    assert_eq!(d["facts"]["from"]["grade"]["first_pass"], 6);
+    // The owner picks Beta themselves: the card's case is gone.
+    primary
+        .apply_settings(&[change(
+            "team.division.code",
+            json!(format!("assistant:{b_uid}")),
+        )])
+        .await
+        .unwrap();
+    now += chrono::Duration::minutes(31);
+    host.rules_tick_at(now).await;
+    let cards = rule_cards(&primary, "division").await;
+    assert_eq!(cards.len(), 1);
+    assert_eq!(data_of(&cards[0])["state"], "expired");
+    // A switch whose pick was changed again since is not taken back.
+    primary
+        .apply_settings(&[change("team.division.code", json!("auto"))])
+        .await
+        .unwrap();
+    for _ in 0..5 {
+        kind_work(&primary, a, "Alpha", "docs", false).await;
+        kind_work(&primary, b, "Beta", "docs", true).await;
+    }
+    now += chrono::Duration::minutes(31);
+    host.rules_tick_at(now).await;
+    let docs = rule_cards(&primary, "division")
+        .await
+        .into_iter()
+        .find(|c| data_of(c)["facts"]["kind"] == "docs")
+        .expect("a card for docs");
+    let n = notice_of(&primary, &docs).await;
+    primary.act_on_notice(n.id, "switch").await.unwrap();
+    let a_uid = uid_of(&primary, a).await;
+    primary
+        .apply_settings(&[change(
+            "team.division.docs",
+            json!(format!("assistant:{a_uid}")),
+        )])
+        .await
+        .unwrap();
+    let err = primary.act_on_notice(n.id, "undo").await.unwrap_err();
+    assert!(err.contains("changed again"), "{err}");
+    assert_eq!(
+        division_of(&primary, "docs").await,
+        Some(format!("assistant:{a_uid}")),
+        "what the owner set since stays"
+    );
+    let row = svc::get_row(&primary.db.conn, n.timeline_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(data_of(&row)["state"], "switched");
+    assert_eq!(notice_of(&primary, &docs).await.state, NoticeState::Acted);
+    // Put back to what it was before the switch by the owner: undoing has
+    // nothing left to do, and says so as taken back.
+    primary
+        .apply_settings(&[change("team.division.docs", json!("auto"))])
+        .await
+        .unwrap();
+    let row = primary.act_on_notice(n.id, "undo").await.unwrap();
+    assert_eq!(row.data.as_ref().unwrap()["state"], "undone");
+    assert_eq!(division_of(&primary, "docs").await, None);
+    // The rule off: nothing more.
+    set_pref(&primary, "rule_division", json!("off")).await;
+    for _ in 0..5 {
+        kind_work(&primary, a, "Alpha", "test", false).await;
+        kind_work(&primary, b, "Beta", "test", true).await;
+    }
+    now += chrono::Duration::minutes(31);
+    host.rules_tick_at(now).await;
+    assert!(rule_cards(&primary, "division")
+        .await
+        .iter()
+        .all(|c| data_of(c)["facts"]["kind"] != "test"));
+}
+
+#[tokio::test]
+async fn a_pick_changed_meanwhile_retires_the_card_that_named_it() {
+    let (host, _w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let alpha = role_assistant(&primary, "Alpha", true).await;
+    let beta = role_assistant(&primary, "Beta", true).await;
+    let gamma = role_assistant(&primary, "Gamma", true).await;
+    let alpha_uid = uid_of(&primary, alpha).await;
+    let gamma_uid = uid_of(&primary, gamma).await;
+    primary
+        .apply_settings(&[change(
+            "team.division.research",
+            json!(format!("assistant:{alpha_uid}")),
+        )])
+        .await
+        .unwrap();
+    for i in 0..5 {
+        kind_work(&primary, alpha, "Alpha", "research", i == 0).await;
+        kind_work(&primary, gamma, "Gamma", "research", i == 0).await;
+        kind_work(&primary, beta, "Beta", "research", true).await;
+    }
+    let now = super::clock::now();
+    host.rules_tick_at(now).await;
+    let first = rule_cards(&primary, "division").await.remove(0);
+    assert_eq!(data_of(&first)["facts"]["from"]["name"], "Alpha");
+    // The owner picks Gamma meanwhile: the card naming Alpha goes, and the
+    // one there is now names Gamma.
+    primary
+        .apply_settings(&[change(
+            "team.division.research",
+            json!(format!("assistant:{gamma_uid}")),
+        )])
+        .await
+        .unwrap();
+    host.rules_tick_at(now + chrono::Duration::minutes(31))
+        .await;
+    let cards = rule_cards(&primary, "division").await;
+    assert_eq!(cards.len(), 2);
+    assert_eq!(data_of(&cards[0])["state"], "expired");
+    assert_eq!(data_of(&cards[1])["state"], "open");
+    assert_eq!(data_of(&cards[1])["facts"]["from"]["name"], "Gamma");
+    assert_eq!(data_of(&cards[1])["facts"]["to"]["id"], beta);
+}
+
+#[tokio::test]
+async fn a_settings_patch_on_condition_writes_only_while_the_value_is_as_expected() {
+    let (engine, _tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let id = engine.bot().await;
+    let code = |s: &str| {
+        let v: serde_json::Value = serde_json::from_str(s).unwrap_or_default();
+        v["team"]["division"]["code"].clone()
+    };
+    let stored = |m: crate::db::entities::personal_agent::Model| code(&m.settings);
+    svc::patch_settings(
+        conn,
+        id,
+        &json!({ "team": { "division": { "code": "assistant:c" } } }),
+    )
+    .await
+    .unwrap();
+    // Expecting what it no longer is (someone saved C meanwhile): nothing.
+    let to_a = json!({ "team": { "division": { "code": "assistant:a" } } });
+    assert!(
+        !svc::patch_settings_if(conn, id, "$.team.division.code", Some("assistant:b"), &to_a)
+            .await
+            .unwrap()
+    );
+    let now = svc::get_bot(conn, id).await.unwrap().unwrap();
+    assert_eq!(stored(now), json!("assistant:c"));
+    // Expecting what it is: written (null takes it out).
+    let off = json!({ "team": { "division": { "code": null } } });
+    assert!(
+        svc::patch_settings_if(conn, id, "$.team.division.code", Some("assistant:c"), &off)
+            .await
+            .unwrap()
+    );
+    let now = svc::get_bot(conn, id).await.unwrap().unwrap();
+    assert_eq!(stored(now), serde_json::Value::Null);
+    // Expecting it absent, while absent: written.
+    assert!(
+        svc::patch_settings_if(conn, id, "$.team.division.code", None, &to_a)
+            .await
+            .unwrap()
+    );
+    let now = svc::get_bot(conn, id).await.unwrap().unwrap();
+    assert_eq!(stored(now), json!("assistant:a"));
+    assert!(
+        !svc::patch_settings_if(conn, id, "$.team.division.code", None, &off)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_dispatch_names_its_kind_of_work_and_why_and_the_record_is_kept_by_it() {
+    let (engine, _tmp) = configured().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let bad = call(
+        &engine,
+        "dispatch",
+        json!({ "mode": "chat", "assistant_id": coder, "title": "X", "prompt": "Do X.", "kind": "cooking" }),
+    )
+    .await;
+    assert!(!bad.ok && bad.text.contains("research"), "{}", bad.text);
+    let made = call(
+        &engine,
+        "dispatch",
+        json!({
+            "mode": "chat", "assistant_id": coder, "title": "Look into Y", "prompt": "Find out Y.",
+            "kind": "review", "why": "Coder passed 9 of 10 reviews first time."
+        }),
+    )
+    .await;
+    assert!(made.ok, "{}", made.text);
+    let id = made.data["dispatch_id"].as_i64().unwrap() as i32;
+    assert_eq!(
+        dispatch_state(&engine, id).await.kind.as_deref(),
+        Some("review")
+    );
+    let card = svc::page(&engine.db.conn, engine.bot().await, None, 200)
+        .await
+        .unwrap()
+        .0
+        .into_iter()
+        .find(|r| r.dispatch_id == Some(id))
+        .unwrap();
+    let data = data_of(&card);
+    assert_eq!(data["kind"], "review");
+    assert_eq!(data["why"], "Coder passed 9 of 10 reviews first time.");
+    // assistant_list reads the record apart by kind (and by mode).
+    for passed in [true, false] {
+        kind_work(&engine, coder, "Coder", "research", passed).await;
+    }
+    kind_work(&engine, coder, "Coder", "code", true).await;
+    let list = call(&engine, "assistant_list", json!({})).await;
+    assert!(list.ok, "{}", list.text);
+    assert!(
+        list.text
+            .contains("by kind of work: research 1 of 2 first time, code 1 of 1 first time"),
+        "{}",
+        list.text
+    );
+    let row = list.data["assistants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == coder)
+        .unwrap()
+        .clone();
+    assert_eq!(row["grade_by_kind"]["research"]["settled"], 2);
+    // The review handed out above counts once it ends.
+    assert!(row["grade_by_mode"]["chat"]["settled"].as_u64().unwrap() >= 3);
+}
+
+#[tokio::test]
+async fn a_plan_step_carries_its_kind_of_work_to_its_dispatch() {
+    let (host, w, _tmp) = hosted().await;
+    let primary = host.primary();
+    let researcher = role_assistant(&primary, "Researcher", true).await;
+    let refused = call(
+        &primary,
+        "plan_create",
+        json!({ "title": "R", "steps": [
+            { "title": "Ask", "bot": w, "prompt": "Ask.", "kind": "research" }
+        ] }),
+    )
+    .await;
+    assert!(
+        !refused.ok && refused.text.contains("kind"),
+        "{}",
+        refused.text
+    );
+    let out = call(
+        &primary,
+        "plan_create",
+        json!({ "title": "Research", "steps": [
+            { "title": "Look", "assistant_id": researcher, "mode": "chat", "prompt": "Look it up.", "kind": "research" }
+        ] }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    let id = out.data["plan"]["id"].as_i64().unwrap() as i32;
+    let s = plan_steps(&primary, id).await.remove(0);
+    assert_eq!(s.kind.as_deref(), Some("research"));
+    let d = s.dispatch_id.expect("dispatched");
+    assert_eq!(
+        dispatch_state(&primary, d).await.kind.as_deref(),
+        Some("research")
+    );
+    let (_, card) = plan_card(&primary, id).await;
+    assert_eq!(card["plan"]["steps"][0]["kind"], "research");
 }

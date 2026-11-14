@@ -868,6 +868,10 @@ pub struct Prefs {
     pub rule_new_project: OnOff,
     #[serde(default, deserialize_with = "lenient")]
     pub rule_behind: OnOff,
+    /// codeg's card when another executor config's record on a kind of
+    /// work is clearly better than the division's pick (7.9).
+    #[serde(default, deserialize_with = "lenient")]
+    pub rule_division: OnOff,
     #[serde(default, deserialize_with = "lenient")]
     pub rule_repeat: OnOff,
     #[serde(
@@ -1028,6 +1032,7 @@ impl Default for Prefs {
             rule_idle_days: RULE_IDLE_DAYS,
             rule_new_project: OnOff::On,
             rule_behind: OnOff::On,
+            rule_division: OnOff::On,
             rule_repeat: OnOff::On,
             rule_repeat_count: RULE_REPEAT_COUNT,
             rule_suggest: OnOff::On,
@@ -1500,6 +1505,11 @@ pub const PREFS: &[PrefSpec] = &[
         label: "codeg's card on a dispatched task's branch behind its target with conflicts",
     },
     PrefSpec {
+        key: "rule_division",
+        kind: PrefKind::Choice(&["on", "off"]),
+        label: "codeg's card when another executor config clearly does a kind of work better than its pick in the division",
+    },
+    PrefSpec {
         key: "rule_repeat",
         kind: PrefKind::Choice(&["on", "off"]),
         label: "codeg's offer to make a request the owner keeps making a routine",
@@ -1708,6 +1718,7 @@ fn rule_preset(level: &str) -> Vec<(&'static str, Value)> {
         ("rule_idle_days", time(RULE_IDLE_DAYS)),
         ("rule_new_project", on(!quiet)),
         ("rule_behind", on(!quiet)),
+        ("rule_division", on(!quiet)),
         ("rule_repeat", on(!quiet)),
     ]
 }
@@ -1992,6 +2003,7 @@ impl Prefs {
             "idle" => self.rule_idle,
             "new_project" => self.rule_new_project,
             "behind" => self.rule_behind,
+            "division" => self.rule_division,
             "repeat" => self.rule_repeat,
             "suggest" => self.rule_suggest,
             "undo" => self.rule_undo,
@@ -2292,6 +2304,7 @@ fn rules_line(prefs: &Prefs) -> String {
         "idle",
         "new_project",
         "behind",
+        "division",
         "repeat",
         "undo",
         "idle_bot",

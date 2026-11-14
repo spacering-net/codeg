@@ -848,6 +848,7 @@ impl PersonalAgentEngine {
                 },
                 done_when: None,
                 pr_fix: None,
+                kind: Some("check".into()),
             },
         )
         .await

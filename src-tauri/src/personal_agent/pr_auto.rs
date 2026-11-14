@@ -1379,6 +1379,17 @@ impl PersonalAgentEngine {
                         report: false,
                         on_done: None,
                         done_when: Some(done_when.into()),
+                        // The kind of work (7.9): red checks and a
+                        // conflict are keeping a PR green; feedback is
+                        // more code.
+                        kind: Some(
+                            match cause {
+                                Cause::Checks | Cause::Conflict => "fix_ci",
+                                Cause::Feedback => "code",
+                            }
+                            .into(),
+                        ),
+                        why: None,
                     };
                     let mut valid = match Box::pin(self.validate_dispatch(&req)).await {
                         Ok(v) => v,

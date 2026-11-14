@@ -94,6 +94,9 @@ pub struct Model {
     pub ended_at: Option<DateTimeUtc>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
+    /// The kind of work it is (7.9), handed on to its dispatch.
+    #[sea_orm(column_type = "Text", nullable)]
+    pub kind: Option<String>,
 }
 
 impl Model {

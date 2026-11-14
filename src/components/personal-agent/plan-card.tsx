@@ -154,6 +154,7 @@ export function PlanCard({ item }: { item: NoticeItem }) {
   const t = useTranslations("PersonalAgent.plan")
   const tm = useTranslations("PersonalAgent.mode")
   const tl = useTranslations("PersonalAgent.ladder")
+  const tk = useTranslations("PersonalAgent.settings.division")
   const { readOnly, onQuote } = usePageScope()
   const botId = useBotId()
   const openWork = useOpenWork()
@@ -362,6 +363,7 @@ export function PlanCard({ item }: { item: NoticeItem }) {
                     <span>
                       {tm(s.mode)}
                       {s.project_name ? ` · ${s.project_name}` : ""}
+                      {s.kind ? ` · ${tk(s.kind)}` : ""}
                     </span>
                   ) : null}
                   {s.depends_on.length > 0 ? (

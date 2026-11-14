@@ -833,17 +833,24 @@ pub async fn personal_agent_profile_update_core(
 }
 
 /// Each assistant's and each executor config's grade (2.11): how its work
-/// went over the last 30 days.
+/// went over the last 30 days — and apart, by who handed it out, who ran
+/// it and how (7.9).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GradesView {
     pub bots: HashMap<i32, crate::personal_agent::profile::Grade>,
     pub executors: HashMap<i32, crate::personal_agent::profile::Grade>,
+    pub cells: Vec<crate::personal_agent::profile::GradeCell>,
 }
 
 pub async fn personal_agent_grades_core(db: &AppDatabase) -> GradesView {
-    let (bots, executors) =
-        crate::personal_agent::profile::grades(db, crate::personal_agent::clock::now()).await;
-    GradesView { bots, executors }
+    use crate::personal_agent::profile;
+    let work = profile::graded_recent(db, crate::personal_agent::clock::now()).await;
+    let (bots, executors) = profile::grades_of(&work);
+    GradesView {
+        bots,
+        executors,
+        cells: profile::cells(&work),
+    }
 }
 
 /// The page's search (8.2): what the time machine finds for `query`, as
@@ -1021,7 +1028,9 @@ pub async fn personal_agent_executors_core(
     let bots = svc::list_bots(&db.conn).await?;
     let recent = svc::dispatches_to_executors(&db.conn, 5_000).await?;
     let since = Utc::now() - Duration::days(14);
-    let (_, grades) = crate::personal_agent::profile::grades(db, Utc::now()).await;
+    let work = crate::personal_agent::profile::graded_recent(db, Utc::now()).await;
+    let (_, grades) = crate::personal_agent::profile::grades_of(&work);
+    let cells = crate::personal_agent::profile::cells(&work);
     let live = [
         DispatchState::Queued,
         DispatchState::Running,
@@ -1093,6 +1102,11 @@ pub async fn personal_agent_executors_core(
             division,
             usage: account.team.usage_of(&a.uid),
             grade: grades.get(&a.id).cloned().unwrap_or_default(),
+            grade_cells: cells
+                .iter()
+                .filter(|c| c.executor == a.id)
+                .cloned()
+                .collect(),
         });
     }
     Ok(out)

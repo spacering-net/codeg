@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
 import type {
   PersonalAgentAccount,
+  PersonalAgentGrades,
   PersonalAgentPrefs,
   PersonalAgentSnapshot,
 } from "@/lib/types"
@@ -94,7 +95,13 @@ const api = vi.hoisted(() => ({
       workday: { start: 600, end: 1200, learned: true, days: 12, set: true },
     },
   })),
-  personalAgentGrades: vi.fn(async () => ({ bots: {}, executors: {} })),
+  personalAgentGrades: vi.fn(
+    async (): Promise<PersonalAgentGrades> => ({
+      bots: {},
+      executors: {},
+      cells: [],
+    })
+  ),
   personalAgentHistoryStatus: vi.fn(async () => HISTORY),
   personalAgentHistoryRebuild: vi.fn(async () => ({
     ...HISTORY,
@@ -849,6 +856,7 @@ describe("the settings view", () => {
         },
       },
       executors: {},
+      cells: [],
     })
     usePersonalAgentUi.getState().openSettings("workers")
     draw()
@@ -860,7 +868,85 @@ describe("the settings view", () => {
     expect(grade.textContent).toBe(
       "first time 80% (8/10) · 1 h 15 min on average"
     )
+    // Apart (3.3): by executor config and mode.
+    api.personalAgentGrades.mockResolvedValue({
+      bots: {
+        "7": {
+          dispatches: 12,
+          settled: 10,
+          first_pass: 8,
+          first_pass_rate: 80,
+          avg_minutes: 75,
+        },
+      },
+      executors: {},
+      cells: [
+        {
+          bot_id: 7,
+          executor: 3,
+          executor_name: "Codex Review",
+          mode: "session",
+          grade: {
+            dispatches: 9,
+            settled: 8,
+            first_pass: 7,
+            first_pass_rate: 88,
+            avg_minutes: 20,
+          },
+        },
+        {
+          bot_id: 7,
+          executor: 4,
+          executor_name: "Claude Dev",
+          mode: "task",
+          grade: {
+            dispatches: 3,
+            settled: 0,
+            first_pass: 0,
+            first_pass_rate: null,
+            avg_minutes: null,
+          },
+        },
+        {
+          bot_id: 8,
+          executor: 4,
+          executor_name: "Claude Dev",
+          mode: "chat",
+          grade: {
+            dispatches: 1,
+            settled: 1,
+            first_pass: 1,
+            first_pass_rate: 100,
+            avg_minutes: 5,
+          },
+        },
+      ],
+    })
+    cleanup()
+    usePersonalAgentUi.getState().openSettings("workers")
+    draw()
+    const open = await waitFor(() => {
+      const el = document.querySelector('[data-pa-worker-cells="7"]')
+      expect(el).not.toBeNull()
+      return el as HTMLElement
+    })
+    fireEvent.click(open)
+    const cells = await waitFor(() => {
+      const els = document.querySelectorAll("[data-pa-grade-cell]")
+      expect(els.length).toBe(2)
+      return els
+    })
+    expect(cells[0].textContent).toBe(
+      "Codex Review · Work sessionfirst time 88% (7/8) · 20 min on average"
+    )
+    expect(cells[1].textContent).toBe(
+      "Claude Dev · Kanban task3 handed out, none done yet"
+    )
     api.personalAgentBots.mockResolvedValue([])
-    api.personalAgentGrades.mockResolvedValue({ bots: {}, executors: {} })
+    api.personalAgentGrades.mockResolvedValue({
+      bots: {},
+      executors: {},
+      cells: [],
+    })
   })
 })

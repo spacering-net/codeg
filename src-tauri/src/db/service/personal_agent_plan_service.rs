@@ -55,6 +55,9 @@ pub struct NewStep {
     pub done_when: Option<String>,
     pub depends_on: Vec<i32>,
     pub confirmed: bool,
+    /// The kind of work it is (7.9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 impl NewStep {
@@ -73,6 +76,7 @@ impl NewStep {
             done_when: s.done_when.clone(),
             depends_on: s.deps(),
             confirmed: s.confirmed,
+            kind: s.kind.clone(),
         }
     }
 }
@@ -104,6 +108,7 @@ fn step_active(plan_id: i32, s: NewStep, now: DateTime<Utc>) -> step::ActiveMode
         ended_at: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
+        kind: Set(s.kind),
     }
 }
 
@@ -490,6 +495,7 @@ pub async fn update_step<C: ConnectionTrait>(
             .col_expr(step::Column::Deliverable, Expr::value(c.deliverable))
             .col_expr(step::Column::Prompt, Expr::value(c.prompt))
             .col_expr(step::Column::DoneWhen, Expr::value(c.done_when))
+            .col_expr(step::Column::Kind, Expr::value(c.kind))
             .col_expr(
                 step::Column::DependsOn,
                 Expr::value(serde_json::to_string(&c.depends_on).unwrap_or_else(|_| "[]".into())),

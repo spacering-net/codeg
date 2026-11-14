@@ -164,6 +164,9 @@ pub struct DispatchTemplate {
     pub deliverable: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub done_when: Option<String>,
+    /// The kind of work it is (7.9).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     /// In a change: back to the assistant's own executor config, whatever
     /// `assistant_id` was (an omitted one keeps what it was). Not kept.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -358,6 +361,7 @@ pub fn spec_of(draft: &Draft, base: Option<&Draft>) -> Result<Spec, String> {
                 prompt: d.prompt.clone().or_else(|| b.prompt.clone()),
                 deliverable: d.deliverable.clone().or_else(|| b.deliverable.clone()),
                 done_when: d.done_when.clone().or_else(|| b.done_when.clone()),
+                kind: d.kind.clone().or_else(|| b.kind.clone()),
                 own_executor: false,
             },
             None => DispatchTemplate {
@@ -1674,6 +1678,8 @@ impl PersonalAgentEngine {
             report: t.deliverable.as_deref() == Some("report"),
             on_done: None,
             done_when: t.done_when.clone(),
+            kind: t.kind.clone(),
+            why: None,
         };
         let valid = match self.validate_dispatch(&req).await {
             Ok(v) => v,
@@ -2072,6 +2078,8 @@ impl PersonalAgentEngine {
                 report: t.deliverable.as_deref() == Some("report"),
                 on_done: None,
                 done_when: t.done_when.clone(),
+                kind: t.kind.clone(),
+                why: None,
             })
             .await?;
         }
@@ -2694,6 +2702,7 @@ impl PersonalAgentEngine {
                 prompt: None,
                 deliverable: d.deliverable.clone(),
                 done_when: d.done_when.clone(),
+                kind: d.kind.clone(),
                 own_executor: false,
             }),
             precheck: None,
@@ -3639,6 +3648,7 @@ mod tests {
                 prompt: Some("Run cargo audit".into()),
                 deliverable: Some("report".into()),
                 done_when: Some("- every advisory listed".into()),
+                kind: Some("research".into()),
                 own_executor: false,
             }),
             ..Default::default()
@@ -3661,6 +3671,7 @@ mod tests {
         assert_eq!(t.title.as_deref(), Some("Weekly deps"));
         assert_eq!(t.prompt.as_deref(), Some("Run cargo audit"));
         assert_eq!(t.done_when.as_deref(), Some("- every advisory listed"));
+        assert_eq!(t.kind.as_deref(), Some("research"));
         assert_eq!(s.cron.as_deref(), Some("0 10 * * 1"));
         // Back to its own executor config: said so, not left out.
         let own = Draft {

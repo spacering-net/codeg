@@ -48,6 +48,25 @@ pub const MAX_TITLE_CHARS: usize = 120;
 pub const MAX_PROMPT_CHARS: usize = 20_000;
 /// Longest acceptance criteria (7.5).
 pub const MAX_DONE_WHEN_CHARS: usize = 4_000;
+/// Longest reason for the executor picked (7.9).
+pub const MAX_WHY_CHARS: usize = 300;
+
+/// A kind of work as a call names it (7.9): one of the division's, or the
+/// refusal that lists them.
+pub fn kind_of(v: Option<&serde_json::Value>) -> Result<String, String> {
+    check_kind(v.and_then(|x| x.as_str()).unwrap_or(""))
+}
+
+/// `named`, when it is one of the division's kinds of work.
+pub fn check_kind(named: &str) -> Result<String, String> {
+    use crate::models::personal_agent_prefs::DIVISION;
+    let named = named.trim();
+    DIVISION
+        .iter()
+        .find(|k| **k == named)
+        .map(|k| k.to_string())
+        .ok_or_else(|| format!("`kind` is one of: {}", DIVISION.join(", ")))
+}
 
 /// A dispatch as the tool asked for it — and as a proposal card keeps it.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -62,6 +81,12 @@ pub struct DispatchRequest {
     /// What done looks like, criterion by criterion (7.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_when: Option<String>,
+    /// The kind of work it is (7.9): one of the division's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Why this executor, as the assistant put it: on the card (7.9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// A dispatch checked against the roster and the projects, ready to record.
@@ -75,6 +100,8 @@ pub struct ValidDispatch {
     pub report: bool,
     pub on_done: Option<String>,
     pub done_when: Option<String>,
+    pub kind: Option<String>,
+    pub why: Option<String>,
     /// The input it is dispatched for, and the chain and thread it inherits
     /// from that input (`for`, 4.11); empty when nothing started it.
     pub lineage: svc::Lineage,
@@ -95,6 +122,8 @@ impl ValidDispatch {
             report: self.report,
             on_done: self.on_done.clone(),
             done_when: self.done_when.clone(),
+            kind: self.kind.clone(),
+            why: self.why.clone(),
         }
     }
 }
@@ -395,6 +424,15 @@ impl PersonalAgentEngine {
             }
             w => w.map(str::to_string),
         };
+        let kind = match req.kind.as_deref() {
+            Some(k) => Some(check_kind(k)?),
+            None => None,
+        };
+        let why = req
+            .why
+            .as_deref()
+            .map(|s| cut(s, MAX_WHY_CHARS))
+            .filter(|s| !s.is_empty());
         Ok(ValidDispatch {
             mode: req.mode,
             snapshot,
@@ -404,6 +442,8 @@ impl PersonalAgentEngine {
             report: req.report,
             on_done,
             done_when,
+            kind,
+            why,
             lineage: svc::Lineage::default(),
             pr_fix: None,
         })
@@ -427,6 +467,8 @@ impl PersonalAgentEngine {
             report,
             on_done,
             done_when,
+            kind,
+            why,
             lineage,
             pr_fix,
         } = v;
@@ -440,6 +482,8 @@ impl PersonalAgentEngine {
             report,
             on_done: on_done.clone(),
             done_when: done_when.clone(),
+            kind: kind.clone(),
+            why: why.clone(),
         };
         let key = ledger::dispatch_key(snapshot.assistant_id, mode, folder_id, &title);
         // A repeat costs nothing to find before anything is written.
@@ -480,6 +524,7 @@ impl PersonalAgentEngine {
             lineage,
             done_when: done_when.clone(),
             pr_fix: pr_fix.as_ref().and_then(|f| serde_json::to_string(f).ok()),
+            kind: kind.clone(),
         };
         let payload = serde_json::to_value(&request).ok();
         let row = match &auth {
@@ -567,6 +612,10 @@ impl PersonalAgentEngine {
             "routine": routine_label,
             // The watched pull request it fixes, and why (7.4).
             "pr_fix": pr_fix,
+            // The kind of work, and why the assistant picked this executor
+            // (7.9).
+            "kind": kind,
+            "why": why,
         }));
         let card = self.push_row(card).await;
         // A round on a pull request belongs to the matter of the work that

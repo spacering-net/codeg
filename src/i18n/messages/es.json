@@ -8704,6 +8704,12 @@
         "level_plan_stuck": {
           "title": "Plan atascado",
           "hint": "Un paso falló y sigue fallando."
+        },
+        "rule_division": {
+          "title": "Quién lo hace mejor",
+          "hint": "Otra configuración de ejecución saca un tipo de trabajo a la primera claramente más a menudo que su primera opción en el reparto (20 puntos o más, con al menos 5 trabajos terminados en cada lado).",
+          "on": "Activado",
+          "off": "Desactivado"
         }
       },
       "workdir": {
@@ -8883,7 +8889,12 @@
         "firstPass": "a la primera {rate}% ({pass}/{settled})",
         "average": "{time} de media",
         "minutes": "{n} min",
-        "hours": "{h} h {m} min"
+        "hours": "{h} h {m} min",
+        "apart": "Por configuración y modo",
+        "byExecutor": "Por configuración de ejecución y modo",
+        "byBot": "Por asistente y modo",
+        "someone": "Trabajo anterior",
+        "unjudged": "{count} encargados, ninguno terminado aún"
       }
     },
     "statusWord": {
@@ -9015,7 +9026,8 @@
       "doneWhen": "Hecho cuando",
       "check": "Revisión de aceptación",
       "checkRound": "Revisión de aceptación · ronda {round}",
-      "checkVia": "revisado con la configuración de ejecución de {name}"
+      "checkVia": "revisado con la configuración de ejecución de {name}",
+      "why": "Por qué: {why}"
     },
     "event": {
       "someone": "Un asistente",
@@ -10255,7 +10267,8 @@
         "new_project": "Un proyecto nuevo",
         "behind": "Rama atrasada, con conflictos",
         "undo": "Cambios que deshiciste",
-        "idle_bot": "Un asistente de trabajo inactivo"
+        "idle_bot": "Un asistente de trabajo inactivo",
+        "division": "Quién lo hace mejor"
       },
       "wait": {
         "permission": "Espera tu aprobación",
@@ -10297,6 +10310,9 @@
         "idle_bot": {
           "hide": "Ocultarlo",
           "delete": "Eliminarlo…"
+        },
+        "division": {
+          "switch": "Dárselo primero a {name}"
         }
       },
       "done": {
@@ -10310,7 +10326,9 @@
         "rebasing": "Devuelto para hacer rebase.",
         "asking_first": "Los cambios que pidas te llegarán primero como tarjeta.",
         "hidden": "Oculto. Sigue entre los asistentes ocultos.",
-        "deleted": "Eliminado."
+        "deleted": "Eliminado.",
+        "switched": "{kind} ahora va primero a {name}.",
+        "undone": "Deshecho: el reparto queda como estaba."
       },
       "hand": {
         "failed": "«{title}» falló y nadie se ha ocupado. Mira qué salió mal y dime qué sugieres.",
@@ -10380,10 +10398,17 @@
         "idle_bot": {
           "title": "Asistentes de trabajo inactivos",
           "hint": "En el repaso semanal: un asistente de trabajo que nadie despertó en dos semanas, ¿ocultarlo o eliminarlo?"
+        },
+        "division": {
+          "title": "Quién lo hace mejor",
+          "hint": "Otra configuración de ejecución saca un tipo de trabajo a la primera claramente más a menudo que su primera opción en el reparto (20 puntos o más, con al menos 5 trabajos terminados en cada lado)."
         }
       },
       "undoDetail": "Deshiciste {undone} de los {made} cambios hechos a tu palabra en las dos últimas semanas.",
-      "idleBotDetail": "Nadie lo ha despertado en dos semanas."
+      "idleBotDetail": "Nadie lo ha despertado en dos semanas.",
+      "undoSwitch": "Deshacer",
+      "divisionDetail": "Últimos {days} días: {to} salió bien a la primera {pass} de {settled} ({rate}%); {from}, la primera opción ahora, {fromPass} de {fromSettled} ({fromRate}%).",
+      "divisionDetailAuto": "Últimos {days} días: {to} salió bien a la primera {pass} de {settled} ({rate}%); las demás juntas, {fromPass} de {fromSettled} ({fromRate}%). Ahora no hay primera opción."
     },
     "brief": {
       "title": "Resumen de la mañana",
@@ -10561,7 +10586,8 @@
         "deliverable": "entregable",
         "prompt": "qué hacer",
         "done_when": "listo cuando",
-        "depends_on": "de qué depende"
+        "depends_on": "de qué depende",
+        "kind": "tipo de trabajo"
       }
     }
   }

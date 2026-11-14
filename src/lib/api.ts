@@ -3143,6 +3143,8 @@ export type NoticeAction =
   | "ask_first"
   | "hide"
   | "delete"
+  // The division rule (7.9): make the better one the pick (and "undo").
+  | "switch"
   // A plan's card (7.6): start (or go on), stop, end; a step confirmed or
   // canceled; a change taken back (`undo:<change>`).
   | "start"

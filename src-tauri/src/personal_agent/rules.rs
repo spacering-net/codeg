@@ -28,6 +28,13 @@
 //!   review: the changes the owner keeps undoing (`undo` — show such
 //!   changes first?) and a work assistant nobody woke for two weeks
 //!   (`idle_bot` — hide it or delete it?).
+//! - **The division of work** (`division`, 7.9): another executor config's
+//!   record on a kind of work is clearly better than the pick's (or, with
+//!   no pick, than everyone else's) — first time at least
+//!   [`DIVISION_GAP`] points more often, each side with at least
+//!   [`DIVISION_MIN_SETTLED`] pieces judged. One card per kind, pick and
+//!   other one. [Switch] makes it the pick, and the card takes it back while
+//!   nothing changed it since — checked and written in one statement.
 //!
 //! The scan runs on the host's clock every [`SCAN_EVERY_SECS`] seconds, off
 //! its loop; the rules that read git or a forge look every
@@ -65,7 +72,9 @@ use crate::db::service::personal_agent_service::{NewNotice, NewRow};
 use crate::db::service::personal_agent_verification_service as vsvc;
 use crate::db::AppDatabase;
 use crate::models::personal_agent::{PersonalAgentChange, TimelineRow};
-use crate::models::personal_agent_prefs::{AccountView, Level, Prefs};
+use crate::models::personal_agent_prefs::{
+    division_label, AccountView, Level, Prefs, TeamSettings, DIVISION,
+};
 
 /// The rules codeg scans for.
 pub const SCANNED: &[&str] = &[
@@ -77,6 +86,7 @@ pub const SCANNED: &[&str] = &[
     "idle",
     "new_project",
     "behind",
+    "division",
 ];
 /// Every rule: the scanned ones, the repeat offer and the assistants' own
 /// suggestions.
@@ -93,9 +103,17 @@ pub const ALL: &[&str] = &[
     "suggest",
     "undo",
     "idle_bot",
+    "division",
 ];
-/// The rules that read git or a forge: looked at less often.
-const SLOW: &[&str] = &["pr_review", "uncommitted", "behind"];
+/// The rules that read git or a forge, or a month of work: looked at less
+/// often.
+const SLOW: &[&str] = &["pr_review", "uncommitted", "behind", "division"];
+/// The division rule (7.9): each side has at least this many pieces of
+/// that kind of work judged…
+pub const DIVISION_MIN_SETTLED: u32 = 5;
+/// …and the other passes the first time at least this many points more
+/// often.
+pub const DIVISION_GAP: u32 = 20;
 /// A topic the owner dismissed stays quiet this long.
 pub const COOLDOWN_DAYS: i64 = 7;
 /// This many of a rule's cards dismissed in a row lower it one level.
@@ -417,6 +435,7 @@ impl Drop for Release {
 struct Look {
     now: DateTime<Utc>,
     prefs: Prefs,
+    team: TeamSettings,
     primary: i32,
     connected: Vec<i32>,
 }
@@ -452,7 +471,8 @@ impl EngineHost {
         let Ok(Some(primary)) = svc::primary_bot(&self.db.conn).await else {
             return;
         };
-        let prefs = AccountView::from_settings(&primary.settings).prefs;
+        let account = AccountView::from_settings(&primary.settings);
+        let prefs = account.prefs;
         if !prefs.proactive() {
             return;
         }
@@ -460,6 +480,7 @@ impl EngineHost {
             now,
             connected: super::meet::connected_in_settings(&primary.settings),
             prefs,
+            team: account.team,
             primary: primary.id,
         };
         for rule in SCANNED {
@@ -478,6 +499,7 @@ impl EngineHost {
                 "idle" => self.scan_idle(&look).await,
                 "new_project" => self.scan_new_projects(&look).await,
                 "behind" => self.scan_behind(&look).await,
+                "division" => self.scan_division(&look).await,
                 _ => None,
             };
             if let Some(found) = found {
@@ -1141,6 +1163,138 @@ impl EngineHost {
         }
         Some(out)
     }
+
+    // ── the division of work ────────────────────────────────────────────────
+
+    /// A kind of work another executor config does clearly better than the
+    /// division's pick (7.9). Checking finished work is left out: its
+    /// rounds are not graded.
+    async fn scan_division(&self, look: &Look) -> Option<Vec<Found>> {
+        use super::profile::{by_kind, grade_of, graded_recent, Grade, GRADE_DAYS};
+        let work = graded_recent(&self.db, look.now).await;
+        let kinds = by_kind(&work);
+        let mut out = Vec::new();
+        if kinds.is_empty() {
+            return Some(out);
+        }
+        let live = crate::db::service::assistant_service::list_live_enabled(&self.db.conn)
+            .await
+            .ok()?;
+        let bots = svc::list_bots(&self.db.conn).await.ok()?;
+        let enough = |g: &Grade| g.settled >= DIVISION_MIN_SETTLED;
+        for kind in DIVISION.iter().copied().filter(|k| *k != "check") {
+            let pick = look.team.division.get(kind).cloned();
+            // Whose record the pick's is: the executor config, or the one
+            // the work assistant picked is bound to.
+            let from = match pick.as_deref().and_then(|p| p.split_once(':')) {
+                Some(("assistant", uid)) => match live.iter().find(|a| a.uid == uid) {
+                    Some(a) => Some((a.id, a.name.clone(), None)),
+                    // A pick that is gone is the division page's to show.
+                    None => continue,
+                },
+                Some(("bot", uid)) => {
+                    let Some(b) = bots.iter().find(|b| b.uid.as_deref() == Some(uid)) else {
+                        continue;
+                    };
+                    match b
+                        .executor_assistant_id
+                        .and_then(|e| live.iter().find(|a| a.id == e))
+                    {
+                        Some(a) => Some((a.id, super::messages::display_name(b), Some(b.id))),
+                        None => continue,
+                    }
+                }
+                _ => None,
+            };
+            let from_exec = from.as_ref().map(|f| f.0);
+            // The best other one the assistants may hand work to.
+            let mut best: Option<(&crate::models::assistant::AssistantInfo, &Grade)> = None;
+            for a in &live {
+                if Some(a.id) == from_exec || !look.team.usage_of(&a.uid).dispatch {
+                    continue;
+                }
+                let Some(g) = kinds.get(&(a.id, kind.to_string())).filter(|g| enough(g)) else {
+                    continue;
+                };
+                if best.is_none_or(|(_, b)| {
+                    (g.first_pass_rate, g.settled) > (b.first_pass_rate, b.settled)
+                }) {
+                    best = Some((a, g));
+                }
+            }
+            let Some((to, to_grade)) = best else {
+                continue;
+            };
+            // Against the pick's own record, or with no pick, everyone
+            // else's together.
+            let against = match from_exec {
+                Some(e) => kinds.get(&(e, kind.to_string())).cloned(),
+                None => {
+                    Some(grade_of(work.iter().filter(|w| {
+                        w.kind.as_deref() == Some(kind) && w.executor != to.id
+                    })))
+                }
+            };
+            let Some(against) = against.filter(|g| enough(g)) else {
+                continue;
+            };
+            let (Some(rate), Some(was)) = (to_grade.first_pass_rate, against.first_pass_rate)
+            else {
+                continue;
+            };
+            if rate < was + DIVISION_GAP {
+                continue;
+            }
+            let (from_name, from_bot) = match &from {
+                Some((_, name, bot)) => (Some(name.clone()), *bot),
+                None => (None, None),
+            };
+            let text = format!(
+                "{}: {} passed {} of {} the first time in {GRADE_DAYS} days; {} {} of {}",
+                division_label(kind),
+                to.name,
+                to_grade.first_pass,
+                to_grade.settled,
+                match &from_name {
+                    Some(n) => format!("{n} (the first pick now)"),
+                    None => "the others".to_string(),
+                },
+                against.first_pass,
+                against.settled,
+            );
+            // About this kind, this pick and this other one: a pick changed
+            // since makes it another case (its card, naming the old pick,
+            // expires).
+            let object = format!("{kind}:{}:{}", pick.as_deref().unwrap_or("auto"), to.uid);
+            out.push(Found {
+                rule: "division",
+                episode: object.clone(),
+                object,
+                bot: look.primary,
+                since: look.now,
+                held: false,
+                facts: json!({
+                    "kind": kind,
+                    "days": GRADE_DAYS,
+                    "to": {
+                        "uid": to.uid,
+                        "id": to.id,
+                        "name": to.name,
+                        "grade": to_grade,
+                    },
+                    "from": {
+                        "pick": pick,
+                        "name": from_name,
+                        "executor_id": from_exec,
+                        "bot_id": from_bot,
+                        "grade": against,
+                    },
+                }),
+                text,
+            });
+        }
+        Some(out)
+    }
 }
 
 // ── the cards ───────────────────────────────────────────────────────────────
@@ -1198,6 +1352,17 @@ impl PersonalAgentEngine {
         self.emit(PersonalAgentChange::Status);
         if let Some(host) = self.host_ref() {
             let (what, link) = match f.rule {
+                "division" => (
+                    What::Division {
+                        kind: f.facts["kind"].as_str().unwrap_or("").to_string(),
+                        to: f.facts["to"]["name"].as_str().unwrap_or("").to_string(),
+                        from: f.facts["from"]["name"].as_str().map(str::to_string),
+                    },
+                    Some(NotifyLink::Bot {
+                        bot_id: bot,
+                        row_id: Some(row.id),
+                    }),
+                ),
                 "session" => (
                     What::Session {
                         text: f.text.clone(),
@@ -1351,6 +1516,10 @@ impl PersonalAgentEngine {
                 .rule_card_row(notice, "dismissed", json!({ "lowered_now": lowered }))
                 .await;
         }
+        // A switch of the division taken back: the card is answered already.
+        if rule == "division" && action == "undo" {
+            return self.undo_division(notice).await;
+        }
         let allowed: &[&str] = match rule.as_str() {
             "failed" => &["retry", "hand"],
             "review" => &["check", "remind"],
@@ -1362,6 +1531,7 @@ impl PersonalAgentEngine {
             "behind" => &["rebase"],
             "undo" => &["ask_first"],
             "idle_bot" => &["hide", "delete"],
+            "division" => &["switch"],
             _ => &[],
         };
         if !allowed.contains(&action) {
@@ -1432,6 +1602,21 @@ impl PersonalAgentEngine {
                 }])
                 .await
                 .map(|_| ("asking_first".into(), json!({}))),
+            // The owner's say on the card: the pick it names, now.
+            ("division", "switch") => {
+                let kind = facts["kind"].as_str().unwrap_or("");
+                let uid = facts["to"]["uid"].as_str().unwrap_or("");
+                if kind.is_empty() || uid.is_empty() {
+                    Err("the card names no kind of work or executor config".to_string())
+                } else {
+                    self.apply_settings(&[super::prefs::SettingChange {
+                        key: format!("team.division.{kind}"),
+                        value: json!(format!("assistant:{uid}")),
+                    }])
+                    .await
+                    .map(|plan| ("switched".into(), json!({ "changes": plan })))
+                }
+            }
             ("idle_bot", "hide") => {
                 let id = id_of("bot_id").ok_or("the card names no assistant")?;
                 match self.host_ref() {
@@ -1507,6 +1692,82 @@ impl PersonalAgentEngine {
                 .await;
                 let _ = self
                     .rule_card_row(notice, "open", json!({ "error": e.clone() }))
+                    .await;
+                Err(e)
+            }
+        }
+    }
+
+    /// [Undo] on a division switched from its card: the pick back to what
+    /// it was — unless it was changed again since, which stays.
+    async fn undo_division(&self, notice: &notice_entity::Model) -> Result<TimelineRow, String> {
+        let row_id = notice.timeline_id.ok_or("the card's row is missing")?;
+        let row = svc::get_row(&self.db.conn, row_id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("the card's row is missing")?;
+        let data = data_of_row(row.data.as_deref());
+        if data["state"].as_str() != Some("switched") {
+            return Err("nothing on this card to undo".into());
+        }
+        let applied: Vec<super::prefs::Applied> =
+            serde_json::from_value(data["changes"].clone()).unwrap_or_default();
+        // Taken first: a second click is told it was answered.
+        if !svc::move_notice(
+            &self.db.conn,
+            notice.id,
+            &[NoticeState::Acted],
+            NoticeState::Acting,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        {
+            return Err("this card was answered already".into());
+        }
+        // Put back in one statement while it still is what the switch made
+        // it: the owner's own save meanwhile is never overwritten.
+        let put = match applied.iter().find(|a| a.key.starts_with("team.division.")) {
+            Some(a) => self.put_division_back(a).await,
+            // It already was the pick: nothing was switched.
+            None => Ok(super::prefs::PutBack::Already),
+        };
+        match put {
+            Ok(super::prefs::PutBack::Done | super::prefs::PutBack::Already) => {
+                let _ = svc::move_notice(
+                    &self.db.conn,
+                    notice.id,
+                    &[NoticeState::Acting],
+                    NoticeState::Undone,
+                )
+                .await;
+                self.note_rule_act(
+                    notice,
+                    format!(
+                        "On codeg's card #{} (rule `division`) the owner took the switch back: \
+                         the division is as it was.",
+                        notice.id
+                    ),
+                )
+                .await;
+                self.rule_card_row(notice, "undone", json!({ "error": null }))
+                    .await
+            }
+            outcome => {
+                let _ = svc::move_notice(
+                    &self.db.conn,
+                    notice.id,
+                    &[NoticeState::Acting],
+                    NoticeState::Acted,
+                )
+                .await;
+                let e = match outcome {
+                    Ok(_) => {
+                        "the division was changed again since; it stays as it is now".to_string()
+                    }
+                    Err(e) => e,
+                };
+                let _ = self
+                    .rule_card_row(notice, "switched", json!({ "error": e.clone() }))
                     .await;
                 Err(e)
             }
@@ -1617,6 +1878,8 @@ impl PersonalAgentEngine {
             report: d.deliverable.as_deref() == Some("report"),
             on_done: d.on_done.clone(),
             done_when: d.done_when.clone(),
+            kind: d.kind.clone(),
+            why: None,
         };
         let mut v = self.validate_dispatch(&request).await?;
         v.lineage = svc::Lineage {

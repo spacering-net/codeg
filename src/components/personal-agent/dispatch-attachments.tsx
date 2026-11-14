@@ -21,6 +21,7 @@ import { useTranslations } from "next-intl"
 
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useElapsedLabel } from "@/hooks/use-elapsed-label"
+import { DIVISION_KINDS } from "@/lib/types"
 import type {
   DispatchInfo,
   DispatchState,
@@ -96,6 +97,7 @@ function DispatchPill({
   info: DispatchInfo | undefined
 }) {
   const t = useTranslations("PersonalAgent.dispatchCard")
+  const tKind = useTranslations("PersonalAgent.settings.division")
   const openWork = useOpenWork()
   const elapsedLabel = useElapsedLabel()
   const data = row.data
@@ -120,6 +122,15 @@ function DispatchPill({
       : null
   const doneWhen = info?.done_when ?? str(data, "done_when")
   const prFix = prFixOf(data?.pr_fix)
+  // The kind of work, and why the assistant picked this executor (7.9).
+  const kind = DIVISION_KINDS.find((k) => k === str(data, "kind")) ?? null
+  const why = str(data, "why")
+  const picked =
+    data?.followup !== true && (kind || why)
+      ? [kind ? tKind(kind) : null, why ? t("why", { why }) : null]
+          .filter(Boolean)
+          .join(" · ")
+      : null
   const pill = (
     <WorkPill
       rowId={row.id}
@@ -132,7 +143,7 @@ function DispatchPill({
       onOpen={canOpenWork(target) ? () => openWork(target) : null}
     />
   )
-  if (checkFor == null && !doneWhen && !prFix) return pill
+  if (checkFor == null && !doneWhen && !prFix && !picked) return pill
   return (
     <div className="flex max-w-full min-w-0 flex-col items-start gap-1">
       {checkFor != null ? (
@@ -140,6 +151,14 @@ function DispatchPill({
       ) : null}
       {prFix ? <PrFixLabel fix={prFix} className="ps-1" /> : null}
       {pill}
+      {picked ? (
+        <p
+          className="max-w-full ps-1 text-xs break-words text-muted-foreground"
+          data-pa-dispatch-why
+        >
+          {picked}
+        </p>
+      ) : null}
       {doneWhen && data?.followup !== true ? (
         <DoneWhen text={doneWhen} className="ps-1" />
       ) : null}
