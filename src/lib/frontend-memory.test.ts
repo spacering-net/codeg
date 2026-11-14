@@ -1,8 +1,28 @@
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createFrontendMemoryTracker,
   type FrontendMemorySample,
 } from "./frontend-memory"
+
+afterEach(() => vi.unstubAllGlobals())
+
+function controllableWeakRefs() {
+  const cells: Array<{ target: object | undefined }> = []
+  vi.stubGlobal(
+    "WeakRef",
+    class {
+      private cell: { target: object | undefined }
+      constructor(target: object) {
+        this.cell = { target }
+        cells.push(this.cell)
+      }
+      deref() {
+        return this.cell.target
+      }
+    }
+  )
+  return cells
+}
 
 describe("frontend memory diagnostics collector", () => {
   it("keeps numeric snapshots separate from provider lifetimes", () => {
@@ -86,5 +106,101 @@ describe("frontend memory diagnostics collector", () => {
 
     resolveSend?.()
     await Promise.all([first, second])
+  })
+
+  it("observes retired runtime targets without serializing their contents", () => {
+    const cells = controllableWeakRefs()
+    const tracker = createFrontendMemoryTracker({
+      reporterId: "12345678-1234-4234-8234-123456789abc",
+      send: async () => {},
+    })
+    const turn = { text: "private reply" }
+    tracker.recordRuntimeRetirement("session", { turns: [turn] })
+    tracker.recordRuntimeRetirement("turn", turn)
+    tracker.recordRuntimeRetirement("turn", turn)
+    expect(tracker.sample().metrics).toMatchObject({
+      runtimeSessionsRetired: 1,
+      retiredRuntimeSessionsAlive: 1,
+      runtimeTurnsRetired: 1,
+      retiredRuntimeTurnsAlive: 1,
+    })
+    expect(JSON.stringify(tracker.sample())).not.toContain("private reply")
+
+    for (const cell of cells) cell.target = undefined
+    expect(tracker.sample().metrics).toMatchObject({
+      runtimeSessionsRetired: 1,
+      retiredRuntimeSessionsAlive: 0,
+      runtimeTurnsRetired: 1,
+      retiredRuntimeTurnsAlive: 0,
+    })
+  })
+
+  it("does not mistake a reclaimed view or an obsolete cleanup for retirement", () => {
+    const cells = controllableWeakRefs()
+    const tracker = createFrontendMemoryTracker({
+      reporterId: "12345678-1234-4234-8234-123456789abc",
+      send: async () => {},
+    })
+    const view = {}
+    const first = tracker.registerMessageView(view)
+    first()
+    first()
+    expect(tracker.sample().metrics).toMatchObject({
+      messageViewsRetired: 1,
+      retiredMessageViewsAlive: 1,
+    })
+    const second = tracker.registerMessageView(view)
+    first()
+    expect(tracker.sample().metrics.retiredMessageViewsAlive).toBe(0)
+    second()
+    expect(tracker.sample().metrics).toMatchObject({
+      messageViewsRetired: 2,
+      retiredMessageViewsAlive: 1,
+    })
+    for (const cell of cells) cell.target = undefined
+    expect(tracker.sample().metrics.retiredMessageViewsAlive).toBe(0)
+  })
+
+  it("bounds lifetime observations and ignores cleanup after disposal", () => {
+    controllableWeakRefs()
+    const tracker = createFrontendMemoryTracker({
+      reporterId: "12345678-1234-4234-8234-123456789abc",
+      send: async () => {},
+    })
+    for (let i = 0; i < 130; i++) {
+      tracker.recordRuntimeRetirement("session", {})
+      tracker.recordRuntimeRetirement("turn", {})
+      tracker.registerMessageView({})()
+    }
+    expect(tracker.sample().metrics).toMatchObject({
+      retiredRuntimeSessionsAlive: 128,
+      retiredRuntimeTurnsAlive: 128,
+      retiredMessageViewsAlive: 128,
+      lifetimeTrackersDropped: 6,
+    })
+    const late = tracker.registerMessageView({})
+    tracker.dispose()
+    late()
+    tracker.recordRuntimeRetirement("session", {})
+    expect(tracker.sample().metrics).toMatchObject({
+      retiredRuntimeSessionsAlive: 0,
+      retiredRuntimeTurnsAlive: 0,
+      retiredMessageViewsAlive: 0,
+    })
+  })
+
+  it("makes retirement tracking a no-op when WeakRef is unavailable", () => {
+    vi.stubGlobal("WeakRef", undefined)
+    const tracker = createFrontendMemoryTracker({
+      reporterId: "12345678-1234-4234-8234-123456789abc",
+      send: async () => {},
+    })
+    tracker.registerMessageView({})()
+    tracker.recordRuntimeRetirement("turn", {})
+    expect(tracker.sample().metrics).toMatchObject({
+      weakRefsAvailable: 0,
+      messageViewsRetired: 0,
+      runtimeTurnsRetired: 0,
+    })
   })
 })

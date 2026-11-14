@@ -47,6 +47,17 @@ pub enum MemoryMetric {
     RuntimeOptimisticTurns,
     RuntimePendingBackgroundSettlements,
     RuntimeLiveBlocks,
+    RuntimeSessionsRetired,
+    RetiredRuntimeSessionsAlive,
+    RuntimeTurnsRetired,
+    RetiredRuntimeTurnsAlive,
+    MessageViewsRetired,
+    RetiredMessageViewsAlive,
+    LifetimeTrackersDropped,
+    HighlightCacheEntries,
+    HighlightCacheEstimatedBytes,
+    HighlightInFlight,
+    HighlightWaiting,
     OverlayFoldRefetchEntries,
     SelectorsCacheEntries,
     IframeCount,
@@ -223,7 +234,18 @@ mod tests {
                 "runtimePendingBackgroundSettlements": 6,
                 "runtimeLiveBlocks": 7,
                 "overlayFoldRefetchEntries": 8,
-                "selectorsCacheEntries": 9
+                "selectorsCacheEntries": 9,
+                "runtimeSessionsRetired": 10,
+                "retiredRuntimeSessionsAlive": 0,
+                "runtimeTurnsRetired": 11,
+                "retiredRuntimeTurnsAlive": 0,
+                "messageViewsRetired": 12,
+                "retiredMessageViewsAlive": 0,
+                "lifetimeTrackersDropped": 0,
+                "highlightCacheEntries": 13,
+                "highlightCacheEstimatedBytes": 14,
+                "highlightInFlight": 0,
+                "highlightWaiting": 0
             }
         }"#;
         let parsed: FrontendMemorySample = serde_json::from_str(json).unwrap();
@@ -231,6 +253,11 @@ mod tests {
         assert_eq!(
             parsed.metrics[&MemoryMetric::RuntimePendingBackgroundSettlements],
             6
+        );
+        assert_eq!(parsed.metrics[&MemoryMetric::MessageViewsRetired], 12);
+        assert_eq!(
+            parsed.metrics[&MemoryMetric::HighlightCacheEstimatedBytes],
+            14
         );
     }
 
