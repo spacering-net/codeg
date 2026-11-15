@@ -274,10 +274,7 @@ function marker(id: number, data: Record<string, unknown>): TimelineRow {
 
 const jumpTo = vi.fn()
 
-function draw({
-  inDrawer = false,
-  reserve = null,
-}: { inDrawer?: boolean; reserve?: number | null } = {}) {
+function draw({ inDrawer = false }: { inDrawer?: boolean } = {}) {
   const scope: PageScope = {
     readOnly: false,
     agentName: "Nova",
@@ -291,11 +288,7 @@ function draw({
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <PageScopeContext.Provider value={scope}>
-        <PersonalAgentAuxPanel
-          snapshot={snapshot()}
-          inDrawer={inDrawer}
-          reserve={reserve}
-        />
+        <PersonalAgentAuxPanel snapshot={snapshot()} inDrawer={inDrawer} />
       </PageScopeContext.Provider>
     </NextIntlClientProvider>
   )
@@ -309,7 +302,7 @@ beforeEach(() => {
   __resetRosterForTests()
   usePersonalAgentUi.setState({
     auxOpen: true,
-    auxTab: "details",
+    auxTab: "activity",
     auxFolds: {},
     work: null,
     workOpen: false,
@@ -352,97 +345,59 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+/** Open a tab as a press of the pointer does (Radix opens one on the
+ *  mouse going down). */
+function openTab(name: RegExp | string) {
+  fireEvent.mouseDown(screen.getByRole("tab", { name }), { button: 0 })
+}
+
 describe("the panel", () => {
-  it("opens on the details tab", () => {
-    expect(FIRST_UI_STATE.auxTab).toBe("details")
+  it("opens on its activity", () => {
+    expect(FIRST_UI_STATE.auxTab).toBe("activity")
     expect(FIRST_UI_STATE.auxOpen).toBe(true)
   })
 
-  it("names the open tab over it and lists the tabs down its edge", async () => {
+  it("has who it is on top, its face alive, and four tabs in a row under its name", async () => {
     draw()
+    const head = document.querySelector<HTMLElement>("[data-pa-aux-head]")!
+    // Its face, large, and its name — no tab's name over the panel.
+    const face = head.querySelector<HTMLElement>("[data-slot='bot-avatar']")!
+    expect(face.getAttribute("aria-label")).toBe("Nova")
+    expect(face.style.width).toBe("4rem")
+    expect(face.hasAttribute("data-bot-look")).toBe(true)
     expect(
-      screen.getByRole("heading", { name: "Details", level: 2 })
+      within(head).getByRole("heading", { name: "Nova", level: 2 })
     ).toBeTruthy()
-    const rail = screen.getByRole("tablist", { name: "Assistant panel" })
-    const tabs = within(rail).getAllByRole("tab")
-    expect(tabs.map((tab) => tab.getAttribute("aria-label"))).toEqual([
-      "Details",
+    expect(screen.queryByRole("heading", { name: "Activity" })).toBeNull()
+    // The tabs under it, a row of words: no icon rail down its edge.
+    const list = within(head).getByRole("tablist", { name: "Assistant panel" })
+    expect(list.getAttribute("aria-orientation")).toBe("horizontal")
+    const tabs = within(list).getAllByRole("tab")
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Activity",
       "Output",
       "Workspace",
+      "Stats",
     ])
-    // A gauge, a parcel, a screen.
-    expect(
-      tabs.map((tab) => tab.querySelector("svg")!.getAttribute("class"))
-    ).toEqual([
-      expect.stringContaining("lucide-circle-gauge"),
-      expect.stringContaining("lucide-package"),
-      expect.stringContaining("lucide-monitor"),
-    ])
-    expect(rail.getAttribute("aria-orientation")).toBe("vertical")
-    // Another tab: its name over it.
-    fireEvent.mouseDown(within(rail).getByRole("tab", { name: "Output" }), {
-      button: 0,
-    })
-    expect(usePersonalAgentUi.getState().auxTab).toBe("output")
-    expect(await screen.findByRole("heading", { name: "Output" })).toBeTruthy()
-  })
-
-  it("keeps the window's corner buttons clear when its strip is in the top band", () => {
-    const { unmount } = draw({ reserve: 132 })
-    const heading = screen.getByRole("heading", { name: "Details", level: 2 })
-    // The strip is the window's top edge there: its name and its empty rest
-    // move the window, and its end is the corner buttons' slot.
-    expect(heading.hasAttribute("data-tauri-drag-region")).toBe(true)
-    const strip = heading.parentElement!
-    const slot = strip.lastElementChild as HTMLElement
-    expect(slot.classList.contains("chrome-reserve")).toBe(true)
-    expect(slot.style.width).toBe("132px")
-    // On the page's own ground with a line under it, as the band over the
-    // conversation is: the top band reads as one.
-    expect(strip.className).toContain("border-b")
-    expect(strip.className).not.toContain("bg-muted")
-    unmount()
-    // Under the band (no slot to keep): its own end padding instead.
-    draw()
-    const plain = screen.getByRole("heading", {
-      name: "Details",
-      level: 2,
-    }).parentElement!
-    expect(plain.querySelector(".chrome-reserve")).toBeNull()
-    expect(plain.className).toContain("pe-3")
-  })
-
-  it("hides itself on a click of the tab already open, as the workspace's does", () => {
-    draw()
-    const tab = screen.getByRole("tab", { name: "Details" })
-    // jsdom's `fireEvent.pointerDown` leaves `button` out: a MouseEvent of
-    // the pointer's type carries it.
-    const press = (target: Element) =>
-      act(() => {
-        target.dispatchEvent(
-          new MouseEvent("pointerdown", { bubbles: true, button: 0 })
-        )
-      })
-    // Another tab first: a click on it only opens it.
-    const output = screen.getByRole("tab", { name: "Output" })
-    press(output)
-    fireEvent.mouseDown(output, { button: 0 })
-    fireEvent.click(output, { detail: 1 })
+    for (const tab of tabs) expect(tab.querySelector("svg")).toBeNull()
+    expect(document.querySelector("[data-pa-aux-rail]")).toBeNull()
+    // Another tab: its body under the same head.
+    openTab("Stats")
+    expect(usePersonalAgentUi.getState().auxTab).toBe("stats")
+    expect(await screen.findByText("Opus")).toBeTruthy()
+    expect(head.isConnected).toBe(true)
+    // A click on the tab already open leaves the panel be: the chrome's
+    // button hides it.
+    const stats = screen.getByRole("tab", { name: "Stats" })
+    fireEvent.mouseDown(stats, { button: 0 })
+    fireEvent.click(stats, { detail: 1 })
     expect(usePersonalAgentUi.getState()).toMatchObject({
-      auxTab: "output",
+      auxTab: "stats",
       auxOpen: true,
     })
-    press(tab)
-    fireEvent.mouseDown(tab, { button: 0 })
-    fireEvent.click(tab, { detail: 1 })
-    expect(usePersonalAgentUi.getState().auxOpen).toBe(true)
-    // The tab that is open: the panel hides.
-    press(tab)
-    fireEvent.click(tab, { detail: 1 })
-    expect(usePersonalAgentUi.getState().auxOpen).toBe(false)
   })
 
-  it("is a row of named tabs under a line in the drawer", async () => {
+  it("is the same in the drawer, its count of what waits on the owner on its activity", async () => {
     api.personalAgentItems.mockResolvedValue([
       item({
         id: 11,
@@ -459,16 +414,13 @@ describe("the panel", () => {
         within(list)
           .getAllByRole("tab")
           .map((tab) => tab.textContent)
-      ).toEqual(["Details1", "Output", "Workspace"])
+      ).toEqual(["Activity1", "Output", "Workspace", "Stats"])
     )
-    // No strip over it: the drawer has its own title.
-    expect(
-      screen.queryByRole("heading", { name: "Details", level: 2 })
-    ).toBeNull()
+    expect(screen.getByRole("heading", { name: "Nova", level: 2 })).toBeTruthy()
   })
 })
 
-describe("the details' matters", () => {
+describe("the activity's matters", () => {
   it("groups what is open by whom it waits on, each piece once; what ended is output", async () => {
     api.personalAgentDispatches.mockResolvedValue([
       dispatch({ id: 1, title: "Review the login fix", state: "review" }),
@@ -549,11 +501,11 @@ describe("the details' matters", () => {
       expect(screen.getAllByText(title)).toHaveLength(1)
     }
     expect(screen.queryByText("Write the notes")).toBeNull()
-    // The rail counts what waits on the owner, and says it.
-    const tab = screen.getByRole("tab", { name: /Details/ })
-    expect(tab.textContent).toBe("1")
+    // Its tab counts what waits on the owner, and says it.
+    const tab = screen.getByRole("tab", { name: /Activity/ })
+    expect(tab.textContent).toBe("Activity1")
     expect(tab.getAttribute("aria-label")).toBe(
-      "Details · 1 thing waits for you"
+      "Activity · 1 thing waits for you"
     )
     // What ended is the output.
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Output" }), {
@@ -596,8 +548,8 @@ describe("the details' matters", () => {
     draw()
     expect(await screen.findByText("Nothing open right now.")).toBeTruthy()
     expect(
-      screen.getByRole("tab", { name: /Details/ }).getAttribute("aria-label")
-    ).toBe("Details")
+      screen.getByRole("tab", { name: /Activity/ }).getAttribute("aria-label")
+    ).toBe("Activity")
   })
 
   it("settles a matter from its card: done, put off, later, dropped", async () => {
@@ -836,20 +788,23 @@ describe("the details' matters", () => {
     expect(container.querySelector("[data-pa-group='external']")).toBeTruthy()
   })
 
-  it("shows Today on the primary, after its status and before its matters", async () => {
+  it("shows Today first on the primary, before its matters; its status is the stats'", async () => {
     todayFeed.active = []
     const { container } = draw()
     await screen.findByRole("switch")
     const order = [...container.querySelectorAll("[data-pa-detail]")].map(
       (el) => el.getAttribute("data-pa-detail")
     )
-    expect(order.slice(0, 3)).toEqual(["status", "today", "matters"])
+    expect(order).toEqual(["today", "matters", "routines"])
+    // No "Status" heading, no card of it here.
+    expect(screen.queryByText("Status")).toBeNull()
+    expect(container.querySelector("[data-pa-status]")).toBeNull()
     expect(
       within(
         container.querySelector('[data-pa-detail="today"]') as HTMLElement
       ).getByText("Today")
     ).toBeTruthy()
-    // Held while the primary's details show.
+    // Held while the primary's activity shows.
     expect(todayFeed.active).toContain(true)
   })
 
@@ -959,15 +914,16 @@ describe("the workspace tab", () => {
     board.tasks = []
   })
 
-  it("shows the work running now, and sleeps when none is", async () => {
+  it("shows the work running now, and an empty screen when none is", async () => {
     usePersonalAgentUi.setState({ auxTab: "workspace" })
     const { unmount } = draw()
     expect(await screen.findByText("Nothing running right now")).toBeTruthy()
-    expect(
-      document
-        .querySelector("[data-pa-workspace-empty] [data-bot-look]")
-        ?.getAttribute("data-bot-look")
-    ).toBe("sleeping")
+    // Its face is over the tabs: not again here.
+    const empty = document.querySelector("[data-pa-workspace-empty]")!
+    expect(empty.querySelector("[data-slot='bot-avatar']")).toBeNull()
+    expect(empty.querySelector("svg")!.getAttribute("class")).toContain(
+      "lucide-monitor"
+    )
     unmount()
     api.personalAgentDispatches.mockResolvedValue([
       dispatch({
@@ -987,14 +943,35 @@ describe("the workspace tab", () => {
   })
 })
 
-describe("the details' status", () => {
-  it("shows who it is and what it runs on as a card, then how full its context is", async () => {
+describe("the stats tab's status", () => {
+  beforeEach(() => {
+    usePersonalAgentUi.setState({ auxTab: "stats" })
+  })
+
+  it("shows what it runs on row by row, no card, then how full its context is", async () => {
     draw()
-    expect(screen.getByText("Nova")).toBeTruthy()
-    expect(screen.getByText("Idle")).toBeTruthy()
-    // A row per property, as Session Details has them.
+    // A row per property, as Session Details has them — who it is is the
+    // panel's head, not a card of its own here.
+    expect(document.querySelector("[data-pa-status] section")).toBeNull()
+    expect(
+      document.querySelectorAll("[data-pa-aux] [data-slot='bot-avatar']")
+    ).toHaveLength(1)
     const row = (label: string) =>
       screen.getByText(label, { selector: "dt" }).parentElement!
+    // (Its icon carries the agent's name for a screen reader too.)
+    expect(row("Agent").textContent).toContain("Claude Code")
+    expect(row("State").textContent).toBe("StateIdle")
+    // The way to change what it runs on, at its row's end.
+    fireEvent.click(
+      within(row("Agent")).getByRole("button", {
+        name: "Change what it runs on",
+      })
+    )
+    expect(usePersonalAgentUi.getState().settings).toEqual({
+      page: "identity",
+      bot: null,
+    })
+    usePersonalAgentUi.setState({ settings: null })
     expect(row("Model").textContent).toBe("ModelOpus")
     expect(row("Mode").textContent).toBe("ModeDefault")
     expect(row("Session").textContent).toContain("#3")
@@ -1025,7 +1002,7 @@ describe("the details' status", () => {
     expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy()
   })
 
-  it("lines its sections up with the card, the run log in words and times", () => {
+  it("lines its sections up with the rows, the run log in words and times", () => {
     pa.rows = [
       marker(1, {
         marker: "segment_start",
@@ -1048,18 +1025,13 @@ describe("the details' status", () => {
       "A new session started on Claude Code (first session)",
     ])
     for (const li of lines) expect(li.querySelector("svg")).toBeNull()
-    // Every section's chevron on the card's edge, its body flush with it.
+    // Every section's chevron on the rows' edge, its body flush with it.
     for (const name of [/Context/, /Run log/, /Details/]) {
       const header = screen.getByRole("button", { name })
       expect(header.firstElementChild!.className).toContain("-ms-[3px]")
       expect(header.firstElementChild!.className).not.toContain("w-7")
       expect(header.closest("section")!.querySelector(".ps-9")).toBeNull()
     }
-    // The agent's avatar, a head taller than the two lines beside it.
-    const avatar = document.querySelector<HTMLElement>(
-      "[data-pa-aux] section [data-slot=assistant-avatar]"
-    )!
-    expect(avatar.style.width).toBe("2.5rem")
   })
 
   it("keeps a section folded or open across a switch of tabs", async () => {
@@ -1067,7 +1039,7 @@ describe("the details' status", () => {
     fireEvent.click(screen.getByRole("button", { name: /Context/ }))
     expect(screen.queryByRole("meter")).toBeNull()
     act(() => usePersonalAgentUi.setState({ auxTab: "output" }))
-    act(() => usePersonalAgentUi.setState({ auxTab: "details" }))
+    act(() => usePersonalAgentUi.setState({ auxTab: "stats" }))
     expect(
       screen
         .getByRole("button", { name: /Context/ })
@@ -1077,8 +1049,9 @@ describe("the details' status", () => {
   })
 })
 
-describe("the details' data", () => {
+describe("the stats tab's data", () => {
   it("leads with the figures of the last two weeks", async () => {
+    usePersonalAgentUi.setState({ auxTab: "stats" })
     const day = (date: string, n: number) => ({
       date,
       owner_messages: n,

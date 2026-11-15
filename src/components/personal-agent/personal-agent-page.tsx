@@ -3,36 +3,25 @@
 /**
  * The personal agent's page: the conversation across the whole page — no
  * card inside the page, the column of messages centered — with the input box
- * at its foot, and the side panel (the agent's status, what is open and what
- * was handed out, its numbers) beside it behind a line, or as a drawer on a
- * narrow screen. On the desktop the page draws the window's top band itself
- * (`WorkbenchBand`): the title over the conversation, and the panel, as the
- * workspace's aux panel does, up to the window's top edge with its strip at
- * the band's end. Its
- * actions — settings, the session underneath, compacting, a new session —
- * are in the window chrome's "⋯" menu; the title is its avatar and name,
- * and its state a word after them. The sessions it reaches — its own, and
- * those of the work it handed out — open in a drawer on the right, over the
- * page.
+ * at its foot, and the side panel (who it is, what it is about, what it made
+ * and handed out, its numbers) beside it behind a line, or as a drawer on a
+ * narrow screen. Under the window's top band, as the other full pages are:
+ * the band's title is its avatar and name, and its state a word after them;
+ * its actions — settings, the session underneath, compacting, a new session
+ * — are in the window chrome's "⋯" menu. The sessions it reaches — its own,
+ * and those of the work it handed out — open in a drawer on the right, over
+ * the page.
  *
  * A workbench route, so the workspace's providers (the live connection store,
  * the assistants) are all there.
  */
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
 import { SessionLinkOpenerContext } from "@/components/ai-elements/session-link-opener"
 import { UserRoundStar } from "@/components/icons/user-round-star"
-import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { LiveTranscriptView } from "@/components/message/live-transcript-view"
 import {
   AlertDialog,
@@ -57,10 +46,6 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
-import {
-  useWorkbenchBand,
-  type WorkbenchBand,
-} from "@/components/workbench/workbench-band"
 import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -70,7 +55,6 @@ import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAssistants } from "@/stores/assistants-store"
 import { usePaAccent } from "@/lib/personal-agent-accent"
-import { useBotLive } from "@/stores/personal-agent-roster-store"
 import {
   PERSONAL_AGENT_EVENTS,
   usePersonalAgentUi,
@@ -88,13 +72,17 @@ import { usePersonalAgentAttachment } from "./live-turn"
 import { MessageList } from "./message-list"
 import { replyState } from "./message-items"
 import { SettingsView } from "./settings/settings-view"
-import { PageScopeContext, useStatusWord, type PageScope } from "./shared"
+import {
+  PageScopeContext,
+  useBotLook,
+  useStatusWord,
+  type PageScope,
+} from "./shared"
 import { useSessionLinkOpener } from "./session-link"
 import { PersonalAgentWorkDrawer } from "./work-drawer"
 import { RoutineEditor } from "./routine-editor"
 import { StatusLine } from "./status-line"
 import { useAssistantShortcuts } from "./use-assistant-shortcuts"
-import { viewOf } from "./roster-order"
 
 export { PersonalAgentChromeActions } from "./chrome-actions"
 
@@ -114,20 +102,19 @@ export function PersonalAgentPageTitle() {
   const word = useStatusWord()
   const agent = snapshot?.agent ?? null
   const title = agent?.name?.trim() || t("title")
-  const live = useBotLive(agent?.id ?? null)
-  const now = useNowTick(live?.work === "busy" || live?.flash != null)
-  const view = viewOf(live, now)
+  const look = useBotLook(agent?.id ?? null)
   return (
     <WorkbenchPageTitle
       title=""
       // The messages carry no avatar of the agent's own: it is here, once,
-      // with its name, as a capsule that opens its details.
+      // with its name, as a capsule that opens the panel on its activity.
       leading={
         agent ? (
           <button
             type="button"
             data-pa-title-capsule
-            onClick={() => showAux("details")}
+            data-pa-face-host
+            onClick={() => showAux("activity")}
             title={t("detail.open")}
             className="flex min-w-0 items-center gap-1.5 rounded-full border border-border/70 bg-background/60 py-0.5 ps-1 pe-2.5 text-[0.8125rem] font-semibold transition-colors hover:bg-foreground/10"
           >
@@ -135,7 +122,7 @@ export function PersonalAgentPageTitle() {
               avatar={agent.avatar}
               name={title}
               size={TITLE_AVATAR_SIZE}
-              look={view.look}
+              look={look}
             />
             <span className="min-w-0 truncate">{title}</span>
           </button>
@@ -147,11 +134,12 @@ export function PersonalAgentPageTitle() {
       }
       trail={
         <>
+          {/* Its state, a word: how it runs is in the panel's numbers. */}
           {word ? (
             <button
               type="button"
               className="ms-1 shrink-0 rounded-md px-1.5 py-0.5 text-xs leading-none text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
-              onClick={() => showAux("details")}
+              onClick={() => showAux("stats")}
               title={t("statusWord.open")}
               aria-live="polite"
             >
@@ -163,49 +151,6 @@ export function PersonalAgentPageTitle() {
         </>
       }
     />
-  )
-}
-
-/** The clock, each second while `on`. */
-function useNowTick(on: boolean): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (!on) return
-    const id = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(id)
-  }, [on])
-  return now
-}
-
-/** The window's top band, when the page draws it (the desktop): the left
- *  corner's slot, the title, and the rest a drag region, as the shell draws
- *  the band for the other pages — over the conversation alone while the
- *  side panel is open, whose strip takes the band's end. */
-function PageBand({ band }: { band: WorkbenchBand }) {
-  return (
-    <div className="flex h-10 shrink-0 items-stretch border-b border-border/50 ws-chrome-border">
-      <ChromeReserve width={band.leftCornerWidth} line={false} />
-      <PersonalAgentPageTitle />
-      <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
-    </div>
-  )
-}
-
-/** A state of the page without its panel (loading, the first setup) under
- *  the band, when the page draws it. */
-function UnderBand({
-  band,
-  children,
-}: {
-  band: WorkbenchBand | null
-  children: ReactNode
-}) {
-  if (!band) return <>{children}</>
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <PageBand band={band} />
-      <div className="min-h-0 flex-1">{children}</div>
-    </div>
   )
 }
 
@@ -231,7 +176,6 @@ export function PersonalAgentPage() {
   const { botId, snapshot, rows, loading, switching } = usePersonalAgent()
   const assistants = useAssistants()
   const isMobile = useIsMobile()
-  const band = useWorkbenchBand()
   const auxOpen = usePersonalAgentUi((s) => s.auxOpen)
   const setAuxOpen = usePersonalAgentUi((s) => s.setAuxOpen)
   const setWorkOpen = usePersonalAgentUi((s) => s.setWorkOpen)
@@ -353,52 +297,38 @@ export function PersonalAgentPage() {
     jumpTo(pendingJump.row)
   }, [pendingJump, agentId, loading, settingsOpen, jumpTo])
 
-  if (!snapshot || loading) {
-    return (
-      <UnderBand band={band}>
-        <div className="h-full" />
-      </UnderBand>
-    )
-  }
+  if (!snapshot || loading) return <div className="h-full" />
 
-  if (!agent && settingsOpen) {
-    return (
-      <UnderBand band={band}>
-        <SettingsView />
-      </UnderBand>
-    )
-  }
+  if (!agent && settingsOpen) return <SettingsView />
 
   if (!agent) {
     return (
-      <UnderBand band={band}>
-        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-          <UserRoundStar className="size-8 text-muted-foreground" aria-hidden />
-          <h2 className="text-base font-semibold text-foreground">
-            {t("setup.title")}
-          </h2>
-          <p className="max-w-md text-sm text-muted-foreground">
-            {t("setup.description")}
-          </p>
-          {snapshot.status.engine === "here" ? (
-            <Button onClick={() => openSettings("identity")}>
-              {t("setup.action")}
-            </Button>
-          ) : (
-            <p className="text-xs text-muted-foreground">{t("readOnly")}</p>
-          )}
-          {/* Executor configs are not the assistant's: someone who only
-              @-delegates manages them here too. */}
-          <Button
-            variant="ghost"
-            size="sm"
-            data-pa-manage-executors
-            onClick={() => openSettings("executors")}
-          >
-            {t("setup.manageExecutors")}
+      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+        <UserRoundStar className="size-8 text-muted-foreground" aria-hidden />
+        <h2 className="text-base font-semibold text-foreground">
+          {t("setup.title")}
+        </h2>
+        <p className="max-w-md text-sm text-muted-foreground">
+          {t("setup.description")}
+        </p>
+        {snapshot.status.engine === "here" ? (
+          <Button onClick={() => openSettings("identity")}>
+            {t("setup.action")}
           </Button>
-        </div>
-      </UnderBand>
+        ) : (
+          <p className="text-xs text-muted-foreground">{t("readOnly")}</p>
+        )}
+        {/* Executor configs are not the assistant's: someone who only
+              @-delegates manages them here too. */}
+        <Button
+          variant="ghost"
+          size="sm"
+          data-pa-manage-executors
+          onClick={() => openSettings("executors")}
+        >
+          {t("setup.manageExecutors")}
+        </Button>
+      </div>
     )
   }
 
@@ -409,15 +339,9 @@ export function PersonalAgentPage() {
         a.enabled && snapshot.account?.team.usage[a.uid]?.dispatch !== false
     ).length === 0
   const conversation = settingsOpen ? (
-    <div className="flex h-full min-h-0 flex-col">
-      {band ? <PageBand band={band} /> : null}
-      <div className="min-h-0 flex-1">
-        <SettingsView />
-      </div>
-    </div>
+    <SettingsView />
   ) : (
     <div className="flex h-full min-h-0 flex-col">
-      {band ? <PageBand band={band} /> : null}
       <div className="flex min-h-0 flex-1">
         {isMobile ? null : (
           <PersonalAgentRoster compact={false} readOnly={readOnly} />
@@ -484,11 +408,7 @@ export function PersonalAgentPage() {
       data-pa-switching={switching || undefined}
       inert={switching || undefined}
     >
-      <PersonalAgentAuxPanel
-        snapshot={snapshot}
-        inDrawer={isMobile}
-        reserve={band?.rightReserve ?? null}
-      />
+      <PersonalAgentAuxPanel snapshot={snapshot} inDrawer={isMobile} />
     </div>
   )
 

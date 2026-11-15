@@ -7986,7 +7986,9 @@
       "copyPath": "复制路径",
       "copied": "已复制",
       "startedValue": "开始于 {when}",
-      "pendingValue": "下一条消息起新会话：{reason}"
+      "pendingValue": "下一条消息起新会话：{reason}",
+      "agent": "智能体",
+      "state": "状态"
     },
     "items": {
       "waits": {
@@ -9544,12 +9546,12 @@
       "open": "显示详情",
       "close": "收起详情",
       "tabs": {
-        "details": "详情",
+        "activity": "动态",
         "output": "产出",
-        "workspace": "工作区"
+        "workspace": "工作区",
+        "stats": "统计"
       },
       "sections": {
-        "status": "状态",
         "today": "今日",
         "matters": "事项",
         "data": "数据",

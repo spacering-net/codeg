@@ -4943,18 +4943,34 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 }
 
 /* ── An assistant's face (10.6, `bot-avatar.tsx`) ───────────────────────────
-   The body (`.pa-face-body`: the shape and its eyes) bobs, breathes or hops
-   with the look; the eyes look about (`.pa-face-gaze`, a glance is an inline
-   transform) and blink (`.pa-face-lids`, `data-blink` on the face). All in
-   the SVG's own units (a 100 × 100 box). The dot's ring is the background
-   it sits on: a parent drawing it on another colour sets `--pa-dot-ring`. */
+   The body (`.pa-face-body`: the shape and its eyes) bounces, breathes,
+   sways or hops with the look, and perks up (`.pa-face-perk`, inside it)
+   when the pointer comes over it; the eyes look about (`.pa-face-gaze`, a
+   glance or the pointer followed is an inline transform) and blink
+   (`.pa-face-lids`, `data-blink` on the face). All in the SVG's own units (a
+   100 × 100 box), so a motion is the same share of a face at any size: a
+   tenth of it or so, enough to be seen on a 28px face. The body squashes
+   and stretches from its foot. The dot's ring is the background it sits on:
+   a parent drawing it on another colour sets `--pa-dot-ring`. */
 .pa-face {
   --pa-dot-ring: var(--background);
 }
 
-.pa-face-body {
+.pa-face-body,
+.pa-face-perk {
   transform-box: view-box;
   transform-origin: 50px 94px;
+}
+
+/* The pointer comes over it: a little hop, squashed as it sets off and as
+   it lands. Two names for one motion, taken in turn, so the next time
+   starts it again. */
+.pa-face[data-perk="a"] .pa-face-perk {
+  animation: pa-face-perk-a 560ms var(--motion-ease-standard);
+}
+
+.pa-face[data-perk="b"] .pa-face-perk {
+  animation: pa-face-perk-b 560ms var(--motion-ease-standard);
 }
 
 .pa-face-gaze {
@@ -4981,21 +4997,34 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 }
 
 .pa-face[data-bot-look="stuck"] .pa-face-body {
-  animation: pa-face-breathe calc(var(--motion-breathe) * 1.5) ease-in-out
-    infinite;
+  animation: pa-face-sway calc(var(--motion-breathe) * 1.5) ease-in-out infinite;
 }
 
 .pa-face[data-bot-look="sleeping"] .pa-face-body {
-  animation: pa-face-sleep var(--motion-breathe) ease-in-out infinite;
+  animation: pa-face-sleep calc(var(--motion-breathe) * 1.25) ease-in-out
+    infinite;
 }
 
 .pa-face[data-bot-look="done"] .pa-face-body {
-  animation: pa-face-hop var(--motion-spring-pop-duration)
-    var(--motion-ease-enter) 2;
+  animation: pa-face-hop 640ms var(--motion-ease-standard) 2;
+}
+
+.pa-face[data-bot-look="failed"] .pa-face-body {
+  animation: pa-face-shake 640ms var(--motion-ease-standard);
+}
+
+.pa-face[data-bot-look="thinking"] .pa-face-body {
+  animation: pa-face-tilt 4.2s ease-in-out infinite alternate;
 }
 
 .pa-face[data-bot-look="thinking"] .pa-face-gaze {
   animation: pa-face-wander 4.2s ease-in-out infinite alternate;
+}
+
+/* While the pointer is on it its eyes are on the pointer: a wander of their
+   own waits. After the looks' rules, which it must outrank. */
+.pa-face[data-hover] .pa-face-gaze {
+  animation: none;
 }
 
 .pa-face-z {
@@ -5010,45 +5039,142 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   animation: pa-face-ring var(--motion-bounce) ease-in-out infinite;
 }
 
+/* Working: a bounce — down into a squash, up stretched, landing squashed. */
 @keyframes pa-face-bob {
-  50% {
-    transform: translateY(-3px);
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  14% {
+    transform: translateY(0) scale(1.07, 0.92);
+  }
+  42% {
+    transform: translateY(-10px) scale(0.95, 1.06);
+  }
+  64% {
+    transform: translateY(0) scale(1.05, 0.94);
+  }
+  80% {
+    transform: translateY(0) scale(1, 1);
   }
 }
 
+/* Waiting: breathing deep, taller as it breathes in. */
 @keyframes pa-face-breathe {
   50% {
-    transform: scale(1.02);
+    transform: scale(0.96, 1.07);
   }
 }
 
+/* Asleep: a slow breath, spreading wider. */
 @keyframes pa-face-sleep {
   50% {
-    transform: scale(1.04);
+    transform: scale(1.06, 0.95);
   }
 }
 
+/* Stuck: swaying, drowsy, from its foot. */
+@keyframes pa-face-sway {
+  0%,
+  100% {
+    transform: rotate(-5deg);
+  }
+  50% {
+    transform: rotate(5deg);
+  }
+}
+
+/* Thinking: its head tilting one way, then the other. */
+@keyframes pa-face-tilt {
+  0% {
+    transform: rotate(-4deg);
+  }
+  100% {
+    transform: rotate(4deg);
+  }
+}
+
+/* Done: a hop, squashed as it sets off and as it lands. */
 @keyframes pa-face-hop {
-  40% {
-    transform: translateY(-8px);
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  16% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  45% {
+    transform: translateY(-20px) scale(0.94, 1.08);
   }
   70% {
-    transform: translateY(0);
+    transform: translateY(0) scale(1.06, 0.93);
   }
   85% {
-    transform: translateY(-2px);
+    transform: translateY(-3px) scale(1, 1);
+  }
+}
+
+/* Failed: a shake of the head. */
+@keyframes pa-face-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  18% {
+    transform: translateX(-7px) rotate(-3deg);
+  }
+  38% {
+    transform: translateX(6px) rotate(3deg);
+  }
+  58% {
+    transform: translateX(-4px) rotate(-2deg);
+  }
+  78% {
+    transform: translateX(2px);
   }
 }
 
 @keyframes pa-face-wander {
   0% {
-    transform: translate(-3px, 0);
+    transform: translate(-9px, 0);
   }
   50% {
-    transform: translate(1px, -2px);
+    transform: translate(2px, -4px);
   }
   100% {
-    transform: translate(3px, 0);
+    transform: translate(9px, 0);
+  }
+}
+
+@keyframes pa-face-perk-a {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  18% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  46% {
+    transform: translateY(-12px) scale(0.95, 1.07);
+  }
+  72% {
+    transform: translateY(0) scale(1.04, 0.95);
+  }
+}
+
+@keyframes pa-face-perk-b {
+  0%,
+  100% {
+    transform: translateY(0) scale(1, 1);
+  }
+  18% {
+    transform: translateY(0) scale(1.08, 0.9);
+  }
+  46% {
+    transform: translateY(-12px) scale(0.95, 1.07);
+  }
+  72% {
+    transform: translateY(0) scale(1.04, 0.95);
   }
 }
 
@@ -5062,7 +5188,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   }
   100% {
     opacity: 0;
-    transform: translate(6px, -16px) scale(1.1);
+    transform: translate(10px, -24px) scale(1.15);
   }
 }
 

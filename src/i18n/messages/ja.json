@@ -7986,7 +7986,9 @@
       "copyPath": "パスをコピー",
       "copied": "コピーしました",
       "startedValue": "{when} に開始",
-      "pendingValue": "次のメッセージで新しいセッション：{reason}"
+      "pendingValue": "次のメッセージで新しいセッション：{reason}",
+      "agent": "エージェント",
+      "state": "状態"
     },
     "items": {
       "waits": {
@@ -9544,12 +9546,12 @@
       "open": "詳細を表示",
       "close": "詳細を隠す",
       "tabs": {
-        "details": "詳細",
+        "activity": "アクティビティ",
         "output": "成果物",
-        "workspace": "ワークスペース"
+        "workspace": "ワークスペース",
+        "stats": "統計"
       },
       "sections": {
-        "status": "状態",
         "today": "今日",
         "matters": "事項",
         "data": "データ",

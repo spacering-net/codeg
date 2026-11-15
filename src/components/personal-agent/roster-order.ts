@@ -175,3 +175,32 @@ export function sectionNames(
   }
   return [...names].sort((a, b) => a.localeCompare(b, locale))
 }
+
+/** When a row was last active, as short as a list's time column has room
+ *  for (a chat list's way): today its clock, then "Yesterday", the weekday
+ *  within the week, the day and month — and the year, when it is not this
+ *  one. `""` for no time. */
+export function rosterTime(iso: string, now: number, locale: string): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return ""
+  const today = new Date(now)
+  const startOfDay = (d: Date) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const days = Math.round((startOfDay(today) - startOfDay(at)) / 86_400_000)
+  // Today — or ahead of this clock, which is the other clock's skew.
+  if (days <= 0) {
+    return at.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })
+  }
+  if (days === 1) {
+    const word = new Intl.RelativeTimeFormat(locale, {
+      numeric: "auto",
+    }).format(-1, "day")
+    return word.charAt(0).toLocaleUpperCase(locale) + word.slice(1)
+  }
+  if (days < 7) return at.toLocaleDateString(locale, { weekday: "short" })
+  return at.toLocaleDateString(locale, {
+    month: "numeric",
+    day: "numeric",
+    ...(at.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}),
+  })
+}

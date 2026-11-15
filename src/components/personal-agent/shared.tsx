@@ -8,7 +8,7 @@
  * right, or out of the page (the board, a conversation tab).
  */
 
-import { createContext, useContext } from "react"
+import { createContext, useContext, useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 
 import { AgentIcon } from "@/components/agent-icon"
@@ -18,6 +18,7 @@ import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import type {
   AgentType,
+  BotLook,
   DispatchInfo,
   DispatchMode,
   DispatchState,
@@ -27,10 +28,13 @@ import { defaultAvatarFor } from "@/lib/assistant-avatar"
 import { cn } from "@/lib/utils"
 import { requestTasksFocus } from "@/lib/workbench-focus"
 import { useAssistant } from "@/stores/assistants-store"
+import { useBotLive } from "@/stores/personal-agent-roster-store"
 import {
   usePersonalAgentUi,
   type WorkTarget,
 } from "@/stores/personal-agent-ui-store"
+
+import { viewOf } from "./roster-order"
 
 export function str(
   data: Record<string, unknown> | null | undefined,
@@ -151,8 +155,28 @@ export function UnreadMark() {
   )
 }
 
-/** What the agent is doing, in a word: the page's title, the panel's status
- *  tab. */
+/** The clock, each second while `on`. */
+function useNowTick(on: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!on) return
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [on])
+  return now
+}
+
+/** How an assistant looks right now (10.6), for its face shown on its own —
+ *  the page's title, the panel's head: its live state, read again each
+ *  second while it moves (a look shown for a while ends on time). */
+export function useBotLook(botId: number | null): BotLook {
+  const live = useBotLive(botId)
+  const now = useNowTick(live?.work === "busy" || live?.flash != null)
+  return viewOf(live, now).look
+}
+
+/** What the agent is doing, in a word: the page's title, the panel's
+ *  numbers. */
 export function useStatusWord(): string | null {
   const t = useTranslations("PersonalAgent.statusWord")
   const { snapshot, needsOwner } = usePersonalAgent()

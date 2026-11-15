@@ -6,7 +6,7 @@
  * schedule, edited with the automations' cron builder and its next run
  * shown as codeg works it out, or on a coding event; and what it looks at
  * first. A new one runs once as a trial when it is saved. Opened from the
- * details' routines, a result card's "every week", a card's offer to make
+ * activity's routines, a result card's "every week", a card's offer to make
  * a request a routine, a paused routine's card.
  */
 

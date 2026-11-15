@@ -11,11 +11,19 @@
  *
  * - **Looks.** idle: calm, blinking every 2.8–5.5 s (a double blink one
  *   time in seven), half the time a glance left, right or up instead, held
- *   0.5–0.9 s; thinking: eyes up, wandering; working: eyes down and
- *   focused, the body bobbing; waiting: eyes on you, breathing; stuck:
- *   drowsy, lids half down; done: eyes curved into a smile, a hop; failed:
- *   eyes drooping; sleeping: eyes shut, breathing slowly, "z z z" rising.
- *   A new look comes through a blink.
+ *   0.5–0.9 s; thinking: eyes up, wandering, the head tilting; working: eyes
+ *   down and focused, the body bouncing, squashed as it lands; waiting: eyes
+ *   on you, breathing deep; stuck: drowsy, lids half down, swaying; done:
+ *   eyes curved into a smile, two hops; failed: eyes drooping, a shake of
+ *   the head; sleeping: eyes shut, breathing slowly, "z z z" rising. A new
+ *   look comes through a blink. Each moves by a tenth of the face or so —
+ *   enough to be seen on a roster row's face, not only on a large one.
+ * - **The pointer.** A face that is alive notices the pointer coming over
+ *   it — or over what it is the face of, a row or a tile marked
+ *   `data-pa-face-host`: it perks up with a little hop — asleep, it wakes
+ *   — and its eyes follow the pointer while it stays (as Grok Bot's do),
+ *   settling back once it leaves. Its eyes never leave its body: they are
+ *   clipped to its shape.
  * - **Alive only when told.** A face is still unless it is given a `look`:
  *   the roster, the title and the status line pass one; a face on a card
  *   or a system line stays put. The idle scheduler pauses while the window
@@ -26,7 +34,7 @@
  *   whose star is there, at the top end.
  */
 
-import { useEffect, useState } from "react"
+import { useEffect, useId, useRef, useState, type RefObject } from "react"
 
 import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { useReducedMotion } from "@/hooks/use-chat-motion"
@@ -190,10 +198,14 @@ const EYE_Y = 46
 type Glance = "left" | "right" | "up"
 
 const GLANCE_SHIFT: Record<Glance, string> = {
-  left: "translate(-4px, 0px)",
-  right: "translate(4px, 0px)",
-  up: "translate(0px, -4px)",
+  left: "translate(-10px, 0px)",
+  right: "translate(10px, 0px)",
+  up: "translate(0px, -8px)",
 }
+
+/** How far the eyes follow the pointer, sideways and up or down. */
+const GAZE_X = 11
+const GAZE_Y = 8
 
 /** Where the eyes sit for a look (moved as a whole, in box units). */
 const EYES_AT: Record<BotLook, number> = {
@@ -395,6 +407,72 @@ function PictureAvatar({
   )
 }
 
+/** The pointer over a face that is alive — or over what it is the face of,
+ *  a row or a tile marked `data-pa-face-host`: whether it is there, where
+ *  the eyes are to look (toward the pointer, as far as they go; `null`
+ *  while it is not there), and how many times it came over (each a perk of
+ *  the body). A touch is not a pointer that hovers. */
+function useFaceHover(
+  ref: RefObject<HTMLElement | null>,
+  on: boolean
+): { over: boolean; gaze: { x: number; y: number } | null; perks: number } {
+  const [over, setOver] = useState(false)
+  const [gaze, setGaze] = useState<{ x: number; y: number } | null>(null)
+  const [perks, setPerks] = useState(0)
+  useEffect(() => {
+    const face = ref.current
+    if (!on || !face) return
+    const host = face.closest<HTMLElement>("[data-pa-face-host]") ?? face
+    let frame = 0
+    let at: { x: number; y: number } | null = null
+    // Once a frame at most: the eyes on the pointer's last place.
+    const aim = () => {
+      frame = 0
+      if (!at) return
+      const r = face.getBoundingClientRect()
+      if (r.width === 0 || r.height === 0) return
+      const dx = (at.x - (r.left + r.width / 2)) / (r.width / 2)
+      const dy = (at.y - (r.top + r.height / 2)) / (r.height / 2)
+      // Over the face, as far as the pointer is off its middle; beyond it,
+      // all the way toward it.
+      const far = Math.max(1, Math.hypot(dx, dy))
+      const x = Math.round((dx / far) * GAZE_X)
+      const y = Math.round((dy / far) * GAZE_Y)
+      setGaze((g) => (g && g.x === x && g.y === y ? g : { x, y }))
+    }
+    const move = (e: PointerEvent) => {
+      if (e.pointerType === "touch") return
+      at = { x: e.clientX, y: e.clientY }
+      if (!frame) frame = requestAnimationFrame(aim)
+    }
+    const enter = (e: PointerEvent) => {
+      if (e.pointerType === "touch") return
+      setOver(true)
+      setPerks((n) => n + 1)
+      move(e)
+    }
+    const leave = () => {
+      at = null
+      if (frame) cancelAnimationFrame(frame)
+      frame = 0
+      setOver(false)
+      setGaze(null)
+    }
+    host.addEventListener("pointerenter", enter)
+    host.addEventListener("pointermove", move)
+    host.addEventListener("pointerleave", leave)
+    return () => {
+      host.removeEventListener("pointerenter", enter)
+      host.removeEventListener("pointermove", move)
+      host.removeEventListener("pointerleave", leave)
+      if (frame) cancelAnimationFrame(frame)
+      setOver(false)
+      setGaze(null)
+    }
+  }, [ref, on])
+  return { over, gaze, perks }
+}
+
 function FaceAvatar({
   face,
   name,
@@ -407,7 +485,12 @@ function FaceAvatar({
 }: BotAvatarProps & { face: Extract<BotAvatarValue, { kind: "face" }> }) {
   const reduced = useReducedMotion()
   const alive = look != null && !reduced
-  const target: BotLook = look ?? "idle"
+  // The pointer over it (`useFaceHover`): asleep, it wakes up for it, its
+  // eyes open on the pointer, and goes back to sleep once it leaves.
+  const rootRef = useRef<HTMLSpanElement>(null)
+  const { over, gaze, perks } = useFaceHover(rootRef, alive)
+  const target: BotLook =
+    over && look === "sleeping" ? "idle" : (look ?? "idle")
 
   // A new look comes through a blink: the lids close, the look changes
   // behind them, they open. Without motion it changes at once.
@@ -483,14 +566,30 @@ function FaceAvatar({
   }, [idle])
 
   const blinking = alive && (swapBlink || (idle && idleBlink))
+
+  // The pointer over it: its eyes on the pointer — shut ones (asleep, until
+  // the blink that wakes it) stay shut — and a perk each time it comes, the
+  // attribute's two names taking turns so the animation starts again.
+  const watching = gaze != null && displayed !== "sleeping"
+  const eyesTo = watching
+    ? `translate(${gaze.x}px, ${gaze.y}px)`
+    : idle && glance
+      ? GLANCE_SHIFT[glance]
+      : undefined
+  const id = useId()
+  const clip = `pa-face-clip-${id.replace(/[^\w-]/g, "")}`
   const { shape, color } = face
+  const outline = FACE_PATHS[shape] ?? FACE_PATHS.blob
   return (
     <span
+      ref={rootRef}
       data-slot="bot-avatar"
       data-bot-shape={shape}
       data-bot-color={color}
       data-bot-look={look ? displayed : undefined}
       data-blink={blinking ? "" : undefined}
+      data-hover={watching ? "" : undefined}
+      data-perk={alive && perks > 0 ? (perks % 2 ? "a" : "b") : undefined}
       role="img"
       aria-label={label ?? name}
       className={cn("pa-face relative inline-flex shrink-0", className)}
@@ -502,20 +601,24 @@ function FaceAvatar({
         overflow="visible"
         aria-hidden
       >
+        <defs>
+          <clipPath id={clip}>
+            <path d={outline} />
+          </clipPath>
+        </defs>
         <g className="pa-face-body">
-          <path
-            d={FACE_PATHS[shape] ?? FACE_PATHS.blob}
-            className={BODY[color]}
-          />
-          <g transform={`translate(0 ${EYES_AT[displayed]})`}>
-            <g
-              className="pa-face-gaze"
-              style={
-                idle && glance ? { transform: GLANCE_SHIFT[glance] } : undefined
-              }
-            >
-              <g className={cn("pa-face-lids", EYES[color])}>
-                {eyesOf(displayed)}
+          <g className="pa-face-perk">
+            <path d={outline} className={BODY[color]} />
+            <g clipPath={`url(#${clip})`}>
+              <g transform={`translate(0 ${EYES_AT[displayed]})`}>
+                <g
+                  className="pa-face-gaze"
+                  style={eyesTo ? { transform: eyesTo } : undefined}
+                >
+                  <g className={cn("pa-face-lids", EYES[color])}>
+                    {eyesOf(displayed)}
+                  </g>
+                </g>
               </g>
             </g>
           </g>

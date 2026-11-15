@@ -7986,7 +7986,9 @@
       "copyPath": "경로 복사",
       "copied": "복사했습니다",
       "startedValue": "{when} 시작",
-      "pendingValue": "다음 메시지부터 새 세션: {reason}"
+      "pendingValue": "다음 메시지부터 새 세션: {reason}",
+      "agent": "에이전트",
+      "state": "상태"
     },
     "items": {
       "waits": {
@@ -9544,12 +9546,12 @@
       "open": "세부 정보 보기",
       "close": "세부 정보 숨기기",
       "tabs": {
-        "details": "세부 정보",
+        "activity": "활동",
         "output": "산출물",
-        "workspace": "작업 공간"
+        "workspace": "작업 공간",
+        "stats": "통계"
       },
       "sections": {
-        "status": "상태",
         "today": "오늘",
         "matters": "진행 중인 일",
         "data": "데이터",

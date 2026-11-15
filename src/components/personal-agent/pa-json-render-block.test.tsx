@@ -413,7 +413,23 @@ describe("an assistant's card: pa.open", () => {
     expect(screen.getByRole("button", { name: "Somewhere" })).toBeDisabled()
   })
 
-  it("opens the details' routines (6.9)", () => {
+  it("opens the panel on its activity, for a matter", () => {
+    usePersonalAgentUi.setState({ auxOpen: false, auxTab: "stats" })
+    draw(
+      card({
+        a: button("See the matter", {
+          press: { action: "pa.open", params: { target: "item", id: 3 } },
+        }),
+      })
+    )
+    fireEvent.click(screen.getByRole("button", { name: "See the matter" }))
+    expect(usePersonalAgentUi.getState()).toMatchObject({
+      auxOpen: true,
+      auxTab: "activity",
+    })
+  })
+
+  it("opens the activity's routines (6.9)", () => {
     const asked = usePersonalAgentUi.getState().routinesAsked
     draw(
       card({
@@ -424,7 +440,7 @@ describe("an assistant's card: pa.open", () => {
     )
     fireEvent.click(screen.getByRole("button", { name: "See the routine" }))
     expect(usePersonalAgentUi.getState().routinesAsked).toBe(asked + 1)
-    expect(usePersonalAgentUi.getState().auxTab).toBe("details")
+    expect(usePersonalAgentUi.getState().auxTab).toBe("activity")
   })
 
   it("opens a session", async () => {

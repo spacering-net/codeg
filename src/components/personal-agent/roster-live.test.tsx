@@ -374,13 +374,28 @@ describe("the roster", () => {
       entry(2, "Dev", {}, { pinned_at: iso(-100) }),
       entry(3, "Ops", {}, { section: "codeg" }),
       entry(4, "Old", {}, { hidden: true }),
+      entry(5, "Ann"),
     ])
     wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
     await screen.findByText("Dev")
-    expect(screen.getByText("Pinned")).toBeTruthy()
-    expect(screen.getByRole("button", { name: "Fold codeg" })).toBeTruthy()
+    // Each group's name where its rows' faces are, a folding one's chevron
+    // after its name; one class for them all.
+    const pinned = screen.getByText("Pinned").parentElement!
+    const fold = screen.getByRole("button", { name: "Fold codeg" })
+    expect(fold.firstElementChild!.textContent).toBe("codeg")
+    expect(fold.lastElementChild!.tagName.toLowerCase()).toBe("svg")
+    expect(fold.className).toContain(pinned.className)
+    expect(screen.getByText("Others").parentElement!.className).toBe(
+      pinned.className
+    )
+    // The hidden ones under a count after the list, the same kind of head.
     expect(screen.queryByText("Old")).toBeNull()
-    fireEvent.click(screen.getByText("1 hidden"))
+    const hidden = screen.getByText("1 hidden").closest("button")!
+    expect(hidden.closest("[data-pa-roster-foot]")).toBeNull()
+    expect(hidden.className).toContain(pinned.className)
+    expect(hidden.getAttribute("aria-expanded")).toBe("false")
+    fireEvent.click(hidden)
+    expect(hidden.getAttribute("aria-expanded")).toBe("true")
     expect(screen.getByText("Old")).toBeTruthy()
     // Its menu.
     fireEvent.contextMenu(screen.getByText("Ops"))
@@ -426,11 +441,46 @@ describe("the roster", () => {
       expect(r.className).toBe("")
       expect((r.firstElementChild as HTMLElement).className).toContain("py-0.5")
     })
-    // [+ New work assistant] at the foot, its own row.
+    // One measure of room: the list as far from the top as the primary's
+    // tile from the rows under it.
+    const list = nav.firstElementChild as HTMLElement
+    expect(list.className).toContain("pt-4")
+    expect((primary.closest("div") as HTMLElement).className).toContain("pb-3")
+    // [+ New work assistant] at the foot, a row as the rows are: a circle
+    // with a plus where a face would be (drawn, not dashed), its name.
     const foot = nav.querySelector("[data-pa-roster-foot]")!
     const add = foot.querySelector("[data-pa-roster-add]")!
     expect(add.textContent).toBe("New work assistant")
     expect(nav.lastElementChild).toBe(foot)
+    const row = nav.querySelector("[data-pa-roster-bot='2']")!
+    for (const cls of ["gap-2.5", "px-2", "py-1.5", "rounded-xl"]) {
+      expect(add.className).toContain(cls)
+      expect(row.className).toContain(cls)
+    }
+    const circle = add.firstElementChild!
+    expect(circle.className).toContain("size-7")
+    expect(circle.className).toContain("border")
+    expect(circle.className).not.toContain("border-dashed")
+    // The foot's room as the list's: its row on the rows' edge.
+    expect(foot.className).toContain("p-2")
+    expect(list.className).toContain("px-2")
+  })
+
+  it("gives a row's time as short as a chat list does", async () => {
+    const day = 86_400_000
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "Nova"),
+      entry(2, "Dev", { last_activity_at: iso(-day) }),
+      entry(3, "Ops", { last_activity_at: iso(-30 * day) }),
+    ])
+    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    await screen.findByText("Dev")
+    const time = (id: number) =>
+      document.querySelector(`[data-pa-roster-bot='${id}'] .tabular-nums`)
+        ?.textContent
+    expect(time(2)).toBe("Yesterday")
+    // A month back: its day and month, no time of day.
+    expect(time(3)).not.toMatch(/:/)
   })
 
   it("folds to a rail of faces: the primary's, a rule, the rest's, each one's line on its card", async () => {
@@ -448,7 +498,13 @@ describe("the roster", () => {
         expect(found.length).toBe(3)
         return found
       })
-      expect(document.querySelector("[data-pa-roster-rail]")).toBeTruthy()
+      const rail = document.querySelector("[data-pa-roster-rail]")!
+      // The tiles as far from the top as from the rail's sides; the rule
+      // as wide as a tile, as far from the faces either side.
+      expect(rail.firstElementChild!.className).toContain("pt-4")
+      const rule = rail.querySelector("[aria-hidden].h-px")!
+      expect(rule.className).toContain("w-13")
+      expect(rule.className).toContain("my-2")
       // The primary, then the pinned, then the rest; faces alone.
       expect(tiles.map((t) => t.getAttribute("data-pa-roster-bot"))).toEqual([
         "1",

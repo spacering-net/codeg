@@ -7986,7 +7986,9 @@
       "copyPath": "Copy path",
       "copied": "Copied",
       "startedValue": "Started {when}",
-      "pendingValue": "A new session starts with the next message: {reason}"
+      "pendingValue": "A new session starts with the next message: {reason}",
+      "agent": "Agent",
+      "state": "State"
     },
     "items": {
       "waits": {
@@ -9544,12 +9546,12 @@
       "open": "Show the details",
       "close": "Hide the details",
       "tabs": {
-        "details": "Details",
+        "activity": "Activity",
         "output": "Output",
-        "workspace": "Workspace"
+        "workspace": "Workspace",
+        "stats": "Stats"
       },
       "sections": {
-        "status": "Status",
         "today": "Today",
         "matters": "Matters",
         "data": "Data",

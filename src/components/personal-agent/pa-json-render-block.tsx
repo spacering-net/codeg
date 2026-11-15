@@ -589,7 +589,7 @@ function PaCard({
         if (isId(id)) nav.openSession(id)
         return
       case "item":
-        nav.showAux("details")
+        nav.showAux("activity")
         return
       case "routine":
         usePersonalAgentUi.getState().showRoutines()

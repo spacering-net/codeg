@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * The details' "Routines" (6.9, 10.1): this assistant's routines, each with
+ * The activity tab's "Routines" (6.9, 10.1): this assistant's routines, each with
  * when it runs, its next run and how its last went, and [Run now] [Pause /
  * Resume] [Edit] [Delete]. Empty: a line saying to ask for one in the
  * conversation, and [New routine].

@@ -12,9 +12,13 @@
  *   and the work in hand.
  * - Groups: the pinned ones (in the owner's order, dragged to reorder), the
  *   owner's own groups (folding), the rest. Within a group: waiting on the
- *   owner, working, idle, done, the most recent first.
- * - At the foot: "N hidden", which opens to show them, and [+ new work
- *   assistant].
+ *   owner, working, idle, done, the most recent first. Each group's name on
+ *   its rows' faces' edge; a row's time as short as a chat list has it.
+ * - After them, "N hidden", which opens to show them; at the foot, [+ new
+ *   work assistant] as a row is drawn.
+ * - One measure for the room: the list as far from the top as the primary's
+ *   tile from the list, the rail's tiles as far from the top as from its
+ *   sides.
  * - Dragged narrower than its least width, the list folds to a rail of
  *   faces (roster-resize.tsx): the primary's, a rule, the others' in the
  *   list's order; each one's name, line and work in hand when hovered.
@@ -28,7 +32,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { ChevronRight, EyeOff, Pin, Plus, VolumeX } from "lucide-react"
+import { ChevronDown, EyeOff, Plus, VolumeX } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -73,9 +77,14 @@ import {
 } from "./activity-text"
 import { BotAvatar } from "./bot-avatar"
 import { BotDeleteDialog } from "./bot-delete-dialog"
-import { useMessageTime } from "./message-actions"
 import { NewBotDialog } from "./new-bot-dialog"
-import { groupRoster, sectionNames, viewOf, type BotView } from "./roster-order"
+import {
+  groupRoster,
+  rosterTime,
+  sectionNames,
+  viewOf,
+  type BotView,
+} from "./roster-order"
 import {
   ROSTER_RAIL_WIDTH,
   RosterResizeHandle,
@@ -334,7 +343,6 @@ export function PersonalAgentRoster({
   const locale = useLocale()
   const entries = useRoster()
   const botName = useBotName()
-  const time = useMessageTime()
   const templates = useBotTemplates()
   const viewBot = usePersonalAgentUi((s) => s.viewBot)
   const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
@@ -620,6 +628,7 @@ export function PersonalAgentRoster({
         type="button"
         data-pa-roster-bot={b.id}
         data-pa-roster-look={view.look}
+        data-pa-face-host
         aria-current={isCurrent ? "page" : undefined}
         onClick={() => go(b)}
         draggable={opts.draggable && !readOnly}
@@ -648,7 +657,7 @@ export function PersonalAgentRoster({
           setDragging(null)
         }}
         className={cn(
-          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start transition-colors",
+          "flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-start transition-colors",
           isCurrent
             ? "bg-accent text-accent-foreground"
             : "text-foreground/85 hover:bg-muted",
@@ -669,7 +678,7 @@ export function PersonalAgentRoster({
             ) : null}
             {at ? (
               <span className="shrink-0 text-[0.6875rem] text-muted-foreground tabular-nums">
-                {time(at)}
+                {rosterTime(at, now, locale)}
               </span>
             ) : null}
           </span>
@@ -789,6 +798,7 @@ export function PersonalAgentRoster({
               data-pa-roster-bot={b.id}
               data-pa-roster-primary={b.kind === "primary" || undefined}
               data-pa-roster-look={view.look}
+              data-pa-face-host
               aria-current={isCurrent ? "page" : undefined}
               onClick={() => go(b)}
               className={cn(
@@ -814,7 +824,7 @@ export function PersonalAgentRoster({
 
   /** The primary on top: a square, its face large, its name under it. */
   const primaryTile = (b: RosterEntry) => (
-    <div className="flex justify-center pb-1">
+    <div className="flex justify-center pb-3">
       {tile(b, () => (
         <span className="flex size-24 flex-col items-center justify-center gap-1 px-1.5">
           {face(b, 56)}
@@ -832,44 +842,41 @@ export function PersonalAgentRoster({
       </span>
     ))
 
-  const hiddenToggle = (rail: boolean) => (
-    <button
-      type="button"
-      className={cn(
-        "rounded text-xs text-muted-foreground hover:bg-muted hover:text-foreground",
-        rail
-          ? "flex h-7 items-center gap-0.5 px-1.5 tabular-nums"
-          : "w-full px-2 py-1 text-start"
-      )}
-      aria-expanded={showHidden}
-      aria-label={
-        rail
-          ? showHidden
-            ? tr("hideHidden")
-            : tr("hiddenCount", { count: groups.hidden.length })
-          : undefined
-      }
-      title={
-        rail ? tr("hiddenCount", { count: groups.hidden.length }) : undefined
-      }
-      onClick={() => setShowHidden((v) => !v)}
-      data-pa-roster-hidden-toggle
-    >
-      {rail ? (
-        <>
-          <EyeOff className="size-3.5" aria-hidden />
-          {groups.hidden.length}
-        </>
-      ) : showHidden ? (
-        tr("hideHidden")
-      ) : (
-        tr("hiddenCount", { count: groups.hidden.length })
-      )}
-    </button>
-  )
+  /** "N hidden", after the list: it opens to show them under it — on the
+   *  rail, an eye and the count. */
+  const hiddenToggle = (rail: boolean) => {
+    const count = tr("hiddenCount", { count: groups.hidden.length })
+    return (
+      <button
+        type="button"
+        className={cn(
+          rail
+            ? "mt-1 flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-xs text-muted-foreground tabular-nums transition-colors hover:bg-muted hover:text-foreground"
+            : cn(HEAD_CLASS, "w-full text-start hover:text-foreground")
+        )}
+        aria-expanded={showHidden}
+        aria-label={rail ? (showHidden ? tr("hideHidden") : count) : undefined}
+        title={rail ? count : undefined}
+        onClick={() => setShowHidden((v) => !v)}
+        data-pa-roster-hidden-toggle
+      >
+        {rail ? (
+          <>
+            <EyeOff className="size-3.5" aria-hidden />
+            {groups.hidden.length}
+          </>
+        ) : (
+          <>
+            <span className="truncate">{count}</span>
+            <FoldChevron open={showHidden} />
+          </>
+        )}
+      </button>
+    )
+  }
 
-  /** [+ new work assistant], at the foot: a row's geometry, a dashed
-   *  circle where a face would be; on the rail, the circle alone. */
+  /** [+ new work assistant], at the foot: a row's geometry, a circle with a
+   *  plus where a face would be; on the rail, a tile's, the circle alone. */
   const addButton = (rail: boolean) => (
     <button
       type="button"
@@ -879,22 +886,22 @@ export function PersonalAgentRoster({
       title={rail ? tr("add") : undefined}
       data-pa-roster-add
       className={cn(
-        "flex items-center rounded-md text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
-        rail
-          ? "size-13 justify-center rounded-xl"
-          : "w-full gap-2 px-2 py-1.5 text-start"
+        "group/add flex items-center rounded-xl text-sm text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
+        rail ? "size-13 shrink-0 justify-center" : "w-full gap-2.5 px-2 py-1.5"
       )}
     >
       <span
         aria-hidden
         className={cn(
-          "flex shrink-0 items-center justify-center rounded-full border border-dashed border-muted-foreground/50",
+          "flex shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors group-hover/add:text-foreground",
           rail ? "size-9" : "size-7"
         )}
       >
-        <Plus className={rail ? "size-4" : "size-3.5"} />
+        <Plus className="size-4" />
       </span>
-      {rail ? null : <span className="min-w-0 truncate">{tr("add")}</span>}
+      {rail ? null : (
+        <span className="min-w-0 truncate text-start">{tr("add")}</span>
+      )}
     </button>
   )
 
@@ -904,7 +911,11 @@ export function PersonalAgentRoster({
       ...groups.sections.flatMap((s) => s.entries),
       ...groups.rest,
     ]
-    const rule = <div aria-hidden className="my-1 h-px w-8 bg-border" />
+    // As wide as a tile, as far from the faces on either side as the
+    // tiles are from the rail's edges.
+    const rule = (
+      <div aria-hidden className="my-2 h-px w-13 shrink-0 bg-border" />
+    )
     return (
       <>
         <nav
@@ -914,10 +925,11 @@ export function PersonalAgentRoster({
           style={{ width: `${ROSTER_RAIL_WIDTH}rem` }}
           className="flex max-w-[50%] shrink-0 flex-col"
         >
-          <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-x-hidden overflow-y-auto py-2">
+          <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-x-hidden overflow-y-auto pt-4 pb-3">
             {primary ? railTile(primary) : null}
             {primary && others.length > 0 ? rule : null}
             {others.map(railTile)}
+            {groups.hidden.length > 0 ? hiddenToggle(true) : null}
             {showHidden && groups.hidden.length > 0 ? (
               <>
                 {rule}
@@ -927,9 +939,8 @@ export function PersonalAgentRoster({
           </div>
           <div
             data-pa-roster-foot
-            className="flex flex-col items-center gap-1 border-t border-border/50 py-1.5"
+            className="flex justify-center border-t border-border/50 py-2"
           >
-            {groups.hidden.length > 0 ? hiddenToggle(true) : null}
             {addButton(true)}
           </div>
         </nav>
@@ -939,35 +950,30 @@ export function PersonalAgentRoster({
     )
   }
 
-  const groupHead = (label: string, foldName?: string) => (
-    <div className="flex items-center gap-1 px-2 pt-3 pb-1 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
-      {foldName ? (
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center gap-1 text-start hover:text-foreground"
-          aria-expanded={!folded.has(foldName)}
-          aria-label={
-            folded.has(foldName)
-              ? tr("expand", { name: label })
-              : tr("collapse", { name: label })
-          }
-          onClick={() => toggleFold(foldName)}
-          data-pa-roster-section={foldName}
-        >
-          <ChevronRight
-            className={cn(
-              "size-3 shrink-0 transition-transform rtl:-scale-x-100",
-              !folded.has(foldName) && "rotate-90 rtl:rotate-90"
-            )}
-            aria-hidden
-          />
-          <span className="truncate">{label}</span>
-        </button>
-      ) : (
+  /** A group's name over its rows, on their faces' edge; one the owner
+   *  made folds, its chevron after its name. */
+  const groupHead = (label: string, foldName?: string) =>
+    foldName ? (
+      <button
+        type="button"
+        className={cn(HEAD_CLASS, "w-full text-start hover:text-foreground")}
+        aria-expanded={!folded.has(foldName)}
+        aria-label={
+          folded.has(foldName)
+            ? tr("expand", { name: label })
+            : tr("collapse", { name: label })
+        }
+        onClick={() => toggleFold(foldName)}
+        data-pa-roster-section={foldName}
+      >
         <span className="truncate">{label}</span>
-      )}
-    </div>
-  )
+        <FoldChevron open={!folded.has(foldName)} />
+      </button>
+    ) : (
+      <div className={HEAD_CLASS}>
+        <span className="truncate">{label}</span>
+      </div>
+    )
 
   const hasGroups = groups.pinned.length > 0 || groups.sections.length > 0
 
@@ -981,59 +987,72 @@ export function PersonalAgentRoster({
         style={{ width: `${size.width}rem` }}
         className="flex max-w-[50%] shrink-0 flex-col"
       >
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-2">
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-4 pb-3">
           {primary ? primaryTile(primary) : null}
-          {groups.pinned.length > 0 ? (
-            <>
-              <div className="flex items-center gap-1 px-2 pt-3 pb-1 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
-                <Pin className="size-3" aria-hidden />
-                <span>{tr("pinned")}</span>
+          {/* The groups, each its name over its rows, a little apart. */}
+          <div className="flex flex-col gap-2">
+            {groups.pinned.length > 0 ? (
+              <div data-pa-roster-group="pinned">
+                {groupHead(tr("pinned"))}
+                <AnimatedRows
+                  entries={groups.pinned}
+                  render={(b) => row(b, { draggable: true })}
+                />
               </div>
-              <AnimatedRows
-                entries={groups.pinned}
-                render={(b) => row(b, { draggable: true })}
-              />
-            </>
-          ) : null}
-          {groups.sections.map((s) => (
-            <div key={s.name}>
-              {groupHead(s.name, s.name)}
-              {folded.has(s.name) ? null : (
-                <AnimatedRows entries={s.entries} render={(b) => row(b)} />
-              )}
-            </div>
-          ))}
-          {groups.rest.length > 0 ? (
-            <>
-              {hasGroups ? groupHead(tr("others")) : <div className="h-2" />}
-              <AnimatedRows entries={groups.rest} render={(b) => row(b)} />
-            </>
-          ) : null}
+            ) : null}
+            {groups.sections.map((s) => (
+              <div key={s.name} data-pa-roster-group={s.name}>
+                {groupHead(s.name, s.name)}
+                {folded.has(s.name) ? null : (
+                  <AnimatedRows entries={s.entries} render={(b) => row(b)} />
+                )}
+              </div>
+            ))}
+            {groups.rest.length > 0 ? (
+              <div data-pa-roster-group="rest">
+                {hasGroups ? groupHead(tr("others")) : null}
+                <AnimatedRows entries={groups.rest} render={(b) => row(b)} />
+              </div>
+            ) : null}
+            {groups.hidden.length > 0 ? (
+              <div data-pa-roster-group="hidden">
+                {hiddenToggle(false)}
+                {showHidden
+                  ? groups.hidden.map((b) => (
+                      <div key={b.id} className="py-0.5">
+                        {row(b)}
+                      </div>
+                    ))
+                  : null}
+              </div>
+            ) : null}
+          </div>
         </div>
-        <div
-          data-pa-roster-foot
-          className="flex flex-col gap-0.5 border-t border-border/50 px-2 py-1.5"
-        >
-          {groups.hidden.length > 0 ? (
-            <>
-              {hiddenToggle(false)}
-              {showHidden ? (
-                <div className="max-h-48 overflow-y-auto">
-                  {groups.hidden.map((b) => (
-                    <div key={b.id} className="py-0.5">
-                      {row(b)}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </>
-          ) : null}
+        <div data-pa-roster-foot className="border-t border-border/50 p-2">
           {addButton(false)}
         </div>
       </nav>
       <RosterResizeHandle size={size} onSize={setSize} />
       {dialogs}
     </>
+  )
+}
+
+/** A group's name, over its rows: on the rows' faces' edge. */
+const HEAD_CLASS =
+  "flex h-7 min-w-0 items-center gap-1 px-2 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase"
+
+/** After a folding group's name: down while it is open, toward the end of
+ *  the line while it is folded. */
+function FoldChevron({ open }: { open: boolean }) {
+  return (
+    <ChevronDown
+      className={cn(
+        "size-3 shrink-0 transition-transform",
+        !open && "-rotate-90 rtl:rotate-90"
+      )}
+      aria-hidden
+    />
   )
 }
 

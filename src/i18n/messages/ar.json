@@ -7986,7 +7986,9 @@
       "copyPath": "نسخ المسار",
       "copied": "تم النسخ",
       "startedValue": "بدأت {when}",
-      "pendingValue": "تبدأ جلسة جديدة مع الرسالة التالية: {reason}"
+      "pendingValue": "تبدأ جلسة جديدة مع الرسالة التالية: {reason}",
+      "agent": "الوكيل",
+      "state": "الحالة"
     },
     "items": {
       "waits": {
@@ -9544,12 +9546,12 @@
       "open": "إظهار التفاصيل",
       "close": "إخفاء التفاصيل",
       "tabs": {
-        "details": "التفاصيل",
+        "activity": "النشاط",
         "output": "المخرجات",
-        "workspace": "مساحة العمل"
+        "workspace": "مساحة العمل",
+        "stats": "الإحصاءات"
       },
       "sections": {
-        "status": "الحالة",
         "today": "اليوم",
         "matters": "الأمور المفتوحة",
         "data": "البيانات",

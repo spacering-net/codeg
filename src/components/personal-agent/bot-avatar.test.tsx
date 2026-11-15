@@ -90,7 +90,8 @@ describe("an assistant's face", () => {
     expect(el.hasAttribute("data-blink")).toBe(false)
     act(() => vi.advanceTimersByTime(2800))
     const gaze = el.querySelector(".pa-face-gaze") as SVGGElement
-    expect(gaze.style.transform).toBe("translate(-4px, 0px)")
+    // A tenth of the face: seen on a roster row's face too.
+    expect(gaze.style.transform).toBe("translate(-10px, 0px)")
     act(() => vi.advanceTimersByTime(500))
     expect(gaze.style.transform).toBe("")
   })
@@ -139,6 +140,168 @@ describe("an assistant's face", () => {
       expect(lids.children.length, look).toBe(2)
       unmount()
     }
+  })
+})
+
+/** jsdom lays nothing out: the face's box, as a browser would have it. */
+function boxed(el: Element, left = 100, top = 100, size = 28) {
+  ;(el as HTMLElement).getBoundingClientRect = () =>
+    ({
+      left,
+      top,
+      x: left,
+      y: top,
+      width: size,
+      height: size,
+      right: left + size,
+      bottom: top + size,
+      toJSON: () => ({}),
+    }) as DOMRect
+}
+
+/** A pointer event (jsdom has no PointerEvent: a MouseEvent of its type,
+ *  its pointer's kind added). */
+function pointer(
+  type: "pointerenter" | "pointermove" | "pointerleave",
+  target: Element,
+  clientX = 0,
+  clientY = 0,
+  pointerType = "mouse"
+) {
+  const event = new MouseEvent(type, {
+    bubbles: type === "pointermove",
+    clientX,
+    clientY,
+  })
+  Object.defineProperty(event, "pointerType", { value: pointerType })
+  act(() => {
+    target.dispatchEvent(event)
+  })
+}
+
+/** The next frame (the eyes follow the pointer once a frame). */
+function frame() {
+  act(() => vi.advanceTimersByTime(20))
+}
+
+describe("the pointer over a face", () => {
+  it("perks it up each time it comes, its eyes following it while it stays", () => {
+    const { container } = render(
+      <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
+    )
+    const el = root(container)
+    const gaze = el.querySelector(".pa-face-gaze") as SVGGElement
+    boxed(el)
+    expect(el.hasAttribute("data-perk")).toBe(false)
+    // In over its right edge: a perk, the eyes all the way right.
+    pointer("pointerenter", el, 128, 114)
+    frame()
+    expect(el.getAttribute("data-perk")).toBe("a")
+    expect(el.hasAttribute("data-hover")).toBe(true)
+    expect(gaze.style.transform).toBe("translate(11px, 0px)")
+    // Off to the top left: as far as the eyes go that way.
+    pointer("pointermove", el, 0, 0)
+    frame()
+    expect(gaze.style.transform).toBe("translate(-8px, -6px)")
+    // Gone: the eyes settle back.
+    pointer("pointerleave", el)
+    expect(el.hasAttribute("data-hover")).toBe(false)
+    expect(gaze.style.transform).toBe("")
+    // Back again: the perk again, under its other name so it plays.
+    pointer("pointerenter", el, 114, 128)
+    frame()
+    expect(el.getAttribute("data-perk")).toBe("b")
+    expect(gaze.style.transform).toBe("translate(0px, 8px)")
+  })
+
+  it("notices it over the row it is the face of", () => {
+    const { container } = render(
+      <button type="button" data-pa-face-host>
+        <BotAvatar avatar={face} name="Dev" size={28} look="working" />
+        Dev
+      </button>
+    )
+    const row = container.querySelector("button")!
+    const el = root(container)
+    boxed(el)
+    // At the row's far end: it looks that way.
+    pointer("pointerenter", row, 300, 114)
+    frame()
+    expect(el.getAttribute("data-perk")).toBe("a")
+    expect(
+      (el.querySelector(".pa-face-gaze") as SVGGElement).style.transform
+    ).toBe("translate(11px, 0px)")
+    pointer("pointerleave", row)
+    expect(el.hasAttribute("data-hover")).toBe(false)
+  })
+
+  it("wakes it up when asleep, and lets it sleep again once it leaves", () => {
+    const { container } = render(
+      <BotAvatar avatar={face} name="Dev" size={28} look="sleeping" />
+    )
+    const el = root(container)
+    boxed(el)
+    pointer("pointerenter", el, 128, 114)
+    // Its eyes open through a blink, then follow the pointer.
+    expect(el.hasAttribute("data-blink")).toBe(true)
+    act(() => vi.advanceTimersByTime(90))
+    expect(el.getAttribute("data-bot-look")).toBe("idle")
+    expect(el.querySelectorAll(".pa-face-z")).toHaveLength(0)
+    frame()
+    act(() => vi.advanceTimersByTime(200))
+    expect(
+      (el.querySelector(".pa-face-gaze") as SVGGElement).style.transform
+    ).toBe("translate(11px, 0px)")
+    pointer("pointerleave", el)
+    act(() => vi.advanceTimersByTime(90))
+    expect(el.getAttribute("data-bot-look")).toBe("sleeping")
+  })
+
+  it("is not noticed by a face that is still, under reduced motion, or as a touch", () => {
+    // Still: no look given.
+    const { container, rerender } = render(
+      <BotAvatar avatar={face} name="Dev" size={28} />
+    )
+    boxed(root(container))
+    pointer("pointerenter", root(container), 128, 114)
+    frame()
+    expect(root(container).hasAttribute("data-perk")).toBe(false)
+    expect(root(container).hasAttribute("data-hover")).toBe(false)
+    // A touch.
+    rerender(<BotAvatar avatar={face} name="Dev" size={28} look="idle" />)
+    pointer("pointerenter", root(container), 128, 114, "touch")
+    frame()
+    expect(root(container).hasAttribute("data-perk")).toBe(false)
+    // Reduced motion.
+    motion.reduced = true
+    rerender(<BotAvatar avatar={face} name="Dev" size={28} look="waiting" />)
+    pointer("pointerenter", root(container), 128, 114)
+    frame()
+    expect(root(container).hasAttribute("data-perk")).toBe(false)
+    expect(root(container).hasAttribute("data-hover")).toBe(false)
+  })
+
+  it("keeps its eyes on its body: clipped to its shape, each face its own", () => {
+    const { container } = render(
+      <>
+        <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
+        <BotAvatar avatar={face} name="Ops" size={28} look="idle" />
+      </>
+    )
+    const faces = [...container.querySelectorAll("[data-slot='bot-avatar']")]
+    const ids = faces.map((f) => {
+      const clip = f.querySelector("clipPath")!
+      const eyes = f.querySelector(".pa-face-lids")!
+      // The group that clips them holds the eyes, and is the body's own.
+      const clipped = eyes.closest("[clip-path]")!
+      expect(clipped.getAttribute("clip-path")).toBe(`url(#${clip.id})`)
+      expect(clip.querySelector("path")!.getAttribute("d")).toBe(
+        f.querySelector(".pa-face-perk > path")!.getAttribute("d")
+      )
+      return clip.id
+    })
+    expect(new Set(ids).size).toBe(2)
+    for (const id of ids) expect(id).toMatch(/^pa-face-clip-[\w-]+$/)
   })
 })
 

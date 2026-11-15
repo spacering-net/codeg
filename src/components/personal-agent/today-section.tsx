@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * "Today" (6.3, 1.14), on the primary's details after its status: every
+ * "Today" (6.3, 1.14), first on the primary's activity tab: every
  * assistant's at once, in four groups — what waits on the owner anywhere in
  * codeg, what the assistants keep an eye on, the rest of the day, what was
  * done today — each shown only when it has something, and "nothing needs
@@ -225,7 +225,7 @@ export function TodaySection({
   inDrawer,
   readOnly,
 }: {
-  /** The section's heading, as the details' others have theirs. */
+  /** The section's heading, as the activity's others have theirs. */
   head: ReactNode
   today: PersonalAgentToday | null
   inDrawer: boolean

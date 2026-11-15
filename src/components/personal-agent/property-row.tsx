@@ -6,7 +6,7 @@ import { Check, Copy } from "lucide-react"
 import { useCopiedFlag } from "@/hooks/use-copied-flag"
 import { copyTextToClipboard } from "@/lib/utils"
 
-/** One label–value row of the personal agent panel's card: a two-column
+/** One label–value row of the personal agent panel's status: a two-column
  *  grid (`grid-cols-[auto_minmax(0,1fr)]`) of label and value, one row per
  *  property. */
 export function PropertyRow({

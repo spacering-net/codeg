@@ -27,8 +27,7 @@ interface WorkbenchPageTitleProps {
 /**
  * Shared header for every full-page workbench route, rendered into the
  * window-chrome strip above the page (the h-10 band the fixed corner overlays
- * sit on — see `WorkbenchRouteStrip` in workbench-content.tsx), or into that
- * band where a route draws it itself (`WorkbenchBand`).
+ * sit on — see `WorkbenchRouteStrip` in workbench-content.tsx).
  *
  * It reads as a breadcrumb: a conversations button, a chevron, then the route's
  * title. That leading button is the ONLY way back out of a full-page route — it

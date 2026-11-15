@@ -7986,7 +7986,9 @@
       "copyPath": "Copier le chemin",
       "copied": "Copié",
       "startedValue": "Commencée le {when}",
-      "pendingValue": "Une nouvelle session commence au prochain message : {reason}"
+      "pendingValue": "Une nouvelle session commence au prochain message : {reason}",
+      "agent": "Agent",
+      "state": "État"
     },
     "items": {
       "waits": {
@@ -9544,12 +9546,12 @@
       "open": "Afficher les détails",
       "close": "Masquer les détails",
       "tabs": {
-        "details": "Détails",
+        "activity": "Activité",
         "output": "Résultats",
-        "workspace": "Espace de travail"
+        "workspace": "Espace de travail",
+        "stats": "Statistiques"
       },
       "sections": {
-        "status": "État",
         "today": "Aujourd’hui",
         "matters": "Sujets en cours",
         "data": "Données",

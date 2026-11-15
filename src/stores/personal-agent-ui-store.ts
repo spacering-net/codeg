@@ -18,10 +18,10 @@ import type {
  * reads them back.
  */
 
-/** The side panel's tabs (10.1): the details (its status, its open
- *  matters, its numbers — the one it opens on), what it made, and the work
- *  running now. */
-export type AuxTab = "details" | "output" | "workspace"
+/** The side panel's tabs (10.1): its activity (today, its open matters,
+ *  its routines — the one it opens on), what it made, the work running now,
+ *  and its numbers (how it runs, its context, its charts). */
+export type AuxTab = "activity" | "output" | "workspace" | "stats"
 
 /** Window events the chrome sends the page. */
 export const PERSONAL_AGENT_EVENTS = {
@@ -149,7 +149,7 @@ interface PersonalAgentUiState {
   routineEditor: RoutineEditorRequest | null
   openRoutineEditor: (req: Omit<RoutineEditorRequest, "key">) => void
   closeRoutineEditor: () => void
-  /** Bumped to bring the details' routines into view (`pa.open`). */
+  /** Bumped to bring the activity's routines into view (`pa.open`). */
   routinesAsked: number
   showRoutines: () => void
   /** The assistant the page shows (`null`: the primary), picked in the
@@ -167,7 +167,7 @@ interface PersonalAgentUiState {
   pendingJump: { bot: number; row: number } | null
   setPendingJump: (jump: { bot: number; row: number } | null) => void
   /** Bumped to bring "Today" into view (the primary's pill, 1.14): the
-   *  panel opens on its details, scrolled to it. */
+   *  panel opens on its activity, scrolled to it. */
   todayAsked: number
   showToday: () => void
   /** The time machine's search is open (8.2). */
@@ -177,7 +177,7 @@ interface PersonalAgentUiState {
 
 export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   auxOpen: true,
-  auxTab: "details",
+  auxTab: "activity",
   setAuxOpen: (auxOpen) => set({ auxOpen }),
   toggleAux: () => set((s) => ({ auxOpen: !s.auxOpen })),
   showAux: (auxTab) => set({ auxOpen: true, auxTab }),
@@ -216,7 +216,7 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   showRoutines: () =>
     set((s) => ({
       auxOpen: true,
-      auxTab: "details",
+      auxTab: "activity",
       routinesAsked: s.routinesAsked + 1,
     })),
   viewBot: null,
@@ -235,7 +235,7 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   showToday: () =>
     set((s) => ({
       auxOpen: true,
-      auxTab: "details",
+      auxTab: "activity",
       todayAsked: s.todayAsked + 1,
     })),
   searchOpen: false,

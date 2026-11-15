@@ -696,7 +696,7 @@ describe("today", () => {
     act(() => usePersonalAgentUi.getState().showToday())
     expect(scroll).toHaveBeenCalled()
     const ui = usePersonalAgentUi.getState()
-    expect([ui.auxOpen, ui.auxTab]).toEqual([true, "details"])
+    expect([ui.auxOpen, ui.auxTab]).toEqual([true, "activity"])
   })
 })
 

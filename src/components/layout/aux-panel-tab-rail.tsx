@@ -32,9 +32,8 @@ import { cn } from "@/lib/utils"
 // and an icon rail would have to undo nearly every class. The primitives keep
 // what matters — the Tabs context, roving focus, and the trigger ids each
 // panel's `aria-labelledby` points at.
-/** A tab of the rail: an icon button, tinted while selected. Shared with the
- *  personal agent page's panel, which is laid out as this one is. */
-export const AUX_RAIL_TRIGGER_CLASS = cn(
+/** A tab of the rail: an icon button, tinted while selected. */
+const AUX_RAIL_TRIGGER_CLASS = cn(
   "flex size-8 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors",
   "hover:bg-foreground/[0.06] hover:text-foreground",
   "focus-visible:ring-2 focus-visible:ring-ring/50",
@@ -53,7 +52,7 @@ export const AUX_RAIL_TRIGGER_CLASS = cn(
  *  settings button of the corner overlay above (`pr-3` + half an `h-6 w-6`
  *  button, both rem, so they stay lined up at any zoom), and within a pixel
  *  of the Windows/Linux close button's centre. */
-export const AUX_RAIL_CLASS =
+const AUX_RAIL_CLASS =
   "flex w-12 shrink-0 flex-col items-center border-s border-border py-1.5 ws-chrome-border"
 
 /** Alt+↑/↓ moves the focused tab — the keyboard way to do what a drag does.

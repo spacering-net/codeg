@@ -1,45 +1,37 @@
 "use client"
 
 /**
- * The personal agent page's side panel, laid out as the workspace's own aux
- * panel is (`layout/aux-panel.tsx`): the open tab's name in a strip across
- * the top, its content under it, and the tabs as an icon rail down the
- * panel's end edge — on a narrow screen's drawer, a row of tabs under a
- * line. Three tabs (10.1), the first open by default:
- * - Details, one page of sections:
- *   - its status first, as Session Details shows a conversation: the agent
- *     as a card — who it is, what it runs on, its session, its working
- *     directory — then folding sections: its context, the run log, the
- *     details;
- *   - on the primary, "Today": every assistant's day in four groups (6.3,
- *     `today-section.tsx`);
- *   - its open matters, as the workspace's task tab shows a board: sections
- *     by whom each piece waits on — the owner first, then the work still
- *     moving, what the agent has to pick up, what comes later — each piece
- *     once, as a card. A piece of handed-out work says where it stands on
- *     the PR ladder and opens its session in the drawer; a task carries its
- *     task card (8.5), and an entry whose work has ended (a pull request
- *     codeg does not follow yet) the owner closes there: done or dropped. A
- *     reminder, a follow-up or a question jumps to the message it came
- *     from, says when it is due and how it comes back, and the owner can
- *     settle it there: done, put off (15 minutes, an hour, tomorrow
- *     morning, or with no set time), dropped;
- *   - its numbers: the last two weeks in four figures, then the charts;
- *   - "Notify me", and the way to its settings.
- *   The rail counts what waits on the owner.
+ * The personal agent page's side panel, under the window's top band as the
+ * other full pages have it (the tasks' board). On top, who it is: its face,
+ * alive, and its name; under them a row of tabs (10.1), the first open by
+ * default:
+ * - Activity: on the primary, "Today": every assistant's day in four groups
+ *   (6.3, `today-section.tsx`); its open matters, as the workspace's task
+ *   tab shows a board: sections by whom each piece waits on — the owner
+ *   first, then the work still moving, what the agent has to pick up, what
+ *   comes later — each piece once, as a card. A piece of handed-out work
+ *   says where it stands on the PR ladder and opens its session in the
+ *   drawer; a task carries its task card (8.5), and an entry whose work has
+ *   ended (a pull request codeg does not follow yet) the owner closes there:
+ *   done or dropped. A reminder, a follow-up or a question jumps to the
+ *   message it came from, says when it is due and how it comes back, and the
+ *   owner can settle it there: done, put off (15 minutes, an hour, tomorrow
+ *   morning, or with no set time), dropped. Then its routines, "Notify me"
+ *   and the way to its settings. The tab counts what waits on the owner.
  * - Output: what it made, newest first — the work that ended (tasks, the
  *   reports of the rest) and the documents it wrote in its working
  *   directory — filtered by kind.
  * - Workspace: the work running now, each as a small live view of its
  *   session; asleep when nothing runs.
- *
- * On the desktop the panel reaches the window's top edge, its strip in the
- * band the page's title is in, as the workspace's panel has it: the strip
- * keeps the window's corner buttons clear (`reserve`).
+ * - Stats: how it runs, as Session Details shows a conversation — what it
+ *   runs on, its state, model and mode, its session (which opens), its
+ *   connection, its working directory (copyable) — then folding sections:
+ *   its context, the run log, the details; then its numbers: the last two
+ *   weeks in four figures, then the charts.
  *
  * Its own panel rather than the workspace's aux panel, which a full-page
  * route closes. Its pieces are the workspace panel's own where they can be
- * (the rail's classes, Session Details' property rows and sections).
+ * (Session Details' property rows and sections).
  */
 
 import { useEffect, useMemo, useState, type ReactNode } from "react"
@@ -47,7 +39,6 @@ import { useLocale, useTranslations } from "next-intl"
 import {
   Bell,
   ChevronDown,
-  CircleGauge,
   Ear,
   FileText,
   Forward,
@@ -61,16 +52,10 @@ import {
   SquareArrowOutUpRight,
   type LucideIcon,
 } from "lucide-react"
-import { Tabs as TabsPrimitive } from "radix-ui"
 import { toast } from "sonner"
 
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { AgentIcon } from "@/components/agent-icon"
-import {
-  AUX_RAIL_CLASS,
-  AUX_RAIL_TRIGGER_CLASS,
-} from "@/components/layout/aux-panel-tab-rail"
-import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { InsightsSection } from "./panel-section"
 import { CopyPropertyButton, PropertyRow } from "./property-row"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
@@ -103,7 +88,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
-import { useTabReselect } from "@/hooks/use-tab-reselect"
 import {
   personalAgentDispatches,
   personalAgentItemAct,
@@ -144,6 +128,7 @@ import {
   ExecutorAvatar,
   num,
   str,
+  useBotLook,
   useOpenWork,
   usePageScope,
   useStatusWord,
@@ -164,9 +149,8 @@ import { TodaySection } from "./today-section"
 const RUN_LOG_LINES = 50
 /** An executor's avatar on a work card, in px at 100% zoom. */
 const CARD_AVATAR_SIZE = 18
-/** The agent's avatar on the status tab's card, in px at 100% zoom: a head
- *  taller than the two lines beside it. */
-const IDENTITY_AVATAR_SIZE = 40
+/** The assistant's face at the head of the panel, in px at 100% zoom. */
+const HEAD_AVATAR_SIZE = 64
 /** The dispatches the work tab reads: enough for the ended list. */
 const DISPATCH_PAGE = 200
 /** Days the stats tab covers. */
@@ -174,15 +158,7 @@ const STATS_DAYS = 14
 /** The panel's charts, in px: shorter than the token dashboard's. */
 const CHART_HEIGHT = 148
 
-const TABS: readonly AuxTab[] = ["details", "output", "workspace"]
-
-/** A gauge for how the agent is, a parcel for what it made, a screen for
- *  the work running. */
-const TAB_ICON: Record<AuxTab, LucideIcon> = {
-  details: CircleGauge,
-  output: Package,
-  workspace: Monitor,
-}
+const TABS: readonly AuxTab[] = ["activity", "output", "workspace", "stats"]
 
 /** Work that has not ended. */
 const MOVING: ReadonlySet<DispatchState> = new Set([
@@ -352,48 +328,18 @@ function useNow(): number {
 export function PersonalAgentAuxPanel({
   snapshot,
   inDrawer = false,
-  reserve = null,
 }: {
   snapshot: PersonalAgentSnapshot
-  /** In the narrow screen's drawer, whose close button sits at the top end:
-   *  the tabs keep clear of it. */
+  /** In the narrow screen's drawer, whose close button sits at the top
+   *  end. */
   inDrawer?: boolean
-  /** The panel's strip is in the window's top band, at its end edge: the
-   *  width it keeps clear there for the window's corner buttons. */
-  reserve?: number | null
 }) {
   const t = useTranslations("PersonalAgent.aux")
+  const tabs = useTranslations("PersonalAgent.detail.tabs")
   const tab = usePersonalAgentUi((s) => s.auxTab)
   const setTab = usePersonalAgentUi((s) => s.setAuxTab)
-  const setAuxOpen = usePersonalAgentUi((s) => s.setAuxOpen)
   const work = useWork()
   const waiting = work?.open.filter((m) => m.group === "owner").length ?? 0
-  const tabs = useTranslations("PersonalAgent.detail.tabs")
-  const label = (value: AuxTab) => tabs(value)
-  // The tab's name for a pointer and a screen reader, with what waits on
-  // the owner when there is any.
-  const fullName = (value: AuxTab) =>
-    value === "details" && waiting > 0
-      ? `${label(value)} · ${t("waiting", { count: waiting })}`
-      : label(value)
-  // A click on the tab already showing hides the panel, as the workspace's
-  // rail does (and closes the drawer).
-  const close = () => setAuxOpen(false)
-
-  const panels = (
-    <>
-      <TabsContent value="details" className="mt-0 min-h-0 flex-1">
-        <DetailsTab snapshot={snapshot} work={work} inDrawer={inDrawer} />
-      </TabsContent>
-      <TabsContent value="output" className="mt-0 min-h-0 flex-1">
-        <OutputTab work={work} />
-      </TabsContent>
-      <TabsContent value="workspace" className="mt-0 min-h-0 flex-1">
-        <WorkspaceTab work={work} />
-      </TabsContent>
-    </>
-  )
-
   return (
     <aside
       data-pa-aux
@@ -403,150 +349,106 @@ export function PersonalAgentAuxPanel({
       <Tabs
         value={tab}
         onValueChange={(v) => setTab(v as AuxTab)}
-        orientation={inDrawer ? "horizontal" : "vertical"}
         className="flex h-full min-h-0 flex-col gap-0"
       >
-        {inDrawer ? (
-          <>
-            {/* The drawer's row of tabs, under a line, as the workspace's
-                drawer has. */}
-            <TabsList
-              variant="line"
-              className="h-10 w-full shrink-0 justify-start gap-3 border-b border-border ws-chrome-border ps-3 pe-12 group-data-horizontal/tabs:h-10"
-            >
-              {TABS.map((value) => (
-                <DrawerTab
-                  key={value}
-                  value={value}
-                  label={label(value)}
-                  name={fullName(value)}
-                  waiting={value === "details" ? waiting : 0}
-                  selected={value === tab}
-                  onReselect={close}
-                />
-              ))}
-            </TabsList>
-            {panels}
-          </>
-        ) : (
-          <>
-            {/* The open tab's name, where the workspace panel has it: in the
-                window's top band, its corner buttons over the slot kept at
-                its end; the name and the rest of the strip move the window,
-                as the band does. Drawn as the band over the conversation is,
-                on the page's own ground with its line under it, so the top
-                band reads as one. */}
-            <div
-              className={cn(
-                "flex h-10 shrink-0 items-center border-b border-border/50 ws-chrome-border ps-3",
-                reserve == null && "pe-3"
-              )}
-            >
-              <h2
-                data-tauri-drag-region
-                className="min-w-0 truncate text-[0.8125rem] leading-5 font-semibold"
-              >
-                {label(tab)}
-              </h2>
-              <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
-              {reserve != null ? (
-                <ChromeReserve width={reserve} line={false} />
-              ) : null}
-            </div>
-            <div className="flex min-h-0 flex-1">
-              <div className="flex min-w-0 flex-1 flex-col">{panels}</div>
-              <TabsPrimitive.List
-                data-pa-aux-rail
-                aria-label={t("title")}
-                className={AUX_RAIL_CLASS}
-              >
-                <div className="flex flex-col items-center gap-1">
-                  {TABS.map((value) => (
-                    <RailTab
-                      key={value}
-                      value={value}
-                      name={fullName(value)}
-                      waiting={value === "details" ? waiting : 0}
-                      selected={value === tab}
-                      onReselect={close}
-                    />
-                  ))}
-                </div>
-              </TabsPrimitive.List>
-            </div>
-          </>
-        )}
+        <AuxHead snapshot={snapshot}>
+          {/* Pills on the panel's ground, no track under them; a row too
+              long for a narrow panel wraps, centred. */}
+          <TabsList
+            aria-label={t("title")}
+            className="h-auto max-w-full flex-wrap justify-center gap-1 bg-transparent p-0 group-data-horizontal/tabs:h-auto"
+          >
+            {TABS.map((value) => (
+              <PanelTab
+                key={value}
+                value={value}
+                label={tabs(value)}
+                // What waits on the owner is in their activity: counted
+                // there, for a pointer and a screen reader too.
+                waiting={value === "activity" ? waiting : 0}
+                waitingLabel={t("waiting", { count: waiting })}
+              />
+            ))}
+          </TabsList>
+        </AuxHead>
+        <TabsContent value="activity" className="mt-0 min-h-0 flex-1">
+          <ActivityTab snapshot={snapshot} work={work} inDrawer={inDrawer} />
+        </TabsContent>
+        <TabsContent value="output" className="mt-0 min-h-0 flex-1">
+          <OutputTab work={work} />
+        </TabsContent>
+        <TabsContent value="workspace" className="mt-0 min-h-0 flex-1">
+          <WorkspaceTab work={work} />
+        </TabsContent>
+        <TabsContent value="stats" className="mt-0 min-h-0 flex-1">
+          <StatsTab snapshot={snapshot} />
+        </TabsContent>
       </Tabs>
     </aside>
   )
 }
 
-/** A tab of the rail: its icon, and what waits on the owner as a count at
- *  its corner. */
-function RailTab({
-  value,
-  name,
-  waiting,
-  selected,
-  onReselect,
+/** Who the panel is about, over its tabs: its face — alive, as on the
+ *  roster, its star on the primary's — and its name. */
+function AuxHead({
+  snapshot,
+  children,
 }: {
-  value: AuxTab
-  name: string
-  waiting: number
-  selected: boolean
-  onReselect: () => void
+  snapshot: PersonalAgentSnapshot
+  children: ReactNode
 }) {
-  const { triggerProps } = useTabReselect(selected, onReselect)
-  const Icon = TAB_ICON[value]
+  const t = useTranslations("PersonalAgent")
+  const { botId } = usePersonalAgent()
+  const agent = snapshot.agent
+  const name = agent?.name?.trim() || t("title")
+  const look = useBotLook(agent?.id ?? null)
   return (
-    <TabsPrimitive.Trigger
-      value={value}
-      title={name}
-      aria-label={name}
-      {...triggerProps}
-      className={cn(AUX_RAIL_TRIGGER_CLASS, "relative")}
+    <header
+      data-pa-aux-head
+      className="flex shrink-0 flex-col items-center gap-3 px-3 pt-6 pb-3"
     >
-      <Icon className="size-4" />
-      {waiting > 0 ? (
-        <span
-          aria-hidden
-          className="absolute -end-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-amber-500 px-1 text-[0.5625rem] leading-none font-semibold text-white tabular-nums"
-        >
-          {waiting}
-        </span>
+      {agent ? (
+        <BotAvatar
+          avatar={agent.avatar}
+          name={name}
+          size={HEAD_AVATAR_SIZE}
+          star={botId == null}
+          look={look}
+        />
       ) : null}
-    </TabsPrimitive.Trigger>
+      <h2
+        title={name}
+        className="max-w-full truncate text-base leading-6 font-medium"
+      >
+        {name}
+      </h2>
+      {children}
+    </header>
   )
 }
 
-/** A tab of the drawer's row: its icon and name, and what waits on the
- *  owner as a count after them. */
-function DrawerTab({
+/** A tab under the name: a word in a pill, filled while it is open; what
+ *  waits on the owner as a count after it. */
+function PanelTab({
   value,
   label,
-  name,
   waiting,
-  selected,
-  onReselect,
+  waitingLabel,
 }: {
   value: AuxTab
   label: string
-  name: string
   waiting: number
-  selected: boolean
-  onReselect: () => void
+  waitingLabel: string
 }) {
-  const { triggerProps } = useTabReselect(selected, onReselect)
-  const Icon = TAB_ICON[value]
+  const name = waiting > 0 ? `${label} · ${waitingLabel}` : label
   return (
     <TabsTrigger
       value={value}
       title={name}
       aria-label={name}
-      {...triggerProps}
-      className="flex-none px-1 text-[0.8125rem]"
+      data-pa-aux-tab={value}
+      className="h-7 flex-none rounded-full px-3 text-[0.8125rem] text-muted-foreground hover:text-foreground data-active:bg-muted data-active:text-foreground dark:data-active:border-transparent dark:data-active:bg-muted"
     >
-      <Icon className="size-3.5" aria-hidden />
       {label}
       {waiting > 0 ? (
         <span
@@ -561,7 +463,8 @@ function DrawerTab({
 }
 
 /** A tab's body when it has nothing to show: its icon, what that means and
- *  what would fill it, as the workspace panel's tabs say it. */
+ *  — when there is something to say — what would fill it, as the
+ *  workspace panel's tabs say it. */
 function EmptyState({
   icon: Icon,
   title,
@@ -569,14 +472,14 @@ function EmptyState({
 }: {
   icon: LucideIcon
   title: string
-  hint: string
+  hint?: string
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center">
       <Icon className="size-8 text-muted-foreground/40" aria-hidden />
       <div className="flex flex-col gap-1">
         <p className="text-sm font-medium">{title}</p>
-        <p className="text-xs text-muted-foreground">{hint}</p>
+        {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
       </div>
     </div>
   )
@@ -1076,7 +979,7 @@ function WorkSkeleton() {
   )
 }
 
-/** The open matters, by whom each waits on: the details' second section. */
+/** The open matters, by whom each waits on: the activity's middle. */
 function WorkBody({
   work,
   inDrawer,
@@ -1247,11 +1150,12 @@ function useWhen(): (iso: string) => string {
     })
 }
 
-/** The agent as Session Details shows a conversation: its avatar, name and
- *  state, what it runs on, then a row per property — its model and mode,
- *  its session (which opens), when that started, its connection, its
- *  working directory (copyable). The way to its settings at the corner. */
-function AgentCard({
+/** How it runs, as Session Details shows a conversation: a row per
+ *  property — what it runs on (the way to change it at the row's end), its
+ *  state, its model and mode, its session (which opens), when that started,
+ *  its connection, its working directory (copyable). Who it is is the
+ *  panel's head. */
+function StatusRows({
   snapshot,
   readOnly,
 }: {
@@ -1266,7 +1170,6 @@ function AgentCard({
   const when = useWhen()
   const { agent, status } = snapshot
   const seg = status.segment
-  const name = agent?.name?.trim() || tPage("title")
   const model = agent?.label_snapshot.options.find(
     (o) => o.id === "model"
   )?.value_label
@@ -1282,58 +1185,38 @@ function AgentCard({
           ? "bg-primary motion-safe:animate-pulse"
           : "bg-emerald-500"
   return (
-    <section className="min-w-0 rounded-lg border border-border/70 bg-muted/40 p-3">
-      <div className="flex min-w-0 items-center gap-3">
-        {agent ? (
-          <BotAvatar
-            avatar={agent.avatar}
-            name={name}
-            size={IDENTITY_AVATAR_SIZE}
-          />
-        ) : null}
-        <div className="min-w-0 flex-1">
-          <p
-            title={name}
-            className="truncate text-[0.8125rem] leading-[1.125rem] font-semibold"
-          >
-            {name}
-          </p>
-          <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-2xs text-muted-foreground">
-            {agent ? (
-              <span aria-hidden className="inline-flex shrink-0">
-                <AgentIcon agentType={agent.agent_type} className="size-3.5" />
-              </span>
-            ) : null}
-            <span className="truncate">
-              {agent?.label_snapshot.agent ?? "—"}
+    <div data-pa-status className="min-w-0">
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-2xs">
+        <PropertyRow label={t("agent")}>
+          {agent ? (
+            <span aria-hidden className="inline-flex shrink-0">
+              <AgentIcon agentType={agent.agent_type} className="size-3.5" />
             </span>
-            {word ? (
-              <>
-                <span aria-hidden>·</span>
-                <span className="inline-flex min-w-0 shrink-0 items-center gap-1 text-foreground/80">
-                  <span
-                    aria-hidden
-                    className={cn("size-1.5 shrink-0 rounded-full", dot)}
-                  />
-                  {word}
-                </span>
-              </>
-            ) : null}
-          </p>
-        </div>
-        {readOnly ? null : (
-          <button
-            type="button"
-            className="inline-flex size-6 shrink-0 items-center justify-center self-start rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            title={to("editBrain")}
-            aria-label={to("editBrain")}
-            onClick={() => usePersonalAgentUi.getState().openSettings()}
-          >
-            <Settings2 className="size-3.5" aria-hidden />
-          </button>
-        )}
-      </div>
-      <dl className="mt-2.5 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-2xs">
+          ) : null}
+          <span className="min-w-0 truncate">
+            {agent?.label_snapshot.agent ?? "—"}
+          </span>
+          {readOnly ? null : (
+            <button
+              type="button"
+              className="ms-auto inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              title={to("editBrain")}
+              aria-label={to("editBrain")}
+              onClick={() => usePersonalAgentUi.getState().openSettings()}
+            >
+              <Settings2 className="size-3" aria-hidden />
+            </button>
+          )}
+        </PropertyRow>
+        {word ? (
+          <PropertyRow label={t("state")}>
+            <span
+              aria-hidden
+              className={cn("size-1.5 shrink-0 rounded-full", dot)}
+            />
+            <span className="min-w-0 truncate">{word}</span>
+          </PropertyRow>
+        ) : null}
         <PropertyRow label={t("model")}>
           <span className="min-w-0 truncate" title={model ?? undefined}>
             {model || "—"}
@@ -1402,7 +1285,7 @@ function AgentCard({
           {t("pendingValue", { reason: tr(seg.pending_reason) })}
         </p>
       ) : null}
-    </section>
+    </div>
   )
 }
 
@@ -1643,25 +1526,6 @@ function DetailsSection({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
   )
 }
 
-/** Its status: the details' first section. */
-function StatusBody({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
-  const t = useTranslations("PersonalAgent.status")
-  const readOnly = snapshot.status.engine !== "here"
-  return (
-    <div className="min-w-0 space-y-4 text-sm">
-      {readOnly ? (
-        <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-800 dark:text-amber-200">
-          {t("elsewhere")}
-        </p>
-      ) : null}
-      <AgentCard snapshot={snapshot} readOnly={readOnly} />
-      <ContextSection snapshot={snapshot} readOnly={readOnly} />
-      <RunLogSection />
-      <DetailsSection snapshot={snapshot} />
-    </div>
-  )
-}
-
 // ── stats ───────────────────────────────────────────────────────────────────
 
 /** One figure of the last two weeks: what it counts, how many, what it is
@@ -1805,7 +1669,7 @@ function ChartSection({
   )
 }
 
-/** Its numbers: the details' third section. */
+/** Its numbers: the stats tab's second part. */
 function StatsBody() {
   const t = useTranslations("PersonalAgent.data")
   const locale = useLocale()
@@ -1993,7 +1857,7 @@ function StatsBody() {
 
 // ── the tabs ────────────────────────────────────────────────────────────────
 
-/** A heading over one of the details' sections. */
+/** A heading over one of a tab's parts. */
 function SectionHead({ children }: { children: ReactNode }) {
   return (
     <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
@@ -2002,9 +1866,9 @@ function SectionHead({ children }: { children: ReactNode }) {
   )
 }
 
-/** The details: its status, its open matters, its numbers, then "Notify
- *  me" and the way to its settings. */
-function DetailsTab({
+/** What it is about: on the primary, today; its open matters, its
+ *  routines; then "Notify me" and the way to its settings. */
+function ActivityTab({
   snapshot,
   work,
   inDrawer,
@@ -2026,11 +1890,7 @@ function DetailsTab({
   const today = useToday(botId == null)
   return (
     <ScrollArea className="h-full">
-      <div className="flex min-w-0 flex-col gap-5 p-3">
-        <section className="flex flex-col gap-2" data-pa-detail="status">
-          <SectionHead>{t("sections.status")}</SectionHead>
-          <StatusBody snapshot={snapshot} />
-        </section>
+      <div className="flex min-w-0 flex-col gap-5 p-3 pt-2">
         {botId == null ? (
           <TodaySection
             head={<SectionHead>{t("sections.today")}</SectionHead>}
@@ -2047,10 +1907,6 @@ function DetailsTab({
           head={<SectionHead>{t("sections.routines")}</SectionHead>}
           readOnly={readOnly}
         />
-        <section className="flex flex-col gap-2" data-pa-detail="data">
-          <SectionHead>{t("sections.data")}</SectionHead>
-          <StatsBody />
-        </section>
         <section className="flex flex-col gap-3 border-t border-border/60 pt-3">
           <label className="flex items-center justify-between gap-3">
             <span className="flex min-w-0 flex-col">
@@ -2082,6 +1938,38 @@ function DetailsTab({
             <Settings2 aria-hidden />
             {t("settings")}
           </Button>
+        </section>
+      </div>
+    </ScrollArea>
+  )
+}
+
+/** How it runs — what on, its context, its run log and details — then its
+ *  numbers. */
+function StatsTab({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
+  const t = useTranslations("PersonalAgent.detail")
+  const ts = useTranslations("PersonalAgent.status")
+  const readOnly = snapshot.status.engine !== "here"
+  return (
+    <ScrollArea className="h-full">
+      <div className="flex min-w-0 flex-col gap-5 p-3 pt-2">
+        <section
+          className="flex min-w-0 flex-col gap-4 text-sm"
+          data-pa-detail="status"
+        >
+          {readOnly ? (
+            <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-800 dark:text-amber-200">
+              {ts("elsewhere")}
+            </p>
+          ) : null}
+          <StatusRows snapshot={snapshot} readOnly={readOnly} />
+          <ContextSection snapshot={snapshot} readOnly={readOnly} />
+          <RunLogSection />
+          <DetailsSection snapshot={snapshot} />
+        </section>
+        <section className="flex flex-col gap-2" data-pa-detail="data">
+          <SectionHead>{t("sections.data")}</SectionHead>
+          <StatsBody />
         </section>
       </div>
     </ScrollArea>
@@ -2157,7 +2045,7 @@ function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
   ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-wrap gap-1 px-3 pt-3 pb-1">
+      <div className="flex shrink-0 flex-wrap gap-1 px-3 pt-2 pb-1">
         {OUTPUT_KINDS.map((k) => (
           <Button
             key={k}
@@ -2176,7 +2064,7 @@ function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
           {work == null || docs == null ? (
             <WorkSkeleton />
           ) : shown.length === 0 ? (
-            <EmptyState icon={TAB_ICON.output} title={t("empty")} hint="" />
+            <EmptyState icon={Package} title={t("empty")} />
           ) : (
             shown.map((x) =>
               "dispatch" in x ? (
@@ -2272,38 +2160,29 @@ function TaskPreview({ taskId }: { taskId: number }) {
   return <TaskTranscriptView task={task} />
 }
 
-/** The work running now, each as a small live view of its session; asleep
- *  when nothing runs. While the drawer shows one of them, the previews stand
+/** The work running now, each as a small live view of its session; an
+ *  empty screen when nothing runs. While the drawer shows one of them, the previews stand
  *  aside: one surface follows a connection at a time. */
 function WorkspaceTab({ work }: { work: ReturnType<typeof useWork> }) {
   const t = useTranslations("PersonalAgent.detail.workspace")
   const openWork = useOpenWork()
-  const { snapshot } = usePersonalAgent()
   const drawerOpen = usePersonalAgentUi((s) => s.workOpen)
   const running = (work?.open ?? [])
     .map((m) => m.dispatch)
     .filter((d): d is DispatchInfo => d != null && STREAMING.has(d.state))
   if (work == null) return <WorkSkeleton />
+  // Its face is over the tabs, asleep when nothing runs: here, a screen
+  // with nothing on it.
   if (running.length === 0) {
-    const agent = snapshot?.agent
     return (
-      <div
-        data-pa-workspace-empty
-        className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center"
-      >
-        <BotAvatar
-          avatar={agent?.avatar ?? null}
-          name={agent?.name ?? ""}
-          size={56}
-          look="sleeping"
-        />
-        <p className="text-sm text-muted-foreground">{t("empty")}</p>
+      <div data-pa-workspace-empty className="h-full">
+        <EmptyState icon={Monitor} title={t("empty")} />
       </div>
     )
   }
   return (
     <ScrollArea className="h-full">
-      <div className="flex flex-col gap-3 p-3">
+      <div className="flex flex-col gap-3 p-3 pt-2">
         {running.map((d) => {
           const target = workTargetOf(d)
           return (

@@ -7986,7 +7986,9 @@
       "copyPath": "複製路徑",
       "copied": "已複製",
       "startedValue": "開始於 {when}",
-      "pendingValue": "下一則訊息起新會話：{reason}"
+      "pendingValue": "下一則訊息起新會話：{reason}",
+      "agent": "智能體",
+      "state": "狀態"
     },
     "items": {
       "waits": {
@@ -9544,12 +9546,12 @@
       "open": "顯示詳情",
       "close": "收合詳情",
       "tabs": {
-        "details": "詳情",
+        "activity": "動態",
         "output": "產出",
-        "workspace": "工作區"
+        "workspace": "工作區",
+        "stats": "統計"
       },
       "sections": {
-        "status": "狀態",
         "today": "今日",
         "matters": "事項",
         "data": "資料",

@@ -5,6 +5,7 @@ import type { BotLive, RosterEntry } from "@/lib/types"
 import {
   groupRoster,
   rosterOrder,
+  rosterTime,
   sectionNames,
   STUCK_AFTER_MS,
   tierOf,
@@ -169,5 +170,28 @@ describe("the roster's order", () => {
         entry(5),
       ])
     ).toEqual(["a", "b"])
+  })
+})
+
+describe("a row's time", () => {
+  // Local times: what a day is, is the clock's own.
+  const now = new Date(2026, 10, 15, 20, 0).getTime()
+  const local = (...parts: [number, number, number, number, number]) =>
+    new Date(...parts).toISOString()
+
+  it("is as short as a chat list has it: the clock, yesterday, the weekday, the date", () => {
+    expect(rosterTime(local(2026, 10, 15, 9, 5), now, "en")).toMatch(/^09:05/)
+    expect(rosterTime(local(2026, 10, 14, 23, 59), now, "en")).toBe("Yesterday")
+    expect(rosterTime(local(2026, 10, 14, 9, 0), now, "zh-CN")).toBe("昨天")
+    // Within the week: its day's name.
+    expect(rosterTime(local(2026, 10, 11, 9, 0), now, "en")).toBe("Wed")
+    // Before: the day and month — the year only when it is another one.
+    expect(rosterTime(local(2026, 10, 1, 9, 0), now, "en")).toBe("11/1")
+    expect(rosterTime(local(2025, 10, 1, 9, 0), now, "en")).toBe("11/1/2025")
+  })
+
+  it("is the clock for a time ahead of this one, and nothing for none", () => {
+    expect(rosterTime(local(2026, 10, 16, 8, 0), now, "en")).toMatch(/^08:00/)
+    expect(rosterTime("not a time", now, "en")).toBe("")
   })
 })
