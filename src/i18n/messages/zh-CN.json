@@ -9310,8 +9310,6 @@
       "roster": {
         "title": "助手",
         "add": "新建工作助手",
-        "search": "搜索助手",
-        "noMatch": "没有匹配的助手",
         "pinned": "置顶",
         "others": "其余",
         "hiddenCount": "已隐藏 {count} 个",
@@ -9538,7 +9536,8 @@
     },
     "pills": {
       "attention": "{count} 项需要你关注",
-      "newMessages": "新消息"
+      "newMessages": "新消息",
+      "toBottom": "回到最新"
     },
     "detail": {
       "title": "详情",

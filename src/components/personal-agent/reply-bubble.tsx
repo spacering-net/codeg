@@ -428,7 +428,10 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
       className={cn(
         AGENT_SURFACE,
         bubbleCorners("start", tail),
-        "min-w-0 p-3 text-sm break-words text-foreground [&>:first-child]:mt-0"
+        // No wider than the message's share of the column, beside its
+        // others too: a line that does not wrap (a quote's title, a long
+        // name in code) must not widen it past the column.
+        "max-w-full min-w-0 p-3 text-sm break-words text-foreground [&>:first-child]:mt-0"
       )}
       aria-live={live ? "polite" : undefined}
       aria-busy={live || undefined}
@@ -503,7 +506,10 @@ export function SaidBubble({ item }: { item: SaidItem }) {
       className={cn(
         AGENT_SURFACE,
         bubbleCorners("start", tail),
-        "min-w-0 p-3 text-sm break-words text-foreground [&>:first-child]:mt-0"
+        // No wider than the message's share of the column, beside its
+        // others too: a line that does not wrap (a quote's title, a long
+        // name in code) must not widen it past the column.
+        "max-w-full min-w-0 p-3 text-sm break-words text-foreground [&>:first-child]:mt-0"
       )}
     >
       <PaReplyScope row={null} running={false}>

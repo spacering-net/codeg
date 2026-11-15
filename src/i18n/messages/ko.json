@@ -9310,8 +9310,6 @@
       "roster": {
         "title": "어시스턴트",
         "add": "새 작업 어시스턴트",
-        "search": "어시스턴트 검색",
-        "noMatch": "일치하는 어시스턴트 없음",
         "pinned": "고정됨",
         "others": "기타",
         "hiddenCount": "{count}명 숨김",
@@ -9538,7 +9536,8 @@
     },
     "pills": {
       "attention": "{count}건이 내 확인 대기 중",
-      "newMessages": "새 메시지"
+      "newMessages": "새 메시지",
+      "toBottom": "최신으로 이동"
     },
     "detail": {
       "title": "세부 정보",

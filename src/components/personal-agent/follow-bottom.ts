@@ -28,3 +28,23 @@ export function followsBottom({
   if (top < lastTop - 1) return false
   return was
 }
+
+/**
+ * Whether the way back down shows (the round button over the list): the
+ * reader stopped following and is more than half a view up from the bottom
+ * — a glance up past the last message or two does not bring it.
+ */
+export function farFromBottom({
+  following,
+  gap,
+  view,
+}: {
+  /** Whether the list follows its bottom (`followsBottom`). */
+  following: boolean
+  /** The distance from the view's bottom to the content's. */
+  gap: number
+  /** The view's height. */
+  view: number
+}): boolean {
+  return !following && gap > view / 2
+}

@@ -3,18 +3,21 @@
 /**
  * The roster, the assistants page's left column (10.1, 4.14).
  *
- * - On top: search (by name or role) and [+].
- * - The primary: its face large, centered, with its star, its name and one
- *   line of what it is up to.
+ * - On top, the primary: a square tile, its face large with its star, and
+ *   its name. What it is up to shows when hovered, with its work in hand.
  * - Then a row each: face, name, one line, a time. The line says first what
  *   the owner should know — what waits on them, what it is doing — and its
  *   last words when nothing does. The face is its state (10.6), the dot in
  *   its corner what it wants of the owner. Hovering shows the whole activity
  *   and the work in hand.
  * - Groups: the pinned ones (in the owner's order, dragged to reorder), the
- *   owner's own groups (folding), the rest; at the foot, "N hidden", which
- *   opens to show them. Within a group: waiting on the owner, working,
- *   idle, done, the most recent first.
+ *   owner's own groups (folding), the rest. Within a group: waiting on the
+ *   owner, working, idle, done, the most recent first.
+ * - At the foot: "N hidden", which opens to show them, and [+ new work
+ *   assistant].
+ * - Dragged narrower than its least width, the list folds to a rail of
+ *   faces (roster-resize.tsx): the primary's, a rule, the others' in the
+ *   list's order; each one's name, line and work in hand when hovered.
  * - A row's context menu: pin, move to a group, hide, mute, mark unread,
  *   notifications, copy, stop everything, delete.
  * - Rows come and go by their height (the motion tokens), not at once.
@@ -25,7 +28,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { ChevronRight, Pin, Plus, Search, VolumeX, X } from "lucide-react"
+import { ChevronRight, EyeOff, Pin, Plus, VolumeX } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -73,7 +76,11 @@ import { BotDeleteDialog } from "./bot-delete-dialog"
 import { useMessageTime } from "./message-actions"
 import { NewBotDialog } from "./new-bot-dialog"
 import { groupRoster, sectionNames, viewOf, type BotView } from "./roster-order"
-import { RosterResizeHandle, useRosterWidth } from "./roster-resize"
+import {
+  ROSTER_RAIL_WIDTH,
+  RosterResizeHandle,
+  useRosterWidth,
+} from "./roster-resize"
 import { useBotName } from "./shared"
 import { useBotTemplates } from "./use-templates"
 
@@ -229,6 +236,19 @@ export function rowLine(
   return null
 }
 
+type RowLine = NonNullable<ReturnType<typeof rowLine>>
+
+/** A line's colour by what it says. */
+function lineTone(tone: RowLine["tone"]): string {
+  return tone === "needs"
+    ? "text-orange-700 dark:text-orange-300"
+    : tone === "ready"
+      ? "text-teal-700 dark:text-teal-300"
+      : tone === "busy"
+        ? "activity-shimmer text-muted-foreground"
+        : "text-muted-foreground"
+}
+
 /** The rows of a group, each coming in and going out by its height (the
  *  motion tokens' `motion-rows`). A row gone is kept, closing, for the
  *  length of the motion. */
@@ -289,7 +309,11 @@ function AnimatedRows({
           className={cn("motion-rows", h.state === "in" && "motion-rows-enter")}
           aria-hidden={h.state === "out" || undefined}
         >
-          <div>{render(h.entry)}</div>
+          {/* What folds is this one, clipped to nothing; the room apart
+              from the next row is inside it, and folds with it. */}
+          <div>
+            <div className="py-0.5">{render(h.entry)}</div>
+          </div>
         </div>
       ))}
     </>
@@ -317,11 +341,10 @@ export function PersonalAgentRoster({
   const [adding, setAdding] = useState(false)
   const [deleting, setDeleting] = useState<number | null>(null)
   const [grouping, setGrouping] = useState<RosterEntry | null>(null)
-  const [query, setQuery] = useState<string | null>(null)
   const [showHidden, setShowHidden] = useState(false)
   const [folded, toggleFold] = useFolded()
   const [dragging, setDragging] = useState<number | null>(null)
-  const [width, setWidth] = useRosterWidth()
+  const [size, setSize] = useRosterWidth()
   const now = useRosterNow(entries)
   const list = useMemo(() => entries ?? [], [entries])
 
@@ -405,22 +428,42 @@ export function PersonalAgentRoster({
     )
   }
 
-  const hover = (b: RosterEntry, view: BotView) => {
+  /** What a row says under its name (10.1): its last words when its
+   *  state is stale, or says nothing more. */
+  const shownLineOf = (b: RosterEntry, view: BotView): RowLine | null => {
+    const line = view.stale ? null : rowLine(tt, b, view, now)
+    const last = b.live?.last_line
+    return line ?? (last ? { text: last.text, tone: "plain" } : null)
+  }
+
+  /** The card a face shows when hovered: who, what it is doing, its work
+   *  in hand and whom it waits for — and, for one whose line is not shown
+   *  (the primary's tile, a face on the rail), that line first. */
+  const hover = (b: RosterEntry, view: BotView, line?: RowLine | null) => {
     const live = b.live
+    const role = b.template ? (roleOf.get(b.template) ?? null) : null
     return (
       <div className="flex flex-col gap-2 text-xs" data-pa-roster-hover={b.id}>
         <div className="flex items-center gap-2">
           {face(b, 28)}
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">{botName(b)}</div>
-            <div className="truncate text-muted-foreground">
-              {b.template ? (roleOf.get(b.template) ?? null) : null}
-            </div>
+            {role ? (
+              <div className="truncate text-muted-foreground">{role}</div>
+            ) : null}
           </div>
         </div>
+        {line ? (
+          <p
+            data-pa-roster-line={line.tone}
+            className={cn("break-words", lineTone(line.tone))}
+          >
+            {line.text}
+          </p>
+        ) : null}
         {view.stale ? (
           <p className="text-muted-foreground">{t("face.stale")}</p>
-        ) : live?.activity && view.busy ? (
+        ) : live?.activity && view.busy && line?.tone !== "busy" ? (
           <p className="break-words">{activityText(tt, live.activity, now)}</p>
         ) : null}
         <div>
@@ -569,11 +612,7 @@ export function PersonalAgentRoster({
 
   const row = (b: RosterEntry, opts: { draggable?: boolean } = {}) => {
     const view = viewOf(b.live, now, b.roster?.unread_mark)
-    const line = view.stale ? null : rowLine(tt, b, view, now)
-    const lastLine = b.live?.last_line
-    const shownLine =
-      line ??
-      (lastLine ? { text: lastLine.text, tone: "plain" as const } : null)
+    const shownLine = shownLineOf(b, view)
     const at = b.live?.last_activity_at
     const isCurrent = b.id === currentId
     const button = (
@@ -637,16 +676,7 @@ export function PersonalAgentRoster({
           {shownLine ? (
             <span
               data-pa-roster-line={shownLine.tone}
-              className={cn(
-                "truncate text-xs",
-                shownLine.tone === "needs"
-                  ? "text-orange-700 dark:text-orange-300"
-                  : shownLine.tone === "ready"
-                    ? "text-teal-700 dark:text-teal-300"
-                    : shownLine.tone === "busy"
-                      ? "activity-shimmer text-muted-foreground"
-                      : "text-muted-foreground"
-              )}
+              className={cn("truncate text-xs", lineTone(shownLine.tone))}
             >
               {shownLine.text}
             </span>
@@ -666,7 +696,7 @@ export function PersonalAgentRoster({
 
   const add = (
     <Button
-      size={compact ? "icon-sm" : "icon-xs"}
+      size="icon-sm"
       variant="ghost"
       disabled={readOnly}
       aria-label={tr("add")}
@@ -741,21 +771,173 @@ export function PersonalAgentRoster({
     )
   }
 
-  const q = query?.trim().toLowerCase() ?? ""
-  const matches = (b: RosterEntry) =>
-    !q ||
-    botName(b).toLowerCase().includes(q) ||
-    (b.template
-      ? (roleOf.get(b.template) ?? b.template).toLowerCase().includes(q)
-      : false)
   const primary = groups.primary
-  const primaryView = primary
-    ? viewOf(primary.live, now, primary.roster?.unread_mark)
-    : null
-  const primaryLine =
-    primary && primaryView && !primaryView.stale
-      ? rowLine(tt, primary, primaryView, now)
-      : null
+
+  /** A face that says no more than itself — the primary's tile, one on the
+   *  rail: its line and its work in hand on the card it shows when
+   *  hovered. */
+  const tile = (b: RosterEntry, look: (view: BotView) => ReactNode) => {
+    const view = viewOf(b.live, now, b.roster?.unread_mark)
+    const isCurrent = b.id === currentId
+    return (
+      <HoverCard key={b.id} openDelay={500} closeDelay={80}>
+        {menu(
+          b,
+          <HoverCardTrigger asChild>
+            <button
+              type="button"
+              data-pa-roster-bot={b.id}
+              data-pa-roster-primary={b.kind === "primary" || undefined}
+              data-pa-roster-look={view.look}
+              aria-current={isCurrent ? "page" : undefined}
+              onClick={() => go(b)}
+              className={cn(
+                "flex shrink-0 flex-col items-center justify-center rounded-xl text-center transition-colors",
+                isCurrent
+                  ? "bg-accent text-accent-foreground"
+                  : "text-foreground/85 hover:bg-muted"
+              )}
+              {...(size.rail
+                ? { "aria-label": faceLabel(b, view), "data-pa-rail-tile": "" }
+                : {})}
+            >
+              {look(view)}
+            </button>
+          </HoverCardTrigger>
+        )}
+        <HoverCardContent side="right" align="start" className="w-72">
+          {hover(b, view, shownLineOf(b, view))}
+        </HoverCardContent>
+      </HoverCard>
+    )
+  }
+
+  /** The primary on top: a square, its face large, its name under it. */
+  const primaryTile = (b: RosterEntry) => (
+    <div className="flex justify-center pb-1">
+      {tile(b, () => (
+        <span className="flex size-24 flex-col items-center justify-center gap-1 px-1.5">
+          {face(b, 56)}
+          <span className="max-w-full truncate text-sm">{botName(b)}</span>
+        </span>
+      ))}
+    </div>
+  )
+
+  /** A face on the rail. */
+  const railTile = (b: RosterEntry) =>
+    tile(b, () => (
+      <span className="flex size-13 items-center justify-center">
+        {face(b, 36)}
+      </span>
+    ))
+
+  const hiddenToggle = (rail: boolean) => (
+    <button
+      type="button"
+      className={cn(
+        "rounded text-xs text-muted-foreground hover:bg-muted hover:text-foreground",
+        rail
+          ? "flex h-7 items-center gap-0.5 px-1.5 tabular-nums"
+          : "w-full px-2 py-1 text-start"
+      )}
+      aria-expanded={showHidden}
+      aria-label={
+        rail
+          ? showHidden
+            ? tr("hideHidden")
+            : tr("hiddenCount", { count: groups.hidden.length })
+          : undefined
+      }
+      title={
+        rail ? tr("hiddenCount", { count: groups.hidden.length }) : undefined
+      }
+      onClick={() => setShowHidden((v) => !v)}
+      data-pa-roster-hidden-toggle
+    >
+      {rail ? (
+        <>
+          <EyeOff className="size-3.5" aria-hidden />
+          {groups.hidden.length}
+        </>
+      ) : showHidden ? (
+        tr("hideHidden")
+      ) : (
+        tr("hiddenCount", { count: groups.hidden.length })
+      )}
+    </button>
+  )
+
+  /** [+ new work assistant], at the foot: a row's geometry, a dashed
+   *  circle where a face would be; on the rail, the circle alone. */
+  const addButton = (rail: boolean) => (
+    <button
+      type="button"
+      disabled={readOnly}
+      onClick={() => setAdding(true)}
+      aria-label={rail ? tr("add") : undefined}
+      title={rail ? tr("add") : undefined}
+      data-pa-roster-add
+      className={cn(
+        "flex items-center rounded-md text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
+        rail
+          ? "size-13 justify-center rounded-xl"
+          : "w-full gap-2 px-2 py-1.5 text-start"
+      )}
+    >
+      <span
+        aria-hidden
+        className={cn(
+          "flex shrink-0 items-center justify-center rounded-full border border-dashed border-muted-foreground/50",
+          rail ? "size-9" : "size-7"
+        )}
+      >
+        <Plus className={rail ? "size-4" : "size-3.5"} />
+      </span>
+      {rail ? null : <span className="min-w-0 truncate">{tr("add")}</span>}
+    </button>
+  )
+
+  if (size.rail) {
+    const others = [
+      ...groups.pinned,
+      ...groups.sections.flatMap((s) => s.entries),
+      ...groups.rest,
+    ]
+    const rule = <div aria-hidden className="my-1 h-px w-8 bg-border" />
+    return (
+      <>
+        <nav
+          data-pa-roster
+          data-pa-roster-rail
+          aria-label={tr("title")}
+          style={{ width: `${ROSTER_RAIL_WIDTH}rem` }}
+          className="flex max-w-[50%] shrink-0 flex-col"
+        >
+          <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-x-hidden overflow-y-auto py-2">
+            {primary ? railTile(primary) : null}
+            {primary && others.length > 0 ? rule : null}
+            {others.map(railTile)}
+            {showHidden && groups.hidden.length > 0 ? (
+              <>
+                {rule}
+                {groups.hidden.map(railTile)}
+              </>
+            ) : null}
+          </div>
+          <div
+            data-pa-roster-foot
+            className="flex flex-col items-center gap-1 border-t border-border/50 py-1.5"
+          >
+            {groups.hidden.length > 0 ? hiddenToggle(true) : null}
+            {addButton(true)}
+          </div>
+        </nav>
+        <RosterResizeHandle size={size} onSize={setSize} />
+        {dialogs}
+      </>
+    )
+  }
 
   const groupHead = (label: string, foldName?: string) => (
     <div className="flex items-center gap-1 px-2 pt-3 pb-1 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
@@ -787,15 +969,6 @@ export function PersonalAgentRoster({
     </div>
   )
 
-  const searching = q.length > 0
-  const found = searching
-    ? [
-        ...groups.pinned,
-        ...groups.sections.flatMap((s) => s.entries),
-        ...groups.rest,
-        ...groups.hidden,
-      ].filter(matches)
-    : []
   const hasGroups = groups.pinned.length > 0 || groups.sections.length > 0
 
   return (
@@ -805,162 +978,60 @@ export function PersonalAgentRoster({
         aria-label={tr("title")}
         // Its width is the owner's (dragged on the handle after it), never
         // past half the room the conversation and it share.
-        style={{ width: `${width}rem` }}
+        style={{ width: `${size.width}rem` }}
         className="flex max-w-[50%] shrink-0 flex-col"
       >
-        <div className="flex items-center gap-1 px-2 pt-2.5 pb-1">
-          {query != null ? (
-            <div className="relative min-w-0 flex-1">
-              <Input
-                autoFocus
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setQuery(null)
-                }}
-                placeholder={tr("search")}
-                aria-label={tr("search")}
-                className="h-7 pe-7 text-xs"
-                data-pa-roster-search
-              />
-              <button
-                type="button"
-                className="absolute end-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label={tr("search")}
-                onClick={() => setQuery(null)}
-              >
-                <X className="size-3.5" aria-hidden />
-              </button>
-            </div>
-          ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-2 pb-2">
+          {primary ? primaryTile(primary) : null}
+          {groups.pinned.length > 0 ? (
             <>
-              <span className="min-w-0 flex-1 truncate px-1 text-xs font-medium text-muted-foreground">
-                {tr("title")}
-              </span>
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                aria-label={tr("search")}
-                title={tr("search")}
-                onClick={() => setQuery("")}
-                data-pa-roster-search-open
-              >
-                <Search aria-hidden />
-              </Button>
-            </>
-          )}
-          {add}
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-          {searching ? (
-            found.length > 0 ? (
-              found.map((b) => <div key={b.id}>{row(b)}</div>)
-            ) : (
-              <p className="px-2 py-3 text-xs text-muted-foreground">
-                {tr("noMatch")}
-              </p>
-            )
-          ) : (
-            <>
-              {primary
-                ? menu(
-                    primary,
-                    <button
-                      type="button"
-                      data-pa-roster-bot={primary.id}
-                      data-pa-roster-primary
-                      aria-current={
-                        primary.id === currentId ? "page" : undefined
-                      }
-                      onClick={() => go(primary)}
-                      className={cn(
-                        "mt-1 flex w-full flex-col items-center gap-1 rounded-lg px-2 py-2.5 text-center transition-colors",
-                        primary.id === currentId
-                          ? "bg-accent text-accent-foreground"
-                          : "hover:bg-muted"
-                      )}
-                    >
-                      {face(primary, 56)}
-                      <span className="max-w-full truncate text-sm font-medium">
-                        {botName(primary)}
-                      </span>
-                      {primaryLine ? (
-                        <span
-                          data-pa-roster-line={primaryLine.tone}
-                          className={cn(
-                            "max-w-full truncate text-xs",
-                            primaryLine.tone === "needs"
-                              ? "text-orange-700 dark:text-orange-300"
-                              : primaryLine.tone === "ready"
-                                ? "text-teal-700 dark:text-teal-300"
-                                : primaryLine.tone === "busy"
-                                  ? "activity-shimmer text-muted-foreground"
-                                  : "text-muted-foreground"
-                          )}
-                        >
-                          {primaryLine.text}
-                        </span>
-                      ) : null}
-                    </button>
-                  )
-                : null}
-              {groups.pinned.length > 0 ? (
-                <>
-                  <div className="flex items-center gap-1 px-2 pt-3 pb-1 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
-                    <Pin className="size-3" aria-hidden />
-                    <span>{tr("pinned")}</span>
-                  </div>
-                  <AnimatedRows
-                    entries={groups.pinned}
-                    render={(b) => row(b, { draggable: true })}
-                  />
-                </>
-              ) : null}
-              {groups.sections.map((s) => (
-                <div key={s.name}>
-                  {groupHead(s.name, s.name)}
-                  {folded.has(s.name) ? null : (
-                    <AnimatedRows entries={s.entries} render={(b) => row(b)} />
-                  )}
-                </div>
-              ))}
-              {groups.rest.length > 0 ? (
-                <>
-                  {hasGroups ? (
-                    groupHead(tr("others"))
-                  ) : (
-                    <div className="h-2" />
-                  )}
-                  <AnimatedRows entries={groups.rest} render={(b) => row(b)} />
-                </>
-              ) : null}
-            </>
-          )}
-        </div>
-        {!searching && groups.hidden.length > 0 ? (
-          <div className="border-t border-border/50 px-2 py-1.5">
-            <button
-              type="button"
-              className="w-full rounded px-2 py-1 text-start text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-expanded={showHidden}
-              onClick={() => setShowHidden((v) => !v)}
-              data-pa-roster-hidden-toggle
-            >
-              {showHidden
-                ? tr("hideHidden")
-                : tr("hiddenCount", { count: groups.hidden.length })}
-            </button>
-            {showHidden ? (
-              <div className="mt-1 max-h-48 overflow-y-auto">
-                {groups.hidden.map((b) => (
-                  <div key={b.id}>{row(b)}</div>
-                ))}
+              <div className="flex items-center gap-1 px-2 pt-3 pb-1 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
+                <Pin className="size-3" aria-hidden />
+                <span>{tr("pinned")}</span>
               </div>
-            ) : null}
-          </div>
-        ) : null}
+              <AnimatedRows
+                entries={groups.pinned}
+                render={(b) => row(b, { draggable: true })}
+              />
+            </>
+          ) : null}
+          {groups.sections.map((s) => (
+            <div key={s.name}>
+              {groupHead(s.name, s.name)}
+              {folded.has(s.name) ? null : (
+                <AnimatedRows entries={s.entries} render={(b) => row(b)} />
+              )}
+            </div>
+          ))}
+          {groups.rest.length > 0 ? (
+            <>
+              {hasGroups ? groupHead(tr("others")) : <div className="h-2" />}
+              <AnimatedRows entries={groups.rest} render={(b) => row(b)} />
+            </>
+          ) : null}
+        </div>
+        <div
+          data-pa-roster-foot
+          className="flex flex-col gap-0.5 border-t border-border/50 px-2 py-1.5"
+        >
+          {groups.hidden.length > 0 ? (
+            <>
+              {hiddenToggle(false)}
+              {showHidden ? (
+                <div className="max-h-48 overflow-y-auto">
+                  {groups.hidden.map((b) => (
+                    <div key={b.id} className="py-0.5">
+                      {row(b)}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : null}
+          {addButton(false)}
+        </div>
       </nav>
-      <RosterResizeHandle width={width} onWidth={setWidth} />
+      <RosterResizeHandle size={size} onSize={setSize} />
       {dialogs}
     </>
   )

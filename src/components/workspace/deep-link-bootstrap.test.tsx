@@ -15,7 +15,10 @@ import {
 
 let tabs: { tabsHydrated: boolean; openTab: Mock }
 
-const h = vi.hoisted(() => ({ toastError: vi.fn() }))
+const h = vi.hoisted(() => ({
+  toastError: vi.fn(),
+  openConversations: vi.fn(),
+}))
 
 vi.mock("sonner", () => ({ toast: { error: h.toastError } }))
 vi.mock("@/contexts/tab-context", () => ({
@@ -27,6 +30,9 @@ vi.mock("@/lib/transport", () => ({
   getTransport: () => ({ subscribe: async () => () => {} }),
 }))
 vi.mock("@/lib/deep-link", () => ({ takePendingDeepLink: async () => null }))
+vi.mock("@/contexts/workbench-route-context", () => ({
+  useOptionalWorkbenchRoute: () => ({ openConversations: h.openConversations }),
+}))
 
 import { DeepLinkBootstrap } from "./deep-link-bootstrap"
 
@@ -39,6 +45,7 @@ const CONVERSATION = {
 describe("DeepLinkBootstrap", () => {
   beforeEach(() => {
     h.toastError.mockReset()
+    h.openConversations.mockReset()
     window.history.replaceState(
       {},
       "",
@@ -79,6 +86,12 @@ describe("DeepLinkBootstrap", () => {
     await waitFor(() =>
       expect(tabs.openTab).toHaveBeenCalledWith(7, 42, "grok", true)
     )
+    // The conversations are shown for it, first: the tab it opens may be
+    // the one already active under the assistants page the window opened on.
+    expect(h.openConversations).toHaveBeenCalledTimes(1)
+    expect(h.openConversations.mock.invocationCallOrder[0]).toBeLessThan(
+      tabs.openTab.mock.invocationCallOrder[0]
+    )
     expect(h.toastError).not.toHaveBeenCalled()
     await waitFor(() => expect(window.location.search).toBe(""))
   })
@@ -95,6 +108,7 @@ describe("DeepLinkBootstrap", () => {
 
     await waitFor(() => expect(h.toastError).toHaveBeenCalled())
     expect(tabs.openTab).not.toHaveBeenCalled()
+    expect(h.openConversations).not.toHaveBeenCalled()
   })
 
   // The conversation list is global, but `addFolderToWorkspaceById` awaits a

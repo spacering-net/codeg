@@ -316,10 +316,12 @@ export function AcceptanceCard({ item }: { item: NoticeItem }) {
                 {t("recheck")}
               </Button>
             ) : null}
+            {/* A button that looks one — alone on a card settled, a ghost
+                one reads as text set in from the rest. */}
             {canOpen ? (
               <Button
                 size="sm"
-                variant="ghost"
+                variant="outline"
                 onClick={() => openWork(target)}
                 data-pa-accept-act="open"
               >

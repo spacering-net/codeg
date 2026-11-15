@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { followsBottom, STICK_PX } from "./follow-bottom"
+import { farFromBottom, followsBottom, STICK_PX } from "./follow-bottom"
 
 describe("followsBottom", () => {
   it("follows near the bottom, whatever it did before", () => {
@@ -37,5 +37,16 @@ describe("followsBottom", () => {
     expect(
       followsBottom({ was: false, gap: 300, top: 1200, lastTop: 900 })
     ).toBe(false)
+  })
+})
+
+describe("farFromBottom", () => {
+  it("shows the way down once the reader is more than half a view up", () => {
+    expect(farFromBottom({ following: false, gap: 401, view: 800 })).toBe(true)
+    expect(farFromBottom({ following: false, gap: 400, view: 800 })).toBe(false)
+  })
+
+  it("does not while the list follows, however far its content grew", () => {
+    expect(farFromBottom({ following: true, gap: 5000, view: 800 })).toBe(false)
   })
 })

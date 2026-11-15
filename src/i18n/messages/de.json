@@ -9310,8 +9310,6 @@
       "roster": {
         "title": "Assistenten",
         "add": "Neuer Arbeitsassistent",
-        "search": "Assistenten suchen",
-        "noMatch": "Kein Assistent passt",
         "pinned": "Angeheftet",
         "others": "Weitere",
         "hiddenCount": "{count, plural, one {# ausgeblendet} other {# ausgeblendet}}",
@@ -9538,7 +9536,8 @@
     },
     "pills": {
       "attention": "{count, plural, one {# Sache braucht dich} other {# Sachen brauchen dich}}",
-      "newMessages": "Neue Nachrichten"
+      "newMessages": "Neue Nachrichten",
+      "toBottom": "Zum Neuesten springen"
     },
     "detail": {
       "title": "Details",

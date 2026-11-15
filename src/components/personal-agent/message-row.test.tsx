@@ -571,6 +571,7 @@ describe("the bubbles", () => {
     const { container } = draw(<SaidBubble item={said} />)
     const bubble = container.querySelector("[data-pa-said]")!
     expect(bubble.textContent).toBe("I'll hand it to Dev.")
+    expect(bubble.className).toContain("max-w-full")
     // No row of its own: jumps land on the line, not on it.
     expect(container.querySelector("[data-row-id]")).toBeNull()
     fireEvent.contextMenu(bubble)
@@ -629,6 +630,10 @@ describe("the bubbles", () => {
     ])
     // One message: one frame, its menu from any of them.
     expect(container.querySelectorAll("[data-row-id='8']")).toHaveLength(1)
+    // Side by side in a column that fits each to its text, each is still no
+    // wider than the frame: a line that does not wrap (a quote's title, a
+    // long name in code) cannot widen one past the column.
+    bubbles.forEach((b) => expect(b.className).toContain("max-w-full"))
     fireEvent.contextMenu(bubbles[0])
     const items = await screen.findAllByRole("menuitem")
     expect(items.map((i) => i.textContent)).toContain("Quote")

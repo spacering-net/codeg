@@ -24,8 +24,10 @@
  * Two pills float over it (10.7): "N items need you" while cards in it wait
  * for the owner (a click scrolls to the first), and "New messages" while the
  * reader is up the page and something came in under them (a click goes to
- * the bottom). A message that comes in while the page is open rises into
- * place; what was there, or is loaded from further back, does not.
+ * the bottom). Up the page more than half a view with nothing new under
+ * them, a round button with an arrow takes them down instead, as the
+ * conversations' does. A message that comes in while the page is open rises
+ * into place; what was there, or is loaded from further back, does not.
  */
 
 import {
@@ -77,7 +79,7 @@ import { MessageEnterContext, useEnterClass } from "./message-row"
 import { OwnerBubble } from "./owner-bubble"
 import { useQuoteAuthor, useQuotedRow } from "./quote-bar"
 import { ReplyBubble, SaidBubble } from "./reply-bubble"
-import { followsBottom } from "./follow-bottom"
+import { farFromBottom, followsBottom } from "./follow-bottom"
 import {
   BUBBLE_MARKDOWN,
   MARKDOWN_LIST_ROOM,
@@ -280,12 +282,15 @@ export function ownerWaitTargets(items: readonly MessageItem[]): number[] {
 function Pill({
   shown,
   className,
+  label,
   onClick,
   children,
   ...rest
 }: {
   shown: boolean
   className?: string
+  /** Its name, for a pill of an icon alone. */
+  label?: string
   onClick: () => void
   children: React.ReactNode
 } & Record<`data-${string}`, string | boolean>) {
@@ -293,6 +298,8 @@ function Pill({
     <button
       type="button"
       {...rest}
+      aria-label={label}
+      title={label}
       data-state={shown ? "open" : "closed"}
       aria-hidden={!shown || undefined}
       tabIndex={shown ? 0 : -1}
@@ -415,6 +422,8 @@ export function MessageList({
   const atBottom = useRef(true)
   // The same, for what renders on it.
   const [bottomed, setBottomed] = useState(true)
+  // Scrolled up more than half a view: the way back down shows.
+  const [far, setFar] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [preview, setPreview] = useState<number | null>(null)
   const jumpSeq = useRef(0)
@@ -430,6 +439,7 @@ export function MessageList({
   if (shownBot !== botId) {
     setShownBot(botId)
     setBottomed(true)
+    setFar(false)
     setPreview(null)
     setLoadingOlder(false)
   }
@@ -451,8 +461,18 @@ export function MessageList({
     const el = scrollRef.current
     const content = contentRef.current
     if (!el || !content || typeof ResizeObserver === "undefined") return
+    const measure = () =>
+      setFar(
+        farFromBottom({
+          following: atBottom.current,
+          gap: el.scrollHeight - el.scrollTop - el.clientHeight,
+          view: el.clientHeight,
+        })
+      )
     const follow = () => {
       if (atBottom.current) el.scrollTop = el.scrollHeight
+      // What came in under a reader up the page puts them further up.
+      else measure()
     }
     let lastTop = el.scrollTop
     const onScroll = () => {
@@ -464,6 +484,7 @@ export function MessageList({
       })
       lastTop = el.scrollTop
       setBottomed(atBottom.current)
+      measure()
     }
     const ro = new ResizeObserver(follow)
     ro.observe(content)
@@ -561,17 +582,24 @@ export function MessageList({
   })
 
   // The owner sent a message: to the bottom, to see it land, and following
-  // from there; what was new is behind them now.
-  const toBottom = useCallback(() => {
-    clearNewFrom()
-    const el = scrollRef.current
-    if (!el) return
-    atBottom.current = true
-    setBottomed(true)
-    el.scrollTop = el.scrollHeight
-  }, [clearNewFrom])
+  // from there; what was new is behind them now. Asked for from the way
+  // down (the pill, the button), it glides there, motion allowed.
+  const toBottom = useCallback(
+    (glide = false) => {
+      clearNewFrom()
+      const el = scrollRef.current
+      if (!el) return
+      atBottom.current = true
+      setBottomed(true)
+      setFar(false)
+      if (glide && !reduced) {
+        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+      } else el.scrollTop = el.scrollHeight
+    },
+    [clearNewFrom, reduced]
+  )
   useEffect(() => {
-    sentRef.current = toBottom
+    sentRef.current = () => toBottom()
   }, [sentRef, toBottom])
   const newLineAt = newFrom != null ? newLineIndex(items, newFrom) : -1
 
@@ -664,11 +692,22 @@ export function MessageList({
         <Pill
           shown={newBelow && scrollReady}
           className="bottom-3"
-          onClick={toBottom}
+          onClick={() => toBottom(true)}
           data-pa-pill="new"
         >
           <ArrowDown className="size-3.5" aria-hidden />
           {tp("newMessages")}
+        </Pill>
+        {/* Up the page with nothing new under them: the way back down, as
+            a conversation's (the pill above says more when there is). */}
+        <Pill
+          shown={far && !newBelow && scrollReady}
+          className="bottom-3 size-8 justify-center p-0"
+          label={tp("toBottom")}
+          onClick={() => toBottom(true)}
+          data-pa-pill="bottom"
+        >
+          <ArrowDown className="size-4" aria-hidden />
         </Pill>
         <ScrollArea
           className="min-h-0 flex-1"

@@ -4880,6 +4880,38 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   }
 }
 
+/* Started, with nothing to say yet (the status line over the assistants'
+   input box): three dots rising in turn, as a messenger's typing does. */
+.motion-typing > span {
+  width: 0.25rem;
+  height: 0.25rem;
+  border-radius: 9999px;
+  background-color: currentColor;
+  animation: motion-typing var(--motion-spin) var(--motion-ease-standard)
+    infinite;
+}
+
+.motion-typing > span:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.motion-typing > span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+@keyframes motion-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.4;
+    translate: 0 0;
+  }
+  30% {
+    opacity: 1;
+    translate: 0 -3px;
+  }
+}
+
 @keyframes motion-pulse {
   50% {
     opacity: 0.35;
@@ -5072,6 +5104,11 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 
   .motion-spin,
   .motion-spin-small {
+    animation: motion-pulse var(--motion-spin) ease-in-out infinite;
+  }
+
+  /* The dots fade in turn instead (each keeps its delay). */
+  .motion-typing > span {
     animation: motion-pulse var(--motion-spin) ease-in-out infinite;
   }
 

@@ -40,6 +40,10 @@ vi.mock("@/lib/transport", () => ({
 vi.mock("@/lib/deep-link", () => ({
   takePendingDeepLink: () => takePendingDeepLink(),
 }))
+const route = vi.hoisted(() => ({ openConversations: vi.fn() }))
+vi.mock("@/contexts/workbench-route-context", () => ({
+  useOptionalWorkbenchRoute: () => route,
+}))
 
 import { PetFocusBridge } from "./deep-link-bootstrap"
 
@@ -65,6 +69,7 @@ describe("PetFocusBridge", () => {
       addFolderToWorkspaceById,
     })
     tabs = { tabsHydrated: false, openTab: vi.fn() }
+    route.openConversations.mockReset()
   })
   afterEach(() => cleanup())
 
@@ -128,6 +133,12 @@ describe("PetFocusBridge", () => {
     })
     await waitFor(() =>
       expect(tabs.openTab).toHaveBeenCalledWith(7, 314, "grok", true)
+    )
+    // The conversations shown for it, before the tab: under the assistants
+    // page the window opened on, that tab may already be the active one.
+    expect(route.openConversations).toHaveBeenCalledTimes(1)
+    expect(route.openConversations.mock.invocationCallOrder[0]).toBeLessThan(
+      tabs.openTab.mock.invocationCallOrder[0]
     )
   })
 

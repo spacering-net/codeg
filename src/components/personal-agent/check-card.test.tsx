@@ -148,6 +148,18 @@ describe("the check's card", () => {
     expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(8, "recheck", null)
   })
 
+  it("with no conversation to open, leads its row with a button that looks one", () => {
+    wrap(row({ state: "done", verdict: "true", conversation_id: null }))
+    expect(
+      screen.queryByRole("button", { name: "Open the conversation" })
+    ).toBeNull()
+    expect(
+      screen
+        .getByRole("button", { name: "Check again" })
+        .getAttribute("data-variant")
+    ).toBe("outline")
+  })
+
   it("for a sentence, shows the sentence first and the message on asking", () => {
     wrap(
       row({

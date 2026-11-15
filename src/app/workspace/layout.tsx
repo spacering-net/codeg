@@ -41,7 +41,7 @@ import {
 } from "@/contexts/acp-connections-context"
 import { DelegationProvider } from "@/contexts/delegation-context"
 import { ConversationRuntimeProvider } from "@/contexts/conversation-runtime-context"
-import { TabProvider, useTabStore, useTabActions } from "@/contexts/tab-context"
+import { TabProvider, useTabStore } from "@/contexts/tab-context"
 import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
 import { SearchDialogProvider } from "@/contexts/search-dialog-context"
 import { AutomationsViewProvider } from "@/contexts/automations-view-context"
@@ -101,6 +101,7 @@ import {
   PetFocusBridge,
 } from "@/components/workspace/deep-link-bootstrap"
 import { WorkspaceOpenFolderListener } from "@/components/workspace/workspace-open-folder-listener"
+import { WorkbenchRouteConversationSync } from "@/components/workspace/workbench-route-conversation-sync"
 import { PersonalAgentOpenBridge } from "@/components/personal-agent/open-bridge"
 import { WorkspaceRestoreNotices } from "@/components/workspace/workspace-restore-notices"
 import { HeavyPluginsWarmup } from "@/components/ai-elements/heavy-plugins-warmup"
@@ -1502,32 +1503,6 @@ function FolderLayoutShell({ children }: { children: React.ReactNode }) {
   )
 }
 
-// Single chokepoint that keeps the workbench route honest: opening or switching
-// to a conversation from ANY entry point (sidebar, ⌘T, search, deep links, pet
-// focus, branch switch, run history …) activates a tab, so leaving a non-default
-// route whenever activeTabId changes covers every opener — present and future —
-// without patching each call site. Re-selecting the ALREADY-active tab does not
-// change activeTabId, so the interactive conversation pickers (sidebar list,
-// search dialog, run history) also call openConversations() directly.
-function WorkbenchRouteConversationSync() {
-  const activeTabId = useTabStore((s) => s.activeTabId)
-  const { consumeRemoteActivation } = useTabActions()
-  const { openConversations } = useWorkbenchRoute()
-  const prevRef = useRef(activeTabId)
-  useEffect(() => {
-    if (prevRef.current === activeTabId) return
-    prevRef.current = activeTabId
-    // A remote tab snapshot that mirrors another client's focus also changes
-    // activeTabId. That's not a local conversation activation, so don't hijack
-    // this window into the conversations route — doing so would unmount whatever
-    // non-conversation view it's on (e.g. the Automations editor + unsaved
-    // edits). Local activations leave the flag false and switch as before.
-    if (consumeRemoteActivation()) return
-    openConversations()
-  }, [activeTabId, openConversations, consumeRemoteActivation])
-  return null
-}
-
 function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
   return (
     <AppWorkspaceProvider>
@@ -1567,8 +1542,6 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                       <BrowserTabsPersistence />
                       <BrowserTabsSuspender />
                       <HeavyPluginsWarmup />
-                      <DeepLinkBootstrap />
-                      <PetFocusBridge />
                       <WorkspaceRestoreNotices />
                       {/* Always mounted: external-change conflicts must be
                             resolvable even with the aux file tree closed. */}
@@ -1583,6 +1556,13 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                                     <PersonalAgentViewScope>
                                       <WorkbenchRouteProvider>
                                         <WorkbenchRouteConversationSync />
+                                        {/* Inside WorkbenchRouteProvider: they
+                                            show the conversations for the one
+                                            they open, which may be the tab
+                                            already active under the view the
+                                            window opened on. */}
+                                        <DeepLinkBootstrap />
+                                        <PetFocusBridge />
                                         {/* The task editor a message's "create
                                             task" opens over the page it is on:
                                             a transcript shows in a tab, a canvas

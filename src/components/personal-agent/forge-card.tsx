@@ -346,9 +346,10 @@ export function ForgeCard({ item }: { item: NoticeItem }) {
                 </Button>
               </>
             ) : link ? (
+              // Alone on the card: a button that looks one.
               <Button
                 size="sm"
-                variant="ghost"
+                variant="outline"
                 onClick={() => void openUrl(link)}
                 data-pa-forge-act="open"
               >

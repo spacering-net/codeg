@@ -217,9 +217,11 @@ export function CheckCard({ item }: { item: NoticeItem }) {
               {t("openConversation")}
             </Button>
           ) : null}
+          {/* First in the row without the conversation's: a button that
+              looks one, its edge on the text's. */}
           <Button
             size="sm"
-            variant="ghost"
+            variant={conversationId != null ? "ghost" : "outline"}
             disabled={readOnly || busy || state === "checking"}
             onClick={() => void recheck()}
           >

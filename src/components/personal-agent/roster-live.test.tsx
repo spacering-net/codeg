@@ -133,6 +133,22 @@ function entry(
   }
 }
 
+/** Hover a face long enough for its card to open. */
+async function hoverOpen(el: Element) {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    fireEvent.pointerEnter(el)
+    act(() => {
+      vi.advanceTimersByTime(600)
+    })
+  } finally {
+    vi.useRealTimers()
+  }
+  await waitFor(() =>
+    expect(document.querySelector("[data-pa-roster-hover]")).toBeTruthy()
+  )
+}
+
 const scope: PageScope = {
   readOnly: false,
   agentName: "Nova",
@@ -229,7 +245,8 @@ describe("the roster", () => {
       document.querySelector(
         `[data-pa-roster-bot='${id}'] [data-pa-roster-line]`
       )?.textContent
-    expect(line(1)).toBe("All set.")
+    // The primary says no more than its name: its line is on its card.
+    expect(line(1)).toBeUndefined()
     expect(line(3)).toBe("Needs your answer: Keep the old layer?")
     expect(line(2)).toBe("#234 Fix the white screen: Editing startup.rs")
     // Its face is its state, its dot what it wants.
@@ -241,6 +258,11 @@ describe("the roster", () => {
       face(3).querySelector("[data-bot-dot]")?.getAttribute("data-bot-dot")
     ).toBe("waiting")
     expect(face(3).getAttribute("aria-label")).toBe("Rev, waiting for you")
+    await hoverOpen(document.querySelector("[data-pa-roster-bot='1']")!)
+    const card = document.querySelector("[data-pa-roster-hover='1']")!
+    expect(card.querySelector("[data-pa-roster-line]")?.textContent).toBe(
+      "All set."
+    )
   })
 
   it("puts work the owner can merge before what it is doing, in a calm tone", async () => {
@@ -381,7 +403,81 @@ describe("the roster", () => {
     expect(screen.getByText("Ops")).toBeTruthy()
   })
 
-  it("finds one by name or role, and opening one takes the owner's unread mark away", async () => {
+  it("puts the primary in a square on top, no title row over it, and the new one at the foot", async () => {
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "Nova", { last_line: { text: "All set.", at: iso(-5000) } }),
+      entry(2, "Dev"),
+      entry(3, "Ops"),
+    ])
+    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    await screen.findByText("Dev")
+    const nav = document.querySelector("[data-pa-roster]")!
+    // No title, no search: the primary first.
+    expect(within(nav as HTMLElement).queryByText("Assistants")).toBeNull()
+    expect(screen.queryByRole("button", { name: /search/i })).toBeNull()
+    const primary = nav.querySelector("[data-pa-roster-primary]")!
+    expect(primary.querySelector(".size-24")).toBeTruthy()
+    expect(primary.textContent).toBe("Nova")
+    // A little room between the rows.
+    // (inside what folds, which itself has none, so it shuts to nothing).
+    const rows = nav.querySelectorAll("[data-pa-roster-row-state] > div")
+    expect(rows.length).toBe(2)
+    rows.forEach((r) => {
+      expect(r.className).toBe("")
+      expect((r.firstElementChild as HTMLElement).className).toContain("py-0.5")
+    })
+    // [+ New work assistant] at the foot, its own row.
+    const foot = nav.querySelector("[data-pa-roster-foot]")!
+    const add = foot.querySelector("[data-pa-roster-add]")!
+    expect(add.textContent).toBe("New work assistant")
+    expect(nav.lastElementChild).toBe(foot)
+  })
+
+  it("folds to a rail of faces: the primary's, a rule, the rest's, each one's line on its card", async () => {
+    window.localStorage.setItem("pa:roster:rail:v1", "1")
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "Nova"),
+      entry(2, "Dev", { last_line: { text: "Done.", at: iso(-5000) } }),
+      entry(3, "Ops", {}, { pinned_at: iso(-100) }),
+      entry(4, "Old", {}, { hidden: true }),
+    ])
+    try {
+      wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+      const tiles = await waitFor(() => {
+        const found = [...document.querySelectorAll("[data-pa-rail-tile]")]
+        expect(found.length).toBe(3)
+        return found
+      })
+      expect(document.querySelector("[data-pa-roster-rail]")).toBeTruthy()
+      // The primary, then the pinned, then the rest; faces alone.
+      expect(tiles.map((t) => t.getAttribute("data-pa-roster-bot"))).toEqual([
+        "1",
+        "3",
+        "2",
+      ])
+      expect(screen.queryByText("Dev")).toBeNull()
+      expect(tiles[2].getAttribute("aria-label")).toBe("Dev, idle")
+      // Its line, on its card.
+      await hoverOpen(tiles[2])
+      expect(
+        document.querySelector(
+          "[data-pa-roster-hover='2'] [data-pa-roster-line]"
+        )?.textContent
+      ).toBe("Done.")
+      fireEvent.click(tiles[2])
+      expect(usePersonalAgentUi.getState().viewBot).toBe(2)
+      // The hidden ones under their count; the new one at the foot.
+      fireEvent.click(screen.getByRole("button", { name: "1 hidden" }))
+      expect(document.querySelectorAll("[data-pa-rail-tile]").length).toBe(4)
+      expect(
+        screen.getByRole("button", { name: "New work assistant" })
+      ).toBeTruthy()
+    } finally {
+      window.localStorage.removeItem("pa:roster:rail:v1")
+    }
+  })
+
+  it("opens one on a click, which takes the owner's unread mark away", async () => {
     api.personalAgentBots.mockResolvedValue([
       entry(1, "Nova"),
       entry(2, "Dev", {}, { unread_mark: true }),
@@ -389,16 +485,6 @@ describe("the roster", () => {
     ])
     wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
     await screen.findByText("Dev")
-    fireEvent.click(screen.getByRole("button", { name: "Search assistants" }))
-    fireEvent.change(screen.getByPlaceholderText("Search assistants"), {
-      target: { value: "review" },
-    })
-    // Both are reviewers by template: the role matches.
-    await waitFor(() => expect(screen.getByText("Ops")).toBeTruthy())
-    fireEvent.change(screen.getByPlaceholderText("Search assistants"), {
-      target: { value: "dev" },
-    })
-    expect(screen.queryByText("Ops")).toBeNull()
     fireEvent.click(screen.getByText("Dev"))
     expect(usePersonalAgentUi.getState().viewBot).toBe(2)
     await waitFor(() =>
@@ -559,6 +645,43 @@ describe("the status line", () => {
     // And the turn can be stopped from here.
     fireEvent.click(screen.getByRole("button", { name: "Stop the reply" }))
     expect(api.personalAgentCancel).toHaveBeenCalled()
+  })
+
+  it("shows three dots, and no chevron, while a turn just begun has nothing to say", async () => {
+    api.personalAgentBots.mockResolvedValue([entry(1, "Nova", busy("think"))])
+    pa.snapshot = {
+      agent: {
+        id: 1,
+        name: "Nova",
+        avatar: { kind: "face", shape: "blob", color: "black" },
+      },
+      status: {
+        engine: "here",
+        connected: true,
+        turn: { batch_id: 5, kind: "delivery" },
+      },
+    }
+    wrap(<StatusLine botId={1} name="Nova" />)
+    const line = await waitFor(() => {
+      const found = document.querySelector("[data-pa-status-line]")
+      expect(found?.querySelector("[data-pa-status-dots]")).toBeTruthy()
+      return found!
+    })
+    expect(line.querySelectorAll("[data-pa-status-dots] > span").length).toBe(3)
+    expect(line.querySelector(".lucide-chevron-down")).toBeNull()
+    // Read out once there is something to say; the dots give way to it.
+    expect(
+      line.querySelector("[data-pa-status-text]")!.getAttribute("aria-live")
+    ).toBe("polite")
+    await waitFor(
+      () =>
+        expect(
+          line.querySelector("[data-pa-status-text]")!.textContent
+        ).toMatch(/Thinking|Mulling|Working out/),
+      { timeout: VAGUE_DELAY_MS + 1000 }
+    )
+    expect(line.querySelector("[data-pa-status-dots]")).toBeNull()
+    expect(line.querySelector(".lucide-chevron-down")).toBeTruthy()
   })
 
   it("folds away when its state went stale, whatever an old snapshot says", async () => {

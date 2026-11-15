@@ -12,6 +12,8 @@
  *   work's title in front; clicking opens the work.
  * - Clicking it during a turn opens this turn's steps, one short line each
  *   ("Edited parser.rs +14 −10"), read again as the turn moves.
+ * - Started with nothing to say yet (the owner's message just sent, a vague
+ *   first step not lasted yet): three dots rising in turn, and no chevron.
  * - Nothing running: the line folds away. A state gone stale (no push for
  *   its 30 s) is nothing running.
  */
@@ -215,14 +217,28 @@ export function StatusLine({
               dot={null}
             />
           ) : null}
+          {/* Kept in place while empty, so what it says next is read out. */}
           <span
             data-pa-status-text
             aria-live="polite"
-            className={cn("min-w-0 truncate", text ? "activity-shimmer" : "")}
+            className={cn(
+              "min-w-0 truncate",
+              text ? "activity-shimmer" : "sr-only"
+            )}
           >
-            {text ?? " "}
+            {text ?? ""}
           </span>
-          {workActivity ? null : (
+          {text == null ? (
+            <span
+              data-pa-status-dots
+              aria-hidden
+              className="motion-typing flex h-4 items-center gap-[3px] px-0.5"
+            >
+              <span />
+              <span />
+              <span />
+            </span>
+          ) : workActivity ? null : (
             <ChevronDown
               aria-hidden
               className={cn(

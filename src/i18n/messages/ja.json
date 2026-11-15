@@ -9310,8 +9310,6 @@
       "roster": {
         "title": "アシスタント",
         "add": "新しい作業アシスタント",
-        "search": "アシスタントを検索",
-        "noMatch": "一致するアシスタントはいません",
         "pinned": "ピン留め",
         "others": "その他",
         "hiddenCount": "非表示 {count} 人",
@@ -9538,7 +9536,8 @@
     },
     "pills": {
       "attention": "{count} 件があなたの対応待ち",
-      "newMessages": "新着メッセージ"
+      "newMessages": "新着メッセージ",
+      "toBottom": "最新へ移動"
     },
     "detail": {
       "title": "詳細",
