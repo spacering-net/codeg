@@ -37524,7 +37524,12 @@ mod tests {
                         BTreeMap::new(),
                         None,
                         FsAccessPolicy::from_env(&cwd, agent_type, &BTreeMap::new()),
-                        HostToolsPolicy::from_env(&BTreeMap::new()),
+                        // Hermetic on purpose: `from_env` falls back to codeg's
+                        // own process env, so a runner launched with
+                        // CODEG_ACP_HOST_TOOLS=agent (e.g. under the codeg
+                        // desktop app) would refuse the terminal/create this
+                        // harness scripts.
+                        HostToolsPolicy::Default,
                         // Watched only for a Claude launch.
                         cwd.join("claude-projects"),
                         crate::parsers::AgentEnv::inherited(),
