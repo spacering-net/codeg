@@ -32,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Popover,
   PopoverAnchor,
@@ -412,7 +413,7 @@ export function catalogDescription(entry: ModelCatalogEntry): string {
   return bits.join(" · ")
 }
 
-function ModelCatalogMenu({
+export function ModelCatalogMenu({
   catalog,
   query,
   current,
@@ -754,6 +755,118 @@ export function ModelIdInputWithCatalog({
       aria-label={ariaLabel}
       aria-invalid={ariaInvalid}
     />
+  )
+}
+
+/**
+ * Model ids one per line (OpenCode's custom provider editor). Two or more
+ * characters on the line the caret is on offers matching catalog models for
+ * THAT line; picking one replaces only that line, leaving the other lines —
+ * and the caret inside the textarea — alone.
+ */
+export function ModelIdLinesTextarea({
+  value,
+  onChange,
+  placeholder,
+  className,
+  disabled = false,
+  "aria-label": ariaLabel,
+}: {
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  className?: string
+  disabled?: boolean
+  "aria-label"?: string
+}) {
+  const catalog = useModelCatalog()
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [open, setOpen] = useState(false)
+  // The caret's line: its text used as the search query, and its offsets in
+  // `value` so a pick replaces exactly that line.
+  const [line, setLine] = useState<{
+    query: string
+    start: number
+    end: number
+  } | null>(null)
+
+  const syncFromCaret = (el: HTMLTextAreaElement, text: string) => {
+    if (disabled || el.selectionStart == null) return
+    const caret = el.selectionStart
+    const start = text.slice(0, caret).lastIndexOf("\n") + 1
+    const breakAt = text.indexOf("\n", caret)
+    const end = breakAt === -1 ? text.length : breakAt
+    const query = text.slice(start, end).trim()
+    if (query.length >= 2) {
+      setLine({ query, start, end })
+      setOpen(true)
+    } else {
+      setOpen(false)
+    }
+  }
+
+  const pick = (entry: ModelCatalogEntry) => {
+    if (!line) return
+    const next =
+      value.slice(0, line.start) + entry.model + value.slice(line.end)
+    onChange(next)
+    setOpen(false)
+    // The menu never took focus, so put the caret just after the inserted id.
+    const caret = line.start + entry.model.length
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (el) {
+        el.focus()
+        el.setSelectionRange(caret, caret)
+      }
+    })
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
+        <Textarea
+          ref={textareaRef}
+          value={value}
+          onChange={(event) => {
+            onChange(event.target.value)
+            syncFromCaret(event.target, event.target.value)
+          }}
+          onClick={(event) =>
+            syncFromCaret(event.currentTarget, event.currentTarget.value)
+          }
+          onKeyUp={(event) => {
+            // Escape closes the menu; don't immediately reopen it for the
+            // same line on that key's keyup.
+            if (event.key === "Escape") return
+            syncFromCaret(event.currentTarget, event.currentTarget.value)
+          }}
+          placeholder={placeholder}
+          className={className}
+          disabled={disabled}
+          aria-label={ariaLabel}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </PopoverAnchor>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        // Typing must continue in the textarea while the suggestions are up.
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        className="w-80 max-w-[min(36rem,var(--radix-popover-content-available-width))] gap-0 overflow-hidden p-0"
+      >
+        {line && (
+          <ModelCatalogMenu
+            catalog={catalog}
+            query={line.query}
+            current=""
+            onSelect={pick}
+          />
+        )}
+      </PopoverContent>
+    </Popover>
   )
 }
 

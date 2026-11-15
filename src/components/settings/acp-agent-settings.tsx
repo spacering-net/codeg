@@ -130,6 +130,7 @@ import type {
   FixAction,
   GrokStructuredConfig,
   HermesLocalConfig,
+  ModelCatalogEntry,
   ModelProviderInfo,
   OpenCodeCatalogProvider,
   OpenCodeCredentialChange,
@@ -925,6 +926,19 @@ export function grokReasoningEffortChoices(levels: string[]): string[] {
       levels.indexOf(level) === index
   )
   return [...GROK_REASONING_EFFORT_LEVELS, ...extra]
+}
+
+/** The capabilities a model catalog pick contributes to Grok's custom model
+ *  config: its context window and the reasoning effort levels it declares.
+ *  Both the model-id field and the "other models" add field adopt the same
+ *  values, so a pick fills them wherever it was made. */
+function grokCatalogCapabilities(entry: ModelCatalogEntry) {
+  return {
+    grokCustomContextWindow: entry.maxInputTokens
+      ? String(entry.maxInputTokens)
+      : "",
+    grokCustomReasoningEfforts: entry.reasoningEffortLevels,
+  }
 }
 
 /** Whether two level lists are the same, entry for entry. */
@@ -12346,11 +12360,7 @@ base_url = "https://api.openai.com/v1"`}
                                 // Picking a model adopts the capabilities it
                                 // declares, replacing anything typed before
                                 // the pick.
-                                grokCustomContextWindow: entry.maxInputTokens
-                                  ? String(entry.maxInputTokens)
-                                  : "",
-                                grokCustomReasoningEfforts:
-                                  entry.reasoningEffortLevels,
+                                ...grokCatalogCapabilities(entry),
                               }))
                             }
                             placeholder={t("grok.customModelIdPlaceholder")}
@@ -12501,6 +12511,14 @@ base_url = "https://api.openai.com/v1"`}
                             updateSelectedDraft((current) => ({
                               ...current,
                               grokCustomExtraModels: ids,
+                            }))
+                          }
+                          onPick={(entry) =>
+                            updateSelectedDraft((current) => ({
+                              ...current,
+                              // A pick in the "add model id" field adopts the
+                              // same capabilities as the model-id field above.
+                              ...grokCatalogCapabilities(entry),
                             }))
                           }
                           state={grokProviderModels}

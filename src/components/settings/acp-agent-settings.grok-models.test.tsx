@@ -1,7 +1,9 @@
 /**
  * The Grok custom-model card's other models: the endpoint's own list, asked
  * the way its backend talks, picked into codeg's extra `[model.<id>]`
- * entries — sent only once the list moved.
+ * entries — sent only once the list moved. A catalog pick in the "add model
+ * id" field also fills the context window and reasoning levels, just like
+ * the model-id field above it.
  */
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -13,11 +15,13 @@ import {
   acpListAgents,
   acpUpdateAgentConfig,
   acpUpdateAgentEnv,
+  getModelCatalog,
   listModelProviders,
   listProviderModels,
 } from "@/lib/api"
-import type { AcpAgentInfo, GrokSettings } from "@/lib/types"
+import type { AcpAgentInfo, GrokSettings, ModelCatalogView } from "@/lib/types"
 
+import { resetModelCatalogCacheForTests } from "./provider-models"
 import { AcpAgentSettings } from "./acp-agent-settings"
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -47,6 +51,31 @@ const CONFIG_TOML = [
   'api_backend = "responses"',
   "",
 ].join("\n")
+
+const CATALOG_VIEW: ModelCatalogView = {
+  status: {
+    url: "https://catalog.test/models.json",
+    autoUpdate: true,
+    entryCount: 1,
+    updatedAt: 1_760_000_000,
+    source: "cache",
+    error: null,
+  },
+  entries: [
+    {
+      id: "openai/gpt-5",
+      model: "gpt-5",
+      provider: "openai",
+      maxInputTokens: 272000,
+      maxOutputTokens: 128000,
+      supportsReasoning: true,
+      reasoningEffortLevels: ["low", "high"],
+      defaultReasoningEffort: "low",
+      supportsVision: true,
+      supportsFunctionCalling: true,
+    },
+  ],
+}
 
 function grokAgent(settings: Partial<GrokSettings> = {}): AcpAgentInfo {
   return {
@@ -114,6 +143,8 @@ async function savedGrokStructured() {
 describe("AcpAgentSettings — Grok's other models from the endpoint", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    resetModelCatalogCacheForTests()
+    vi.mocked(getModelCatalog).mockResolvedValue(CATALOG_VIEW)
     vi.mocked(listModelProviders).mockResolvedValue([])
     vi.mocked(acpUpdateAgentEnv).mockResolvedValue(0)
     vi.mocked(acpUpdateAgentConfig).mockResolvedValue(0)
@@ -156,5 +187,34 @@ describe("AcpAgentSettings — Grok's other models from the endpoint", () => {
     await openPanel(grokAgent())
     await user.click(screen.getByRole("button", { name: "Save Grok Config" }))
     expect(await savedGrokStructured()).not.toHaveProperty("customExtraModels")
+  })
+
+  it("fills context window and reasoning levels from a catalog pick in the add field", async () => {
+    const user = userEvent.setup()
+    await openPanel(grokAgent())
+
+    const context = screen.getByRole("spinbutton", {
+      name: "Context window (tokens)",
+    })
+    expect(context).toHaveValue(null)
+
+    const add = screen.getByPlaceholderText("Add a model id")
+    await user.type(add, "gp")
+    await user.click(await screen.findByRole("option", { name: /gpt-5/ }))
+
+    expect(context).toHaveValue(272000)
+    const levels = screen.getByRole("group", {
+      name: "Reasoning effort levels",
+    })
+    expect(within(levels).getByRole("button", { name: "low" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    )
+    expect(
+      within(levels).getByRole("button", { name: "high" })
+    ).toHaveAttribute("aria-pressed", "true")
+    expect(
+      within(levels).getByRole("button", { name: "medium" })
+    ).toHaveAttribute("aria-pressed", "false")
   })
 })
