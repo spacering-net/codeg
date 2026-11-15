@@ -953,6 +953,7 @@
       "saveClineConfig": "Save Cline Config",
       "saveHermesConfig": "Save Hermes Config",
       "saveCodeBuddyConfig": "Save CodeBuddy Config",
+      "saveCodeArtsConfig": "Save CodeArts Config",
       "saveKimiCodeConfig": "Save Kimi Code Config",
       "customInstall": "Custom install",
       "upgradeToLatest": "Upgrade to unreviewed latest {version}",
@@ -1480,6 +1481,15 @@
       "rawConfigHint": "Edit ~/.hermes/config.yaml directly. Saving here overwrites the file verbatim.",
       "saveRawConfig": "Save config.yaml"
     },
+    "codearts": {
+      "configManagement": "CodeArts Configuration",
+      "configDescription": "CodeArts CLI needs an AK/SK pair to run tasks. codeg bridges the CLI over ACP because the vendor CLI has no --acp command.",
+      "akLabel": "Access Key ID (AK)",
+      "akPlaceholder": "CODEARTS_CLI_AK",
+      "skLabel": "Secret Access Key (SK)",
+      "skPlaceholder": "CODEARTS_CLI_SK",
+      "envHint": "Saved as this agent's environment variables. Leave both empty to use the AK/SK from your operating system's user or system environment instead."
+    },
     "codebuddy": {
       "configManagement": "CodeBuddy Configuration",
       "configDescription": "CodeBuddy authenticates with an API key. Mainland China builds also require the environment set to “China (internal)”; iOA builds use “iOA”. The overseas build leaves it unset.",
@@ -1674,6 +1684,8 @@
       "hermesSaved": "Hermes config saved",
       "saveHermesFailed": "Failed to save Hermes config",
       "codeBuddySaved": "CodeBuddy config saved",
+      "codeArtsSaved": "CodeArts config saved",
+      "saveCodeArtsFailed": "Failed to save CodeArts config",
       "saveCodeBuddyFailed": "Failed to save CodeBuddy config",
       "kimiCodeSaved": "Kimi Code config saved",
       "saveKimiCodeFailed": "Failed to save Kimi Code config",

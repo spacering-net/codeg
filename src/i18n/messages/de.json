@@ -953,6 +953,7 @@
       "saveClineConfig": "Cline-Konfiguration speichern",
       "saveHermesConfig": "Hermes-Konfiguration speichern",
       "saveCodeBuddyConfig": "CodeBuddy-Konfiguration speichern",
+      "saveCodeArtsConfig": "Save CodeArts Config",
       "saveKimiCodeConfig": "Kimi-Code-Konfiguration speichern",
       "customInstall": "Benutzerdefinierte Installation",
       "upgradeToLatest": "Auf ungeprüfte neueste Version {version} aktualisieren",
@@ -1480,6 +1481,15 @@
       "rawConfigHint": "Bearbeite ~/.hermes/config.yaml direkt. Das Speichern hier überschreibt die Datei wortwörtlich.",
       "saveRawConfig": "config.yaml speichern"
     },
+    "codearts": {
+      "configManagement": "CodeArts Configuration",
+      "configDescription": "CodeArts CLI needs an AK/SK pair to run tasks. codeg bridges the CLI over ACP because the vendor CLI has no --acp command.",
+      "akLabel": "Access Key ID (AK)",
+      "akPlaceholder": "CODEARTS_CLI_AK",
+      "skLabel": "Secret Access Key (SK)",
+      "skPlaceholder": "CODEARTS_CLI_SK",
+      "envHint": "Saved as this agent's environment variables. Leave both empty to use the AK/SK from your operating system's user or system environment instead."
+    },
     "codebuddy": {
       "configManagement": "CodeBuddy-Konfiguration",
       "configDescription": "CodeBuddy authentifiziert sich mit einem API-Schlüssel. Builds für Festlandchina erfordern zudem die Umgebung „China (internal)“; iOA-Builds verwenden „iOA“. Der internationale Build lässt sie ungesetzt.",
@@ -1674,6 +1684,8 @@
       "hermesSaved": "Hermes-Konfiguration gespeichert",
       "saveHermesFailed": "Hermes-Konfiguration konnte nicht gespeichert werden",
       "codeBuddySaved": "CodeBuddy-Konfiguration gespeichert",
+      "codeArtsSaved": "CodeArts config saved",
+      "saveCodeArtsFailed": "Failed to save CodeArts config",
       "saveCodeBuddyFailed": "CodeBuddy-Konfiguration konnte nicht gespeichert werden",
       "kimiCodeSaved": "Kimi-Code-Konfiguration gespeichert",
       "saveKimiCodeFailed": "Speichern der Kimi-Code-Konfiguration fehlgeschlagen",

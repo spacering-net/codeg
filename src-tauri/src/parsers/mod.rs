@@ -433,7 +433,8 @@ pub fn build_agent_parser(agent_type: AgentType, env: &AgentEnv) -> Box<dyn Agen
         | AgentType::ZCode
         | AgentType::Trae
         | AgentType::CommandCode
-        | AgentType::MiniMaxCode => {
+        | AgentType::MiniMaxCode
+        | AgentType::CodeArts => {
             Box::new(acp_native::AcpNativeParser::for_env(agent_type, env))
         }
     };

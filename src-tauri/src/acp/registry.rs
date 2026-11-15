@@ -256,7 +256,7 @@ pub fn current_platform() -> &'static str {
     }
 }
 
-/// The twenty built-in agents. Excludes user-registered custom agents — use
+/// The twenty-one built-in agents. Excludes user-registered custom agents — use
 /// [`all_acp_agents`] for the live set.
 pub fn builtin_acp_agents() -> Vec<AgentType> {
     vec![
@@ -280,10 +280,11 @@ pub fn builtin_acp_agents() -> Vec<AgentType> {
         AgentType::Trae,
         AgentType::CommandCode,
         AgentType::MiniMaxCode,
+        AgentType::CodeArts,
     ]
 }
 
-/// Every agent codeg can currently drive: the twenty built-ins followed by
+/// Every agent codeg can currently drive: the twenty-one built-ins followed by
 /// the user's registered custom ACP agents (sorted by id).
 pub fn all_acp_agents() -> Vec<AgentType> {
     let mut agents = builtin_acp_agents();
@@ -324,6 +325,8 @@ pub fn registry_id_for(agent_type: AgentType) -> &'static str {
         AgentType::CommandCode => "codeg-command-code",
         // Preserve pre-existing hand-registered mcode / minimax-code agents.
         AgentType::MiniMaxCode => "codeg-minimax-code",
+        // Not in the ACP registry; prefixed like TRAE/CommandCode/MiniMax.
+        AgentType::CodeArts => "codeg-codearts-bridge",
         // A custom agent's registry id IS its identity.
         AgentType::Custom(id) => id,
     }
@@ -351,6 +354,7 @@ pub fn from_registry_id(id: &str) -> Option<AgentType> {
         "codeg-trae-cli" => Some(AgentType::Trae),
         "codeg-command-code" => Some(AgentType::CommandCode),
         "codeg-minimax-code" => Some(AgentType::MiniMaxCode),
+        "codeg-codearts-bridge" => Some(AgentType::CodeArts),
         // Only ids the user has actually registered resolve. An unregistered
         // id must stay `None` so the ACP-registry picker still offers it as
         // "addable" rather than treating it as already supported.
@@ -8384,6 +8388,31 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 // Leave upgrades to the official CLI installer until an
                 // unattended updater contract is verified.
                 update_args: None,
+            },
+        },
+        AgentType::CodeArts => AcpAgentMeta {
+            agent_type,
+            supports_mcp: false,
+            name: "Huawei CodeArts",
+            description: "Huawei Cloud CodeArts (Ma Dao) CLI, bridged to ACP by codeg",
+            // The vendor CLI has no `acp` subcommand (verified on 26.10.9:
+            // "The 'acp' command is not supported."). codeg therefore spawns its
+            // own in-process ACP bridge: `connection::build_agent` substitutes
+            // current_exe() + CODEARTS_BRIDGE_ARGS for this agent, while the
+            // vendor CLI below is what preflight/version/upgrade probe.
+            // `codearts run --format json` emits NDJSON events; the bridge maps
+            // them to session/update chunks. `codearts models --verbose` carries
+            // each model's options.creditRatioDisplay (e.g. "0.7x").
+            // Auth: CODEARTS_CLI_AK / CODEARTS_CLI_SK from the agent env, falling
+            // back to the OS user/machine environment; see the settings panel.
+            // History is codeg's own ACP transcript; native CLI history is not
+            // scanned (same as MiniMaxCode).
+            distribution: AgentDistribution::System {
+                cmd: "codearts",
+                args: &[],
+                env: &[],
+                install_url: "https://support.huaweicloud.com/usermanual-cli/codeartsagent_cli_0034.html",
+                update_args: Some(&["upgrade"]),
             },
         },
         // Handled by the early return above; keep this match exhaustive.

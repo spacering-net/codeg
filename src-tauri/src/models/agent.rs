@@ -42,12 +42,15 @@ pub enum AgentType {
     Trae,
     CommandCode,
     MiniMaxCode,
+    /// Huawei Cloud CodeArts (Ma Dao) CLI. The vendor CLI has no ACP server, so
+    /// codeg launches its own in-process bridge (see `acp::codearts_bridge`).
+    CodeArts,
     /// A user-registered ACP agent, identified by its ACP-registry id
     /// (interned). Ordered last so built-ins keep their relative order.
     Custom(&'static str),
 }
 
-/// The twenty compile-time agents, in declaration order. Does NOT include
+/// The twenty-one compile-time agents, in declaration order. Does NOT include
 /// custom agents — use [`crate::acp::registry::all_acp_agents`] for the live
 /// set that includes them.
 pub const BUILTIN_AGENT_TYPES: &[AgentType] = &[
@@ -71,6 +74,7 @@ pub const BUILTIN_AGENT_TYPES: &[AgentType] = &[
     AgentType::Trae,
     AgentType::CommandCode,
     AgentType::MiniMaxCode,
+    AgentType::CodeArts,
 ];
 
 impl AgentType {
@@ -88,6 +92,7 @@ impl AgentType {
                 | AgentType::Trae
                 | AgentType::CommandCode
                 | AgentType::MiniMaxCode
+                | AgentType::CodeArts
         )
     }
 
@@ -135,6 +140,7 @@ impl AgentType {
             AgentType::Trae => Cow::Borrowed("trae"),
             AgentType::CommandCode => Cow::Borrowed("command_code"),
             AgentType::MiniMaxCode => Cow::Borrowed("minimax_code"),
+            AgentType::CodeArts => Cow::Borrowed("code_arts"),
             AgentType::Custom(id) => Cow::Owned(format!("{CUSTOM_AGENT_WIRE_PREFIX}{id}")),
         }
     }
@@ -163,6 +169,7 @@ impl AgentType {
             "trae" => Some(AgentType::Trae),
             "command_code" => Some(AgentType::CommandCode),
             "minimax_code" => Some(AgentType::MiniMaxCode),
+            "code_arts" => Some(AgentType::CodeArts),
             other => other
                 .strip_prefix(CUSTOM_AGENT_WIRE_PREFIX)
                 .and_then(AgentType::custom),
@@ -215,6 +222,7 @@ pub fn is_valid_custom_agent_id(id: &str) -> bool {
                 | "qoder"
                 | "antigravity"
                 | "kiro"
+                | "code_arts"
         )
 }
 
@@ -255,6 +263,7 @@ impl fmt::Display for AgentType {
             AgentType::Trae => write!(f, "TRAE CLI"),
             AgentType::CommandCode => write!(f, "Command Code"),
             AgentType::MiniMaxCode => write!(f, "MiniMax Code"),
+            AgentType::CodeArts => write!(f, "Huawei CodeArts"),
             // Prefer the registered display name; fall back to the raw id when
             // the registry has not been hydrated (or the agent was deleted
             // while conversations still reference it).
@@ -295,6 +304,7 @@ mod tests {
             (AgentType::Trae, "trae"),
             (AgentType::CommandCode, "command_code"),
             (AgentType::MiniMaxCode, "minimax_code"),
+            (AgentType::CodeArts, "code_arts"),
         ];
         for (agent, wire) in expected {
             assert_eq!(agent.as_wire(), wire);

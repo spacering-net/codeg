@@ -953,6 +953,7 @@
       "saveClineConfig": "Cline 설정 저장",
       "saveHermesConfig": "Hermes 설정 저장",
       "saveCodeBuddyConfig": "CodeBuddy 구성 저장",
+      "saveCodeArtsConfig": "Save CodeArts Config",
       "saveKimiCodeConfig": "Kimi Code 구성 저장",
       "customInstall": "사용자 지정 설치",
       "upgradeToLatest": "검토되지 않은 최신 버전 {version}(으)로 업그레이드",
@@ -1480,6 +1481,15 @@
       "rawConfigHint": "~/.hermes/config.yaml을 직접 편집합니다. 여기서 저장하면 파일이 그대로 덮어쓰여집니다.",
       "saveRawConfig": "config.yaml 저장"
     },
+    "codearts": {
+      "configManagement": "CodeArts Configuration",
+      "configDescription": "CodeArts CLI needs an AK/SK pair to run tasks. codeg bridges the CLI over ACP because the vendor CLI has no --acp command.",
+      "akLabel": "Access Key ID (AK)",
+      "akPlaceholder": "CODEARTS_CLI_AK",
+      "skLabel": "Secret Access Key (SK)",
+      "skPlaceholder": "CODEARTS_CLI_SK",
+      "envHint": "Saved as this agent's environment variables. Leave both empty to use the AK/SK from your operating system's user or system environment instead."
+    },
     "codebuddy": {
       "configManagement": "CodeBuddy 구성",
       "configDescription": "CodeBuddy는 API 키로 인증합니다. 중국 버전은 환경을 ‘중국(internal)’으로 설정해야 하며, iOA 버전은 ‘iOA’를 사용하고, 해외 버전은 설정하지 않습니다.",
@@ -1674,6 +1684,8 @@
       "hermesSaved": "Hermes 설정 저장됨",
       "saveHermesFailed": "Hermes 설정 저장 실패",
       "codeBuddySaved": "CodeBuddy 구성이 저장되었습니다",
+      "codeArtsSaved": "CodeArts config saved",
+      "saveCodeArtsFailed": "Failed to save CodeArts config",
       "saveCodeBuddyFailed": "CodeBuddy 구성 저장에 실패했습니다",
       "kimiCodeSaved": "Kimi Code 구성이 저장되었습니다",
       "saveKimiCodeFailed": "Kimi Code 구성 저장 실패",

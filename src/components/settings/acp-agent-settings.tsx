@@ -217,6 +217,7 @@ import {
   CommandCodeConfigPanel,
 } from "./command-code-config-panel"
 import { CodeBuddyConfigPanel } from "./codebuddy-config-panel"
+import { CodeArtsConfigPanel } from "./codearts-config-panel"
 import { CursorConfigPanel } from "./cursor-config-panel"
 import {
   DEEPSEEK_DEFAULT_BASE_URL,
@@ -11885,6 +11886,19 @@ base_url = "https://api.openai.com/v1"`}
                   </div>
                 ) : selectedAgent.agent_type === "code_buddy" ? (
                   <CodeBuddyConfigPanel
+                    agent={selectedAgent}
+                    saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                    onSave={(env, enabled) =>
+                      persistEnv(
+                        selectedAgent.agent_type,
+                        enabled,
+                        envMapToText(env),
+                        selectedAgent.model_provider_id
+                      )
+                    }
+                  />
+                ) : selectedAgent.agent_type === "code_arts" ? (
+                  <CodeArtsConfigPanel
                     agent={selectedAgent}
                     saving={Boolean(savingEnv[selectedAgent.agent_type])}
                     onSave={(env, enabled) =>

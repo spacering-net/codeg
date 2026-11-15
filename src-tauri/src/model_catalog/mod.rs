@@ -304,6 +304,14 @@ fn bundled_catalog() -> CatalogFile {
     })
 }
 
+/// The trimmed litellm entries compiled into the binary, for in-process callers
+/// that need capability metadata (e.g. reasoning-effort levels) without a live
+/// fetch or a database handle — the CodeArts ACP bridge runs as a standalone
+/// subprocess and has neither.
+pub fn bundled_entries() -> Vec<CatalogEntry> {
+    bundled_catalog().entries
+}
+
 fn cache_path(data_dir: &Path) -> PathBuf {
     data_dir
         .join("cache")

@@ -953,6 +953,7 @@
       "saveClineConfig": "حفظ تكوين Cline",
       "saveHermesConfig": "حفظ تكوين Hermes",
       "saveCodeBuddyConfig": "حفظ إعدادات CodeBuddy",
+      "saveCodeArtsConfig": "Save CodeArts Config",
       "saveKimiCodeConfig": "حفظ إعدادات Kimi Code",
       "customInstall": "تثبيت مخصص",
       "upgradeToLatest": "الترقية إلى أحدث إصدار غير مُراجَع {version}",
@@ -1480,6 +1481,15 @@
       "rawConfigHint": "حرّر ~/.hermes/config.yaml مباشرةً. الحفظ هنا يستبدل الملف حرفيًا.",
       "saveRawConfig": "حفظ config.yaml"
     },
+    "codearts": {
+      "configManagement": "CodeArts Configuration",
+      "configDescription": "CodeArts CLI needs an AK/SK pair to run tasks. codeg bridges the CLI over ACP because the vendor CLI has no --acp command.",
+      "akLabel": "Access Key ID (AK)",
+      "akPlaceholder": "CODEARTS_CLI_AK",
+      "skLabel": "Secret Access Key (SK)",
+      "skPlaceholder": "CODEARTS_CLI_SK",
+      "envHint": "Saved as this agent's environment variables. Leave both empty to use the AK/SK from your operating system's user or system environment instead."
+    },
     "codebuddy": {
       "configManagement": "تكوين CodeBuddy",
       "configDescription": "يصادق CodeBuddy باستخدام مفتاح API. تتطلب إصدارات الصين أيضًا ضبط البيئة على «الصين (internal)»؛ وتستخدم إصدارات iOA «iOA». أما الإصدار الخارجي فيتركها غير مضبوطة.",
@@ -1674,6 +1684,8 @@
       "hermesSaved": "تم حفظ تكوين Hermes",
       "saveHermesFailed": "فشل في حفظ تكوين Hermes",
       "codeBuddySaved": "تم حفظ إعدادات CodeBuddy",
+      "codeArtsSaved": "CodeArts config saved",
+      "saveCodeArtsFailed": "Failed to save CodeArts config",
       "saveCodeBuddyFailed": "فشل حفظ إعدادات CodeBuddy",
       "kimiCodeSaved": "تم حفظ إعدادات Kimi Code",
       "saveKimiCodeFailed": "فشل حفظ إعدادات Kimi Code",

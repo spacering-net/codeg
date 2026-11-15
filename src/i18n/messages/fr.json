@@ -953,6 +953,7 @@
       "saveClineConfig": "Enregistrer la configuration Cline",
       "saveHermesConfig": "Enregistrer la configuration Hermes",
       "saveCodeBuddyConfig": "Enregistrer la configuration CodeBuddy",
+      "saveCodeArtsConfig": "Save CodeArts Config",
       "saveKimiCodeConfig": "Enregistrer la configuration de Kimi Code",
       "customInstall": "Installation personnalisée",
       "upgradeToLatest": "Mettre à niveau vers la dernière non examinée {version}",
@@ -1480,6 +1481,15 @@
       "rawConfigHint": "Modifiez directement ~/.hermes/config.yaml. Enregistrer ici écrase le fichier tel quel.",
       "saveRawConfig": "Enregistrer config.yaml"
     },
+    "codearts": {
+      "configManagement": "CodeArts Configuration",
+      "configDescription": "CodeArts CLI needs an AK/SK pair to run tasks. codeg bridges the CLI over ACP because the vendor CLI has no --acp command.",
+      "akLabel": "Access Key ID (AK)",
+      "akPlaceholder": "CODEARTS_CLI_AK",
+      "skLabel": "Secret Access Key (SK)",
+      "skPlaceholder": "CODEARTS_CLI_SK",
+      "envHint": "Saved as this agent's environment variables. Leave both empty to use the AK/SK from your operating system's user or system environment instead."
+    },
     "codebuddy": {
       "configManagement": "Configuration de CodeBuddy",
       "configDescription": "CodeBuddy s'authentifie avec une clé API. Les versions pour la Chine continentale nécessitent aussi de définir l'environnement sur « Chine (internal) » ; les versions iOA utilisent « iOA ». La version internationale la laisse non définie.",
@@ -1674,6 +1684,8 @@
       "hermesSaved": "Configuration Hermes enregistrée",
       "saveHermesFailed": "Échec de l'enregistrement de la configuration Hermes",
       "codeBuddySaved": "Configuration CodeBuddy enregistrée",
+      "codeArtsSaved": "CodeArts config saved",
+      "saveCodeArtsFailed": "Failed to save CodeArts config",
       "saveCodeBuddyFailed": "Échec de l'enregistrement de la configuration CodeBuddy",
       "kimiCodeSaved": "Configuration de Kimi Code enregistrée",
       "saveKimiCodeFailed": "Échec de l'enregistrement de la configuration de Kimi Code",

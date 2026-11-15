@@ -953,6 +953,7 @@
       "saveClineConfig": "Guardar configuración de Cline",
       "saveHermesConfig": "Guardar configuración de Hermes",
       "saveCodeBuddyConfig": "Guardar configuración de CodeBuddy",
+      "saveCodeArtsConfig": "Save CodeArts Config",
       "saveKimiCodeConfig": "Guardar configuración de Kimi Code",
       "customInstall": "Instalación personalizada",
       "upgradeToLatest": "Actualizar a la última sin revisar {version}",
@@ -1480,6 +1481,15 @@
       "rawConfigHint": "Edita ~/.hermes/config.yaml directamente. Guardar aquí sobrescribe el archivo tal cual.",
       "saveRawConfig": "Guardar config.yaml"
     },
+    "codearts": {
+      "configManagement": "CodeArts Configuration",
+      "configDescription": "CodeArts CLI needs an AK/SK pair to run tasks. codeg bridges the CLI over ACP because the vendor CLI has no --acp command.",
+      "akLabel": "Access Key ID (AK)",
+      "akPlaceholder": "CODEARTS_CLI_AK",
+      "skLabel": "Secret Access Key (SK)",
+      "skPlaceholder": "CODEARTS_CLI_SK",
+      "envHint": "Saved as this agent's environment variables. Leave both empty to use the AK/SK from your operating system's user or system environment instead."
+    },
     "codebuddy": {
       "configManagement": "Configuración de CodeBuddy",
       "configDescription": "CodeBuddy se autentica con una clave de API. Las versiones para China continental también requieren establecer el entorno en «China (internal)»; las versiones iOA usan «iOA». La versión internacional lo deja sin definir.",
@@ -1674,6 +1684,8 @@
       "hermesSaved": "Configuración de Hermes guardada",
       "saveHermesFailed": "Error al guardar la configuración de Hermes",
       "codeBuddySaved": "Configuración de CodeBuddy guardada",
+      "codeArtsSaved": "CodeArts config saved",
+      "saveCodeArtsFailed": "Failed to save CodeArts config",
       "saveCodeBuddyFailed": "No se pudo guardar la configuración de CodeBuddy",
       "kimiCodeSaved": "Configuración de Kimi Code guardada",
       "saveKimiCodeFailed": "Error al guardar la configuración de Kimi Code",

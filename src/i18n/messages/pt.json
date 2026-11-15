@@ -953,6 +953,7 @@
       "saveClineConfig": "Salvar configuração do Cline",
       "saveHermesConfig": "Salvar configuração do Hermes",
       "saveCodeBuddyConfig": "Salvar configuração do CodeBuddy",
+      "saveCodeArtsConfig": "Save CodeArts Config",
       "saveKimiCodeConfig": "Salvar configuração do Kimi Code",
       "customInstall": "Instalação personalizada",
       "upgradeToLatest": "Atualizar para a mais recente não revisada {version}",
@@ -1480,6 +1481,15 @@
       "rawConfigHint": "Edite ~/.hermes/config.yaml diretamente. Salvar aqui sobrescreve o arquivo exatamente como está.",
       "saveRawConfig": "Salvar config.yaml"
     },
+    "codearts": {
+      "configManagement": "CodeArts Configuration",
+      "configDescription": "CodeArts CLI needs an AK/SK pair to run tasks. codeg bridges the CLI over ACP because the vendor CLI has no --acp command.",
+      "akLabel": "Access Key ID (AK)",
+      "akPlaceholder": "CODEARTS_CLI_AK",
+      "skLabel": "Secret Access Key (SK)",
+      "skPlaceholder": "CODEARTS_CLI_SK",
+      "envHint": "Saved as this agent's environment variables. Leave both empty to use the AK/SK from your operating system's user or system environment instead."
+    },
     "codebuddy": {
       "configManagement": "Configuração do CodeBuddy",
       "configDescription": "O CodeBuddy autentica com uma chave de API. As versões da China continental também exigem o ambiente definido como “China (internal)”; as versões iOA usam “iOA”. A versão internacional deixa sem definir.",
@@ -1674,6 +1684,8 @@
       "hermesSaved": "Configuração do Hermes salva",
       "saveHermesFailed": "Falha ao salvar a configuração do Hermes",
       "codeBuddySaved": "Configuração do CodeBuddy salva",
+      "codeArtsSaved": "CodeArts config saved",
+      "saveCodeArtsFailed": "Failed to save CodeArts config",
       "saveCodeBuddyFailed": "Falha ao salvar a configuração do CodeBuddy",
       "kimiCodeSaved": "Configuração do Kimi Code salva",
       "saveKimiCodeFailed": "Falha ao salvar a configuração do Kimi Code",

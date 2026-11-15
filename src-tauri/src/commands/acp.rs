@@ -9496,6 +9496,7 @@ pub(crate) fn agent_system_instructions_path(agent_type: AgentType) -> Option<Pa
         | AgentType::Cursor
         | AgentType::MiniMaxCode
         | AgentType::OpenClaw
+        | AgentType::CodeArts
         | AgentType::Custom(_) => None,
     }
 }
@@ -10124,7 +10125,7 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // MiniMax Code's native profile roots and external skill discovery are
         // CLI-owned; do not install into a different profile than the launch
         // env selects.
-        AgentType::MiniMaxCode => None,
+        AgentType::MiniMaxCode | AgentType::CodeArts => None,
         // codeg cannot detect where an arbitrary ACP agent loads skills from,
         // so custom agents are gated on the user's own declaration: that the
         // agent reads the shared `.agents/skills` store (the cross-agent
@@ -11864,7 +11865,7 @@ fn cascade_update_agent_config(
             // `KIRO_API_KEY` in the agent's env) and accepts no custom base
             // URL, so it stays off the model-provider credential cascade.
         }
-        AgentType::ZCode | AgentType::MiniMaxCode => {
+        AgentType::ZCode | AgentType::MiniMaxCode | AgentType::CodeArts => {
             // Authentication and providers belong to the official agent runtime.
         }
         AgentType::Trae => {

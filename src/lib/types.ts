@@ -20,6 +20,7 @@ export type BuiltinAgentType =
   | "zcode"
   | "trae"
   | "command_code"
+  | "code_arts"
 
 /**
  * Which agent backs a conversation.
@@ -1146,6 +1147,7 @@ export const AGENT_DISPLAY_ORDER: BuiltinAgentType[] = [
   "zcode",
   "trae",
   "command_code",
+  "code_arts",
 ]
 
 const AGENT_DISPLAY_ORDER_INDEX = new Map<AgentType, number>(
@@ -1185,6 +1187,7 @@ export const ALL_AGENT_TYPES: BuiltinAgentType[] = [
   "zcode",
   "trae",
   "command_code",
+  "code_arts",
 ]
 
 export const MODEL_PROVIDER_AGENT_TYPES: BuiltinAgentType[] = [
@@ -1501,6 +1504,7 @@ export const AGENT_LABELS: Record<BuiltinAgentType, string> = {
   zcode: "ZCode",
   trae: "TRAE CLI",
   command_code: "Command Code",
+  code_arts: "Huawei CodeArts",
 }
 
 export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
@@ -1524,6 +1528,7 @@ export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
   zcode: "bg-[#111827]",
   trae: "bg-[#32F08C]",
   command_code: "bg-black",
+  code_arts: "bg-[#FF4D4F]",
 }
 
 // ACP connection status (matches Rust ConnectionStatus)

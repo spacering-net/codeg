@@ -953,6 +953,7 @@
       "saveClineConfig": "保存 Cline 配置",
       "saveHermesConfig": "保存 Hermes 配置",
       "saveCodeBuddyConfig": "保存 CodeBuddy 配置",
+      "saveCodeArtsConfig": "保存码道配置",
       "saveKimiCodeConfig": "保存 Kimi Code 配置",
       "customInstall": "自定义安装",
       "upgradeToLatest": "升级到未经审查的最新版本 {version}",
@@ -1480,6 +1481,15 @@
       "rawConfigHint": "直接编辑 ~/.hermes/config.yaml。在此保存将原样覆盖该文件。",
       "saveRawConfig": "保存 config.yaml"
     },
+    "codearts": {
+      "configManagement": "码道配置",
+      "configDescription": "码道 CLI 需要 AK/SK 才能执行任务。由于官方 CLI 不支持 --acp，codeg 通过 ACP 桥接它。",
+      "akLabel": "Access Key ID (AK)",
+      "akPlaceholder": "CODEARTS_CLI_AK",
+      "skLabel": "Secret Access Key (SK)",
+      "skPlaceholder": "CODEARTS_CLI_SK",
+      "envHint": "会写入该智能体的环境变量。两个都留空时，改用操作系统用户级或系统级环境变量中的 AK/SK。"
+    },
     "codebuddy": {
       "configManagement": "CodeBuddy 配置",
       "configDescription": "CodeBuddy 使用 API Key 进行认证。中国版还必须将环境设为“中国版（internal）”；iOA 版使用“iOA”；海外版则不设置。",
@@ -1674,6 +1684,8 @@
       "hermesSaved": "Hermes 配置已保存",
       "saveHermesFailed": "保存 Hermes 配置失败",
       "codeBuddySaved": "CodeBuddy 配置已保存",
+      "codeArtsSaved": "码道配置已保存",
+      "saveCodeArtsFailed": "保存码道配置失败",
       "saveCodeBuddyFailed": "保存 CodeBuddy 配置失败",
       "kimiCodeSaved": "Kimi Code 配置已保存",
       "saveKimiCodeFailed": "保存 Kimi Code 配置失败",

@@ -16,6 +16,8 @@ pub mod codex_endpoint_catalog;
 pub mod codex_goal;
 pub mod codex_model_catalog;
 pub mod codex_runtime;
+pub mod codearts_bridge;
+pub mod codearts_models;
 pub mod command_code;
 pub mod computer_tools;
 pub mod connection;
