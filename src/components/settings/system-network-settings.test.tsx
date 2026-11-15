@@ -65,6 +65,13 @@ vi.mock("@/lib/api", () => ({
   stageRestoreDesktop: vi.fn(),
   stageRestoreWeb: vi.fn(),
   uploadBackupWeb: vi.fn(),
+  // The model catalog card, loaded alongside the proxy settings.
+  getModelCatalogSettings: vi.fn(async () => ({
+    url: "https://catalog.test/models.json",
+    autoUpdate: true,
+  })),
+  updateModelCatalogSettings: vi.fn(),
+  refreshModelCatalog: vi.fn(),
 }))
 
 vi.mock("sonner", () => ({

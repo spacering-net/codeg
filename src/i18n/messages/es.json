@@ -349,7 +349,21 @@
       "downloadFailed": "No se pudo descargar el paquete de actualización. Inténtalo más tarde.",
       "installFailed": "No se pudo instalar la actualización. Cierra la app e inténtalo de nuevo.",
       "unknown": "La actualización falló. Inténtalo más tarde."
-    }
+    },
+    "modelCatalogTitle": "Catálogo de modelos",
+    "modelCatalogDescription": "La lista de modelos que rellena la ventana de contexto, la salida máxima y los niveles de razonamiento de los ID personalizados. Se descarga de la URL de abajo y se guarda en caché local.",
+    "modelCatalogUrlLabel": "URL del catálogo",
+    "modelCatalogUrlHint": "Un model_prices_and_context_window.json compatible con litellm. La descarga usa el proxy de arriba.",
+    "modelCatalogAutoUpdate": "Actualizar automáticamente",
+    "modelCatalogAutoUpdateHint": "Se actualiza una vez al día en segundo plano.",
+    "modelCatalogRefresh": "Actualizar ahora",
+    "modelCatalogRefreshing": "Actualizando…",
+    "modelCatalogRefreshed": "Catálogo actualizado: {count} modelos",
+    "modelCatalogRefreshFailed": "Error al actualizar: {message}",
+    "modelCatalogSaveFailed": "No se pudo guardar la configuración del catálogo: {message}",
+    "modelCatalogRestoreDefault": "Restaurar predeterminado",
+    "modelCatalogSummary": "{count} modelos · actualizado {time}",
+    "modelCatalogSummaryNever": "{count} modelos · copia integrada"
   },
   "VersionControlSettings": {
     "loading": "Cargando...",
@@ -7793,5 +7807,12 @@
         "probeFailed": "El navegador integrado no pudo confirmar que llega al host remoto a través del túnel. Vuelve a intentarlo en un momento."
       }
     }
+  },
+  "ModelCatalog": {
+    "summary": "{count} modelos · actualizado {time}",
+    "neverUpdated": "sin actualizar",
+    "loading": "Cargando el catálogo de modelos…",
+    "noMatch": "Ningún modelo del catálogo coincide",
+    "refresh": "Actualizar catálogo de modelos"
   }
 }

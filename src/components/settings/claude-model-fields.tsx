@@ -6,6 +6,9 @@ import { Input } from "@/components/ui/input"
 import {
   ModelIdInputWithFetch,
   ModelIdListField,
+  catalogDescription,
+  catalogDisplayName,
+  useModelCatalog,
 } from "@/components/settings/provider-models"
 import type { ProviderModelsState } from "@/hooks/use-provider-models"
 import type { ClaudeProviderModel } from "@/lib/types"
@@ -109,6 +112,7 @@ export function ClaudeProviderModelFields({
   state: ProviderModelsState
 }) {
   const t = useTranslations("ModelProviderSettings")
+  const catalog = useModelCatalog()
   const set = (patch: Partial<ClaudeProviderModel>) =>
     onChange({ ...value, ...patch })
   return (
@@ -125,6 +129,17 @@ export function ClaudeProviderModelFields({
               value={value[field.key] ?? ""}
               onChange={(next) => set({ [field.key]: next })}
               state={state}
+              catalog={catalog}
+              onCatalogPick={
+                field.key === "customOption"
+                  ? (entry) =>
+                      set({
+                        customOption: entry.model,
+                        customOptionName: catalogDisplayName(entry),
+                        customOptionDescription: catalogDescription(entry),
+                      })
+                  : undefined
+              }
               placeholder={field.placeholder}
             />
           </div>

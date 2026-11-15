@@ -32,6 +32,7 @@ pub mod git;
 pub mod logging;
 pub mod mcp;
 pub mod mcp_service;
+pub mod model_catalog;
 pub mod model_provider;
 pub mod office_tools;
 pub mod office_watch_proxy;

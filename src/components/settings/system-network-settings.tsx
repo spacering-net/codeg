@@ -10,6 +10,7 @@ import {
 import {
   ArrowUpCircle,
   CheckCircle2,
+  Database,
   Languages,
   Loader2,
   Power,
@@ -46,8 +47,11 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import {
+  getModelCatalogSettings,
   getSystemAutostartSettings,
   getSystemProxySettings,
+  refreshModelCatalog,
+  updateModelCatalogSettings,
   updateSystemAutostartSettings,
   updateSystemLanguageSettings,
   updateSystemProxySettings,
@@ -59,7 +63,7 @@ import { describeAppUpdateError, usesTauriUpdater } from "@/lib/updater"
 import { useAppUpdate } from "@/components/providers/update-provider"
 import { APP_LOCALES } from "@/lib/i18n"
 import { toErrorMessage } from "@/lib/app-error"
-import type { AppCommandError } from "@/lib/types"
+import type { AppCommandError, ModelCatalogStatus } from "@/lib/types"
 
 function GithubMarkIcon({ className }: { className?: string }) {
   return (
@@ -86,6 +90,12 @@ const PROXY_EXAMPLE = "http://127.0.0.1:7890"
 // Written exactly as the backend stores the list — comma-separated, no spaces —
 // so the example, the placeholder and the saved value all read the same.
 const PROXY_BYPASS_EXAMPLE = "git.example.com,.example.org,192.168.1.10"
+
+// Mirrors `DEFAULT_CATALOG_URL` in src-tauri/src/model_catalog/mod.rs; the
+// backend answers with the stored value, this is only what "restore default"
+// writes back.
+const MODEL_CATALOG_DEFAULT_URL =
+  "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
 
 // A value in a hint, set apart from the prose so its punctuation is not read
 // as the sentence's. `dir="ltr"` keeps it intact in Arabic, where the leading
@@ -121,6 +131,16 @@ export function SystemNetworkSettings() {
   const [noProxy, setNoProxy] = useState("")
   const [loadError, setLoadError] = useState<string | null>(null)
   const [rollbackConfirmOpen, setRollbackConfirmOpen] = useState(false)
+
+  // The model catalog: the URL it downloads from, whether the background loop
+  // keeps it fresh, and what the last manual refresh answered.
+  const [catalogUrl, setCatalogUrl] = useState("")
+  const [catalogAutoUpdate, setCatalogAutoUpdate] = useState(true)
+  const [catalogSaving, setCatalogSaving] = useState(false)
+  const [catalogRefreshing, setCatalogRefreshing] = useState(false)
+  const [catalogStatus, setCatalogStatus] = useState<ModelCatalogStatus | null>(
+    null
+  )
 
   // Launch at login registers *this* machine's executable with the OS, so it
   // only means something for a local Tauri shell — a remote workspace window
@@ -256,7 +276,7 @@ export function SystemNetworkSettings() {
     setLoadError(null)
 
     try {
-      const [proxySettings, autostart] = await Promise.all([
+      const [proxySettings, autostart, catalogSettings] = await Promise.all([
         getSystemProxySettings(),
         // Kept out of the shared rejection path: a machine that cannot report
         // its login items must not blank out the proxy and language cards.
@@ -269,11 +289,14 @@ export function SystemNetworkSettings() {
               }
             )
           : Promise.resolve(null),
+        getModelCatalogSettings(),
       ])
 
       setEnabled(proxySettings.enabled)
       setProxyUrl(proxySettings.proxy_url ?? "")
       setNoProxy(proxySettings.no_proxy ?? "")
+      setCatalogUrl(catalogSettings.url)
+      setCatalogAutoUpdate(catalogSettings.autoUpdate)
 
       if (autostart) {
         setAutostartEnabled(autostart.settings?.enabled ?? false)
@@ -330,6 +353,50 @@ export function SystemNetworkSettings() {
     },
     [t]
   )
+
+  const saveCatalogSettings = useCallback(
+    async (nextUrl: string, nextAutoUpdate: boolean) => {
+      if (!nextUrl.trim()) {
+        setCatalogUrl(MODEL_CATALOG_DEFAULT_URL)
+        return
+      }
+      setCatalogSaving(true)
+      try {
+        const next = await updateModelCatalogSettings({
+          url: nextUrl.trim(),
+          autoUpdate: nextAutoUpdate,
+        })
+        setCatalogUrl(next.url)
+        setCatalogAutoUpdate(next.autoUpdate)
+      } catch (err) {
+        const message = toErrorMessage(err)
+        toast.error(t("modelCatalogSaveFailed", { message }))
+      } finally {
+        setCatalogSaving(false)
+      }
+    },
+    [t]
+  )
+
+  const refreshCatalog = useCallback(async () => {
+    setCatalogRefreshing(true)
+    try {
+      const status = await refreshModelCatalog()
+      setCatalogStatus(status)
+      setCatalogUrl(status.url)
+      setCatalogAutoUpdate(status.autoUpdate)
+      if (status.error) {
+        toast.error(t("modelCatalogRefreshFailed", { message: status.error }))
+      } else {
+        toast.success(t("modelCatalogRefreshed", { count: status.entryCount }))
+      }
+    } catch (err) {
+      const message = toErrorMessage(err)
+      toast.error(t("modelCatalogRefreshFailed", { message }))
+    } finally {
+      setCatalogRefreshing(false)
+    }
+  }, [t])
 
   const saveAutostartSettings = useCallback(
     async (next: boolean, prev: boolean) => {
@@ -800,6 +867,109 @@ export function SystemNetworkSettings() {
               })}
             </p>
           </div>
+        </section>
+
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Database className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">{t("modelCatalogTitle")}</h2>
+          </div>
+
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("modelCatalogDescription")}
+          </p>
+
+          <div className="space-y-2">
+            <label
+              htmlFor="model-catalog-url"
+              className="text-xs font-medium text-muted-foreground"
+            >
+              {t("modelCatalogUrlLabel")}
+            </label>
+            <Input
+              id="model-catalog-url"
+              dir="ltr"
+              value={catalogUrl}
+              onChange={(event) => setCatalogUrl(event.target.value)}
+              onBlur={() =>
+                void saveCatalogSettings(catalogUrl, catalogAutoUpdate)
+              }
+              disabled={catalogSaving || catalogRefreshing}
+            />
+            <p className="text-2xs text-muted-foreground">
+              {t("modelCatalogUrlHint")}
+            </p>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-sm">{t("modelCatalogAutoUpdate")}</p>
+              <p className="text-2xs text-muted-foreground">
+                {t("modelCatalogAutoUpdateHint")}
+              </p>
+            </div>
+            <Switch
+              checked={catalogAutoUpdate}
+              disabled={catalogSaving}
+              onCheckedChange={(next) => {
+                setCatalogAutoUpdate(next)
+                void saveCatalogSettings(catalogUrl, next)
+              }}
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void refreshCatalog()}
+              disabled={catalogRefreshing || catalogSaving}
+            >
+              {catalogRefreshing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              {catalogRefreshing
+                ? t("modelCatalogRefreshing")
+                : t("modelCatalogRefresh")}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                void saveCatalogSettings(
+                  MODEL_CATALOG_DEFAULT_URL,
+                  catalogAutoUpdate
+                )
+              }
+              disabled={
+                catalogSaving || catalogUrl === MODEL_CATALOG_DEFAULT_URL
+              }
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              {t("modelCatalogRestoreDefault")}
+            </Button>
+          </div>
+
+          {catalogStatus && (
+            <p className="text-2xs text-muted-foreground">
+              {catalogStatus.updatedAt
+                ? t("modelCatalogSummary", {
+                    count: catalogStatus.entryCount,
+                    time: new Intl.DateTimeFormat(locale, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    }).format(new Date(catalogStatus.updatedAt * 1000)),
+                  })
+                : t("modelCatalogSummaryNever", {
+                    count: catalogStatus.entryCount,
+                  })}
+            </p>
+          )}
+          {catalogStatus?.error && (
+            <p className="text-2xs text-destructive">{catalogStatus.error}</p>
+          )}
         </section>
 
         <section className="rounded-xl border bg-card p-4 space-y-4">

@@ -349,7 +349,21 @@
       "downloadFailed": "更新パッケージのダウンロードに失敗しました。しばらくしてから再試行してください。",
       "installFailed": "更新のインストールに失敗しました。アプリを閉じて再試行してください。",
       "unknown": "更新に失敗しました。しばらくしてから再試行してください。"
-    }
+    },
+    "modelCatalogTitle": "モデルカタログ",
+    "modelCatalogDescription": "カスタムモデル ID のコンテキストウィンドウ・最大出力・推論レベルを自動入力するためのモデル一覧です。下の URL から取得し、ローカルにキャッシュします。",
+    "modelCatalogUrlLabel": "カタログ URL",
+    "modelCatalogUrlHint": "litellm 互換の model_prices_and_context_window.json を指定します。取得は上のプロキシ経由です。",
+    "modelCatalogAutoUpdate": "自動更新",
+    "modelCatalogAutoUpdateHint": "バックグラウンドで 1 日 1 回更新します。",
+    "modelCatalogRefresh": "今すぐ更新",
+    "modelCatalogRefreshing": "更新中…",
+    "modelCatalogRefreshed": "モデルカタログを更新しました：{count} 件",
+    "modelCatalogRefreshFailed": "更新に失敗しました：{message}",
+    "modelCatalogSaveFailed": "モデルカタログ設定を保存できませんでした：{message}",
+    "modelCatalogRestoreDefault": "既定に戻す",
+    "modelCatalogSummary": "{count} 件のモデル · {time} に更新",
+    "modelCatalogSummaryNever": "{count} 件のモデル · 内蔵スナップショット"
   },
   "VersionControlSettings": {
     "loading": "読み込み中...",
@@ -7793,5 +7807,12 @@
         "probeFailed": "内蔵ブラウザーがトンネル経由でリモートホストに届くことを確認できませんでした。しばらくしてからもう一度お試しください。"
       }
     }
+  },
+  "ModelCatalog": {
+    "summary": "{count} 件のモデル · {time} に更新",
+    "neverUpdated": "未更新",
+    "loading": "モデルカタログを読み込み中…",
+    "noMatch": "モデルカタログに該当するモデルがありません",
+    "refresh": "モデルカタログを更新"
   }
 }

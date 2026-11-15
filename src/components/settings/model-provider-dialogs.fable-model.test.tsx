@@ -11,9 +11,14 @@ import type { ReactNode } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
-import { createModelProvider, updateModelProvider } from "@/lib/api"
+import {
+  createModelProvider,
+  getModelCatalog,
+  updateModelProvider,
+} from "@/lib/api"
 import type { ModelProviderInfo } from "@/lib/types"
 
+import { resetModelCatalogCacheForTests } from "./provider-models"
 import { AddModelProviderDialog } from "./add-model-provider-dialog"
 import { EditModelProviderDialog } from "./edit-model-provider-dialog"
 
@@ -56,6 +61,7 @@ function fieldUnder(label: string): HTMLElement {
 
 describe("model provider dialogs — the Claude Fable model pin", () => {
   beforeEach(() => {
+    resetModelCatalogCacheForTests()
     vi.mocked(createModelProvider).mockResolvedValue(CLAUDE_PROVIDER)
     vi.mocked(updateModelProvider).mockResolvedValue({
       provider: CLAUDE_PROVIDER,
@@ -110,5 +116,55 @@ describe("model provider dialogs — the Claude Fable model pin", () => {
       opus: "gw/opus",
       fable: "gw/fable-2",
     })
+  })
+
+  it("fills the custom model name and description from a catalog pick", async () => {
+    vi.mocked(getModelCatalog).mockResolvedValue({
+      status: {
+        url: "https://catalog.test/models.json",
+        autoUpdate: true,
+        entryCount: 1,
+        updatedAt: null,
+        source: "bundled",
+        error: null,
+      },
+      entries: [
+        {
+          id: "openai/gpt-5",
+          model: "gpt-5",
+          provider: "openai",
+          maxInputTokens: 272000,
+          maxOutputTokens: 128000,
+          supportsReasoning: true,
+          reasoningEffortLevels: ["low", "high"],
+          defaultReasoningEffort: "low",
+          supportsVision: true,
+          supportsFunctionCalling: true,
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    render(
+      withIntl(
+        <AddModelProviderDialog
+          open
+          onOpenChange={() => {}}
+          onProviderAdded={() => {}}
+        />
+      )
+    )
+    await user.type(screen.getByLabelText("Name"), "Gateway")
+    await user.type(screen.getByLabelText("API URL"), "https://gateway.test")
+    await user.type(screen.getByLabelText("API Key"), "key")
+
+    const id = fieldUnder("Custom Model ID")
+    await user.type(id, "gp")
+    await user.click(await screen.findByRole("option", { name: /gpt-5/ }))
+
+    expect(id).toHaveValue("gpt-5")
+    expect(fieldUnder("Custom Model Name")).toHaveValue("Gpt 5")
+    expect(
+      (fieldUnder("Custom Model Description") as HTMLInputElement).value
+    ).toContain("openai/gpt-5")
   })
 })

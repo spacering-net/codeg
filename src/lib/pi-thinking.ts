@@ -15,6 +15,8 @@
  * `thinkingLevelMap` names.
  */
 
+import type { ModelCatalogEntry } from "@/lib/types"
+
 export const PI_THINKING_LEVELS = [
   "off",
   "minimal",
@@ -134,6 +136,34 @@ export function reasoningFromModel(
     }
   }
   return { enabled: reasoning === true, levels, wireValues }
+}
+
+/** Adopt a model catalog entry's reasoning declaration as pi's editable view.
+ *
+ *  litellm spells the lowest effort `none` where pi spells it `off`; pi's own
+ *  implicit wire value already sends `"none"` for `off`, so no custom wire
+ *  values are needed. A model that declares reasoning but lists no levels is
+ *  given pi's ordinary vocabulary (everything bar `xhigh`/`max`) so the form
+ *  stays usable instead of failing its "pick at least one level" check.
+ */
+export function reasoningFromCatalog(
+  entry: ModelCatalogEntry
+): PiModelReasoning {
+  const named = entry.reasoningEffortLevels
+    .map((level) => (level === "none" ? "off" : level))
+    .filter(isPiThinkingLevel)
+  const levels = PI_THINKING_LEVELS.filter((level) => named.includes(level))
+  const enabled = entry.supportsReasoning || levels.length > 0
+  return {
+    enabled,
+    levels:
+      enabled && levels.length === 0
+        ? PI_THINKING_LEVELS.filter(
+            (level) => level !== "xhigh" && level !== "max"
+          )
+        : levels,
+    wireValues: {},
+  }
 }
 
 /**

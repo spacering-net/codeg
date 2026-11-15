@@ -212,6 +212,9 @@ import type {
   WebhookConfig,
   ModelProviderInfo,
   UpdateModelProviderResult,
+  ModelCatalogSettings,
+  ModelCatalogStatus,
+  ModelCatalogView,
   OpencodePluginList,
   OpenCodeCatalogProvider,
   OpenCodeConnectKeyRequest,
@@ -1508,6 +1511,33 @@ export async function codexBundledCatalog(
   return getTransport().call("codex_bundled_catalog", {
     forceRefresh: forceRefresh ?? null,
   })
+}
+
+/** The model catalog (litellm's table, trimmed): entries to autofill custom
+ *  model forms from, and where they came from. Pass `forceRefresh` to bypass
+ *  the 24h cache and download it again. */
+export async function getModelCatalog(
+  forceRefresh?: boolean
+): Promise<ModelCatalogView> {
+  return getTransport().call("get_model_catalog", {
+    force: forceRefresh ?? null,
+  })
+}
+
+/** Download the catalog again and report its status (no entries). Used by the
+ *  settings page's refresh button. */
+export async function refreshModelCatalog(): Promise<ModelCatalogStatus> {
+  return getTransport().call("refresh_model_catalog", {})
+}
+
+export async function getModelCatalogSettings(): Promise<ModelCatalogSettings> {
+  return getTransport().call("get_model_catalog_settings", {})
+}
+
+export async function updateModelCatalogSettings(
+  settings: ModelCatalogSettings
+): Promise<ModelCatalogSettings> {
+  return getTransport().call("update_model_catalog_settings", { settings })
 }
 
 /** Every integration OpenCode 2 knows (providers, mostly), with how each is

@@ -1,14 +1,34 @@
 import { describe, expect, it } from "vitest"
 
+import type { ModelCatalogEntry } from "@/lib/types"
 import {
   clampThinkingLevel,
   levelsFromMap,
+  reasoningFromCatalog,
   reasoningFromModel,
   reasoningToMap,
   supportedLevels,
   toggleLevel,
   type PiModelReasoning,
 } from "./pi-thinking"
+
+function catalogEntry(
+  overrides: Partial<ModelCatalogEntry> = {}
+): ModelCatalogEntry {
+  return {
+    id: "openai/gpt-5",
+    model: "gpt-5",
+    provider: "openai",
+    maxInputTokens: 272000,
+    maxOutputTokens: 128000,
+    supportsReasoning: true,
+    reasoningEffortLevels: ["none", "minimal", "low", "high"],
+    defaultReasoningEffort: "low",
+    supportsVision: true,
+    supportsFunctionCalling: true,
+    ...overrides,
+  }
+}
 
 /**
  * The read half has to agree with pi's `getSupportedThinkingLevels` byte for byte —
@@ -252,5 +272,46 @@ describe("clampThinkingLevel", () => {
 
   it("falls back to off when a reasoning model offers no level at all", () => {
     expect(clampThinkingLevel("medium", [])).toBe("off")
+  })
+})
+
+describe("reasoningFromCatalog", () => {
+  it("maps the catalog's none effort to pi's off and keeps pi's order", () => {
+    const reasoning = reasoningFromCatalog(catalogEntry())
+    expect(reasoning.enabled).toBe(true)
+    expect(reasoning.levels).toEqual(["off", "minimal", "low", "high"])
+    expect(reasoning.wireValues).toEqual({})
+  })
+
+  it("turns reasoning off for a model that declares none", () => {
+    const reasoning = reasoningFromCatalog(
+      catalogEntry({
+        supportsReasoning: false,
+        reasoningEffortLevels: [],
+      })
+    )
+    expect(reasoning.enabled).toBe(false)
+    expect(reasoning.levels).toEqual([])
+  })
+
+  it("offers pi's ordinary vocabulary when reasoning has no listed levels", () => {
+    const reasoning = reasoningFromCatalog(
+      catalogEntry({ reasoningEffortLevels: [] })
+    )
+    expect(reasoning.enabled).toBe(true)
+    expect(reasoning.levels).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ])
+  })
+
+  it("drops catalog levels pi does not know", () => {
+    const reasoning = reasoningFromCatalog(
+      catalogEntry({ reasoningEffortLevels: ["none", "low", "extralarge"] })
+    )
+    expect(reasoning.levels).toEqual(["off", "low"])
   })
 })

@@ -44,7 +44,11 @@ import {
   type CodexCatalogEndpoint,
   type CodexPickerItem,
 } from "@/components/settings/codex-catalog-source"
-import { ProviderModelsRefreshButton } from "@/components/settings/provider-models"
+import {
+  catalogDisplayName,
+  ModelIdInputWithCatalog,
+  ProviderModelsRefreshButton,
+} from "@/components/settings/provider-models"
 import { codexBundledCatalog } from "@/lib/api"
 import type { CodexCatalogTranslator } from "@/lib/codex-catalog-error"
 import {
@@ -58,6 +62,7 @@ import {
   type CodexModelConfig,
   type CodexModelInfo,
   type CodexOpenAiIdView,
+  type ModelCatalogEntry,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -892,6 +897,34 @@ function CodexModelRow({
   )
 }
 
+/** Picking a model from the litellm catalog replaces the row's declared
+ *  capabilities with the ones that model declares. Only fields this editor
+ *  exposes are written; a reasoning level is kept only when the row's base
+ *  template actually offers that level. */
+function applyCodexCatalogPick(
+  entry: CodexCustomEntry,
+  picked: ModelCatalogEntry,
+  reasoningEfforts: string[]
+): Partial<CodexCustomEntry> {
+  const overrides = { ...(entry.overrides ?? {}) }
+  if (
+    picked.defaultReasoningEffort &&
+    reasoningEfforts.includes(picked.defaultReasoningEffort)
+  ) {
+    overrides.default_reasoning_level = picked.defaultReasoningEffort
+  } else {
+    delete overrides.default_reasoning_level
+  }
+  overrides.supports_parallel_tool_calls = picked.supportsFunctionCalling
+  overrides.supports_image_detail_original = picked.supportsVision
+  return {
+    slug: picked.model,
+    displayName: catalogDisplayName(picked),
+    contextWindow: picked.maxInputTokens ?? undefined,
+    overrides,
+  }
+}
+
 function CodexCustomRow({
   entry,
   isDefault,
@@ -1027,12 +1060,15 @@ function CodexCustomRow({
         </button>
 
         <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_7rem]">
-          <Input
+          <ModelIdInputWithCatalog
             value={entry.slug}
             readOnly={readOnly}
             placeholder={t("slugPlaceholder")}
-            onChange={(e) => onPatch({ slug: e.target.value })}
-            className="h-8 text-xs"
+            onChange={(value) => onPatch({ slug: value })}
+            onPick={(picked) =>
+              onPatch(applyCodexCatalogPick(entry, picked, reasoningEfforts))
+            }
+            inputClassName="h-8 text-xs"
           />
           <Input
             value={entry.displayName ?? ""}

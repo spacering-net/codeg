@@ -38,7 +38,10 @@ import {
 } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { ClaudeProviderModelFields } from "@/components/settings/claude-model-fields"
-import { ModelIdInputWithFetch } from "@/components/settings/provider-models"
+import {
+  ModelIdInputWithFetch,
+  useModelCatalog,
+} from "@/components/settings/provider-models"
 import { useProviderModels } from "@/hooks/use-provider-models"
 
 interface AddModelProviderDialogProps {
@@ -111,6 +114,7 @@ export function AddModelProviderDialog({
 
   // Claude and Gemini fields offer the models the provider lists, asked the
   // way each agent sends this key.
+  const catalog = useModelCatalog()
   const providerModels = useProviderModels(
     agentType === "claude_code" || agentType === "gemini"
       ? {
@@ -275,6 +279,7 @@ export function AddModelProviderDialog({
                 value={singleModel}
                 onChange={setSingleModel}
                 state={providerModels}
+                catalog={catalog}
                 placeholder={modelPlaceholder}
               />
             </div>

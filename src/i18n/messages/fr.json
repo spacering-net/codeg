@@ -349,7 +349,21 @@
       "downloadFailed": "Impossible de télécharger le paquet de mise à jour. Veuillez réessayer plus tard.",
       "installFailed": "Impossible d’installer la mise à jour. Fermez l’app puis réessayez.",
       "unknown": "La mise à jour a échoué. Veuillez réessayer plus tard."
-    }
+    },
+    "modelCatalogTitle": "Catalogue de modèles",
+    "modelCatalogDescription": "La liste des modèles qui complète la fenêtre de contexte, la sortie maximale et les niveaux de raisonnement des ID personnalisés. Téléchargée depuis l’URL ci-dessous et mise en cache localement.",
+    "modelCatalogUrlLabel": "URL du catalogue",
+    "modelCatalogUrlHint": "Un model_prices_and_context_window.json compatible litellm. Le téléchargement passe par le proxy ci-dessus.",
+    "modelCatalogAutoUpdate": "Mise à jour automatique",
+    "modelCatalogAutoUpdateHint": "Actualisé une fois par jour en arrière-plan.",
+    "modelCatalogRefresh": "Actualiser maintenant",
+    "modelCatalogRefreshing": "Actualisation…",
+    "modelCatalogRefreshed": "Catalogue mis à jour : {count} modèles",
+    "modelCatalogRefreshFailed": "Échec de l’actualisation : {message}",
+    "modelCatalogSaveFailed": "Impossible d’enregistrer les paramètres du catalogue : {message}",
+    "modelCatalogRestoreDefault": "Rétablir la valeur par défaut",
+    "modelCatalogSummary": "{count} modèles · mis à jour {time}",
+    "modelCatalogSummaryNever": "{count} modèles · instantané intégré"
   },
   "VersionControlSettings": {
     "loading": "Chargement...",
@@ -7793,5 +7807,12 @@
         "probeFailed": "Le navigateur intégré n'a pas pu confirmer qu'il atteint l'hôte distant par le tunnel. Réessayez dans un instant."
       }
     }
+  },
+  "ModelCatalog": {
+    "summary": "{count} modèles · mis à jour {time}",
+    "neverUpdated": "jamais mis à jour",
+    "loading": "Chargement du catalogue de modèles…",
+    "noMatch": "Aucun modèle du catalogue ne correspond",
+    "refresh": "Actualiser le catalogue"
   }
 }

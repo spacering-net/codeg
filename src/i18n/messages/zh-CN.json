@@ -349,7 +349,21 @@
       "downloadFailed": "下载更新包失败，请稍后重试。",
       "installFailed": "安装更新失败，请关闭应用后重试。",
       "unknown": "更新失败，请稍后重试。"
-    }
+    },
+    "modelCatalogTitle": "模型目录",
+    "modelCatalogDescription": "为自定义模型 ID 自动补全上下文窗口、最大输出和思考等级的模型清单。从下方 URL 下载并缓存在本地。",
+    "modelCatalogUrlLabel": "目录地址",
+    "modelCatalogUrlHint": "指向 litellm 兼容的 model_prices_and_context_window.json；下载会走上方代理。",
+    "modelCatalogAutoUpdate": "自动更新",
+    "modelCatalogAutoUpdateHint": "每天在后台刷新一次。",
+    "modelCatalogRefresh": "立即刷新",
+    "modelCatalogRefreshing": "刷新中…",
+    "modelCatalogRefreshed": "模型目录已更新：{count} 个模型",
+    "modelCatalogRefreshFailed": "刷新失败：{message}",
+    "modelCatalogSaveFailed": "无法保存模型目录设置：{message}",
+    "modelCatalogRestoreDefault": "恢复默认",
+    "modelCatalogSummary": "共 {count} 个模型 · 更新于 {time}",
+    "modelCatalogSummaryNever": "共 {count} 个模型 · 使用内置快照"
   },
   "VersionControlSettings": {
     "loading": "加载中...",
@@ -7793,5 +7807,12 @@
         "probeFailed": "内置浏览器无法确认它能通过隧道访问远端主机。请稍后重试。"
       }
     }
+  },
+  "ModelCatalog": {
+    "summary": "共 {count} 个模型 · 更新于 {time}",
+    "neverUpdated": "未更新",
+    "loading": "正在加载模型目录…",
+    "noMatch": "模型目录中无此模型",
+    "refresh": "刷新模型目录"
   }
 }

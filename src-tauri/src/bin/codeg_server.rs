@@ -735,6 +735,18 @@ async fn async_main(
         });
     }
 
+    // The model catalog refresher (mirrors lib.rs setup).
+    {
+        let catalog_db = state.db.conn.clone();
+        let catalog_dir = state.data_dir.clone();
+        let catalog_emitter = std::sync::Arc::new(state.emitter.clone());
+        tokio::spawn(codeg_lib::model_catalog::scheduler::run_loop(
+            catalog_db,
+            catalog_dir,
+            catalog_emitter,
+        ));
+    }
+
     // The Codex model list refresher (mirrors lib.rs setup).
     if let Some(scheduler) = codeg_lib::acp::codex_catalog_refresh::build(state.emitter.clone()) {
         tokio::spawn(codeg_lib::acp::codex_catalog_refresh::run(scheduler));

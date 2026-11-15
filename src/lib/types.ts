@@ -6361,3 +6361,43 @@ export interface DeepSeekModelCatalog {
    *  fixed, sessions run on the agent's built-in catalog instead. */
   invalid: string | null
 }
+/** One model the model catalog knows, in the shape a custom-model form fills
+ *  from. Derived from litellm's `model_prices_and_context_window.json`. */
+export interface ModelCatalogEntry {
+  /** The litellm key, provider prefix included (`anthropic/claude-sonnet-4-5`). */
+  id: string
+  /** The id a provider expects, prefix removed. */
+  model: string
+  provider: string
+  maxInputTokens: number | null
+  maxOutputTokens: number | null
+  supportsReasoning: boolean
+  /** Effort levels the model declares, `none` … `max`. */
+  reasoningEffortLevels: string[]
+  defaultReasoningEffort: string | null
+  supportsVision: boolean
+  supportsFunctionCalling: boolean
+}
+
+export type ModelCatalogSource = "live" | "cache" | "bundled"
+
+export interface ModelCatalogStatus {
+  url: string
+  autoUpdate: boolean
+  entryCount: number
+  /** Unix seconds; `null` when the bundled snapshot is being served. */
+  updatedAt: number | null
+  source: ModelCatalogSource
+  /** Why a fetch failed while older entries are being served. */
+  error: string | null
+}
+
+export interface ModelCatalogView {
+  status: ModelCatalogStatus
+  entries: ModelCatalogEntry[]
+}
+
+export interface ModelCatalogSettings {
+  url: string
+  autoUpdate: boolean
+}

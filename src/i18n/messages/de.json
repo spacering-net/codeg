@@ -349,7 +349,21 @@
       "downloadFailed": "Das Update-Paket konnte nicht heruntergeladen werden. Bitte später erneut versuchen.",
       "installFailed": "Das Update konnte nicht installiert werden. Bitte App schließen und erneut versuchen.",
       "unknown": "Update fehlgeschlagen. Bitte später erneut versuchen."
-    }
+    },
+    "modelCatalogTitle": "Modellkatalog",
+    "modelCatalogDescription": "Die Modellliste, die Kontextfenster, maximale Ausgabe und Denkstufen für benutzerdefinierte Modell-IDs ausfüllt. Wird von der URL unten geladen und lokal zwischengespeichert.",
+    "modelCatalogUrlLabel": "Katalog-URL",
+    "modelCatalogUrlHint": "Eine litellm-kompatible model_prices_and_context_window.json. Der Download nutzt den Proxy oben.",
+    "modelCatalogAutoUpdate": "Automatisch aktualisieren",
+    "modelCatalogAutoUpdateHint": "Aktualisiert einmal täglich im Hintergrund.",
+    "modelCatalogRefresh": "Jetzt aktualisieren",
+    "modelCatalogRefreshing": "Aktualisiere…",
+    "modelCatalogRefreshed": "Modellkatalog aktualisiert: {count} Modelle",
+    "modelCatalogRefreshFailed": "Aktualisierung fehlgeschlagen: {message}",
+    "modelCatalogSaveFailed": "Einstellungen des Modellkatalogs konnten nicht gespeichert werden: {message}",
+    "modelCatalogRestoreDefault": "Standard wiederherstellen",
+    "modelCatalogSummary": "{count} Modelle · aktualisiert {time}",
+    "modelCatalogSummaryNever": "{count} Modelle · mitgelieferter Stand"
   },
   "VersionControlSettings": {
     "loading": "Laden...",
@@ -7793,5 +7807,12 @@
         "probeFailed": "Der integrierte Browser konnte nicht bestätigen, dass er den entfernten Host über den Tunnel erreicht. Versuche es gleich noch einmal."
       }
     }
+  },
+  "ModelCatalog": {
+    "summary": "{count} Modelle · aktualisiert {time}",
+    "neverUpdated": "nie aktualisiert",
+    "loading": "Modellkatalog wird geladen…",
+    "noMatch": "Kein Modell im Katalog passt",
+    "refresh": "Modellkatalog aktualisieren"
   }
 }

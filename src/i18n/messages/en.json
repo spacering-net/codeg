@@ -349,7 +349,21 @@
       "downloadFailed": "Failed to download update package. Please try again later.",
       "installFailed": "Failed to install update. Please close the app and try again.",
       "unknown": "Update failed. Please try again later."
-    }
+    },
+    "modelCatalogTitle": "Model catalog",
+    "modelCatalogDescription": "The model list that autofills context window, max output and reasoning levels for custom model ids. Downloaded from the URL below and cached on this machine.",
+    "modelCatalogUrlLabel": "Catalog URL",
+    "modelCatalogUrlHint": "A litellm-compatible model_prices_and_context_window.json. Downloads go through the proxy above.",
+    "modelCatalogAutoUpdate": "Update automatically",
+    "modelCatalogAutoUpdateHint": "Refresh once a day in the background.",
+    "modelCatalogRefresh": "Refresh now",
+    "modelCatalogRefreshing": "Refreshing…",
+    "modelCatalogRefreshed": "Model catalog updated: {count} models",
+    "modelCatalogRefreshFailed": "Refresh failed: {message}",
+    "modelCatalogSaveFailed": "Could not save the model catalog settings: {message}",
+    "modelCatalogRestoreDefault": "Restore default",
+    "modelCatalogSummary": "{count} models · updated {time}",
+    "modelCatalogSummaryNever": "{count} models · bundled snapshot"
   },
   "VersionControlSettings": {
     "loading": "Loading...",
@@ -7793,5 +7807,12 @@
         "probeFailed": "The built-in browser couldn't confirm that it reaches the remote host through the tunnel. Try again in a moment."
       }
     }
+  },
+  "ModelCatalog": {
+    "summary": "{count} models · updated {time}",
+    "neverUpdated": "never",
+    "loading": "Loading the model catalog…",
+    "noMatch": "No model in the catalog matches",
+    "refresh": "Refresh model catalog"
   }
 }

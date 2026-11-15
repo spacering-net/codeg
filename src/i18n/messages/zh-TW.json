@@ -349,7 +349,21 @@
       "downloadFailed": "下載更新包失敗，請稍後再試。",
       "installFailed": "安裝更新失敗，請關閉應用後重試。",
       "unknown": "更新失敗，請稍後再試。"
-    }
+    },
+    "modelCatalogTitle": "模型目錄",
+    "modelCatalogDescription": "為自訂模型 ID 自動補齊上下文視窗、最大輸出與思考等級的模型清單。從下方 URL 下載並快取於本機。",
+    "modelCatalogUrlLabel": "目錄位址",
+    "modelCatalogUrlHint": "指向 litellm 相容的 model_prices_and_context_window.json；下載會走上方代理。",
+    "modelCatalogAutoUpdate": "自動更新",
+    "modelCatalogAutoUpdateHint": "每天在背景重新整理一次。",
+    "modelCatalogRefresh": "立即重新整理",
+    "modelCatalogRefreshing": "重新整理中…",
+    "modelCatalogRefreshed": "模型目錄已更新：{count} 個模型",
+    "modelCatalogRefreshFailed": "重新整理失敗：{message}",
+    "modelCatalogSaveFailed": "無法儲存模型目錄設定：{message}",
+    "modelCatalogRestoreDefault": "恢復預設",
+    "modelCatalogSummary": "共 {count} 個模型 · 更新於 {time}",
+    "modelCatalogSummaryNever": "共 {count} 個模型 · 使用內建快照"
   },
   "VersionControlSettings": {
     "loading": "載入中...",
@@ -7793,5 +7807,12 @@
         "probeFailed": "內建瀏覽器無法確認它能透過通道連到遠端主機。請稍後再試。"
       }
     }
+  },
+  "ModelCatalog": {
+    "summary": "共 {count} 個模型 · 更新於 {time}",
+    "neverUpdated": "未更新",
+    "loading": "正在載入模型目錄…",
+    "noMatch": "模型目錄中無此模型",
+    "refresh": "重新整理模型目錄"
   }
 }

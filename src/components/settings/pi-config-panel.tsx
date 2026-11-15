@@ -49,6 +49,7 @@ import { useProviderModels } from "@/hooks/use-provider-models"
 import {
   ModelIdInputWithFetch,
   ModelIdListField,
+  useModelCatalog,
 } from "@/components/settings/provider-models"
 import type { ProviderModelsProtocol } from "@/lib/types"
 import {
@@ -61,6 +62,7 @@ import {
   clampThinkingLevel,
   implicitWireValue,
   isPiThinkingLevel,
+  reasoningFromCatalog,
   reasoningFromModel,
   reasoningToMap,
   supportedLevels,
@@ -68,7 +70,7 @@ import {
   type PiModelReasoning,
   type PiThinkingLevel,
 } from "@/lib/pi-thinking"
-import type { AcpAgentInfo } from "@/lib/types"
+import type { AcpAgentInfo, ModelCatalogEntry } from "@/lib/types"
 import { cn, randomUUID } from "@/lib/utils"
 
 const PI_COMMAND_ENV = "PI_ACP_PI_COMMAND"
@@ -371,6 +373,7 @@ export function PiConfigPanel({
     customProviders
       .find((provider) => provider.id === effectiveProvider)
       ?.models?.map((entry) => entry.id) ?? []
+  const modelCatalog = useModelCatalog()
   // The custom provider's own models, asked the way its protocol lists them —
   // with the key typed here, else the one pi keeps for it.
   const providerModels = useProviderModels(
@@ -398,14 +401,31 @@ export function PiConfigPanel({
   const reasoningKey =
     loadingCreds || !isCustom ? null : `${effectiveProvider}\n${model.trim()}`
   const [lastReasoningKey, setLastReasoningKey] = useState<string | null>(null)
+  // A model picked from the litellm catalog brings its own reasoning
+  // declaration. It wins over models.json for the model it names, including on
+  // the render that rehydrates the controls after `model` changes.
+  const catalogPickRef = useRef<{
+    model: string
+    entry: ModelCatalogEntry
+  } | null>(null)
+  const applyCatalogPick = useCallback((entry: ModelCatalogEntry) => {
+    catalogPickRef.current = { model: entry.model, entry }
+    setReasoning(reasoningFromCatalog(entry))
+  }, [])
   if (reasoningKey !== null && reasoningKey !== lastReasoningKey) {
     setLastReasoningKey(reasoningKey)
-    const stored = customProviders
-      .find((provider) => provider.id === effectiveProvider)
-      ?.models?.find((entry) => entry.id === model.trim())
-    setReasoning(
-      reasoningFromModel(stored?.reasoning, stored?.thinkingLevelMap)
-    )
+    const picked = catalogPickRef.current
+    catalogPickRef.current = null
+    if (picked && picked.model === model.trim()) {
+      setReasoning(reasoningFromCatalog(picked.entry))
+    } else {
+      const stored = customProviders
+        .find((provider) => provider.id === effectiveProvider)
+        ?.models?.find((entry) => entry.id === model.trim())
+      setReasoning(
+        reasoningFromModel(stored?.reasoning, stored?.thinkingLevelMap)
+      )
+    }
   }
 
   // The form mirrors pi's native files in the agent dir, so it reloads when —
@@ -1354,6 +1374,8 @@ export function PiConfigPanel({
             value={model}
             onChange={setModel}
             state={providerModels}
+            catalog={modelCatalog}
+            onCatalogPick={applyCatalogPick}
             placeholder="claude-sonnet-5-5"
             disabled={savingCreds || loadingCreds}
           />
@@ -1363,6 +1385,12 @@ export function PiConfigPanel({
           <ModelIdListField
             ids={customModels ?? storedCustomModels}
             onChange={setCustomModels}
+            onPick={(entry) => {
+              // The reasoning card describes the model this form is about, so
+              // adopting a catalog model there makes it the current model too.
+              setModel(entry.model)
+              applyCatalogPick(entry)
+            }}
             state={providerModels}
             readOnly={savingCreds || loadingCreds}
             title={tModels("piList.title")}

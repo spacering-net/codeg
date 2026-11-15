@@ -41,7 +41,10 @@ import {
 } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { ClaudeProviderModelFields } from "@/components/settings/claude-model-fields"
-import { ModelIdInputWithFetch } from "@/components/settings/provider-models"
+import {
+  ModelIdInputWithFetch,
+  useModelCatalog,
+} from "@/components/settings/provider-models"
 import { useProviderModels } from "@/hooks/use-provider-models"
 
 interface EditModelProviderDialogProps {
@@ -126,6 +129,7 @@ export function EditModelProviderDialog({
 
   // Claude and Gemini fields offer the models the provider lists, asked the
   // way each agent sends the key: the one typed here, else the stored one.
+  const catalog = useModelCatalog()
   const providerModels = useProviderModels(
     provider && (agentType === "claude_code" || agentType === "gemini")
       ? {
@@ -302,6 +306,7 @@ export function EditModelProviderDialog({
                 value={singleModel}
                 onChange={setSingleModel}
                 state={providerModels}
+                catalog={catalog}
                 placeholder={modelPlaceholder}
               />
             </div>

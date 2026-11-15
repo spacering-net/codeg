@@ -48,6 +48,7 @@ pub mod git_repo;
 pub mod intern;
 pub mod keyring_store;
 pub mod logging;
+pub mod model_catalog;
 pub mod models;
 mod network;
 pub mod office_watch;
@@ -116,6 +117,7 @@ mod tauri_app {
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
         folder_links, local_command, office_tools as office_tools_commands, open_in,
         folders, logging as logging_commands, mcp as mcp_commands,
+        model_catalog as model_catalog_commands,
         model_provider as model_provider_commands, notification, pet as pet_commands, project_boot,
         question as question_commands, quick_messages as quick_messages_commands,
         remote_proxy as remote_proxy_commands,
@@ -1063,6 +1065,26 @@ mod tauri_app {
                     web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
                 ) {
                     tauri::async_runtime::spawn(crate::acp::codex_catalog_refresh::run(scheduler));
+                }
+
+                // Keeps the model catalog cache current (the litellm table the
+                // custom-model forms autofill from). One per process; mirrored in
+                // `bin/codeg_server.rs`.
+                {
+                    let catalog_db = app.state::<db::AppDatabase>().conn.clone();
+                    let catalog_dir = app
+                        .path()
+                        .app_data_dir()
+                        .map(|p| paths::resolve_effective_data_dir(&p))
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let catalog_emitter = std::sync::Arc::new(
+                        web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                    );
+                    tauri::async_runtime::spawn(crate::model_catalog::scheduler::run_loop(
+                        catalog_db,
+                        catalog_dir,
+                        catalog_emitter,
+                    ));
                 }
 
                 // Label worktree folders registered before aliases were seeded at
@@ -2076,6 +2098,10 @@ mod tauri_app {
                 project_boot::create_hyperframes_project,
                 system_settings::get_system_proxy_settings,
                 system_settings::update_system_proxy_settings,
+                model_catalog_commands::get_model_catalog,
+                model_catalog_commands::refresh_model_catalog,
+                model_catalog_commands::get_model_catalog_settings,
+                model_catalog_commands::update_model_catalog_settings,
                 system_settings::get_system_language_settings,
                 system_settings::update_system_language_settings,
                 system_settings::get_system_terminal_settings,

@@ -14,6 +14,7 @@ import enMessages from "@/i18n/messages/en.json"
 import type { PiModelCatalog } from "@/lib/api"
 import { piRuntimeIsTooOld } from "@/lib/pi-config"
 import type { AcpAgentInfo } from "@/lib/types"
+import { resetModelCatalogCacheForTests } from "./provider-models"
 import { PiConfigPanel } from "./pi-config-panel"
 
 const api = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ const api = vi.hoisted(() => ({
   acpValidatePiCommand: vi.fn(),
   acpPiListTrustEntries: vi.fn(),
   listProviderModels: vi.fn(),
+  getModelCatalog: vi.fn(),
   onSaveEnv: vi.fn(),
 }))
 
@@ -33,6 +35,7 @@ vi.mock("@/lib/api", () => ({
   acpValidatePiCommand: api.acpValidatePiCommand,
   acpPiListTrustEntries: api.acpPiListTrustEntries,
   listProviderModels: api.listProviderModels,
+  getModelCatalog: api.getModelCatalog,
   acpPiSetProjectTrust: vi.fn(),
   acpInstallPiBinary: vi.fn(),
   acpUninstallPiBinary: vi.fn(),
@@ -61,6 +64,31 @@ const MODELS: PiModelCatalog["models"] = [
 ]
 
 const ANSWERED: PiModelCatalog = { status: "ok", models: MODELS }
+
+const CATALOG_VIEW = {
+  status: {
+    url: "https://catalog.test/models.json",
+    autoUpdate: true,
+    entryCount: 1,
+    updatedAt: null,
+    source: "bundled" as const,
+    error: null,
+  },
+  entries: [
+    {
+      id: "openai/gpt-5",
+      model: "gpt-5",
+      provider: "openai",
+      maxInputTokens: 272000,
+      maxOutputTokens: 128000,
+      supportsReasoning: true,
+      reasoningEffortLevels: ["none", "low", "high"],
+      defaultReasoningEffort: "low",
+      supportsVision: true,
+      supportsFunctionCalling: true,
+    },
+  ],
+}
 
 function config(model = "gpt-5.6-sol", thinking = "max") {
   return {
@@ -125,6 +153,7 @@ function pending<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetModelCatalogCacheForTests()
   api.loadPiConfig.mockResolvedValue(config())
   api.listPiModelCapabilities.mockResolvedValue(ANSWERED)
   api.acpUpdatePiConfig.mockResolvedValue(undefined)
@@ -134,6 +163,9 @@ beforeEach(() => {
     version: null,
   })
   api.acpPiListTrustEntries.mockResolvedValue([])
+  // `useModelCatalog` caches its first answer process-wide, so the one catalog
+  // every test shares has to be set here rather than in a single test.
+  api.getModelCatalog.mockResolvedValue(CATALOG_VIEW)
   api.onSaveEnv.mockResolvedValue(undefined)
 })
 
@@ -445,6 +477,49 @@ describe("Pi custom provider models", () => {
     await saveConfig()
     await waitFor(() => expect(api.acpUpdatePiConfig).toHaveBeenCalled())
     expect(api.acpUpdatePiConfig.mock.calls[0][0].customModels).toBeUndefined()
+  })
+
+  it("adopts a catalog pick's reasoning gate and levels from the add-model field", async () => {
+    api.loadPiConfig.mockResolvedValue({
+      defaultProvider: "my-proxy",
+      defaultModel: "local-model",
+      defaultThinkingLevel: "",
+      authProviders: [],
+      customProviders: [
+        {
+          id: "my-proxy",
+          baseUrl: "https://proxy.example/v1",
+          api: "openai-completions",
+          models: [
+            { id: "local-model", reasoning: false, thinkingLevelMap: {} },
+          ],
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    await renderPanel({}, "local-model")
+
+    // models.json declares no reasoning, so the card starts off.
+    const enable = screen.getByRole("switch", { name: "Enable" })
+    expect(enable).not.toBeChecked()
+
+    const add = screen.getByPlaceholderText("Add a model id")
+    await user.type(add, "gp")
+    await user.click(await screen.findByRole("option", { name: /gpt-5/ }))
+
+    expect(enable).toBeChecked()
+    for (const [level, pressed] of [
+      ["off", "true"],
+      ["low", "true"],
+      ["high", "true"],
+      ["minimal", "false"],
+      ["medium", "false"],
+    ] as const) {
+      expect(screen.getByRole("button", { name: level })).toHaveAttribute(
+        "aria-pressed",
+        pressed
+      )
+    }
   })
 })
 
