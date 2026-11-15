@@ -1510,7 +1510,10 @@ export function MessageInput({
             .run()
         }
       }
-      if (detail.image) void attach.appendFilesFromInput([detail.image])
+      detail.imageAccepted =
+        promptCapabilities.image || promptCapabilities.embedded_context
+      if (detail.image && detail.imageAccepted)
+        void attach.appendFilesFromInput([detail.image])
       // Read by the sender the moment `dispatchEvent` returns.
       detail.accepted = true
     }
@@ -1519,7 +1522,12 @@ export function MessageInput({
     return () => {
       window.removeEventListener(ATTACH_PAGE_TO_SESSION_EVENT, handleAttachPage)
     }
-  }, [attach, attachmentTabId, promptCapabilities.embedded_context])
+  }, [
+    attach,
+    attachmentTabId,
+    promptCapabilities.embedded_context,
+    promptCapabilities.image,
+  ])
 
   useEffect(() => {
     if (!attachmentTabId) return

@@ -5,7 +5,7 @@ import type { CaptureOutcome } from "./types"
  *  picture must not take the block that goes with it down too — so this
  *  answers `undefined` rather than throwing. */
 export function captureFile(
-  capture: CaptureOutcome,
+  capture: Pick<CaptureOutcome, "data" | "mime">,
   name: string
 ): File | undefined {
   try {

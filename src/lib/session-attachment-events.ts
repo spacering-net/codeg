@@ -75,6 +75,8 @@ export interface AttachPageToSessionDetail {
    *  image path, so its wire encoding follows the agent's capabilities and an
    *  agent that takes no images simply does not get it. */
   image?: File
+  /** The receiver explicitly reports whether its agent can accept the image. */
+  imageAccepted?: boolean
   /** Set by the composer that took it. Dispatch is synchronous, so the sender
    *  reads this the moment it returns — and a conversation closed while the
    *  person was choosing an element has no listener at all, which must not be
