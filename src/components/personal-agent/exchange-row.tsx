@@ -14,7 +14,7 @@
 
 import { useState } from "react"
 import { useFormatter, useTranslations } from "next-intl"
-import { ArrowDownLeft, ArrowUpRight, ChevronDown } from "lucide-react"
+import { ChevronDown } from "lucide-react"
 
 import type { BotAvatar as AvatarValue, TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils"
 import { BotAvatar } from "./bot-avatar"
 import { ExchangeSheet } from "./exchange-sheet"
 import type { MessageItem } from "./message-items"
+import { useEnterClass } from "./message-row"
 import { num, str, useBotName } from "./shared"
 
 type ExchangeItem = Extract<MessageItem, { kind: "exchange" }>
@@ -79,7 +80,6 @@ function Line({
   const peer = peerOf(row)
   const peerName = botName(peer)
   const word = stateWord(row)
-  const Icon = out ? ArrowUpRight : ArrowDownLeft
   const who = () => (
     <span className="inline-flex min-w-0 items-center gap-1">
       <BotAvatar avatar={peer.avatar} name={peerName} size={16} />
@@ -100,7 +100,6 @@ function Line({
         word && "line-through decoration-muted-foreground/50"
       )}
     >
-      <Icon className="size-3 shrink-0" aria-hidden />
       <span className="inline-flex min-w-0 items-center gap-1">
         {t.rich(out ? "sentTo" : "from", { peer: who })}
       </span>
@@ -115,6 +114,7 @@ export function ExchangeRow({ item }: { item: ExchangeItem }) {
   const [open, setOpen] = useState(false)
   const [sheetRow, setSheetRow] = useState<TimelineRow | null>(null)
   const botName = useBotName()
+  const enter = useEnterClass()
   const rows = item.rows
   const names = [...new Set(rows.map((r) => botName(peerOf(r))))]
   return (
@@ -122,7 +122,10 @@ export function ExchangeRow({ item }: { item: ExchangeItem }) {
       data-row-id={item.row.id}
       data-pa-divider
       data-pa-exchange
-      className="flex flex-col items-center gap-0.5 py-2 select-none first:pt-0"
+      className={cn(
+        "flex flex-col items-center gap-0.5 py-2 select-none first:pt-0",
+        enter
+      )}
     >
       {rows.length === 1 ? (
         <Line row={rows[0]} onOpen={setSheetRow} />

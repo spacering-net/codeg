@@ -8001,7 +8001,8 @@
         "reminder": "تذكير",
         "followup": "متابعة",
         "question": "سؤال",
-        "when_mentioned": "عند الذكر"
+        "when_mentioned": "عند الذكر",
+        "message": "رسالة"
       },
       "onDone": "عند الانتهاء: {text}",
       "mention": "عندما تذكر {words} · {times} من {max} مرات · حتى {until}"
@@ -8870,7 +8871,9 @@
             "pr": "طلبات الدمج",
             "routine": "الروتينات",
             "rule": "الاقتراحات",
-            "memory": "الذاكرة"
+            "memory": "الذاكرة",
+            "tidy": "ترتيب الذاكرة",
+            "skill": "مهارات العمليات"
           }
         },
         "clear": {
@@ -9344,7 +9347,8 @@
         "prReady": "جاهز للدمج: {text}",
         "prFailed": "#{id} فشلت الفحوصات: {title}",
         "prStuck": "#{id} يوجد تعارض: {title}",
-        "prChecks": "#{id} بانتظار الفحوصات {passed}/{total}"
+        "prChecks": "#{id} بانتظار الفحوصات {passed}/{total}",
+        "resize": "تغيير عرض قائمة المساعدين"
       },
       "choice": {
         "other": "غير ذلك",
@@ -9786,7 +9790,9 @@
       "dispatch": {
         "queued": "في الطابور",
         "running": "قيد التنفيذ",
-        "waiting_input": "مساعده يجيب"
+        "waiting_input": "مساعده يجيب",
+        "review": "بانتظار المراجعة",
+        "handed_over": "تم تسليمه"
       },
       "item": {
         "notify": "تذكير عند {time}",

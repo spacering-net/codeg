@@ -40,21 +40,26 @@ import {
 /** An assistant's routines, kept fresh as they change. */
 export function useRoutines(): Routine[] | null {
   const { botId, routineVersion } = usePersonalAgent()
-  const [list, setList] = useState<Routine[] | null>(null)
+  // Kept with the assistant they are of: another one shown waits for its
+  // own, never listing the last one's.
+  const [read, setRead] = useState<{
+    bot: number | null
+    list: Routine[]
+  } | null>(null)
   useEffect(() => {
     let alive = true
     personalAgentRoutines(botId)
       .then((l) => {
-        if (alive) setList(l)
+        if (alive) setRead({ bot: botId, list: l })
       })
       .catch(() => {
-        if (alive) setList([])
+        if (alive) setRead({ bot: botId, list: [] })
       })
     return () => {
       alive = false
     }
   }, [botId, routineVersion])
-  return list
+  return read?.bot === botId ? read.list : null
 }
 
 export function RoutinesSection({

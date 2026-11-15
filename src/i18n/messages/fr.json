@@ -8001,7 +8001,8 @@
         "reminder": "rappel",
         "followup": "suivi",
         "question": "question",
-        "when_mentioned": "à la mention"
+        "when_mentioned": "à la mention",
+        "message": "message"
       },
       "onDone": "Une fois terminé : {text}",
       "mention": "Quand vous mentionnez {words} · {times} sur {max} fois · jusqu’au {until}"
@@ -8870,7 +8871,9 @@
             "pr": "Pull requests",
             "routine": "Routines",
             "rule": "Propositions",
-            "memory": "Mémoire"
+            "memory": "Mémoire",
+            "tidy": "Rangement de la mémoire",
+            "skill": "Compétences de processus"
           }
         },
         "clear": {
@@ -9344,7 +9347,8 @@
         "prReady": "Prête à fusionner : {text}",
         "prFailed": "#{id} vérifications en échec : {title}",
         "prStuck": "#{id} est en conflit : {title}",
-        "prChecks": "#{id} vérifications en attente {passed}/{total}"
+        "prChecks": "#{id} vérifications en attente {passed}/{total}",
+        "resize": "Redimensionner la liste des assistants"
       },
       "choice": {
         "other": "Autre",
@@ -9786,7 +9790,9 @@
       "dispatch": {
         "queued": "En file",
         "running": "En cours",
-        "waiting_input": "Son assistant répond"
+        "waiting_input": "Son assistant répond",
+        "review": "En attente de revue",
+        "handed_over": "Transmis"
       },
       "item": {
         "notify": "Rappel à {time}",

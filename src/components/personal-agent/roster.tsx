@@ -73,6 +73,7 @@ import { BotDeleteDialog } from "./bot-delete-dialog"
 import { useMessageTime } from "./message-actions"
 import { NewBotDialog } from "./new-bot-dialog"
 import { groupRoster, sectionNames, viewOf, type BotView } from "./roster-order"
+import { RosterResizeHandle, useRosterWidth } from "./roster-resize"
 import { useBotName } from "./shared"
 import { useBotTemplates } from "./use-templates"
 
@@ -320,6 +321,7 @@ export function PersonalAgentRoster({
   const [showHidden, setShowHidden] = useState(false)
   const [folded, toggleFold] = useFolded()
   const [dragging, setDragging] = useState<number | null>(null)
+  const [width, setWidth] = useRosterWidth()
   const now = useRosterNow(entries)
   const list = useMemo(() => entries ?? [], [entries])
 
@@ -801,7 +803,10 @@ export function PersonalAgentRoster({
       <nav
         data-pa-roster
         aria-label={tr("title")}
-        className="flex w-60 shrink-0 flex-col border-e border-border/50"
+        // Its width is the owner's (dragged on the handle after it), never
+        // past half the room the conversation and it share.
+        style={{ width: `${width}rem` }}
+        className="flex max-w-[50%] shrink-0 flex-col"
       >
         <div className="flex items-center gap-1 px-2 pt-2.5 pb-1">
           {query != null ? (
@@ -955,6 +960,7 @@ export function PersonalAgentRoster({
           </div>
         ) : null}
       </nav>
+      <RosterResizeHandle width={width} onWidth={setWidth} />
       {dialogs}
     </>
   )

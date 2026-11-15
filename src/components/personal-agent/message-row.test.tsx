@@ -20,7 +20,11 @@ const api = vi.hoisted(() => ({
   personalAgentNoticeAct: vi.fn(),
   personalAgentBots: vi.fn(async () => []),
 }))
-const pa = vi.hoisted(() => ({ dispatchById: new Map<number, unknown>() }))
+const pa = vi.hoisted(() => ({
+  dispatchById: new Map<number, unknown>(),
+  liveReplies: new Map<number, unknown>(),
+  liveTexts: new Map<number, { n: number; text: string }>(),
+}))
 const toasts = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
@@ -31,7 +35,8 @@ vi.mock("sonner", () => ({ toast: toasts }))
 vi.mock("@/contexts/personal-agent-context", () => ({
   useBotId: () => null,
   usePersonalAgent: () => ({
-    liveReplies: new Map(),
+    liveReplies: pa.liveReplies,
+    liveTexts: pa.liveTexts,
     dispatchById: pa.dispatchById,
     quoted: new Map(),
     requestQuoted: () => {},
@@ -51,7 +56,7 @@ import { MessageActions } from "./message-actions"
 import { buildMessageItems, type MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { OwnerBubble } from "./owner-bubble"
-import { ReplyBubble } from "./reply-bubble"
+import { ReplyBubble, SaidBubble } from "./reply-bubble"
 import { AGENT_SURFACE, PageScopeContext, type PageScope } from "./shared"
 
 function row(
@@ -141,6 +146,8 @@ beforeEach(() => {
   api.personalAgentCancel.mockReset()
   api.personalAgentCancel.mockResolvedValue(undefined)
   pa.dispatchById = new Map()
+  pa.liveReplies = new Map()
+  pa.liveTexts = new Map()
   usePersonalAgentUi.setState({ work: null, workOpen: false })
 })
 
@@ -533,6 +540,70 @@ describe("MessageActions", () => {
 })
 
 describe("the bubbles", () => {
+  /** A turn that wrote "I'll hand it to Dev." (step 1), sent Dev a message
+   *  (step 2) and goes on: its reply row `2`, the line `3`. */
+  function handedTurn(reply: Partial<TimelineRow>) {
+    const items = buildMessageItems([
+      row(2, "reply", { batch_id: 7, ...reply }),
+      row(3, "exchange", {
+        batch_id: 7,
+        body: "Fix the login bug.",
+        data: {
+          direction: "out",
+          peer: { id: 5, name: "Dev" },
+          turn: { n: 2, said: { n: 1, text: "I'll hand it to Dev." } },
+        },
+      }),
+    ])
+    const said = items.find((i) => i.kind === "said") as Extract<
+      MessageItem,
+      { kind: "said" }
+    >
+    const reply2 = items.find((i) => i.kind === "reply") as Extract<
+      MessageItem,
+      { kind: "reply" }
+    >
+    return { said, reply: reply2 }
+  }
+
+  it("keeps what a turn wrote before a message it sent, to copy, not to quote", async () => {
+    const { said } = handedTurn({ data: { state: "running" } })
+    const { container } = draw(<SaidBubble item={said} />)
+    const bubble = container.querySelector("[data-pa-said]")!
+    expect(bubble.textContent).toBe("I'll hand it to Dev.")
+    // No row of its own: jumps land on the line, not on it.
+    expect(container.querySelector("[data-row-id]")).toBeNull()
+    fireEvent.contextMenu(bubble)
+    const items = await screen.findAllByRole("menuitem")
+    const words = items.map((i) => i.textContent)
+    expect(words).toContain("Copy")
+    expect(words).not.toContain("Quote")
+  })
+
+  it("does not draw again, while the turn runs, the text drawn over its line", () => {
+    // The turn is on a step after the message; the bubble would keep its
+    // last text, which is the one over the line.
+    pa.liveReplies.set(2, {
+      t: "step",
+      n: 3,
+      kind: "read",
+      title: "Read notes.md",
+    })
+    pa.liveTexts.set(2, { n: 1, text: "I'll hand it to Dev." })
+    const { reply } = handedTurn({ data: { state: "running" } })
+    expect(reply.saidNs).toEqual([1])
+    const { container, unmount } = draw(<ReplyBubble item={reply} />)
+    expect(container.querySelector("[data-bubble]")).toBeNull()
+    unmount()
+    // What it writes next is its own again.
+    pa.liveReplies.set(2, { t: "text", n: 4, text: "Dev has it." })
+    pa.liveTexts.set(2, { n: 4, text: "Dev has it." })
+    const again = draw(<ReplyBubble item={reply} />)
+    expect(again.container.querySelector("[data-bubble]")?.textContent).toBe(
+      "Dev has it."
+    )
+  })
+
   it("splits a reply of short paragraphs into bubbles that act as one", async () => {
     const item = itemOf(
       [

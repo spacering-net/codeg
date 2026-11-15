@@ -8001,7 +8001,8 @@
         "reminder": "提醒",
         "followup": "跟进",
         "question": "提问",
-        "when_mentioned": "提到时提醒"
+        "when_mentioned": "提到时提醒",
+        "message": "消息"
       },
       "onDone": "完成后：{text}",
       "mention": "你提到 {words} 时提醒 · 已提醒 {times}/{max} 次 · 到 {until}"
@@ -8870,7 +8871,9 @@
             "pr": "PR",
             "routine": "例程",
             "rule": "提议",
-            "memory": "记忆"
+            "memory": "记忆",
+            "tidy": "整理记忆",
+            "skill": "流程技能"
           }
         },
         "clear": {
@@ -9344,7 +9347,8 @@
         "prReady": "可以合并了：{text}",
         "prFailed": "#{id} 检查没过：{title}",
         "prStuck": "#{id} 有冲突：{title}",
-        "prChecks": "#{id} 等检查 {passed}/{total}"
+        "prChecks": "#{id} 等检查 {passed}/{total}",
+        "resize": "调整助手列表宽度"
       },
       "choice": {
         "other": "其他",
@@ -9786,7 +9790,9 @@
       "dispatch": {
         "queued": "排队中",
         "running": "进行中",
-        "waiting_input": "助手正在替你答"
+        "waiting_input": "助手正在替你答",
+        "review": "待验收",
+        "handed_over": "已转交"
       },
       "item": {
         "notify": "{time} 提醒",

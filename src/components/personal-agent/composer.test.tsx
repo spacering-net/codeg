@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { forwardRef, useImperativeHandle, useState } from "react"
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
@@ -26,16 +26,21 @@ vi.mock("@/components/chat/composer/rich-composer", () => ({
       className?: string
       onChange?: (text: string) => void
       onSubmit?: () => void
+      onReady?: () => void
     },
     ref
   ) {
     const [text, setText] = useState("")
     useImperativeHandle(ref, () => ({
       getText: () => text,
+      isEmpty: () => text === "",
+      setText: (next: string) => setText(next),
       clear: () => setText(""),
       focus: () => {},
       getEditor: () => null,
     }))
+    const { onReady } = props
+    useEffect(() => onReady?.(), [onReady])
     return (
       <textarea
         aria-label={props.ariaLabel}
@@ -184,6 +189,80 @@ describe("PersonalAgentComposer", () => {
     })
     expect(editor.dataset.class).toContain("[&_.codeg-composer-scroll]:ps-2")
     expect(editor.dataset.class).toContain("[&_.codeg-composer-scroll]:py-1")
+  })
+
+  /** The page's box, one per assistant (keyed by them), as the page
+   *  draws it. */
+  function Page({
+    id,
+    draft = null,
+    onClearQuote,
+    onSent,
+  }: {
+    id: number
+    draft?: { text: string; n: number } | null
+    onClearQuote: () => void
+    onSent: () => void
+  }) {
+    return (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <PersonalAgentComposer
+          key={id}
+          agent={{ ...agent, id } as PersonalAgentInfo}
+          agentName="Aide"
+          status={status(null)}
+          quoting={null}
+          draft={draft}
+          onClearQuote={onClearQuote}
+          onSent={onSent}
+        />
+      </NextIntlClientProvider>
+    )
+  }
+  const box = () =>
+    screen.getByRole("textbox", {
+      name: "Message to your personal agent",
+    }) as HTMLTextAreaElement
+
+  it("leaves the next assistant's box alone when a send to the last one lands after the switch", async () => {
+    let land: (row: unknown) => void = () => {}
+    api.personalAgentSend.mockReturnValue(
+      new Promise((resolve) => {
+        land = resolve
+      })
+    )
+    const onClearQuote = vi.fn()
+    const onSent = vi.fn()
+    const { rerender } = render(
+      <Page id={1} onClearQuote={onClearQuote} onSent={onSent} />
+    )
+    fireEvent.change(box(), { target: { value: "for the first" } })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    })
+    // Switched while it is out: a box of the second's own, written in.
+    rerender(<Page id={2} onClearQuote={onClearQuote} onSent={onSent} />)
+    expect(box().value).toBe("")
+    fireEvent.change(box(), { target: { value: "for the second" } })
+    await act(async () => {
+      land({ id: 9 })
+    })
+    expect(box().value).toBe("for the second")
+    // Nor the page's quote and scroll, now the second's.
+    expect(onClearQuote).not.toHaveBeenCalled()
+    expect(onSent).not.toHaveBeenCalled()
+  })
+
+  it("puts a card's message in the box after switching assistants too", () => {
+    const props = { onClearQuote: vi.fn(), onSent: vi.fn() }
+    const { rerender } = render(<Page id={1} draft={null} {...props} />)
+    rerender(<Page id={1} draft={{ text: "first card", n: 1 }} {...props} />)
+    expect(box().value).toBe("first card")
+    // The page starts its count again for the next assistant.
+    rerender(<Page id={2} draft={null} {...props} />)
+    expect(box().value).toBe("")
+    rerender(<Page id={2} draft={{ text: "second card", n: 1 }} {...props} />)
+    expect(box().value).toBe("second card")
   })
 
   it("does not say a message went out when sending failed", async () => {

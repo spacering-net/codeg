@@ -35,11 +35,19 @@ export function useOwnerSeen({
   unseenCount: number
 }): { newFrom: number | null; clearNewFrom: () => void } {
   const unseenRows = useMemo(() => rows.filter(isUnseen), [rows])
+  const botId = useBotId()
 
   // Read as the owner comes (in render, before marking changes the rows).
   const [newFrom, setNewFrom] = useState<number | null>(null)
   const [wasWatching, setWasWatching] = useState(watching)
-  if (watching !== wasWatching) {
+  // Another assistant shown in the same list: coming to its conversation,
+  // as opening the page is — the last one's line goes.
+  const [forBot, setForBot] = useState(botId)
+  if (forBot !== botId) {
+    setForBot(botId)
+    setWasWatching(watching)
+    setNewFrom(watching && unseenRows.length > 0 ? unseenRows[0].id : null)
+  } else if (watching !== wasWatching) {
     setWasWatching(watching)
     if (watching && newFrom == null && unseenRows.length > 0) {
       setNewFrom(unseenRows[0].id)
@@ -54,7 +62,6 @@ export function useOwnerSeen({
       ? `${newestId}:${unseenRows.map((r) => r.id).join(",")}:${unseenCount > 0}`
       : null
   const lastMark = useRef<string | null>(null)
-  const botId = useBotId()
   useEffect(() => {
     if (markKey == null || newestId == null || markKey === lastMark.current)
       return

@@ -20,10 +20,14 @@
  *
  * The lines codeg writes for messages between assistants ("sent a message
  * to …", "message from …") sit in the middle, as a time line does; a run of
- * them is one line that opens to each. Those a turn wrote while it ran come
- * right before its reply: the reply is the conclusion. A question or
- * permission request another assistant's brain raised for something that
- * began here (a mirror) is a card of its own.
+ * them is one line that opens to each. Those a turn wrote while it ran sit
+ * where the turn wrote them: after the text it had written before sending
+ * (kept and drawn there, though a reply's body is only its last text), and
+ * before the reply's body — or after it, when the turn sent the message once
+ * it had written its last word. A line that cannot say where (one written
+ * before lines recorded it) comes right before the reply: the reply is the
+ * conclusion. A question or permission request another assistant's brain
+ * raised for something that began here (a mirror) is a card of its own.
  *
  * Pure, so it can be tested on rows alone.
  */
@@ -66,6 +70,9 @@ export type MessageItem =
       attached: TimelineRow[]
       /** The owner messages the turn carried. */
       owners: TimelineRow[]
+      /** The ordinals of the turn's texts drawn before its lines (`said`
+       *  items): while it runs, its bubble does not draw them again. */
+      saidNs: number[]
     })
   | (ItemBase & {
       kind: "event"
@@ -80,6 +87,10 @@ export type MessageItem =
   /** Messages between assistants, in the middle: `row` is the first of
    *  `rows`, a run of lines with nothing between them. */
   | (ItemBase & { kind: "exchange"; row: TimelineRow; rows: TimelineRow[] })
+  /** What a turn wrote before a message it sent (its line comes right
+   *  under it), on the assistant's side: `row` is the line, which keeps the
+   *  text — the turn's reply keeps only its last. */
+  | (ItemBase & { kind: "said"; row: TimelineRow; text: string })
   /** Another assistant's question or permission request, shown where what
    *  it is for began. */
   | (ItemBase & { kind: "mirror"; row: TimelineRow })
@@ -88,6 +99,44 @@ export type MessageItem =
 export function replyState(row: TimelineRow): string | null {
   const s = row.data?.state
   return typeof s === "string" ? s : null
+}
+
+/** Where a line a turn wrote stands among the turn's steps, as the line
+ *  records it (`data.turn`): the step the turn was on when it sent the
+ *  message, and the text it had written last before — `null` for a line
+ *  written outside a turn, or before lines recorded it. */
+export interface TurnMark {
+  n: number
+  said: { n: number; text: string } | null
+}
+
+export function turnMarkOf(row: TimelineRow): TurnMark | null {
+  const turn = row.data?.turn
+  if (!turn || typeof turn !== "object") return null
+  const t = turn as Record<string, unknown>
+  if (typeof t.n !== "number" || !Number.isFinite(t.n)) return null
+  const s =
+    t.said && typeof t.said === "object"
+      ? (t.said as Record<string, unknown>)
+      : null
+  const said =
+    s &&
+    typeof s.n === "number" &&
+    Number.isFinite(s.n) &&
+    typeof s.text === "string" &&
+    s.text.trim() !== ""
+      ? { n: s.n, text: s.text }
+      : null
+  return { n: t.n, said }
+}
+
+/** The ordinal of a settled reply's body (its last text), or `null` — a
+ *  turn still running, one that wrote no text, or a row that never
+ *  recorded it. */
+function bodyOrdinal(row: TimelineRow): number | null {
+  if (replyState(row) === "running" || row.body.trim() === "") return null
+  const n = row.data?.last_text_n
+  return typeof n === "number" && Number.isFinite(n) ? n : null
 }
 
 /** A reply whose prompt never reached the agent — or a routine's that had
@@ -131,6 +180,7 @@ export function isMirror(row: TimelineRow): boolean {
 function quotableIds(item: MessageItem): number[] {
   switch (item.kind) {
     case "time":
+    case "said":
       return []
     case "reply":
       return item.row ? [item.row.id, item.anchor.id] : [item.anchor.id]
@@ -199,7 +249,11 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
       sideOf(last.item) !== sideOf(item)
         ? "side"
         : "near"
-    if (item.kind !== "owner" && item.kind !== "exchange") {
+    if (
+      item.kind !== "owner" &&
+      item.kind !== "exchange" &&
+      item.kind !== "said"
+    ) {
       // The owner's own quotes always show: they picked them.
       const quoted =
         item.kind === "reply" ? item.row?.reply_to : item.row.reply_to
@@ -220,6 +274,43 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
     row: list[0],
     rows: [...list],
   })
+  /** A reply and the lines its turn wrote, each where it was written: after
+   *  the text the turn had written before sending (drawn there, once for a
+   *  run of lines it came before), and before the body — or after it, for a
+   *  message sent once the last text was written. */
+  const placeTurn = (
+    item: Extract<Placed, { kind: "reply" }>,
+    reply: TimelineRow,
+    lines: readonly TimelineRow[]
+  ) => {
+    const body = bodyOrdinal(reply)
+    const after: TimelineRow[] = []
+    let shown: number | null = null
+    for (const line of lines) {
+      const mark = turnMarkOf(line)
+      if (body != null && mark != null && mark.n >= body) {
+        after.push(line)
+        continue
+      }
+      const said = mark?.said
+      if (said && said.n !== shown && said.n !== body) {
+        place({
+          kind: "said",
+          key: `s${line.id}`,
+          gap: "side",
+          tail: false,
+          quotesPrevious: false,
+          row: line,
+          text: said.text,
+        })
+        shown = said.n
+        item.saidNs.push(said.n)
+      }
+      place(exchange([line]))
+    }
+    place(item)
+    for (const line of after) place(exchange([line]))
+  }
   for (const r of rows) {
     let item: Placed | null = null
     if (r.kind === "marker" || isDiscarded(r)) continue
@@ -281,6 +372,7 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
         batchId: b,
         attached: b != null ? (attachedByBatch.get(b) ?? []) : [],
         owners: b != null ? (ownersByBatch.get(b) ?? []) : [],
+        saidNs: [],
       }
     } else if (GROUPED_KINDS.has(r.kind)) {
       const b = r.batch_id
@@ -299,17 +391,20 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
         batchId: b,
         attached: group,
         owners: b != null ? (ownersByBatch.get(b) ?? []) : [],
+        saidNs: [],
       }
     }
     if (!item) continue
-    // What the turn said to other assistants comes before what it
-    // concluded.
-    const said =
+    // What the turn said to other assistants, where it said it.
+    const lines =
       item.kind === "reply" && item.row != null && item.batchId != null
         ? exchangesByBatch.get(item.batchId)
         : undefined
-    if (said?.length) place(exchange(said))
-    place(item)
+    if (item.kind === "reply" && item.row != null && lines?.length) {
+      placeTurn(item, item.row, lines)
+    } else {
+      place(item)
+    }
   }
   items.forEach((item, i) => {
     if (item.kind === "time") return
@@ -334,7 +429,8 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
 export function drawnRowIds(items: readonly MessageItem[]): Set<number> {
   const ids = new Set<number>()
   for (const item of items) {
-    if (item.kind === "time") continue
+    // A turn's text before a line is no row of its own: the line draws it.
+    if (item.kind === "time" || item.kind === "said") continue
     if (item.kind === "reply") {
       ids.add(item.anchor.id)
       if (item.row) ids.add(item.row.id)
@@ -356,7 +452,7 @@ export function newLineIndex(
   rowId: number
 ): number {
   const i = items.findIndex((item) =>
-    item.kind === "time"
+    item.kind === "time" || item.kind === "said"
       ? false
       : item.kind === "reply"
         ? item.anchor.id === rowId || item.row?.id === rowId

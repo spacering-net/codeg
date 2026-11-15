@@ -8001,7 +8001,8 @@
         "reminder": "lembrete",
         "followup": "acompanhamento",
         "question": "pergunta",
-        "when_mentioned": "ao mencionar"
+        "when_mentioned": "ao mencionar",
+        "message": "mensagem"
       },
       "onDone": "Ao concluir: {text}",
       "mention": "Quando você mencionar {words} · {times} de {max} vezes · até {until}"
@@ -8870,7 +8871,9 @@
             "pr": "Pull requests",
             "routine": "Rotinas",
             "rule": "Propostas",
-            "memory": "Memória"
+            "memory": "Memória",
+            "tidy": "Organização da memória",
+            "skill": "Skills de processo"
           }
         },
         "clear": {
@@ -9344,7 +9347,8 @@
         "prReady": "Pronto para mesclar: {text}",
         "prFailed": "#{id} verificações falharam: {title}",
         "prStuck": "#{id} tem um conflito: {title}",
-        "prChecks": "#{id} aguardando verificações {passed}/{total}"
+        "prChecks": "#{id} aguardando verificações {passed}/{total}",
+        "resize": "Redimensionar a lista de assistentes"
       },
       "choice": {
         "other": "Outro",
@@ -9786,7 +9790,9 @@
       "dispatch": {
         "queued": "Na fila",
         "running": "Em andamento",
-        "waiting_input": "O assistente está respondendo"
+        "waiting_input": "O assistente está respondendo",
+        "review": "Aguardando revisão",
+        "handed_over": "Repassado"
       },
       "item": {
         "notify": "Lembrete às {time}",

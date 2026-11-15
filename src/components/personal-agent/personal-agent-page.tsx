@@ -67,6 +67,7 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { personalAgentKeepalive, personalAgentNewSession } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type { TimelineRow } from "@/lib/types"
+import { cn } from "@/lib/utils"
 import { useAssistants } from "@/stores/assistants-store"
 import { usePaAccent } from "@/lib/personal-agent-accent"
 import { useBotLive } from "@/stores/personal-agent-roster-store"
@@ -227,7 +228,7 @@ export function PersonalAgentPage() {
   useAssistantShortcuts()
   // Session links in its replies open their conversations.
   const openSession = useSessionLinkOpener()
-  const { botId, snapshot, rows, loading } = usePersonalAgent()
+  const { botId, snapshot, rows, loading, switching } = usePersonalAgent()
   const assistants = useAssistants()
   const isMobile = useIsMobile()
   const band = useWorkbenchBand()
@@ -248,6 +249,14 @@ export function PersonalAgentPage() {
   }, [])
   const jumpRef = useRef<((rowId: number) => void) | null>(null)
   const sentRef = useRef<(() => void) | null>(null)
+  // Another assistant shown in the same frame: a quote or a draft meant for
+  // the last one is not this one's.
+  const [shownBot, setShownBot] = useState(botId)
+  if (shownBot !== botId) {
+    setShownBot(botId)
+    setQuoting(null)
+    setDraft(null)
+  }
 
   // A narrow screen opens on the conversation, its panel a drawer away.
   useEffect(() => {
@@ -414,8 +423,16 @@ export function PersonalAgentPage() {
           <PersonalAgentRoster compact={false} readOnly={readOnly} />
         )}
         <div
-          className="flex min-w-0 flex-1 flex-col"
+          className={cn(
+            "flex min-w-0 flex-1 flex-col transition-opacity",
+            // While another assistant is read, this one stays drawn — no
+            // emptied page — but not to act on; dimmed only if it takes a
+            // while (a switch read in time never dims at all).
+            switching && "opacity-60 delay-500 duration-200"
+          )}
           data-pa-accent={accentColor ?? undefined}
+          data-pa-switching={switching || undefined}
+          inert={switching || undefined}
         >
           {isMobile ? (
             <PersonalAgentRoster compact readOnly={readOnly} />
@@ -446,6 +463,9 @@ export function PersonalAgentPage() {
           <MessageList jumpRef={jumpRef} sentRef={sentRef} />
           <StatusLine botId={agent.id} name={agentName} />
           <PersonalAgentComposer
+            // Each assistant's own box: what is being written, sent or
+            // uploaded for one never lands in another's.
+            key={agent.id}
             agent={agent}
             agentName={agentName}
             status={snapshot.status}
@@ -459,11 +479,17 @@ export function PersonalAgentPage() {
     </div>
   )
   const aux = (
-    <PersonalAgentAuxPanel
-      snapshot={snapshot}
-      inDrawer={isMobile}
-      reserve={band?.rightReserve ?? null}
-    />
+    <div
+      className="h-full"
+      data-pa-switching={switching || undefined}
+      inert={switching || undefined}
+    >
+      <PersonalAgentAuxPanel
+        snapshot={snapshot}
+        inDrawer={isMobile}
+        reserve={band?.rightReserve ?? null}
+      />
+    </div>
   )
 
   return (

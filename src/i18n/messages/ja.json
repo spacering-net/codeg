@@ -8001,7 +8001,8 @@
         "reminder": "リマインダー",
         "followup": "フォローアップ",
         "question": "質問",
-        "when_mentioned": "言及時"
+        "when_mentioned": "言及時",
+        "message": "メッセージ"
       },
       "onDone": "完了後：{text}",
       "mention": "{words} と言ったときに知らせる · {times}/{max} 回 · {until} まで"
@@ -8870,7 +8871,9 @@
             "pr": "プルリクエスト",
             "routine": "ルーチン",
             "rule": "提案",
-            "memory": "メモリ"
+            "memory": "メモリ",
+            "tidy": "記憶の整理",
+            "skill": "手順スキル"
           }
         },
         "clear": {
@@ -9344,7 +9347,8 @@
         "prReady": "マージできます：{text}",
         "prFailed": "#{id} チェック失敗：{title}",
         "prStuck": "#{id} コンフリクトあり：{title}",
-        "prChecks": "#{id} チェック待ち {passed}/{total}"
+        "prChecks": "#{id} チェック待ち {passed}/{total}",
+        "resize": "アシスタント一覧の幅を変更"
       },
       "choice": {
         "other": "その他",
@@ -9786,7 +9790,9 @@
       "dispatch": {
         "queued": "待機中",
         "running": "実行中",
-        "waiting_input": "アシスタントが回答中"
+        "waiting_input": "アシスタントが回答中",
+        "review": "レビュー待ち",
+        "handed_over": "引き継ぎ済み"
       },
       "item": {
         "notify": "{time} にリマインド",

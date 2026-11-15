@@ -423,6 +423,34 @@ describe("what I'll do on my own", () => {
     )
   })
 
+  it("lays its switches out as the settings do, its actions under a hairline", () => {
+    draw(open())
+    // The level and the switches, each group on one surface, a row each.
+    const level = document.querySelector("[data-pa-meet-level]")!
+    const promises = document.querySelector("[data-pa-meet-promises]")!
+    expect(level.className).toContain("divide-y")
+    expect(promises.className).toContain("divide-y")
+    expect(promises.querySelectorAll("[data-pa-promise]")).toHaveLength(10)
+    // A row's title is its switch's label.
+    const brief = promises.querySelector('[data-pa-promise="brief"]')!
+    const label = brief.querySelector("label")!
+    expect(label.getAttribute("for")).toBe(
+      brief.querySelector('[role="switch"]')!.id
+    )
+    // The level is one segmented control, a radio group.
+    expect(level.querySelector('[role="radiogroup"]')).not.toBeNull()
+    // The ways on, quiet, and [Done] at the end, under a line.
+    const actions = document.querySelector("[data-pa-meet-actions]")!
+    expect(actions.className).toContain("border-t")
+    const buttons = [...actions.querySelectorAll("button")]
+    const last = buttons[buttons.length - 1]
+    expect(last.hasAttribute("data-pa-meet-done")).toBe(true)
+    expect(last.className).toContain("ms-auto")
+    expect(
+      buttons.filter((b) => b.getAttribute("data-variant") === "ghost")
+    ).toHaveLength(buttons.length - 1)
+  })
+
   it("suggests a team once, opens the preferences and the companion, and folds when done", async () => {
     const openSettings = vi.fn()
     usePersonalAgentUi.setState({ openSettings })

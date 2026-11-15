@@ -7,8 +7,9 @@ const api = vi.hoisted(() => ({
   personalAgentMarkSeen: vi.fn(),
 }))
 vi.mock("@/lib/api", () => api)
+const bot = vi.hoisted(() => ({ id: null as number | null }))
 vi.mock("@/contexts/personal-agent-context", () => ({
-  useBotId: () => null,
+  useBotId: () => bot.id,
 }))
 
 import { useOwnerSeen } from "./use-owner-seen"
@@ -61,11 +62,40 @@ async function flush() {
 }
 
 beforeEach(() => {
+  bot.id = null
   api.personalAgentMarkSeen.mockReset()
   api.personalAgentMarkSeen.mockResolvedValue(undefined)
 })
 
 describe("useOwnerSeen", () => {
+  it("comes to another assistant's conversation shown in the same list as to a page just opened", () => {
+    // Watching the primary, with nothing new there.
+    const { result, rerender } = setup({
+      rows: [row(1, "owner"), reply(2, "done", true)],
+      watching: true,
+      unseenCount: 0,
+    })
+    expect(result.current.newFrom).toBeNull()
+    // Another assistant, still watched: its first new message gets the
+    // line, though the owner never stopped watching.
+    bot.id = 9
+    rerender({
+      rows: [row(10, "owner"), reply(11, "done", true), reply(12, "done")],
+      watching: true,
+      unseenCount: 1,
+    })
+    expect(result.current.newFrom).toBe(12)
+    expect(api.personalAgentMarkSeen).toHaveBeenLastCalledWith(12, 9)
+    // Back to the primary, nothing new there: the last one's line goes.
+    bot.id = null
+    rerender({
+      rows: [row(1, "owner"), reply(2, "done", true)],
+      watching: true,
+      unseenCount: 0,
+    })
+    expect(result.current.newFrom).toBeNull()
+  })
+
   it("marks nothing while the owner does not watch", () => {
     const { result } = setup({
       rows: [row(1, "owner"), reply(2, "done")],

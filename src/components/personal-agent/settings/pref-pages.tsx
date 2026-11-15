@@ -99,7 +99,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { cn } from "@/lib/utils"
 import { isDesktop } from "@/lib/transport"
 import { Input } from "@/components/ui/input"
 import {
@@ -114,7 +117,6 @@ import type {
   PersonalAgentPrefKey,
   PersonalAgentPrefs,
 } from "@/lib/types"
-import { cn } from "@/lib/utils"
 
 import { ProposalRules } from "./proposal-rules"
 import { useSettingsPatch } from "./use-settings"
@@ -467,7 +469,9 @@ export const COUNT_MAX: Partial<Record<PersonalAgentPrefKey, number>> = {
   brief_suggestions: 5,
 }
 
-const ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
+/** Each preference's glyph, wherever it is set (the settings, the first
+ *  meeting's switches). */
+export const PREF_ICONS: Record<PersonalAgentPrefKey, LucideIcon> = {
   reply_length: Text,
   cards: LayoutGrid,
   when_unsure: MessageCircleQuestion,
@@ -726,7 +730,7 @@ function PrefRow({
   }
   return (
     <SettingRow
-      icon={ICONS[item]}
+      icon={PREF_ICONS[item]}
       title={t(`${item}.title` as "reply_length.title")}
       description={t(`${item}.hint` as "reply_length.hint")}
       htmlFor={id}
@@ -885,6 +889,7 @@ export function PresetPicker<L extends string>({
   prefs,
   icon,
   disabled,
+  stacked,
   onPick,
 }: {
   /** `automation_level` or `disturb_level`: its words and its patch key. */
@@ -895,6 +900,9 @@ export function PresetPicker<L extends string>({
   prefs: PersonalAgentPrefs
   icon: LucideIcon
   disabled: boolean
+  /** The choice under the words rather than beside them (a narrow place,
+   *  a card in the conversation). */
+  stacked?: boolean
   onPick: (level: L) => void
 }) {
   const t = useTranslations("PersonalAgent.settings")
@@ -913,6 +921,51 @@ export function PresetPicker<L extends string>({
     onPick(next)
   }
   const word = (l: string) => tp(`${item}.${l}` as "automation_level.standard")
+  const choice = (
+    // One segmented control (a radio group: the arrow keys move through
+    // it); a level of the owner's own making is a badge beside it, not a
+    // choice in it.
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-1.5",
+        stacked ? "flex-row-reverse justify-end" : "justify-end"
+      )}
+    >
+      {level === "custom" ? (
+        <Badge
+          variant="secondary"
+          data-pa-level="custom"
+          className="font-normal"
+        >
+          {word("custom")}
+        </Badge>
+      ) : null}
+      <ToggleGroup
+        type="single"
+        variant="outline"
+        size="sm"
+        spacing={0}
+        value={level === "custom" ? "" : level}
+        onValueChange={(v) => {
+          if (v) choose(v as L)
+        }}
+        disabled={disabled}
+        aria-label={tp(`${item}.title` as "automation_level.title")}
+        className="bg-background"
+      >
+        {levels.map((l) => (
+          <ToggleGroupItem
+            key={l}
+            value={l}
+            data-pa-level={l}
+            className="h-7 px-3 text-xs font-normal text-muted-foreground data-[state=on]:font-medium data-[state=on]:text-foreground"
+          >
+            {word(l)}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
+  )
   return (
     <>
       <SettingRow
@@ -921,42 +974,10 @@ export function PresetPicker<L extends string>({
         description={tp(
           `${item}.${level}Hint` as "automation_level.standardHint"
         )}
-        control={
-          <div
-            role="radiogroup"
-            aria-label={tp(`${item}.title` as "automation_level.title")}
-            className="inline-flex flex-wrap rounded-lg border border-border/70 bg-background p-0.5"
-          >
-            {levels.map((l) => (
-              <button
-                key={l}
-                type="button"
-                role="radio"
-                aria-checked={level === l}
-                data-pa-level={l}
-                disabled={disabled}
-                onClick={() => choose(l)}
-                className={cn(
-                  "rounded-md px-2.5 py-1 text-xs transition-colors disabled:opacity-50",
-                  level === l
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {word(l)}
-              </button>
-            ))}
-            {level === "custom" ? (
-              <span
-                data-pa-level="custom"
-                className="rounded-md bg-muted px-2.5 py-1 text-xs text-foreground"
-              >
-                {word("custom")}
-              </span>
-            ) : null}
-          </div>
-        }
-      />
+        control={stacked ? undefined : choice}
+      >
+        {stacked ? choice : null}
+      </SettingRow>
       <AlertDialog
         open={confirm != null}
         onOpenChange={(open) => !open && setConfirm(null)}

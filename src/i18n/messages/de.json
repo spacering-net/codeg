@@ -8001,7 +8001,8 @@
         "reminder": "Erinnerung",
         "followup": "Nachfassen",
         "question": "Frage",
-        "when_mentioned": "bei Erwähnung"
+        "when_mentioned": "bei Erwähnung",
+        "message": "Nachricht"
       },
       "onDone": "Wenn erledigt: {text}",
       "mention": "Wenn du {words} erwähnst · {times} von {max} Mal · bis {until}"
@@ -8870,7 +8871,9 @@
             "pr": "Pull-Requests",
             "routine": "Routinen",
             "rule": "Vorschläge",
-            "memory": "Gedächtnis"
+            "memory": "Gedächtnis",
+            "tidy": "Aufräumen",
+            "skill": "Ablauf-Skills"
           }
         },
         "clear": {
@@ -9344,7 +9347,8 @@
         "prReady": "Bereit zum Mergen: {text}",
         "prFailed": "#{id} Checks fehlgeschlagen: {title}",
         "prStuck": "#{id} hat einen Konflikt: {title}",
-        "prChecks": "#{id} wartet auf Checks {passed}/{total}"
+        "prChecks": "#{id} wartet auf Checks {passed}/{total}",
+        "resize": "Breite der Assistentenliste ändern"
       },
       "choice": {
         "other": "Andere",
@@ -9786,7 +9790,9 @@
       "dispatch": {
         "queued": "In der Warteschlange",
         "running": "Läuft",
-        "waiting_input": "Sein Assistent antwortet"
+        "waiting_input": "Sein Assistent antwortet",
+        "review": "Wartet auf Prüfung",
+        "handed_over": "Übergeben"
       },
       "item": {
         "notify": "Erinnerung um {time}",

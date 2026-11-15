@@ -37,6 +37,7 @@ vi.mock("@/contexts/tab-context", () => ({
 
 import { ExchangeRow } from "./exchange-row"
 import { buildMessageItems, type MessageItem } from "./message-items"
+import { MessageEnterContext, MessageRow } from "./message-row"
 import { MirrorCard } from "./mirror-card"
 import { PageScopeContext, type PageScope } from "./shared"
 
@@ -123,6 +124,57 @@ describe("ExchangeRow", () => {
     expect(button.getAttribute("title")).toBe(
       "Fix the cold-start white screen."
     )
+    // Words and the peer's face, no arrow in front of them.
+    const arrows = '[class*="lucide-arrow"]'
+    expect(button.querySelectorAll(arrows)).toHaveLength(0)
+    cleanup()
+    draw([line(2, "in")])
+    expect(
+      screen
+        .getByRole("button", { name: /Message from/ })
+        .querySelectorAll(arrows)
+    ).toHaveLength(0)
+  })
+
+  it("rises into place on its own element, so the list's spacing still sees its neighbours", () => {
+    const [item] = buildMessageItems([line(1, "out")]).filter(
+      (i) => i.kind === "exchange"
+    ) as Extract<MessageItem, { kind: "exchange" }>[]
+    const { container } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <PageScopeContext.Provider value={scope()}>
+          <div data-list>
+            <MessageRow rowId={9} side="start" gap="side" tail>
+              <div data-bubble>before</div>
+            </MessageRow>
+            <MessageEnterContext.Provider value>
+              <ExchangeRow item={item} />
+            </MessageEnterContext.Provider>
+            <MessageEnterContext.Provider value>
+              <MessageRow rowId={10} side="start" gap="side" tail>
+                <div data-bubble>after</div>
+              </MessageRow>
+            </MessageEnterContext.Provider>
+          </div>
+        </PageScopeContext.Provider>
+      </NextIntlClientProvider>
+    )
+    const list = container.querySelector("[data-list]")!
+    const [before, exchange, after] = Array.from(list.children)
+    // No wrapper: the line is the list's own child, right after the message
+    // over it (so it keeps its room over it, `first:pt-0` not applying), and
+    // the message under it is its next sibling (so `[data-pa-divider]+&`
+    // starts it right there, not 32px down).
+    expect(exchange.hasAttribute("data-pa-exchange")).toBe(true)
+    expect(exchange.className).toContain("motion-message-enter")
+    expect(exchange.previousElementSibling).toBe(before)
+    expect(after.getAttribute("data-row-id")).toBe("10")
+    expect(after.className).toContain("motion-message-enter")
+    expect(after.previousElementSibling?.hasAttribute("data-pa-divider")).toBe(
+      true
+    )
+    // What was there already does not rise.
+    expect(before.className).not.toContain("motion-message-enter")
   })
 
   it("draws a run as one line that opens to each", () => {

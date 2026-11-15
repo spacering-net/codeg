@@ -37,6 +37,7 @@ vi.mock("@/lib/platform", () => ({
 
 import {
   PersonalAgentProvider,
+  SWITCH_HOLD_MS,
   usePersonalAgent,
   usePrimaryAgent,
   ViewedPersonalAgentProvider,
@@ -428,15 +429,97 @@ describe("ViewedPersonalAgentProvider", () => {
     expect(seen.page!.botId).toBeNull()
     expect(seen.page!.snapshot?.agent?.name).toBe("Nova")
     rerender(tree(9))
-    // Until its own store is read, the page waits: never the primary's.
-    expect(seen.page!.botId).toBe(9)
+    // Until its own store is read, the page goes on showing the one it
+    // showed — marked, so nothing acts on it — never an emptied page.
+    expect(seen.page!.botId).toBeNull()
+    expect(seen.page!.switching).toBe(true)
+    expect(seen.page!.snapshot?.agent?.name).toBe("Nova")
     await act(flush)
+    expect(seen.page!.botId).toBe(9)
+    expect(seen.page!.switching).toBeFalsy()
     expect(seen.page!.snapshot?.agent?.name).toBe("Reviewer")
     expect(seen.primary!.botId).toBeNull()
     expect(seen.primary!.snapshot?.agent?.name).toBe("Nova")
     expect(api.personalAgentGet).toHaveBeenCalledWith(9)
+    // The primary's is read already: back at once.
     rerender(tree(null))
     expect(seen.page!.snapshot?.agent?.name).toBe("Nova")
+    expect(seen.page!.switching).toBeFalsy()
     expect(seen.mounts).toBe(1)
+  })
+
+  it("keeps the last work assistant while the next is read, and gives up waiting", async () => {
+    // Assistant 7 is read at once; 8 only when released; 5 never.
+    let release8: (() => void) | null = null
+    api.personalAgentGet.mockImplementation((bot: number | null) => {
+      const snap = {
+        ...snapshot("here"),
+        agent: { id: bot ?? 1, name: `bot ${bot ?? 1}` },
+      }
+      if (bot === 8)
+        return new Promise((resolve) => {
+          release8 = () => resolve(snap)
+        })
+      if (bot === 5) return new Promise(() => {})
+      return Promise.resolve(snap)
+    })
+    api.personalAgentTimeline.mockResolvedValue(page([]))
+    const seen: { page: Ctx | null } = { page: null }
+    function Reader() {
+      const page = usePersonalAgent()
+      useEffect(() => {
+        seen.page = page
+      })
+      return null
+    }
+    const tree = (viewBot: number | null) => (
+      <PersonalAgentProvider>
+        <ViewedPersonalAgentProvider viewBot={viewBot}>
+          <Reader />
+        </ViewedPersonalAgentProvider>
+      </PersonalAgentProvider>
+    )
+    const { rerender } = render(tree(7))
+    await act(flush)
+    expect(seen.page!.botId).toBe(7)
+    rerender(tree(8))
+    await act(flush)
+    // 8 is not read yet: 7 stays, its store kept meanwhile.
+    expect(seen.page!.botId).toBe(7)
+    expect(seen.page!.switching).toBe(true)
+    expect(seen.page!.snapshot?.agent?.name).toBe("bot 7")
+    await act(async () => {
+      release8!()
+      await flush()
+    })
+    expect(seen.page!.botId).toBe(8)
+    expect(seen.page!.switching).toBeFalsy()
+    expect(seen.page!.snapshot?.agent?.name).toBe("bot 8")
+    // One whose snapshot never comes: the page waits so long, then shows
+    // it as it is, unread.
+    rerender(tree(5))
+    await act(flush)
+    expect(seen.page!.botId).toBe(8)
+    expect(seen.page!.switching).toBe(true)
+    await act(async () => {
+      vi.advanceTimersByTime(SWITCH_HOLD_MS)
+      await flush()
+    })
+    expect(seen.page!.botId).toBe(5)
+    expect(seen.page!.switching).toBeFalsy()
+    expect(seen.page!.snapshot).toBeNull()
+    // Back to 8, then 5 again: a new pick waits afresh — the last time's
+    // giving up is not this time's.
+    rerender(tree(8))
+    await act(async () => {
+      await flush()
+      release8!()
+      await flush()
+    })
+    expect(seen.page!.botId).toBe(8)
+    rerender(tree(5))
+    await act(flush)
+    expect(seen.page!.botId).toBe(8)
+    expect(seen.page!.switching).toBe(true)
   })
 })

@@ -78,6 +78,9 @@ interface PersonalAgentContextValue {
   quoted: ReadonlyMap<number, TimelineRow | null>
   /** Ask for rows a quote names that are not held. */
   requestQuoted: (ids: number[]) => void
+  /** Another assistant was picked and is still being read: this store is
+   *  the one the page showed, drawn as it is but not to act on. */
+  switching?: boolean
 }
 
 const PersonalAgentContext = createContext<PersonalAgentContextValue | null>(
@@ -651,17 +654,29 @@ function pendingStore(botId: number): PersonalAgentContextValue {
   }
 }
 
-/** Holds the viewed assistant's store and hands it up; renders nothing. */
+/** How long the page keeps showing the assistant it showed while the one
+ *  picked is read; then it shows the one picked, read or not. */
+export const SWITCH_HOLD_MS = 1500
+
+/** Holds a work assistant's store and hands it up; renders nothing. */
 function ViewedStore({
   botId,
   onValue,
+  onGone,
 }: {
   botId: number
   onValue: (v: { bot: number; value: PersonalAgentContextValue }) => void
+  onGone: (bot: number) => void
 }) {
   const value = usePersonalAgentStore(botId)
   useEffect(() => onValue({ bot: botId, value }), [botId, value, onValue])
+  useEffect(() => () => onGone(botId), [botId, onGone])
   return null
+}
+
+/** Read enough to draw the page: its snapshot and its newest rows. */
+function isReady(value: PersonalAgentContextValue | null): boolean {
+  return value != null && !value.loading && value.snapshot != null
 }
 
 /**
@@ -670,6 +685,11 @@ function ViewedStore({
  * store, made afresh for each assistant — while `usePrimaryAgent` keeps
  * reading the primary's. The tree under it never changes shape, so
  * switching assistants remounts nothing of the workspace.
+ *
+ * Switching, the page goes on showing the assistant it showed — its store
+ * kept, live, and marked `switching`, so the page draws it but takes no
+ * action on it — until the one picked is read (`SWITCH_HOLD_MS` at most),
+ * and then shows that one whole: never a page emptied while it loads.
  */
 export function ViewedPersonalAgentProvider({
   viewBot,
@@ -680,23 +700,67 @@ export function ViewedPersonalAgentProvider({
   children: ReactNode
 }) {
   const primary = useContext(PersonalAgentContext)
-  const [viewed, setViewed] = useState<{
-    bot: number
-    value: PersonalAgentContextValue
-  } | null>(null)
+  const [stores, setStores] = useState<
+    ReadonlyMap<number, PersonalAgentContextValue>
+  >(() => new Map())
+  const onValue = useCallback(
+    ({ bot, value }: { bot: number; value: PersonalAgentContextValue }) =>
+      setStores((held) => new Map(held).set(bot, value)),
+    []
+  )
+  const onGone = useCallback(
+    (bot: number) =>
+      setStores((held) => {
+        if (!held.has(bot)) return held
+        const next = new Map(held)
+        next.delete(bot)
+        return next
+      }),
+    []
+  )
   const primaryId = primary?.snapshot?.agent?.id ?? null
   const other = viewBot != null && viewBot !== primaryId ? viewBot : null
-  const value =
-    other == null
-      ? primary
-      : viewed?.bot === other
-        ? viewed.value
-        : pendingStore(other)
+  // The store picked (`null`: the primary's), and the one the page shows.
+  const [shown, setShown] = useState<number | null>(other)
+  // Waiting for the one picked given up, this switch: a new pick waits
+  // afresh, the same assistant picked again included.
+  const [gaveUp, setGaveUp] = useState<number | null>(null)
+  const [picked, setPicked] = useState<number | null>(other)
+  if (picked !== other) {
+    setPicked(other)
+    setGaveUp(null)
+  }
+  const storeOf = (bot: number | null) =>
+    bot == null ? primary : (stores.get(bot) ?? null)
+  const wanted = storeOf(other)
+  if (shown !== other && (isReady(wanted) || gaveUp === other)) {
+    setShown(other)
+  }
+  const switching = shown !== other
+  useEffect(() => {
+    if (!switching) return
+    const timer = window.setTimeout(() => setGaveUp(other), SWITCH_HOLD_MS)
+    return () => window.clearTimeout(timer)
+  }, [switching, other])
+  const held = switching ? storeOf(shown) : null
+  const value = useMemo(
+    () =>
+      held
+        ? { ...held, switching: true }
+        : (storeOf(other) ?? pendingStore(other ?? 0)),
+    // `storeOf` reads `primary` and `stores`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [held, other, primary, stores]
+  )
+  // The store picked, and the one still shown while it is read.
+  const mounted = [other, switching ? shown : null].filter(
+    (b, i, all): b is number => b != null && all.indexOf(b) === i
+  )
   return (
     <PrimaryAgentContext.Provider value={primary}>
-      {other != null ? (
-        <ViewedStore key={other} botId={other} onValue={setViewed} />
-      ) : null}
+      {mounted.map((bot) => (
+        <ViewedStore key={bot} botId={bot} onValue={onValue} onGone={onGone} />
+      ))}
       <PersonalAgentContext.Provider value={value}>
         {children}
       </PersonalAgentContext.Provider>

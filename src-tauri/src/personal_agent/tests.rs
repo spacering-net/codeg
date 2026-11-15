@@ -4208,6 +4208,85 @@ async fn pending_message_events(engine: &PersonalAgentEngine, bot: i32) -> Vec<c
 }
 
 #[tokio::test]
+async fn a_message_sent_in_a_turn_keeps_the_text_the_turn_wrote_before_it() {
+    let (primary, _tmp) = configured().await;
+    let w = worker_row(&primary, "Dev").await;
+    let p = primary.bot().await;
+    let seg = open_segment(&primary).await;
+    let (mut rx, state) = live_connection(&primary, seg, "pa-1").await;
+    primary
+        .send_owner_message("give the login fix to Dev".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    primary.pump().await;
+    let (_, token) = take_prompt(&mut rx);
+    start_prompt(&state, Some(&token)).await;
+    emit(
+        &primary,
+        &state,
+        "pa-1",
+        text("I'll hand the login fix to Dev."),
+        true,
+    )
+    .await;
+    emit(&primary, &state, "pa-1", tool("t1", "bot_message"), true).await;
+    sent_id(
+        &say(
+            &primary,
+            json!({ "to": w.to_string(), "text": "Fix the login bug." }),
+        )
+        .await,
+    );
+    // The sender's line says where the turn was: the step it sent from, and
+    // the text it wrote before — which the reply's body will not keep.
+    let out = rows_of(&primary, p, TimelineKind::Exchange).await;
+    assert_eq!(out.len(), 1);
+    let turn = data_of(&out[0])["turn"].clone();
+    assert_eq!(turn["n"], 2, "{turn}");
+    assert_eq!(turn["said"]["n"], 1, "{turn}");
+    assert_eq!(
+        turn["said"]["text"], "I'll hand the login fix to Dev.",
+        "{turn}"
+    );
+    // The receiver's line is no turn's of its own.
+    let inn = rows_of(&primary, w, TimelineKind::Exchange).await;
+    assert!(data_of(&inn[0]).get("turn").is_none(), "{:?}", inn[0].data);
+    // The body is what came after: the page draws the line before it.
+    emit(&primary, &state, "pa-1", text("Dev has it."), true).await;
+    emit(&primary, &state, "pa-1", turn_complete("end_turn"), true).await;
+    let reply = reply_of(&primary, out[0].batch_id.expect("sent in the delivery")).await;
+    assert_eq!(reply.body, "Dev has it.");
+    assert_eq!(data_of(&reply)["last_text_n"], 3);
+    // Answering a question the line once was keeps where it stood.
+    primary
+        .refresh_lines(sent_id_of_line(&out[0]), "replied")
+        .await;
+    let again = rows_of(&primary, p, TimelineKind::Exchange).await;
+    assert_eq!(data_of(&again[0])["state"], "replied");
+    assert_eq!(data_of(&again[0])["turn"], turn);
+    // Outside any turn, a message records no place.
+    sent_id(
+        &say(
+            &primary,
+            json!({ "to": w.to_string(), "text": "And the signup page." }),
+        )
+        .await,
+    );
+    let out = rows_of(&primary, p, TimelineKind::Exchange).await;
+    let last = out.iter().max_by_key(|r| r.id).unwrap();
+    assert!(data_of(last).get("turn").is_none(), "{:?}", last.data);
+}
+
+/// The message a line is of (`m<id>`).
+fn sent_id_of_line(row: &crate::db::entities::personal_agent_timeline::Model) -> i32 {
+    row.ref_id
+        .as_deref()
+        .and_then(|r| r.strip_prefix('m'))
+        .and_then(|r| r.parse().ok())
+        .expect("a line names its message")
+}
+
+#[tokio::test]
 async fn a_message_wakes_its_receiver_and_its_answer_closes_the_wait() {
     let (host, w, _tmp) = hosted().await;
     let primary = host.primary();

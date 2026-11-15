@@ -2744,6 +2744,8 @@ export type ItemKind =
   | "reminder"
   | "followup"
   | "question"
+  /** Waiting for another assistant's answer to a message (1.4). */
+  | "message"
   | "when_mentioned"
 export type ItemStatus = "open" | "waiting" | "done" | "dropped"
 export type WaitsFor = "owner" | "agent" | "time" | "external"
@@ -3161,6 +3163,13 @@ export type TodayRowKind =
   | "confirm"
   | "stuck"
   | "waiting"
+  // … an acceptance card to answer (7.5), a routine codeg paused (6.9), a
+  // watched pull request fixed as often as allowed (7.4), a plan stuck on
+  // a step (7.6) …
+  | "acceptance"
+  | "routine_paused"
+  | "used_up"
+  | "plan_stuck"
   // … an assistant's suggestion, handed-out work that failed, a board task,
   // a session, a reminder that came due.
   | "proposal"

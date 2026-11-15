@@ -39,6 +39,7 @@ import { DispatchAttachments } from "./dispatch-attachments"
 import { BlockingPrompts } from "./live-turn"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
+import { PaReplyScope } from "./pa-card-scope"
 import { QuoteBar } from "./quote-bar"
 import {
   replyView,
@@ -287,14 +288,26 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
   // While the turn runs, the bubble holds only what it wrote: the other
   // steps are the status line's (10.7). Its last text stays while it goes on
   // with them; with none yet, there is no bubble at all — unless the turn
-  // asks the owner something here.
-  const said = row ? liveTexts?.get(row.id) : undefined
+  // asks the owner something here. A text it wrote before sending a message
+  // is drawn above that message's line already (`said`): not here again.
+  const drawnAbove = (n: number | undefined) =>
+    n != null && item.saidNs.includes(n)
+  const kept = row ? liveTexts?.get(row.id) : undefined
+  const said = kept && !drawnAbove(kept.n) ? kept : undefined
   const streamed: SlotView | null =
     view.running && view.slot?.kind !== "text"
       ? said
-        ? { kind: "text", key: `t${said.n}`, text: said.text, streaming: true }
+        ? {
+            kind: "text",
+            key: `t${said.n}`,
+            text: said.text,
+            streaming: true,
+            n: said.n,
+          }
         : null
-      : view.slot
+      : view.running && view.slot?.kind === "text" && drawnAbove(view.slot.n)
+        ? null
+        : view.slot
   // A routine's "nothing to say" as it streams in is not shown (6.9).
   const slot: SlotView | null =
     view.running && streamed?.kind === "text" && silentSoFar(streamed.text)
@@ -465,6 +478,63 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
           </>,
           liveTurn
         )
+      )}
+    </MessageRow>
+  )
+}
+
+type SaidItem = Extract<MessageItem, { kind: "said" }>
+
+/**
+ * What a turn wrote before a message it sent to another assistant, over
+ * that message's line — where it was written: the turn's reply keeps only
+ * its last text, and without this the line would sit above everything the
+ * turn said. Drawn as the reply's text is (short paragraphs a bubble each);
+ * its actions copy it, with no quote — it is no message of its own.
+ */
+export function SaidBubble({ item }: { item: SaidItem }) {
+  const parts = splitReply(item.text)
+  const bubble = (part: number, tail: boolean, text: string) => (
+    <div
+      key={part}
+      data-bubble
+      data-pa-said
+      data-pa-bubble-part={parts.length > 1 ? part : undefined}
+      className={cn(
+        AGENT_SURFACE,
+        bubbleCorners("start", tail),
+        "min-w-0 p-3 text-sm break-words text-foreground [&>:first-child]:mt-0"
+      )}
+    >
+      <PaReplyScope row={null} running={false}>
+        <MessageResponse
+          className={cn("text-sm", MARKDOWN_LIST_ROOM, BUBBLE_MARKDOWN)}
+        >
+          {text}
+        </MessageResponse>
+      </PaReplyScope>
+    </div>
+  )
+  return (
+    <MessageRow
+      side="start"
+      gap={item.gap}
+      tail={item.tail}
+      actions={{
+        rowId: item.row.id,
+        text: item.text,
+        at: item.row.created_at,
+        quote: false,
+      }}
+    >
+      {parts.length > 1 ? (
+        <div className="flex min-w-0 flex-col items-start gap-1">
+          {parts.map((text, i) =>
+            bubble(i, i === parts.length - 1 && item.tail, text)
+          )}
+        </div>
+      ) : (
+        bubble(0, item.tail, parts[0] ?? item.text)
       )}
     </MessageRow>
   )

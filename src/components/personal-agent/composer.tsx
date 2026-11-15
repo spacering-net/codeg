@@ -178,6 +178,17 @@ export function PersonalAgentComposer({
   const [editorReady, setEditorReady] = useState(false)
   const open = wrapped || quoting != null || hasImages
 
+  // The box is one assistant's (the page keys it by them): a send that
+  // lands once it is gone — the owner switched assistants meanwhile — leaves
+  // the page's quote and scroll, now the next one's, alone.
+  const mounted = useRef(false)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
   const send = async () => {
     if (!canSend || !editorRef.current) return
     if (attach.hasUploadingImage) {
@@ -189,6 +200,7 @@ export function PersonalAgentComposer({
     setSending(true)
     try {
       await personalAgentSend(body, blocks, quoting, botId)
+      if (!mounted.current) return
       editorRef.current?.clear()
       attach.clearAttachments()
       setText("")

@@ -703,6 +703,16 @@ impl PersonalAgentEngine {
                 .await?;
         }
         let excerpt = first_line(&m.body, 80);
+        // Where the sender's line goes among what its turn wrote (after the
+        // text the turn had written before sending), as the page draws it.
+        let turn = match &auth {
+            MessageAuth::Ledgered { batch_id, .. } => self.turn_mark(*batch_id).await,
+            _ => None,
+        };
+        let mut sender_line = json!({ "peer": bot_face(&to) });
+        if let (Some(line), Some(turn)) = (sender_line.as_object_mut(), turn) {
+            line.insert("turn".into(), turn);
+        }
         let (ledger, ledger_notice, sent_batch_id) = match &auth {
             MessageAuth::Ledgered { batch_id, .. } => (
                 Some(LedgerSlot::in_batch(*batch_id, key.clone(), super::ledger::fresh_op_id())),
@@ -734,7 +744,7 @@ impl PersonalAgentEngine {
             sent_segment_id: self.state.lock().await.connection_segment,
             summary: format!("{} wrote to you: {excerpt}", display_name(&me)),
             waiting_summary: format!("Waiting for {}'s answer: {excerpt}", display_name(&to)),
-            sender_line: json!({ "peer": bot_face(&to) }),
+            sender_line,
             receiver_line: json!({ "peer": bot_face(&me) }),
             ledger,
             ledger_notice,

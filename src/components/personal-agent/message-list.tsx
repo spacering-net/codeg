@@ -32,6 +32,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -72,9 +73,10 @@ import {
   newLineIndex,
   type MessageItem,
 } from "./message-items"
+import { MessageEnterContext, useEnterClass } from "./message-row"
 import { OwnerBubble } from "./owner-bubble"
 import { useQuoteAuthor, useQuotedRow } from "./quote-bar"
-import { ReplyBubble } from "./reply-bubble"
+import { ReplyBubble, SaidBubble } from "./reply-bubble"
 import { followsBottom } from "./follow-bottom"
 import {
   BUBBLE_MARKDOWN,
@@ -123,6 +125,7 @@ function ListDivider({
   tone?: "new"
   children: React.ReactNode
 } & Record<`data-${string}`, boolean>) {
+  const enter = useEnterClass()
   const hairline = cn(
     "flex-1 bg-transparent from-transparent",
     tone === "new" ? "to-primary/40" : "to-border/70"
@@ -133,7 +136,8 @@ function ListDivider({
       data-pa-divider
       className={cn(
         "flex items-center gap-3 py-3 text-xs select-none first:pt-0",
-        tone === "new" ? "text-primary" : "text-muted-foreground/80"
+        tone === "new" ? "text-primary" : "text-muted-foreground/80",
+        enter
       )}
     >
       <Separator
@@ -317,6 +321,8 @@ function Item({ item }: { item: MessageItem }) {
       return <NoticeCard item={item} />
     case "exchange":
       return <ExchangeRow item={item} />
+    case "said":
+      return <SaidBubble item={item} />
     case "mirror":
       return <MirrorCard item={item} />
   }
@@ -412,6 +418,31 @@ export function MessageList({
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [preview, setPreview] = useState<number | null>(null)
   const jumpSeq = useRef(0)
+  // Bumped when another assistant is shown: what was under way for the last
+  // one (a jump, keeping the place after loading older) lands nowhere.
+  const shownSeq = useRef(0)
+
+  // Another assistant shown in this same list (the page keeps its frame
+  // when switching): it opens at its bottom, as a list just opened does,
+  // with nothing of the last one's left over — in the render that first
+  // draws it, and scrolled there before it paints.
+  const [shownBot, setShownBot] = useState(botId)
+  if (shownBot !== botId) {
+    setShownBot(botId)
+    setBottomed(true)
+    setPreview(null)
+    setLoadingOlder(false)
+  }
+  const scrolledFor = useRef(botId)
+  useLayoutEffect(() => {
+    if (scrolledFor.current === botId) return
+    scrolledFor.current = botId
+    shownSeq.current += 1
+    jumpSeq.current += 1
+    atBottom.current = true
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [botId])
 
   // Follow what comes in — a new row, a reply growing, a step's height
   // animating — while the reader is at the bottom. Content changes size
@@ -665,16 +696,21 @@ export function MessageList({
                   onClick={() => {
                     const el = scrollRef.current
                     const before = el?.scrollHeight ?? 0
+                    const seq = shownSeq.current
                     setLoadingOlder(true)
                     loadOlder()
                       .then(() => {
-                        // Keep the reader where they were.
+                        // Keep the reader where they were — on the list
+                        // they asked it for.
                         requestAnimationFrame(() => {
-                          if (el) el.scrollTop += el.scrollHeight - before
+                          if (el && seq === shownSeq.current)
+                            el.scrollTop += el.scrollHeight - before
                         })
                       })
                       .catch((e) => toast.error(toErrorMessage(e)))
-                      .finally(() => setLoadingOlder(false))
+                      .finally(() => {
+                        if (seq === shownSeq.current) setLoadingOlder(false)
+                      })
                   }}
                 >
                   {loadingOlder ? (
@@ -692,13 +728,12 @@ export function MessageList({
             {placed.map((item, i) => (
               <Fragment key={item.key}>
                 {i === newLineAt ? <NewLine /> : null}
-                {enters(item) ? (
-                  <div className="motion-message-enter">
-                    <Item item={item} />
-                  </div>
-                ) : (
+                {/* What came in rises into place on its own element (see
+                    MessageEnterContext): a wrapper would break the
+                    spacing the list reads off neighbours. */}
+                <MessageEnterContext.Provider value={enters(item)}>
                   <Item item={item} />
-                )}
+                </MessageEnterContext.Provider>
               </Fragment>
             ))}
             {orphanPrompt ? (

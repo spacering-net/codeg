@@ -8001,7 +8001,8 @@
         "reminder": "recordatorio",
         "followup": "seguimiento",
         "question": "pregunta",
-        "when_mentioned": "al mencionarlo"
+        "when_mentioned": "al mencionarlo",
+        "message": "mensaje"
       },
       "onDone": "Al terminar: {text}",
       "mention": "Cuando menciones {words} · {times} de {max} veces · hasta el {until}"
@@ -8870,7 +8871,9 @@
             "pr": "Pull requests",
             "routine": "Rutinas",
             "rule": "Propuestas",
-            "memory": "Memoria"
+            "memory": "Memoria",
+            "tidy": "Orden de memoria",
+            "skill": "Habilidades de proceso"
           }
         },
         "clear": {
@@ -9344,7 +9347,8 @@
         "prReady": "Lista para fusionar: {text}",
         "prFailed": "#{id} comprobaciones fallidas: {title}",
         "prStuck": "#{id} tiene un conflicto: {title}",
-        "prChecks": "#{id} esperando comprobaciones {passed}/{total}"
+        "prChecks": "#{id} esperando comprobaciones {passed}/{total}",
+        "resize": "Cambiar el ancho de la lista de asistentes"
       },
       "choice": {
         "other": "Otro",
@@ -9786,7 +9790,9 @@
       "dispatch": {
         "queued": "En cola",
         "running": "En curso",
-        "waiting_input": "Su asistente está respondiendo"
+        "waiting_input": "Su asistente está respondiendo",
+        "review": "Pendiente de revisión",
+        "handed_over": "Traspasado"
       },
       "item": {
         "notify": "Recordatorio a las {time}",

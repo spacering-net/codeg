@@ -53,6 +53,7 @@ import {
   Forward,
   ListTodo,
   MessageCircleQuestionMark,
+  MessagesSquare,
   Monitor,
   Package,
   Play,
@@ -211,6 +212,7 @@ const KIND_ICON: Record<Exclude<ItemKind, "dispatch">, LucideIcon> = {
   reminder: Bell,
   followup: Forward,
   question: MessageCircleQuestionMark,
+  message: MessagesSquare,
   when_mentioned: Ear,
 }
 
@@ -247,18 +249,33 @@ function useFold(key: string): [boolean, (open: boolean) => void] {
   return [stored ?? FOLD_START[key] ?? true, (open) => setFold(key, open)]
 }
 
+/** A read, and the assistant it is of (`null`: the primary). */
+interface Of<T> {
+  bot: number | null
+  value: T
+}
+
+/** What was read for `bot`; `null` while only another one's is held. */
+function ofBot<T>(read: Of<T> | null, bot: number | null): T | null {
+  return read != null && read.bot === bot ? read.value : null
+}
+
 /** The open matters and the dispatches, loaded for the panel: the work tab
  *  lists them, the rail counts what waits on the owner. */
 function useWork() {
   const { botId, itemVersion, dispatchVersion, dispatchById } =
     usePersonalAgent()
-  const [items, setItems] = useState<ItemInfo[] | null>(null)
-  const [dispatches, setDispatches] = useState<DispatchInfo[] | null>(null)
+  // Each read kept with the assistant it is of: another one shown waits for
+  // its own, never drawing the last one's.
+  const [itemsOf, setItemsOf] = useState<Of<ItemInfo[]> | null>(null)
+  const [dispatchesOf, setDispatchesOf] = useState<Of<DispatchInfo[]> | null>(
+    null
+  )
   useEffect(() => {
     let cancelled = false
     personalAgentItems("active", botId)
       .then((list) => {
-        if (!cancelled) setItems(list)
+        if (!cancelled) setItemsOf({ bot: botId, value: list })
       })
       .catch(() => {})
     return () => {
@@ -269,13 +286,15 @@ function useWork() {
     let cancelled = false
     personalAgentDispatches(null, DISPATCH_PAGE, null, botId)
       .then((list) => {
-        if (!cancelled) setDispatches(list)
+        if (!cancelled) setDispatchesOf({ bot: botId, value: list })
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
   }, [dispatchVersion, botId])
+  const items = ofBot(itemsOf, botId)
+  const dispatches = ofBot(dispatchesOf, botId)
   return useMemo(() => {
     if (items == null || dispatches == null) return null
     const byId = new Map(dispatches.map((d) => [d.id, d]))
@@ -1792,18 +1811,19 @@ function StatsBody() {
   const locale = useLocale()
   const tm = useTranslations("PersonalAgent.mode")
   const { botId, dispatchVersion } = usePersonalAgent()
-  const [stats, setStats] = useState<PersonalAgentStats | null>(null)
+  const [statsOf, setStatsOf] = useState<Of<PersonalAgentStats> | null>(null)
   useEffect(() => {
     let cancelled = false
     personalAgentStats(STATS_DAYS, botId)
       .then((s) => {
-        if (!cancelled) setStats(s)
+        if (!cancelled) setStatsOf({ bot: botId, value: s })
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
   }, [dispatchVersion, botId])
+  const stats = ofBot(statsOf, botId)
   if (!stats) {
     return (
       <SyncedSpinner
@@ -2079,8 +2099,11 @@ function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
   const { botId, dispatchVersion } = usePersonalAgent()
   const now = useNow()
   const [kind, setKind] = useState<OutputKind>("all")
-  const [docs, setDocs] = useState<PersonalAgentOutputDoc[] | null>(null)
-  const [reading, setReading] = useState<{
+  const [docsOf, setDocsOf] = useState<Of<PersonalAgentOutputDoc[]> | null>(
+    null
+  )
+  const [readingOf, setReading] = useState<{
+    bot: number | null
     path: string
     text: string | null
   } | null>(null)
@@ -2088,19 +2111,22 @@ function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
     let live = true
     personalAgentOutputs(botId)
       .then((list) => {
-        if (live) setDocs(list)
+        if (live) setDocsOf({ bot: botId, value: list })
       })
       .catch(() => {
-        if (live) setDocs([])
+        if (live) setDocsOf({ bot: botId, value: [] })
       })
     return () => {
       live = false
     }
   }, [botId, dispatchVersion])
+  const docs = ofBot(docsOf, botId)
+  // A document of the assistant shown, not of the last one.
+  const reading = readingOf?.bot === botId ? readingOf : null
   const open = (path: string) => {
-    setReading({ path, text: null })
+    setReading({ bot: botId, path, text: null })
     personalAgentOutputRead(botId, path)
-      .then((text) => setReading({ path, text }))
+      .then((text) => setReading({ bot: botId, path, text }))
       .catch((e) => {
         setReading(null)
         toast.error(toErrorMessage(e))

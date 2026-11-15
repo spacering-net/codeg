@@ -43,6 +43,8 @@ export interface MessageActionsSpec {
   durationMs?: number | null
   /** The reply the turn in flight writes: it can be stopped from here. */
   live?: boolean
+  /** `false`: nothing to quote (text that is no row of its own). */
+  quote?: boolean
 }
 
 /** `14:32`, `昨天 09:10`, `11月3日 18:05` — how the list writes a time, in
@@ -139,6 +141,7 @@ export function MessageActions({
   at,
   durationMs,
   live,
+  quote = true,
   side,
 }: MessageActionsSpec & {
   /** The bubble's side of the column: the actions read away from it. */
@@ -168,7 +171,7 @@ export function MessageActions({
         </>
       ) : null}
       {live && !readOnly ? <StopButton /> : null}
-      {readOnly ? null : (
+      {readOnly || !quote ? null : (
         <button
           type="button"
           className={BUTTON}
@@ -224,7 +227,8 @@ function MenuItems({
     })
   }
   const stop = spec.live && !readOnly
-  const any = Boolean(selection) || stop || !readOnly || Boolean(spec.text)
+  const quote = !readOnly && spec.quote !== false
+  const any = Boolean(selection) || stop || quote || Boolean(spec.text)
   return (
     <>
       {selection ? (
@@ -240,7 +244,7 @@ function MenuItems({
           {t("stop")}
         </ContextMenuItem>
       ) : null}
-      {readOnly ? null : (
+      {quote ? (
         <ContextMenuItem
           onSelect={() => {
             onQuoted()
@@ -250,7 +254,7 @@ function MenuItems({
           <Reply className="rtl:-scale-x-100" />
           {t("quote")}
         </ContextMenuItem>
-      )}
+      ) : null}
       {spec.text ? (
         <ContextMenuItem onSelect={() => copy(spec.text!)}>
           <Copy />

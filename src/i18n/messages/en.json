@@ -8001,7 +8001,8 @@
         "reminder": "reminder",
         "followup": "follow-up",
         "question": "question",
-        "when_mentioned": "on mention"
+        "when_mentioned": "on mention",
+        "message": "message"
       },
       "onDone": "When done: {text}",
       "mention": "When you mention {words} · {times} of {max} times · until {until}"
@@ -8870,7 +8871,9 @@
             "pr": "Pull requests",
             "routine": "Routines",
             "rule": "Proposals",
-            "memory": "Memory"
+            "memory": "Memory",
+            "tidy": "Tidy-ups",
+            "skill": "Process skills"
           }
         },
         "clear": {
@@ -9344,7 +9347,8 @@
         "prReady": "Ready to merge: {text}",
         "prFailed": "#{id} checks failed: {title}",
         "prStuck": "#{id} has a conflict: {title}",
-        "prChecks": "#{id} waiting for checks {passed}/{total}"
+        "prChecks": "#{id} waiting for checks {passed}/{total}",
+        "resize": "Resize the assistant list"
       },
       "choice": {
         "other": "Other",
@@ -9786,7 +9790,9 @@
       "dispatch": {
         "queued": "Queued",
         "running": "Running",
-        "waiting_input": "Its assistant is answering"
+        "waiting_input": "Its assistant is answering",
+        "review": "Waiting for review",
+        "handed_over": "Handed over"
       },
       "item": {
         "notify": "Reminder at {time}",

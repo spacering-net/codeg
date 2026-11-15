@@ -103,6 +103,13 @@ export default async function RootLayout({
               defaultTheme="system"
               enableSystem
               disableTransitionOnChange
+              // The theme is on the page before it paints by
+              // APPEARANCE_INIT_SCRIPT above. next-themes' own script is
+              // only ever made on the client here — its provider mounts once
+              // the language settings are read — where a script React makes
+              // never runs, and React reports one made as code: a data block
+              // is what it is.
+              scriptProps={{ type: "application/json" }}
             >
               <AppearanceProvider>
                 <OverlayScrollbarsInit />

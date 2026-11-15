@@ -1776,6 +1776,23 @@ impl PersonalAgentEngine {
         Some((t.reply_row_id?, t.reply_token.clone()?, t.conn_id.clone()))
     }
 
+    /// Where the delivery `batch_id` in flight is, for a line it writes now
+    /// (a message to another assistant): the step it is on, and the last
+    /// text it wrote. The page draws the line after that text, which it keeps
+    /// showing there — the reply's body is only the turn's last text — rather
+    /// than above everything the turn said. `None` outside that delivery, or
+    /// with no reply being built.
+    pub(super) async fn turn_mark(&self, batch_id: i32) -> Option<serde_json::Value> {
+        let (token, conn_id) = {
+            let st = self.state.lock().await;
+            let t = st.turn.as_ref().filter(|t| t.batch_id == batch_id)?;
+            (t.reply_token.clone()?, t.conn_id.clone())
+        };
+        let state = self.manager.get_state(&conn_id).await?;
+        let snap = state.read().await.reply_turns.snapshot(&token)?;
+        Some(serde_json::json!({ "n": snap.step_count, "said": snap.last_text }))
+    }
+
     /// The reply in flight's row and the connection's copy of it now.
     async fn reply_snapshot(&self) -> Option<(i32, ReplySnapshot)> {
         let (row_id, token, conn_id) = self.reply_in_flight().await?;

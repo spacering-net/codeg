@@ -29,6 +29,7 @@ import {
   Gauge,
   Handshake,
   KeyRound,
+  PawPrint,
   Settings2,
   Sparkles,
   Users,
@@ -37,6 +38,7 @@ import {
 import { toast } from "sonner"
 
 import { WorkspaceFolderDialog } from "@/components/layout/workspace-folder-dialog"
+import { SettingCard, SettingRow } from "@/components/shared/setting-card"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
@@ -66,9 +68,21 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { Stepper } from "./question-choice-card"
-import { DISTURB_PRESETS, disturbOf, PresetPicker } from "./settings/pref-pages"
+import {
+  DISTURB_PRESETS,
+  disturbOf,
+  PREF_ICONS,
+  PresetPicker,
+} from "./settings/pref-pages"
 import { useSettingsPatch } from "./settings/use-settings"
-import { AGENT_SURFACE, num, str, usePageScope } from "./shared"
+import {
+  AGENT_SURFACE,
+  INSET_HOVER,
+  INSET_SURFACE,
+  num,
+  str,
+  usePageScope,
+} from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -688,9 +702,13 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
 
   const level = account ? disturbOf(account) : "standard"
   const done = state === "done"
+  // As the settings write them — a group's rows on one surface, a hairline
+  // between them, the switch on each row's end — on the bubble's own colour
+  // a step deeper rather than a card of their own.
+  const group = cn(INSET_SURFACE, "border-transparent")
   const body = account ? (
-    <>
-      <div className="-mx-3" data-pa-meet-level>
+    <div className="flex flex-col gap-2">
+      <SettingCard className={group} data-pa-meet-level>
         <PresetPicker
           item="disturb_level"
           levels={["quiet", "standard", "more"] as const}
@@ -699,91 +717,103 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
           prefs={account.prefs}
           icon={Gauge}
           disabled={disabled}
+          stacked
           onPick={(l) => void patch([{ key: "prefs.disturb_level", value: l }])}
         />
-      </div>
-      <ul
-        className="mt-1 flex flex-col divide-y divide-border/60"
-        data-pa-meet-promises
-      >
+      </SettingCard>
+      <SettingCard className={group} data-pa-meet-promises>
         {PROMISES.map(({ key, on, off }) => {
           const id = `pa-meet-promise-${row.id}-${key}`
           const value = account.prefs[key] as unknown as string
           return (
-            <li
-              key={key}
-              className="flex items-start gap-3 py-2"
-              data-pa-promise={key}
-            >
-              <label htmlFor={id} className="min-w-0 flex-1 cursor-pointer">
-                <span className="block text-sm">
-                  {t(`items.${key}.title` as "items.proactive.title")}
-                </span>
-                <span className="block text-xs leading-5 text-muted-foreground">
-                  {t(`items.${key}.hint` as "items.proactive.hint")}
-                </span>
-              </label>
-              <Switch
-                id={id}
-                checked={value !== off}
-                disabled={disabled || patching != null}
-                onCheckedChange={(checked) =>
-                  void patch([
-                    { key: `prefs.${key}`, value: checked ? on : off },
-                  ])
+            <div key={key} data-pa-promise={key}>
+              <SettingRow
+                icon={PREF_ICONS[key]}
+                title={t(`items.${key}.title` as "items.proactive.title")}
+                description={t(`items.${key}.hint` as "items.proactive.hint")}
+                htmlFor={id}
+                control={
+                  <Switch
+                    id={id}
+                    checked={value !== off}
+                    disabled={disabled || patching != null}
+                    onCheckedChange={(checked) =>
+                      void patch([
+                        { key: `prefs.${key}`, value: checked ? on : off },
+                      ])
+                    }
+                  />
                 }
               />
-            </li>
+            </div>
           )
         })}
-      </ul>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={readOnly || busy != null || suggested}
-          onClick={() => void act("team")}
-          data-pa-meet-team
-        >
-          {busy === "team" ? (
-            <SyncedSpinner small className="size-3.5" />
-          ) : (
-            <Users aria-hidden />
-          )}
-          {suggested ? t("teamSuggested") : t("team")}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => openSettings("proactive")}
-          data-pa-meet-prefs
-        >
-          <Settings2 aria-hidden />
-          {t("prefs")}
-        </Button>
-        {desktop ? (
-          <Button size="sm" variant="outline" onClick={summon} data-pa-meet-pet>
-            {t("pet")}
-          </Button>
-        ) : null}
-        {!done ? (
-          <Button
-            size="sm"
-            disabled={readOnly || busy != null}
-            onClick={() => void act("done")}
-            data-pa-meet-done
-          >
-            {busy === "done" ? (
-              <SyncedSpinner small className="size-3.5" />
-            ) : null}
-            {t("done")}
-          </Button>
-        ) : null}
-      </div>
-    </>
+      </SettingCard>
+    </div>
   ) : (
     <p className="text-xs text-muted-foreground">{t("unavailable")}</p>
   )
+  // Its actions under a hairline: the ways on — a team, the preferences,
+  // the desktop companion — as quiet buttons, and [Done] at the end.
+  const quiet = cn("text-foreground/80 hover:text-foreground", INSET_HOVER)
+  const actions = account ? (
+    <div
+      className="mt-3 flex flex-wrap items-center gap-1 border-t border-border/60 pt-3"
+      data-pa-meet-actions
+    >
+      <Button
+        size="sm"
+        variant="ghost"
+        className={quiet}
+        disabled={readOnly || busy != null || suggested}
+        onClick={() => void act("team")}
+        data-pa-meet-team
+      >
+        {busy === "team" ? (
+          <SyncedSpinner small className="size-3.5" />
+        ) : (
+          <Users aria-hidden />
+        )}
+        {suggested ? t("teamSuggested") : t("team")}
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        className={quiet}
+        onClick={() => openSettings("proactive")}
+        data-pa-meet-prefs
+      >
+        <Settings2 aria-hidden />
+        {t("prefs")}
+      </Button>
+      {desktop ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          className={quiet}
+          onClick={summon}
+          data-pa-meet-pet
+        >
+          <PawPrint aria-hidden />
+          {t("pet")}
+        </Button>
+      ) : null}
+      {!done ? (
+        <Button
+          size="sm"
+          className="ms-auto min-w-20"
+          disabled={readOnly || busy != null}
+          onClick={() => void act("done")}
+          data-pa-meet-done
+        >
+          {busy === "done" ? (
+            <SyncedSpinner small className="size-3.5" />
+          ) : null}
+          {t("done")}
+        </Button>
+      ) : null}
+    </div>
+  ) : null
 
   return (
     <MeetFrame
@@ -817,15 +847,16 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
             <button
               type="button"
               onClick={() => setUnfolded(false)}
-              className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+              className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
             >
               <ChevronDown className="size-3.5" aria-hidden />
               {t("collapse")}
             </button>
           ) : (
-            <p className="mb-1 text-sm">{t("intro")}</p>
+            <p className="mb-3 text-sm">{t("intro")}</p>
           )}
           {body}
+          {actions}
         </>
       )}
       <Failed error={failed} />

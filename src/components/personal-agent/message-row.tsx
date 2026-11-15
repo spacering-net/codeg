@@ -27,7 +27,7 @@
  * over it, and the message under it starts right there.
  */
 
-import { useRef, useState } from "react"
+import { createContext, useContext, useRef, useState } from "react"
 
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { cn } from "@/lib/utils"
@@ -55,6 +55,23 @@ export function bubbleCorners(side: "start" | "end", tail: boolean): string {
     !tail &&
       (side === "start" ? "rounded-es-[0.375rem]" : "rounded-ee-[0.375rem]")
   )
+}
+
+/**
+ * Whether what is drawn came in while the page was open: it rises into
+ * place (`motion-message-enter`). The list says so per item, and the item
+ * puts the class on its own outermost element — a message's frame, a line
+ * across the list — never on a wrapper round it: the list's spacing reads
+ * an element's neighbours (a message right under a line starts there; the
+ * list's first line has no room over it), and a wrapper would hide them,
+ * leaving a line that came in glued to the message over it and too much
+ * room under it until the page is opened again.
+ */
+export const MessageEnterContext = createContext(false)
+
+/** The class that makes what came in rise into place, or none. */
+export function useEnterClass(): string | false {
+  return useContext(MessageEnterContext) && "motion-message-enter"
 }
 
 /** The room above, in rem (Tailwind's spacing): the "side" one holds the
@@ -105,7 +122,9 @@ export function MessageRow({
   below,
   children,
 }: {
-  rowId: number
+  /** The row it stands for, which a jump lands on; none for text that is
+   *  no row of its own (what a turn wrote before a message it sent). */
+  rowId?: number
   side: "start" | "end"
   /** The room above it. */
   gap: MessageGap
@@ -133,6 +152,7 @@ export function MessageRow({
   const press = useRef<{ at: number; text: string } | null>(null)
   // The menu opens from our contextmenu handler (rather than a long press).
   const fromEvent = useRef(false)
+  const enter = useEnterClass()
 
   const frame = (
     <div
@@ -210,7 +230,8 @@ export function MessageRow({
         "group/msg relative flex min-w-0 flex-col",
         side === "start" ? "items-start" : "items-end",
         GAP[gap],
-        "[[data-pa-divider]+&]:mt-0"
+        "[[data-pa-divider]+&]:mt-0",
+        enter
       )}
     >
       {actions ? (

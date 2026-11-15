@@ -1261,6 +1261,19 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     terminalMaxHeight,
     safeMainHeight
   )
+  // A panel's starting size inside the bounds it has now (none while it is
+  // closed): one outside them is what the panels library clamps anyway, and
+  // warns about in the console on every launch.
+  const startSize = (
+    open: boolean,
+    size: number,
+    range: { minSize: number; maxSize: number }
+  ) => (open ? clamp(size, range.minSize, range.maxSize) : 0)
+  // The middle takes the rest, so the starting sizes still add up to the
+  // whole (the library warns about a layout that does not, too).
+  const sidebarStart = startSize(sidebarOpen, 18, sidebarSizeRange)
+  const auxStart = startSize(auxOpen, 18, auxSizeRange)
+  const terminalStart = startSize(terminalOpen, 28, terminalSizeRange)
 
   return (
     <div
@@ -1277,7 +1290,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         <ResizablePanel
           id={FOLDER_SHELL_LEFT_PANEL_ID}
           order={1}
-          defaultSize={18}
+          defaultSize={sidebarStart}
           style={sidebarPanelStyle}
           minSize={sidebarOpen ? sidebarSizeRange.minSize : 0}
           maxSize={sidebarOpen ? sidebarSizeRange.maxSize : 0}
@@ -1303,7 +1316,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         <ResizablePanel
           id={FOLDER_SHELL_MAIN_PANEL_ID}
           order={2}
-          defaultSize={64}
+          defaultSize={Math.max(10, 100 - sidebarStart - auxStart)}
           minSize={10}
         >
           <main
@@ -1322,7 +1335,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               <ResizablePanel
                 id={FOLDER_MAIN_WORKSPACE_PANEL_ID}
                 order={1}
-                defaultSize={72}
+                defaultSize={Math.max(15, 100 - terminalStart)}
                 minSize={15}
               >
                 {workspaceElement}
@@ -1353,7 +1366,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               <ResizablePanel
                 id={FOLDER_MAIN_TERMINAL_PANEL_ID}
                 order={2}
-                defaultSize={28}
+                defaultSize={terminalStart}
                 style={terminalPanelStyle}
                 minSize={terminalOpen ? terminalSizeRange.minSize : 0}
                 maxSize={terminalOpen ? terminalSizeRange.maxSize : 0}
@@ -1377,7 +1390,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         <ResizablePanel
           id={FOLDER_SHELL_RIGHT_PANEL_ID}
           order={3}
-          defaultSize={18}
+          defaultSize={auxStart}
           style={auxPanelStyle}
           minSize={auxOpen ? auxSizeRange.minSize : 0}
           maxSize={auxOpen ? auxSizeRange.maxSize : 0}

@@ -23,7 +23,14 @@ export type StepInfo = Extract<ReplyStep, { t: "step" }>
 /** What the step slot holds. Keyed by the step's ordinal, so a text that
  *  grows, and the same text settling as the body, stay one element. */
 export type SlotView =
-  | { kind: "text"; key: string; text: string; streaming: boolean }
+  | {
+      kind: "text"
+      key: string
+      text: string
+      streaming: boolean
+      /** The text's ordinal in its turn, when known. */
+      n?: number
+    }
   | { kind: "step"; key: string; step: StepInfo }
   /** Running, no step yet. */
   | { kind: "waiting"; key: string }
@@ -110,6 +117,7 @@ export function slotOfStep(step: ReplyStep | null): SlotView {
       key: `t${step.n}`,
       text: step.text,
       streaming: true,
+      n: step.n,
     }
   }
   return { kind: "step", key: `s${step.n}`, step }

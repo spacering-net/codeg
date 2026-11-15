@@ -8001,7 +8001,8 @@
         "reminder": "리마인더",
         "followup": "후속 확인",
         "question": "질문",
-        "when_mentioned": "언급 시"
+        "when_mentioned": "언급 시",
+        "message": "메시지"
       },
       "onDone": "완료 후: {text}",
       "mention": "{words}을(를) 언급하면 알림 · {times}/{max}회 · {until}까지"
@@ -8870,7 +8871,9 @@
             "pr": "풀 리퀘스트",
             "routine": "루틴",
             "rule": "제안",
-            "memory": "메모리"
+            "memory": "메모리",
+            "tidy": "기억 정리",
+            "skill": "절차 스킬"
           }
         },
         "clear": {
@@ -9344,7 +9347,8 @@
         "prReady": "병합 가능: {text}",
         "prFailed": "#{id} 검사 실패: {title}",
         "prStuck": "#{id} 충돌 있음: {title}",
-        "prChecks": "#{id} 검사 대기 {passed}/{total}"
+        "prChecks": "#{id} 검사 대기 {passed}/{total}",
+        "resize": "어시스턴트 목록 너비 조정"
       },
       "choice": {
         "other": "기타",
@@ -9786,7 +9790,9 @@
       "dispatch": {
         "queued": "대기열",
         "running": "진행 중",
-        "waiting_input": "어시스턴트가 답하는 중"
+        "waiting_input": "어시스턴트가 답하는 중",
+        "review": "검토 대기",
+        "handed_over": "인계됨"
       },
       "item": {
         "notify": "{time} 알림",

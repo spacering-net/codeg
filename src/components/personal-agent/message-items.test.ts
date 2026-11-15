@@ -52,6 +52,8 @@ function shape(items: MessageItem[]): string[] {
         return `exchange:${i.rows.map((r) => r.id).join(",")}`
       case "mirror":
         return `mirror:${i.row.id}`
+      case "said":
+        return `said:${i.row.id}(${i.text})`
     }
   })
 }
@@ -82,6 +84,122 @@ describe("lines between assistants", () => {
     // What is above the line closes its run.
     const owner = items[1] as Extract<MessageItem, { kind: "owner" }>
     expect(owner.tail).toBe(true)
+  })
+
+  /** A line the turn wrote at step `n`, after the text `said` (step
+   *  `saidN`). */
+  const sent = (id: number, n: number, said?: [number, string]) =>
+    line(id, {
+      batch_id: 7,
+      data: {
+        direction: "out",
+        peer: { id: 2, name: "Dev" },
+        turn: {
+          n,
+          said: said ? { n: said[0], text: said[1] } : null,
+        },
+      },
+    })
+
+  it("puts a line after the text the turn wrote before sending it", () => {
+    // "I'll hand it to Dev." (step 1), a read (2), the message (3), then
+    // the reply's body (step 4).
+    const done = row(2, "reply", {
+      batch_id: 7,
+      body: "Dev has it.\n\nIt will report back.",
+      data: { state: "done", last_text_n: 4 },
+    })
+    const items = buildMessageItems([
+      row(1, "owner", { batch_id: 7, status: "answered" }),
+      done,
+      sent(3, 3, [1, "I'll hand it to Dev."]),
+    ])
+    expect(shape(items)).toEqual([
+      "time",
+      "owner:1",
+      "said:3(I'll hand it to Dev.)",
+      "exchange:3",
+      "reply:2[]",
+    ])
+    const said = items[2] as Extract<MessageItem, { kind: "said" }>
+    // Its own side's run starts under the owner's message, and closes
+    // round over the line.
+    expect(said.gap).toBe("side")
+    expect(said.tail).toBe(true)
+    // It is no row of its own: the line draws row 3, and jumps land there.
+    expect(drawnRowIds(items).has(3)).toBe(true)
+    expect(newLineIndex(items, 3)).toBe(3)
+    const reply = items[4] as Extract<MessageItem, { kind: "reply" }>
+    expect(reply.saidNs).toEqual([1])
+    expect(reply.gap).toBe("side")
+
+    // While the turn runs it is the same: the text, the line, the bubble —
+    // which does not draw that text again.
+    const running = buildMessageItems([
+      row(1, "owner", { batch_id: 7, status: "answered" }),
+      row(2, "reply", { batch_id: 7, data: { state: "running" } }),
+      sent(3, 3, [1, "I'll hand it to Dev."]),
+    ])
+    expect(shape(running)).toEqual(shape(items))
+    expect(
+      (running[4] as Extract<MessageItem, { kind: "reply" }>).saidNs
+    ).toEqual([1])
+  })
+
+  it("draws the text once for a run of lines, and a new text before the next", () => {
+    const items = buildMessageItems([
+      row(2, "reply", {
+        batch_id: 7,
+        body: "All sent.",
+        data: { state: "done", last_text_n: 7 },
+      }),
+      sent(3, 2, [1, "Asking both."]),
+      sent(4, 3, [1, "Asking both."]),
+      sent(5, 6, [5, "And one more thing."]),
+    ])
+    expect(shape(items)).toEqual([
+      "time",
+      "said:3(Asking both.)",
+      "exchange:3,4",
+      "said:5(And one more thing.)",
+      "exchange:5",
+      "reply:2[]",
+    ])
+    expect(
+      (items[5] as Extract<MessageItem, { kind: "reply" }>).saidNs
+    ).toEqual([1, 5])
+  })
+
+  it("puts a message sent after the last word under the reply", () => {
+    // "Sent." (step 1) is the body; the message went at step 2.
+    const items = buildMessageItems([
+      row(1, "owner", { batch_id: 7, status: "answered" }),
+      row(2, "reply", {
+        batch_id: 7,
+        body: "Sent.",
+        data: { state: "done", last_text_n: 1 },
+      }),
+      sent(3, 2, [1, "Sent."]),
+    ])
+    expect(shape(items)).toEqual(["time", "owner:1", "reply:2[]", "exchange:3"])
+    const reply = items[2] as Extract<MessageItem, { kind: "reply" }>
+    // The body is not drawn twice, and closes its run over the line.
+    expect(reply.saidNs).toEqual([])
+    expect(reply.tail).toBe(true)
+  })
+
+  it("keeps a line that cannot say where it was written before the reply", () => {
+    const items = buildMessageItems([
+      row(2, "reply", {
+        batch_id: 7,
+        body: "Done.",
+        data: { state: "done", last_text_n: 2 },
+      }),
+      line(3, { batch_id: 7 }),
+      // A message sent before the turn wrote anything.
+      sent(4, 1),
+    ])
+    expect(shape(items)).toEqual(["time", "exchange:3,4", "reply:2[]"])
   })
 
   it("draws a run of lines as one, and a line on its own in its place", () => {

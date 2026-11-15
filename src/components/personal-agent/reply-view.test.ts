@@ -64,6 +64,7 @@ describe("replyView while the turn runs", () => {
       key: "t1",
       text: "Looking",
       streaming: true,
+      n: 1,
     })
     expect(v.ending).toBeNull()
   })
