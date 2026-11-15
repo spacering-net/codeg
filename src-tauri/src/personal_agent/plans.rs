@@ -712,6 +712,17 @@ fn dispatch_outcome(
             Some(t) if d.deliverable.as_deref() == Some("report") || t.files_changed == Some(0) => {
                 Outcome::Done(excerpt)
             }
+            // Kept in review after its delivery to a pull request: it lands
+            // through that pull request, whatever the board says.
+            Some(t) if super::watch::kept_on_pr(t) => {
+                match super::watch::with_pr(Ladder::PrOpen, pr) {
+                    Ladder::Merged => Outcome::Done(excerpt),
+                    Ladder::PrClosed => {
+                        Outcome::Failed("its pull request was closed without being merged".into())
+                    }
+                    _ => Outcome::Running,
+                }
+            }
             // Code work waits for its acceptance and its merge.
             Some(_) => Outcome::Running,
             None => Outcome::Done(excerpt),
@@ -3386,6 +3397,54 @@ mod tests {
         task.completion_kind = Some("delivered_pr".into());
         assert_eq!(
             dispatch_outcome(&d, Some(&task), None, false),
+            Outcome::Running
+        );
+        // Delivered to a pull request and kept in review: the pull request
+        // says when it landed — merged is done, closed is failed, the board
+        // still showing review is no matter.
+        let mut kept = task.clone();
+        kept.status = WorkTaskStatus::Review;
+        kept.completion_kind = None;
+        kept.delivery = Some(
+            r#"{"provider":"github","server_host":"github.com","account_id":"a","owner_repo":"acme/app","pr_url":"https://github.com/acme/app/pull/42","pr_number":42}"#
+                .into(),
+        );
+        let review = dispatch(DispatchState::Review, DispatchMode::Task);
+        let facts = |phase: &str| crate::models::personal_agent_overview::PrFacts {
+            watch_id: 1,
+            phase: Some(phase.into()),
+            passed: 0,
+            failed: 0,
+            pending: 0,
+            total: 0,
+            checks_known: true,
+            head: None,
+            merge_state: None,
+            last_read_at: None,
+            stale: false,
+            watching: phase != "merged" && phase != "closed",
+        };
+        assert_eq!(
+            dispatch_outcome(&review, Some(&kept), None, false),
+            Outcome::Running
+        );
+        assert_eq!(
+            dispatch_outcome(&review, Some(&kept), Some(&facts("checks_failed")), false),
+            Outcome::Running
+        );
+        assert_eq!(
+            dispatch_outcome(&review, Some(&kept), Some(&facts("merged")), false),
+            Outcome::Done(Some("did it".into()))
+        );
+        assert!(matches!(
+            dispatch_outcome(&review, Some(&kept), Some(&facts("closed")), false),
+            Outcome::Failed(_)
+        ));
+        // In review with no pull request: a merged one elsewhere is not its.
+        let mut local = kept.clone();
+        local.delivery = None;
+        assert_eq!(
+            dispatch_outcome(&review, Some(&local), Some(&facts("merged")), false),
             Outcome::Running
         );
         // A chat ended.

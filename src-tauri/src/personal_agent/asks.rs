@@ -1186,8 +1186,20 @@ impl PersonalAgentEngine {
         if !card.is_open() || card.state == "submitting" {
             return Ok(self.recorded_reply(card));
         }
-        if by == Answerer::Assistant && card.state == "forwarded" && card.forward_reason.as_deref() == Some("secret") {
-            return Err("this question asks for a secret: the owner answers it".into());
+        if by == Answerer::Assistant && card.state == "forwarded" {
+            match card.forward_reason.as_deref() {
+                Some("secret") => {
+                    return Err("this question asks for a secret: the owner answers it".into())
+                }
+                // The owner's setting sent it to them — on its arrival, or
+                // while the assistant was still answering it: theirs.
+                Some("settings") => {
+                    return Err(
+                        "the owner's settings sent this to them: it is theirs to answer".into(),
+                    )
+                }
+                _ => {}
+            }
         }
         // Taken over meanwhile: the owner's work, and the owner's to answer.
         if by == Answerer::Assistant

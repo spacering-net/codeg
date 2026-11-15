@@ -9235,6 +9235,7 @@
         "canceled": "canceled"
       },
       "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "Open {name}'s conversation",
       "sheetHint": "Every message the two assistants wrote each other on this exchange.",
       "unavailable": "Could not load the exchange: {error}"
     },
@@ -9896,6 +9897,14 @@
             "title": "Tell you when something needs you",
             "hint": "Questions, approvals, finished work and your reminders, as they come."
           },
+          "brief": {
+            "title": "Write you a morning brief",
+            "hint": "When your day starts: what waits for you, what ran overnight, what's on today."
+          },
+          "wrap": {
+            "title": "Wrap up your day",
+            "hint": "Before you stop: what got done, what's left, and what could run tonight."
+          },
           "exec_questions": {
             "title": "Answer the questions of the sessions I hand out",
             "hint": "I answer what I can and pass you what I'm unsure of."
@@ -9907,6 +9916,10 @@
           "followups": {
             "title": "Follow up and retry my own work",
             "hint": "When work I handed out needs another round, I start it."
+          },
+          "ci_failure": {
+            "title": "Fix watched pull requests that go red",
+            "hint": "A PR with failing checks or a conflict is fixed by its task, round by round."
           },
           "interrupt_retry": {
             "title": "Retry work a restart cut off",
@@ -9921,7 +9934,6 @@
             "hint": "Another executor config checks it read-only; I judge it against what you asked."
           }
         },
-        "later": "Morning briefs, wrap-ups and PR watching join here as they arrive.",
         "team": "Build a team",
         "teamSuggested": "Team suggested",
         "prefs": "Adjust preferences",
@@ -10139,6 +10151,7 @@
         "pr_no_conflict": "A watched PR has no conflict (checks unknown)",
         "pr_merged": "A watched PR is merged",
         "pr_closed": "A watched PR is closed",
+        "pr_review": "A watched PR gets new review feedback",
         "forge_issue": "A new issue or PR on the forge"
       },
       "precheck": {
@@ -10491,7 +10504,7 @@
         },
         "work": "Handed out {count} ({modes}) · completed {completed}, failed {failed} · first time {firstPass} of {settled}",
         "byBot": "By assistant: {list}",
-        "doneForYou": "Done for you: {caught} sent back by acceptance · {retried} retried · {routines} routine runs · {merged} merged",
+        "doneForYou": "Done for you: {caught} sent back by acceptance · {retried} retried · {ciFixed} CI fixes · {routines} routine runs · {merged} merged",
         "asks": "Questions from the work: {count} · answered by the assistants {answered} · came to you {forwarded}",
         "between": "Between the assistants: {messages} messages on {threads} threads · {loops} stopped",
         "unblock": "You answered what waited on you in {minutes} min on average ({count})",

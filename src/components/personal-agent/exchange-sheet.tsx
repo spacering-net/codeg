@@ -4,13 +4,14 @@
  * The exchange a line is on, between this conversation's assistant and the
  * other one: titled "Primary ⇄ Dev", every message the two wrote each other
  * there, in their own words, as chat bubbles — the other one's on the left,
- * this one's on the right — with their avatars and times, and the work
- * handed out on the exchange as pills (this assistant's open in the drawer).
+ * this one's on the right — with their avatars and times, the work handed
+ * out on the exchange as pills (either side's opens in the drawer), and
+ * [Open the other one's conversation].
  */
 
 import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
-import { ArrowLeftRight } from "lucide-react"
+import { ArrowLeftRight, MessageSquare } from "lucide-react"
 
 import {
   Dialog,
@@ -19,13 +20,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentThread } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import type { BotFace, ThreadView, TimelineRow } from "@/lib/types"
+import type {
+  BotFace,
+  ThreadDispatch,
+  ThreadView,
+  TimelineRow,
+} from "@/lib/types"
 import { cn } from "@/lib/utils"
+import {
+  usePersonalAgentUi,
+  type WorkTarget,
+} from "@/stores/personal-agent-ui-store"
 
 import { BotAvatar } from "./bot-avatar"
 import { useMessageTime } from "./message-actions"
@@ -41,6 +52,25 @@ import {
   useOpenWork,
   workTargetOf,
 } from "./shared"
+
+/** A dispatch on the exchange as the drawer opens it — the other side's too,
+ *  whose dispatches this assistant's page does not hold. */
+function threadTarget(d: ThreadDispatch): WorkTarget {
+  return {
+    dispatchId: d.id,
+    mode: d.mode,
+    workTaskId: d.work_task_id,
+    conversationId: d.conversation_id,
+    folderId: d.conversation_folder_id,
+    agentType: d.agent_type,
+    title: d.title,
+    executorId: null,
+    executorName: null,
+    prompt: null,
+    connectionId: null,
+    state: d.state,
+  }
+}
 
 /** The two ends of a line's exchange: this conversation's assistant, and the
  *  one the line names. */
@@ -63,7 +93,7 @@ export function ExchangeSheet({
   return (
     <Dialog open={row != null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-xl">
-        {row != null ? <SheetBody row={row} /> : null}
+        {row != null ? <SheetBody row={row} onClose={onClose} /> : null}
         <DialogDescription className="sr-only">
           {t("sheetHint")}
         </DialogDescription>
@@ -72,12 +102,19 @@ export function ExchangeSheet({
   )
 }
 
-function SheetBody({ row }: { row: TimelineRow }) {
+function SheetBody({
+  row,
+  onClose,
+}: {
+  row: TimelineRow
+  onClose: () => void
+}) {
   const t = useTranslations("PersonalAgent.exchange")
   const tState = useTranslations("PersonalAgent.state")
   const botId = useBotId()
   const { dispatchById } = usePersonalAgent()
   const openWork = useOpenWork()
+  const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
   const time = useMessageTime()
   const botName = useBotName()
   const threadId = num(row.data, "thread_id")
@@ -184,14 +221,14 @@ function SheetBody({ row }: { row: TimelineRow }) {
               <div className="flex flex-wrap gap-1.5 border-t pt-3">
                 {view.dispatches.map((d) => {
                   const info = dispatchById.get(d.id)
-                  const target = info ? workTargetOf(info) : null
-                  const openable = target != null && canOpenWork(target)
+                  const target = info ? workTargetOf(info) : threadTarget(d)
+                  const openable = canOpenWork(target)
                   return (
                     <button
                       key={d.id}
                       type="button"
                       disabled={!openable}
-                      onClick={() => target && openWork(target)}
+                      onClick={() => openWork(target)}
                       className={cn(
                         "inline-flex max-w-full items-center gap-1.5 rounded-full px-2.5 py-1 text-xs",
                         INSET_SURFACE,
@@ -211,6 +248,22 @@ function SheetBody({ row }: { row: TimelineRow }) {
           </div>
         </ScrollArea>
       )}
+      {theirs ? (
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            variant="outline"
+            data-pa-exchange-open-peer
+            onClick={() => {
+              setViewBot(theirs.kind === "primary" ? null : theirs.id)
+              onClose()
+            }}
+          >
+            <MessageSquare aria-hidden />
+            {t("openPeer", { name: botName(theirs) })}
+          </Button>
+        </div>
+      ) : null}
     </>
   )
 }

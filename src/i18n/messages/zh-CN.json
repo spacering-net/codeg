@@ -9235,6 +9235,7 @@
         "canceled": "已取消"
       },
       "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "打开{name}的对话",
       "sheetHint": "这两个助手在这条往来线上互相写的全部消息。",
       "unavailable": "往来记录读不出来：{error}"
     },
@@ -9896,6 +9897,14 @@
             "title": "有事需要你时告诉你",
             "hint": "提问、审批、做完的活和你设的提醒，一到就说。"
           },
+          "brief": {
+            "title": "每天早上给你写晨报",
+            "hint": "你一天开始时：等你的事、夜里跑完的活、今天的安排。"
+          },
+          "wrap": {
+            "title": "帮你收尾一天",
+            "hint": "你收工前：做完了什么、还剩什么、今晚可以接着跑什么。"
+          },
           "exec_questions": {
             "title": "替你回答派出去的会话的提问",
             "hint": "能答的我先答，拿不准的转给你。"
@@ -9907,6 +9916,10 @@
           "followups": {
             "title": "自己跟进和重试派出去的活",
             "hint": "派出去的活需要再来一轮时，我直接接着做。"
+          },
+          "ci_failure": {
+            "title": "看护的 PR 检查没过时自动修",
+            "hint": "检查失败或有冲突的 PR，由它的任务一轮一轮修好。"
           },
           "interrupt_retry": {
             "title": "重启打断的活自动重试",
@@ -9921,7 +9934,6 @@
             "hint": "派另一个执行配置只读检查，我对照你的要求下结论。"
           }
         },
-        "later": "晨报、收尾和 PR 看护，做好后也会出现在这里。",
         "team": "组个团队",
         "teamSuggested": "已建议团队",
         "prefs": "调整偏好",
@@ -10139,6 +10151,7 @@
         "pr_no_conflict": "看护的 PR 没有冲突（检查未知）",
         "pr_merged": "看护的 PR 已合并",
         "pr_closed": "看护的 PR 被关闭",
+        "pr_review": "看护的 PR 有新评审",
         "forge_issue": "平台上有新的 issue 或 PR"
       },
       "precheck": {
@@ -10491,7 +10504,7 @@
         },
         "work": "派活 {count} 件（{modes}）· 完成 {completed}，失败 {failed} · 一次过 {firstPass}/{settled}",
         "byBot": "按助手：{list}",
-        "doneForYou": "替你办完的：验收拦下 {caught} · 自动重试 {retried} · 例程完成 {routines} · 合并 PR {merged}",
+        "doneForYou": "替你办完的：验收拦下 {caught} · 自动重试 {retried} · 自动修 CI {ciFixed} · 例程完成 {routines} · 合并 PR {merged}",
         "asks": "执行会话的提问：{count} 次 · 助手代答 {answered} · 转给你 {forwarded}",
         "between": "助手之间：{messages} 条消息，{threads} 条往来线 · 停下 {loops} 次",
         "unblock": "你处理等你的事平均用 {minutes} 分钟（{count} 次）",

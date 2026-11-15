@@ -2201,6 +2201,10 @@ export interface ThreadDispatch {
   state: DispatchState
   work_task_id: number | null
   conversation_id: number | null
+  /** What opens it from either end of the exchange: the folder its
+   *  conversation sits in, and the agent that reads it. */
+  conversation_folder_id: number | null
+  agent_type: AgentType
   created_at: string
 }
 
@@ -3347,6 +3351,9 @@ export interface BriefWeek {
   caught: number
   retried: number
   routine_done: number
+  /** Rounds codeg ran by itself on a pull request's failed checks or
+   *  conflict; absent from a review made before it was counted. */
+  ci_fixed?: number
   merged: number
   asked: number
   plans: number
@@ -8652,6 +8659,7 @@ export const ROUTINE_EVENT_KINDS = [
   "pr_no_conflict",
   "pr_merged",
   "pr_closed",
+  "pr_review",
   "forge_issue",
 ] as const
 export type RoutineEventKind = (typeof ROUTINE_EVENT_KINDS)[number]

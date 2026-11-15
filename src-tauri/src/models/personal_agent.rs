@@ -442,6 +442,10 @@ pub struct ThreadDispatch {
     pub state: DispatchState,
     pub work_task_id: Option<i32>,
     pub conversation_id: Option<i32>,
+    /// What opens it from either end of the exchange: the folder its
+    /// conversation sits in, and the agent that reads it.
+    pub conversation_folder_id: Option<i32>,
+    pub agent_type: AgentType,
     pub created_at: DateTime<Utc>,
 }
 

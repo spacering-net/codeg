@@ -132,6 +132,12 @@ fn check_own(item: &str, value: &Value) -> Result<Value, String> {
 /// preference by its name, an own setting by its name.
 fn tool_key(raw: &str) -> Option<String> {
     let k = raw.trim();
+    // A kind of work's first pick (10.5): `auto`, `bot:<uid>` or
+    // `assistant:<uid>` — what `bot_update` / `assistant_update` `roles`
+    // set by naming the assistant.
+    if let Some(kind) = k.strip_prefix("team.division.") {
+        return prefs::DIVISION.contains(&kind).then(|| k.to_string());
+    }
     let k = k.strip_prefix("prefs.").unwrap_or(k);
     if prefs::spec(k).is_some() || prefs::PRESETS.iter().any(|(key, _)| *key == k) {
         return Some(format!("prefs.{k}"));
@@ -149,7 +155,12 @@ fn tool_keys() -> String {
     keys.extend(prefs::PRESETS.iter().map(|(k, _)| *k));
     keys.extend(OWN_ITEMS);
     keys.push(BRAIN_ITEM);
-    keys.join(", ")
+    let division = prefs::DIVISION
+        .iter()
+        .map(|k| format!("team.division.{k}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{}, {division}", keys.join(", "))
 }
 
 /// Merge `value` into `patch` at the dotted `path`.

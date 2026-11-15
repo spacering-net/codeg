@@ -546,9 +546,21 @@ impl PersonalAgentEngine {
                 }),
             });
         }
+        // The kinds of work it is the first pick for (10.5).
+        match roles_of(args) {
+            Ok(roles) => {
+                for kind in roles {
+                    changes.push(SettingChange {
+                        key: format!("team.division.{kind}"),
+                        value: json!(format!("bot:{uid}")),
+                    });
+                }
+            }
+            Err(e) => return ToolOutcome::refused(e),
+        }
         if changes.is_empty() {
             return ToolOutcome::refused(
-                "name what to change: name, shape, color, template, brain, executor, notify, muted, hidden",
+                "name what to change: name, shape, color, template, brain, executor, notify, muted, hidden, roles",
             );
         }
         self.change_settings_call("bot_update", changes, args).await

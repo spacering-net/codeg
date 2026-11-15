@@ -217,6 +217,7 @@ describe("the brief codeg wrote itself", () => {
             caught: 1,
             retried: 2,
             routine_done: 0,
+            ci_fixed: 3,
             merged: 0,
             asked: 3,
             plans: 1,
@@ -266,6 +267,11 @@ describe("the brief codeg wrote itself", () => {
       container.querySelector("[data-pa-week-line='work']")?.textContent
     ).toBe(
       "Handed out 5 (board 3 · session 2) · completed 4, failed 1 · first time 3 of 5"
+    )
+    expect(
+      container.querySelector("[data-pa-week-line='done']")?.textContent
+    ).toBe(
+      "Done for you: 1 sent back by acceptance · 2 retried · 3 CI fixes · 0 routine runs · 0 merged"
     )
     expect(
       container.querySelector("[data-pa-week-line='unblock']")?.textContent

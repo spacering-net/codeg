@@ -1260,20 +1260,28 @@ pub async fn personal_agent_thread_core(
             bots.push(crate::personal_agent::messages::bot_face(&b));
         }
     }
-    let dispatches = svc::dispatches_of_thread(&db.conn, thread_id)
-        .await?
-        .into_iter()
-        .map(|d| crate::models::personal_agent::ThreadDispatch {
+    let mut dispatches = Vec::new();
+    for d in svc::dispatches_of_thread(&db.conn, thread_id).await? {
+        let conversation_folder_id = match d.conversation_id {
+            Some(cid) => crate::db::service::conversation_service::get_by_id(&db.conn, cid)
+                .await
+                .ok()
+                .map(|c| c.folder_id),
+            None => None,
+        };
+        dispatches.push(crate::models::personal_agent::ThreadDispatch {
             id: d.id,
             bot_id: d.bot_id,
+            agent_type: crate::personal_agent::dispatch::executor_of(&d).agent_type,
             title: d.title,
             mode: d.mode,
             state: d.state,
             work_task_id: d.work_task_id,
             conversation_id: d.conversation_id,
+            conversation_folder_id,
             created_at: d.created_at,
-        })
-        .collect();
+        });
+    }
     Ok(crate::models::personal_agent::ThreadView {
         id: thread.id,
         state: thread.state,

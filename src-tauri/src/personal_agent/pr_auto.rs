@@ -1884,6 +1884,11 @@ impl PersonalAgentEngine {
             .ok();
         let mut writers_feedback: Vec<Kept> = Vec::new();
         let mut others: Vec<Kept> = Vec::new();
+        // The new review on it, approvals too: what a routine set off by a
+        // new review runs on (6.9) — its first item, how much, how many
+        // approved.
+        let mut reviewed: Option<String> = None;
+        let (mut review_items, mut approvals) = (0usize, 0usize);
         for item in feedback.items {
             if auto.feedback.seen.contains(&item.id) {
                 continue;
@@ -1891,7 +1896,16 @@ impl PersonalAgentEngine {
             auto.feedback.seen.push(item.id.clone());
             // Written before codeg watched it, or not dated: not news.
             let new = parse_at(item.at.as_deref()).is_some_and(|at| at >= since_base);
-            if !new || ours(&item) || !says_something(&item) {
+            if !new || ours(&item) {
+                continue;
+            }
+            let approved = item.verdict == Some(ReviewVerdict::Approved);
+            if approved || says_something(&item) {
+                reviewed.get_or_insert_with(|| item.id.clone());
+                review_items += 1;
+                approvals += usize::from(approved);
+            }
+            if !says_something(&item) {
                 continue;
             }
             let own = auth.as_ref().is_some_and(|a| {
@@ -1965,6 +1979,31 @@ impl PersonalAgentEngine {
         }
         if !self.save_auto(&w, &auto).await {
             return;
+        }
+        // A new review, as a coding event: what a routine set off by one
+        // runs on (6.9). Once per read that found one — marked seen above,
+        // a read again finds nothing new.
+        if let Some(first) = reviewed {
+            Box::pin(super::watch::signal(
+                &self.db,
+                "pr_review",
+                format!("pr:{}:review:{first}", w.id),
+                Some(w.bot_id),
+                w.folder_id,
+                json!({
+                    "watch_id": w.id,
+                    "target": super::watch::label_of(&w),
+                    "number": w.number,
+                    "url": w.url,
+                    "head": head,
+                    "task_id": w.work_task_id,
+                    "dispatch_id": w.dispatch_id,
+                    "items": review_items,
+                    "approvals": approvals,
+                    "for_the_task": writers_feedback.len(),
+                }),
+            ))
+            .await;
         }
         if forward {
             if let Ok(Some(fresh)) = wsvc::get(&self.db.conn, w.id).await {

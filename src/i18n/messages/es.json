@@ -9235,6 +9235,7 @@
         "canceled": "cancelado"
       },
       "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "Abrir la conversación de {name}",
       "sheetHint": "Todos los mensajes que los dos asistentes se escribieron en este intercambio.",
       "unavailable": "No se pudo cargar el intercambio: {error}"
     },
@@ -9896,6 +9897,14 @@
             "title": "Avisarte cuando algo te necesita",
             "hint": "Preguntas, aprobaciones, trabajo terminado y tus recordatorios, en cuanto llegan."
           },
+          "brief": {
+            "title": "Escribirte un resumen cada mañana",
+            "hint": "Al empezar tu día: lo que te espera, lo que se hizo de noche y lo de hoy."
+          },
+          "wrap": {
+            "title": "Cerrar tu día",
+            "hint": "Antes de que pares: lo hecho, lo que queda y lo que puede correr esta noche."
+          },
           "exec_questions": {
             "title": "Responder las preguntas de las sesiones que encargo",
             "hint": "Respondo lo que puedo y te paso lo que no tengo claro."
@@ -9907,6 +9916,10 @@
           "followups": {
             "title": "Seguir y reintentar mi propio trabajo",
             "hint": "Si el trabajo encargado necesita otra vuelta, la empiezo."
+          },
+          "ci_failure": {
+            "title": "Arreglar las PR vigiladas que fallan",
+            "hint": "Una PR con comprobaciones fallidas o un conflicto la arregla su tarea, ronda a ronda."
           },
           "interrupt_retry": {
             "title": "Reintentar el trabajo que cortó un reinicio",
@@ -9921,7 +9934,6 @@
             "hint": "Otra configuración de ejecución lo revisa en solo lectura; yo lo juzgo según lo que pediste."
           }
         },
-        "later": "Resúmenes matinales, cierres y vigilancia de PR se sumarán aquí cuando lleguen.",
         "team": "Formar un equipo",
         "teamSuggested": "Equipo sugerido",
         "prefs": "Ajustar preferencias",
@@ -10139,6 +10151,7 @@
         "pr_no_conflict": "Una PR vigilada no tiene conflictos (comprobaciones desconocidas)",
         "pr_merged": "Se fusiona una PR vigilada",
         "pr_closed": "Se cierra una PR vigilada",
+        "pr_review": "Una PR vigilada recibe nuevas revisiones",
         "forge_issue": "Un issue o PR nuevo en la forja"
       },
       "precheck": {
@@ -10491,7 +10504,7 @@
         },
         "work": "Encargos {count} ({modes}) · completados {completed}, fallidos {failed} · a la primera {firstPass} de {settled}",
         "byBot": "Por asistente: {list}",
-        "doneForYou": "Hecho por ti: {caught} devueltos en la aceptación · {retried} reintentados · {routines} rutinas · {merged} fusionados",
+        "doneForYou": "Hecho por ti: {caught} devueltos en la aceptación · {retried} reintentados · {ciFixed} arreglos de CI · {routines} rutinas · {merged} fusionados",
         "asks": "Preguntas del trabajo: {count} · respondidas por los asistentes {answered} · te llegaron {forwarded}",
         "between": "Entre asistentes: {messages} mensajes en {threads} hilos · {loops} detenidos",
         "unblock": "Respondiste a lo que te esperaba en {minutes} min de media ({count})",

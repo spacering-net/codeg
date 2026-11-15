@@ -39,6 +39,7 @@ use crate::db::entities::personal_agent_notice::{self as notice_entity, NoticeKi
 use crate::db::entities::personal_agent_routine_run::{self as run_entity, RunOutcome};
 use crate::db::entities::personal_agent_timeline as timeline_entity;
 use crate::db::entities::personal_agent_verification::{self as round_entity, VerificationState};
+use crate::db::entities::personal_agent_watch as watch_entity;
 use crate::db::entities::{token_usage_turn, work_task};
 use crate::db::service::personal_agent_profile_service as psvc;
 use crate::db::service::personal_agent_service as svc;
@@ -234,6 +235,10 @@ pub struct Week {
     pub retried: u32,
     /// Routine runs that got done (reported or nothing to say).
     pub routine_done: u32,
+    /// Rounds codeg ran by itself on a pull request's failed checks or
+    /// conflict (7.4, phase 3).
+    #[serde(default)]
+    pub ci_fixed: u32,
     /// Pull requests an assistant merged.
     pub merged: u32,
     // Questions from the work, answered for the owner.
@@ -397,7 +402,8 @@ async fn unblock(db: &AppDatabase, from: DateTime<Utc>, to: DateTime<Utc>) -> (O
     )
 }
 
-/// Each assistant's own conversations and those of the work it handed out.
+/// Each assistant's own conversations and those of the work it handed out,
+/// with the sessions either went on in (a delegation's children).
 async fn conversations_of(
     db: &AppDatabase,
     bots: &[agent_entity::Model],
@@ -440,6 +446,9 @@ async fn conversations_of(
             }
         }
     }
+    // The sessions their work runs on in (a delegation's children) are
+    // theirs too, as the usage summary counts them.
+    Box::pin(super::overview::with_children(db, &mut own, &mut handed)).await;
     (own, handed)
 }
 
@@ -520,6 +529,22 @@ pub async fn gather(db: &AppDatabase, prefs: &Prefs, w: WeekSpan, now: DateTime<
         .await
         .map(|v| v.len() as u32)
         .unwrap_or(0);
+    // The pull requests codeg set out to fix by itself: its rounds on failed
+    // checks and conflicts, as each watch keeps them.
+    week.ci_fixed = watch_entity::Entity::find()
+        .filter(watch_entity::Column::Auto.is_not_null())
+        .all(&db.conn)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|w| {
+            super::pr_auto::auto_of(w)
+                .rounds
+                .iter()
+                .filter(|r| r.cause != super::pr_auto::Cause::Feedback && r.at >= from && r.at < to)
+                .count() as u32
+        })
+        .sum();
 
     // Every card raised this week, and the rows they are on.
     let cards = profile::cards_between(db, from, to).await;
@@ -963,8 +988,8 @@ pub fn lines(w: &Week) -> Vec<String> {
     let modes: Vec<String> = w.by_mode.iter().map(|(m, n)| format!("{m} {n}")).collect();
     out.push(format!(
         "- handed out: {} ({}) · completed {}, failed {} · passed the first time {} of {} settled · \
-         sent back by acceptance {} · retried by codeg {} · routine runs done {} · pull requests \
-         merged by an assistant {}",
+         sent back by acceptance {} · retried by codeg {} · pull requests' checks or conflicts \
+         fixed by codeg {} · routine runs done {} · pull requests merged by an assistant {}",
         w.dispatched,
         if modes.is_empty() { "none".into() } else { modes.join(", ") },
         w.completed,
@@ -973,6 +998,7 @@ pub fn lines(w: &Week) -> Vec<String> {
         w.settled,
         w.caught,
         w.retried,
+        w.ci_fixed,
         w.routine_done,
         w.merged
     ));

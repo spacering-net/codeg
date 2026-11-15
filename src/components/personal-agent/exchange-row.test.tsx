@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import type { ThreadView, TimelineRow } from "@/lib/types"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 const api = vi.hoisted(() => ({
   personalAgentThread: vi.fn(),
@@ -196,6 +197,8 @@ describe("ExchangeRow", () => {
           state: "completed",
           work_task_id: 3,
           conversation_id: null,
+          conversation_folder_id: null,
+          agent_type: "codex",
           created_at: "2026-11-10T10:01:00Z",
         },
       ],
@@ -208,6 +211,19 @@ describe("ExchangeRow", () => {
     expect(screen.getByText("Aide ⇄ Dev")).toBeTruthy()
     expect(screen.getByText("Fix it, please.")).toBeTruthy()
     expect(screen.getByText("Fix the white screen")).toBeTruthy()
+    // Dev's own work, which this page does not hold, opens all the same.
+    const pill = screen.getByText("Fix the white screen").closest("button")!
+    expect(pill.disabled).toBe(false)
+    fireEvent.click(pill)
+    const ui = usePersonalAgentUi.getState()
+    expect(ui.workOpen).toBe(true)
+    expect(ui.work?.workTaskId).toBe(3)
+    // [Open Dev's conversation]: Dev's page, the sheet closed.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Dev's conversation" })
+    )
+    expect(usePersonalAgentUi.getState().viewBot).toBe(2)
+    await waitFor(() => expect(screen.queryByText("Aide ⇄ Dev")).toBeNull())
   })
 })
 

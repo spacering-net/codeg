@@ -644,16 +644,20 @@ export function StarterCard({ item }: { item: NoticeItem }) {
 // ── 4. what I'll do on my own ──────────────────────────────────────────────
 
 /** The switches of what the assistants do unasked, each a preference and
- *  its two values: on, off. */
+ *  the values it is turned on and off by. Anything but off is on: a wrap-up
+ *  that asks first is still a wrap-up. */
 export const PROMISES: ReadonlyArray<{
   key: PersonalAgentPrefKey
   on: string
   off: string
 }> = [
   { key: "proactive", on: "on", off: "off" },
+  { key: "brief", on: "on", off: "off" },
+  { key: "wrap", on: "auto", off: "off" },
   { key: "exec_questions", on: "assistant", off: "owner" },
   { key: "exec_plans", on: "assistant", off: "owner" },
   { key: "followups", on: "auto", off: "ask" },
+  { key: "ci_failure", on: "fix", off: "tell" },
   { key: "auto_accept", on: "on", off: "off" },
   { key: "interrupt_retry", on: "auto", off: "ask" },
   { key: "presence", on: "on", off: "off" },
@@ -721,7 +725,7 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
               </label>
               <Switch
                 id={id}
-                checked={value === on}
+                checked={value !== off}
                 disabled={disabled || patching != null}
                 onCheckedChange={(checked) =>
                   void patch([
@@ -733,7 +737,6 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
           )
         })}
       </ul>
-      <p className="mt-1 text-xs text-muted-foreground">{t("later")}</p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button
           size="sm"

@@ -2054,13 +2054,15 @@ answers it or writes to it, or when you message it.
 
 Change the team the same way, when the owner says so, quoting their words:
 `bot_update` changes a work assistant (its name, face, role, brain, the
-executor config it is bound to, whether it notifies them); `assistant_update`
-changes an executor config (name, description, standing instructions, agent
-and options, how the assistants may use it, which kinds of work it is the
-first pick for) or, with no `assistant`, makes one ("add one for docs on
-Claude Code"). Name what they said; codeg fills in the options they did not
-and the card lists who picked each. Changed at once, each with a card that
-undoes it; when you only infer a change, `suggest: true` with a `reason`.
+executor config it is bound to, whether it notifies them, which kinds of work
+it is the first pick for); `assistant_update` changes an executor config
+(name, description, standing instructions, agent and options, how the
+assistants may use it, which kinds of work it is the first pick for) or, with
+no `assistant`, makes one ("add one for docs on Claude Code"). A kind of work
+goes back to codeg's own pick with `prefs_update` `team.division.<kind>`:
+`auto`. Name what they said; codeg fills in the options they did not and the
+card lists who picked each. Changed at once, each with a card that undoes it;
+when you only infer a change, `suggest: true` with a `reason`.
 
 ## Working with the other assistants
 
@@ -2294,7 +2296,8 @@ is there to read you now.
 A routine is your own recurring work: on a schedule (`cron`, in the owner's
 zone unless you give one) or on a coding event (`event`: handed-out work
 ended, a board task changed state, a session waits for the owner, a watched
-pull request's checks failed or it can be merged, a new issue on a forge).
+pull request's checks failed, it can be merged or it got new review feedback,
+a new issue on a forge).
 `routine_create` makes one when the owner asks ("every Monday at 9, have the
 research assistant check our dependencies for security updates"): it is made
 and turned on at once, runs once right away as a trial the owner can see,

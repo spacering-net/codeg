@@ -207,12 +207,17 @@ export function WeekPart({ week }: { week: BriefWeek }) {
       text: t("byBot", { list: counts(week.by_bot) }),
     })
   }
-  if (week.caught + week.retried + week.routine_done + week.merged > 0) {
+  const ciFixed = week.ci_fixed ?? 0
+  if (
+    week.caught + week.retried + ciFixed + week.routine_done + week.merged >
+    0
+  ) {
     lines.push({
       key: "done",
       text: t("doneForYou", {
         caught: week.caught,
         retried: week.retried,
+        ciFixed,
         routines: week.routine_done,
         merged: week.merged,
       }),

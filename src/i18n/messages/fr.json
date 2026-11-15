@@ -9235,6 +9235,7 @@
         "canceled": "annulé"
       },
       "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "Ouvrir la conversation de {name}",
       "sheetHint": "Tous les messages que les deux assistants se sont écrits dans cet échange.",
       "unavailable": "Impossible de charger l’échange : {error}"
     },
@@ -9896,6 +9897,14 @@
             "title": "Te prévenir quand quelque chose a besoin de toi",
             "hint": "Questions, validations, travail terminé et tes rappels, dès qu'ils arrivent."
           },
+          "brief": {
+            "title": "T'écrire un point chaque matin",
+            "hint": "Quand ta journée commence : ce qui t'attend, ce qui a tourné la nuit, ce qui est prévu aujourd'hui."
+          },
+          "wrap": {
+            "title": "Clore ta journée",
+            "hint": "Avant que tu t'arrêtes : ce qui est fait, ce qui reste et ce qui peut tourner cette nuit."
+          },
           "exec_questions": {
             "title": "Répondre aux questions des sessions confiées",
             "hint": "Je réponds à ce que je peux et je te passe ce dont je ne suis pas sûr."
@@ -9907,6 +9916,10 @@
           "followups": {
             "title": "Suivre et relancer mon propre travail",
             "hint": "Si un travail confié demande un autre tour, je le lance."
+          },
+          "ci_failure": {
+            "title": "Réparer les PR surveillées qui passent au rouge",
+            "hint": "Une PR aux vérifications en échec ou en conflit est réparée par sa tâche, tour après tour."
           },
           "interrupt_retry": {
             "title": "Relancer le travail coupé par un redémarrage",
@@ -9921,7 +9934,6 @@
             "hint": "Une autre configuration d'exécution le vérifie en lecture seule ; je le juge d'après ce que vous avez demandé."
           }
         },
-        "later": "Briefings du matin, bilans et suivi des PR s'ajouteront ici dès qu'ils seront prêts.",
         "team": "Former une équipe",
         "teamSuggested": "Équipe suggérée",
         "prefs": "Ajuster les préférences",
@@ -10139,6 +10151,7 @@
         "pr_no_conflict": "Une PR surveillée sans conflit (vérifications inconnues)",
         "pr_merged": "Une PR surveillée est fusionnée",
         "pr_closed": "Une PR surveillée est fermée",
+        "pr_review": "Une PR surveillée reçoit une nouvelle revue",
         "forge_issue": "Un nouvel issue ou une nouvelle PR sur la forge"
       },
       "precheck": {
@@ -10491,7 +10504,7 @@
         },
         "work": "Confié {count} ({modes}) · terminés {completed}, échoués {failed} · du premier coup {firstPass} sur {settled}",
         "byBot": "Par assistant : {list}",
-        "doneForYou": "Fait pour vous : {caught} renvoyés à la réception · {retried} relancés · {routines} routines · {merged} fusionnés",
+        "doneForYou": "Fait pour vous : {caught} renvoyés à la réception · {retried} relancés · {ciFixed} corrections de CI · {routines} routines · {merged} fusionnés",
         "asks": "Questions du travail : {count} · répondues par les assistants {answered} · arrivées à vous {forwarded}",
         "between": "Entre assistants : {messages} messages sur {threads} fils · {loops} arrêtés",
         "unblock": "Vous avez répondu à ce qui vous attendait en {minutes} min en moyenne ({count})",

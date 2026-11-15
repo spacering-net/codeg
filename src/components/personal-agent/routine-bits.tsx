@@ -65,6 +65,7 @@ export function eventWords(t: T, e: RoutineEventSpec): string {
       "pr_no_conflict",
       "pr_merged",
       "pr_closed",
+      "pr_review",
       "forge_issue",
     ] as const
   ).find((k) => k === e.kind)

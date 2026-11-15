@@ -9235,6 +9235,7 @@
         "canceled": "キャンセル済み"
       },
       "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "{name}の会話を開く",
       "sheetHint": "このやり取りで 2 つのアシスタントが書いたすべてのメッセージ。",
       "unavailable": "やり取りを読み込めませんでした：{error}"
     },
@@ -9896,6 +9897,14 @@
             "title": "あなたが必要なときに知らせる",
             "hint": "質問・承認・終わった作業・設定したリマインダーを、届いたらすぐに。"
           },
+          "brief": {
+            "title": "毎朝ブリーフを書く",
+            "hint": "一日の始まりに：あなた待ちのこと、夜のうちに終わった作業、今日の予定。"
+          },
+          "wrap": {
+            "title": "一日の締めくくり",
+            "hint": "終える前に：終わったこと、残っていること、今夜回せること。"
+          },
           "exec_questions": {
             "title": "任せたセッションの質問に答える",
             "hint": "答えられるものは答え、迷うものはあなたに回します。"
@@ -9907,6 +9916,10 @@
           "followups": {
             "title": "任せた作業のフォローと再試行",
             "hint": "もう一巡必要なとき、そのまま続けます。"
+          },
+          "ci_failure": {
+            "title": "見守り中の PR が赤くなったら直す",
+            "hint": "チェック失敗やコンフリクトのある PR を、そのタスクが一回ずつ直す。"
           },
           "interrupt_retry": {
             "title": "再起動で中断した作業を再試行",
@@ -9921,7 +9934,6 @@
             "hint": "別の実行設定が読み取り専用で確認し、あなたの要望に照らして私が判断します。"
           }
         },
-        "later": "朝のまとめ・締めくくり・PR の見守りも、できあがりしだいここに加わります。",
         "team": "チームを作る",
         "teamSuggested": "チームを提案済み",
         "prefs": "設定を調整",
@@ -10139,6 +10151,7 @@
         "pr_no_conflict": "見守り中の PR にコンフリクトなし（チェック不明）",
         "pr_merged": "見守り中の PR がマージされた",
         "pr_closed": "見守り中の PR がクローズ",
+        "pr_review": "見守り中の PR に新しいレビュー",
         "forge_issue": "プラットフォームに新しい issue や PR"
       },
       "precheck": {
@@ -10491,7 +10504,7 @@
         },
         "work": "依頼 {count} 件（{modes}）· 完了 {completed}、失敗 {failed} · 一発合格 {firstPass}/{settled}",
         "byBot": "アシスタント別：{list}",
-        "doneForYou": "代わりにやったこと：受け入れで差し戻し {caught} · 自動再試行 {retried} · ルーチン完了 {routines} · マージ {merged}",
+        "doneForYou": "代わりにやったこと：受け入れで差し戻し {caught} · 自動再試行 {retried} · CI 自動修正 {ciFixed} · ルーチン完了 {routines} · マージ {merged}",
         "asks": "作業からの質問：{count} 件 · アシスタントが回答 {answered} · あなたへ {forwarded}",
         "between": "アシスタント間：メッセージ {messages} 件、{threads} スレッド · 停止 {loops}",
         "unblock": "あなた待ちへの対応は平均 {minutes} 分（{count} 件）",

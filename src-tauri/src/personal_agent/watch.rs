@@ -98,6 +98,7 @@ pub const KINDS: &[&str] = &[
     "pr_no_conflict",
     "pr_merged",
     "pr_closed",
+    "pr_review",
 ];
 
 // ── what a read says ────────────────────────────────────────────────────────
@@ -422,22 +423,62 @@ pub fn with_pr(ladder: Ladder, pr: Option<&PrFacts>) -> Ladder {
     }
 }
 
-/// The watches of `tasks`' pull requests, as their cards show them.
+/// The watches of `tasks`' pull requests, as their cards show them: the
+/// watch reading it for the task — or, when a later task delivered to the
+/// same pull request and took its watch over (a round that fixed it, 7.4
+/// phase 3), the watch on the pull request the task delivered, which is
+/// still that task's pull request.
 pub async fn facts_of_tasks(
     db: &crate::db::AppDatabase,
     task_ids: &[i32],
 ) -> HashMap<i32, PrFacts> {
     let now = Utc::now();
-    wsvc::of_tasks(&db.conn, task_ids)
-        .await
-        .unwrap_or_default()
+    let mut watches = wsvc::of_tasks(&db.conn, task_ids).await.unwrap_or_default();
+    let missing: Vec<i32> = task_ids
+        .iter()
+        .copied()
+        .filter(|t| !watches.contains_key(t))
+        .collect();
+    if !missing.is_empty() {
+        // Boxed: this is read deep inside every assistant's status, whose
+        // futures stay within a thread's stack so.
+        watches.extend(Box::pin(watches_by_delivery(db, missing)).await);
+    }
+    watches
         .into_iter()
         .map(|(t, w)| (t, pr_facts(&w, now)))
         .collect()
 }
 
+/// The watches on the pull requests these board tasks delivered, by task —
+/// for a task whose pull request a later task delivered to since.
+async fn watches_by_delivery(
+    db: &crate::db::AppDatabase,
+    task_ids: Vec<i32>,
+) -> HashMap<i32, watch_entity::Model> {
+    let mut out = HashMap::new();
+    for chunk in task_ids.chunks(500) {
+        let tasks = work_task::Entity::find()
+            .filter(work_task::Column::Id.is_in(chunk.to_vec()))
+            .all(&db.conn)
+            .await
+            .unwrap_or_default();
+        for t in tasks.iter().filter(|t| delivered_pr(t)) {
+            let Some((target, number)) = super::ladder::pr_target(t) else {
+                continue;
+            };
+            if let Ok(Some(w)) =
+                wsvc::by_key(&db.conn, &wsvc::item_key(&target, "pr", number)).await
+            {
+                out.insert(t.id, w);
+            }
+        }
+    }
+    out
+}
+
 /// `owner/repo#12` — `!12` for a GitLab merge request.
-fn label_of(w: &watch_entity::Model) -> String {
+pub(super) fn label_of(w: &watch_entity::Model) -> String {
     let sigil = if w.provider == "gitlab" && w.kind == "pr" {
         "!"
     } else {
@@ -453,13 +494,20 @@ fn delivered_pr(t: &work_task::Model) -> bool {
     let done = t.status == WorkTaskStatus::Done
         && t.completion_kind.as_deref()
             == Some(crate::db::service::work_task_service::COMPLETION_DELIVERED_PR);
-    let kept = t.status == WorkTaskStatus::Review
+    (done && super::ladder::pr_target(t).is_some()) || kept_on_pr(t)
+}
+
+/// A board task kept in review after its delivery to a pull request: its
+/// owner lands it through that pull request (or a later round pushes to
+/// it), so the pull request — not the board — says when it landed.
+pub fn kept_on_pr(t: &work_task::Model) -> bool {
+    t.status == WorkTaskStatus::Review
         && (t.delivery.is_some()
             || t.source_meta
                 .as_deref()
                 .and_then(|m| serde_json::from_str::<crate::forge::ForgeSourceMeta>(m).ok())
-                .is_some_and(|m| m.result_pr_number.is_some()));
-    (done || kept) && super::ladder::pr_target(t).is_some()
+                .is_some_and(|m| m.result_pr_number.is_some()))
+        && super::ladder::pr_target(t).is_some()
 }
 
 // ── coding events ───────────────────────────────────────────────────────────
@@ -1110,8 +1158,18 @@ impl PersonalAgentEngine {
             return;
         };
         // A plan's step done with its pull request merged, or stuck on one
-        // closed (7.6).
+        // closed (7.6) — the work that made the pull request's too, when a
+        // later round delivered to it and took its watch over.
         self.plan_dispatch_moved(d).await;
+        let origin = match svc::get_dispatch(&self.db.conn, d).await {
+            Ok(Some(dm)) => super::pr_auto::pr_fix_of(&dm)
+                .and_then(|f| f.origin_dispatch_id)
+                .filter(|o| *o != d),
+            _ => None,
+        };
+        if let Some(origin) = origin {
+            Box::pin(self.plan_dispatch_moved(origin)).await;
+        }
         // A round codeg ran on the pull request has no matter of its own:
         // the work that made it does.
         let item = match svc::item_of_dispatch(&self.db.conn, d).await {

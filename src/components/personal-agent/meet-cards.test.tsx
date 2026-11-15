@@ -387,6 +387,42 @@ describe("what I'll do on my own", () => {
     )
   })
 
+  it("lists the brief, the wrap-up and fixing red pull requests, nothing left for later", async () => {
+    ctx.account = account({
+      prefs: { ...DEFAULT_PREFS, wrap: "ask" },
+    })
+    draw(open())
+    expect(screen.queryByText(/join here as they arrive/)).toBeNull()
+    // A wrap-up that asks first is still on.
+    expect(
+      screen
+        .getByRole("switch", { name: /Wrap up your day/ })
+        .getAttribute("aria-checked")
+    ).toBe("true")
+    const brief = screen.getByRole("switch", {
+      name: /Write you a morning brief/,
+    })
+    expect(brief.getAttribute("aria-checked")).toBe("true")
+    fireEvent.click(brief)
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenLastCalledWith(
+        [{ key: "prefs.brief", value: "off" }],
+        null
+      )
+    )
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: /Fix watched pull requests that go red/,
+      })
+    )
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenLastCalledWith(
+        [{ key: "prefs.ci_failure", value: "tell" }],
+        null
+      )
+    )
+  })
+
   it("suggests a team once, opens the preferences and the companion, and folds when done", async () => {
     const openSettings = vi.fn()
     usePersonalAgentUi.setState({ openSettings })

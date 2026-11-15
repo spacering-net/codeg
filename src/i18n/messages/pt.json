@@ -9235,6 +9235,7 @@
         "canceled": "cancelada"
       },
       "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "Abrir a conversa de {name}",
       "sheetHint": "Todas as mensagens que os dois assistentes trocaram nesta conversa.",
       "unavailable": "Não foi possível carregar a conversa: {error}"
     },
@@ -9896,6 +9897,14 @@
             "title": "Avisar quando algo precisar de você",
             "hint": "Perguntas, aprovações, trabalho concluído e seus lembretes, assim que chegam."
           },
+          "brief": {
+            "title": "Escrever um resumo toda manhã",
+            "hint": "Quando seu dia começa: o que espera por você, o que rodou à noite e o que há para hoje."
+          },
+          "wrap": {
+            "title": "Fechar o seu dia",
+            "hint": "Antes de você parar: o que foi feito, o que falta e o que pode rodar esta noite."
+          },
           "exec_questions": {
             "title": "Responder às perguntas das sessões que distribuo",
             "hint": "Respondo o que posso e passo para você o que não tenho certeza."
@@ -9907,6 +9916,10 @@
           "followups": {
             "title": "Acompanhar e repetir meu próprio trabalho",
             "hint": "Se o trabalho distribuído precisar de outra rodada, eu começo."
+          },
+          "ci_failure": {
+            "title": "Corrigir PRs acompanhados que falham",
+            "hint": "Um PR com verificações falhando ou um conflito é corrigido pela sua tarefa, rodada a rodada."
           },
           "interrupt_retry": {
             "title": "Repetir o trabalho cortado por um reinício",
@@ -9921,7 +9934,6 @@
             "hint": "Outra configuração de execução verifica em modo somente leitura; eu avalio conforme o que você pediu."
           }
         },
-        "later": "Resumos da manhã, fechamentos e acompanhamento de PRs entram aqui quando ficarem prontos.",
         "team": "Montar uma equipe",
         "teamSuggested": "Equipe sugerida",
         "prefs": "Ajustar preferências",
@@ -10139,6 +10151,7 @@
         "pr_no_conflict": "Um PR acompanhado sem conflito (verificações desconhecidas)",
         "pr_merged": "Um PR acompanhado é mesclado",
         "pr_closed": "Um PR acompanhado é fechado",
+        "pr_review": "Um PR acompanhado recebe nova revisão",
         "forge_issue": "Uma issue ou PR novo na forja"
       },
       "precheck": {
@@ -10491,7 +10504,7 @@
         },
         "work": "Delegados {count} ({modes}) · concluídos {completed}, falharam {failed} · de primeira {firstPass} de {settled}",
         "byBot": "Por assistente: {list}",
-        "doneForYou": "Feito por você: {caught} devolvidos na aceitação · {retried} repetidos · {routines} rotinas · {merged} mesclados",
+        "doneForYou": "Feito por você: {caught} devolvidos na aceitação · {retried} repetidos · {ciFixed} correções de CI · {routines} rotinas · {merged} mesclados",
         "asks": "Perguntas do trabalho: {count} · respondidas pelos assistentes {answered} · vieram a você {forwarded}",
         "between": "Entre assistentes: {messages} mensagens em {threads} conversas · {loops} interrompidas",
         "unblock": "Você respondeu ao que esperava em {minutes} min em média ({count})",

@@ -9235,6 +9235,7 @@
         "canceled": "abgebrochen"
       },
       "sheetTitle": "{a} ⇄ {b}",
+      "openPeer": "Unterhaltung mit {name} öffnen",
       "sheetHint": "Alle Nachrichten, die die beiden Assistenten in diesem Austausch einander geschrieben haben.",
       "unavailable": "Der Austausch konnte nicht geladen werden: {error}"
     },
@@ -9896,6 +9897,14 @@
             "title": "Dir sagen, wenn etwas dich braucht",
             "hint": "Fragen, Freigaben, fertige Arbeit und deine Erinnerungen, sobald sie kommen."
           },
+          "brief": {
+            "title": "Dir jeden Morgen ein Briefing schreiben",
+            "hint": "Wenn dein Tag beginnt: was auf dich wartet, was über Nacht lief, was heute ansteht."
+          },
+          "wrap": {
+            "title": "Deinen Tag abschließen",
+            "hint": "Bevor du aufhörst: was erledigt ist, was bleibt und was heute Nacht laufen kann."
+          },
           "exec_questions": {
             "title": "Fragen der vergebenen Sitzungen beantworten",
             "hint": "Ich beantworte, was ich kann, und reiche Unklares an dich weiter."
@@ -9907,6 +9916,10 @@
           "followups": {
             "title": "Eigene Arbeit nachverfolgen und wiederholen",
             "hint": "Braucht vergebene Arbeit eine weitere Runde, starte ich sie."
+          },
+          "ci_failure": {
+            "title": "Beobachtete PRs reparieren, die rot werden",
+            "hint": "Einen PR mit fehlgeschlagenen Checks oder einem Konflikt repariert seine Aufgabe, Runde für Runde."
           },
           "interrupt_retry": {
             "title": "Durch Neustart unterbrochene Arbeit wiederholen",
@@ -9921,7 +9934,6 @@
             "hint": "Eine andere Ausführungskonfiguration prüft sie nur lesend; ich beurteile sie nach dem, was du wolltest."
           }
         },
-        "later": "Morgenbriefing, Tagesabschluss und PR-Betreuung kommen hier dazu, sobald sie fertig sind.",
         "team": "Ein Team bilden",
         "teamSuggested": "Team vorgeschlagen",
         "prefs": "Einstellungen anpassen",
@@ -10139,6 +10151,7 @@
         "pr_no_conflict": "Ein beobachteter PR ohne Konflikt (Checks unbekannt)",
         "pr_merged": "Ein beobachteter PR wird gemergt",
         "pr_closed": "Ein beobachteter PR wird geschlossen",
+        "pr_review": "Ein beobachteter PR bekommt neues Review",
         "forge_issue": "Ein neues Issue oder ein neuer PR auf der Forge"
       },
       "precheck": {
@@ -10491,7 +10504,7 @@
         },
         "work": "Vergeben {count} ({modes}) · erledigt {completed}, fehlgeschlagen {failed} · beim ersten Mal {firstPass} von {settled}",
         "byBot": "Nach Assistent: {list}",
-        "doneForYou": "Für dich erledigt: {caught} bei der Abnahme zurückgeschickt · {retried} wiederholt · {routines} Routinen · {merged} gemergt",
+        "doneForYou": "Für dich erledigt: {caught} bei der Abnahme zurückgeschickt · {retried} wiederholt · {ciFixed} CI-Korrekturen · {routines} Routinen · {merged} gemergt",
         "asks": "Fragen aus der Arbeit: {count} · von den Assistenten beantwortet {answered} · an dich {forwarded}",
         "between": "Zwischen den Assistenten: {messages} Nachrichten in {threads} Fäden · {loops} gestoppt",
         "unblock": "Was auf dich wartete, hast du im Schnitt in {minutes} Min. beantwortet ({count})",

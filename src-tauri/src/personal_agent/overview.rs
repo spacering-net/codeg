@@ -532,6 +532,44 @@ fn lines(title: &str, rows: &[String], empty: Option<&str>) -> Option<String> {
     Some(out)
 }
 
+/// Work runs on in sessions of its own — a delegation's children, however
+/// deep: they are their parent's assistant's too. `own` (an assistant's own
+/// conversations) and `handed` (those of the work it handed out), each
+/// conversation → assistant, grown by them; every conversation looked at,
+/// children included.
+pub(super) async fn with_children(
+    db: &AppDatabase,
+    own: &mut HashMap<i32, i32>,
+    handed: &mut HashMap<i32, i32>,
+) -> HashSet<i32> {
+    let mut frontier: Vec<i32> = own.keys().chain(handed.keys()).copied().collect();
+    let mut seen: HashSet<i32> = frontier.iter().copied().collect();
+    while !frontier.is_empty() {
+        let mut next = Vec::new();
+        for chunk in frontier.chunks(500) {
+            let children = conversation::Entity::find()
+                .filter(conversation::Column::ParentId.is_in(chunk.to_vec()))
+                .all(&db.conn)
+                .await
+                .unwrap_or_default();
+            for c in children {
+                let Some(parent) = c.parent_id else { continue };
+                if !seen.insert(c.id) {
+                    continue;
+                }
+                if let Some(b) = own.get(&parent).copied() {
+                    own.insert(c.id, b);
+                } else if let Some(b) = handed.get(&parent).copied() {
+                    handed.insert(c.id, b);
+                }
+                next.push(c.id);
+            }
+        }
+        frontier = next;
+    }
+    seen
+}
+
 fn int_arg(args: &Value, key: &str) -> Option<i64> {
     args.get(key).and_then(|v| {
         v.as_i64()
@@ -1350,31 +1388,7 @@ impl PersonalAgentEngine {
         }
         // Work runs on in sessions of its own (a delegation's children):
         // those are the assistant's too, however deep.
-        let mut frontier: Vec<i32> = own_of.keys().chain(handed_of.keys()).copied().collect();
-        let mut seen: HashSet<i32> = frontier.iter().copied().collect();
-        while !frontier.is_empty() {
-            let mut next = Vec::new();
-            for chunk in frontier.chunks(500) {
-                let children = conversation::Entity::find()
-                    .filter(conversation::Column::ParentId.is_in(chunk.to_vec()))
-                    .all(&db.conn)
-                    .await
-                    .unwrap_or_default();
-                for c in children {
-                    let Some(parent) = c.parent_id else { continue };
-                    if !seen.insert(c.id) {
-                        continue;
-                    }
-                    if let Some(b) = own_of.get(&parent).copied() {
-                        own_of.insert(c.id, b);
-                    } else if let Some(b) = handed_of.get(&parent).copied() {
-                        handed_of.insert(c.id, b);
-                    }
-                    next.push(c.id);
-                }
-            }
-            frontier = next;
-        }
+        let seen = Box::pin(with_children(db, &mut own_of, &mut handed_of)).await;
         // Counted as the headline is: live conversations, inside the window.
         let mut watched: Vec<i32> = Vec::new();
         let ids: Vec<i32> = seen.into_iter().collect();

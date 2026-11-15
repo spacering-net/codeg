@@ -106,6 +106,7 @@ pub const EVENT_KINDS: &[&str] = &[
     "pr_no_conflict",
     "pr_merged",
     "pr_closed",
+    "pr_review",
     FORGE_EVENT,
 ];
 
@@ -593,6 +594,12 @@ pub fn event_words(s: &signal_entity::Model) -> String {
                 "pr_no_conflict" => "it has no conflict (checks unknown)".into(),
                 "pr_merged" => "it was merged".into(),
                 "pr_closed" => "it was closed without merging".into(),
+                "pr_review" => format!(
+                    "it has a new review ({} item(s): {} approval(s), {} for its task)",
+                    f["items"].as_u64().unwrap_or(0),
+                    f["approvals"].as_u64().unwrap_or(0),
+                    f["for_the_task"].as_u64().unwrap_or(0)
+                ),
                 _ => k.to_string(),
             };
             format!(

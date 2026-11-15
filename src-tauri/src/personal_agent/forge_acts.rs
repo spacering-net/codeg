@@ -165,6 +165,8 @@ pub struct ForgeCall {
     /// A merge: the head commit it merges, what vouches for that version
     /// (`accepted` or `green`), the acceptance round, the checks as read
     /// (`green`, `none`, `unknown`), and whether the forge holds the head.
+    /// A comment on a pull request put to the owner first: the head it was
+    /// at when its card went up.
     #[serde(default)]
     pub head: Option<String>,
     #[serde(default)]
@@ -539,6 +541,15 @@ impl PersonalAgentEngine {
         }
         .into();
         if call.why != "direct" {
+            // A comment on a pull request is about the head it is at now:
+            // one approved after it moved on is not posted. Unread, it is
+            // posted as approved.
+            if action == ForgeAction::Comment {
+                call.head = Box::pin(self.pr_head_now(&call.target))
+                    .await
+                    .ok()
+                    .flatten();
+            }
             return match self
                 .raise_forge_card(&call, "open", batch, Some(subject), Value::Null)
                 .await
@@ -753,6 +764,29 @@ impl PersonalAgentEngine {
                     && crate::forge::same_repo(&r.owner_repo, &repo.owner_repo)
             })
         })
+    }
+
+    /// The head pull request `target` is at now; `None` for an issue, or
+    /// when the forge does not say.
+    async fn pr_head_now(&self, target: &ForgeTarget) -> Result<Option<String>, String> {
+        if target.kind != "pr" {
+            return Ok(None);
+        }
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(FORGE_ACT_SECS),
+            crate::commands::forge::change_detail_at(&self.db, &target.repo, target.number),
+        )
+        .await;
+        match read {
+            Err(_) => Err(format!(
+                "the forge did not answer within {FORGE_ACT_SECS} s"
+            )),
+            Ok(Err(e)) => Err(format!("could not read {}: {e}", target.label())),
+            Ok(Ok(d)) => Ok(d
+                .head_sha
+                .map(|h| h.trim().to_string())
+                .filter(|h| !h.is_empty())),
+        }
     }
 
     // ── a merge ─────────────────────────────────────────────────────────────
@@ -2089,6 +2123,36 @@ impl PersonalAgentEngine {
                             )
                             .await;
                             return Err(e);
+                        }
+                    }
+                }
+                // A comment on a pull request was written about the head it
+                // was at when its card went up: approved after the pull
+                // request moved on, it is not posted (2.2).
+                if call.action == ForgeAction::Comment && action == "accept" {
+                    if let Some(was) = call.head.clone() {
+                        match Box::pin(self.pr_head_now(&call.target)).await {
+                            Ok(Some(now)) if !now.eq_ignore_ascii_case(&was) => {
+                                let why = format!(
+                                    "the pull request has a new head since: {} → {}",
+                                    short(&was),
+                                    short(&now)
+                                );
+                                return self.not_run(notice, &call, &why).await;
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                let _ = self.set_forge_phase(notice.id, "approve").await;
+                                self.forge_card_to(
+                                    notice.id,
+                                    &[NoticeState::Acting],
+                                    NoticeState::Open,
+                                    "open",
+                                    json!({ "error": e.clone() }),
+                                )
+                                .await;
+                                return Err(e);
+                            }
                         }
                     }
                 }

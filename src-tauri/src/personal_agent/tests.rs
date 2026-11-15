@@ -7494,6 +7494,22 @@ async fn taking_work_over_or_changing_the_setting_tells_the_windows() {
     )
     .await;
     assert!(!out.ok, "{}", out.text);
+    // The one the setting sent to the owner while the assistant was
+    // answering it: the assistant's late answer does not land.
+    let sent = ask_cards(&engine).await.remove(0);
+    assert_eq!(sent.forward_reason.as_deref(), Some("settings"));
+    let out = call(
+        &engine,
+        "dispatch_answer",
+        json!({ "ask_id": sent.ask_id, "answers": [{ "choose": ["A"] }], "reason": "r" }),
+    )
+    .await;
+    assert!(!out.ok && out.text.contains("settings"), "{}", out.text);
+    assert_eq!(
+        ask_cards(&engine).await.remove(0).state,
+        "forwarded",
+        "still the owner's"
+    );
 }
 
 /// A plan answer that lost keeps neither the card's settled state nor its
@@ -10437,6 +10453,62 @@ async fn the_owner_changes_a_work_assistant_in_words_and_the_card_undoes_it() {
 }
 
 #[tokio::test]
+async fn the_owner_names_a_kind_of_works_first_pick_in_words_and_puts_it_back_to_auto() {
+    let (host, w, _tmp) = hosted().await;
+    let engine = host.primary();
+    let uid = svc::get_bot(&engine.db.conn, w)
+        .await
+        .unwrap()
+        .unwrap()
+        .uid
+        .unwrap();
+    // A work assistant made the first pick for a kind of work, in words…
+    let picked = format!("bot:{uid}");
+    let out = call_tool(
+        &engine,
+        "bot_update",
+        json!({ "bot": w, "roles": ["review"], "quote": "Dev reviews from now on" }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    assert_eq!(
+        engine.account().await.team.division.get("review"),
+        Some(&picked)
+    );
+    let out = call_tool(
+        &engine,
+        "prefs_update",
+        json!({ "changes": [{ "key": "team.division.review", "value": "auto" }], "quote": "pick the reviewer yourself" }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    assert!(!engine.account().await.team.division.contains_key("review"));
+    // Undone: Dev reviews again.
+    engine
+        .act_on_notice(card_id(&last_card(&engine, "changed").await), "undo")
+        .await
+        .unwrap();
+    assert_eq!(
+        engine.account().await.team.division.get("review"),
+        Some(&picked)
+    );
+    let out = call_tool(
+        &engine,
+        "bot_update",
+        json!({ "bot": w, "roles": ["chores"], "quote": "x" }),
+    )
+    .await;
+    assert!(!out.ok && out.text.contains("kind of work"), "{}", out.text);
+    let out = call_tool(
+        &engine,
+        "prefs_update",
+        json!({ "changes": [{ "key": "team.division.chores", "value": "auto" }], "quote": "x" }),
+    )
+    .await;
+    assert!(!out.ok, "{}", out.text);
+}
+
+#[tokio::test]
 async fn an_executor_config_is_made_from_what_the_owner_said_and_the_rest_filled_in() {
     let (engine, _tmp) = ready().await;
     let out = call_tool(
@@ -11020,6 +11092,67 @@ mod against_a_forge {
             engine_ref.act_on_notice(card_id(&card), "accept").await.unwrap();
             assert_eq!(state_ref.lock().unwrap().closes, 1, "not closed again");
             assert_eq!(data_of(&last_card(engine_ref, "forge").await)["state"], "not_run");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_approved_comment_on_a_pull_request_that_moved_on_is_not_posted() {
+        let (engine, tmp) = configured().await;
+        let state: Shared = Arc::new(StdMutex::new(Forge {
+            head: "h34d1".into(),
+            ..Default::default()
+        }));
+        let (engine_ref, tmp_ref, state_ref) = (&engine, &tmp, &state);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(engine_ref, tmp_ref, state_ref.clone()).await;
+            set_pref(engine_ref, "forge_comment", json!("ask")).await;
+            // Written about the head the pull request is at…
+            let out = call_tool(
+                engine_ref,
+                "forge_comment",
+                json!({ "project_id": project, "number": 9, "kind": "pr", "body": "Fixed." }),
+            )
+            .await;
+            assert!(
+                out.ok && out.data["state"] == "awaiting_owner",
+                "{}",
+                out.text
+            );
+            let card = last_card(engine_ref, "forge").await;
+            assert_eq!(data_of(&card)["head"], "h34d1");
+            // …approved after a push: not posted, and the card says why.
+            state_ref.lock().unwrap().head = "h34d2".into();
+            engine_ref
+                .act_on_notice(card_id(&card), "accept")
+                .await
+                .unwrap();
+            assert_eq!(state_ref.lock().unwrap().posts, 0);
+            let data = data_of(&last_card(engine_ref, "forge").await);
+            assert_eq!(data["state"], "not_run");
+            assert!(
+                data["error"].as_str().unwrap().contains("new head"),
+                "{data}"
+            );
+            // Approved at the head it was written about: posted.
+            let out = call_tool(
+                engine_ref,
+                "forge_comment",
+                json!({ "project_id": project, "number": 9, "kind": "pr", "body": "Fixed now." }),
+            )
+            .await;
+            assert!(out.ok, "{}", out.text);
+            let card = last_card(engine_ref, "forge").await;
+            assert_eq!(data_of(&card)["head"], "h34d2");
+            engine_ref
+                .act_on_notice(card_id(&card), "accept")
+                .await
+                .unwrap();
+            assert_eq!(state_ref.lock().unwrap().posts, 1);
+            assert_eq!(
+                data_of(&last_card(engine_ref, "forge").await)["state"],
+                "done"
+            );
         })
         .await;
     }
@@ -11701,6 +11834,152 @@ mod against_a_forge {
             .unwrap();
     }
 
+    /// Board task `t` done by delivering to a pull request: `delivery`, or
+    /// the one it works on.
+    async fn done_as_pr(
+        engine: &PersonalAgentEngine,
+        t: work_task_entity::Model,
+        delivery: Option<String>,
+    ) {
+        use sea_orm::{ActiveModelTrait, Set};
+        let mut am: work_task_entity::ActiveModel = t.into();
+        am.status = Set(WorkTaskStatus::Done);
+        am.completion_kind = Set(Some("delivered_pr".into()));
+        if let Some(d) = delivery {
+            am.delivery = Set(Some(d));
+        }
+        am.finished_at = Set(Some(chrono::Utc::now()));
+        am.updated_at = Set(chrono::Utc::now() + chrono::Duration::seconds(1));
+        am.update(&engine.db.conn).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_plan_step_whose_pull_request_a_later_round_fixed_is_done_once_it_merges() {
+        use crate::db::entities::personal_agent_plan_step::TargetKind;
+        use crate::db::service::personal_agent_service::Ledgered;
+        use crate::db::service::personal_agent_watch_service as wsvc;
+        let (host, _w, tmp) = hosted().await;
+        let primary = host.primary();
+        let state: Shared = Arc::new(StdMutex::new(Forge {
+            head: "h1".into(),
+            checks: vec![running("build")],
+            ..Default::default()
+        }));
+        let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            let coder = role_assistant(primary_ref, "Coder", true).await;
+            host_ref.board_tick().await;
+            // A plan's code step, carried out by a board task that delivered
+            // pull request #7 (the board's own engine does not run here).
+            let t1 = delivered(primary_ref, project, "Fix login", 7).await;
+            let d1 = task_dispatch(
+                primary_ref,
+                coder,
+                project,
+                t1.id,
+                "Fix login",
+                DispatchState::Completed,
+            )
+            .await
+            .id;
+            let made = psvc::create(
+                &primary_ref.db.conn,
+                psvc::NewPlan {
+                    bot_id: primary_ref.bot().await,
+                    title: "Login".into(),
+                    goal: None,
+                    state: PlanState::Running,
+                    origin_batch_id: None,
+                    for_input: None,
+                    origin_bot_id: None,
+                    origin_row_id: None,
+                    thread_id: None,
+                },
+                vec![psvc::NewStep {
+                    seq: 1,
+                    title: "Fix login".into(),
+                    target_kind: TargetKind::Assistant,
+                    target_id: coder,
+                    target_name: "Coder".into(),
+                    mode: Some("task".into()),
+                    project_id: Some(project),
+                    deliverable: Some("change".into()),
+                    prompt: "Fix the login.".into(),
+                    done_when: None,
+                    depends_on: vec![],
+                    confirmed: true,
+                    kind: None,
+                }],
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+            let Ledgered::New(made) = made else {
+                panic!("made")
+            };
+            let plan = made.id;
+            let step = plan_steps(primary_ref, plan).await.remove(0);
+            psvc::update_step(
+                &primary_ref.db.conn,
+                step.id,
+                None,
+                psvc::StepWrite {
+                    state: Some(StepState::Running),
+                    dispatch_id: Some(Some(d1)),
+                    started_at: Some(Some(chrono::Utc::now())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+            host_ref.board_tick().await;
+            let watch = wsvc::of_tasks(&primary_ref.db.conn, &[t1.id])
+                .await
+                .unwrap()
+                .remove(&t1.id)
+                .expect("watched");
+            read_now(primary_ref, watch.id).await;
+            // Red, its task done: a new task on the pull request fixes it,
+            // and its delivery takes the watch over.
+            state_ref.lock().unwrap().checks = vec![failed("build")];
+            read_now(primary_ref, watch.id).await;
+            let (r1, fix) = rounds_of(primary_ref).await.pop().expect("a round");
+            assert_eq!(
+                (fix.how, fix.origin_dispatch_id),
+                (super::super::pr_auto::How::Task, Some(d1))
+            );
+            let t2 = task_of_round(primary_ref, r1.id).await;
+            done_as_pr(primary_ref, t2, None).await;
+            settle_round(primary_ref, r1.id, DispatchState::Completed).await;
+            host_ref.board_tick().await;
+            assert!(
+                wsvc::of_tasks(&primary_ref.db.conn, &[t1.id])
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "the round's task holds the watch now"
+            );
+            // The first task still shows its pull request…
+            let facts = super::super::watch::facts_of_tasks(&primary_ref.db, &[t1.id]).await;
+            assert_eq!(facts.get(&t1.id).map(|f| f.watch_id), Some(watch.id));
+            assert_eq!(
+                plan_steps(primary_ref, plan).await[0].state,
+                StepState::Running
+            );
+            // …and once that pull request is merged, the step is done.
+            {
+                let mut f = state_ref.lock().unwrap();
+                f.checks = vec![green("build")];
+                f.merged = true;
+            }
+            read_now(primary_ref, watch.id).await;
+            until_step(primary_ref, plan, 1, StepState::Done).await;
+        })
+        .await;
+    }
+
     #[tokio::test]
     async fn failed_checks_are_fixed_by_a_task_on_the_pull_request_one_round_at_a_time_up_to_the_cap() {
         use crate::db::entities::personal_agent_item::{ItemKind, ItemStatus, WaitsFor};
@@ -12010,6 +12289,92 @@ mod against_a_forge {
             let rounds = rounds_of(primary_ref).await;
             assert_eq!(rounds.len(), 3);
             assert!(rounds[2].0.prompt.contains("Rename it."));
+            // Each read that found new feedback is a coding event a routine
+            // can run on (6.9): once per read, naming the pull request.
+            let reviews: Vec<_> = wsvc::signals_after(&primary_ref.db.conn, 0, 200)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|s| s.kind == "pr_review")
+                .collect();
+            assert!(reviews.len() >= 2, "{reviews:?}");
+            let first: serde_json::Value = serde_json::from_str(&reviews[0].facts).unwrap();
+            // The first read: two reviews (one approving), a line comment and
+            // a stranger's comment; codeg's own is not one.
+            assert_eq!((first["items"].as_u64(), first["approvals"].as_u64(), first["for_the_task"].as_u64()), (Some(4), Some(1), Some(2)), "{first}");
+            let last: serde_json::Value = serde_json::from_str(&reviews.last().unwrap().facts).unwrap();
+            assert_eq!((last["watch_id"].as_i64(), last["items"].as_u64(), last["for_the_task"].as_u64()), (Some(watch.id as i64), Some(1), Some(1)));
+            assert_eq!(last["target"], "acme/app#7");
+            assert!(super::super::routines::EVENT_KINDS.contains(&"pr_review"));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_approval_alone_is_a_new_review_a_routine_runs_on_once() {
+        use crate::db::service::personal_agent_watch_service as wsvc;
+        let (host, _w, tmp) = hosted().await;
+        let primary = host.primary();
+        let state: Shared = Arc::new(StdMutex::new(Forge {
+            head: "h1".into(),
+            checks: vec![running("build")],
+            updated: Some("2026-11-14T00:00:00Z".into()),
+            ..Default::default()
+        }));
+        let (host_ref, tmp_ref, state_ref, primary_ref) = (&host, &tmp, &state, &primary);
+        in_data_dir(&tmp, || async move {
+            let project = on_forge(primary_ref, tmp_ref, state_ref.clone()).await;
+            let coder = role_assistant(primary_ref, "Coder", true).await;
+            let out = call_tool(
+                primary_ref,
+                "routine_create",
+                json!({ "title": "Reviewed", "what": "Tell me what the review said.", "event": { "kind": "pr_review" } }),
+            )
+            .await;
+            assert!(out.ok, "{}", out.text);
+            let routine = out.data["routine"]["id"].as_i64().unwrap() as i32;
+            host_ref.board_tick().await;
+            let task = delivered(primary_ref, project, "Fix login", 7).await;
+            task_dispatch(primary_ref, coder, project, task.id, "Fix login", DispatchState::Completed).await;
+            host_ref.board_tick().await;
+            let watch = wsvc::of_tasks(&primary_ref.db.conn, &[task.id]).await.unwrap().remove(&task.id).unwrap();
+            read_now(primary_ref, watch.id).await;
+            // Only an approval: nothing for the task, still a new review.
+            let after = (chrono::Utc::now() + chrono::Duration::seconds(5)).to_rfc3339();
+            {
+                let mut f = state_ref.lock().unwrap();
+                f.writers = vec!["maint".into()];
+                f.reviews = vec![json!({ "id": 3, "user": { "login": "maint" }, "state": "APPROVED", "body": "", "submitted_at": after })];
+                f.updated = Some("2026-11-14T01:00:00Z".into());
+            }
+            read_now(primary_ref, watch.id).await;
+            assert!(rounds_of(primary_ref).await.is_empty(), "nothing for its task");
+            let reviews = || async {
+                wsvc::signals_after(&primary_ref.db.conn, 0, 200)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .filter(|s| s.kind == "pr_review")
+                    .collect::<Vec<_>>()
+            };
+            let seen = reviews().await;
+            assert_eq!(seen.len(), 1, "{seen:?}");
+            let facts: serde_json::Value = serde_json::from_str(&seen[0].facts).unwrap();
+            assert_eq!((facts["items"].as_u64(), facts["approvals"].as_u64(), facts["for_the_task"].as_u64()), (Some(1), Some(1), Some(0)));
+            primary_ref.routine_tick(super::super::clock::now()).await;
+            // Read again, touched again with nothing new: no second one.
+            state_ref.lock().unwrap().updated = Some("2026-11-14T02:00:00Z".into());
+            read_now(primary_ref, watch.id).await;
+            assert_eq!(reviews().await.len(), 1);
+            primary_ref.routine_tick(super::super::clock::now()).await;
+            let runs: Vec<_> = rsvc::runs_of(&primary_ref.db.conn, routine, 10)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|r| r.trigger == "event")
+                .collect();
+            assert_eq!(runs.len(), 1, "{runs:?}");
+            assert!(runs[0].note.as_deref().unwrap_or("").contains("1 approval(s)"), "{:?}", runs[0].note);
         })
         .await;
     }
@@ -12048,7 +12413,6 @@ mod against_a_forge {
             }
             read_now(primary_ref, w1.id).await;
             let mine = |w: i32| {
-                let w = w;
                 async move {
                     rounds_of(primary_ref)
                         .await
@@ -15796,6 +16160,89 @@ async fn profile_steps() {
         .insert(conn)
         .await
         .unwrap();
+        // That work delegated on to a session of its own: the worker's too.
+        let child = crate::db::test_helpers::seed_conversation(db, a, AgentType::ClaudeCode).await;
+        let row = crate::db::entities::conversation::Entity::find_by_id(child)
+            .one(conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut am: crate::db::entities::conversation::ActiveModel = row.into();
+        am.parent_id = Set(Some(conv));
+        am.update(conn).await.unwrap();
+        crate::db::entities::token_usage_turn::ActiveModel {
+            conversation_id: Set(child),
+            turn_key: Set("t2".into()),
+            occurred_at: Set(Utc::now()),
+            model: Set(None),
+            input_tokens: Set(100),
+            output_tokens: Set(0),
+            cache_creation_tokens: Set(0),
+            cache_read_tokens: Set(0),
+            total_tokens: Set(100),
+            duration_ms: Set(0),
+            ..Default::default()
+        }
+        .insert(conn)
+        .await
+        .unwrap();
+    }
+    // A pull request codeg fixed by itself: a round on its failed checks
+    // this week, one on a conflict long before, one on review feedback.
+    {
+        use crate::db::service::personal_agent_watch_service as wsvc;
+        use crate::personal_agent::pr_auto::{Auto, Cause, How, Round};
+        let (watch, _) = wsvc::insert_or_get(
+            conn,
+            wsvc::NewWatch {
+                bot_id: p,
+                target: crate::forge::DeliveryTarget {
+                    provider: crate::forge::ForgeProvider::GitHub,
+                    server_host: "github.com".into(),
+                    account_id: "a".into(),
+                    owner_repo: "acme/app".into(),
+                },
+                kind: "pr".into(),
+                number: 7,
+                folder_id: None,
+                work_task_id: None,
+                dispatch_id: None,
+                source: "task".into(),
+                state: crate::db::entities::personal_agent_watch::WatchState::Watching,
+                url: None,
+                title: None,
+                quiet_first: true,
+            },
+        )
+        .await
+        .unwrap();
+        let round = |cause, at| Round {
+            n: 1,
+            cause,
+            head: "h1".into(),
+            dispatch_id: made[0],
+            how: How::Task,
+            at,
+        };
+        let auto = Auto {
+            rounds: vec![
+                round(Cause::Conflict, Utc::now() - Duration::days(30)),
+                round(Cause::Checks, Utc::now()),
+                round(Cause::Feedback, Utc::now()),
+            ],
+            ..Default::default()
+        };
+        wsvc::update(
+            conn,
+            watch.id,
+            None,
+            wsvc::WatchWrite {
+                auto: Some(Some(serde_json::to_string(&auto).unwrap())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
     }
     profile::count_held(db, presence::hours_day(Utc::now(), tz), "merged").await;
     profile::count_held(db, presence::hours_day(Utc::now(), tz), "merged").await;
@@ -15815,9 +16262,14 @@ async fn profile_steps() {
     assert_eq!(week.by_bot[0].id, w);
     assert_eq!(week.by_executor[0].name, "Dev");
     assert_eq!((week.changes, week.changes_undone), (4, 3));
-    assert_eq!(week.tokens, 1234);
+    assert_eq!(week.ci_fixed, 1, "this week's round on its checks");
+    assert!(weekly::lines(&week)[0].contains("fixed by codeg 1"));
+    assert_eq!(week.tokens, 1334);
     assert_eq!(week.tokens_by_bot[0].bot_id, w);
-    assert_eq!(week.tokens_by_bot[0].handed_out, 1234);
+    assert_eq!(
+        week.tokens_by_bot[0].handed_out, 1334,
+        "a delegation's session is the work's"
+    );
     assert_eq!((week.held.merged, week.held.deferred), (2, 1));
     assert!(week.so_far);
     let undo = week
