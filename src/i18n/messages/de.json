@@ -5402,15 +5402,17 @@
       "customAgents": "Eigene Agenten",
       "quickMessages": "Schnellnachrichten",
       "taskTemplates": "Aufgabenvorlagen",
-      "preferences": "App-Einstellungen (Sprache, Aussehen, Schalter)",
-      "assistants": "Assistenten"
+      "preferences": "App-Einstellungen (Sprache, Schalter)",
+      "assistants": "Assistenten",
+      "appearance": "Darstellung (Hell/Dunkel, Designfarbe, Zoom, Schriftarten, Hintergrundeinstellungen, eigene Stile)"
     },
     "scopeExcluded": {
       "conversations": "Unterhaltungen und Verlauf",
       "uploads": "Hochgeladene Dateien und Bilder",
       "workspaces": "Arbeitsbereich-Projekte und Pfade",
       "mcp": "MCP-Server (gehören zur jeweiligen CLI)",
-      "credentials": "Anmeldedaten und Tokens"
+      "credentials": "Anmeldedaten und Tokens",
+      "backgroundImage": "Das Hintergrundbild selbst (bleibt auf jedem Gerät)"
     },
     "fileTitle": "Konfigurationsdatei",
     "exportButton": "In Datei exportieren",
@@ -5439,7 +5441,7 @@
     "profile": "Profil",
     "profileHint": "Geräte mit demselben Profil teilen sich eine Konfiguration. Verwende getrennte Profile, um Arbeit und Privates zu trennen.",
     "autoSyncLabel": "Automatisch hochladen",
-    "autoSyncHint": "Prüft regelmäßig und lädt nur hoch, wenn sich die Konfiguration geändert hat.",
+    "autoSyncHint": "Prüft regelmäßig und lädt nur hoch, wenn sich die Konfiguration geändert hat. Einen Snapshot, den ein anderes Gerät hochgeladen hat, ersetzt es erst, wenn Sie ihn wiederhergestellt oder das Ersetzen bestätigt haben.",
     "intervalLabel": "Prüfintervall",
     "intervalOption": "Alle {minutes} Minuten",
     "saveButton": "Speichern",
@@ -5460,7 +5462,7 @@
     "plaintextWarning": "Der Snapshot wird unverschlüsselt hochgeladen und enthält API-Schlüssel. Nutze daher einen WebDAV-Server, auf den nur du zugreifen kannst. Die Zugangsdaten der Synchronisierung selbst sind nie Teil des Snapshots.",
     "importConfirmTitle": "Konfiguration importieren?",
     "importConfirmBody": "Einträge aus der Datei werden auf diesem Gerät hinzugefügt oder aktualisiert. Vorhandene Einträge, die in der Datei nicht vorkommen, bleiben erhalten.",
-    "restartHint": "Einige Änderungen – Darstellung, Sprache und die Anbieterliste – werden erst nach einem Neustart von codeg wirksam.",
+    "restartHint": "Einige Änderungen – Sprache und die Anbieterliste – werden erst nach einem Neustart von codeg wirksam.",
     "importConfirmAction": "Importieren",
     "restoreConfirmTitle": "Vom Server wiederherstellen?",
     "restoreConfirmBody": "Der Snapshot von {device} vom {time} wird auf dieses Gerät angewendet. Vorhandene Einträge, die im Snapshot fehlen, bleiben erhalten.",
@@ -5474,7 +5476,8 @@
       "quickMessages": "{count, plural, one {# Schnellnachricht} other {# Schnellnachrichten}}",
       "taskTemplates": "{count, plural, one {# Aufgabenvorlage} other {# Aufgabenvorlagen}}",
       "preferences": "{count, plural, one {# Einstellung} other {# Einstellungen}}",
-      "assistants": "{count, plural, one {# Assistent} other {# Assistenten}}"
+      "assistants": "{count, plural, one {# Assistent} other {# Assistenten}}",
+      "appearance": "{count, plural, one {# Darstellungseinstellung} other {# Darstellungseinstellungen}}"
     },
     "rollbackTitle": "Import rückgängig machen",
     "rollbackHint": "Jeder Import und jede Wiederherstellung sichern vorher den Stand dieses Geräts. Die letzten zehn bleiben erhalten.",
@@ -5491,7 +5494,17 @@
     "passphraseKeep": "Leer lassen, um die gespeicherte Passphrase zu behalten",
     "passphrasePlaceholder": "Passphrase zur Verschlüsselung",
     "passphraseHint": "Bleibt im Schlüsselbund dieses Geräts und wird nie hochgeladen. Gib auf deinen anderen Geräten dieselbe Passphrase ein.",
-    "assistantsRenamed": "{count, plural, one {# Assistent wurde umbenannt: Hier gab es schon einen mit seinem Namen.} other {# Assistenten wurden umbenannt: Hier gab es schon welche mit ihren Namen.}}"
+    "assistantsRenamed": "{count, plural, one {# Assistent wurde umbenannt: Hier gab es schon einen mit seinem Namen.} other {# Assistenten wurden umbenannt: Hier gab es schon welche mit ihren Namen.}}",
+    "conflictTitle": "Automatisches Hochladen pausiert",
+    "conflictBody": "Auf dem Server liegt ein Snapshot von {device} vom {time}, den dieses Gerät nicht wiederhergestellt hat. Hochladen würde ihn ersetzen, und der Server behält keine ältere Kopie.",
+    "conflictRestore": "Wiederherstellen",
+    "conflictOverwrite": "Durch dieses Gerät ersetzen",
+    "conflictUnknownDevice": "einem unbekannten Gerät",
+    "conflictChanged": "Der Snapshot auf dem Server hat sich erneut geändert. Prüfen Sie den neuen, bevor Sie ihn ersetzen.",
+    "overwriteConfirmTitle": "Snapshot auf dem Server ersetzen?",
+    "overwriteConfirmBody": "Der Snapshot von {device} vom {time} wird durch die Konfiguration dieses Geräts ersetzt. Der Server behält keine ältere Kopie; die Einstellungen jenes Geräts lassen sich dann nur noch dort wiederfinden.",
+    "overwriteConfirmAction": "Ersetzen",
+    "lastPulledAt": "Zuletzt wiederhergestellt: {time}"
   },
   "backup": {
     "restore": {

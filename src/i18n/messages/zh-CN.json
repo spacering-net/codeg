@@ -5402,15 +5402,17 @@
       "customAgents": "自定义智能体",
       "quickMessages": "快捷消息",
       "taskTemplates": "任务模板",
-      "preferences": "应用偏好（语言、外观、开关）",
-      "assistants": "助手"
+      "preferences": "应用偏好（语言、开关）",
+      "assistants": "助手",
+      "appearance": "外观（明暗模式、主题色、缩放、字体、背景设置、自定义样式）"
     },
     "scopeExcluded": {
       "conversations": "会话记录与历史",
       "uploads": "上传的文件与图片",
       "workspaces": "工作区项目与路径",
       "mcp": "MCP 服务器（归各 CLI 自己管）",
-      "credentials": "登录凭据与令牌"
+      "credentials": "登录凭据与令牌",
+      "backgroundImage": "背景图片文件本身（各机器各自保留）"
     },
     "fileTitle": "配置文件",
     "exportButton": "导出到文件",
@@ -5439,7 +5441,7 @@
     "profile": "配置集",
     "profileHint": "使用相同配置集的设备共享同一份配置；想区分工作与个人环境时可以分开命名。",
     "autoSyncLabel": "自动上传",
-    "autoSyncHint": "定期检查，只在配置发生变化时上传。",
+    "autoSyncHint": "定期检查，只在配置发生变化时上传。服务器上若是另一台机器上传的快照，在你恢复它或选择替换之前不会被覆盖。",
     "intervalLabel": "检查间隔",
     "intervalOption": "每 {minutes} 分钟",
     "saveButton": "保存",
@@ -5460,7 +5462,7 @@
     "plaintextWarning": "快照以明文上传且包含 API 密钥，请只使用只有你能访问的 WebDAV 服务器。同步凭据本身不会写入快照。",
     "importConfirmTitle": "导入配置？",
     "importConfirmBody": "文件中的条目将在本机新增或更新，文件未涉及的本地条目会保留。",
-    "restartHint": "部分改动（外观、语言、服务商列表）需要重启 codeg 后才会生效。",
+    "restartHint": "部分改动（语言、服务商列表）需要重启 codeg 后才会生效。",
     "importConfirmAction": "导入",
     "restoreConfirmTitle": "从远程恢复？",
     "restoreConfirmBody": "将把 {device} 在 {time} 上传的快照应用到本机，快照未涉及的本地条目会保留。",
@@ -5474,7 +5476,8 @@
       "quickMessages": "{count} 条快捷消息",
       "taskTemplates": "{count} 个任务模板",
       "preferences": "{count} 项应用偏好",
-      "assistants": "{count} 个助手"
+      "assistants": "{count} 个助手",
+      "appearance": "{count} 项外观设置"
     },
     "rollbackTitle": "撤销导入",
     "rollbackHint": "每次导入和每次还原前，都会先保存这台设备当时的配置，最近十份会保留下来。",
@@ -5491,7 +5494,17 @@
     "passphraseKeep": "留空则沿用已保存的口令",
     "passphrasePlaceholder": "加密口令",
     "passphraseHint": "只保存在这台设备的钥匙串里，不会上传。请在你的其他设备上输入同一个口令。",
-    "assistantsRenamed": "有 {count} 个助手与本机已有的助手重名，已自动改名。"
+    "assistantsRenamed": "有 {count} 个助手与本机已有的助手重名，已自动改名。",
+    "conflictTitle": "自动上传已暂停",
+    "conflictBody": "服务器上有一份来自 {device}、{time} 的快照，本机还没有恢复过。上传会替换它，而服务器不保留旧版本。",
+    "conflictRestore": "恢复它",
+    "conflictOverwrite": "用本机配置替换",
+    "conflictUnknownDevice": "未知设备",
+    "conflictChanged": "服务器上的快照又变了，请先查看新的那份再决定是否替换。",
+    "overwriteConfirmTitle": "替换服务器上的快照？",
+    "overwriteConfirmBody": "来自 {device}、{time} 的快照将被本机配置替换。服务器不保留旧版本，那台机器的设置之后只能从那台机器上找回。",
+    "overwriteConfirmAction": "替换",
+    "lastPulledAt": "上次恢复：{time}"
   },
   "backup": {
     "restore": {

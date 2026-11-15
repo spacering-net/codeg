@@ -5402,15 +5402,17 @@
       "customAgents": "Custom agents",
       "quickMessages": "Quick messages",
       "taskTemplates": "Task templates",
-      "preferences": "App preferences (language, appearance, toggles)",
-      "assistants": "Assistants"
+      "preferences": "App preferences (language, toggles)",
+      "assistants": "Assistants",
+      "appearance": "Appearance (light/dark mode, theme colour, zoom, fonts, background settings, custom styles)"
     },
     "scopeExcluded": {
       "conversations": "Conversations and history",
       "uploads": "Uploaded files and images",
       "workspaces": "Workspace projects and paths",
       "mcp": "MCP servers (owned by each CLI)",
-      "credentials": "Login credentials and tokens"
+      "credentials": "Login credentials and tokens",
+      "backgroundImage": "The background image itself (each machine keeps its own)"
     },
     "fileTitle": "Configuration file",
     "exportButton": "Export to file",
@@ -5439,7 +5441,7 @@
     "profile": "Profile",
     "profileHint": "Machines that share a profile share one configuration. Use separate profiles to keep work and personal setups apart.",
     "autoSyncLabel": "Upload automatically",
-    "autoSyncHint": "Checks periodically and uploads only when the configuration changed.",
+    "autoSyncHint": "Checks periodically and uploads only when the configuration changed. It never replaces a snapshot another machine uploaded until you restore it or choose to replace it.",
     "intervalLabel": "Check interval",
     "intervalOption": "Every {minutes} minutes",
     "saveButton": "Save",
@@ -5460,7 +5462,7 @@
     "plaintextWarning": "The snapshot is uploaded unencrypted and includes API keys, so use a WebDAV server only you can reach. The sync credentials themselves are never part of the snapshot.",
     "importConfirmTitle": "Import configuration?",
     "importConfirmBody": "Entries from this file will be added or updated on this machine. Existing entries that the file does not mention are kept.",
-    "restartHint": "Some changes — appearance, language, and the provider list — take effect after restarting codeg.",
+    "restartHint": "Some changes — language and the provider list — take effect after restarting codeg.",
     "importConfirmAction": "Import",
     "restoreConfirmTitle": "Restore from remote?",
     "restoreConfirmBody": "The snapshot from {device}, taken {time}, will be applied to this machine. Existing entries that the snapshot does not mention are kept.",
@@ -5474,7 +5476,8 @@
       "quickMessages": "{count, plural, one {# quick message} other {# quick messages}}",
       "taskTemplates": "{count, plural, one {# task template} other {# task templates}}",
       "preferences": "{count, plural, one {# preference} other {# preferences}}",
-      "assistants": "{count, plural, one {# assistant} other {# assistants}}"
+      "assistants": "{count, plural, one {# assistant} other {# assistants}}",
+      "appearance": "{count, plural, one {# appearance setting} other {# appearance settings}}"
     },
     "rollbackTitle": "Undo an import",
     "rollbackHint": "Every import and every restore saves what this machine looked like beforehand. The last ten are kept.",
@@ -5491,7 +5494,17 @@
     "passphraseKeep": "Leave empty to keep the saved passphrase",
     "passphrasePlaceholder": "Encryption passphrase",
     "passphraseHint": "Kept in this machine's keychain and never uploaded. Enter the same passphrase on your other machines.",
-    "assistantsRenamed": "{count, plural, one {# assistant was renamed: one here already had its name.} other {# assistants were renamed: ones here already had their names.}}"
+    "assistantsRenamed": "{count, plural, one {# assistant was renamed: one here already had its name.} other {# assistants were renamed: ones here already had their names.}}",
+    "conflictTitle": "Automatic upload is paused",
+    "conflictBody": "The server holds a snapshot from {device}, taken {time}, that this machine has not restored. Uploading would replace it, and the server keeps no earlier copy.",
+    "conflictRestore": "Restore it",
+    "conflictOverwrite": "Replace it with this machine's",
+    "conflictUnknownDevice": "an unknown machine",
+    "conflictChanged": "The snapshot on the server changed again. Check the new one before replacing it.",
+    "overwriteConfirmTitle": "Replace the snapshot on the server?",
+    "overwriteConfirmBody": "The snapshot from {device}, taken {time}, will be replaced with this machine's configuration. The server keeps no earlier copy, so that machine's settings can only be recovered from that machine.",
+    "overwriteConfirmAction": "Replace",
+    "lastPulledAt": "Last restored {time}"
   },
   "backup": {
     "restore": {

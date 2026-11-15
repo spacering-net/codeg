@@ -5402,15 +5402,17 @@
       "customAgents": "사용자 지정 에이전트",
       "quickMessages": "빠른 메시지",
       "taskTemplates": "작업 템플릿",
-      "preferences": "앱 기본 설정(언어, 테마, 토글)",
-      "assistants": "어시스턴트"
+      "preferences": "앱 기본 설정(언어, 토글)",
+      "assistants": "어시스턴트",
+      "appearance": "모양(라이트/다크 모드, 테마 색상, 확대/축소, 글꼴, 배경 설정, 사용자 지정 스타일)"
     },
     "scopeExcluded": {
       "conversations": "대화 기록",
       "uploads": "업로드한 파일과 이미지",
       "workspaces": "워크스페이스 프로젝트와 경로",
       "mcp": "MCP 서버(각 CLI가 관리)",
-      "credentials": "로그인 자격 증명과 토큰"
+      "credentials": "로그인 자격 증명과 토큰",
+      "backgroundImage": "배경 이미지 파일 자체(각 기기에 그대로 남음)"
     },
     "fileTitle": "설정 파일",
     "exportButton": "파일로 내보내기",
@@ -5439,7 +5441,7 @@
     "profile": "프로필",
     "profileHint": "같은 프로필을 쓰는 기기는 하나의 설정을 공유합니다. 업무용과 개인용을 나누려면 프로필을 다르게 지정하세요.",
     "autoSyncLabel": "자동 업로드",
-    "autoSyncHint": "주기적으로 확인하고 설정이 바뀜을 때만 업로드합니다.",
+    "autoSyncHint": "주기적으로 확인하고 설정이 바뀌었을 때만 업로드합니다. 다른 기기가 업로드한 스냅샷은 복원하거나 교체를 선택하기 전까지 덮어쓰지 않습니다.",
     "intervalLabel": "확인 주기",
     "intervalOption": "{minutes}분마다",
     "saveButton": "저장",
@@ -5460,7 +5462,7 @@
     "plaintextWarning": "스냅샷은 암호화되지 않은 상태로 업로드되며 API 키를 포함합니다. 본인만 접근할 수 있는 WebDAV 서버를 사용하세요. 동기화 자격 증명 자체는 스냅샷에 포함되지 않습니다.",
     "importConfirmTitle": "설정을 가져올까요?",
     "importConfirmBody": "파일의 항목이 이 기기에 추가되거나 업데이트됩니다. 파일에 없는 기존 항목은 유지됩니다.",
-    "restartHint": "모양, 언어, 공급자 목록 등 일부 변경 사항은 codeg를 다시 시작한 뒤에 적용됩니다.",
+    "restartHint": "언어, 공급자 목록 등 일부 변경 사항은 codeg를 다시 시작한 뒤에 적용됩니다.",
     "importConfirmAction": "가져오기",
     "restoreConfirmTitle": "원격에서 복원할까요?",
     "restoreConfirmBody": "{device}에서 {time}에 만든 스냅샷을 이 기기에 적용합니다. 스냅샷에 없는 기존 항목은 유지됩니다.",
@@ -5474,7 +5476,8 @@
       "quickMessages": "빠른 메시지 {count}개",
       "taskTemplates": "작업 템플릿 {count}개",
       "preferences": "앱 환경설정 {count}개",
-      "assistants": "어시스턴트 {count}개"
+      "assistants": "어시스턴트 {count}개",
+      "appearance": "모양 설정 {count}개"
     },
     "rollbackTitle": "가져오기 되돌리기",
     "rollbackHint": "가져오기와 복원을 할 때마다 직전의 이 기기 설정을 저장합니다. 최근 10개가 남습니다.",
@@ -5491,7 +5494,17 @@
     "passphraseKeep": "비워 두면 저장된 암호구를 사용합니다",
     "passphrasePlaceholder": "암호화 암호구",
     "passphraseHint": "이 기기의 키체인에만 저장되며 업로드되지 않습니다. 다른 기기에도 같은 암호구를 입력하세요.",
-    "assistantsRenamed": "이 기기에 같은 이름의 어시스턴트가 있어 {count}개의 이름을 바꿨습니다."
+    "assistantsRenamed": "이 기기에 같은 이름의 어시스턴트가 있어 {count}개의 이름을 바꿨습니다.",
+    "conflictTitle": "자동 업로드가 일시 중지되었습니다",
+    "conflictBody": "서버에 {device}에서 {time}에 만든 스냅샷이 있으며 이 기기에서는 아직 복원하지 않았습니다. 업로드하면 이 스냅샷이 교체되며 서버에는 이전 사본이 남지 않습니다.",
+    "conflictRestore": "복원",
+    "conflictOverwrite": "이 기기의 설정으로 교체",
+    "conflictUnknownDevice": "알 수 없는 기기",
+    "conflictChanged": "서버의 스냅샷이 다시 바뀌었습니다. 교체하기 전에 새 스냅샷을 확인하세요.",
+    "overwriteConfirmTitle": "서버의 스냅샷을 교체할까요?",
+    "overwriteConfirmBody": "{device}에서 {time}에 만든 스냅샷이 이 기기의 설정으로 교체됩니다. 서버에는 이전 사본이 남지 않으므로 그 기기의 설정은 그 기기에서만 되찾을 수 있습니다.",
+    "overwriteConfirmAction": "교체",
+    "lastPulledAt": "마지막 복원: {time}"
   },
   "backup": {
     "restore": {

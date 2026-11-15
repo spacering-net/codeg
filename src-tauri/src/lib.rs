@@ -2400,6 +2400,7 @@ mod tauri_app {
                 config_sync::config_sync_import_content,
                 config_sync::config_sync_list_rollbacks,
                 config_sync::config_sync_apply_rollback,
+                config_sync::config_sync_mirror_appearance,
                 backup::backup_create,
                 backup::backup_prepare_source,
                 backup::backup_release_source,
