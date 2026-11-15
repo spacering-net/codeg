@@ -113,6 +113,7 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
             .and_then(|s| serde_json::from_str(s).ok()),
         latest_progress: None,
         compacting: false,
+        background_wait: None,
         created_at: m.created_at,
         updated_at: m.updated_at,
         started_at: m.started_at,
@@ -154,6 +155,37 @@ pub async fn record_event<C: ConnectionTrait>(
     };
     active.insert(conn).await?;
     Ok(())
+}
+
+/// The payload of generation `run_seq`'s `background_wait` when no
+/// `background_wait_end` followed it: the engine was holding that run open for
+/// its agent's background work when the process went away. `None` when the
+/// generation never waited, or its wait was closed.
+pub async fn open_background_wait(
+    conn: &DatabaseConnection,
+    task_id: i32,
+    run_seq: i32,
+) -> Result<Option<serde_json::Value>, DbError> {
+    let events = work_task_event::Entity::find()
+        .filter(work_task_event::Column::TaskId.eq(task_id))
+        .filter(work_task_event::Column::Kind.is_in(["background_wait", "background_wait_end"]))
+        .order_by_desc(work_task_event::Column::Id)
+        .all(conn)
+        .await?;
+    for e in events {
+        let Some(payload) = e
+            .payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+        else {
+            continue;
+        };
+        if payload.get("run_seq").and_then(serde_json::Value::as_i64) != Some(run_seq as i64) {
+            continue;
+        }
+        return Ok((e.kind == "background_wait").then_some(payload));
+    }
+    Ok(None)
 }
 
 async fn status_changed_event<C: ConnectionTrait>(
@@ -221,9 +253,12 @@ pub async fn list(
     if !live_ids.is_empty() {
         let events = work_task_event::Entity::find()
             .filter(work_task_event::Column::TaskId.is_in(live_ids))
-            .filter(
-                work_task_event::Column::Kind.is_in(["agent_progress", "context_compact"]),
-            )
+            .filter(work_task_event::Column::Kind.is_in([
+                "agent_progress",
+                "context_compact",
+                "background_wait",
+                "background_wait_end",
+            ]))
             .order_by_asc(work_task_event::Column::Id)
             .all(conn)
             .await?;
@@ -237,6 +272,10 @@ pub async fn list(
         let mut latest: std::collections::HashMap<i32, String> = std::collections::HashMap::new();
         let mut compacting: std::collections::HashMap<i32, bool> =
             std::collections::HashMap::new();
+        let mut waiting: std::collections::HashMap<
+            i32,
+            Option<crate::models::WorkTaskBackgroundWait>,
+        > = std::collections::HashMap::new();
         let by_id: std::collections::HashMap<i32, i32> =
             infos.iter().map(|t| (t.id, t.run_seq)).collect();
         for e in events {
@@ -277,6 +316,33 @@ pub async fn list(
                         payload.get("status").and_then(|s| s.as_str()) == Some("started");
                     compacting.insert(e.task_id, started);
                 }
+                // The engine opens a wait when the turn ends with work still
+                // running and closes it when it settles the run, so the last
+                // of the pair on this generation is the answer — as with the
+                // compaction above, and with the same tolerance for a lost
+                // closing write: the row's status still tells the truth.
+                "background_wait" => {
+                    let tasks = payload
+                        .get("tasks")
+                        .and_then(|t| t.as_array())
+                        .map(|tasks| {
+                            tasks
+                                .iter()
+                                .filter_map(|t| t.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    waiting.insert(
+                        e.task_id,
+                        Some(crate::models::WorkTaskBackgroundWait {
+                            since: e.created_at,
+                            tasks,
+                        }),
+                    );
+                }
+                "background_wait_end" => {
+                    waiting.insert(e.task_id, None);
+                }
                 _ => {}
             }
         }
@@ -285,6 +351,7 @@ pub async fn list(
                 t.latest_progress = Some(m.clone());
             }
             t.compacting = compacting.get(&t.id).copied().unwrap_or(false);
+            t.background_wait = waiting.get(&t.id).cloned().flatten();
         }
     }
     Ok(infos)

@@ -64,6 +64,7 @@ function renderRow(
     onFollowUp: noop,
     onEdit: noop,
     onSchedule: noop,
+    onStopBackgroundWait: noop,
     ...handlers,
   }
   return render(

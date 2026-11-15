@@ -592,6 +592,18 @@ pub async fn work_task_cancel_core(
     Ok(())
 }
 
+/// Stop waiting for the background work a running task's agent left going
+/// when its turn ended, and settle the task now: the engine holds such a run
+/// open until that work (and the agent's own follow-up to it) finishes, and
+/// this is the way out when it never will — a dev server, a watcher. The work
+/// still running ends with the agent's connection.
+pub async fn work_task_stop_background_wait_core(id: i32) -> Result<(), DbError> {
+    engine()?
+        .stop_background_wait(id)
+        .await
+        .map_err(DbError::Validation)
+}
+
 /// Dispatch the merge generation: the agent lands the task in its session and
 /// the outcome rides the `task://changed` events (merging → done, or back to
 /// review with a readable error). This awaits only the dispatch (validation +
@@ -1141,6 +1153,12 @@ pub async fn work_task_cancel(
     delete_worktree: Option<bool>,
 ) -> Result<(), DbError> {
     work_task_cancel_core(id, reason, delete_worktree.unwrap_or(false)).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_stop_background_wait(id: i32) -> Result<(), DbError> {
+    work_task_stop_background_wait_core(id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

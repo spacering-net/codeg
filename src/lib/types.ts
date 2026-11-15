@@ -2094,11 +2094,25 @@ export interface WorkTask {
    *  is working, but on shrinking the session rather than on the task. The one
    *  thing that explains a card sitting in 准备中 / 合并中 for minutes. */
   compacting?: boolean
+  /** This generation's turn has ended but the agent still has background work
+   *  going (a background shell, a monitor, the turn Claude Code starts on its
+   *  own to read their results, a delegation), so the engine holds the run
+   *  open instead of settling it — settling would end that work (mirrors Rust
+   *  WorkTaskBackgroundWait). Absent when not waiting. */
+  background_wait?: WorkTaskBackgroundWait | null
   created_at: string
   updated_at: string
   started_at: string | null
   settled_at: string | null
   finished_at: string | null
+}
+
+/** What a run held open past its turn's end is waiting for. */
+export interface WorkTaskBackgroundWait {
+  /** When the turn ended and the wait began. */
+  since: string
+  /** The work still running then, one short description each (a snapshot). */
+  tasks: string[]
 }
 
 /** Provenance snapshot of a forge-triggered task (mirrors Rust ForgeSourceMeta). */
