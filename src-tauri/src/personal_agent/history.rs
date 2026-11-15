@@ -1210,7 +1210,7 @@ fn marked_as_text(e: &str) -> String {
     e.replace(MARK_OPEN, "«").replace(MARK_CLOSE, "»")
 }
 
-fn link_text(title: &str) -> String {
+pub(super) fn link_text(title: &str) -> String {
     title
         .chars()
         .map(|c| match c {

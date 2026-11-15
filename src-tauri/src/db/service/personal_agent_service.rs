@@ -2753,6 +2753,15 @@ pub async fn create_dispatch(
     conn: &DatabaseConnection,
     new: NewDispatch,
 ) -> Result<dispatch::Model, DbError> {
+    create_dispatch_on(conn, new).await
+}
+
+/// [`create_dispatch`] on any connection — a transaction that writes what
+/// the dispatch is for with it.
+pub async fn create_dispatch_on<C: ConnectionTrait>(
+    conn: &C,
+    new: NewDispatch,
+) -> Result<dispatch::Model, DbError> {
     require_bot(new.bot_id)?;
     Ok(dispatch_active(new).insert(conn).await?)
 }

@@ -184,6 +184,13 @@ function dispatchIdsOf(rows: readonly TimelineRow[]): number[] {
   for (const r of rows) {
     if ((r.kind === "dispatch" || r.kind === "result") && r.dispatch_id) {
       ids.add(r.dispatch_id)
+    } else if (
+      // A check of a message (10.3): its card follows the check's work.
+      r.kind === "notice" &&
+      r.data?.notice === "check" &&
+      typeof r.data.dispatch_id === "number"
+    ) {
+      ids.add(r.data.dispatch_id)
     }
   }
   return [...ids]

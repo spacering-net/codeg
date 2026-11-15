@@ -779,21 +779,12 @@ impl PersonalAgentEngine {
                     .as_ref()
                     .is_none_or(|p| p.contains(&task.folder_id))
         };
-        if let Some((what, uid)) = team.division.get("check").and_then(|p| p.split_once(':')) {
-            let picked = match what {
-                "bot" => {
-                    let bots = svc::list_bots(&self.db.conn).await.unwrap_or_default();
-                    bots.iter()
-                        .find(|b| b.uid.as_deref() == Some(uid))
-                        .and_then(|b| b.executor_assistant_id)
-                        .and_then(|id| assistants.iter().find(|a| a.id == id))
-                }
-                "assistant" => assistants.iter().find(|a| a.uid == uid),
-                _ => None,
-            };
-            if let Some(a) = picked.filter(|a| takes(a)) {
-                return Some(a.clone());
-            }
+        if let Some(a) = self
+            .division_check_pick(&team, &assistants)
+            .await
+            .filter(|a| takes(a))
+        {
+            return Some(a.clone());
         }
         assistants
             .iter()
@@ -801,6 +792,29 @@ impl PersonalAgentEngine {
             .find(|a| a.agent_type != executor.agent_type)
             .or_else(|| assistants.iter().find(|a| takes(a)))
             .cloned()
+    }
+
+    /// The executor config the division picked to check work (10.5): a
+    /// work assistant's own, or one by itself; `None` for "auto", or a pick
+    /// that is not among `assistants` (gone, or turned off).
+    pub(super) async fn division_check_pick<'a>(
+        &self,
+        team: &crate::models::personal_agent_prefs::TeamSettings,
+        assistants: &'a [crate::models::assistant::AssistantInfo],
+    ) -> Option<&'a crate::models::assistant::AssistantInfo> {
+        let (what, uid) = team.division.get("check").and_then(|p| p.split_once(':'))?;
+        match what {
+            "bot" => {
+                let bots = svc::list_bots(&self.db.conn).await.unwrap_or_default();
+                let id = bots
+                    .iter()
+                    .find(|b| b.uid.as_deref() == Some(uid))
+                    .and_then(|b| b.executor_assistant_id)?;
+                assistants.iter().find(|a| a.id == id)
+            }
+            "assistant" => assistants.iter().find(|a| a.uid == uid),
+            _ => None,
+        }
     }
 
     /// Send the check out: a work session in the task's worktree, as the
@@ -878,7 +892,10 @@ impl PersonalAgentEngine {
 
     /// The work assistant whose executor config `checker` is, when the
     /// division picked it that way.
-    async fn checker_via(&self, checker: &crate::models::assistant::AssistantInfo) -> Value {
+    pub(super) async fn checker_via(
+        &self,
+        checker: &crate::models::assistant::AssistantInfo,
+    ) -> Value {
         let team = self.account().await.team;
         let Some(("bot", uid)) = team.division.get("check").and_then(|p| p.split_once(':')) else {
             return Value::Null;

@@ -2223,6 +2223,15 @@ preflight, the executor's own summary and the owner's words. Conclude it with
 - Work that is only a report has no check: read it against `done_when`
   yourself, and follow it up when it falls short.
 
+## Checking a message for the owner
+
+In their conversations the owner can have a message checked ("is this
+right?"): codeg hands it at once to another executor config — read only, with
+the message, what it answered and the conversation's link — and puts a check
+card in your conversation. You hear what the check found with your next
+delivery; there is nothing to do unless they ask. When they do, answer from
+the card's verdict and evidence, and point them at it.
+
 ## Open matters
 
 codeg keeps a ledger of open matters for you; every dispatch gets one

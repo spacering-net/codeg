@@ -1956,6 +1956,8 @@ mod tauri_app {
                 crate::commands::personal_agent::personal_agent_file_save,
                 crate::commands::personal_agent::personal_agent_file_delete,
                 crate::commands::personal_agent::personal_agent_skill_switch,
+                crate::commands::personal_agent::personal_agent_check_message,
+                crate::commands::personal_agent::personal_agent_checks,
                 crate::commands::personal_agent::personal_agent_set_workdir,
                 conversation_tags::list_conversation_tags,
                 conversation_tags::create_conversation_tag,

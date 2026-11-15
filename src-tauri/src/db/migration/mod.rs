@@ -76,6 +76,7 @@ mod m20261120_000001_personal_agent_profile;
 mod m20261121_000001_personal_agent_pr_auto;
 mod m20261122_000001_personal_agent_plan;
 mod m20261123_000001_personal_agent_work_kind;
+mod m20261124_000001_personal_agent_check;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -158,6 +159,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261121_000001_personal_agent_pr_auto::Migration),
             Box::new(m20261122_000001_personal_agent_plan::Migration),
             Box::new(m20261123_000001_personal_agent_work_kind::Migration),
+            Box::new(m20261124_000001_personal_agent_check::Migration),
         ]
     }
 }

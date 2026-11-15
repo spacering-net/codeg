@@ -16176,7 +16176,10 @@ async fn until_step(
             .into_iter()
             .find(|s| s.seq == seq)
         {
-            if s.state == want {
+            // A step is claimed (running) before it is sent: under way is
+            // once its message or dispatch is written too.
+            let sent = s.message_id.is_some() || s.dispatch_id.is_some();
+            if s.state == want && (want != StepState::Running || sent) {
                 return s;
             }
         }
@@ -18442,4 +18445,691 @@ async fn switched_off_a_queued_tidy_up_is_let_go_and_one_running_is_kept_aside()
     );
     let card = cards_of(&engine, "tidy").await.remove(0);
     assert_eq!(data_of(&card)["state"], "draft");
+}
+
+// ── 3.5: "is this right?" (10.3) ─────────────────────────────────────────────
+
+/// An executor config running `agent`.
+async fn typed_assistant(engine: &PersonalAgentEngine, name: &str, agent: AgentType) -> i32 {
+    crate::db::service::assistant_service::create(
+        &engine.db.conn,
+        &crate::models::AssistantDraft {
+            name: name.into(),
+            description: "reads code".into(),
+            avatar: crate::models::AssistantAvatar::Monogram {
+                color: "green".into(),
+            },
+            agent_config: brain(agent),
+            instructions: "Cite lines.".into(),
+            enabled: true,
+        },
+    )
+    .await
+    .unwrap()
+    .id
+}
+
+/// Every slot taken: what is handed out waits in the queue (nothing is
+/// started in a test).
+async fn slots_taken(engine: &PersonalAgentEngine, by: i32) {
+    for i in 0..crate::models::personal_agent::DEFAULT_DISPATCH_CONCURRENCY {
+        let busy = svc::create_dispatch(
+            &engine.db.conn,
+            NewDispatch {
+                bot_id: engine.bot().await,
+                mode: DispatchMode::Chat,
+                executor_assistant_id: by,
+                executor_snapshot_json: "{}".into(),
+                folder_id: None,
+                deliverable: None,
+                title: format!("busy {i}"),
+                prompt: "busy".into(),
+                origin_batch_id: None,
+                on_done: None,
+                lineage: Default::default(),
+                done_when: None,
+                pr_fix: None,
+                kind: None,
+            },
+        )
+        .await
+        .unwrap();
+        svc::update_dispatch(
+            &engine.db.conn,
+            busy.id,
+            None,
+            DispatchWrite {
+                state: Some(DispatchState::Running),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+}
+
+fn check_of(
+    conversation_id: i32,
+    message: &str,
+    quote: Option<&str>,
+    again: bool,
+) -> crate::models::personal_agent::MessageCheckRequest {
+    crate::models::personal_agent::MessageCheckRequest {
+        conversation_id,
+        message: message.into(),
+        asked: Some("Does the build pass?".into()),
+        quote: quote.map(str::to_string),
+        again,
+    }
+}
+
+async fn check_card(
+    engine: &PersonalAgentEngine,
+    check_id: i32,
+) -> crate::db::entities::personal_agent_timeline::Model {
+    cards_of(engine, "check")
+        .await
+        .into_iter()
+        .find(|r| data_of(r)["check_id"] == check_id)
+        .expect("its card")
+}
+
+#[tokio::test]
+async fn a_message_is_checked_by_another_agent_and_its_verdict_marks_it_and_reaches_the_card() {
+    use crate::db::entities::personal_agent_check::{FactCheckState, FactVerdict};
+    let (engine, tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let same = typed_assistant(&engine, "Codex reviewer", AgentType::Codex).await;
+    let other = typed_assistant(&engine, "Claude checker", AgentType::ClaudeCode).await;
+    slots_taken(&engine, same).await;
+    let project =
+        crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy())
+            .await;
+    let conv = crate::db::service::conversation_service::create(
+        conn,
+        project,
+        AgentType::Codex,
+        Some("Fix the build".into()),
+        None,
+    )
+    .await
+    .unwrap()
+    .id;
+    // The division names one of the conversation's own agent: skipped.
+    engine
+        .apply_settings(&[change(
+            "team.division.check",
+            json!(format!("assistant:{}", uid_of(&engine, same).await)),
+        )])
+        .await
+        .unwrap();
+    let message = "The build passes now.\r\nI changed src/build.rs.\n";
+
+    let first = engine
+        .check_message(check_of(conv, message, None, false))
+        .await
+        .unwrap();
+    assert_eq!(first.state, FactCheckState::Checking);
+    assert_eq!(first.executor.as_deref(), Some("Claude checker"));
+    assert_eq!(
+        first.message_fp,
+        super::fact_check::fingerprint("The build passes now.\nI changed src/build.rs.")
+    );
+    assert_eq!(first.quote_fp, "");
+    // A read-only work session where the conversation is, as the primary,
+    // with the three things.
+    let d = svc::get_dispatch(conn, first.dispatch_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (d.mode, d.state, d.folder_id),
+        (DispatchMode::Session, DispatchState::Queued, Some(project))
+    );
+    assert_eq!(d.executor_assistant_id, other);
+    assert_eq!(d.bot_id, Some(engine.bot().await));
+    assert_eq!(d.kind.as_deref(), Some("check"));
+    assert!(
+        d.title.starts_with("Check: The build passes now."),
+        "{}",
+        d.title
+    );
+    for want in [
+        "READ-ONLY",
+        "I changed src/build.rs.",
+        "Does the build pass?",
+        &format!("[Fix the build](codeg://session/{conv})"),
+        "VERDICT: TRUE | FALSE | PARTLY | UNSURE",
+    ] {
+        assert!(d.prompt.contains(want), "{want}\n---\n{}", d.prompt);
+    }
+    // Its card, being checked; nothing for the owner to answer.
+    let card = check_card(&engine, first.id).await;
+    assert_eq!(Some(card.id), first.row_id);
+    assert_eq!(data_of(&card)["state"], "checking");
+    assert_eq!(data_of(&card)["executor"], "Claude checker");
+    assert_eq!(data_of(&card)["conversation_title"], "Fix the build");
+    assert!(
+        card.body
+            .starts_with("Checking a message of \"Fix the build\""),
+        "{}",
+        card.body
+    );
+    let notice = svc::get_notice(conn, first.notice_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(notice.state, NoticeState::Acted);
+    // Asked again while it runs, even "again": the same check.
+    for again in [false, true] {
+        let same_one = engine
+            .check_message(check_of(conv, message, None, again))
+            .await
+            .unwrap();
+        assert_eq!(same_one.id, first.id);
+    }
+    assert_eq!(
+        svc::list_dispatches(conn, engine.bot().await, &[DispatchState::Queued], None, 50)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Back: false, with its evidence. The card says so, the conversation's
+    // checks mark the message, the brain hears it with its next delivery.
+    finish_check(
+        &engine,
+        d.id,
+        "Read it.\nVERDICT: FALSE\n- evidence: src/build.rs:3 still fails, `cargo build` exit 101",
+    )
+    .await;
+    let checks = crate::commands::personal_agent::personal_agent_checks_core(&engine.db, conv)
+        .await
+        .unwrap();
+    assert_eq!(checks.len(), 1);
+    let done = &checks[0];
+    assert_eq!(
+        (done.id, done.state, done.verdict),
+        (first.id, FactCheckState::Done, Some(FactVerdict::False))
+    );
+    assert!(done.evidence.as_deref().unwrap().contains("src/build.rs:3"));
+    assert_eq!(done.row_id, first.row_id);
+    let card = check_card(&engine, first.id).await;
+    assert_eq!(data_of(&card)["state"], "done");
+    assert_eq!(data_of(&card)["verdict"], "false");
+    assert_eq!(
+        data_of(&card)["executor"],
+        "Claude checker",
+        "what it had stays"
+    );
+    assert_eq!(card.body, "Checked a message of \"Fix the build\": FALSE");
+    let told = svc::events_in_flight(conn, super::fact_check::CHECK_EVENT)
+        .await
+        .unwrap();
+    assert_eq!(told.len(), 1);
+    assert!(!told[0].wake);
+    assert!(
+        told[0].summary.contains("FALSE")
+            && told[0].summary.contains(&format!("codeg://session/{conv}")),
+        "{}",
+        told[0].summary
+    );
+    // The same check's end again tells nothing more.
+    let d = svc::get_dispatch(conn, d.id).await.unwrap().unwrap();
+    engine.record_progress(&d, None, None, "turn").await;
+    assert_eq!(
+        svc::events_in_flight(conn, super::fact_check::CHECK_EVENT)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // The same message again: the last conclusion, no new check.
+    let again = engine
+        .check_message(check_of(
+            conv,
+            " The build passes now.\nI changed src/build.rs.",
+            None,
+            false,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        (again.id, again.verdict),
+        (first.id, Some(FactVerdict::False))
+    );
+    // [Check again]: a new check, a new card.
+    let anew = engine
+        .check_message(check_of(conv, message, None, true))
+        .await
+        .unwrap();
+    assert_ne!(anew.id, first.id);
+    assert_eq!(anew.state, FactCheckState::Checking);
+    assert_ne!(anew.row_id, first.row_id);
+    // The old card's [Check again] while that one runs: that one.
+    let row = engine
+        .act_on_notice_with(first.notice_id.unwrap(), "recheck", None)
+        .await
+        .unwrap();
+    assert_eq!(Some(row.id), anew.row_id);
+    let checks = crate::commands::personal_agent::personal_agent_checks_core(&engine.db, conv)
+        .await
+        .unwrap();
+    assert_eq!(
+        checks.iter().map(|c| c.id).collect::<Vec<_>>(),
+        vec![anew.id],
+        "the latest of each message"
+    );
+}
+
+#[tokio::test]
+async fn a_sentence_is_its_own_check_and_a_check_that_did_not_finish_says_why() {
+    use crate::db::entities::personal_agent_check::{FactCheckState, FactVerdict};
+    let (engine, tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let checker = typed_assistant(&engine, "Claude checker", AgentType::ClaudeCode).await;
+    slots_taken(&engine, checker).await;
+    let project =
+        crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy())
+            .await;
+    let conv =
+        crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::ClaudeCode)
+            .await;
+    let message = "It builds. The tests pass.";
+
+    // Only one of the conversation's own agent: it checks all the same.
+    let whole = engine
+        .check_message(check_of(conv, message, None, false))
+        .await
+        .unwrap();
+    assert_eq!(whole.executor.as_deref(), Some("Claude checker"));
+    let sentence = engine
+        .check_message(check_of(conv, message, Some("The tests pass."), false))
+        .await
+        .unwrap();
+    assert_ne!(sentence.id, whole.id);
+    assert_eq!(sentence.message_fp, whole.message_fp);
+    assert_eq!(
+        sentence.quote_fp,
+        super::fact_check::fingerprint("The tests pass.")
+    );
+    let d = svc::get_dispatch(conn, sentence.dispatch_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        d.prompt
+            .contains("<<<SENTENCE\nThe tests pass.\nSENTENCE>>>"),
+        "{}",
+        d.prompt
+    );
+    assert!(d.title.contains("The tests pass."), "{}", d.title);
+    assert!(check_card(&engine, sentence.id)
+        .await
+        .body
+        .starts_with("Checking a sentence"));
+
+    // A verdict with nothing to show for it is unsure, and says why.
+    finish_check(&engine, d.id, "VERDICT: TRUE").await;
+    let c = crate::db::service::personal_agent_check_service::get(conn, sentence.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (c.state, c.verdict),
+        (FactCheckState::Done, Some(FactVerdict::Unsure))
+    );
+    assert_eq!(c.note.as_deref(), Some("no_evidence"));
+
+    // The whole message's check failed: it did not finish, and why.
+    svc::update_dispatch(
+        conn,
+        whole.dispatch_id.unwrap(),
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Failed),
+            error: Some(Some("the agent would not start".into())),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    // Nothing heard its end (codeg went down): the reconcile tick settles it.
+    engine.check_tick().await;
+    let c = crate::db::service::personal_agent_check_service::get(conn, whole.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((c.state, c.verdict), (FactCheckState::Failed, None));
+    assert_eq!(c.note.as_deref(), Some("failed:the agent would not start"));
+    let card = check_card(&engine, whole.id).await;
+    assert_eq!(data_of(&card)["state"], "failed");
+    assert_eq!(card.body, "The check of a message did not finish");
+    // Checked again, and cut off by a restart.
+    let anew = engine
+        .check_message(check_of(conv, message, None, true))
+        .await
+        .unwrap();
+    let d = svc::update_dispatch(
+        conn,
+        anew.dispatch_id.unwrap(),
+        None,
+        DispatchWrite {
+            state: Some(DispatchState::Interrupted),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    engine.record_progress(&d, None, None, "boot").await;
+    let c = crate::db::service::personal_agent_check_service::get(conn, anew.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(c.state, FactCheckState::Failed);
+    assert_eq!(c.note.as_deref(), Some("restarted"));
+    // The brain heard each, none woke it.
+    let told = svc::events_in_flight(conn, super::fact_check::CHECK_EVENT)
+        .await
+        .unwrap();
+    assert_eq!(told.len(), 3);
+    assert!(told.iter().all(|e| !e.wake));
+}
+
+#[tokio::test]
+async fn a_chat_is_checked_in_a_chat_and_nobody_to_check_it_is_said_at_once() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let checker = typed_assistant(&engine, "Claude checker", AgentType::ClaudeCode).await;
+    slots_taken(&engine, checker).await;
+    let folder = crate::db::test_helpers::seed_folder(
+        &engine.db,
+        &tmp.path().join("chat").to_string_lossy(),
+    )
+    .await;
+    let row = crate::db::entities::folder::Entity::find_by_id(folder)
+        .one(conn)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut am: crate::db::entities::folder::ActiveModel = row.into();
+    am.kind = Set(crate::db::entities::folder::FolderKind::Chat);
+    am.update(conn).await.unwrap();
+    let conv =
+        crate::db::test_helpers::seed_conversation(&engine.db, folder, AgentType::Codex).await;
+
+    let c = engine
+        .check_message(check_of(conv, "Rust 1.0 came out in 2015.", None, false))
+        .await
+        .unwrap();
+    let d = svc::get_dispatch(conn, c.dispatch_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((d.mode, d.folder_id), (DispatchMode::Chat, None));
+    assert!(!d.prompt.contains("working directory"), "{}", d.prompt);
+
+    // Nobody may take it: refused at once, nothing made.
+    engine
+        .apply_settings(&[change(
+            &format!("team.usage.{}", uid_of(&engine, checker).await),
+            json!({ "dispatch": false }),
+        )])
+        .await
+        .unwrap();
+    let err = engine
+        .check_message(check_of(conv, "Another claim.", None, false))
+        .await
+        .unwrap_err();
+    assert!(err.contains("no executor config can check it"), "{err}");
+    assert!(engine
+        .check_message(check_of(conv, "  \n ", None, false))
+        .await
+        .is_err());
+    assert!(engine
+        .check_message(check_of(9_999, "A claim.", None, false))
+        .await
+        .is_err());
+    let checks = crate::commands::personal_agent::personal_agent_checks_core(&engine.db, conv)
+        .await
+        .unwrap();
+    assert_eq!(checks.len(), 1);
+}
+
+/// Put check `id`'s last change `secs` seconds back (it ended a while ago).
+async fn check_aged(engine: &PersonalAgentEngine, id: i32, secs: i64) {
+    use sea_orm::{ActiveModelTrait, Set};
+    let c = crate::db::service::personal_agent_check_service::get(&engine.db.conn, id)
+        .await
+        .unwrap()
+        .unwrap();
+    let at = c.updated_at - chrono::Duration::seconds(secs);
+    let mut am: crate::db::entities::personal_agent_check::ActiveModel = c.into();
+    am.updated_at = Set(at);
+    am.update(&engine.db.conn).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_restart_between_a_checks_end_and_its_telling_tells_it_after_once() {
+    use crate::db::entities::personal_agent_check::{FactCheckState, FactVerdict};
+    use crate::db::service::personal_agent_check_service::{self as csvc, Settled};
+    let (engine, tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let checker = typed_assistant(&engine, "Claude checker", AgentType::ClaudeCode).await;
+    slots_taken(&engine, checker).await;
+    let project =
+        crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy())
+            .await;
+    let conv =
+        crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    let c = engine
+        .check_message(check_of(conv, "It builds.", None, false))
+        .await
+        .unwrap();
+
+    // Settled, and codeg went down before anything was told.
+    let done = csvc::settle(
+        conn,
+        c.id,
+        Settled {
+            state: FactCheckState::Done,
+            verdict: Some(FactVerdict::False),
+            evidence: Some("- build.rs:3".into()),
+            note: None,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(done.told_at.is_none());
+    assert_eq!(
+        data_of(&check_card(&engine, c.id).await)["state"],
+        "checking"
+    );
+    // Just ended: the path that settled it tells it.
+    engine.check_tick().await;
+    assert!(svc::events_in_flight(conn, super::fact_check::CHECK_EVENT)
+        .await
+        .unwrap()
+        .is_empty());
+    // A while after: told now — the card, the brain — and only once.
+    check_aged(&engine, c.id, 120).await;
+    engine.check_tick().await;
+    let card = check_card(&engine, c.id).await;
+    assert_eq!(
+        (
+            data_of(&card)["state"].clone(),
+            data_of(&card)["verdict"].clone()
+        ),
+        (json!("done"), json!("false"))
+    );
+    let told = svc::events_in_flight(conn, super::fact_check::CHECK_EVENT)
+        .await
+        .unwrap();
+    assert_eq!(told.len(), 1);
+    assert!(!told[0].wake);
+    assert!(csvc::get(conn, c.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .told_at
+        .is_some());
+    check_aged(&engine, c.id, 120).await;
+    engine.check_tick().await;
+    assert_eq!(
+        svc::events_in_flight(conn, super::fact_check::CHECK_EVENT)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(cards_of(&engine, "check").await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_card_raised_and_not_linked_before_a_restart_is_the_one_its_check_ends_on() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let checker = typed_assistant(&engine, "Claude checker", AgentType::ClaudeCode).await;
+    slots_taken(&engine, checker).await;
+    let project =
+        crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy())
+            .await;
+    let conv =
+        crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    let c = engine
+        .check_message(check_of(conv, "It builds.", None, false))
+        .await
+        .unwrap();
+    let card_id = c.row_id.unwrap();
+
+    // The card raised, the restart before it was linked (or moved past open).
+    let row = crate::db::service::personal_agent_check_service::get(conn, c.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut am: crate::db::entities::personal_agent_check::ActiveModel = row.into();
+    am.notice_id = Set(None);
+    am.update(conn).await.unwrap();
+    let notice = svc::get_notice(conn, c.notice_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let mut am: crate::db::entities::personal_agent_notice::ActiveModel = notice.into();
+    am.state = Set(NoticeState::Open);
+    am.update(conn).await.unwrap();
+    // The page still finds its card.
+    let views = crate::commands::personal_agent::personal_agent_checks_core(&engine.db, conv)
+        .await
+        .unwrap();
+    assert_eq!(views[0].row_id, Some(card_id));
+    assert_eq!(views[0].notice_id, c.notice_id);
+
+    // It ends: on that card, linked now; no second card.
+    finish_check(
+        &engine,
+        c.dispatch_id.unwrap(),
+        "VERDICT: TRUE\n- evidence: `cargo build` exit 0",
+    )
+    .await;
+    let cards = cards_of(&engine, "check").await;
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].id, card_id);
+    assert_eq!(data_of(&cards[0])["verdict"], "true");
+    let row = crate::db::service::personal_agent_check_service::get(conn, c.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.notice_id, c.notice_id);
+    assert_eq!(
+        svc::get_notice(conn, c.notice_id.unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        NoticeState::Acted
+    );
+    // Its card's [Check again] still works.
+    let again = engine
+        .act_on_notice_with(c.notice_id.unwrap(), "recheck", None)
+        .await
+        .unwrap();
+    assert_ne!(again.id, card_id);
+    assert_eq!(cards_of(&engine, "check").await.len(), 2);
+}
+
+#[tokio::test]
+async fn a_check_whose_card_could_not_be_written_is_not_marked_told_and_is_told_later() {
+    use sea_orm::IntoActiveModel;
+    let (engine, tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let checker = typed_assistant(&engine, "Claude checker", AgentType::ClaudeCode).await;
+    slots_taken(&engine, checker).await;
+    let project =
+        crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy())
+            .await;
+    let conv =
+        crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
+    let c = engine
+        .check_message(check_of(conv, "It builds.", None, false))
+        .await
+        .unwrap();
+    let card_id = c.row_id.unwrap();
+
+    // Its card's row cannot be read when the check ends (gone for the moment).
+    let held = crate::db::entities::personal_agent_timeline::Entity::find_by_id(card_id)
+        .one(conn)
+        .await
+        .unwrap()
+        .unwrap();
+    crate::db::entities::personal_agent_timeline::Entity::delete_by_id(card_id)
+        .exec(conn)
+        .await
+        .unwrap();
+    finish_check(
+        &engine,
+        c.dispatch_id.unwrap(),
+        "VERDICT: FALSE\n- evidence: build.rs:3",
+    )
+    .await;
+    let row = crate::db::service::personal_agent_check_service::get(conn, c.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.state,
+        crate::db::entities::personal_agent_check::FactCheckState::Done
+    );
+    assert!(row.told_at.is_none(), "its card was not written: not told");
+
+    // Back again: the next look writes the card and marks it told; the
+    // brain's event is still the one.
+    let mut back = held.into_active_model();
+    back.id = sea_orm::ActiveValue::Set(card_id);
+    crate::db::entities::personal_agent_timeline::Entity::insert(back)
+        .exec(conn)
+        .await
+        .unwrap();
+    check_aged(&engine, c.id, 120).await;
+    engine.check_tick().await;
+    let card = check_card(&engine, c.id).await;
+    assert_eq!(card.id, card_id);
+    assert_eq!(data_of(&card)["verdict"], "false");
+    let row = crate::db::service::personal_agent_check_service::get(conn, c.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.told_at.is_some());
+    assert_eq!(
+        svc::events_in_flight(conn, super::fact_check::CHECK_EVENT)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }

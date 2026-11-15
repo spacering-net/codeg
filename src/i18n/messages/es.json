@@ -10696,5 +10696,57 @@
       "install": "Instalar",
       "dismiss": "Esta no"
     }
+  },
+  "MessageCheck": {
+    "action": "Que el asistente lo compruebe",
+    "selection": "Comprobar",
+    "verdict": {
+      "true": "Cierto",
+      "false": "No es cierto",
+      "partly": "En parte cierto",
+      "unsure": "No se puede saber"
+    },
+    "checking": "Comprobando…",
+    "unfinished": "Sin terminar",
+    "mark": "Comprobado: {verdict}",
+    "markQuote": "«{quote}»: {verdict}",
+    "by": "Lo comprobó {executor}",
+    "again": "Comprobar de nuevo",
+    "inAssistant": "Ver en la conversación del asistente",
+    "process": "Ver la comprobación",
+    "openConversation": "Abrir la conversación",
+    "sent": "{executor} lo está comprobando; el resultado aparecerá bajo el mensaje.",
+    "sentNoName": "Comprobándolo; el resultado aparecerá bajo el mensaje.",
+    "startFailed": "No se pudo empezar a comprobar: {message}",
+    "evidence": "Pruebas",
+    "noEvidence": "No dio pruebas.",
+    "checkedMessage": "El mensaje comprobado",
+    "checkedSentence": "La frase comprobada",
+    "asked": "Respondía a",
+    "note": {
+      "no_verdict": "La comprobación no dio veredicto.",
+      "no_evidence": "Dio un veredicto sin pruebas, así que cuenta como no se puede saber.",
+      "restarted": "codeg se reinició mientras se ejecutaba.",
+      "stopped": "Se detuvo.",
+      "taken_over": "Tomaste su sesión.",
+      "failed": "Falló: {error}"
+    },
+    "heading": {
+      "checking": "Comprobando un mensaje",
+      "done": "Resultado de la comprobación",
+      "failed": "Comprobación sin terminar"
+    },
+    "cardLine": {
+      "checking": "Comprobando un mensaje de {title}",
+      "checkingSentence": "Comprobando una frase de {title}",
+      "done": "Comprobado un mensaje de {title}: {verdict}",
+      "doneSentence": "Comprobada una frase de {title}: {verdict}",
+      "failed": "La comprobación de un mensaje de {title} no terminó",
+      "failedSentence": "La comprobación de una frase de {title} no terminó"
+    },
+    "titleQuoted": "«{title}»",
+    "untitled": "una conversación",
+    "expand": "Ver todo",
+    "collapse": "Ver menos"
   }
 }

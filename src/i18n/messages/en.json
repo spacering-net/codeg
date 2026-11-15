@@ -10696,5 +10696,57 @@
       "install": "Install",
       "dismiss": "Not this one"
     }
+  },
+  "MessageCheck": {
+    "action": "Have the assistant check this",
+    "selection": "Check",
+    "verdict": {
+      "true": "True",
+      "false": "Not true",
+      "partly": "Partly true",
+      "unsure": "Can't tell"
+    },
+    "checking": "Checking…",
+    "unfinished": "Not finished",
+    "mark": "Check: {verdict}",
+    "markQuote": "“{quote}”: {verdict}",
+    "by": "Checked by {executor}",
+    "again": "Check again",
+    "inAssistant": "View in the assistant's conversation",
+    "process": "See the check",
+    "openConversation": "Open the conversation",
+    "sent": "{executor} is checking it; the result shows under the message.",
+    "sentNoName": "Checking it; the result shows under the message.",
+    "startFailed": "The check could not start: {message}",
+    "evidence": "Evidence",
+    "noEvidence": "No evidence given.",
+    "checkedMessage": "The message checked",
+    "checkedSentence": "The sentence checked",
+    "asked": "It answered",
+    "note": {
+      "no_verdict": "The check gave no verdict.",
+      "no_evidence": "The check gave a verdict but no evidence, so it counts as can't tell.",
+      "restarted": "codeg restarted while it ran.",
+      "stopped": "It was stopped.",
+      "taken_over": "You took its session over.",
+      "failed": "It failed: {error}"
+    },
+    "heading": {
+      "checking": "Checking a message",
+      "done": "Check result",
+      "failed": "Check not finished"
+    },
+    "cardLine": {
+      "checking": "Checking a message in {title}",
+      "checkingSentence": "Checking a sentence in {title}",
+      "done": "Checked a message in {title}: {verdict}",
+      "doneSentence": "Checked a sentence in {title}: {verdict}",
+      "failed": "The check of a message in {title} did not finish",
+      "failedSentence": "The check of a sentence in {title} did not finish"
+    },
+    "titleQuoted": "“{title}”",
+    "untitled": "a conversation",
+    "expand": "Show all",
+    "collapse": "Show less"
   }
 }

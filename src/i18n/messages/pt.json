@@ -10696,5 +10696,57 @@
       "install": "Instalar",
       "dismiss": "Esta não"
     }
+  },
+  "MessageCheck": {
+    "action": "Pedir ao assistente para verificar",
+    "selection": "Verificar",
+    "verdict": {
+      "true": "Verdadeiro",
+      "false": "Não é verdade",
+      "partly": "Parcialmente verdadeiro",
+      "unsure": "Não dá para dizer"
+    },
+    "checking": "Verificando…",
+    "unfinished": "Não terminou",
+    "mark": "Verificado: {verdict}",
+    "markQuote": "“{quote}”: {verdict}",
+    "by": "Verificado por {executor}",
+    "again": "Verificar de novo",
+    "inAssistant": "Ver na conversa do assistente",
+    "process": "Ver a verificação",
+    "openConversation": "Abrir a conversa",
+    "sent": "{executor} está verificando; o resultado aparece abaixo da mensagem.",
+    "sentNoName": "Verificando; o resultado aparece abaixo da mensagem.",
+    "startFailed": "Não foi possível começar a verificar: {message}",
+    "evidence": "Evidências",
+    "noEvidence": "Nenhuma evidência dada.",
+    "checkedMessage": "A mensagem verificada",
+    "checkedSentence": "A frase verificada",
+    "asked": "Respondia a",
+    "note": {
+      "no_verdict": "A verificação não deu veredito.",
+      "no_evidence": "A verificação deu um veredito sem evidências, então conta como não dá para dizer.",
+      "restarted": "O codeg reiniciou enquanto ela rodava.",
+      "stopped": "Ela foi interrompida.",
+      "taken_over": "Você assumiu a sessão dela.",
+      "failed": "Falhou: {error}"
+    },
+    "heading": {
+      "checking": "Verificando uma mensagem",
+      "done": "Resultado da verificação",
+      "failed": "Verificação não terminou"
+    },
+    "cardLine": {
+      "checking": "Verificando uma mensagem de {title}",
+      "checkingSentence": "Verificando uma frase de {title}",
+      "done": "Mensagem de {title} verificada: {verdict}",
+      "doneSentence": "Frase de {title} verificada: {verdict}",
+      "failed": "A verificação de uma mensagem de {title} não terminou",
+      "failedSentence": "A verificação de uma frase de {title} não terminou"
+    },
+    "titleQuoted": "“{title}”",
+    "untitled": "uma conversa",
+    "expand": "Ver tudo",
+    "collapse": "Ver menos"
   }
 }

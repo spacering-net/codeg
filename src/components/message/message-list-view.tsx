@@ -48,6 +48,12 @@ import { KnownInvocationsProvider } from "./known-invocations-context"
 import { DelegationStatusIndexProvider } from "./delegation-status-index-context"
 import { useTranscriptKnownInvocations } from "./use-transcript-known-invocations"
 import { ReplyArtifacts } from "./reply-artifacts"
+import {
+  CheckMarks,
+  MessageChecksProvider,
+  useMessageChecks,
+  type CheckAsk,
+} from "./message-checks"
 import { UserResourceLinks } from "./user-resource-links"
 import { UserImageAttachments } from "./user-image-attachments"
 import {
@@ -284,6 +290,9 @@ export type ThreadRenderItem =
       showStats: boolean
       isRoleTransition: boolean
       previousUserIndex: number | null
+      /** The owner's message this reply answers (the closest user turn
+       *  before it): what a check of the reply is handed (10.3). */
+      previousUserGroup: ResolvedMessageGroup | null
       /** The newest assistant reply in the thread. Together with the view's
        *  `armed` flag this is what makes a run "the current round" — see the
        *  fold state below. */
@@ -1300,6 +1309,8 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   onForkFromTurn,
   forkDisabled = false,
   isThreadTail = false,
+  previousUserGroup = null,
+  checkKey,
 }: {
   group: ResolvedMessageGroup
   dimmed?: boolean
@@ -1316,11 +1327,17 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   /** Whether nothing follows this group in the thread — the one position where
    *  a turn the backend cannot name still forks where the user pointed. */
   isThreadTail?: boolean
+  /** The owner's message this reply answers (10.3). */
+  previousUserGroup?: ResolvedMessageGroup | null
+  /** The reply's key in the thread: a selection in it is checked as a
+   *  sentence of it (10.3). */
+  checkKey?: string
 }) {
   // A message the user has just sent rises into the thread. Decided once, as
   // it mounts on its way (`dimmed`): the virtual list bringing a stored one
   // back never replays it.
   const [risesIn] = useState(dimmed && group.role === "user")
+  const checks = useMessageChecks()
   if (group.role === "system") {
     // A failed turn's line is the agent's account of the failure, not a
     // message the system sent: it closes the round in place, unboxed.
@@ -1336,6 +1353,12 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
     ? sourceTurns[sourceTurns.length - 1]
     : null
   const forkPointUnnamed = isForkPointUnnamed(forkPoint, isThreadTail)
+  const replyText =
+    group.role === "assistant" && isResponseComplete
+      ? extractTextFromParts(group.parts)
+      : ""
+  const askedOf = () =>
+    previousUserGroup ? askedTextOf(previousUserGroup) : null
 
   return (
     // Dimmed while the message is on its way (not yet stored); it brightens
@@ -1346,6 +1369,11 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
       <Message
         from={group.role}
         className={risesIn ? "chat-enter-rise" : undefined}
+        data-check-key={
+          checks && group.role === "assistant" && isResponseComplete
+            ? checkKey
+            : undefined
+        }
       >
         {group.role === "user" && group.images.length > 0 ? (
           <UserImageAttachments images={group.images} className="self-end" />
@@ -1375,6 +1403,9 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
           <UserResourceLinks resources={group.resources} className="self-end" />
         ) : null}
       </Message>
+      {checks && replyText ? (
+        <CheckMarks text={replyText} askedOf={askedOf} />
+      ) : null}
       {showStats && group.role === "assistant" && sourceTurns && (
         <ReplyArtifacts
           sourceTurns={sourceTurns}
@@ -1391,7 +1422,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
           isResponseComplete={isResponseComplete}
           // The row shows nothing until the reply is done; joining all of a
           // long reply's prose on every batch while it streams bought nothing.
-          copyText={isResponseComplete ? extractTextFromParts(group.parts) : ""}
+          copyText={replyText}
           completedAt={group.completed_at}
           forkDisabled={forkDisabled || forkPointUnnamed}
           forkDisabledReason={forkPointUnnamed ? "unnamed" : "busy"}
@@ -1411,11 +1442,27 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
                 }
               : undefined
           }
+          onCheck={
+            checks && replyText
+              ? () =>
+                  checks.check({
+                    message: replyText,
+                    asked: askedOf(),
+                    quote: null,
+                  })
+              : undefined
+          }
         />
       )}
     </div>
   )
 })
+
+/** The owner's message, as it reads (its composer escaping undone). */
+function askedTextOf(group: ResolvedMessageGroup): string | null {
+  const text = unescapeComposerText(extractTextFromParts(group.parts)).trim()
+  return text || null
+}
 
 /** No parts yet: the reply the pending one stands for has said nothing. */
 const NO_PARTS: AdaptedContentPart[] = []
@@ -1732,6 +1779,7 @@ export function MessageListView({
         showStats: false,
         isRoleTransition: false,
         previousUserIndex: null,
+        previousUserGroup: null,
         isLastAssistantRun: false,
         isThreadTail: false,
         sourceTurns: singletonSourceTurns(allTurns[i]),
@@ -1752,6 +1800,7 @@ export function MessageListView({
     // previousUserIndex points at the closest preceding user turn (used by the
     // post-stream stats row's "jump to previous user message" button).
     let lastUserIdx: number | null = null
+    let lastUserGroup: ResolvedMessageGroup | null = null
     let lastAssistantItem: AssistantTurnItem | null = null
     for (let idx = 0; idx < items.length; idx++) {
       const item = items[idx]
@@ -1762,6 +1811,7 @@ export function MessageListView({
       item.showStats = false
       item.isRoleTransition = false
       item.previousUserIndex = null
+      item.previousUserGroup = null
       item.isLastAssistantRun = false
       item.isThreadTail = false
 
@@ -1775,11 +1825,13 @@ export function MessageListView({
 
       if (item.group.role === "user") {
         lastUserIdx = idx
+        lastUserGroup = item.group
       }
 
       // showStats: only on the last assistant turn before a non-assistant or end
       if (item.group.role === "assistant") {
         lastAssistantItem = item
+        item.previousUserGroup = lastUserGroup
         const next = items[idx + 1]
         if (!next || next.kind !== "turn" || next.group.role !== "assistant") {
           item.showStats = true
@@ -1893,6 +1945,8 @@ export function MessageListView({
                 onForkFromTurn={onForkFromTurn}
                 forkDisabled={forkBusy}
                 isThreadTail={item.isThreadTail}
+                previousUserGroup={item.previousUserGroup}
+                checkKey={item.key}
               />
             </div>
           )
@@ -2009,6 +2063,34 @@ export function MessageListView({
   // (non-scrolling) frame, so the bubble is clipped to the message area and
   // never overlaps the composer or the tab strip.
   const selectionBoxRef = useRef<HTMLDivElement | null>(null)
+  // The thread as last rendered, for a selection checked as a sentence of
+  // its reply (10.3): read at the click, not on every render.
+  const threadItemsRef = useRef(threadItems)
+  useEffect(() => {
+    threadItemsRef.current = threadItems
+  }, [threadItems])
+  const resolveCheck = useCallback(
+    (key: string): Omit<CheckAsk, "quote"> | null => {
+      const item = threadItemsRef.current.find((i) => i.key === key)
+      if (
+        !item ||
+        item.kind !== "turn" ||
+        item.group.role !== "assistant" ||
+        !item.isResponseComplete
+      ) {
+        return null
+      }
+      const message = extractTextFromParts(item.group.parts)
+      if (!message.trim()) return null
+      return {
+        message,
+        asked: item.previousUserGroup
+          ? askedTextOf(item.previousUserGroup)
+          : null,
+      }
+    },
+    []
+  )
 
   // The loaded user messages: how many, and where each renders. Cheap — no
   // diff parsing — so the message count and the jumps can use it while
@@ -2466,11 +2548,12 @@ export function MessageListView({
             />
           </div>
         )}
-        <SelectionActionBubble
+        <CheckableSelectionBubble
           containerRef={selectionBoxRef}
           onQuote={onQuoteSelection}
           onAsk={onAskSelection}
           onSaveAsNote={onSaveNoteSelection}
+          resolveCheck={resolveCheck}
         />
       </div>
     </SessionViewerHost>
@@ -2480,11 +2563,37 @@ export function MessageListView({
     <MarkdownImageProvider rootPath={resolvedImageRoot}>
       <ModelLabelProvider value={modelLabel}>
         <DelegationStatusIndexProvider value={delegationStatusIndex}>
-          <KnownInvocationsProvider value={knownInvocations}>
-            {thread}
-          </KnownInvocationsProvider>
+          <MessageChecksProvider conversationId={conversationId}>
+            <KnownInvocationsProvider value={knownInvocations}>
+              {thread}
+            </KnownInvocationsProvider>
+          </MessageChecksProvider>
         </DelegationStatusIndexProvider>
       </ModelLabelProvider>
     </MarkdownImageProvider>
   )
+}
+
+/** The selection bubble, with "Check" for a sentence of a reply where the
+ *  conversation's checks are offered (10.3). */
+function CheckableSelectionBubble({
+  resolveCheck,
+  ...props
+}: ComponentProps<typeof SelectionActionBubble> & {
+  resolveCheck: (key: string) => Omit<CheckAsk, "quote"> | null
+}) {
+  const checks = useMessageChecks()
+  const check = checks?.check
+  const onCheck = useMemo(
+    () =>
+      check
+        ? (text: string, from: Element) => {
+            const key = from.getAttribute("data-check-key")
+            const ask = key ? resolveCheck(key) : null
+            if (ask) check({ ...ask, quote: text })
+          }
+        : undefined,
+    [check, resolveCheck]
+  )
+  return <SelectionActionBubble {...props} onCheck={onCheck} />
 }

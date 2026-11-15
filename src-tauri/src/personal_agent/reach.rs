@@ -267,6 +267,12 @@ pub enum What {
         status: String,
         draft: bool,
     },
+    /// A check of a message the owner asked for came back (10.3): its
+    /// verdict (none: it did not finish), and what it checked.
+    Check {
+        verdict: Option<crate::db::entities::personal_agent_check::FactVerdict>,
+        text: String,
+    },
     /// A plan carried out to its end (7.6): its title.
     PlanDone {
         text: String,
@@ -578,6 +584,12 @@ struct Words {
     skill_changed: &'static str,
     skill_removed: &'static str,
     skill_draft: &'static str,
+    check_true: &'static str,
+    check_false: &'static str,
+    check_partly: &'static str,
+    check_unsure: &'static str,
+    check_unfinished: &'static str,
+    check_title: &'static str,
     why_memory: &'static str,
     plan_done: &'static str,
     plan_stuck: &'static str,
@@ -665,6 +677,12 @@ const EN: Words = Words {
     skill_changed: "Changed its process skill: {text}",
     skill_removed: "Removed its process skill: {text}",
     skill_draft: "A process skill for you to look at: {text}",
+    check_true: "Check: true — {text}",
+    check_false: "Check: not true — {text}",
+    check_partly: "Check: partly true — {text}",
+    check_unsure: "Check: can't tell — {text}",
+    check_unfinished: "The check did not finish: {text}",
+    check_title: "Check: {text}",
     why_memory: "It changed what it remembers; the card can undo it.",
     plan_done: "Plan done: {text}",
     plan_stuck: "Plan stuck: {text}",
@@ -761,6 +779,12 @@ const ZH_CN: Words = Words {
     skill_changed: "改了流程技能：{text}",
     skill_removed: "删掉了流程技能：{text}",
     skill_draft: "有个流程技能等你看：{text}",
+    check_true: "核查：属实——{text}",
+    check_false: "核查：不属实——{text}",
+    check_partly: "核查：部分属实——{text}",
+    check_unsure: "核查：无法判断——{text}",
+    check_unfinished: "核查没完成：{text}",
+    check_title: "核查：{text}",
     why_memory: "它改了记忆，卡片上可以撤销。",
     plan_done: "计划完成：{text}",
     plan_stuck: "计划卡住了：{text}",
@@ -857,6 +881,12 @@ const ZH_TW: Words = Words {
     skill_changed: "改了流程技能：{text}",
     skill_removed: "刪掉了流程技能：{text}",
     skill_draft: "有個流程技能等你看：{text}",
+    check_true: "核查：屬實——{text}",
+    check_false: "核查：不屬實——{text}",
+    check_partly: "核查：部分屬實——{text}",
+    check_unsure: "核查：無法判斷——{text}",
+    check_unfinished: "核查沒完成：{text}",
+    check_title: "核查：{text}",
     why_memory: "它改了記憶，卡片上可以撤銷。",
     plan_done: "計畫完成：{text}",
     plan_stuck: "計畫卡住了：{text}",
@@ -944,6 +974,12 @@ const JA: Words = Words {
     skill_changed: "手順スキルを変更しました：{text}",
     skill_removed: "手順スキルを削除しました：{text}",
     skill_draft: "確認待ちの手順スキル：{text}",
+    check_true: "確認結果：正しい — {text}",
+    check_false: "確認結果：正しくない — {text}",
+    check_partly: "確認結果：一部正しい — {text}",
+    check_unsure: "確認結果：判断できない — {text}",
+    check_unfinished: "確認が終わりませんでした：{text}",
+    check_title: "確認：{text}",
     why_memory: "記憶を更新しました。カードから元に戻せます。",
     plan_done: "計画が完了しました：{text}",
     plan_stuck: "計画が止まっています：{text}",
@@ -1031,6 +1067,12 @@ const KO: Words = Words {
     skill_changed: "절차 스킬을 바꿨어요: {text}",
     skill_removed: "절차 스킬을 지웠어요: {text}",
     skill_draft: "확인할 절차 스킬이 있어요: {text}",
+    check_true: "확인 결과: 사실 — {text}",
+    check_false: "확인 결과: 사실 아님 — {text}",
+    check_partly: "확인 결과: 일부 사실 — {text}",
+    check_unsure: "확인 결과: 판단 불가 — {text}",
+    check_unfinished: "확인이 끝나지 않았어요: {text}",
+    check_title: "확인: {text}",
     why_memory: "기억을 바꿨어요. 카드에서 되돌릴 수 있어요.",
     plan_done: "계획 완료: {text}",
     plan_stuck: "계획이 막혔어요: {text}",
@@ -1118,6 +1160,12 @@ const ES: Words = Words {
     skill_changed: "Cambió su habilidad de proceso: {text}",
     skill_removed: "Quitó su habilidad de proceso: {text}",
     skill_draft: "Una habilidad de proceso para que la revises: {text}",
+    check_true: "Comprobado: cierto — {text}",
+    check_false: "Comprobado: no es cierto — {text}",
+    check_partly: "Comprobado: en parte cierto — {text}",
+    check_unsure: "Comprobado: no se puede saber — {text}",
+    check_unfinished: "La comprobación no terminó: {text}",
+    check_title: "Comprobar: {text}",
     why_memory: "Cambió lo que recuerda; la tarjeta permite deshacerlo.",
     plan_done: "Plan terminado: {text}",
     plan_stuck: "Plan atascado: {text}",
@@ -1205,6 +1253,12 @@ const DE: Words = Words {
     skill_changed: "Hat seinen Ablauf-Skill geändert: {text}",
     skill_removed: "Hat seinen Ablauf-Skill entfernt: {text}",
     skill_draft: "Ein Ablauf-Skill zum Ansehen: {text}",
+    check_true: "Geprüft: stimmt — {text}",
+    check_false: "Geprüft: stimmt nicht — {text}",
+    check_partly: "Geprüft: stimmt teilweise — {text}",
+    check_unsure: "Geprüft: nicht feststellbar — {text}",
+    check_unfinished: "Die Prüfung wurde nicht fertig: {text}",
+    check_title: "Prüfen: {text}",
     why_memory: "Es hat sein Gedächtnis geändert; auf der Karte lässt sich das rückgängig machen.",
     plan_done: "Plan erledigt: {text}",
     plan_stuck: "Plan hängt fest: {text}",
@@ -1293,6 +1347,12 @@ const FR: Words = Words {
     skill_changed: "A modifié sa compétence de processus : {text}",
     skill_removed: "A supprimé sa compétence de processus : {text}",
     skill_draft: "Une compétence de processus à examiner : {text}",
+    check_true: "Vérifié : exact — {text}",
+    check_false: "Vérifié : inexact — {text}",
+    check_partly: "Vérifié : en partie exact — {text}",
+    check_unsure: "Vérifié : impossible à dire — {text}",
+    check_unfinished: "La vérification n’a pas abouti : {text}",
+    check_title: "Vérifier : {text}",
     why_memory: "Il a modifié sa mémoire ; la carte permet d’annuler.",
     plan_done: "Plan terminé : {text}",
     plan_stuck: "Plan bloqué : {text}",
@@ -1381,6 +1441,12 @@ const PT: Words = Words {
     skill_changed: "Alterou sua skill de processo: {text}",
     skill_removed: "Removeu sua skill de processo: {text}",
     skill_draft: "Uma skill de processo para você revisar: {text}",
+    check_true: "Verificado: verdadeiro — {text}",
+    check_false: "Verificado: não é verdade — {text}",
+    check_partly: "Verificado: parcialmente verdadeiro — {text}",
+    check_unsure: "Verificado: não dá para dizer — {text}",
+    check_unfinished: "A verificação não terminou: {text}",
+    check_title: "Verificar: {text}",
     why_memory: "Mudou o que lembra; o cartão permite desfazer.",
     plan_done: "Plano concluído: {text}",
     plan_stuck: "Plano travado: {text}",
@@ -1468,12 +1534,24 @@ const AR: Words = Words {
     skill_changed: "غيّر مهارة العملية: {text}",
     skill_removed: "أزال مهارة العملية: {text}",
     skill_draft: "مهارة عملية بانتظار مراجعتك: {text}",
+    check_true: "تم التحقق: صحيح — {text}",
+    check_false: "تم التحقق: غير صحيح — {text}",
+    check_partly: "تم التحقق: صحيح جزئيًا — {text}",
+    check_unsure: "تم التحقق: لا يمكن الحكم — {text}",
+    check_unfinished: "لم يكتمل التحقق: {text}",
+    check_title: "تحقّق: {text}",
     why_memory: "غيّر ما يتذكره؛ يمكنك التراجع من البطاقة.",
     plan_done: "اكتملت الخطة: {text}",
     plan_stuck: "الخطة متوقفة: {text}",
     why_plan: "نفّذ خطة أعدّها لك حتى النهاية.",
     why_plan_stuck: "فشلت خطوة وبقيت فاشلة؛ ما لا يعتمد عليها يستمر.",
 };
+
+/// The title of a check codeg hands out for the owner (10.3), in their
+/// language: what it checks, its first words.
+pub fn check_title(locale: AppLocale, text: &str) -> String {
+    fill(words(locale).check_title, &glimpse(text), 0, "")
+}
 
 fn words(locale: AppLocale) -> &'static Words {
     match locale {
@@ -1619,6 +1697,17 @@ fn main_line(w: &Words, what: &What) -> String {
                 _ => w.skill_changed,
             };
             fill(line, &glimpse(title), 0, "")
+        }
+        What::Check { verdict, text } => {
+            use crate::db::entities::personal_agent_check::FactVerdict;
+            let line = match verdict {
+                Some(FactVerdict::True) => w.check_true,
+                Some(FactVerdict::False) => w.check_false,
+                Some(FactVerdict::Partly) => w.check_partly,
+                Some(FactVerdict::Unsure) => w.check_unsure,
+                None => w.check_unfinished,
+            };
+            fill(line, &glimpse(text), 0, "")
         }
         What::PlanDone { text } => fill(w.plan_done, text, 0, ""),
         What::PlanStuck { text } => fill(w.plan_stuck, text, 0, ""),
@@ -2828,6 +2917,39 @@ mod tests {
                 ),
                 "{locale:?}"
             );
+            // A check's verdicts (10.3): each its own line, with what it checked.
+            {
+                use crate::db::entities::personal_agent_check::FactVerdict;
+                let checked: Vec<String> = [
+                    Some(FactVerdict::True),
+                    Some(FactVerdict::False),
+                    Some(FactVerdict::Partly),
+                    Some(FactVerdict::Unsure),
+                    None,
+                ]
+                .into_iter()
+                .map(|verdict| {
+                    main_line(
+                        w,
+                        &What::Check {
+                            verdict,
+                            text: "The build passes.\nMore.".into(),
+                        },
+                    )
+                })
+                .collect();
+                for l in &checked {
+                    assert!(
+                        l.contains("The build passes.") && !l.contains("More."),
+                        "{locale:?}: {l}"
+                    );
+                }
+                let mut distinct = checked.clone();
+                distinct.sort();
+                distinct.dedup();
+                assert_eq!(distinct.len(), 5, "{locale:?}: {checked:?}");
+                assert!(w.check_title.contains("{text}"), "{locale:?}");
+            }
             for t in [
                 w.waiting, w.approval, w.waited, w.session, w.done, w.failed, w.review, w.reminder,
             ] {

@@ -10696,5 +10696,57 @@
       "install": "설치",
       "dismiss": "안 쓰기"
     }
+  },
+  "MessageCheck": {
+    "action": "어시스턴트에게 확인 맡기기",
+    "selection": "확인",
+    "verdict": {
+      "true": "사실",
+      "false": "사실 아님",
+      "partly": "일부 사실",
+      "unsure": "판단 불가"
+    },
+    "checking": "확인 중…",
+    "unfinished": "확인 못 끝남",
+    "mark": "어시스턴트 확인: {verdict}",
+    "markQuote": "‘{quote}’ 확인: {verdict}",
+    "by": "확인: {executor}",
+    "again": "다시 확인",
+    "inAssistant": "어시스턴트 대화에서 보기",
+    "process": "확인 과정 보기",
+    "openConversation": "원래 대화 열기",
+    "sent": "{executor}에게 확인을 맡겼어요. 결과는 이 메시지 아래에 나와요",
+    "sentNoName": "확인을 시작했어요. 결과는 이 메시지 아래에 나와요",
+    "startFailed": "확인을 시작하지 못했어요: {message}",
+    "evidence": "근거",
+    "noEvidence": "근거가 없어요.",
+    "checkedMessage": "확인한 메시지",
+    "checkedSentence": "확인한 문장",
+    "asked": "답한 질문",
+    "note": {
+      "no_verdict": "확인 결과가 나오지 않았어요.",
+      "no_evidence": "결과는 냈지만 근거가 없어 판단 불가로 봐요.",
+      "restarted": "codeg가 다시 시작되면서 중단됐어요.",
+      "stopped": "중지됐어요.",
+      "taken_over": "당신이 그 세션을 넘겨받았어요.",
+      "failed": "실패했어요: {error}"
+    },
+    "heading": {
+      "checking": "확인 중",
+      "done": "확인 결과",
+      "failed": "확인 못 끝남"
+    },
+    "cardLine": {
+      "checking": "{title}의 메시지를 확인하고 있어요",
+      "checkingSentence": "{title}의 문장을 확인하고 있어요",
+      "done": "{title}의 메시지를 확인했어요: {verdict}",
+      "doneSentence": "{title}의 문장을 확인했어요: {verdict}",
+      "failed": "{title}의 메시지 확인이 끝나지 않았어요",
+      "failedSentence": "{title}의 문장 확인이 끝나지 않았어요"
+    },
+    "titleQuoted": "‘{title}’",
+    "untitled": "어떤 대화",
+    "expand": "모두 보기",
+    "collapse": "접기"
   }
 }

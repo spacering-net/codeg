@@ -10696,5 +10696,57 @@
       "install": "تثبيت",
       "dismiss": "ليست هذه"
     }
+  },
+  "MessageCheck": {
+    "action": "اطلب من المساعد التحقق",
+    "selection": "تحقّق",
+    "verdict": {
+      "true": "صحيح",
+      "false": "غير صحيح",
+      "partly": "صحيح جزئيًا",
+      "unsure": "لا يمكن الحكم"
+    },
+    "checking": "جارٍ التحقق…",
+    "unfinished": "لم يكتمل",
+    "mark": "تحقّق المساعد: {verdict}",
+    "markQuote": "«{quote}»: {verdict}",
+    "by": "تحقّق منه {executor}",
+    "again": "تحقّق مرة أخرى",
+    "inAssistant": "اعرضه في محادثة المساعد",
+    "process": "اعرض عملية التحقق",
+    "openConversation": "افتح المحادثة",
+    "sent": "يتحقق {executor} منه؛ تظهر النتيجة تحت الرسالة.",
+    "sentNoName": "جارٍ التحقق؛ تظهر النتيجة تحت الرسالة.",
+    "startFailed": "تعذّر بدء التحقق: {message}",
+    "evidence": "الأدلة",
+    "noEvidence": "لم تُقدَّم أدلة.",
+    "checkedMessage": "الرسالة التي جرى التحقق منها",
+    "checkedSentence": "الجملة التي جرى التحقق منها",
+    "asked": "كانت إجابة عن",
+    "note": {
+      "no_verdict": "لم يُصدر التحقق حكمًا.",
+      "no_evidence": "أصدر التحقق حكمًا بلا أدلة، فيُعدّ «لا يمكن الحكم».",
+      "restarted": "أُعيد تشغيل codeg أثناء عمله.",
+      "stopped": "أُوقف.",
+      "taken_over": "توليتَ جلسته.",
+      "failed": "فشل: {error}"
+    },
+    "heading": {
+      "checking": "جارٍ التحقق من رسالة",
+      "done": "نتيجة التحقق",
+      "failed": "لم يكتمل التحقق"
+    },
+    "cardLine": {
+      "checking": "جارٍ التحقق من رسالة في {title}",
+      "checkingSentence": "جارٍ التحقق من جملة في {title}",
+      "done": "تم التحقق من رسالة في {title}: {verdict}",
+      "doneSentence": "تم التحقق من جملة في {title}: {verdict}",
+      "failed": "لم يكتمل التحقق من رسالة في {title}",
+      "failedSentence": "لم يكتمل التحقق من جملة في {title}"
+    },
+    "titleQuoted": "«{title}»",
+    "untitled": "محادثة",
+    "expand": "عرض الكل",
+    "collapse": "عرض أقل"
   }
 }

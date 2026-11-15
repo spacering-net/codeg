@@ -15,6 +15,7 @@ use super::personal_agent_bots::BotAvatar;
 use super::system::AppLocale;
 use crate::acp::delegation::types::AgentDelegationDefaults;
 use crate::db::entities::personal_agent_batch::BatchKind;
+use crate::db::entities::personal_agent_check::{FactCheckState, FactVerdict};
 use crate::db::entities::personal_agent_dispatch::{DispatchMode, DispatchState};
 use crate::db::entities::personal_agent_item::{ItemKind, ItemStatus, WaitsFor};
 use crate::db::entities::personal_agent_segment::SegmentReason;
@@ -343,6 +344,48 @@ pub struct SegmentInfo {
     pub compactions_manual: i32,
     pub compactions_agent: i32,
     pub auto_compact_paused: bool,
+}
+
+/// The owner's "is this right?" on a message of an ordinary conversation
+/// (10.3): the message (all of it — its fingerprint is of all of it), the
+/// owner's message it answered, the sentence of it when they selected one.
+/// `again`: check it anew when its last check is over.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MessageCheckRequest {
+    pub conversation_id: i32,
+    pub message: String,
+    #[serde(default)]
+    pub asked: Option<String>,
+    #[serde(default)]
+    pub quote: Option<String>,
+    #[serde(default)]
+    pub again: bool,
+}
+
+/// A check of a message, as the conversation's page and the card show it.
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageCheckView {
+    pub id: i32,
+    pub bot_id: i32,
+    pub conversation_id: i32,
+    pub message_fp: String,
+    /// "" when the whole message was checked.
+    pub quote_fp: String,
+    pub quote: Option<String>,
+    pub state: FactCheckState,
+    pub verdict: Option<FactVerdict>,
+    pub evidence: Option<String>,
+    pub note: Option<String>,
+    pub dispatch_id: Option<i32>,
+    /// The checker's session, once it has one.
+    pub check_conversation_id: Option<i32>,
+    /// Who checked it.
+    pub executor: Option<String>,
+    pub notice_id: Option<i32>,
+    /// Its card on the primary's timeline.
+    pub row_id: Option<i32>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// What the executor of a dispatch was, frozen when it was dispatched.
@@ -748,4 +791,9 @@ pub enum PersonalAgentChange {
     Item { id: i32 },
     /// A routine changed, or one of its runs (6.9).
     Routine { id: i32 },
+    /// A check of a message of conversation `conversation_id` began or
+    /// ended (10.3): its view marks the message.
+    Check {
+        conversation_id: i32,
+    },
 }

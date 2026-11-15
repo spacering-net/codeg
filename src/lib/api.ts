@@ -26,6 +26,7 @@ import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
   CardClick,
+  MessageCheck,
   LeakedTempReclaim,
   LeakedTempScan,
   AgentType,
@@ -3271,6 +3272,34 @@ export async function personalAgentSkillSwitch(
     on,
     botId: bot ?? null,
   })
+}
+
+/** "Is this right?" (10.3): have a message of an ordinary conversation
+ *  checked — its last check, or (with `again`, once that one is over) a new
+ *  one, handed out by the primary at once. `message` is all of it (its
+ *  fingerprint is of all of it); `asked`, the owner's message it answered;
+ *  `quote`, the sentence of it they selected. */
+export async function personalAgentCheckMessage(args: {
+  conversationId: number
+  message: string
+  asked?: string | null
+  quote?: string | null
+  again?: boolean
+}): Promise<MessageCheck> {
+  return getTransport().call("personal_agent_check_message", {
+    conversationId: args.conversationId,
+    message: args.message,
+    asked: args.asked ?? null,
+    quote: args.quote ?? null,
+    again: args.again ?? false,
+  })
+}
+
+/** The latest check of each message of a conversation (10.3). */
+export async function personalAgentChecks(
+  conversationId: number
+): Promise<MessageCheck[]> {
+  return getTransport().call("personal_agent_checks", { conversationId })
 }
 
 /** `null` returns to the data directory's default. `locale` is the UI's: the

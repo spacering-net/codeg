@@ -10696,5 +10696,57 @@
       "install": "Installieren",
       "dismiss": "Nicht diesen"
     }
+  },
+  "MessageCheck": {
+    "action": "Vom Assistenten prüfen lassen",
+    "selection": "Prüfen",
+    "verdict": {
+      "true": "Stimmt",
+      "false": "Stimmt nicht",
+      "partly": "Stimmt teilweise",
+      "unsure": "Nicht feststellbar"
+    },
+    "checking": "Wird geprüft…",
+    "unfinished": "Nicht fertig",
+    "mark": "Geprüft: {verdict}",
+    "markQuote": "„{quote}“: {verdict}",
+    "by": "Geprüft von {executor}",
+    "again": "Erneut prüfen",
+    "inAssistant": "Im Gespräch des Assistenten ansehen",
+    "process": "Prüfung ansehen",
+    "openConversation": "Gespräch öffnen",
+    "sent": "{executor} prüft es; das Ergebnis erscheint unter der Nachricht.",
+    "sentNoName": "Wird geprüft; das Ergebnis erscheint unter der Nachricht.",
+    "startFailed": "Die Prüfung konnte nicht starten: {message}",
+    "evidence": "Belege",
+    "noEvidence": "Keine Belege angegeben.",
+    "checkedMessage": "Die geprüfte Nachricht",
+    "checkedSentence": "Der geprüfte Satz",
+    "asked": "Antwort auf",
+    "note": {
+      "no_verdict": "Die Prüfung gab kein Urteil ab.",
+      "no_evidence": "Die Prüfung gab ein Urteil ohne Belege ab, daher gilt es als nicht feststellbar.",
+      "restarted": "codeg wurde währenddessen neu gestartet.",
+      "stopped": "Sie wurde gestoppt.",
+      "taken_over": "Du hast ihre Sitzung übernommen.",
+      "failed": "Fehlgeschlagen: {error}"
+    },
+    "heading": {
+      "checking": "Nachricht wird geprüft",
+      "done": "Prüfergebnis",
+      "failed": "Prüfung nicht fertig"
+    },
+    "cardLine": {
+      "checking": "Prüfe eine Nachricht in {title}",
+      "checkingSentence": "Prüfe einen Satz in {title}",
+      "done": "Eine Nachricht in {title} geprüft: {verdict}",
+      "doneSentence": "Einen Satz in {title} geprüft: {verdict}",
+      "failed": "Die Prüfung einer Nachricht in {title} wurde nicht fertig",
+      "failedSentence": "Die Prüfung eines Satzes in {title} wurde nicht fertig"
+    },
+    "titleQuoted": "„{title}“",
+    "untitled": "einem Gespräch",
+    "expand": "Alles zeigen",
+    "collapse": "Weniger zeigen"
   }
 }

@@ -101,6 +101,11 @@ pub enum NoticeKind {
     /// draft, installed or let go.
     #[sea_orm(string_value = "skill")]
     Skill,
+    /// "Is this right?" (10.3): a message of an ordinary conversation the
+    /// owner had checked — being checked, then the verdict and its
+    /// evidence, with the way to check it again.
+    #[sea_orm(string_value = "check")]
+    Check,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

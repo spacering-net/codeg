@@ -10696,5 +10696,57 @@
       "install": "安装",
       "dismiss": "不用"
     }
+  },
+  "MessageCheck": {
+    "action": "让助手核查",
+    "selection": "核查",
+    "verdict": {
+      "true": "属实",
+      "false": "不属实",
+      "partly": "部分属实",
+      "unsure": "无法判断"
+    },
+    "checking": "核查中…",
+    "unfinished": "没核查完",
+    "mark": "助手核查：{verdict}",
+    "markQuote": "核查「{quote}」：{verdict}",
+    "by": "由 {executor} 核查",
+    "again": "重新核查",
+    "inAssistant": "在助手对话里看",
+    "process": "看核查过程",
+    "openConversation": "打开原会话",
+    "sent": "已交给 {executor} 核查，结果会显示在这条消息下面",
+    "sentNoName": "已开始核查，结果会显示在这条消息下面",
+    "startFailed": "没能开始核查：{message}",
+    "evidence": "证据",
+    "noEvidence": "没有给出证据。",
+    "checkedMessage": "被核查的消息",
+    "checkedSentence": "被核查的一句",
+    "asked": "它回答的是",
+    "note": {
+      "no_verdict": "核查没给出结论。",
+      "no_evidence": "核查给了结论却没给证据，按无法判断算。",
+      "restarted": "codeg 重启时打断了它。",
+      "stopped": "它被停掉了。",
+      "taken_over": "你接手了它的会话。",
+      "failed": "它失败了：{error}"
+    },
+    "heading": {
+      "checking": "正在核查",
+      "done": "核查结论",
+      "failed": "没核查完"
+    },
+    "cardLine": {
+      "checking": "正在核查{title}里的一条消息",
+      "checkingSentence": "正在核查{title}里的一句话",
+      "done": "核查了{title}里的一条消息：{verdict}",
+      "doneSentence": "核查了{title}里的一句话：{verdict}",
+      "failed": "{title}里的一条消息没核查完",
+      "failedSentence": "{title}里的一句话没核查完"
+    },
+    "titleQuoted": "「{title}」",
+    "untitled": "一个会话",
+    "expand": "展开",
+    "collapse": "收起"
   }
 }

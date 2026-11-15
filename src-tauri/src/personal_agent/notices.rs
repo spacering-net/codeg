@@ -612,6 +612,8 @@ impl PersonalAgentEngine {
             // (7.8).
             NoticeKind::Tidy => return Box::pin(self.act_on_tidy(&notice, action)).await,
             NoticeKind::Skill => return Box::pin(self.act_on_skill(&notice, action)).await,
+            // "Is this right?" (10.3): check it again.
+            NoticeKind::Check => return Box::pin(self.act_on_check(&notice, action)).await,
             NoticeKind::Proposal | NoticeKind::Uncertain => {}
         }
         // A card whose own run ended unknown can be run again, or let be.

@@ -10696,5 +10696,57 @@
       "install": "インストール",
       "dismiss": "使わない"
     }
+  },
+  "MessageCheck": {
+    "action": "アシスタントに確認してもらう",
+    "selection": "確認",
+    "verdict": {
+      "true": "正しい",
+      "false": "正しくない",
+      "partly": "一部正しい",
+      "unsure": "判断できない"
+    },
+    "checking": "確認中…",
+    "unfinished": "確認が終わっていません",
+    "mark": "アシスタントの確認：{verdict}",
+    "markQuote": "「{quote}」の確認：{verdict}",
+    "by": "{executor} が確認",
+    "again": "もう一度確認",
+    "inAssistant": "アシスタントの会話で見る",
+    "process": "確認の様子を見る",
+    "openConversation": "元の会話を開く",
+    "sent": "{executor} が確認しています。結果はこのメッセージの下に出ます",
+    "sentNoName": "確認を始めました。結果はこのメッセージの下に出ます",
+    "startFailed": "確認を始められませんでした：{message}",
+    "evidence": "根拠",
+    "noEvidence": "根拠は示されていません。",
+    "checkedMessage": "確認したメッセージ",
+    "checkedSentence": "確認した一文",
+    "asked": "答えていた質問",
+    "note": {
+      "no_verdict": "確認は結論を出しませんでした。",
+      "no_evidence": "結論はあっても根拠がないため、判断できない扱いです。",
+      "restarted": "codeg の再起動で中断されました。",
+      "stopped": "停止されました。",
+      "taken_over": "あなたがそのセッションを引き継ぎました。",
+      "failed": "失敗しました：{error}"
+    },
+    "heading": {
+      "checking": "確認中",
+      "done": "確認結果",
+      "failed": "確認が終わっていません"
+    },
+    "cardLine": {
+      "checking": "{title}のメッセージを確認しています",
+      "checkingSentence": "{title}の一文を確認しています",
+      "done": "{title}のメッセージを確認しました：{verdict}",
+      "doneSentence": "{title}の一文を確認しました：{verdict}",
+      "failed": "{title}のメッセージの確認が終わりませんでした",
+      "failedSentence": "{title}の一文の確認が終わりませんでした"
+    },
+    "titleQuoted": "「{title}」",
+    "untitled": "ある会話",
+    "expand": "すべて表示",
+    "collapse": "折りたたむ"
   }
 }

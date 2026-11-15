@@ -40,6 +40,7 @@ pub mod compaction;
 pub mod dispatch;
 pub mod due;
 pub mod engine;
+pub mod fact_check;
 pub mod forge_acts;
 pub mod history;
 pub mod host;

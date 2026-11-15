@@ -985,6 +985,49 @@ pub async fn personal_agent_skill_switch(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CheckMessageParams {
+    pub conversation_id: i32,
+    pub message: String,
+    #[serde(default)]
+    pub asked: Option<String>,
+    #[serde(default)]
+    pub quote: Option<String>,
+    #[serde(default)]
+    pub again: Option<bool>,
+}
+
+pub async fn personal_agent_check_message(
+    Json(params): Json<CheckMessageParams>,
+) -> Result<Json<crate::models::personal_agent::MessageCheckView>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_check_message_core(crate::models::personal_agent::MessageCheckRequest {
+            conversation_id: params.conversation_id,
+            message: params.message,
+            asked: params.asked,
+            quote: params.quote,
+            again: params.again.unwrap_or(false),
+        })
+        .await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChecksParams {
+    pub conversation_id: i32,
+}
+
+pub async fn personal_agent_checks(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ChecksParams>,
+) -> Result<Json<Vec<crate::models::personal_agent::MessageCheckView>>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_checks_core(&state.db, params.conversation_id).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SetWorkdirParams {
     /// The assistant it is about; left out, the primary.
     #[serde(default)]

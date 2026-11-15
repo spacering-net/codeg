@@ -4084,7 +4084,43 @@ export type PersonalAgentChange = { bot_id?: number } & (
   | { kind: "item"; id: number }
   /** A routine changed, or one of its runs (6.9). */
   | { kind: "routine"; id: number }
+  /** A check of a message of conversation `conversation_id` began or ended
+   *  (10.3): its view marks the message. */
+  | { kind: "check"; conversation_id: number }
 )
+
+/** Where a check of a message stands (10.3). */
+export type MessageCheckState = "checking" | "done" | "failed"
+/** What a check found the message to be. */
+export type MessageCheckVerdict = "true" | "false" | "partly" | "unsure"
+
+/** "Is this right?" (10.3): a check of a message of an ordinary
+ *  conversation, as its page and the card show it. Mirrors
+ *  `MessageCheckView` in models/personal_agent.rs. */
+export interface MessageCheck {
+  id: number
+  bot_id: number
+  conversation_id: number
+  /** The message's fingerprint (`messageFingerprint`). */
+  message_fp: string
+  /** The sentence's, when one was checked; "" for the whole message. */
+  quote_fp: string
+  quote: string | null
+  state: MessageCheckState
+  verdict: MessageCheckVerdict | null
+  evidence: string | null
+  /** Why it is unsure for want of evidence, or why it did not finish. */
+  note: string | null
+  dispatch_id: number | null
+  /** The checker's session, once it has one. */
+  check_conversation_id: number | null
+  executor: string | null
+  notice_id: number | null
+  /** Its card on the primary's timeline. */
+  row_id: number | null
+  created_at: string
+  updated_at: string
+}
 
 export const PERSONAL_AGENT_CHANGED_EVENT = "personal-agent://changed"
 

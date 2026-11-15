@@ -417,6 +417,9 @@ pub struct PersonalAgentEngine {
     pub(super) reminder_lock: Mutex<()>,
     /// Serializes opening, moving and concluding rounds of acceptance (7.5).
     pub(super) accept_lock: Mutex<()>,
+    /// Serializes answering the owner's checks of messages (10.3): the
+    /// same message is checked once at a time.
+    pub(super) check_lock: Mutex<()>,
     /// Serializes reading the pull requests it watches (7.4): one read of
     /// one at a time, so what changed is told once.
     pub(super) watch_lock: Mutex<()>,
@@ -474,6 +477,7 @@ impl PersonalAgentEngine {
             card_lock: Mutex::new(()),
             reminder_lock: Mutex::new(()),
             accept_lock: Mutex::new(()),
+            check_lock: Mutex::new(()),
             watch_lock: Mutex::new(()),
             watch_busy: AtomicBool::new(false),
             plan_lock: Mutex::new(()),
@@ -787,6 +791,8 @@ impl PersonalAgentEngine {
                     // The plans (7.6): what a hook missed, and a failure
                     // left waiting on a turn that never came.
                     self.plan_tick().await;
+                    // Checks of messages whose end nothing heard (10.3).
+                    self.check_tick().await;
                 }
                 _ = due.tick() => {
                     self.due_tick().await;

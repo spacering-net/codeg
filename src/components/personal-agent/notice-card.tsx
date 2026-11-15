@@ -30,6 +30,8 @@
  *   nightly tidy-up, the same card undone as a whole or applied as a draft.
  * - **skill**: a process skill the assistant wrote or changed
  *   (`./skill-card.tsx`, 7.8).
+ * - **check**: "is this right?", a message of an ordinary conversation the
+ *   owner had checked (`./check-card.tsx`, 10.3).
  * - **stopped**: what the owner's stop took with it — the work the turn
  *   handed out, the messages nobody had started on — and what it could not:
  *   messages another assistant is already working on, each with [Stop this
@@ -86,6 +88,7 @@ import { ExchangeSheet } from "./exchange-sheet"
 import { ForgeCard } from "./forge-card"
 import { MemoryCard } from "./memory-card"
 import { SkillCard } from "./skill-card"
+import { CheckCard } from "./check-card"
 import { PlanCard } from "./plan-card"
 import { PrCard } from "./pr-card"
 import { RoutineCard } from "./routine-card"
@@ -172,6 +175,7 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "memory" || kind === "tidy") return <MemoryCard item={item} />
   if (kind === "skill") return <SkillCard item={item} />
   if (kind === "plan") return <PlanCard item={item} />
+  if (kind === "check") return <CheckCard item={item} />
   return null
 }
 

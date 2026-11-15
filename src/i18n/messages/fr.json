@@ -10696,5 +10696,57 @@
       "install": "Installer",
       "dismiss": "Pas celle-ci"
     }
+  },
+  "MessageCheck": {
+    "action": "Faire vérifier par l’assistant",
+    "selection": "Vérifier",
+    "verdict": {
+      "true": "Exact",
+      "false": "Inexact",
+      "partly": "En partie exact",
+      "unsure": "Impossible à dire"
+    },
+    "checking": "Vérification…",
+    "unfinished": "Non terminée",
+    "mark": "Vérifié : {verdict}",
+    "markQuote": "« {quote} » : {verdict}",
+    "by": "Vérifié par {executor}",
+    "again": "Vérifier à nouveau",
+    "inAssistant": "Voir dans la conversation de l’assistant",
+    "process": "Voir la vérification",
+    "openConversation": "Ouvrir la conversation",
+    "sent": "{executor} le vérifie ; le résultat s’affichera sous le message.",
+    "sentNoName": "Vérification en cours ; le résultat s’affichera sous le message.",
+    "startFailed": "La vérification n’a pas pu démarrer : {message}",
+    "evidence": "Preuves",
+    "noEvidence": "Aucune preuve donnée.",
+    "checkedMessage": "Le message vérifié",
+    "checkedSentence": "La phrase vérifiée",
+    "asked": "Il répondait à",
+    "note": {
+      "no_verdict": "La vérification n’a donné aucun verdict.",
+      "no_evidence": "La vérification a donné un verdict sans preuve : il compte comme impossible à dire.",
+      "restarted": "codeg a redémarré pendant qu’elle tournait.",
+      "stopped": "Elle a été arrêtée.",
+      "taken_over": "Vous avez repris sa session.",
+      "failed": "Échec : {error}"
+    },
+    "heading": {
+      "checking": "Vérification d’un message",
+      "done": "Résultat de la vérification",
+      "failed": "Vérification non terminée"
+    },
+    "cardLine": {
+      "checking": "Vérification d’un message de {title}",
+      "checkingSentence": "Vérification d’une phrase de {title}",
+      "done": "Message de {title} vérifié : {verdict}",
+      "doneSentence": "Phrase de {title} vérifiée : {verdict}",
+      "failed": "La vérification d’un message de {title} n’a pas abouti",
+      "failedSentence": "La vérification d’une phrase de {title} n’a pas abouti"
+    },
+    "titleQuoted": "« {title} »",
+    "untitled": "une conversation",
+    "expand": "Tout afficher",
+    "collapse": "Afficher moins"
   }
 }

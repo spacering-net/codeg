@@ -1492,6 +1492,32 @@ pub async fn personal_agent_skill_switch_core(
         .map_err(refused)
 }
 
+/// "Is this right?" (10.3): the owner has a message of an ordinary
+/// conversation checked — its last check, or a new one through the primary.
+pub async fn personal_agent_check_message_core(
+    request: crate::models::personal_agent::MessageCheckRequest,
+) -> Result<crate::models::personal_agent::MessageCheckView, AppCommandError> {
+    engine(None)
+        .await?
+        .check_message(request)
+        .await
+        .map_err(refused)
+}
+
+/// The latest check of each message of a conversation (10.3). Read-only, so
+/// a page anywhere reads it.
+pub async fn personal_agent_checks_core(
+    db: &AppDatabase,
+    conversation_id: i32,
+) -> Result<Vec<crate::models::personal_agent::MessageCheckView>, AppCommandError> {
+    let checks = crate::db::service::personal_agent_check_service::latest_of_conversation(
+        &db.conn,
+        conversation_id,
+    )
+    .await?;
+    Ok(crate::personal_agent::fact_check::check_views(db, checks).await)
+}
+
 pub async fn personal_agent_set_workdir_core(
     bot_id: Option<i32>,
     path: Option<String>,
@@ -2218,6 +2244,34 @@ pub async fn personal_agent_skill_switch(
     on: bool,
 ) -> Result<(), AppCommandError> {
     personal_agent_skill_switch_core(bot_id, name, on).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_check_message(
+    conversation_id: i32,
+    message: String,
+    asked: Option<String>,
+    quote: Option<String>,
+    again: Option<bool>,
+) -> Result<crate::models::personal_agent::MessageCheckView, AppCommandError> {
+    personal_agent_check_message_core(crate::models::personal_agent::MessageCheckRequest {
+        conversation_id,
+        message,
+        asked,
+        quote,
+        again: again.unwrap_or(false),
+    })
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_checks(
+    db: State<'_, AppDatabase>,
+    conversation_id: i32,
+) -> Result<Vec<crate::models::personal_agent::MessageCheckView>, AppCommandError> {
+    personal_agent_checks_core(&db, conversation_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

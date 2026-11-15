@@ -1274,9 +1274,10 @@ impl PersonalAgentEngine {
             Some(state) => state.read().await.last_assistant_text.clone(),
             None => None,
         };
-        // A check's verdict comes last, past what an excerpt keeps (7.5).
+        // A check's verdict comes last, past what an excerpt keeps (7.5,
+        // 10.3).
         if let Some(text) = full.as_ref() {
-            if self.check_round_of(id).await.is_some() {
+            if self.check_round_of(id).await.is_some() || self.fact_check_of(id).await.is_some() {
                 self.state.lock().await.check_texts.insert(id, text.clone());
             }
         }
@@ -1363,6 +1364,14 @@ impl PersonalAgentEngine {
         if let Some(round) = self.check_round_of(d.id).await {
             if d.state != DispatchState::WaitingInput {
                 self.check_progress(d, round, note, cause).await;
+                return;
+            }
+        }
+        // So is a check of a message the owner asked for (10.3), of that
+        // check.
+        if let Some(check) = self.fact_check_of(d.id).await {
+            if d.state != DispatchState::WaitingInput {
+                self.fact_check_progress(d, check, note).await;
                 return;
             }
         }

@@ -634,6 +634,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_skill_switch),
         )
         .route(
+            "/personal_agent_check_message",
+            post(handlers::personal_agent::personal_agent_check_message),
+        )
+        .route(
+            "/personal_agent_checks",
+            post(handlers::personal_agent::personal_agent_checks),
+        )
+        .route(
             "/personal_agent_set_workdir",
             post(handlers::personal_agent::personal_agent_set_workdir),
         )
