@@ -158,7 +158,7 @@ const starter = (extra: Record<string, unknown> = {}) =>
   )
 
 beforeEach(() => {
-  usePersonalAgentUi.setState({ settings: null, viewBot: null })
+  usePersonalAgentUi.setState({ settings: null, botPage: null, viewBot: null })
   useAppWorkspaceStore.setState({
     folders: [
       { id: 5, name: "my-app", kind: "regular", parent_id: null },
@@ -250,10 +250,7 @@ describe("the opening choice card", () => {
     expect(screen.getByText("agent's default")).toBeTruthy()
     expect(screen.getByText("from another config")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Change brain" }))
-    expect(usePersonalAgentUi.getState().settings).toEqual({
-      page: "identity",
-      bot: null,
-    })
+    expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "identity" })
     const role = screen.getByRole("button", { name: /Change role/ })
     await waitFor(() => expect(role.hasAttribute("disabled")).toBe(false))
     await userEvent.click(role)

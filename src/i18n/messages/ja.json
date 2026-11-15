@@ -8093,13 +8093,9 @@
       "restoreDefaults": "既定に戻す",
       "back": "会話に戻る",
       "viewTitle": "設定",
-      "backToOwn": "このページのアシスタントに戻る",
-      "editingOther": "{name} 自身の設定を編集しています。",
       "readOnly": "アシスタントは別の codeg プロセスで動作しているため、ここでは設定は読み取り専用です。実行設定そのものは引き続き編集できます。",
       "setUpFirst": "先にメインアシスタントを設定してください。",
       "nav": {
-        "thisAssistant": "このアシスタント",
-        "allAssistants": "すべてのアシスタント",
         "team": "チーム",
         "prefs": "環境設定",
         "identity": "アイデンティティと頭脳",
@@ -8803,8 +8799,6 @@
         "off": "オフ",
         "default": "既定"
       },
-      "targetLoading": "このアシスタントの設定を読み込み中…",
-      "targetFailed": "このアシスタントの設定を読み込めませんでした。",
       "brain": "頭脳",
       "about": {
         "followSystem": "システムに従う",
@@ -8917,7 +8911,8 @@
       "skillTurnedOff": "{name} をオフにしました",
       "deleteSkill": "スキルを削除",
       "confirmDeleteSkillHint": "この手順スキルを削除しますか？作業ディレクトリからフォルダーごと削除されます。",
-      "skillDeleted": "{name} を削除しました"
+      "skillDeleted": "{name} を削除しました",
+      "viewSubtitle": "すべてのアシスタントで共通"
     },
     "statusWord": {
       "idle": "待機中",
@@ -8941,7 +8936,8 @@
       "newSession": "新しいセッションを開始…",
       "stopAll": "すべて停止",
       "stopAllHint": "返信、送り出した作業、まだ誰も着手していないメッセージを止めます",
-      "stoppedAll": "このアシスタントの作業をすべて止めました"
+      "stoppedAll": "このアシスタントの作業をすべて止めました",
+      "details": "詳細を表示"
     },
     "newSession": {
       "title": "新しいセッションを開始しますか？",
@@ -9259,7 +9255,6 @@
       "copied": "{name} として複製しました",
       "openConversation": "開く",
       "more": "その他",
-      "settings": "設定",
       "copy": "複製",
       "deleteAction": "削除…",
       "fromTemplate": "テンプレートから作成",
@@ -9341,14 +9336,17 @@
           "copy": "複製…",
           "stopAll": "すべて停止",
           "delete": "削除…",
-          "open": "開く"
+          "open": "開く",
+          "details": "詳細を表示",
+          "edit": "基本情報を編集…"
         },
         "mergeable": "#{id} マージできます：{title}",
         "prReady": "マージできます：{text}",
         "prFailed": "#{id} チェック失敗：{title}",
         "prStuck": "#{id} コンフリクトあり：{title}",
         "prChecks": "#{id} チェック待ち {passed}/{total}",
-        "resize": "アシスタント一覧の幅を変更"
+        "resize": "アシスタント一覧の幅を変更",
+        "dropNewGroup": "ここにドロップして新しいグループに"
       },
       "choice": {
         "other": "その他",
@@ -9424,6 +9422,14 @@
         "confirm": "削除",
         "plans": "計画 {count} 件が止まります：{titles}。",
         "planSteps": "他の計画の {count} ステップがこのアシスタントに割り当てられています：{steps}。その番が来たら、各計画のアシスタントが別の担当を選びます。"
+      },
+      "edit": {
+        "title": "基本情報を編集",
+        "description": "名簿、専用ページ、メッセージに表示される名前とアイコンです。アシスタント自身もこの名前を知っています。",
+        "name": "名前",
+        "cancel": "キャンセル",
+        "save": "保存",
+        "saved": "保存しました。"
       }
     },
     "face": {
@@ -10715,6 +10721,11 @@
       "cancel": "キャンセル",
       "install": "インストール",
       "dismiss": "使わない"
+    },
+    "botPage": {
+      "primary": "メインアシスタント",
+      "worker": "作業アシスタント",
+      "notSetUp": "まだ設定されていません"
     }
   },
   "MessageCheck": {

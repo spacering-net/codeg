@@ -8093,13 +8093,9 @@
       "restoreDefaults": "Restaurar padrões",
       "back": "Voltar à conversa",
       "viewTitle": "Configurações",
-      "backToOwn": "Voltar ao assistente desta página",
-      "editingOther": "Você está editando as configurações próprias de {name}.",
       "readOnly": "Os assistentes rodam em outro processo do codeg, então as configurações deles são somente leitura aqui. As configurações de execução em si ainda podem ser editadas.",
       "setUpFirst": "Configure primeiro o assistente principal.",
       "nav": {
-        "thisAssistant": "Este assistente",
-        "allAssistants": "Todos os assistentes",
         "team": "Equipe",
         "prefs": "Preferências",
         "identity": "Identidade e cérebro",
@@ -8803,8 +8799,6 @@
         "off": "desativado",
         "default": "padrão"
       },
-      "targetLoading": "Carregando as configurações deste assistente…",
-      "targetFailed": "Não foi possível ler as configurações deste assistente.",
       "brain": "Cérebro",
       "about": {
         "followSystem": "Seguir o sistema",
@@ -8917,7 +8911,8 @@
       "skillTurnedOff": "{name} desativada",
       "deleteSkill": "Excluir skill",
       "confirmDeleteSkillHint": "Excluir esta skill de processo? A pasta dela sai do diretório de trabalho.",
-      "skillDeleted": "{name} excluída"
+      "skillDeleted": "{name} excluída",
+      "viewSubtitle": "Comuns a todos os assistentes"
     },
     "statusWord": {
       "idle": "Ocioso",
@@ -8941,7 +8936,8 @@
       "newSession": "Iniciar uma nova sessão…",
       "stopAll": "Parar tudo",
       "stopAllHint": "Para a resposta, o trabalho delegado e as mensagens que ninguém começou",
-      "stoppedAll": "Tudo o que este assistente tinha em andamento foi parado"
+      "stoppedAll": "Tudo o que este assistente tinha em andamento foi parado",
+      "details": "Ver detalhes"
     },
     "newSession": {
       "title": "Iniciar uma nova sessão?",
@@ -9259,7 +9255,6 @@
       "copied": "Cópia criada: {name}",
       "openConversation": "Abrir",
       "more": "Mais",
-      "settings": "Configurações",
       "copy": "Duplicar",
       "deleteAction": "Excluir…",
       "fromTemplate": "A partir de um modelo",
@@ -9341,14 +9336,17 @@
           "copy": "Duplicar…",
           "stopAll": "Parar tudo",
           "delete": "Excluir…",
-          "open": "Abrir"
+          "open": "Abrir",
+          "details": "Ver detalhes",
+          "edit": "Editar informações básicas…"
         },
         "mergeable": "#{id} pronta para mesclar: {title}",
         "prReady": "Pronto para mesclar: {text}",
         "prFailed": "#{id} verificações falharam: {title}",
         "prStuck": "#{id} tem um conflito: {title}",
         "prChecks": "#{id} aguardando verificações {passed}/{total}",
-        "resize": "Redimensionar a lista de assistentes"
+        "resize": "Redimensionar a lista de assistentes",
+        "dropNewGroup": "Solte aqui para um novo grupo"
       },
       "choice": {
         "other": "Outro",
@@ -9424,6 +9422,14 @@
         "confirm": "Excluir",
         "plans": "{count, plural, one {O plano dele para} other {Os # planos dele param}}: {titles}.",
         "planSteps": "{count, plural, one {Uma etapa de outro plano está} other {# etapas de outros planos estão}} com ele: {steps}. Quando chegar a vez, os assistentes desses planos escolhem outro."
+      },
+      "edit": {
+        "title": "Editar informações básicas",
+        "description": "O nome e a imagem com que aparece na lista, na sua página e nas suas mensagens; o assistente também sabe o seu nome.",
+        "name": "Nome",
+        "cancel": "Cancelar",
+        "save": "Salvar",
+        "saved": "Salvo."
       }
     },
     "face": {
@@ -10715,6 +10721,11 @@
       "cancel": "Cancelar",
       "install": "Instalar",
       "dismiss": "Esta não"
+    },
+    "botPage": {
+      "primary": "Assistente principal",
+      "worker": "Assistente de trabalho",
+      "notSetUp": "Ainda não configurado"
     }
   },
   "MessageCheck": {

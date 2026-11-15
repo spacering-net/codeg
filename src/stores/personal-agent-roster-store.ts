@@ -11,11 +11,13 @@
  * back; each assistant's state is then replaced as it is pushed
  * (`personal-agent://bots` `live`). States are kept by freshness: a read
  * that was on its way while a newer push came does not undo it, and a push
- * that came before the first read is kept for it. In a process that does
- * not run the assistants nothing is pushed: the roster is read again every
- * few seconds there. One subscription for every holder, dropped with the
- * last; each subscription is a fresh set of callbacks, so one dropped late
- * never touches the next.
+ * that came before the first read is kept for it. Reads are kept by the
+ * order they were asked for: one landing after a read asked for later has
+ * landed is dropped, and one landing before it is kept until that one
+ * lands. In a process that does not run the assistants nothing is pushed:
+ * the roster is read again every few seconds there. One subscription for
+ * every holder, dropped with the last; each subscription is a fresh set of
+ * callbacks, so one dropped late never touches the next.
  */
 
 import { useEffect } from "react"
@@ -106,21 +108,38 @@ export const usePersonalAgentRoster = create<RosterStore>((set) => ({
 let holders = 0
 let stop: (() => void) | null = null
 
+/** Reads by the order they were asked for: the last asked for, and the
+ *  last of them shown. */
+let readSeq = 0
+let shownSeq = 0
+
+/** Show read `seq` unless a read asked for after it is shown already. */
+function showRead(seq: number, entries: RosterEntry[]): void {
+  if (seq <= shownSeq) return
+  shownSeq = seq
+  usePersonalAgentRoster.getState().setEntries(entries)
+}
+
 /** Read the roster now (coalesced with any read asked for just before). */
 let reloadTimer: ReturnType<typeof setTimeout> | null = null
-let readSeq = 0
 export function reloadRoster(): void {
   if (reloadTimer) return
   reloadTimer = setTimeout(() => {
     reloadTimer = null
     const seq = ++readSeq
     personalAgentBots()
-      .then((entries) => {
-        if (seq === readSeq)
-          usePersonalAgentRoster.getState().setEntries(entries)
-      })
+      .then((entries) => showRead(seq, entries))
       .catch(() => {})
   }, RELOAD_GAP_MS)
+}
+
+/** Read the roster now and wait for it: what an assistant just made needs
+ *  before the page goes to it — the page takes an assistant the roster does
+ *  not have for one deleted. Once it returns, the roster shown is this read
+ *  or one asked for after it — never one from before. */
+export async function readRosterNow(): Promise<void> {
+  const seq = ++readSeq
+  showRead(seq, await personalAgentBots())
 }
 
 function start(): () => void {
@@ -168,9 +187,7 @@ function start(): () => void {
   const seq = ++readSeq
   personalAgentBots()
     .then((entries) => {
-      if (live && seq === readSeq) {
-        usePersonalAgentRoster.getState().setEntries(entries)
-      }
+      if (live) showRead(seq, entries)
     })
     .catch(() => {})
   return () => {
@@ -210,7 +227,9 @@ export function __resetRosterForTests(): void {
     lastSpecific: {},
     freshest: {},
   })
+  // A read on its way is from before: never shown.
   readSeq += 1
+  shownSeq = readSeq
   if (reloadTimer) {
     clearTimeout(reloadTimer)
     reloadTimer = null

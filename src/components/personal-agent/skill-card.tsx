@@ -53,7 +53,7 @@ export function SkillCard({ item }: { item: NoticeItem }) {
   const tn = useTranslations("PersonalAgent.notice")
   const { readOnly } = usePageScope()
   const botId = useBotId()
-  const openSettings = usePersonalAgentUi((s) => s.openSettings)
+  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   const row = item.row
   const data = row.data
   const raw = str(data, "state") ?? "acted"
@@ -198,7 +198,7 @@ export function SkillCard({ item }: { item: NoticeItem }) {
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => openSettings("persona", null, path)}
+              onClick={() => openBotPage("persona", { entry: path })}
               data-pa-skill-act="view"
             >
               {t("view")}

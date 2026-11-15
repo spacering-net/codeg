@@ -103,7 +103,7 @@ function TidyLine({ row }: { row: TodayRow }) {
     if (row.bot_id == null) return
     const ui = usePersonalAgentUi.getState()
     ui.setViewBot(entry?.kind === "primary" ? null : row.bot_id)
-    ui.closeSettings()
+    ui.showConversation()
     ui.setPendingJump(
       row.row_id != null ? { bot: row.bot_id, row: row.row_id } : null
     )

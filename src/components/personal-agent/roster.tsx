@@ -10,10 +10,15 @@
  *   last words when nothing does. The face is its state (10.6), the dot in
  *   its corner what it wants of the owner. Hovering shows the whole activity
  *   and the work in hand.
- * - Groups: the pinned ones (in the owner's order, dragged to reorder), the
- *   owner's own groups (folding), the rest. Within a group: waiting on the
- *   owner, working, idle, done, the most recent first. Each group's name on
- *   its rows' faces' edge; a row's time as short as a chat list has it.
+ * - Groups: the pinned ones (in the owner's order), the owner's own groups
+ *   (folding), the rest. Within a group: waiting on the owner, working,
+ *   idle, done, the most recent first. Each group's name on its rows' faces'
+ *   edge; a row's time as short as a chat list has it.
+ * - A work assistant's row is dragged onto a group to put it there — among
+ *   the pinned ones at the slot it is let go over, in a group of the
+ *   owner's, with the rest — or onto "new group" to name one. By the
+ *   pointer, not the page's drag and drop: the desktop's webview takes that
+ *   for an OS drop and never hands the page its drop.
  * - After them, "N hidden", which opens to show them; at the foot, [+ new
  *   work assistant] as a row is drawn.
  * - One measure for the room: the list as far from the top as the primary's
@@ -22,17 +27,45 @@
  * - Dragged narrower than its least width, the list folds to a rail of
  *   faces (roster-resize.tsx): the primary's, a rule, the others' in the
  *   list's order; each one's name, line and work in hand when hovered.
- * - A row's context menu: pin, move to a group, hide, mute, mark unread,
- *   notifications, copy, stop everything, delete.
+ * - A row's context menu: open, its page, its name and face, pin, move to a
+ *   group, hide, mute, mark unread, notifications, copy, stop everything,
+ *   delete.
  * - Rows come and go by their height (the motion tokens), not at once.
  * - On a narrow screen, a strip of faces over the page.
  *
  * Opening an assistant takes away the owner's own unread mark on it.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react"
+import { createPortal } from "react-dom"
 import { useLocale, useTranslations } from "next-intl"
-import { ChevronDown, EyeOff, Plus, VolumeX } from "lucide-react"
+import {
+  Bell,
+  ChevronDown,
+  Copy,
+  Eye,
+  EyeOff,
+  FolderInput,
+  IdCard,
+  Mail,
+  MailOpen,
+  MessageSquareText,
+  OctagonX,
+  Pin,
+  PinOff,
+  Plus,
+  Trash2,
+  UserPen,
+  Volume2,
+  VolumeX,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -77,6 +110,7 @@ import {
 } from "./activity-text"
 import { BotAvatar } from "./bot-avatar"
 import { BotDeleteDialog } from "./bot-delete-dialog"
+import { BotInfoDialog } from "./bot-info-dialog"
 import { NewBotDialog } from "./new-bot-dialog"
 import {
   groupRoster,
@@ -100,6 +134,36 @@ const TICK_SLOW_MS = 30_000
 /** A row's height in or out. */
 const ROW_MS = 240
 const FOLDED_KEY = "pa:roster:folded:v1"
+/** How far the pointer moves, pressed on a row, before the row is
+ *  dragged. */
+const DRAG_START_PX = 5
+
+/** Where a dragged row can be put: among the pinned ones, in a group of the
+ *  owner's, with the rest, or in a group to name. */
+type DropGroup =
+  | { kind: "pinned" }
+  | { kind: "section"; name: string }
+  | { kind: "rest" }
+  | { kind: "new" }
+
+interface DropTarget {
+  /** The group's `data-pa-drop`. */
+  key: string
+  group: DropGroup
+  /** Among the pinned ones: the one it goes before (`null`: the end). */
+  before: number | null
+}
+
+function dropKey(g: DropGroup): string {
+  return g.kind === "section" ? `section:${g.name}` : g.kind
+}
+
+function dropGroupOf(key: string): DropGroup | null {
+  if (key === "pinned" || key === "rest" || key === "new") return { kind: key }
+  return key.startsWith("section:")
+    ? { kind: "section", name: key.slice("section:".length) }
+    : null
+}
 
 /** The clock, read fast only while it can change what is shown. */
 function useRosterNow(entries: readonly RosterEntry[] | null): number {
@@ -346,12 +410,33 @@ export function PersonalAgentRoster({
   const templates = useBotTemplates()
   const viewBot = usePersonalAgentUi((s) => s.viewBot)
   const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
+  const showConversation = usePersonalAgentUi((s) => s.showConversation)
+  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   const [adding, setAdding] = useState(false)
   const [deleting, setDeleting] = useState<number | null>(null)
   const [grouping, setGrouping] = useState<RosterEntry | null>(null)
+  const [editing, setEditing] = useState<RosterEntry | null>(null)
   const [showHidden, setShowHidden] = useState(false)
   const [folded, toggleFold] = useFolded()
-  const [dragging, setDragging] = useState<number | null>(null)
+  // A row dragged by the pointer: where it is, and the group under it.
+  const [drag, setDrag] = useState<{ id: number; x: number; y: number } | null>(
+    null
+  )
+  const [target, setTarget] = useState<DropTarget | null>(null)
+  const press = useRef<{
+    id: number
+    pointer: number
+    x: number
+    y: number
+    el: HTMLElement
+    /** Let go of by Esc: the rest of the press drags nothing, and its
+     *  click opens nothing. */
+    dropped?: boolean
+  } | null>(null)
+  const dragRef = useRef<{ id: number; target: DropTarget | null } | null>(null)
+  // The click a drag ends in is the drop's, not a click on the row.
+  const swallowClick = useRef(false)
+  const navRef = useRef<HTMLElement | null>(null)
   const [size, setSize] = useRosterWidth()
   const now = useRosterNow(entries)
   const list = useMemo(() => entries ?? [], [entries])
@@ -392,11 +477,239 @@ export function PersonalAgentRoster({
     return m
   }, [templates])
 
-  const go = (b: RosterEntry) => setViewBot(b.kind === "primary" ? null : b.id)
+  // Its conversation — out of its page or the settings, too.
+  const go = (b: RosterEntry) => {
+    setViewBot(b.kind === "primary" ? null : b.id)
+    showConversation()
+  }
+  const openDetails = (b: RosterEntry) =>
+    openBotPage("identity", { bot: b.kind === "primary" ? null : b.id })
   const act = (b: RosterEntry, a: RosterAct) => {
     void personalAgentRosterAct(b.id, a).catch((e) =>
       toast.error(toErrorMessage(e))
     )
+  }
+
+  /** The pinned ones' order with `id` put before `before` (`null`: at the
+   *  end). */
+  const pinnedOrder = (id: number, before: number | null): number[] => {
+    const ids = groups.pinned.map((p) => p.id).filter((x) => x !== id)
+    const at = before == null ? -1 : ids.indexOf(before)
+    ids.splice(at < 0 ? ids.length : at, 0, id)
+    return ids
+  }
+
+  /** Put `b` in `g`: where it then shows — out of the pinned ones for a
+   *  group, and (dragged out of the hidden ones) shown. A group to name
+   *  asks its name first. */
+  const moveTo = async (
+    b: RosterEntry,
+    g: DropGroup,
+    opts: { before?: number | null; show?: boolean } = {}
+  ) => {
+    if (g.kind === "new") {
+      setGrouping(b)
+      return
+    }
+    const r = b.roster
+    const show = opts.show && r?.hidden
+    const acts: RosterAct[] = []
+    if (g.kind === "pinned") {
+      if (show) acts.push({ act: "show" })
+      if (!r?.pinned_at) acts.push({ act: "pin" })
+      // Newly pinned, it goes at the end; anywhere else, the order says.
+      if (r?.pinned_at || opts.before != null) {
+        acts.push({ act: "order", ids: pinnedOrder(b.id, opts.before ?? null) })
+      }
+    } else {
+      const name = g.kind === "section" ? g.name : null
+      if ((r?.section?.trim() || null) !== name) {
+        acts.push({ act: "section", name })
+      }
+      // Its group first: unpinned before, it would show a moment where it
+      // was.
+      if (r?.pinned_at) acts.push({ act: "unpin" })
+      if (show) acts.push({ act: "show" })
+    }
+    try {
+      for (const a of acts) await personalAgentRosterAct(b.id, a)
+    } catch (e) {
+      toast.error(toErrorMessage(e))
+    }
+  }
+
+  /** Whether `b` put in `g` would move: not into the group it is in. */
+  const moves = (b: RosterEntry, g: DropGroup): boolean => {
+    const r = b.roster
+    const section = r?.section?.trim() || null
+    switch (g.kind) {
+      case "pinned":
+      case "new":
+        return true
+      case "section":
+        return !!r?.pinned_at || !!r?.hidden || section !== g.name
+      case "rest":
+        return !!r?.pinned_at || !!r?.hidden || section != null
+    }
+  }
+
+  /** The group under the pointer, for the row `id` dragged — and among the
+   *  pinned ones, the slot: before the first other row whose middle is
+   *  below the pointer. */
+  const hitTest = (x: number, y: number, id: number): DropTarget | null => {
+    const el =
+      typeof document.elementFromPoint === "function"
+        ? (document.elementFromPoint(x, y) as HTMLElement | null)
+        : null
+    const zone = el?.closest<HTMLElement>("[data-pa-drop]") ?? null
+    if (!zone || !navRef.current?.contains(zone)) return null
+    const key = zone.dataset.paDrop ?? ""
+    const group = dropGroupOf(key)
+    const b = list.find((e) => e.id === id)
+    if (!group || !b || !moves(b, group)) return null
+    if (group.kind !== "pinned") return { key, group, before: null }
+    let before: number | null = null
+    for (const rowEl of zone.querySelectorAll<HTMLElement>(
+      "[data-pa-roster-bot]"
+    )) {
+      if (rowEl.closest('[data-pa-roster-row-state="out"]')) continue
+      // Not before itself: over its own row it stays where it is.
+      if (Number(rowEl.dataset.paRosterBot) === id) continue
+      const r = rowEl.getBoundingClientRect()
+      if (y < r.top + r.height / 2) {
+        before = Number(rowEl.dataset.paRosterBot)
+        break
+      }
+    }
+    // Where it already is: nowhere to put it.
+    if (b.roster?.pinned_at && !b.roster.hidden) {
+      const held = groups.pinned.map((p) => p.id)
+      const next = pinnedOrder(id, before)
+      if (next.every((v, i) => v === held[i])) return null
+    }
+    return { key, group, before }
+  }
+
+  /** The click the press ends in is the drag's, not a click on the row. */
+  const swallowNextClick = () => {
+    swallowClick.current = true
+    window.setTimeout(() => {
+      swallowClick.current = false
+    }, 0)
+  }
+
+  /** The press let go (`commit`: dropped where it is), or the drag let go
+   *  of by Esc (`held`: the button still down). */
+  const endDrag = (pointer: number, commit: boolean, held = false) => {
+    const p = press.current
+    if (!p || p.pointer !== pointer) return
+    const d = dragRef.current
+    dragRef.current = null
+    if (held) press.current = { ...p, dropped: true }
+    else {
+      press.current = null
+      if (p.dropped) swallowNextClick()
+    }
+    // A press that never moved: its click opens the row.
+    if (!d) return
+    delete document.documentElement.dataset.paRosterDragging
+    setDrag(null)
+    setTarget(null)
+    if (!held) swallowNextClick()
+    const b = list.find((e) => e.id === d.id)
+    if (commit && b && d.target) {
+      void moveTo(b, d.target.group, { before: d.target.before, show: true })
+    }
+  }
+
+  // Esc lets go of a dragged row where it was.
+  const dragging = drag != null
+  useEffect(() => {
+    if (!dragging) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return
+      e.preventDefault()
+      const p = press.current
+      if (p) endDrag(p.pointer, false, true)
+    }
+    window.addEventListener("keydown", onKey, true)
+    return () => window.removeEventListener("keydown", onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragging])
+  // Gone mid-drag (the page left): nothing kept dragging.
+  useEffect(
+    () => () => {
+      delete document.documentElement.dataset.paRosterDragging
+    },
+    []
+  )
+
+  /** A work assistant's row, dragged by the pointer onto a group. Not by
+   *  touch: a finger on the list scrolls it. */
+  const dragHandlers = (b: RosterEntry) =>
+    readOnly || b.kind === "primary"
+      ? {}
+      : {
+          onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
+            if (e.button !== 0 || e.pointerType === "touch") return
+            press.current = {
+              id: b.id,
+              pointer: e.pointerId,
+              x: e.clientX,
+              y: e.clientY,
+              el: e.currentTarget,
+            }
+          },
+          onPointerMove: (e: ReactPointerEvent<HTMLElement>) => {
+            const p = press.current
+            if (!p || p.pointer !== e.pointerId || p.dropped) return
+            if (!dragRef.current) {
+              // Let go somewhere else since: nothing to drag.
+              if ((e.buttons & 1) === 0) {
+                press.current = null
+                return
+              }
+              if (Math.hypot(e.clientX - p.x, e.clientY - p.y) < DRAG_START_PX)
+                return
+              try {
+                p.el.setPointerCapture?.(e.pointerId)
+              } catch {
+                // Not capturable: the moves still come while over the row.
+              }
+              dragRef.current = { id: p.id, target: null }
+              document.documentElement.dataset.paRosterDragging = ""
+            }
+            const d = dragRef.current
+            const next = hitTest(e.clientX, e.clientY, p.id)
+            d.target = next
+            setDrag({ id: p.id, x: e.clientX, y: e.clientY })
+            setTarget((held) =>
+              held?.key === next?.key && held?.before === next?.before
+                ? held
+                : next
+            )
+          },
+          onPointerUp: (e: ReactPointerEvent<HTMLElement>) =>
+            endDrag(e.pointerId, true),
+          onPointerCancel: (e: ReactPointerEvent<HTMLElement>) =>
+            endDrag(e.pointerId, false),
+          onLostPointerCapture: (e: ReactPointerEvent<HTMLElement>) =>
+            endDrag(e.pointerId, false),
+        }
+
+  /** A group a row can be dragged onto: its `data-pa-drop`, lit while the
+   *  row is over it. */
+  const dropZone = (g: DropGroup) => {
+    const key = dropKey(g)
+    const over = target?.key === key
+    return {
+      "data-pa-drop": key,
+      "data-pa-drop-over": over || undefined,
+      className: cn(
+        "rounded-xl transition-colors",
+        over && "bg-accent/50 ring-1 ring-primary/25"
+      ),
+    }
   }
   const copy = async (b: RosterEntry) => {
     try {
@@ -523,39 +836,59 @@ export function PersonalAgentRoster({
   const menu = (b: RosterEntry, trigger: ReactNode) => {
     const worker = b.kind === "worker"
     const r = b.roster
+    const notify = r?.notify ?? true
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>{trigger}</ContextMenuTrigger>
-        <ContextMenuContent data-pa-roster-menu={b.id}>
+        <ContextMenuContent data-pa-roster-menu={b.id} className="min-w-48">
           <ContextMenuItem onSelect={() => go(b)}>
+            <MessageSquareText aria-hidden />
             {tr("menu.open")}
           </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() => openDetails(b)}
+            data-pa-roster-details={b.id}
+          >
+            <IdCard aria-hidden />
+            {tr("menu.details")}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={readOnly}
+            onSelect={() => setEditing(b)}
+            data-pa-roster-edit={b.id}
+          >
+            <UserPen aria-hidden />
+            {tr("menu.edit")}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
           {worker ? (
             <ContextMenuItem
               disabled={readOnly}
               onSelect={() => act(b, { act: r?.pinned_at ? "unpin" : "pin" })}
             >
+              {r?.pinned_at ? <PinOff aria-hidden /> : <Pin aria-hidden />}
               {r?.pinned_at ? tr("menu.unpin") : tr("menu.pin")}
             </ContextMenuItem>
           ) : null}
           {worker ? (
             <ContextMenuSub>
               <ContextMenuSubTrigger disabled={readOnly}>
+                <FolderInput aria-hidden />
                 {tr("menu.moveTo")}
               </ContextMenuSubTrigger>
               <ContextMenuSubContent>
                 {sections.map((name) => (
                   <ContextMenuItem
                     key={name}
-                    disabled={r?.section === name}
-                    onSelect={() => act(b, { act: "section", name })}
+                    disabled={!r?.pinned_at && r?.section === name}
+                    onSelect={() => void moveTo(b, { kind: "section", name })}
                   >
                     {name}
                   </ContextMenuItem>
                 ))}
                 <ContextMenuItem
-                  disabled={!r?.section}
-                  onSelect={() => act(b, { act: "section", name: null })}
+                  disabled={!r?.pinned_at && !r?.section}
+                  onSelect={() => void moveTo(b, { kind: "rest" })}
                 >
                   {tr("menu.noGroup")}
                 </ContextMenuItem>
@@ -571,6 +904,7 @@ export function PersonalAgentRoster({
               disabled={readOnly}
               onSelect={() => act(b, { act: r?.hidden ? "show" : "hide" })}
             >
+              {r?.hidden ? <Eye aria-hidden /> : <EyeOff aria-hidden />}
               {r?.hidden ? tr("menu.show") : tr("menu.hide")}
             </ContextMenuItem>
           ) : null}
@@ -578,6 +912,7 @@ export function PersonalAgentRoster({
             disabled={readOnly}
             onSelect={() => act(b, { act: r?.muted ? "unmute" : "mute" })}
           >
+            {r?.muted ? <Volume2 aria-hidden /> : <VolumeX aria-hidden />}
             {r?.muted ? tr("menu.unmute") : tr("menu.mute")}
           </ContextMenuItem>
           <ContextMenuItem
@@ -586,22 +921,26 @@ export function PersonalAgentRoster({
               act(b, { act: r?.unread_mark ? "mark_read" : "mark_unread" })
             }
           >
+            {r?.unread_mark ? <MailOpen aria-hidden /> : <Mail aria-hidden />}
             {r?.unread_mark ? tr("menu.markRead") : tr("menu.markUnread")}
           </ContextMenuItem>
           <ContextMenuItem
             disabled={readOnly}
-            onSelect={() => act(b, { act: "notify", on: !(r?.notify ?? true) })}
+            onSelect={() => act(b, { act: "notify", on: !notify })}
           >
+            <Bell aria-hidden />
             <span className="flex-1">{tr("menu.notifyOn")}</span>
-            {(r?.notify ?? true) ? <span aria-hidden>✓</span> : null}
+            {notify ? <span aria-hidden>✓</span> : null}
           </ContextMenuItem>
           <ContextMenuSeparator />
           {worker ? (
             <ContextMenuItem disabled={readOnly} onSelect={() => void copy(b)}>
+              <Copy aria-hidden />
               {tr("menu.copy")}
             </ContextMenuItem>
           ) : null}
           <ContextMenuItem disabled={readOnly} onSelect={() => stopAll(b)}>
+            <OctagonX aria-hidden />
             {tr("menu.stopAll")}
           </ContextMenuItem>
           {worker ? (
@@ -610,6 +949,7 @@ export function PersonalAgentRoster({
               variant="destructive"
               onSelect={() => setDeleting(b.id)}
             >
+              <Trash2 aria-hidden />
               {tr("menu.delete")}
             </ContextMenuItem>
           ) : null}
@@ -618,52 +958,54 @@ export function PersonalAgentRoster({
     )
   }
 
-  const row = (b: RosterEntry, opts: { draggable?: boolean } = {}) => {
+  /** Where a row dragged among the pinned ones would go: before this
+   *  one, or after it (the last). */
+  const slotLine = (b: RosterEntry): "before" | "after" | null => {
+    if (target?.key !== "pinned") return null
+    if (target.before === b.id) return "before"
+    const last = groups.pinned[groups.pinned.length - 1]
+    return target.before == null && last?.id === b.id ? "after" : null
+  }
+
+  const row = (b: RosterEntry) => {
     const view = viewOf(b.live, now, b.roster?.unread_mark)
     const shownLine = shownLineOf(b, view)
     const at = b.live?.last_activity_at
     const isCurrent = b.id === currentId
+    const line = slotLine(b)
+    const lifted = drag?.id === b.id
     const button = (
       <button
         type="button"
         data-pa-roster-bot={b.id}
         data-pa-roster-look={view.look}
+        data-pa-roster-dragged={lifted || undefined}
         data-pa-face-host
         aria-current={isCurrent ? "page" : undefined}
-        onClick={() => go(b)}
-        draggable={opts.draggable && !readOnly}
-        onDragStart={(e) => {
-          if (!opts.draggable) return
-          setDragging(b.id)
-          e.dataTransfer.effectAllowed = "move"
-          e.dataTransfer.setData("text/plain", String(b.id))
+        onClick={() => {
+          if (swallowClick.current) return
+          go(b)
         }}
-        onDragEnd={() => setDragging(null)}
-        onDragOver={(e) => {
-          if (opts.draggable && dragging != null && dragging !== b.id) {
-            e.preventDefault()
-          }
-        }}
-        onDrop={(e) => {
-          if (!opts.draggable || dragging == null || dragging === b.id) return
-          e.preventDefault()
-          const ids = groups.pinned
-            .map((p) => p.id)
-            .filter((id) => id !== dragging)
-          ids.splice(ids.indexOf(b.id), 0, dragging)
-          void personalAgentRosterAct(dragging, { act: "order", ids }).catch(
-            (err) => toast.error(toErrorMessage(err))
-          )
-          setDragging(null)
-        }}
+        onFocus={hoverOnly}
+        {...dragHandlers(b)}
         className={cn(
-          "flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-start transition-colors",
+          "relative flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-start transition-colors",
           isCurrent
             ? "bg-accent text-accent-foreground"
             : "text-foreground/85 hover:bg-muted",
-          dragging === b.id && "opacity-50"
+          lifted && "cursor-grabbing opacity-40"
         )}
       >
+        {line ? (
+          <span
+            aria-hidden
+            data-pa-roster-slot={line}
+            className={cn(
+              "pointer-events-none absolute inset-x-2 h-0.5 rounded-full bg-primary",
+              line === "before" ? "-top-[3px]" : "-bottom-[3px]"
+            )}
+          />
+        ) : null}
         {face(b, 28)}
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex items-center gap-1">
@@ -696,7 +1038,12 @@ export function PersonalAgentRoster({
     return (
       <HoverCard openDelay={500} closeDelay={80}>
         {menu(b, <HoverCardTrigger asChild>{button}</HoverCardTrigger>)}
-        <HoverCardContent side="right" align="start" className="w-72">
+        <HoverCardContent
+          side="right"
+          align="start"
+          className="w-72"
+          data-pa-roster-hovercard
+        >
           {hover(b, view)}
         </HoverCardContent>
       </HoverCard>
@@ -731,8 +1078,16 @@ export function PersonalAgentRoster({
         target={grouping}
         onClose={() => setGrouping(null)}
         onSave={(name) => {
-          if (grouping) act(grouping, { act: "section", name })
+          if (grouping) {
+            void moveTo(grouping, { kind: "section", name }, { show: true })
+          }
           setGrouping(null)
+        }}
+      />
+      <BotInfoDialog
+        bot={editing}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null)
         }}
       />
     </>
@@ -801,6 +1156,7 @@ export function PersonalAgentRoster({
               data-pa-face-host
               aria-current={isCurrent ? "page" : undefined}
               onClick={() => go(b)}
+              onFocus={hoverOnly}
               className={cn(
                 "flex shrink-0 flex-col items-center justify-center rounded-xl text-center transition-colors",
                 isCurrent
@@ -815,7 +1171,12 @@ export function PersonalAgentRoster({
             </button>
           </HoverCardTrigger>
         )}
-        <HoverCardContent side="right" align="start" className="w-72">
+        <HoverCardContent
+          side="right"
+          align="start"
+          className="w-72"
+          data-pa-roster-hovercard
+        >
           {hover(b, view, shownLineOf(b, view))}
         </HoverCardContent>
       </HoverCard>
@@ -976,10 +1337,12 @@ export function PersonalAgentRoster({
     )
 
   const hasGroups = groups.pinned.length > 0 || groups.sections.length > 0
+  const dragged = drag ? (list.find((e) => e.id === drag.id) ?? null) : null
 
   return (
     <>
       <nav
+        ref={navRef}
         data-pa-roster
         aria-label={tr("title")}
         // Its width is the owner's (dragged on the handle after it), never
@@ -992,26 +1355,30 @@ export function PersonalAgentRoster({
           {/* The groups, each its name over its rows, a little apart. */}
           <div className="flex flex-col gap-2">
             {groups.pinned.length > 0 ? (
-              <div data-pa-roster-group="pinned">
+              <div
+                data-pa-roster-group="pinned"
+                {...dropZone({ kind: "pinned" })}
+              >
                 {groupHead(tr("pinned"))}
-                <AnimatedRows
-                  entries={groups.pinned}
-                  render={(b) => row(b, { draggable: true })}
-                />
+                <AnimatedRows entries={groups.pinned} render={row} />
               </div>
             ) : null}
             {groups.sections.map((s) => (
-              <div key={s.name} data-pa-roster-group={s.name}>
+              <div
+                key={s.name}
+                data-pa-roster-group={s.name}
+                {...dropZone({ kind: "section", name: s.name })}
+              >
                 {groupHead(s.name, s.name)}
                 {folded.has(s.name) ? null : (
-                  <AnimatedRows entries={s.entries} render={(b) => row(b)} />
+                  <AnimatedRows entries={s.entries} render={row} />
                 )}
               </div>
             ))}
-            {groups.rest.length > 0 ? (
-              <div data-pa-roster-group="rest">
+            {groups.rest.length > 0 || (drag && hasGroups) ? (
+              <div data-pa-roster-group="rest" {...dropZone({ kind: "rest" })}>
                 {hasGroups ? groupHead(tr("others")) : null}
-                <AnimatedRows entries={groups.rest} render={(b) => row(b)} />
+                <AnimatedRows entries={groups.rest} render={row} />
               </div>
             ) : null}
             {groups.hidden.length > 0 ? (
@@ -1026,6 +1393,21 @@ export function PersonalAgentRoster({
                   : null}
               </div>
             ) : null}
+            {/* While a row is dragged: a group to name, for it. */}
+            {drag ? (
+              <div
+                {...dropZone({ kind: "new" })}
+                className={cn(
+                  "flex h-9 items-center justify-center gap-1.5 rounded-xl border border-dashed text-xs transition-colors",
+                  target?.key === "new"
+                    ? "border-primary/40 bg-accent/50 text-foreground"
+                    : "border-border text-muted-foreground"
+                )}
+              >
+                <Plus className="size-3.5" aria-hidden />
+                {tr("dropNewGroup")}
+              </div>
+            ) : null}
           </div>
         </div>
         <div data-pa-roster-foot className="border-t border-border/50 p-2">
@@ -1034,8 +1416,35 @@ export function PersonalAgentRoster({
       </nav>
       <RosterResizeHandle size={size} onSize={setSize} />
       {dialogs}
+      {/* The row dragged, under the pointer. */}
+      {drag && dragged
+        ? createPortal(
+            <div
+              aria-hidden
+              data-pa-roster-ghost={dragged.id}
+              className="pointer-events-none fixed z-50 flex max-w-56 items-center gap-2 rounded-xl border border-border bg-popover py-1.5 ps-1.5 pe-3 text-sm text-popover-foreground shadow-lg"
+              style={{
+                left: drag.x,
+                top: drag.y,
+                transform: "translate(12px, 8px)",
+              }}
+            >
+              {face(dragged, 24)}
+              <span className="min-w-0 truncate">{botName(dragged)}</span>
+            </div>,
+            document.body
+          )
+        : null}
     </>
   )
+}
+
+/** A face's card opens on the pointer alone, not on focus: the focus a
+ *  row's menu hands back to it, closing, would leave the card open over
+ *  what the menu opened. (Prevented, the card's own focus handler stands
+ *  down.) */
+function hoverOnly(e: { preventDefault: () => void }) {
+  e.preventDefault()
 }
 
 /** A group's name, over its rows: on the rows' faces' edge. */

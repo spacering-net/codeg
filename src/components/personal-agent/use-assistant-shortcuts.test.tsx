@@ -124,7 +124,7 @@ beforeEach(() => {
   localStorage.clear()
   resetAssistantShortcuts()
   usePersonalAgentRoster.setState({ entries: ROSTER })
-  usePersonalAgentUi.setState({ viewBot: null, settings: null })
+  usePersonalAgentUi.setState({ viewBot: null, settings: null, botPage: null })
 })
 
 afterEach(() => {

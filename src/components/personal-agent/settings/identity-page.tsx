@@ -1,12 +1,13 @@
 "use client"
 
 /**
- * "Identity & brain", the first of an assistant's own settings pages: its
- * name and picture, and the agent it runs on with every option picked (the
+ * "Identity & brain", the first tab of an assistant's own page: its name
+ * and picture, and the agent it runs on with every option picked (the
  * assistant editor's flow and validation). The mode and permissions are
  * chosen here, and codeg runs it as picked. Saved with [Save] — switching
  * the agent starts a new session. With no assistant yet, it is the first
- * setup.
+ * setup. A name or picture saved elsewhere meanwhile (the roster's "Edit
+ * basic info") shows here unless the field was changed here.
  */
 
 import { useMemo, useRef, useState } from "react"
@@ -86,10 +87,22 @@ export function IdentityPage({
   const locale = useLocale()
   const { agents } = useAcpAgents()
 
-  const [name, setName] = useState(agent?.name ?? "")
-  const [avatar, setAvatar] = useState<BotAvatar>(
-    agent?.avatar ?? DEFAULT_AVATAR
-  )
+  const savedName = agent?.name ?? ""
+  const savedAvatar = agent?.avatar ?? DEFAULT_AVATAR
+  const [name, setName] = useState(savedName)
+  const [avatar, setAvatar] = useState<BotAvatar>(savedAvatar)
+  // The saved name and picture as the fields last took them: one saved
+  // anew (here or elsewhere) replaces a field still as it was.
+  const [base, setBase] = useState({ name: savedName, avatar: savedAvatar })
+  if (
+    base.name !== savedName ||
+    JSON.stringify(base.avatar) !== JSON.stringify(savedAvatar)
+  ) {
+    setBase({ name: savedName, avatar: savedAvatar })
+    if (name === base.name) setName(savedName)
+    if (JSON.stringify(avatar) === JSON.stringify(base.avatar))
+      setAvatar(savedAvatar)
+  }
   const [agentType, setAgentType] = useState<AgentType | null>(
     agent?.agent_type ?? null
   )
@@ -279,7 +292,6 @@ export function IdentityPage({
       }}
     >
       <PageHead
-        title={agent ? t("nav.identity") : t("setupTitle")}
         description={agent ? t("pages.identity") : t("setupDescription")}
       />
       <SettingCard>

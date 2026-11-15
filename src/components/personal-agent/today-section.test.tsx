@@ -210,6 +210,7 @@ beforeEach(() => {
     viewBot: 2,
     pendingJump: null,
     settings: null,
+    botPage: null,
     auxOpen: true,
     work: null,
     workOpen: false,

@@ -1,8 +1,8 @@
 /**
- * Opening the assistants page's settings from another window (10.5): the
- * settings window's "moved to the assistants page — [Open]", and the
- * composer's "Manage executor configs…" in a window that is not a
- * workspace.
+ * Opening the assistants page's settings — or a tab of the page's
+ * assistant's own page — from another window (10.5): the settings window's
+ * "moved to the assistants page — [Open]", and the composer's "Manage
+ * executor configs…" in a window that is not a workspace.
  *
  * - Desktop: the backend brings the workspace window the settings window
  *   was opened from to the front and sends it `workspace://open-personal-
@@ -14,7 +14,7 @@
  */
 
 import { getShellTransport, isDesktop } from "@/lib/transport"
-import type { SettingsPage } from "@/stores/personal-agent-ui-store"
+import type { BotTab, SettingsPage } from "@/stores/personal-agent-ui-store"
 
 export const PERSONAL_AGENT_OPEN_EVENT = "workspace://open-personal-agent"
 export const PERSONAL_AGENT_OPEN_PARAM = "pa"
@@ -22,12 +22,11 @@ const CHANNEL = "codeg:personal-agent-open"
 /** How long an open workspace tab has to answer. */
 const ANSWER_MS = 600
 
-const PAGES: readonly SettingsPage[] = [
-  "identity",
-  "persona",
-  "execution",
-  "notify",
-  "advanced",
+/** What another window may ask for: a page of the settings, or a tab of the
+ *  page's assistant's own page. */
+export type PersonalAgentPage = SettingsPage | BotTab
+
+const SETTINGS_PAGES: readonly SettingsPage[] = [
   "workers",
   "executors",
   "division",
@@ -37,16 +36,37 @@ const PAGES: readonly SettingsPage[] = [
   "about",
 ]
 
+const BOT_TABS: readonly BotTab[] = [
+  "identity",
+  "persona",
+  "execution",
+  "notify",
+  "advanced",
+]
+
 export function isSettingsPage(v: unknown): v is SettingsPage {
-  return typeof v === "string" && (PAGES as readonly string[]).includes(v)
+  return (
+    typeof v === "string" && (SETTINGS_PAGES as readonly string[]).includes(v)
+  )
+}
+
+export function isBotTab(v: unknown): v is BotTab {
+  return typeof v === "string" && (BOT_TABS as readonly string[]).includes(v)
+}
+
+export function isPersonalAgentPage(v: unknown): v is PersonalAgentPage {
+  return isSettingsPage(v) || isBotTab(v)
 }
 
 type ChannelMessage =
-  | { type: "open"; page: SettingsPage; id: string }
+  | { type: "open"; page: PersonalAgentPage; id: string }
   | { type: "taken"; id: string }
 
-/** Open the assistants page's settings at `page`, in the workspace. */
-export async function openPersonalAgentPage(page: SettingsPage): Promise<void> {
+/** Open the assistants page's settings (or its assistant's own page) at
+ *  `page`, in the workspace. */
+export async function openPersonalAgentPage(
+  page: PersonalAgentPage
+): Promise<void> {
   if (isDesktop()) {
     await getShellTransport().call("open_personal_agent_page", { page })
     return
@@ -84,14 +104,14 @@ export async function openPersonalAgentPage(page: SettingsPage): Promise<void> {
 
 /** In a workspace: take the requests other windows make. */
 export function listenPersonalAgentOpen(
-  onOpen: (page: SettingsPage) => void
+  onOpen: (page: PersonalAgentPage) => void
 ): () => void {
   const disposers: Array<() => void> = []
   let cancelled = false
   if (isDesktop()) {
     void getShellTransport()
       .subscribe<{ page?: string }>(PERSONAL_AGENT_OPEN_EVENT, (payload) => {
-        if (isSettingsPage(payload?.page)) onOpen(payload.page)
+        if (isPersonalAgentPage(payload?.page)) onOpen(payload.page)
       })
       .then((off) => {
         if (cancelled) off()
@@ -101,7 +121,7 @@ export function listenPersonalAgentOpen(
   } else if (typeof BroadcastChannel !== "undefined") {
     const channel = new BroadcastChannel(CHANNEL)
     channel.onmessage = (e: MessageEvent<ChannelMessage>) => {
-      if (e.data?.type !== "open" || !isSettingsPage(e.data.page)) return
+      if (e.data?.type !== "open" || !isPersonalAgentPage(e.data.page)) return
       channel.postMessage({
         type: "taken",
         id: e.data.id,

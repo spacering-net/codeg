@@ -98,7 +98,7 @@ export function MemoryCard({ item }: { item: NoticeItem }) {
   const tn = useTranslations("PersonalAgent.notice")
   const { readOnly } = usePageScope()
   const botId = useBotId()
-  const openSettings = usePersonalAgentUi((s) => s.openSettings)
+  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   const label = useMemoryFileLabel()
   const row = item.row
   const data = row.data
@@ -188,7 +188,7 @@ export function MemoryCard({ item }: { item: NoticeItem }) {
                   type="button"
                   className="min-w-0 truncate text-start font-medium underline-offset-2 hover:underline"
                   title={f.path}
-                  onClick={() => openSettings("persona", null, f.path)}
+                  onClick={() => openBotPage("persona", { entry: f.path })}
                 >
                   {label(f)}
                 </button>

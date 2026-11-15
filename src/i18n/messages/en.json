@@ -8092,13 +8092,9 @@
       "restoreDefaults": "Restore defaults",
       "back": "Back to the conversation",
       "viewTitle": "Settings",
-      "backToOwn": "Back to this page's assistant",
-      "editingOther": "You are editing {name}'s own settings.",
       "readOnly": "The assistants run in another codeg process, so their settings are read-only here. Executor configs themselves can still be edited.",
       "setUpFirst": "Set up the primary assistant first.",
       "nav": {
-        "thisAssistant": "This assistant",
-        "allAssistants": "All assistants",
         "team": "Team",
         "prefs": "Preferences",
         "identity": "Identity & brain",
@@ -8803,8 +8799,6 @@
         "default": "default"
       },
       "tabPersona": "Persona & memory",
-      "targetLoading": "Loading this assistant's settings…",
-      "targetFailed": "Could not read this assistant's settings.",
       "brain": "Brain",
       "about": {
         "followSystem": "Follow the system",
@@ -8917,7 +8911,8 @@
       "skillTurnedOff": "Turned off {name}",
       "deleteSkill": "Delete skill",
       "confirmDeleteSkillHint": "Delete this process skill? Its folder is removed from the working directory.",
-      "skillDeleted": "Deleted {name}"
+      "skillDeleted": "Deleted {name}",
+      "viewSubtitle": "Shared by every assistant"
     },
     "statusWord": {
       "idle": "Idle",
@@ -8941,7 +8936,8 @@
       "newSession": "Start a new session…",
       "stopAll": "Stop everything",
       "stopAllHint": "Stop the reply, the work it handed out, and the messages nobody has started on",
-      "stoppedAll": "Stopped everything this assistant had going"
+      "stoppedAll": "Stopped everything this assistant had going",
+      "details": "View details"
     },
     "newSession": {
       "title": "Start a new session?",
@@ -9259,7 +9255,6 @@
       "copied": "Made {name}, a copy",
       "openConversation": "Open",
       "more": "More",
-      "settings": "Settings",
       "copy": "Copy",
       "deleteAction": "Delete…",
       "fromTemplate": "From a template",
@@ -9341,14 +9336,17 @@
           "copy": "Copy…",
           "stopAll": "Stop everything",
           "delete": "Delete…",
-          "open": "Open"
+          "open": "Open",
+          "details": "View details",
+          "edit": "Edit basic info…"
         },
         "mergeable": "#{id} ready to merge: {title}",
         "prReady": "Ready to merge: {text}",
         "prFailed": "#{id} checks failed: {title}",
         "prStuck": "#{id} has a conflict: {title}",
         "prChecks": "#{id} waiting for checks {passed}/{total}",
-        "resize": "Resize the assistant list"
+        "resize": "Resize the assistant list",
+        "dropNewGroup": "Drop here for a new group"
       },
       "choice": {
         "other": "Other",
@@ -9424,6 +9422,14 @@
         "confirm": "Delete",
         "plans": "{count, plural, one {Its plan stops} other {Its # plans stop}}: {titles}.",
         "planSteps": "{count, plural, one {A step of another plan is} other {# steps of other plans are}} handed to it: {steps}. Their assistants pick another when it comes up."
+      },
+      "edit": {
+        "title": "Edit basic info",
+        "description": "The name and picture it goes by on the roster, on its page and in its messages; the assistant knows the name too.",
+        "name": "Name",
+        "cancel": "Cancel",
+        "save": "Save",
+        "saved": "Saved."
       }
     },
     "face": {
@@ -10715,6 +10721,11 @@
       "cancel": "Cancel",
       "install": "Install",
       "dismiss": "Not this one"
+    },
+    "botPage": {
+      "primary": "Primary assistant",
+      "worker": "Work assistant",
+      "notSetUp": "Not set up yet"
     }
   },
   "MessageCheck": {

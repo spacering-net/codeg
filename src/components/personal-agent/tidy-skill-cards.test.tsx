@@ -136,7 +136,7 @@ beforeEach(() => {
   __resetRosterForTests()
   api.personalAgentNoticeAct.mockClear()
   api.personalAgentTimelineRows.mockClear()
-  usePersonalAgentUi.setState({ settings: null })
+  usePersonalAgentUi.setState({ settings: null, botPage: null })
 })
 afterEach(() => cleanup())
 
@@ -314,9 +314,8 @@ describe("a process skill's card", () => {
     cleanup()
     wrap(<SkillCard item={item(skill({}))} />)
     fireEvent.click(screen.getByText("View"))
-    expect(usePersonalAgentUi.getState().settings).toEqual({
-      page: "persona",
-      bot: null,
+    expect(usePersonalAgentUi.getState().botPage).toEqual({
+      tab: "persona",
       entry: "process-skills/release/SKILL.md",
     })
     // Deleting asks once more.

@@ -67,7 +67,7 @@ export function PersonaPage({
   const t = useTranslations("PersonalAgent.settings")
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="persona">
-      <PageHead title={t("nav.persona")} description={t("pages.persona")} />
+      <PageHead description={t("pages.persona")} />
       <PersonaFiles key={entry ?? ""} botId={bot} initial={entry} />
     </div>
   )
@@ -152,7 +152,7 @@ export function AdvancedPage({ agent, bot, disabled }: OwnPageProps) {
   const pathValue = path ?? (agent.workdir_custom ? agent.workdir : "")
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="advanced">
-      <PageHead title={t("nav.advanced")} description={t("pages.advanced")} />
+      <PageHead description={t("pages.advanced")} />
       <SettingCard>
         <SettingRow
           icon={Shrink}
@@ -313,7 +313,7 @@ export function ExecutionPage({ agent, bot, disabled }: OwnPageProps) {
   }
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="execution">
-      <PageHead title={t("nav.execution")} description={t("pages.execution")} />
+      <PageHead description={t("pages.execution")} />
       <SettingCard>
         <SettingRow
           icon={Workflow}

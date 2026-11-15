@@ -103,7 +103,7 @@ function draw(row: TimelineRow) {
 
 beforeEach(() => {
   api.personalAgentNoticeAct.mockClear()
-  usePersonalAgentUi.setState({ settings: null })
+  usePersonalAgentUi.setState({ settings: null, botPage: null })
 })
 afterEach(() => cleanup())
 
@@ -125,9 +125,8 @@ describe("the memory card", () => {
   it("opens the entry it names on the persona page", () => {
     draw(card({}))
     fireEvent.click(screen.getByText("Release days"))
-    expect(usePersonalAgentUi.getState().settings).toEqual({
-      page: "persona",
-      bot: null,
+    expect(usePersonalAgentUi.getState().botPage).toEqual({
+      tab: "persona",
       entry: "memory/release.md",
     })
   })

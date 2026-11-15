@@ -60,6 +60,7 @@ import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentNoticeAct } from "@/lib/api"
+import { isBotTab, type PersonalAgentPage } from "@/lib/personal-agent-open"
 import type {
   AgentType,
   AssistantLabelSnapshot,
@@ -73,10 +74,7 @@ import type {
 import { AGENT_LABELS } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAssistants } from "@/stores/assistants-store"
-import {
-  usePersonalAgentUi,
-  type SettingsPage,
-} from "@/stores/personal-agent-ui-store"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { AcceptanceCard } from "./acceptance-card"
 import { AskCard } from "./ask-card"
@@ -708,8 +706,9 @@ function StoppedCard({ item }: { item: NoticeItem }) {
   )
 }
 
-/** The settings page an item is on. */
-function pageOf(key: string): SettingsPage {
+/** The page an item is on: a tab of the assistant's own page, or a page of
+ *  the settings every assistant shares. */
+function pageOf(key: string): PersonalAgentPage {
   if (key === "own.brain") return "identity"
   if (key.startsWith("own.")) return "advanced"
   if (key.startsWith("team.division.")) return "division"
@@ -948,6 +947,7 @@ function ChangedCard({ item }: { item: NoticeItem }) {
   const t = useTranslations("PersonalAgent.notice.changed")
   const { readOnly } = usePageScope()
   const openSettings = usePersonalAgentUi((s) => s.openSettings)
+  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   const botName = useBotName()
   const row = item.row
   const data = row.data
@@ -1083,7 +1083,11 @@ function ChangedCard({ item }: { item: NoticeItem }) {
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => openSettings(pageOf(changes[0].key))}
+              onClick={() => {
+                const page = pageOf(changes[0].key)
+                if (isBotTab(page)) openBotPage(page)
+                else openSettings(page)
+              }}
             >
               {t("seeSettings")}
             </Button>

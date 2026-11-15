@@ -227,7 +227,7 @@ function memoriesOf(v: unknown): ReplyMemory[] {
  *  that entry on the persona page (7.7). */
 function UsedMemory({ memories }: { memories: ReplyMemory[] }) {
   const t = useTranslations("PersonalAgent.memory")
-  const openSettings = usePersonalAgentUi((s) => s.openSettings)
+  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   if (memories.length === 0) return null
   return (
     <p
@@ -244,7 +244,7 @@ function UsedMemory({ memories }: { memories: ReplyMemory[] }) {
             className="min-w-0 truncate underline-offset-2 hover:text-foreground hover:underline"
             title={m.name}
             data-pa-reply-memory={m.name}
-            onClick={() => openSettings("persona", null, m.name)}
+            onClick={() => openBotPage("persona", { entry: m.name })}
           >
             {m.title || m.name}
           </button>

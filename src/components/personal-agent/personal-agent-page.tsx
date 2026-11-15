@@ -7,10 +7,14 @@
  * and handed out, its numbers) beside it behind a line, or as a drawer on a
  * narrow screen. Under the window's top band, as the other full pages are:
  * the band's title is its avatar and name, and its state a word after them;
- * its actions — settings, the session underneath, compacting, a new session
- * — are in the window chrome's "⋯" menu. The sessions it reaches — its own,
- * and those of the work it handed out — open in a drawer on the right, over
- * the page.
+ * its actions — its own page, the settings, the session underneath,
+ * compacting, a new session — are in the window chrome's "⋯" menu. The
+ * sessions it reaches — its own, and those of the work it handed out — open
+ * in a drawer on the right, over the page.
+ *
+ * In place of the conversation, two pages, the side panel standing aside
+ * while either is open: the assistant's own page, the roster kept beside it,
+ * and the settings every assistant shares, across the whole page.
  *
  * A workbench route, so the workspace's providers (the live connection store,
  * the assistants) are all there.
@@ -71,6 +75,7 @@ import { PersonalAgentComposer } from "./composer"
 import { usePersonalAgentAttachment } from "./live-turn"
 import { MessageList } from "./message-list"
 import { replyState } from "./message-items"
+import { BotPage } from "./settings/bot-page"
 import { SettingsView } from "./settings/settings-view"
 import {
   PageScopeContext,
@@ -180,7 +185,11 @@ export function PersonalAgentPage() {
   const setAuxOpen = usePersonalAgentUi((s) => s.setAuxOpen)
   const setWorkOpen = usePersonalAgentUi((s) => s.setWorkOpen)
   const settingsOpen = usePersonalAgentUi((s) => s.settings != null)
+  const botPageOpen = usePersonalAgentUi((s) => s.botPage != null)
   const openSettings = usePersonalAgentUi((s) => s.openSettings)
+  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
+  // A page over the conversation: the panel stands aside for it.
+  const pageOver = settingsOpen || botPageOpen
   const [sessionOpen, setSessionOpen] = useState(false)
   const [confirmNew, setConfirmNew] = useState(false)
   const [quoting, setQuoting] = useState<number | null>(null)
@@ -280,7 +289,7 @@ export function PersonalAgentPage() {
   // Whose conversation this window shows the owner: the presence beat
   // says so, and that assistant is not notified (1.13).
   const setViewing = usePersonalAgentUi((s) => s.setViewing)
-  const viewingId = !settingsOpen && !loading ? (agent?.id ?? null) : null
+  const viewingId = !pageOver && !loading ? (agent?.id ?? null) : null
   useEffect(() => {
     setViewing(viewingId)
   }, [viewingId, setViewing])
@@ -291,15 +300,17 @@ export function PersonalAgentPage() {
   const pendingJump = usePersonalAgentUi((s) => s.pendingJump)
   const agentId = agent?.id ?? null
   useEffect(() => {
-    if (!pendingJump || loading || settingsOpen) return
+    if (!pendingJump || loading || pageOver) return
     if (agentId == null || pendingJump.bot !== agentId) return
     usePersonalAgentUi.getState().setPendingJump(null)
     jumpTo(pendingJump.row)
-  }, [pendingJump, agentId, loading, settingsOpen, jumpTo])
+  }, [pendingJump, agentId, loading, pageOver, jumpTo])
 
   if (!snapshot || loading) return <div className="h-full" />
 
   if (!agent && settingsOpen) return <SettingsView />
+  // The first setup: the identity tab of the page it will have.
+  if (!agent && botPageOpen) return <BotPage />
 
   if (!agent) {
     return (
@@ -312,7 +323,7 @@ export function PersonalAgentPage() {
           {t("setup.description")}
         </p>
         {snapshot.status.engine === "here" ? (
-          <Button onClick={() => openSettings("identity")}>
+          <Button onClick={() => openBotPage("identity")}>
             {t("setup.action")}
           </Button>
         ) : (
@@ -346,59 +357,65 @@ export function PersonalAgentPage() {
         {isMobile ? null : (
           <PersonalAgentRoster compact={false} readOnly={readOnly} />
         )}
-        <div
-          className={cn(
-            "flex min-w-0 flex-1 flex-col transition-opacity",
-            // While another assistant is read, this one stays drawn — no
-            // emptied page — but not to act on; dimmed only if it takes a
-            // while (a switch read in time never dims at all).
-            switching && "opacity-60 delay-500 duration-200"
-          )}
-          data-pa-accent={accentColor ?? undefined}
-          data-pa-switching={switching || undefined}
-          inert={switching || undefined}
-        >
-          {isMobile ? (
-            <PersonalAgentRoster compact readOnly={readOnly} />
-          ) : null}
-          {readOnly || noAssistants ? (
-            <div className="mx-auto flex w-full chat-content-w shrink-0 flex-col gap-1 px-4 pt-2">
-              {readOnly ? (
-                <p className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
-                  {t("readOnly")}
-                </p>
-              ) : null}
-              {noAssistants ? (
-                <p className="flex items-center justify-between gap-2 rounded-lg bg-muted px-3 py-1.5 text-xs text-muted-foreground">
-                  <span>{t("noAssistants")}</span>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    className="shrink-0 bg-background"
-                    data-pa-add-executor
-                    onClick={() => openSettings("executors")}
-                  >
-                    {t("addExecutor")}
-                  </Button>
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-          <MessageList jumpRef={jumpRef} sentRef={sentRef} />
-          <StatusLine botId={agent.id} name={agentName} />
-          <PersonalAgentComposer
-            // Each assistant's own box: what is being written, sent or
-            // uploaded for one never lands in another's.
-            key={agent.id}
-            agent={agent}
-            agentName={agentName}
-            status={snapshot.status}
-            quoting={quoting}
-            draft={draft}
-            onClearQuote={() => setQuoting(null)}
-            onSent={() => sentRef.current?.()}
-          />
-        </div>
+        {botPageOpen ? (
+          <div className="flex min-w-0 flex-1 flex-col">
+            <BotPage />
+          </div>
+        ) : (
+          <div
+            className={cn(
+              "flex min-w-0 flex-1 flex-col transition-opacity",
+              // While another assistant is read, this one stays drawn — no
+              // emptied page — but not to act on; dimmed only if it takes a
+              // while (a switch read in time never dims at all).
+              switching && "opacity-60 delay-500 duration-200"
+            )}
+            data-pa-accent={accentColor ?? undefined}
+            data-pa-switching={switching || undefined}
+            inert={switching || undefined}
+          >
+            {isMobile ? (
+              <PersonalAgentRoster compact readOnly={readOnly} />
+            ) : null}
+            {readOnly || noAssistants ? (
+              <div className="mx-auto flex w-full chat-content-w shrink-0 flex-col gap-1 px-4 pt-2">
+                {readOnly ? (
+                  <p className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
+                    {t("readOnly")}
+                  </p>
+                ) : null}
+                {noAssistants ? (
+                  <p className="flex items-center justify-between gap-2 rounded-lg bg-muted px-3 py-1.5 text-xs text-muted-foreground">
+                    <span>{t("noAssistants")}</span>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      className="shrink-0 bg-background"
+                      data-pa-add-executor
+                      onClick={() => openSettings("executors")}
+                    >
+                      {t("addExecutor")}
+                    </Button>
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+            <MessageList jumpRef={jumpRef} sentRef={sentRef} />
+            <StatusLine botId={agent.id} name={agentName} />
+            <PersonalAgentComposer
+              // Each assistant's own box: what is being written, sent or
+              // uploaded for one never lands in another's.
+              key={agent.id}
+              agent={agent}
+              agentName={agentName}
+              status={snapshot.status}
+              quoting={quoting}
+              draft={draft}
+              onClearQuote={() => setQuoting(null)}
+              onSent={() => sentRef.current?.()}
+            />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -426,12 +443,15 @@ export function PersonalAgentPage() {
               <ResizablePanel
                 id="personal-agent-main"
                 order={1}
-                defaultSize={70}
+                // Alone — the panel closed, or a page over the
+                // conversation — the whole width: the group warns of a
+                // layout short of 100%.
+                defaultSize={auxOpen && !pageOver ? 70 : 100}
                 minSize={45}
               >
                 {conversation}
               </ResizablePanel>
-              {auxOpen ? (
+              {auxOpen && !pageOver ? (
                 <>
                   <ResizableHandle />
                   <ResizablePanel
@@ -449,7 +469,7 @@ export function PersonalAgentPage() {
         </div>
         {isMobile ? (
           <Drawer
-            open={auxOpen}
+            open={auxOpen && !pageOver}
             onOpenChange={setAuxOpen}
             swipeDirection="right"
           >

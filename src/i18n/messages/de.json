@@ -8093,13 +8093,9 @@
       "restoreDefaults": "Standard wiederherstellen",
       "back": "Zurück zur Unterhaltung",
       "viewTitle": "Einstellungen",
-      "backToOwn": "Zurück zum Assistenten dieser Seite",
-      "editingOther": "Du bearbeitest die eigenen Einstellungen von {name}.",
       "readOnly": "Die Assistenten laufen in einem anderen codeg-Prozess, daher sind ihre Einstellungen hier schreibgeschützt. Ausführungskonfigurationen selbst lassen sich weiterhin bearbeiten.",
       "setUpFirst": "Richte zuerst den Hauptassistenten ein.",
       "nav": {
-        "thisAssistant": "Dieser Assistent",
-        "allAssistants": "Alle Assistenten",
         "team": "Team",
         "prefs": "Präferenzen",
         "identity": "Identität & Gehirn",
@@ -8803,8 +8799,6 @@
         "off": "aus",
         "default": "Standard"
       },
-      "targetLoading": "Einstellungen dieses Assistenten werden geladen …",
-      "targetFailed": "Die Einstellungen dieses Assistenten konnten nicht gelesen werden.",
       "brain": "Gehirn",
       "about": {
         "followSystem": "Wie das System",
@@ -8917,7 +8911,8 @@
       "skillTurnedOff": "{name} ausgeschaltet",
       "deleteSkill": "Skill löschen",
       "confirmDeleteSkillHint": "Diesen Ablauf-Skill löschen? Sein Ordner wird aus dem Arbeitsverzeichnis entfernt.",
-      "skillDeleted": "{name} gelöscht"
+      "skillDeleted": "{name} gelöscht",
+      "viewSubtitle": "Gilt für alle Assistenten"
     },
     "statusWord": {
       "idle": "Bereit",
@@ -8941,7 +8936,8 @@
       "newSession": "Neue Sitzung starten…",
       "stopAll": "Alles anhalten",
       "stopAllHint": "Hält die Antwort, die vergebene Arbeit und die noch nicht begonnenen Nachrichten an",
-      "stoppedAll": "Alles, was dieser Assistent laufen hatte, wurde angehalten"
+      "stoppedAll": "Alles, was dieser Assistent laufen hatte, wurde angehalten",
+      "details": "Details anzeigen"
     },
     "newSession": {
       "title": "Neue Sitzung starten?",
@@ -9259,7 +9255,6 @@
       "copied": "Kopie erstellt: {name}",
       "openConversation": "Öffnen",
       "more": "Mehr",
-      "settings": "Einstellungen",
       "copy": "Duplizieren",
       "deleteAction": "Löschen…",
       "fromTemplate": "Aus Vorlage",
@@ -9341,14 +9336,17 @@
           "copy": "Duplizieren…",
           "stopAll": "Alles anhalten",
           "delete": "Löschen…",
-          "open": "Öffnen"
+          "open": "Öffnen",
+          "details": "Details anzeigen",
+          "edit": "Grunddaten bearbeiten…"
         },
         "mergeable": "#{id} bereit zum Mergen: {title}",
         "prReady": "Bereit zum Mergen: {text}",
         "prFailed": "#{id} Checks fehlgeschlagen: {title}",
         "prStuck": "#{id} hat einen Konflikt: {title}",
         "prChecks": "#{id} wartet auf Checks {passed}/{total}",
-        "resize": "Breite der Assistentenliste ändern"
+        "resize": "Breite der Assistentenliste ändern",
+        "dropNewGroup": "Hier ablegen für eine neue Gruppe"
       },
       "choice": {
         "other": "Andere",
@@ -9424,6 +9422,14 @@
         "confirm": "Löschen",
         "plans": "{count, plural, one {Sein Plan stoppt} other {Seine # Pläne stoppen}}: {titles}.",
         "planSteps": "{count, plural, one {Ein Schritt eines anderen Plans ist} other {# Schritte anderer Pläne sind}} ihm zugeteilt: {steps}. Wenn sie dran sind, wählen deren Assistenten jemand anderen."
+      },
+      "edit": {
+        "title": "Grunddaten bearbeiten",
+        "description": "Name und Bild, mit denen er in der Liste, auf seiner Seite und in seinen Nachrichten erscheint; der Assistent kennt seinen Namen auch.",
+        "name": "Name",
+        "cancel": "Abbrechen",
+        "save": "Speichern",
+        "saved": "Gespeichert."
       }
     },
     "face": {
@@ -10715,6 +10721,11 @@
       "cancel": "Abbrechen",
       "install": "Installieren",
       "dismiss": "Nicht diesen"
+    },
+    "botPage": {
+      "primary": "Hauptassistent",
+      "worker": "Arbeitsassistent",
+      "notSetUp": "Noch nicht eingerichtet"
     }
   },
   "MessageCheck": {

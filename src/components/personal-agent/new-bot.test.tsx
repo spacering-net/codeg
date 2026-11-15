@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import type { BotImpact, PersonalAgentBotSummary } from "@/lib/types"
+import { reloadRoster } from "@/stores/personal-agent-roster-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 const api = vi.hoisted(() => ({
@@ -81,7 +83,7 @@ const bot = (id: number, kind: "primary" | "worker", name: string) =>
   }) as PersonalAgentBotSummary
 
 beforeEach(() => {
-  usePersonalAgentUi.setState({ viewBot: null, settings: null })
+  usePersonalAgentUi.setState({ viewBot: null, settings: null, botPage: null })
   editor.props = null
 })
 
@@ -114,6 +116,86 @@ describe("a new work assistant", () => {
     expect(draft.executor_made_for_it).toBe(false)
     await waitFor(() => expect(usePersonalAgentUi.getState().viewBot).toBe(9))
     expect(closed).toHaveBeenCalledWith(false)
+  })
+
+  it("goes to it once the roster has it: not taken for one deleted (polish round 4)", async () => {
+    // The roster as it was read before: the new one not on it yet.
+    api.personalAgentBots.mockResolvedValue([bot(1, "primary", "Nova")])
+    usePersonalAgentUi.setState({ botPage: { tab: "notify" } })
+    wrap(
+      <>
+        <PersonalAgentRoster compact={false} readOnly={false} />
+        <NewBotDialog open onOpenChange={() => {}} />
+      </>
+    )
+    await screen.findByText("Nova")
+    api.personalAgentBotCreate.mockResolvedValue({
+      bot: bot(9, "worker", "Code review"),
+      executor_assistant_id: 3,
+      template: "review",
+      options_unavailable: null,
+    })
+    // Read after it is made, the roster has it.
+    api.personalAgentBots.mockResolvedValue([
+      bot(1, "primary", "Nova"),
+      bot(9, "worker", "Code review"),
+    ])
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Code review" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create" }))
+    await waitFor(() => expect(usePersonalAgentUi.getState().viewBot).toBe(9))
+    // Still on it once the roster has settled, on its conversation.
+    await new Promise((r) => setTimeout(r, 50))
+    expect(usePersonalAgentUi.getState().viewBot).toBe(9)
+    expect(usePersonalAgentUi.getState().botPage).toBeNull()
+    expect(
+      document
+        .querySelector('[data-pa-roster-bot="9"]')
+        ?.getAttribute("aria-current")
+    ).toBe("page")
+  })
+
+  it("goes to it also when the roster is read again while it waits (review round 1)", async () => {
+    api.personalAgentBots.mockResolvedValue([bot(1, "primary", "Nova")])
+    wrap(
+      <>
+        <PersonalAgentRoster compact={false} readOnly={false} />
+        <NewBotDialog open onOpenChange={() => {}} />
+      </>
+    )
+    await screen.findByText("Nova")
+    api.personalAgentBotCreate.mockResolvedValue({
+      bot: bot(9, "worker", "Code review"),
+      executor_assistant_id: 3,
+      template: "review",
+      options_unavailable: null,
+    })
+    const both = [bot(1, "primary", "Nova"), bot(9, "worker", "Code review")]
+    let landMine: (v: unknown) => void = () => {}
+    let landLater: (v: unknown) => void = () => {}
+    api.personalAgentBots.mockClear()
+    api.personalAgentBots
+      .mockImplementationOnce(() => new Promise((r) => (landMine = r)))
+      .mockImplementationOnce(() => new Promise((r) => (landLater = r)))
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Code review" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Create" }))
+    // The read it waits for is on its way…
+    await waitFor(() => expect(api.personalAgentBots).toHaveBeenCalledTimes(1))
+    // …when the "made" event's read is asked for.
+    reloadRoster()
+    await waitFor(
+      () => expect(api.personalAgentBots).toHaveBeenCalledTimes(2),
+      { timeout: 2000 }
+    )
+    // Its own read lands first: shown, and the page goes to it.
+    await act(async () => landMine(both))
+    await waitFor(() => expect(usePersonalAgentUi.getState().viewBot).toBe(9))
+    await act(async () => landLater(both))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(usePersonalAgentUi.getState().viewBot).toBe(9)
   })
 
   it("sends the face the owner picked", async () => {

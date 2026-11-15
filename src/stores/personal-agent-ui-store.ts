@@ -11,11 +11,12 @@ import type {
  * The personal agent page's view state that other branches of the tree read:
  * whether the side panel is open and on which tab (the window chrome's
  * buttons drive it), whether the page shows the owner the newest messages
- * right now (the sidebar's unread badge stands down while it does), and the
+ * right now (the sidebar's unread badge stands down while it does), the
  * handed-out work open in the drawer on the right (any card, in the list or
- * the panel, opens it). One-shot requests (open the settings, the session,
- * the "new session" confirmation) go as window events instead — nothing
- * reads them back.
+ * the panel, opens it), and what is shown in place of the conversation — the
+ * settings every assistant shares, or an assistant's own page. One-shot
+ * requests (the session, the "new session" confirmation) go as window events
+ * instead — nothing reads them back.
  */
 
 /** The side panel's tabs (10.1): its activity (today, its open matters,
@@ -29,14 +30,9 @@ export const PERSONAL_AGENT_EVENTS = {
   newSession: "codeg:personal-agent-new-session",
 } as const
 
-/** The pages of the settings view (13.1): the assistant's own, then the
- *  ones every assistant shares. */
+/** The pages of the settings view (13.1): what every assistant shares —
+ *  the team, then the preferences. */
 export type SettingsPage =
-  | "identity"
-  | "persona"
-  | "execution"
-  | "notify"
-  | "advanced"
   | "workers"
   | "executors"
   | "division"
@@ -45,12 +41,26 @@ export type SettingsPage =
   | "automation"
   | "about"
 
-/** The settings view, while it is open: on which page, and — for the
- *  assistant's own pages — whose (`null`: the page's own assistant). */
+/** The tabs of an assistant's own page (13.1): who it is and the agent it
+ *  runs on, its persona and memory, a work assistant's execution, its
+ *  notifications, the advanced. */
+export type BotTab =
+  | "identity"
+  | "persona"
+  | "execution"
+  | "notify"
+  | "advanced"
+
+/** The settings view, while it is open: on which page. */
 export interface SettingsOpen {
   page: SettingsPage
-  bot: number | null
-  /** The persona page's file to open on: a memory entry a card or a reply
+}
+
+/** An assistant's own page, while it is open — the page's assistant's (the
+ *  one `viewBot` says): on which tab. */
+export interface BotPageOpen {
+  tab: BotTab
+  /** The persona tab's file to open on: a memory entry a card or a reply
    *  names (7.7). */
   entry?: string | null
 }
@@ -131,12 +141,18 @@ interface PersonalAgentUiState {
    *  request made before the page mounts (another window's "open the
    *  executor configs") finds it open. */
   settings: SettingsOpen | null
-  openSettings: (
-    page?: SettingsPage,
-    bot?: number | null,
-    entry?: string | null
+  openSettings: (page?: SettingsPage) => void
+  /** The assistant's own page, open in place of the conversation. */
+  botPage: BotPageOpen | null
+  /** Open an assistant's own page on `tab`: the page's assistant's, or —
+   *  `bot` given — that one's, switched to (`null`: the primary). */
+  openBotPage: (
+    tab?: BotTab,
+    opts?: { bot?: number | null; entry?: string | null }
   ) => void
-  closeSettings: () => void
+  /** Back to the conversation: the settings or the assistant's page over it
+   *  closed. */
+  showConversation: () => void
   /** The executor configs' page, with its editor open on one (or a new one
    *  prefilled); taken by the page once it opens it. */
   executorEditor: ExecutorEditorRequest | null
@@ -153,12 +169,13 @@ interface PersonalAgentUiState {
   routinesAsked: number
   showRoutines: () => void
   /** The assistant the page shows (`null`: the primary), picked in the
-   *  roster. Switching closes what was open about the other one. */
+   *  roster. Switching closes what was open about the other one — its page
+   *  and the settings with it. */
   viewBot: number | null
   setViewBot: (bot: number | null) => void
   /** The assistant whose conversation this window shows the owner right
    *  now (its real id, the primary's too): the page is the active route
-   *  and the settings view is not over it. The presence beat carries it —
+   *  and neither the settings nor the assistant's page is over it. The presence beat carries it —
    *  an assistant being looked at is not notified (1.13). */
   viewing: number | null
   setViewing: (bot: number | null) => void
@@ -180,7 +197,9 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   auxTab: "activity",
   setAuxOpen: (auxOpen) => set({ auxOpen }),
   toggleAux: () => set((s) => ({ auxOpen: !s.auxOpen })),
-  showAux: (auxTab) => set({ auxOpen: true, auxTab }),
+  // The panel stands beside the conversation: asked for, it brings it back.
+  showAux: (auxTab) =>
+    set({ auxOpen: true, auxTab, settings: null, botPage: null }),
   setAuxTab: (auxTab) => set({ auxTab }),
   auxFolds: {},
   setAuxFold: (key, open) =>
@@ -192,13 +211,30 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
   openWork: (work) => set({ work, workOpen: true }),
   setWorkOpen: (workOpen) => set({ workOpen }),
   settings: null,
-  openSettings: (page = "identity", bot = null, entry = null) =>
-    set({ settings: entry ? { page, bot, entry } : { page, bot } }),
-  closeSettings: () => set({ settings: null }),
+  openSettings: (page = "workers") =>
+    set({ settings: { page }, botPage: null }),
+  botPage: null,
+  openBotPage: (tab = "identity", opts = {}) =>
+    set((s) => {
+      const botPage: BotPageOpen = opts.entry
+        ? { tab, entry: opts.entry }
+        : { tab }
+      return opts.bot === undefined || opts.bot === s.viewBot
+        ? { botPage, settings: null }
+        : {
+            viewBot: opts.bot,
+            botPage,
+            settings: null,
+            workOpen: false,
+            watching: false,
+          }
+    }),
+  showConversation: () => set({ settings: null, botPage: null }),
   executorEditor: null,
   openExecutorEditor: (assistantId, prefill = null) =>
     set((s) => ({
-      settings: { page: "executors", bot: null },
+      settings: { page: "executors" },
+      botPage: null,
       executorEditor: {
         key: (s.executorEditor?.key ?? 0) + 1,
         assistantId,
@@ -217,6 +253,8 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
     set((s) => ({
       auxOpen: true,
       auxTab: "activity",
+      settings: null,
+      botPage: null,
       routinesAsked: s.routinesAsked + 1,
     })),
   viewBot: null,
@@ -224,7 +262,13 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
     set((s) =>
       s.viewBot === viewBot
         ? s
-        : { viewBot, settings: null, workOpen: false, watching: false }
+        : {
+            viewBot,
+            settings: null,
+            botPage: null,
+            workOpen: false,
+            watching: false,
+          }
     ),
   viewing: null,
   setViewing: (viewing) =>
@@ -236,6 +280,8 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
     set((s) => ({
       auxOpen: true,
       auxTab: "activity",
+      settings: null,
+      botPage: null,
       todayAsked: s.todayAsked + 1,
     })),
   searchOpen: false,

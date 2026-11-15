@@ -1202,7 +1202,9 @@ function StatusRows({
               className="ms-auto inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
               title={to("editBrain")}
               aria-label={to("editBrain")}
-              onClick={() => usePersonalAgentUi.getState().openSettings()}
+              onClick={() =>
+                usePersonalAgentUi.getState().openBotPage("identity")
+              }
             >
               <Settings2 className="size-3" aria-hidden />
             </button>
@@ -1880,7 +1882,7 @@ function ActivityTab({
   const t = useTranslations("PersonalAgent.detail")
   const { botId } = usePersonalAgent()
   const readOnly = snapshot.status.engine !== "here"
-  const openSettings = usePersonalAgentUi((s) => s.openSettings)
+  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   const entry = usePersonalAgentRoster((s) =>
     s.entries?.find((e) => e.id === (snapshot.agent?.id ?? botId))
   )
@@ -1932,7 +1934,7 @@ function ActivityTab({
             size="sm"
             variant="outline"
             className="self-start"
-            onClick={() => openSettings("identity")}
+            onClick={() => openBotPage("identity")}
             data-pa-detail-settings
           >
             <Settings2 aria-hidden />

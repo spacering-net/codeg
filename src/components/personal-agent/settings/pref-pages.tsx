@@ -9,7 +9,7 @@
  * reads "custom".
  */
 
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import {
   Activity,
@@ -759,9 +759,16 @@ function PrefRow({
             <SelectTrigger
               id={id}
               data-pa-pref={item}
-              className="h-8 w-44 bg-background text-xs"
+              // As wide as its choice, within reason: the long ones whole.
+              className="h-8 w-auto max-w-72 min-w-44 bg-background text-xs"
             >
-              <SelectValue />
+              {/* The choice alone: "(default)" is the open list's, room
+                  kept for the choice itself. */}
+              <SelectValue>
+                {choices.includes(String(value))
+                  ? t(choiceKey(item, String(value)) as "reply_length.short")
+                  : String(value)}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {choices.map((c) => (
@@ -799,28 +806,39 @@ function PrefRow({
 }
 
 /** A page's heading: its title and what it is for, and [Restore defaults]. */
+/** A page's head: its title and what it is for — on an assistant's own
+ *  page, whose tab names it, what it is for alone — and at its end what
+ *  the page does first ([New work assistant]) or, on a page of
+ *  preferences, [Restore defaults]. */
 export function PageHead({
   title,
   description,
   onRestore,
   restoreDisabled,
+  action,
 }: {
-  title: string
+  title?: string
   description?: string
   onRestore?: () => void
   restoreDisabled?: boolean
+  action?: ReactNode
 }) {
   const t = useTranslations("PersonalAgent.settings")
   return (
-    <div className="flex items-start justify-between gap-3">
-      <div className="min-w-0 space-y-1">
-        <h2 className="text-sm font-semibold">{title}</h2>
+    <div className="flex items-start justify-between gap-4 pb-1">
+      <div className="min-w-0 space-y-1.5">
+        {title ? (
+          <h2 className="text-lg leading-7 font-semibold tracking-tight">
+            {title}
+          </h2>
+        ) : null}
         {description ? (
-          <p className="text-xs leading-5 text-muted-foreground">
+          <p className="text-sm leading-6 text-pretty text-muted-foreground">
             {description}
           </p>
         ) : null}
       </div>
+      {action ? <div className="shrink-0">{action}</div> : null}
       {onRestore ? (
         <Button
           size="sm"
@@ -828,6 +846,7 @@ export function PageHead({
           className="shrink-0 text-muted-foreground"
           disabled={restoreDisabled}
           onClick={onRestore}
+          data-pa-restore
         >
           <RotateCcw aria-hidden />
           {t("restoreDefaults")}

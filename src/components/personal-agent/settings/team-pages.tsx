@@ -213,8 +213,8 @@ export function WorkersPage({
   const assistants = useAssistants()
   const botName = useBotName()
   const templates = useBotTemplates()
-  const openSettings = usePersonalAgentUi((s) => s.openSettings)
-  const closeSettings = usePersonalAgentUi((s) => s.closeSettings)
+  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
+  const showConversation = usePersonalAgentUi((s) => s.showConversation)
   const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
   const [adding, setAdding] = useState(false)
   const [deleting, setDeleting] = useState<number | null>(null)
@@ -235,7 +235,7 @@ export function WorkersPage({
   const workers = (bots ?? []).filter((b) => b.kind === "worker")
   const goTo = (id: number) => {
     setViewBot(id)
-    closeSettings()
+    showConversation()
   }
   const copy = async (w: PersonalAgentBotSummary) => {
     setCopying(w.id)
@@ -254,21 +254,24 @@ export function WorkersPage({
   }
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="workers">
-      <PageHead title={t("nav.workers")} description={t("pages.workers")} />
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground">
-          {readOnly ? readOnlyWhy : null}
-        </p>
-        <Button
-          size="sm"
-          disabled={readOnly}
-          onClick={() => setAdding(true)}
-          data-pa-new-worker
-        >
-          <Plus aria-hidden />
-          {tb("new")}
-        </Button>
-      </div>
+      <PageHead
+        title={t("nav.workers")}
+        description={t("pages.workers")}
+        action={
+          <Button
+            size="sm"
+            disabled={readOnly}
+            onClick={() => setAdding(true)}
+            data-pa-new-worker
+          >
+            <Plus aria-hidden />
+            {tb("new")}
+          </Button>
+        }
+      />
+      {readOnly && readOnlyWhy ? (
+        <p className="text-xs text-muted-foreground">{readOnlyWhy}</p>
+      ) : null}
       {bots != null && workers.length === 0 ? (
         <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border/70 px-6 py-8 text-center">
           <Users className="size-5 text-muted-foreground" aria-hidden />
@@ -292,7 +295,7 @@ export function WorkersPage({
               >
                 <button
                   type="button"
-                  onClick={() => openSettings("identity", w.id)}
+                  onClick={() => openBotPage("identity", { bot: w.id })}
                   className="flex min-w-0 flex-1 items-center gap-3 text-start"
                 >
                   <BotAvatar avatar={w.avatar} name={botName(w)} size={32} />
@@ -368,9 +371,10 @@ export function WorkersPage({
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem
-                      onSelect={() => openSettings("identity", w.id)}
+                      onSelect={() => openBotPage("identity", { bot: w.id })}
+                      data-pa-worker-details={w.id}
                     >
-                      {tb("settings")}
+                      {tb("roster.menu.details")}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       disabled={readOnly || copying != null}

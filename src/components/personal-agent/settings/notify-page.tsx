@@ -52,7 +52,7 @@ export function NotifyPage({
   const off = disabled || !flags
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="notify">
-      <PageHead title={t("nav.notify")} description={t("pages.notify")} />
+      <PageHead description={t("pages.notify")} />
       <SettingCard>
         <SettingRow
           icon={Bell}

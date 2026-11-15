@@ -1,10 +1,10 @@
 import {
-  act,
   cleanup,
   fireEvent,
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
@@ -125,10 +125,6 @@ vi.mock("@/lib/platform", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), message: vi.fn() } }))
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }))
 // The pages with editors of their own are tested where they live.
-vi.mock("./identity-page", () => ({
-  IdentityPage: () => <div data-testid="identity-page" />,
-}))
-vi.mock("../persona-files", () => ({ PersonaFiles: () => null }))
 vi.mock("@/components/settings/assistants-panel", () => ({
   AssistantsPanel: () => <div data-testid="executors-list" />,
 }))
@@ -205,38 +201,60 @@ function draw() {
 beforeEach(() => {
   ctx.snapshot = snapshot()
   ctx.botId = null
-  usePersonalAgentUi.getState().openSettings("identity")
+  usePersonalAgentUi.getState().openSettings()
 })
 
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
-  usePersonalAgentUi.getState().closeSettings()
+  usePersonalAgentUi.getState().showConversation()
 })
 
 describe("the settings view", () => {
-  it("has the assistant's own pages and the ones every assistant shares", () => {
+  it("has the pages every assistant shares, the team's and the preferences, and none of an assistant's own", () => {
     draw()
-    expect(screen.getByText("This assistant · Nova")).toBeInTheDocument()
-    expect(screen.getByText("All assistants")).toBeInTheDocument()
-    for (const page of [
-      "identity",
-      "persona",
-      "advanced",
-      "workers",
-      "executors",
-      "division",
-      "notify",
+    const nav = document.querySelector("[data-pa-settings-nav]") as HTMLElement
+    expect(within(nav).getByRole("heading").textContent).toBe("Settings")
+    expect(within(nav).getByText("Shared by every assistant")).toBeTruthy()
+    const groups = within(nav).getAllByRole("group")
+    expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual([
+      "Team",
+      "Preferences",
+    ])
+    const pages = (g: HTMLElement) =>
+      [...g.querySelectorAll("[data-pa-nav]")].map((b) =>
+        b.getAttribute("data-pa-nav")
+      )
+    expect(pages(groups[0])).toEqual(["workers", "executors", "division"])
+    expect(pages(groups[1])).toEqual([
       "communication",
       "proactive",
       "automation",
       "about",
-    ]) {
-      expect(document.querySelector(`[data-pa-nav="${page}"]`)).not.toBeNull()
+    ])
+    // Each with its icon.
+    for (const b of nav.querySelectorAll("[data-pa-nav]")) {
+      expect(b.querySelector("svg")).not.toBeNull()
     }
-    // A primary has no "Execution" page: it is a work assistant's.
-    expect(document.querySelector('[data-pa-nav="execution"]')).toBeNull()
-    expect(screen.getByTestId("identity-page")).toBeInTheDocument()
+    // An assistant's own pages are on its page now.
+    for (const page of [
+      "identity",
+      "persona",
+      "execution",
+      "notify",
+      "advanced",
+    ]) {
+      expect(document.querySelector(`[data-pa-nav="${page}"]`)).toBeNull()
+    }
+    // It opens on the work assistants.
+    expect(
+      document
+        .querySelector('[data-pa-nav="workers"]')
+        ?.getAttribute("aria-current")
+    ).toBe("page")
+    expect(
+      document.querySelector('[data-pa-settings-page="workers"]')
+    ).not.toBeNull()
     fireEvent.click(document.querySelector('[data-pa-nav="executors"]')!)
     expect(screen.getByTestId("executors-list")).toBeInTheDocument()
     expect(
@@ -351,41 +369,6 @@ describe("the settings view", () => {
       screen.getAllByText(/settings are read-only here/).length
     ).toBeGreaterThan(0)
     expect(document.querySelector('[data-pa-level="ask_more"]')).toBeDisabled()
-  })
-
-  it("never shows a work assistant's own pages as another's", async () => {
-    const worker = (id: number) => {
-      const s = snapshot()
-      return {
-        ...s,
-        agent: {
-          ...s.agent!,
-          id,
-          name: `Worker ${id}`,
-          kind: "worker" as const,
-        },
-      }
-    }
-    // Worker 2 reads; worker 3's read fails.
-    api.personalAgentGet.mockImplementation(async (id: number) => {
-      if (id === 3) throw new Error("gone")
-      return worker(id)
-    })
-    usePersonalAgentUi.getState().openSettings("identity", 2)
-    draw()
-    expect(
-      await screen.findByText("This assistant · Worker 2")
-    ).toBeInTheDocument()
-    expect(screen.getByTestId("identity-page")).toBeInTheDocument()
-    // Another worker whose read fails: nothing of worker 2's stays up.
-    act(() => {
-      usePersonalAgentUi.getState().openSettings("identity", 3)
-    })
-    expect(
-      await screen.findByText("Could not read this assistant's settings.")
-    ).toBeInTheDocument()
-    expect(screen.queryByTestId("identity-page")).toBeNull()
-    expect(screen.queryByText("This assistant · Worker 2")).toBeNull()
   })
 
   it("has the owner's zone and their record of hours on “About you”", async () => {
@@ -600,28 +583,6 @@ describe("the settings view", () => {
     expect(usePersonalAgentUi.getState().settings).toBeNull()
   })
 
-  it("saves a work assistant's own items to it when the page shows it", async () => {
-    // The page shows work assistant #7: its own pages are its.
-    ctx.botId = 7
-    const worker = snapshot() as unknown as {
-      agent: Record<string, unknown>
-    }
-    worker.agent = { ...worker.agent, id: 7, kind: "worker", name: "Reviewer" }
-    ctx.snapshot = worker
-    usePersonalAgentUi.getState().openSettings("advanced")
-    draw()
-    expect(screen.getByText("This assistant · Reviewer")).toBeInTheDocument()
-    const field = screen.getByLabelText("Dispatched conversations at once")
-    fireEvent.change(field, { target: { value: "5" } })
-    fireEvent.blur(field)
-    await waitFor(() =>
-      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
-        [{ key: "own.dispatch_concurrency", value: 5 }],
-        7
-      )
-    )
-  })
-
   it("sets how the assistants reach the owner on “Proactive & notifications”", async () => {
     usePersonalAgentUi.getState().openSettings("proactive")
     const { unmount } = draw()
@@ -744,7 +705,7 @@ describe("the settings view", () => {
     }
   })
 
-  it("turns an assistant's own notifications on and off on its “Notifications” page", async () => {
+  it("opens a work assistant's page from the team's list, or its conversation", async () => {
     const flags = {
       sort_order: 0,
       pinned_at: null,
@@ -754,70 +715,38 @@ describe("the settings view", () => {
       unread_mark: false,
       notify: true,
     }
-    const entry = (id: number, kind: "primary" | "worker") => ({
-      id,
-      kind,
-      uid: `u${id}`,
-      name: kind === "primary" ? "Nova" : "Reviewer",
-      avatar: { kind: "face", shape: "blob", color: "blue" },
-      template: null,
-      executor_assistant_id: null,
-      created_at: "2026-11-10T00:00:00Z",
-      roster: { ...flags, muted: id === 7 },
-      live: { bot_id: id, updated_at: "2026-11-10T00:00:00Z" },
-    })
     api.personalAgentBots.mockResolvedValue([
-      entry(1, "primary"),
-      entry(7, "worker"),
+      {
+        id: 7,
+        kind: "worker",
+        uid: "u7",
+        name: "Reviewer",
+        avatar: { kind: "face", shape: "blob", color: "blue" },
+        template: null,
+        executor_assistant_id: null,
+        created_at: "2026-11-10T00:00:00Z",
+        roster: flags,
+        live: { bot_id: 7, updated_at: "2026-11-10T00:00:00Z" },
+      },
     ] as never)
-    usePersonalAgentUi.getState().openSettings("notify")
-    const { unmount } = draw()
-    const notify = await waitFor(() => {
-      const el = document.querySelector('[data-pa-notify="notify"]')
-      expect(el).not.toBeDisabled()
-      return el!
-    })
-    // The primary cannot be hidden.
-    expect(document.querySelector('[data-pa-notify="hidden"]')).toBeNull()
-    fireEvent.click(notify)
-    await waitFor(() =>
-      expect(api.personalAgentRosterAct).toHaveBeenCalledWith(1, {
-        act: "notify",
-        on: false,
-      })
-    )
-    fireEvent.click(document.querySelector('[data-pa-notify="muted"]')!)
-    await waitFor(() =>
-      expect(api.personalAgentRosterAct).toHaveBeenCalledWith(1, {
-        act: "mute",
-      })
-    )
-    unmount()
-    // A work assistant: muted already, and it can be hidden.
-    ctx.botId = 7
-    const worker = snapshot() as unknown as {
-      agent: Record<string, unknown>
-    }
-    worker.agent = { ...worker.agent, id: 7, kind: "worker", name: "Reviewer" }
-    ctx.snapshot = worker
     draw()
-    const muted = await waitFor(() => {
-      const el = document.querySelector('[data-pa-notify="muted"]')
-      expect(el).toHaveAttribute("data-state", "checked")
-      return el!
+    const row = await waitFor(() => {
+      const el = document.querySelector('[data-pa-worker="7"]')
+      expect(el).not.toBeNull()
+      return el as HTMLElement
     })
-    fireEvent.click(muted)
-    await waitFor(() =>
-      expect(api.personalAgentRosterAct).toHaveBeenCalledWith(7, {
-        act: "unmute",
-      })
-    )
-    fireEvent.click(document.querySelector('[data-pa-notify="hidden"]')!)
-    await waitFor(() =>
-      expect(api.personalAgentRosterAct).toHaveBeenCalledWith(7, {
-        act: "hide",
-      })
-    )
+    fireEvent.click(within(row).getByText("Reviewer"))
+    let ui = usePersonalAgentUi.getState()
+    expect(ui.viewBot).toBe(7)
+    expect(ui.botPage).toEqual({ tab: "identity" })
+    expect(ui.settings).toBeNull()
+    ui.openSettings("workers")
+    fireEvent.click(document.querySelector('[data-pa-worker-open="7"]')!)
+    ui = usePersonalAgentUi.getState()
+    expect(ui.viewBot).toBe(7)
+    expect(ui.settings).toBeNull()
+    expect(ui.botPage).toBeNull()
+    usePersonalAgentUi.setState({ viewBot: null })
     api.personalAgentBots.mockResolvedValue([])
   })
 

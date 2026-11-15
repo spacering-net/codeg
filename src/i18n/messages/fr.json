@@ -8093,13 +8093,9 @@
       "restoreDefaults": "Rétablir les valeurs par défaut",
       "back": "Retour à la conversation",
       "viewTitle": "Réglages",
-      "backToOwn": "Revenir à l'assistant de cette page",
-      "editingOther": "Vous modifiez les réglages propres à {name}.",
       "readOnly": "Les assistants s'exécutent dans un autre processus codeg ; leurs réglages sont donc en lecture seule ici. Les configurations d'exécution elles-mêmes restent modifiables.",
       "setUpFirst": "Configurez d'abord l'assistant principal.",
       "nav": {
-        "thisAssistant": "Cet assistant",
-        "allAssistants": "Tous les assistants",
         "team": "Équipe",
         "prefs": "Préférences",
         "identity": "Identité et cerveau",
@@ -8803,8 +8799,6 @@
         "off": "désactivé",
         "default": "par défaut"
       },
-      "targetLoading": "Chargement des réglages de cet assistant…",
-      "targetFailed": "Impossible de lire les réglages de cet assistant.",
       "brain": "Cerveau",
       "about": {
         "followSystem": "Suivre le système",
@@ -8917,7 +8911,8 @@
       "skillTurnedOff": "{name} désactivée",
       "deleteSkill": "Supprimer la compétence",
       "confirmDeleteSkillHint": "Supprimer cette compétence de processus ? Son dossier est retiré du répertoire de travail.",
-      "skillDeleted": "{name} supprimée"
+      "skillDeleted": "{name} supprimée",
+      "viewSubtitle": "Communs à tous les assistants"
     },
     "statusWord": {
       "idle": "Inactif",
@@ -8941,7 +8936,8 @@
       "newSession": "Démarrer une nouvelle session…",
       "stopAll": "Tout arrêter",
       "stopAllHint": "Arrête la réponse, le travail confié et les messages que personne n’a commencés",
-      "stoppedAll": "Tout ce que cet assistant avait en cours a été arrêté"
+      "stoppedAll": "Tout ce que cet assistant avait en cours a été arrêté",
+      "details": "Voir les détails"
     },
     "newSession": {
       "title": "Démarrer une nouvelle session ?",
@@ -9259,7 +9255,6 @@
       "copied": "Copie créée : {name}",
       "openConversation": "Ouvrir",
       "more": "Plus",
-      "settings": "Réglages",
       "copy": "Dupliquer",
       "deleteAction": "Supprimer…",
       "fromTemplate": "À partir d'un modèle",
@@ -9341,14 +9336,17 @@
           "copy": "Dupliquer…",
           "stopAll": "Tout arrêter",
           "delete": "Supprimer…",
-          "open": "Ouvrir"
+          "open": "Ouvrir",
+          "details": "Voir les détails",
+          "edit": "Modifier les informations de base…"
         },
         "mergeable": "#{id} prête à fusionner : {title}",
         "prReady": "Prête à fusionner : {text}",
         "prFailed": "#{id} vérifications en échec : {title}",
         "prStuck": "#{id} est en conflit : {title}",
         "prChecks": "#{id} vérifications en attente {passed}/{total}",
-        "resize": "Redimensionner la liste des assistants"
+        "resize": "Redimensionner la liste des assistants",
+        "dropNewGroup": "Déposer ici pour un nouveau groupe"
       },
       "choice": {
         "other": "Autre",
@@ -9424,6 +9422,14 @@
         "confirm": "Supprimer",
         "plans": "{count, plural, one {Son plan s’arrête} other {Ses # plans s’arrêtent}} : {titles}.",
         "planSteps": "{count, plural, one {Une étape d’un autre plan lui est confiée} other {# étapes d’autres plans lui sont confiées}} : {steps}. Le moment venu, leurs assistants en choisiront un autre."
+      },
+      "edit": {
+        "title": "Modifier les informations de base",
+        "description": "Le nom et l'image sous lesquels il apparaît dans la liste, sur sa page et dans ses messages ; l'assistant connaît aussi son nom.",
+        "name": "Nom",
+        "cancel": "Annuler",
+        "save": "Enregistrer",
+        "saved": "Enregistré."
       }
     },
     "face": {
@@ -10715,6 +10721,11 @@
       "cancel": "Annuler",
       "install": "Installer",
       "dismiss": "Pas celle-ci"
+    },
+    "botPage": {
+      "primary": "Assistant principal",
+      "worker": "Assistant de travail",
+      "notSetUp": "Pas encore configuré"
     }
   },
   "MessageCheck": {

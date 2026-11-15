@@ -390,7 +390,7 @@ export function PersonalAgentHistorySearch() {
           (entries ?? []).some((e) => e.id === bot && e.kind === "primary")
         const ui = usePersonalAgentUi.getState()
         ui.setViewBot(isPrimary ? null : bot)
-        ui.closeSettings()
+        ui.showConversation()
         ui.setPendingJump({ bot, row })
       },
       session: openSession,

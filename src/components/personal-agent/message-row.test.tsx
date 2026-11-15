@@ -709,7 +709,7 @@ describe("the bubbles", () => {
   })
 
   it("names the memory a reply used, each opening its entry (7.7)", () => {
-    usePersonalAgentUi.setState({ settings: null })
+    usePersonalAgentUi.setState({ settings: null, botPage: null })
     const item = itemOf(
       [
         row(11, "reply", {
@@ -731,9 +731,8 @@ describe("the bubbles", () => {
     const line = container.querySelector("[data-pa-reply-memories]")
     expect(line?.textContent).toBe("Memory used:Release days·Your hours")
     fireEvent.click(screen.getByText("Your hours"))
-    expect(usePersonalAgentUi.getState().settings).toEqual({
-      page: "persona",
-      bot: null,
+    expect(usePersonalAgentUi.getState().botPage).toEqual({
+      tab: "persona",
       entry: "memory/hours.md",
     })
   })

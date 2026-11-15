@@ -37,7 +37,8 @@ beforeEach(() => {
   ]
   usePersonalAgentUi.setState({
     viewBot: 5,
-    settings: { page: "proactive", bot: null },
+    settings: null,
+    botPage: { tab: "notify" },
     pendingJump: null,
   })
 })
@@ -54,9 +55,11 @@ describe("following a notification in the workspace", () => {
     render(<PersonalAgentOpenBridge />)
     act(() => followPersonalAgentLink({ kind: "bot", bot_id: 1, row_id: 40 }))
     const ui = usePersonalAgentUi.getState()
-    // The primary is the page's `null`.
+    // The primary is the page's `null`, its conversation shown: no page
+    // over it.
     expect(ui.viewBot).toBeNull()
     expect(ui.settings).toBeNull()
+    expect(ui.botPage).toBeNull()
     expect(ui.pendingJump).toEqual({ bot: 1, row: 40 })
     expect(h.setRoute).toHaveBeenCalledWith("personalAgent")
     act(() => followPersonalAgentLink({ kind: "bot", bot_id: 5, row_id: null }))
@@ -80,5 +83,37 @@ describe("following a notification in the workspace", () => {
   it("hands the roster's avatars over for the notifications' icons", () => {
     render(<PersonalAgentOpenBridge />)
     expect(h.upload).toHaveBeenCalledWith(h.roster, false)
+  })
+})
+
+describe("a page asked for in the address (`?pa=`)", () => {
+  afterEach(() => window.history.replaceState(null, "", "/"))
+
+  it("opens a tab of the assistant's own page, or a page of the settings", () => {
+    usePersonalAgentUi.setState({ settings: null, botPage: null })
+    window.history.replaceState(null, "", "/workspace?pa=persona&x=1")
+    render(<PersonalAgentOpenBridge />)
+    // The page's assistant's own page, its conversation stays the same one.
+    expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "persona" })
+    expect(usePersonalAgentUi.getState().viewBot).toBe(5)
+    expect(usePersonalAgentUi.getState().settings).toBeNull()
+    expect(window.location.search).toBe("?x=1")
+    expect(h.setRoute).toHaveBeenCalledWith("personalAgent")
+    cleanup()
+    window.history.replaceState(null, "", "/workspace?pa=executors")
+    render(<PersonalAgentOpenBridge />)
+    expect(usePersonalAgentUi.getState().settings).toEqual({
+      page: "executors",
+    })
+    expect(usePersonalAgentUi.getState().botPage).toBeNull()
+  })
+
+  it("leaves one it does not know", () => {
+    usePersonalAgentUi.setState({ settings: null, botPage: null })
+    window.history.replaceState(null, "", "/workspace?pa=elsewhere")
+    render(<PersonalAgentOpenBridge />)
+    expect(usePersonalAgentUi.getState().settings).toBeNull()
+    expect(usePersonalAgentUi.getState().botPage).toBeNull()
+    expect(h.setRoute).not.toHaveBeenCalled()
   })
 })

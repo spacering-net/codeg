@@ -819,10 +819,7 @@ describe("the activity's matters", () => {
       on: false,
     })
     fireEvent.click(screen.getByRole("button", { name: "Settings" }))
-    expect(usePersonalAgentUi.getState().settings).toEqual({
-      page: "identity",
-      bot: null,
-    })
+    expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "identity" })
   })
 })
 
@@ -967,11 +964,8 @@ describe("the stats tab's status", () => {
         name: "Change what it runs on",
       })
     )
-    expect(usePersonalAgentUi.getState().settings).toEqual({
-      page: "identity",
-      bot: null,
-    })
-    usePersonalAgentUi.setState({ settings: null })
+    expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "identity" })
+    usePersonalAgentUi.setState({ settings: null, botPage: null })
     expect(row("Model").textContent).toBe("ModelOpus")
     expect(row("Mode").textContent).toBe("ModeDefault")
     expect(row("Session").textContent).toContain("#3")

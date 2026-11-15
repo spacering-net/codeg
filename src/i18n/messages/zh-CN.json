@@ -8092,13 +8092,9 @@
       "restoreDefaults": "恢复本页默认",
       "back": "返回对话",
       "viewTitle": "设置",
-      "backToOwn": "回到本页的助手",
-      "editingOther": "正在改「{name}」自己的设置。",
       "readOnly": "助手在另一个 codeg 进程里运行，这里的设置只读；执行配置本身仍可编辑。",
       "setUpFirst": "请先设置主助手。",
       "nav": {
-        "thisAssistant": "这个助手",
-        "allAssistants": "全部助手",
         "team": "团队",
         "prefs": "偏好",
         "identity": "身份与大脑",
@@ -8803,8 +8799,6 @@
         "default": "默认"
       },
       "tabPersona": "人设与记忆",
-      "targetLoading": "正在读取这个助手的设置…",
-      "targetFailed": "读不到这个助手的设置。",
       "brain": "大脑",
       "about": {
         "followSystem": "跟随系统",
@@ -8917,7 +8911,8 @@
       "skillTurnedOff": "已停用 {name}",
       "deleteSkill": "删除技能",
       "confirmDeleteSkillHint": "删除这个流程技能？它的文件夹会从工作目录里删掉。",
-      "skillDeleted": "已删除 {name}"
+      "skillDeleted": "已删除 {name}",
+      "viewSubtitle": "所有助手共用"
     },
     "statusWord": {
       "idle": "空闲",
@@ -8941,7 +8936,8 @@
       "newSession": "开启新会话…",
       "stopAll": "全部停下",
       "stopAllHint": "停下回复、它派出的活，以及对方还没开始处理的消息",
-      "stoppedAll": "这个助手手上的事已全部停下"
+      "stoppedAll": "这个助手手上的事已全部停下",
+      "details": "查看详情"
     },
     "newSession": {
       "title": "开启新会话？",
@@ -9259,7 +9255,6 @@
       "copied": "已复制成 {name}",
       "openConversation": "打开",
       "more": "更多",
-      "settings": "设置",
       "copy": "复制",
       "deleteAction": "删除…",
       "fromTemplate": "从模板新建",
@@ -9341,14 +9336,17 @@
           "copy": "复制…",
           "stopAll": "全部停下",
           "delete": "删除…",
-          "open": "打开"
+          "open": "打开",
+          "details": "查看详情",
+          "edit": "编辑基本信息…"
         },
         "mergeable": "#{id} 可以合并了：{title}",
         "prReady": "可以合并了：{text}",
         "prFailed": "#{id} 检查没过：{title}",
         "prStuck": "#{id} 有冲突：{title}",
         "prChecks": "#{id} 等检查 {passed}/{total}",
-        "resize": "调整助手列表宽度"
+        "resize": "调整助手列表宽度",
+        "dropNewGroup": "拖到这里新建分组"
       },
       "choice": {
         "other": "其他",
@@ -9424,6 +9422,14 @@
         "confirm": "删除",
         "plans": "它的 {count} 个计划会停下：{titles}。",
         "planSteps": "别的计划里有 {count} 步交给了它：{steps}。轮到时，由那个计划的助手另挑一个。"
+      },
+      "edit": {
+        "title": "编辑基本信息",
+        "description": "它在名册、它的页面和消息里显示的名字和头像；助手也知道自己叫这个名字。",
+        "name": "名称",
+        "cancel": "取消",
+        "save": "保存",
+        "saved": "已保存。"
       }
     },
     "face": {
@@ -10715,6 +10721,11 @@
       "cancel": "取消",
       "install": "安装",
       "dismiss": "不用"
+    },
+    "botPage": {
+      "primary": "主助手",
+      "worker": "工作助手",
+      "notSetUp": "还没设置"
     }
   },
   "MessageCheck": {

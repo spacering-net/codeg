@@ -11,12 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
-import { usePersonalAgent } from "@/contexts/personal-agent-context"
-import {
-  personalAgentExecutors,
-  personalAgentGet,
-  personalAgentSettingsPatch,
-} from "@/lib/api"
+import { personalAgentExecutors, personalAgentSettingsPatch } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { subscribe } from "@/lib/platform"
 import {
@@ -26,7 +21,6 @@ import {
   type PersonalAgentBotSummary,
   type PersonalAgentChange,
   type PersonalAgentSettingChange,
-  type PersonalAgentSnapshot,
 } from "@/lib/types"
 import { useAssistantsStore } from "@/stores/assistants-store"
 import { useRoster } from "@/stores/personal-agent-roster-store"
@@ -53,62 +47,6 @@ function usePersonalAgentChanges(
       unsub?.()
     }
   }, [])
-}
-
-/**
- * The snapshot of the assistant the settings are about: the page's own
- * (from its store), or — a work assistant picked in the team's list — its
- * own, read here and again whenever it changes. Only ever the snapshot of
- * the assistant asked for: while another's is still loading (or failed to),
- * there is none, so nothing is shown — or saved — as the wrong assistant.
- */
-export function useTargetSnapshot(bot: number | null): {
-  snapshot: PersonalAgentSnapshot | null
-  /** A work assistant's could not be read. */
-  failed: boolean
-  reload: () => void
-} {
-  const { snapshot: own, refresh } = usePersonalAgent()
-  const [other, setOther] = useState<{
-    bot: number
-    snapshot: PersonalAgentSnapshot | null
-    failed: boolean
-  } | null>(null)
-  const seq = useRef(0)
-  const reload = useCallback(() => {
-    if (bot == null) {
-      void refresh()
-      return
-    }
-    const id = ++seq.current
-    personalAgentGet(bot)
-      .then((s) => {
-        if (id === seq.current) setOther({ bot, snapshot: s, failed: false })
-      })
-      .catch(() => {
-        if (id !== seq.current) return
-        // A read that failed keeps what this assistant had, never another's.
-        setOther((held) =>
-          held?.bot === bot
-            ? { ...held, failed: held.snapshot == null }
-            : { bot, snapshot: null, failed: true }
-        )
-      })
-  }, [bot, refresh])
-  useEffect(() => {
-    if (bot != null) reload()
-  }, [bot, reload])
-  usePersonalAgentChanges((c) => {
-    if (bot == null || c.bot_id !== bot) return
-    if (c.kind === "agent" || c.kind === "status") reload()
-  })
-  if (bot == null) return { snapshot: own, failed: false, reload }
-  const mine = other?.bot === bot ? other : null
-  // The snapshot must also be the assistant's own (an id that names
-  // another, or none, is not it).
-  const snapshot =
-    mine?.snapshot && mine.snapshot.agent?.id === bot ? mine.snapshot : null
-  return { snapshot, failed: mine?.failed ?? false, reload }
 }
 
 /** The owner's assistants, kept up to date: the roster's (one read and one

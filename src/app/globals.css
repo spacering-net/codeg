@@ -5252,3 +5252,19 @@ div.monaco-diff-editor.side-by-side .editor.modified {
     opacity: 0.7;
   }
 }
+
+/* A roster row dragged onto a group (personal-agent/roster.tsx): no hover
+   card over the rows it passes, no text selected on its way. */
+:root[data-pa-roster-dragging] {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+:root[data-pa-roster-dragging] [data-pa-roster-hovercard] {
+  display: none;
+}
+
+/* Nor while a row's menu is open: the menu is what the owner looks at. */
+body:has([data-pa-roster-menu][data-state="open"]) [data-pa-roster-hovercard] {
+  display: none;
+}

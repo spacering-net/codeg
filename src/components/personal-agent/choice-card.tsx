@@ -359,7 +359,7 @@ function StarterFoot({
   botId: number | null
 }) {
   const t = useTranslations("PersonalAgent.bots.choice")
-  const openSettings = usePersonalAgentUi((s) => s.openSettings)
+  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   const templates = useBotTemplates()
   const [details, setDetails] = useState(false)
   const [switching, setSwitching] = useState(false)
@@ -420,14 +420,14 @@ function StarterFoot({
           <Button
             size="xs"
             variant="ghost"
-            onClick={() => openSettings("identity", null)}
+            onClick={() => openBotPage("identity")}
           >
             {t("editBrain")}
           </Button>
           <Button
             size="xs"
             variant="ghost"
-            onClick={() => openSettings("execution", null)}
+            onClick={() => openBotPage("execution")}
           >
             {t("editExecutor")}
           </Button>

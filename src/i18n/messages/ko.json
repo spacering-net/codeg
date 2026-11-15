@@ -8093,13 +8093,9 @@
       "restoreDefaults": "기본값으로 복원",
       "back": "대화로 돌아가기",
       "viewTitle": "설정",
-      "backToOwn": "이 페이지의 어시스턴트로 돌아가기",
-      "editingOther": "{name}의 자체 설정을 편집하고 있습니다.",
       "readOnly": "어시스턴트가 다른 codeg 프로세스에서 실행 중이라 여기서는 설정이 읽기 전용입니다. 실행 구성 자체는 계속 편집할 수 있습니다.",
       "setUpFirst": "먼저 메인 어시스턴트를 설정하세요.",
       "nav": {
-        "thisAssistant": "이 어시스턴트",
-        "allAssistants": "모든 어시스턴트",
         "team": "팀",
         "prefs": "환경설정",
         "identity": "정체성과 두뇌",
@@ -8803,8 +8799,6 @@
         "off": "꺼짐",
         "default": "기본값"
       },
-      "targetLoading": "이 어시스턴트의 설정을 불러오는 중…",
-      "targetFailed": "이 어시스턴트의 설정을 불러올 수 없습니다.",
       "brain": "두뇌",
       "about": {
         "followSystem": "시스템 따르기",
@@ -8917,7 +8911,8 @@
       "skillTurnedOff": "{name}을(를) 껐어요",
       "deleteSkill": "스킬 삭제",
       "confirmDeleteSkillHint": "이 절차 스킬을 삭제할까요? 작업 디렉터리에서 폴더째 지워져요.",
-      "skillDeleted": "{name}을(를) 삭제했어요"
+      "skillDeleted": "{name}을(를) 삭제했어요",
+      "viewSubtitle": "모든 어시스턴트 공통"
     },
     "statusWord": {
       "idle": "대기 중",
@@ -8941,7 +8936,8 @@
       "newSession": "새 세션 시작…",
       "stopAll": "모두 멈추기",
       "stopAllHint": "답장, 맡긴 작업, 아직 아무도 시작하지 않은 메시지를 멈춥니다",
-      "stoppedAll": "이 어시스턴트의 일을 모두 멈췄습니다"
+      "stoppedAll": "이 어시스턴트의 일을 모두 멈췄습니다",
+      "details": "세부 정보 보기"
     },
     "newSession": {
       "title": "새 세션을 시작할까요?",
@@ -9259,7 +9255,6 @@
       "copied": "복제본 {name}을(를) 만들었습니다",
       "openConversation": "열기",
       "more": "더 보기",
-      "settings": "설정",
       "copy": "복제",
       "deleteAction": "삭제…",
       "fromTemplate": "템플릿에서 만들기",
@@ -9341,14 +9336,17 @@
           "copy": "복제…",
           "stopAll": "모두 멈추기",
           "delete": "삭제…",
-          "open": "열기"
+          "open": "열기",
+          "details": "세부 정보 보기",
+          "edit": "기본 정보 편집…"
         },
         "mergeable": "#{id} 병합 가능: {title}",
         "prReady": "병합 가능: {text}",
         "prFailed": "#{id} 검사 실패: {title}",
         "prStuck": "#{id} 충돌 있음: {title}",
         "prChecks": "#{id} 검사 대기 {passed}/{total}",
-        "resize": "어시스턴트 목록 너비 조정"
+        "resize": "어시스턴트 목록 너비 조정",
+        "dropNewGroup": "여기에 놓아 새 그룹 만들기"
       },
       "choice": {
         "other": "기타",
@@ -9424,6 +9422,14 @@
         "confirm": "삭제",
         "plans": "계획 {count}개가 멈춰요: {titles}.",
         "planSteps": "다른 계획의 {count}단계가 이 어시스턴트에게 맡겨져 있어요: {steps}. 차례가 오면 각 계획의 어시스턴트가 다른 담당을 골라요."
+      },
+      "edit": {
+        "title": "기본 정보 편집",
+        "description": "명단, 전용 페이지, 메시지에 표시되는 이름과 사진입니다. 어시스턴트도 이 이름을 압니다.",
+        "name": "이름",
+        "cancel": "취소",
+        "save": "저장",
+        "saved": "저장했습니다."
       }
     },
     "face": {
@@ -10715,6 +10721,11 @@
       "cancel": "취소",
       "install": "설치",
       "dismiss": "안 쓰기"
+    },
+    "botPage": {
+      "primary": "메인 어시스턴트",
+      "worker": "작업 어시스턴트",
+      "notSetUp": "아직 설정하지 않음"
     }
   },
   "MessageCheck": {

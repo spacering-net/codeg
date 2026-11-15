@@ -42,6 +42,7 @@ const api = vi.hoisted(() => ({
     },
   ]),
   personalAgentResend: vi.fn(),
+  personalAgentSave: vi.fn(async () => ({})),
 }))
 vi.mock("@/lib/api", () => api)
 const events = vi.hoisted(() => ({
@@ -172,7 +173,7 @@ function wrap(node: React.ReactNode) {
 
 beforeEach(() => {
   __resetRosterForTests()
-  usePersonalAgentUi.setState({ viewBot: null, settings: null })
+  usePersonalAgentUi.setState({ viewBot: null, settings: null, botPage: null })
   pa.snapshot = {
     agent: {
       id: 1,
@@ -547,6 +548,365 @@ describe("the roster", () => {
       expect(api.personalAgentRosterAct).toHaveBeenCalledWith(2, {
         act: "mark_read",
       })
+    )
+  })
+})
+
+/** A pointer event on `target` (jsdom has no PointerEvent: a MouseEvent of
+ *  its type, the pointer's id and kind added). */
+function pointer(
+  type: "pointerdown" | "pointermove" | "pointerup",
+  target: Element,
+  x: number,
+  y: number,
+  buttons = 1
+) {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX: x,
+    clientY: y,
+    button: 0,
+    buttons,
+  })
+  Object.defineProperty(event, "pointerId", { value: 1 })
+  Object.defineProperty(event, "pointerType", { value: "mouse" })
+  act(() => {
+    target.dispatchEvent(event)
+  })
+}
+
+/** What the page finds under the pointer: `under()`'s element. */
+function hitTesting(under: () => Element | null) {
+  Object.defineProperty(document, "elementFromPoint", {
+    configurable: true,
+    value: () => under(),
+  })
+  return () => {
+    delete (document as { elementFromPoint?: unknown }).elementFromPoint
+  }
+}
+
+const rowOf = (name: string) =>
+  screen.getByText(name).closest("[data-pa-roster-bot]") as HTMLElement
+
+/** Press on `from`'s row (at `fromY`), move onto `to` (found by the page
+ *  under the pointer — twice: what shows only while dragging is there the
+ *  second time), and let go. */
+function dragRow(from: string, to: () => Element | null, y = 30, fromY = 10) {
+  const row = rowOf(from)
+  const undo = hitTesting(to)
+  try {
+    pointer("pointerdown", row, 10, fromY)
+    pointer("pointermove", row, 10, y)
+    pointer("pointermove", row, 10, y + 1)
+    pointer("pointerup", row, 10, y + 1, 0)
+  } finally {
+    undo()
+  }
+  return row
+}
+
+describe("the roster's menu and drags (polish round 4)", () => {
+  it("opens an assistant's page and edits its name and face from its menu, each item with its icon", async () => {
+    api.personalAgentBots.mockResolvedValue([entry(1, "Nova"), entry(2, "Dev")])
+    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    await screen.findByText("Dev")
+    fireEvent.contextMenu(screen.getByText("Dev"))
+    let menu = await screen.findByRole("menu")
+    for (const item of within(menu).getAllByRole("menuitem")) {
+      expect(item.querySelector("svg")).not.toBeNull()
+    }
+    fireEvent.click(
+      within(menu).getByRole("menuitem", { name: "View details" })
+    )
+    expect(usePersonalAgentUi.getState()).toMatchObject({
+      viewBot: 2,
+      botPage: { tab: "identity" },
+    })
+    // A click on its row: its conversation, the page closed.
+    fireEvent.click(screen.getByText("Dev"))
+    expect(usePersonalAgentUi.getState().botPage).toBeNull()
+    expect(usePersonalAgentUi.getState().viewBot).toBe(2)
+    // Its name and face.
+    fireEvent.contextMenu(screen.getByText("Dev"))
+    menu = await screen.findByRole("menu")
+    fireEvent.click(
+      within(menu).getByRole("menuitem", { name: "Edit basic info…" })
+    )
+    const dialog = await screen.findByRole("dialog", {
+      name: "Edit basic info",
+    })
+    const save = within(dialog).getByRole("button", { name: "Save" })
+    // Nothing changed yet; and a work assistant keeps a name.
+    expect(save).toBeDisabled()
+    const name = within(dialog).getByLabelText("Name")
+    fireEvent.change(name, { target: { value: " " } })
+    expect(save).toBeDisabled()
+    fireEvent.change(name, { target: { value: "  Builder " } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Purple" }))
+    fireEvent.click(save)
+    await waitFor(() =>
+      expect(api.personalAgentSave).toHaveBeenCalledWith(
+        {
+          name: "Builder",
+          avatar: { kind: "face", shape: "blob", color: "purple" },
+          locale: "en",
+        },
+        2
+      )
+    )
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
+  it("lets the primary go by the default name", async () => {
+    api.personalAgentBots.mockResolvedValue([entry(1, "Nova"), entry(2, "Dev")])
+    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    await screen.findByText("Dev")
+    fireEvent.contextMenu(screen.getByText("Nova"))
+    fireEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", {
+        name: "Edit basic info…",
+      })
+    )
+    const dialog = await screen.findByRole("dialog")
+    const name = within(dialog).getByLabelText("Name") as HTMLInputElement
+    expect(name.placeholder).toBe("Personal agent")
+    fireEvent.change(name, { target: { value: "" } })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
+    await waitFor(() =>
+      expect(api.personalAgentSave).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "" }),
+        null
+      )
+    )
+  })
+
+  it("puts a row dragged onto a group in it, out of the pinned ones", async () => {
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "Nova"),
+      entry(2, "Dev", {}, { pinned_at: iso(-100), section: "web" }),
+      entry(3, "Ops", {}, { section: "codeg" }),
+      entry(5, "Ann"),
+    ])
+    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    await screen.findByText("Ann")
+    const group = (name: string) =>
+      document.querySelector(`[data-pa-roster-group="${name}"]`)!
+    // Mid-drag: the group under it lit, a chip of it under the pointer, a
+    // group to name at the end.
+    const row = rowOf("Ann")
+    const undo = hitTesting(() => screen.getByText("Ops"))
+    pointer("pointerdown", row, 10, 10)
+    pointer("pointermove", row, 10, 30)
+    expect(group("codeg").getAttribute("data-pa-drop-over")).toBe("true")
+    expect(document.querySelector('[data-pa-roster-ghost="5"]')).toBeTruthy()
+    expect(document.querySelector('[data-pa-drop="new"]')).toBeTruthy()
+    expect(row.getAttribute("data-pa-roster-dragged")).toBe("true")
+    pointer("pointerup", row, 10, 30, 0)
+    // The click the drop ends in, right after it, is not a click on the
+    // row.
+    fireEvent.click(row)
+    expect(usePersonalAgentUi.getState().viewBot).toBeNull()
+    undo()
+    await waitFor(() =>
+      expect(api.personalAgentRosterAct).toHaveBeenCalledWith(5, {
+        act: "section",
+        name: "codeg",
+      })
+    )
+    expect(document.querySelector("[data-pa-roster-ghost]")).toBeNull()
+    expect(document.querySelector('[data-pa-drop="new"]')).toBeNull()
+    // A pinned one dropped with the others: out of its group, then unpinned.
+    api.personalAgentRosterAct.mockClear()
+    dragRow("Dev", () => screen.getByText("Others"))
+    await waitFor(() =>
+      expect(api.personalAgentRosterAct.mock.calls).toEqual([
+        [2, { act: "section", name: null }],
+        [2, { act: "unpin" }],
+      ])
+    )
+  })
+
+  it("pins a row dragged among the pinned ones at the slot it is let go over", async () => {
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "Nova"),
+      entry(2, "Dev", {}, { pinned_at: iso(-300), sort_order: 0 }),
+      entry(3, "Ops", {}, { pinned_at: iso(-200), sort_order: 1 }),
+      entry(5, "Ann"),
+    ])
+    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    await screen.findByText("Ann")
+    // Dev's row from 0 to 40, Ops's from 40 to 80.
+    for (const [name, top] of [
+      ["Dev", 0],
+      ["Ops", 40],
+    ] as const) {
+      rowOf(name).getBoundingClientRect = () =>
+        ({ top, bottom: top + 40, height: 40, left: 0, right: 200 }) as DOMRect
+    }
+    // Over Ops's upper half: before Ops.
+    const row = rowOf("Ann")
+    const undo = hitTesting(() => screen.getByText("Ops"))
+    pointer("pointerdown", row, 10, 100)
+    pointer("pointermove", row, 10, 50)
+    expect(
+      rowOf("Ops").querySelector('[data-pa-roster-slot="before"]')
+    ).toBeTruthy()
+    pointer("pointerup", row, 10, 50, 0)
+    undo()
+    await waitFor(() =>
+      expect(api.personalAgentRosterAct.mock.calls).toEqual([
+        [5, { act: "pin" }],
+        [5, { act: "order", ids: [2, 5, 3] }],
+      ])
+    )
+    // Dev to the end; and over where it is, nothing to do.
+    api.personalAgentRosterAct.mockClear()
+    dragRow("Dev", () => screen.getByText("Ops"), 70)
+    await waitFor(() =>
+      expect(api.personalAgentRosterAct).toHaveBeenCalledWith(2, {
+        act: "order",
+        ids: [3, 2],
+      })
+    )
+    api.personalAgentRosterAct.mockClear()
+    // Pressed low on its row, moved up over its own upper half: a drag,
+    // but nowhere new (review round 1: not "before itself", the end).
+    dragRow(
+      "Dev",
+      () => document.querySelector('[data-pa-roster-bot="2"]'),
+      12,
+      35
+    )
+    expect(document.querySelector("[data-pa-roster-ghost]")).toBeNull()
+    await act(async () => {})
+    expect(api.personalAgentRosterAct).not.toHaveBeenCalled()
+  })
+
+  it("leaves the middle pinned one where it is, let go over its own row", async () => {
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "Nova"),
+      entry(2, "Dev", {}, { pinned_at: iso(-300), sort_order: 0 }),
+      entry(3, "Ops", {}, { pinned_at: iso(-200), sort_order: 1 }),
+      entry(5, "Ann", {}, { pinned_at: iso(-100), sort_order: 2 }),
+    ])
+    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    await screen.findByText("Ann")
+    for (const [name, top] of [
+      ["Dev", 0],
+      ["Ops", 40],
+      ["Ann", 80],
+    ] as const) {
+      rowOf(name).getBoundingClientRect = () =>
+        ({ top, bottom: top + 40, height: 40, left: 0, right: 200 }) as DOMRect
+    }
+    const row = rowOf("Ops")
+    const undo = hitTesting(() => row)
+    pointer("pointerdown", row, 10, 75)
+    pointer("pointermove", row, 10, 50)
+    // A drag, with no slot shown and the group not lit.
+    expect(document.querySelector('[data-pa-roster-ghost="3"]')).toBeTruthy()
+    expect(document.querySelector("[data-pa-roster-slot]")).toBeNull()
+    expect(document.querySelector("[data-pa-drop-over]")).toBeNull()
+    pointer("pointerup", row, 10, 50, 0)
+    undo()
+    await act(async () => {})
+    expect(api.personalAgentRosterAct).not.toHaveBeenCalled()
+  })
+
+  it("names a new group for a row dropped on “new group”", async () => {
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "Nova"),
+      entry(2, "Dev", {}, { pinned_at: iso(-100) }),
+      entry(5, "Ann"),
+    ])
+    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    await screen.findByText("Ann")
+    dragRow("Dev", () => document.querySelector('[data-pa-drop="new"]'))
+    const dialog = await screen.findByRole("dialog", { name: "New group" })
+    fireEvent.change(within(dialog).getByLabelText("Group name"), {
+      target: { value: "Release" },
+    })
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move" }))
+    await waitFor(() =>
+      expect(api.personalAgentRosterAct.mock.calls).toEqual([
+        [2, { act: "section", name: "Release" }],
+        [2, { act: "unpin" }],
+      ])
+    )
+  })
+
+  it("opens a row pressed without moving, lets go where it was on Esc, and drags nothing read-only", async () => {
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "Nova"),
+      entry(3, "Ops", {}, { section: "codeg" }),
+      entry(5, "Ann"),
+    ])
+    const { unmount } = wrap(
+      <PersonalAgentRoster compact={false} readOnly={false} />
+    )
+    await screen.findByText("Ann")
+    const row = rowOf("Ann")
+    // A press that hardly moves is a click.
+    pointer("pointerdown", row, 10, 10)
+    pointer("pointermove", row, 12, 11)
+    pointer("pointerup", row, 12, 11, 0)
+    fireEvent.click(row)
+    expect(usePersonalAgentUi.getState().viewBot).toBe(5)
+    // Esc lets go of it where it was: the rest of the press drags
+    // nothing, and the click it ends in opens nothing.
+    usePersonalAgentUi.setState({ viewBot: null })
+    const undo = hitTesting(() => screen.getByText("Ops"))
+    pointer("pointerdown", row, 10, 10)
+    pointer("pointermove", row, 10, 40)
+    expect(document.querySelector("[data-pa-drop-over]")).toBeTruthy()
+    fireEvent.keyDown(window, { key: "Escape" })
+    expect(document.querySelector("[data-pa-roster-ghost]")).toBeNull()
+    pointer("pointermove", row, 10, 60)
+    expect(document.querySelector("[data-pa-roster-ghost]")).toBeNull()
+    pointer("pointerup", row, 10, 60, 0)
+    fireEvent.click(row)
+    expect(usePersonalAgentUi.getState().viewBot).toBeNull()
+    undo()
+    await act(async () => {})
+    expect(api.personalAgentRosterAct).not.toHaveBeenCalledWith(5, {
+      act: "section",
+      name: "codeg",
+    })
+    unmount()
+    // Read-only: no drag at all.
+    wrap(<PersonalAgentRoster compact={false} readOnly />)
+    await screen.findByText("Ann")
+    dragRow("Ann", () => screen.getByText("Ops"))
+    await act(async () => {})
+    expect(api.personalAgentRosterAct).not.toHaveBeenCalledWith(5, {
+      act: "section",
+      name: "codeg",
+    })
+  })
+
+  it("moves a pinned one to a group from its menu, where it then shows", async () => {
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "Nova"),
+      entry(2, "Dev", {}, { pinned_at: iso(-100), section: "codeg" }),
+      entry(3, "Ops", {}, { section: "codeg" }),
+    ])
+    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    await screen.findByText("Dev")
+    fireEvent.contextMenu(screen.getByText("Dev"))
+    const menu = await screen.findByRole("menu")
+    fireEvent.click(
+      within(menu).getByRole("menuitem", { name: "Move to group" })
+    )
+    // Its own group too: it is pinned, so it shows elsewhere for now.
+    const codeg = await screen.findByRole("menuitem", { name: "codeg" })
+    expect(codeg.getAttribute("data-disabled")).toBeNull()
+    fireEvent.click(codeg)
+    await waitFor(() =>
+      expect(api.personalAgentRosterAct.mock.calls).toEqual([
+        [2, { act: "unpin" }],
+      ])
     )
   })
 })

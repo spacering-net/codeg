@@ -95,7 +95,7 @@ function useOpener(
       const primary = entries?.find((e) => e.id === bot)?.kind === "primary"
       const ui = usePersonalAgentUi.getState()
       ui.setViewBot(primary ? null : bot)
-      ui.closeSettings()
+      ui.showConversation()
       ui.setPendingJump(rowId != null ? { bot, row: rowId } : null)
       // The drawer would cover the card it jumps to.
       if (inDrawer) ui.setAuxOpen(false)

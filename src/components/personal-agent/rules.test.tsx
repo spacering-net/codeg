@@ -156,7 +156,7 @@ beforeEach(() => {
     agent_type: "codex",
     title: "Explore auth",
   })
-  usePersonalAgentUi.setState({ settings: null })
+  usePersonalAgentUi.setState({ settings: null, botPage: null })
 })
 
 afterEach(() => {

@@ -8093,13 +8093,9 @@
       "restoreDefaults": "Restablecer valores predeterminados",
       "back": "Volver a la conversación",
       "viewTitle": "Ajustes",
-      "backToOwn": "Volver al asistente de esta página",
-      "editingOther": "Estás editando los ajustes propios de {name}.",
       "readOnly": "Los asistentes se ejecutan en otro proceso de codeg, así que aquí sus ajustes son de solo lectura. Las configuraciones de ejecución en sí se pueden seguir editando.",
       "setUpFirst": "Primero configura el asistente principal.",
       "nav": {
-        "thisAssistant": "Este asistente",
-        "allAssistants": "Todos los asistentes",
         "team": "Equipo",
         "prefs": "Preferencias",
         "identity": "Identidad y cerebro",
@@ -8803,8 +8799,6 @@
         "off": "desactivado",
         "default": "predeterminado"
       },
-      "targetLoading": "Cargando los ajustes de este asistente…",
-      "targetFailed": "No se pudieron leer los ajustes de este asistente.",
       "brain": "Cerebro",
       "about": {
         "followSystem": "Seguir al sistema",
@@ -8917,7 +8911,8 @@
       "skillTurnedOff": "{name} desactivada",
       "deleteSkill": "Eliminar habilidad",
       "confirmDeleteSkillHint": "¿Eliminar esta habilidad de proceso? Su carpeta se quita del directorio de trabajo.",
-      "skillDeleted": "{name} eliminada"
+      "skillDeleted": "{name} eliminada",
+      "viewSubtitle": "Comunes a todos los asistentes"
     },
     "statusWord": {
       "idle": "Inactivo",
@@ -8941,7 +8936,8 @@
       "newSession": "Iniciar una sesión nueva…",
       "stopAll": "Detener todo",
       "stopAllHint": "Detiene la respuesta, el trabajo que encargó y los mensajes que nadie ha empezado",
-      "stoppedAll": "Se detuvo todo lo que tenía en marcha este asistente"
+      "stoppedAll": "Se detuvo todo lo que tenía en marcha este asistente",
+      "details": "Ver detalles"
     },
     "newSession": {
       "title": "¿Iniciar una sesión nueva?",
@@ -9259,7 +9255,6 @@
       "copied": "Copia creada: {name}",
       "openConversation": "Abrir",
       "more": "Más",
-      "settings": "Ajustes",
       "copy": "Duplicar",
       "deleteAction": "Eliminar…",
       "fromTemplate": "Desde una plantilla",
@@ -9341,14 +9336,17 @@
           "copy": "Duplicar…",
           "stopAll": "Detener todo",
           "delete": "Eliminar…",
-          "open": "Abrir"
+          "open": "Abrir",
+          "details": "Ver detalles",
+          "edit": "Editar información básica…"
         },
         "mergeable": "#{id} lista para fusionar: {title}",
         "prReady": "Lista para fusionar: {text}",
         "prFailed": "#{id} comprobaciones fallidas: {title}",
         "prStuck": "#{id} tiene un conflicto: {title}",
         "prChecks": "#{id} esperando comprobaciones {passed}/{total}",
-        "resize": "Cambiar el ancho de la lista de asistentes"
+        "resize": "Cambiar el ancho de la lista de asistentes",
+        "dropNewGroup": "Suelta aquí para un grupo nuevo"
       },
       "choice": {
         "other": "Otro",
@@ -9424,6 +9422,14 @@
         "confirm": "Eliminar",
         "plans": "{count, plural, one {Su plan se detiene} other {Sus # planes se detienen}}: {titles}.",
         "planSteps": "{count, plural, one {Tiene asignado un paso de otro plan} other {Tiene asignados # pasos de otros planes}}: {steps}. Cuando les toque, sus asistentes elegirán a otro."
+      },
+      "edit": {
+        "title": "Editar información básica",
+        "description": "El nombre y la imagen con los que aparece en la lista, en su página y en sus mensajes; el asistente también conoce su nombre.",
+        "name": "Nombre",
+        "cancel": "Cancelar",
+        "save": "Guardar",
+        "saved": "Guardado."
       }
     },
     "face": {
@@ -10715,6 +10721,11 @@
       "cancel": "Cancelar",
       "install": "Instalar",
       "dismiss": "Esta no"
+    },
+    "botPage": {
+      "primary": "Asistente principal",
+      "worker": "Asistente de trabajo",
+      "notSetUp": "Aún sin configurar"
     }
   },
   "MessageCheck": {

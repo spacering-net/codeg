@@ -136,7 +136,11 @@ beforeEach(() => {
   ])
   platform.openUrl.mockReset().mockResolvedValue(undefined)
   __resetTemplatesForTests()
-  usePersonalAgentUi.setState({ settings: null, executorEditor: null })
+  usePersonalAgentUi.setState({
+    settings: null,
+    botPage: null,
+    executorEditor: null,
+  })
 })
 
 afterEach(cleanup)

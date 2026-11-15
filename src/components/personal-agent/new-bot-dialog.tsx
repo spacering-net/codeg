@@ -8,6 +8,10 @@
  * made with it, its options filled in. Only when codeg cannot read the
  * agent's options does the executor config editor open, prefilled with the
  * role, and the assistant is made with what is picked there.
+ *
+ * Made, the page goes to its conversation — once the roster has it: the
+ * page takes an assistant the roster does not have for one deleted, and
+ * goes back to the primary.
  */
 
 import { useMemo, useState } from "react"
@@ -34,6 +38,7 @@ import type {
   BotAvatar as BotAvatarValue,
   BotMade,
 } from "@/lib/types"
+import { readRosterNow } from "@/stores/personal-agent-roster-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { BotAvatar, defaultBotFace, newBotUid } from "./bot-avatar"
@@ -70,7 +75,8 @@ export function NewBotDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Made: the page goes to it unless the host says otherwise. */
+  /** Made, and on the roster: the page goes to its conversation unless the
+   *  host says otherwise. */
   onMade?: (made: BotMade) => void
 }) {
   return (
@@ -93,7 +99,6 @@ function NewBotBody({
 }) {
   const t = useTranslations("PersonalAgent.bots.create")
   const locale = useLocale()
-  const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
   const templates = useBotTemplates()
   const uid = useMemo(() => newBotUid(), [])
   const [name, setName] = useState("")
@@ -108,10 +113,16 @@ function NewBotBody({
   const shown = face ?? defaultBotFace(uid)
   const trimmed = name.trim()
 
-  const done = (made: BotMade) => {
+  const done = async (made: BotMade) => {
+    // On the roster first: gone to before it is, the page would take it
+    // for one deleted and go back to the primary.
+    if (made.bot) await readRosterNow().catch(() => {})
     if (onMade) onMade(made)
-    else if (made.bot)
-      setViewBot(made.bot.kind === "primary" ? null : made.bot.id)
+    else if (made.bot) {
+      const ui = usePersonalAgentUi.getState()
+      ui.setViewBot(made.bot.kind === "primary" ? null : made.bot.id)
+      ui.showConversation()
+    }
     onClose()
   }
 
@@ -149,7 +160,7 @@ function NewBotBody({
         })
         return
       }
-      done(made)
+      await done(made)
     } catch (e) {
       setError(toErrorMessage(e))
     } finally {

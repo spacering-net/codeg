@@ -3,17 +3,20 @@
 /**
  * The personal agent's buttons in the window's top-right chrome, left of
  * the window's own settings gear: a "⋯" menu with what acts on the agent
- * itself — its settings, the session it runs on underneath, compacting that
- * session's context (or, while a turn runs, stopping it: the reply being
- * written, or the compaction), and starting a new one — then the side
- * panel's toggle, nearest the edge the panel opens at. Two buttons, the room
- * the chrome keeps for a route's own (`RIGHT_CHROME_CLUSTER`).
+ * itself — its own page, the settings every assistant shares, the session it
+ * runs on underneath, compacting that session's context (or, while a turn
+ * runs, stopping it: the reply being written, or the compaction), and
+ * starting a new one — then the side panel's toggle, nearest the edge the
+ * panel opens at; not while a page is over the conversation, the panel
+ * standing aside for it. Two buttons, the room the chrome keeps for a
+ * route's own (`RIGHT_CHROME_CLUSTER`).
  */
 
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   Eye,
+  IdCard,
   MoreHorizontal,
   OctagonX,
   PanelRight,
@@ -53,6 +56,9 @@ export function PersonalAgentChromeActions({
   const { snapshot, botId } = usePersonalAgent()
   const auxOpen = usePersonalAgentUi((s) => s.auxOpen)
   const toggleAux = usePersonalAgentUi((s) => s.toggleAux)
+  const pageOver = usePersonalAgentUi(
+    (s) => s.settings != null || s.botPage != null
+  )
   const [acting, setActing] = useState(false)
   const status = snapshot?.status ?? null
   const configured = snapshot?.agent != null
@@ -88,6 +94,15 @@ export function PersonalAgentChromeActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-52">
+          {configured ? (
+            <DropdownMenuItem
+              onClick={() => usePersonalAgentUi.getState().openBotPage()}
+              data-pa-menu-details
+            >
+              <IdCard className="size-4" />
+              {t("details")}
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem
             onClick={() => usePersonalAgentUi.getState().openSettings()}
           >
@@ -152,7 +167,7 @@ export function PersonalAgentChromeActions({
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
-      {configured ? (
+      {configured && !pageOver ? (
         <Button
           variant="ghost"
           size="icon"
