@@ -21126,6 +21126,7 @@ wire_api = "chat"
     /// launch env `build_session_runtime_env_with_conversation` produces. This
     /// is the exact chain the spawn path runs, so the assertions below cover
     /// the wiring rather than one function in isolation.
+    #[allow(clippy::await_holding_lock)]
     async fn custom_agent_launch_env(
         agent_id: &'static str,
         model_env: Option<crate::acp::custom_registry::ModelEnvDeclaration>,
@@ -21136,6 +21137,12 @@ wire_api = "chat"
         use crate::models::model_provider_file::{
             ModelEntryDraft, ModelProviderApiType, ModelProviderDraft, WireModelInput,
         };
+        // The `hydrate_registry` call below wholesale-replaces the
+        // process-global custom-agent registry. Hold the test guard so
+        // concurrent registry-sensitive tests (detection, custom-agent saves)
+        // never see the registry clobbered mid-flight, and so this helper's
+        // hydrated state survives until the launch env is built.
+        let _registry = crate::acp::custom_registry::hydrate_test_guard();
 
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
         let catalog = tempfile::tempdir().expect("catalog dir");
@@ -21353,6 +21360,7 @@ wire_api = "chat"
     /// credentials when the agent remembers one — the "remembered first,
     /// otherwise pick" rule. Without this an agent that cannot start
     /// unauthenticated (qwen-code) never gets far enough to be configured.
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn remembered_agent_selection_covers_pre_bind_and_unset_conversations() {
         use crate::acp::custom_registry::{
@@ -21361,6 +21369,11 @@ wire_api = "chat"
         use crate::models::model_provider_file::{
             ModelEntryDraft, ModelProviderApiType, ModelProviderDraft, WireModelInput,
         };
+        // The `hydrate_registry` call below wholesale-replaces the
+        // process-global custom-agent registry; hold the test guard so
+        // concurrent registry-sensitive tests never see it clobbered
+        // mid-flight.
+        let _registry = crate::acp::custom_registry::hydrate_test_guard();
 
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
         let catalog = tempfile::tempdir().expect("catalog dir");

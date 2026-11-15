@@ -904,11 +904,17 @@ mod tests {
     /// path consult: a verified standard-convention agent gets every
     /// projectable family, an unverified one gets none (so the settings card
     /// is not offered and the selection is never applied).
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn per_agent_capability_gates_custom_agents_on_their_declaration() {
         use crate::acp::custom_registry::{
             CustomAgentDef, CustomAgentSpec, CustomDistributionKind, ModelEnvDeclaration, NpxSpec,
         };
+        // The two `hydrate_registry` calls below wholesale-replace the
+        // process-global custom-agent registry; hold the test guard so
+        // concurrent registry-sensitive tests never see it clobbered
+        // mid-flight.
+        let _registry = crate::acp::custom_registry::hydrate_test_guard();
 
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
         let def = |id: &str, model_env: Option<ModelEnvDeclaration>| CustomAgentDef {
