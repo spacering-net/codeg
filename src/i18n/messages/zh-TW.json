@@ -1185,10 +1185,10 @@
       "configManagement": "DeepSeek Harness 設定",
       "configDescription": "端點與金鑰是 deepseek-acp 啟動時讀取的環境變數。模型與推理等級是工作階段層級的選擇器，在輸入框裡切換。",
       "baseUrlLabel": "API 端點",
-      "baseUrlHint": "留空則使用官方端點。儲存後對新建的工作階段生效——正在進行的工作階段需要重新連線才會切換。",
-      "baseUrlInvalid": "請填寫完整的 http(s) 網址且不帶查詢參數，例如 https://api.deepseek.com",
+      "baseUrlHint": "留空則使用官方端點。自訂端點須提供 DeepSeek 相容 Anthropic 的 Messages API。儲存後對新建的工作階段生效——正在進行的工作階段需要重新連線才會切換。",
+      "baseUrlInvalid": "請填寫完整的 http(s) 網址且不帶查詢參數，例如 https://api.deepseek.com/anthropic",
       "apiKeyLabel": "API 金鑰",
-      "apiKeyHint": "以 DEEPSEEK_API_KEY 傳給智慧體。環境變數的優先權高於憑證檔，因此若用終端機登入，這裡留空即可。"
+      "apiKeyHint": "以 DEEPSEEK_API_KEY 傳給智慧體。終端機登入（deepseek-acp --setup）存下的金鑰優先於這裡，因此用終端機登入過的話，要換金鑰請重新登入。"
     },
     "codex": {
       "configDescription": "支援 API URL、API Key、模型名稱快捷配置，並與 `auth.json` / `config.toml` 雙向聯動。",
@@ -6872,6 +6872,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "模型清單",
+    "builtInCatalogNotice": "自 deepseek-acp 0.10.0 起，模型清單內建於智慧體中，不再讀取 harness 設定文件，因此無法在這裡編輯。先前在這裡儲存的清單仍留在檔案中，但不再生效。",
     "description": "DeepSeek 工作階段可切換的模型。儲存在 harness 的設定文件中，代理在啟動時讀取——儲存後對之後新建的工作階段生效。",
     "inheritedBadge": "代理預設",
     "inheritedHint": "尚未儲存過清單，這些是代理內建的模型。儲存會將它們固定下來，之後升級代理也不會再自動變動。檔案：",

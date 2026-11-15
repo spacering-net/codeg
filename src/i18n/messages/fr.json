@@ -1185,10 +1185,10 @@
       "configManagement": "Configuration de DeepSeek Harness",
       "configDescription": "Le point de terminaison et la clé sont des variables d'environnement que deepseek-acp lit au démarrage. Le modèle et le niveau de raisonnement sont des sélecteurs par session : ils se choisissent dans le champ de saisie.",
       "baseUrlLabel": "Point de terminaison de l'API",
-      "baseUrlHint": "Laissez vide pour le point de terminaison officiel. S'applique aux sessions démarrées après l'enregistrement ; reconnectez une session en cours pour qu'elle le prenne en compte.",
-      "baseUrlInvalid": "Saisissez une URL http(s) complète et sans chaîne de requête, par exemple https://api.deepseek.com",
+      "baseUrlHint": "Laissez vide pour le point de terminaison officiel. Un point de terminaison personnalisé doit fournir l'API Messages de DeepSeek compatible Anthropic. S'applique aux sessions démarrées après l'enregistrement ; reconnectez une session en cours pour qu'elle le prenne en compte.",
+      "baseUrlInvalid": "Saisissez une URL http(s) complète et sans chaîne de requête, par exemple https://api.deepseek.com/anthropic",
       "apiKeyLabel": "Clé d'API",
-      "apiKeyHint": "Transmise à l'agent via DEEPSEEK_API_KEY. Une variable d'environnement l'emporte sur le fichier d'identifiants : laissez ce champ vide si vous vous connectez depuis le terminal."
+      "apiKeyHint": "Transmise à l'agent via DEEPSEEK_API_KEY. Une clé enregistrée par une connexion depuis le terminal (deepseek-acp --setup) l'emporte sur celle-ci : si vous vous êtes connecté ainsi, changez la clé en vous reconnectant."
     },
     "codex": {
       "configDescription": "Prend en charge la configuration rapide de l’URL API, de la clé API et du nom du modèle, avec synchronisation vers `auth.json` / `config.toml`.",
@@ -6872,6 +6872,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "Liste de modèles",
+    "builtInCatalogNotice": "Depuis deepseek-acp 0.10.0, la liste des modèles est intégrée à l'agent et n'est plus lue depuis le document de paramètres du harness ; elle ne peut donc pas être modifiée ici. Une liste enregistrée ici auparavant reste dans le fichier, mais n'a plus d'effet.",
     "description": "Les modèles entre lesquels une session DeepSeek peut basculer. Ils sont stockés dans le document de réglages du harness, que l'agent lit au démarrage : un enregistrement s'applique aux sessions démarrées ensuite.",
     "inheritedBadge": "Défauts de l'agent",
     "inheritedHint": "Aucune liste n'est encore enregistrée : voici les modèles intégrés de l'agent. L'enregistrement les fige, et les versions ultérieures de l'agent ne les changeront plus d'elles-mêmes. Fichier :",

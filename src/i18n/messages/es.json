@@ -1185,10 +1185,10 @@
       "configManagement": "Configuración de DeepSeek Harness",
       "configDescription": "El endpoint y la clave son variables de entorno que deepseek-acp lee al arrancar. El modelo y el esfuerzo de razonamiento son selectores por sesión: se eligen en el campo de mensaje.",
       "baseUrlLabel": "Endpoint de la API",
-      "baseUrlHint": "Déjalo vacío para el endpoint oficial. Se aplica a las sesiones iniciadas tras guardar; vuelve a conectar una sesión en curso para que lo tome.",
-      "baseUrlInvalid": "Introduce una URL http(s) completa y sin cadena de consulta, por ejemplo https://api.deepseek.com",
+      "baseUrlHint": "Déjalo vacío para el endpoint oficial. Un endpoint propio debe ofrecer la API Messages de DeepSeek compatible con Anthropic. Se aplica a las sesiones iniciadas tras guardar; vuelve a conectar una sesión en curso para que lo tome.",
+      "baseUrlInvalid": "Introduce una URL http(s) completa y sin cadena de consulta, por ejemplo https://api.deepseek.com/anthropic",
       "apiKeyLabel": "Clave de API",
-      "apiKeyHint": "Se pasa al agente como DEEPSEEK_API_KEY. Una variable de entorno tiene prioridad sobre el archivo de credenciales, así que déjala vacía si inicias sesión desde la terminal."
+      "apiKeyHint": "Se pasa al agente como DEEPSEEK_API_KEY. Una clave guardada al iniciar sesión desde la terminal (deepseek-acp --setup) tiene prioridad sobre esta, así que si iniciaste sesión así, cambia la clave volviendo a iniciar sesión."
     },
     "codex": {
       "configDescription": "Admite configuración rápida de URL de API, API Key y nombre del modelo, y sincroniza con `auth.json` / `config.toml`.",
@@ -6872,6 +6872,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "Lista de modelos",
+    "builtInCatalogNotice": "Desde deepseek-acp 0.10.0 la lista de modelos viene integrada en el agente y ya no se lee del documento de ajustes del harness, así que no se puede editar aquí. Una lista guardada aquí antes sigue en el archivo, pero no tiene efecto.",
     "description": "Los modelos entre los que puede cambiar una sesión de DeepSeek. Se guardan en el documento de ajustes del harness, que el agente lee al iniciarse: al guardar, se aplica a las sesiones iniciadas después.",
     "inheritedBadge": "Valores del agente",
     "inheritedHint": "Todavía no hay ninguna lista guardada, así que estos son los modelos integrados del agente. Guardarla los fija, y las versiones posteriores del agente ya no los cambiarán por su cuenta. Archivo:",

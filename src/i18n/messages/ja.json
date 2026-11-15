@@ -1185,10 +1185,10 @@
       "configManagement": "DeepSeek Harness の設定",
       "configDescription": "エンドポイントと API キーは deepseek-acp が起動時に読み込む環境変数です。モデルと推論レベルはセッションごとのセレクターなので、入力欄で切り替えます。",
       "baseUrlLabel": "API エンドポイント",
-      "baseUrlHint": "空欄なら公式エンドポイントを使います。保存後に開始したセッションから有効になります。実行中のセッションは再接続してください。",
-      "baseUrlInvalid": "クエリ文字列を含まない完全な http(s) URL を入力してください（例：https://api.deepseek.com）",
+      "baseUrlHint": "空欄なら公式エンドポイントを使います。独自のエンドポイントは DeepSeek の Anthropic 互換 Messages API を提供している必要があります。保存後に開始したセッションから有効になります。実行中のセッションは再接続してください。",
+      "baseUrlInvalid": "クエリ文字列を含まない完全な http(s) URL を入力してください（例：https://api.deepseek.com/anthropic）",
       "apiKeyLabel": "API キー",
-      "apiKeyHint": "DEEPSEEK_API_KEY としてエージェントに渡されます。環境変数は認証情報ファイルより優先されるため、ターミナルでログインする場合は空のままにしてください。"
+      "apiKeyHint": "DEEPSEEK_API_KEY としてエージェントに渡されます。ターミナルでのログイン（deepseek-acp --setup）で保存したキーがこちらより優先されるため、その方法でログインした場合は、もう一度ログインしてキーを変更してください。"
     },
     "codex": {
       "configDescription": "API URL、API Key、モデル名を素早く設定でき、`auth.json` / `config.toml` と同期します。",
@@ -6872,6 +6872,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "モデル一覧",
+    "builtInCatalogNotice": "deepseek-acp 0.10.0 以降、モデル一覧はエージェントに組み込まれ、harness の設定ファイルからは読み込まれなくなったため、ここでは編集できません。以前ここで保存した一覧はファイルに残りますが、効果はありません。",
     "description": "DeepSeek セッションで切り替えられるモデルです。harness の設定ドキュメントに保存され、エージェントは起動時に読み込みます——保存後に開始されたセッションから反映されます。",
     "inheritedBadge": "エージェント既定",
     "inheritedHint": "まだ一覧が保存されていないため、これはエージェント内蔵のモデルです。保存すると固定され、以降のエージェント更新でも自動では変わりません。ファイル：",

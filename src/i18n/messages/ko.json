@@ -1185,10 +1185,10 @@
       "configManagement": "DeepSeek Harness 구성",
       "configDescription": "엔드포인트와 API 키는 deepseek-acp가 시작할 때 읽는 환경 변수입니다. 모델과 추론 강도는 세션별 선택기이므로 입력창에서 바꿉니다.",
       "baseUrlLabel": "API 엔드포인트",
-      "baseUrlHint": "비워 두면 공식 엔드포인트를 사용합니다. 저장 후 시작하는 세션부터 적용되며, 실행 중인 세션은 다시 연결해야 반영됩니다.",
-      "baseUrlInvalid": "쿼리 문자열이 없는 완전한 http(s) URL을 입력하세요. 예: https://api.deepseek.com",
+      "baseUrlHint": "비워 두면 공식 엔드포인트를 사용합니다. 사용자 지정 엔드포인트는 DeepSeek의 Anthropic 호환 Messages API를 제공해야 합니다. 저장 후 시작하는 세션부터 적용되며, 실행 중인 세션은 다시 연결해야 반영됩니다.",
+      "baseUrlInvalid": "쿼리 문자열이 없는 완전한 http(s) URL을 입력하세요. 예: https://api.deepseek.com/anthropic",
       "apiKeyLabel": "API 키",
-      "apiKeyHint": "DEEPSEEK_API_KEY로 에이전트에 전달됩니다. 환경 변수가 자격 증명 파일보다 우선하므로 터미널로 로그인한다면 비워 두세요."
+      "apiKeyHint": "DEEPSEEK_API_KEY로 에이전트에 전달됩니다. 터미널 로그인(deepseek-acp --setup)으로 저장한 키가 이 값보다 우선하므로, 그 방법으로 로그인했다면 다시 로그인해서 키를 바꾸세요."
     },
     "codex": {
       "configDescription": "API URL, API Key, 모델 이름을 빠르게 설정하고 `auth.json` / `config.toml`과 동기화합니다.",
@@ -6872,6 +6872,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "모델 목록",
+    "builtInCatalogNotice": "deepseek-acp 0.10.0부터 모델 목록은 에이전트에 내장되어 더 이상 harness 설정 문서에서 읽지 않으므로 여기서 편집할 수 없습니다. 이전에 여기서 저장한 목록은 파일에 남아 있지만 효과가 없습니다.",
     "description": "DeepSeek 세션에서 전환할 수 있는 모델입니다. harness 설정 문서에 저장되며 에이전트가 시작할 때 읽습니다 — 저장 이후 시작된 세션부터 적용됩니다.",
     "inheritedBadge": "에이전트 기본값",
     "inheritedHint": "아직 저장된 목록이 없어 에이전트 내장 모델을 보여 줍니다. 저장하면 고정되어 이후 에이전트 업데이트로도 바뀌지 않습니다. 파일:",

@@ -1185,10 +1185,10 @@
       "configManagement": "DeepSeek Harness 配置",
       "configDescription": "端点与密钥是 deepseek-acp 启动时读取的环境变量。模型和推理档位是会话级选择器，在输入框里切换。",
       "baseUrlLabel": "API 端点",
-      "baseUrlHint": "留空则使用官方端点。保存后对新建的会话生效——正在进行的会话需要重新连接才会切换。",
-      "baseUrlInvalid": "请填写完整的 http(s) 地址且不带查询参数，例如 https://api.deepseek.com",
+      "baseUrlHint": "留空则使用官方端点。自定义端点须提供 DeepSeek 兼容 Anthropic 的 Messages API。保存后对新建的会话生效——正在进行的会话需要重新连接才会切换。",
+      "baseUrlInvalid": "请填写完整的 http(s) 地址且不带查询参数，例如 https://api.deepseek.com/anthropic",
       "apiKeyLabel": "API 密钥",
-      "apiKeyHint": "以 DEEPSEEK_API_KEY 传给智能体。环境变量的优先级高于凭据文件，因此若用终端登录，这里留空即可。"
+      "apiKeyHint": "以 DEEPSEEK_API_KEY 传给智能体。终端登录（deepseek-acp --setup）存下的密钥优先于这里，因此用终端登录过的话，要换密钥请重新登录。"
     },
     "codex": {
       "configDescription": "支持 API URL、API Key、模型名称快捷配置，并与 `auth.json` / `config.toml` 双向联动。",
@@ -6872,6 +6872,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "模型列表",
+    "builtInCatalogNotice": "从 deepseek-acp 0.10.0 起，模型列表内置在智能体中，不再读取 harness 设置文档，因此无法在这里编辑。之前在这里保存的列表仍留在文件里，但不再生效。",
     "description": "DeepSeek 会话可切换的模型。保存在 harness 的设置文档里，代理在启动时读取——保存后对之后新建的会话生效。",
     "inheritedBadge": "代理默认",
     "inheritedHint": "尚未保存过列表，这些是代理内置的模型。保存会把它们固定下来，之后升级代理也不再自动变化。文件：",

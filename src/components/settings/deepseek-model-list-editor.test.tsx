@@ -11,8 +11,10 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
+  DeepSeekBuiltInCatalogNotice,
   DeepSeekModelListEditor,
   deepSeekAcceptsImages,
+  deepseekReadsHarnessCatalog,
   deepSeekImageBudgetMode,
   pruneEmpty,
   rowsForPicks,
@@ -88,6 +90,40 @@ async function renderEditor(
 
 const idField = (index: number) =>
   screen.getAllByLabelText("Model id")[index] as HTMLInputElement
+
+describe("deepseekReadsHarnessCatalog", () => {
+  it("is true only for releases before 0.10.0", () => {
+    expect(deepseekReadsHarnessCatalog("0.9.0")).toBe(true)
+    expect(deepseekReadsHarnessCatalog(" v0.9.0 ")).toBe(true)
+    expect(deepseekReadsHarnessCatalog("0.6.3")).toBe(true)
+    expect(deepseekReadsHarnessCatalog("0.10.0")).toBe(false)
+    expect(deepseekReadsHarnessCatalog("0.11.0")).toBe(false)
+    expect(deepseekReadsHarnessCatalog("1.0.0")).toBe(false)
+  })
+
+  it("treats a missing or unparseable version as the pinned release", () => {
+    expect(deepseekReadsHarnessCatalog(null)).toBe(false)
+    expect(deepseekReadsHarnessCatalog(undefined)).toBe(false)
+    expect(deepseekReadsHarnessCatalog("")).toBe(false)
+    expect(deepseekReadsHarnessCatalog("local")).toBe(false)
+  })
+})
+
+describe("DeepSeekBuiltInCatalogNotice", () => {
+  it("says the list is built in and offers no editor", () => {
+    vi.mocked(loadDeepSeekModelCatalog).mockClear()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <DeepSeekBuiltInCatalogNotice />
+      </NextIntlClientProvider>
+    )
+    expect(
+      screen.getByText(enMessages.DeepSeekModelEditor.builtInCatalogNotice)
+    ).toBeTruthy()
+    expect(screen.queryByRole("button")).toBeNull()
+    expect(loadDeepSeekModelCatalog).not.toHaveBeenCalled()
+  })
+})
 
 describe("validateDeepSeekModels", () => {
   it("accepts what the agent accepts", () => {

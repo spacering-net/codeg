@@ -1185,10 +1185,10 @@
       "configManagement": "DeepSeek Harness Configuration",
       "configDescription": "The endpoint and key are environment variables deepseek-acp reads at launch. Model and reasoning effort are per-session selectors — pick them in the composer.",
       "baseUrlLabel": "API endpoint",
-      "baseUrlHint": "Leave empty for the official endpoint. Applies to sessions started after the save — reconnect a running session to pick it up.",
-      "baseUrlInvalid": "Enter a full http(s) URL with no query string, for example https://api.deepseek.com",
+      "baseUrlHint": "Leave empty for the official endpoint. A custom endpoint must serve DeepSeek's Anthropic-compatible Messages API. Applies to sessions started after the save — reconnect a running session to pick it up.",
+      "baseUrlInvalid": "Enter a full http(s) URL with no query string, for example https://api.deepseek.com/anthropic",
       "apiKeyLabel": "API key",
-      "apiKeyHint": "Passed to the agent as DEEPSEEK_API_KEY. An environment variable outranks the credentials file, so leave this empty if you sign in through the terminal."
+      "apiKeyHint": "Passed to the agent as DEEPSEEK_API_KEY. A key stored by a terminal sign-in (deepseek-acp --setup) takes precedence over this one, so after signing in that way, change the key by signing in again."
     },
     "codex": {
       "configDescription": "Supports quick configuration for API URL, API Key and model name, and syncs with `auth.json` / `config.toml`.",
@@ -6872,6 +6872,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "Model list",
+    "builtInCatalogNotice": "From deepseek-acp 0.10.0 the model list is built into the agent and no longer read from the harness settings document, so it cannot be edited here. A list saved here earlier stays in the file but has no effect.",
     "description": "The models a DeepSeek session can be switched between. Stored in the harness settings document, which the agent reads at launch — a save reaches sessions started after it.",
     "inheritedBadge": "Agent defaults",
     "inheritedHint": "No list is stored yet, so these are the agent's built-in models. Saving pins them, and later agent versions will no longer change them on their own. File:",

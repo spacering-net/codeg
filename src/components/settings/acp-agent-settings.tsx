@@ -214,11 +214,15 @@ import {
 import { CodeBuddyConfigPanel } from "./codebuddy-config-panel"
 import { CursorConfigPanel } from "./cursor-config-panel"
 import {
-  DEEPSEEK_DEFAULT_BASE_URL,
+  DEEPSEEK_LEGACY_BASE_URL,
   DEEPSEEK_PANEL_ENV_KEYS,
   DeepSeekConfigPanel,
 } from "./deepseek-config-panel"
-import { DeepSeekModelListEditor } from "./deepseek-model-list-editor"
+import {
+  DeepSeekBuiltInCatalogNotice,
+  DeepSeekModelListEditor,
+  deepseekReadsHarnessCatalog,
+} from "./deepseek-model-list-editor"
 import { MiniMaxCodeConfigPanel } from "./minimax-code-config-panel"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
@@ -12033,20 +12037,33 @@ base_url = "https://api.openai.com/v1"`}
                         )
                       }
                     />
-                    {/* The deployment's model catalog. It lives in the harness'
-                      own `settings.yaml`, not in the agent env, so it has its
-                      own section and its own save — and it is what the
-                      composer's per-session model selector gets to choose
-                      from. */}
-                    <DeepSeekModelListEditor
-                      launchModel={selectedAgent.env.DEEPSEEK_ACP_MODEL}
-                      endpoint={{
-                        baseUrl:
-                          selectedAgent.env.DEEPSEEK_BASE_URL?.trim() ||
-                          DEEPSEEK_DEFAULT_BASE_URL,
-                        apiKey: selectedAgent.env.DEEPSEEK_API_KEY ?? "",
-                      }}
-                    />
+                    {/* The deployment's model catalog. Through deepseek-acp
+                      0.9.0 it lives in the harness' own `settings.yaml`, not
+                      in the agent env, so it has its own section and its own
+                      save — and it is what the composer's per-session model
+                      selector gets to choose from. 0.10.0 builds it into the
+                      bridge and reads that file no more, so later releases
+                      get a notice instead of an editor that changes nothing.
+                      Judged on the installed release, else the pinned one. */}
+                    {deepseekReadsHarnessCatalog(
+                      selectedAgent.installed_version ??
+                        selectedAgent.registry_version
+                    ) ? (
+                      <DeepSeekModelListEditor
+                        launchModel={selectedAgent.env.DEEPSEEK_ACP_MODEL}
+                        endpoint={{
+                          // The releases that read this list speak OpenAI
+                          // Chat Completions, so their own default endpoint
+                          // is the one to list models from.
+                          baseUrl:
+                            selectedAgent.env.DEEPSEEK_BASE_URL?.trim() ||
+                            DEEPSEEK_LEGACY_BASE_URL,
+                          apiKey: selectedAgent.env.DEEPSEEK_API_KEY ?? "",
+                        }}
+                      />
+                    ) : (
+                      <DeepSeekBuiltInCatalogNotice />
+                    )}
                   </>
                 ) : selectedAgent.agent_type === "qoder" ? (
                   <QoderConfigPanel

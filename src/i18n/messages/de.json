@@ -1185,10 +1185,10 @@
       "configManagement": "DeepSeek-Harness-Konfiguration",
       "configDescription": "Endpunkt und Schlüssel sind Umgebungsvariablen, die deepseek-acp beim Start liest. Modell und Denkstufe sind Auswahlfelder pro Sitzung — sie werden im Eingabefeld gewählt.",
       "baseUrlLabel": "API-Endpunkt",
-      "baseUrlHint": "Leer lassen für den offiziellen Endpunkt. Gilt für Sitzungen, die nach dem Speichern starten – eine laufende Sitzung muss neu verbinden.",
-      "baseUrlInvalid": "Vollständige http(s)-URL ohne Query-String eingeben, zum Beispiel https://api.deepseek.com",
+      "baseUrlHint": "Leer lassen für den offiziellen Endpunkt. Ein eigener Endpunkt muss die Anthropic-kompatible Messages-API von DeepSeek bereitstellen. Gilt für Sitzungen, die nach dem Speichern starten – eine laufende Sitzung muss neu verbinden.",
+      "baseUrlInvalid": "Vollständige http(s)-URL ohne Query-String eingeben, zum Beispiel https://api.deepseek.com/anthropic",
       "apiKeyLabel": "API-Schlüssel",
-      "apiKeyHint": "Wird dem Agenten als DEEPSEEK_API_KEY übergeben. Eine Umgebungsvariable hat Vorrang vor der Zugangsdatendatei – lass das Feld leer, wenn du dich im Terminal anmeldest."
+      "apiKeyHint": "Wird dem Agenten als DEEPSEEK_API_KEY übergeben. Ein per Terminal-Anmeldung (deepseek-acp --setup) gespeicherter Schlüssel hat Vorrang vor diesem – wenn du dich so angemeldet hast, änderst du den Schlüssel durch erneutes Anmelden."
     },
     "codex": {
       "configDescription": "Unterstützt schnelle Konfiguration von API-URL, API-Key und Modellname und synchronisiert mit `auth.json` / `config.toml`.",
@@ -6872,6 +6872,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "Modellliste",
+    "builtInCatalogNotice": "Ab deepseek-acp 0.10.0 ist die Modellliste in den Agenten eingebaut und wird nicht mehr aus dem Harness-Einstellungsdokument gelesen, daher lässt sie sich hier nicht bearbeiten. Eine früher hier gespeicherte Liste bleibt in der Datei, hat aber keine Wirkung.",
     "description": "Die Modelle, zwischen denen eine DeepSeek-Sitzung wechseln kann. Sie stehen im Einstellungsdokument des Harness, das der Agent beim Start liest – gespeicherte Änderungen greifen für danach gestartete Sitzungen.",
     "inheritedBadge": "Agent-Standard",
     "inheritedHint": "Es ist noch keine Liste gespeichert, dies sind die eingebauten Modelle des Agenten. Speichern legt sie fest; spätere Agent-Versionen ändern sie dann nicht mehr von selbst. Datei:",
