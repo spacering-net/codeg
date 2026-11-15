@@ -59,8 +59,8 @@ use crate::acp::terminal_runtime::{
     TerminalRuntime, TerminalRuntimeError, TerminalShellRuntimeConfig,
 };
 use crate::acp::types::{
-    AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, ConnectionInfo,
-    ConnectionStatus, GrokModelCatalog, GrokModelSpec, KiroReasoning, PermissionAnswerOrigin,
+    AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, ConnectionStatus,
+    GrokModelCatalog, GrokModelSpec, KiroReasoning, PermissionAnswerOrigin,
     PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure, PromptCapabilitiesInfo,
     PromptInputBlock, RemoteControlInfo, SessionConfigBooleanInfo, SessionConfigKindInfo,
     SessionConfigOptionInfo, SessionConfigSelectGroupInfo, SessionConfigSelectInfo,
@@ -1668,7 +1668,6 @@ impl<V: Send + 'static> Drop for ConnectionCleanupGuard<V> {
 pub struct AgentConnection {
     pub id: String,
     pub agent_type: AgentType,
-    pub status: ConnectionStatus,
     pub owner_window_label: String,
     pub cmd_tx: mpsc::Sender<ConnectionCommand>,
     /// Cancelled by every manager path that ends this connection, before it
@@ -1724,16 +1723,6 @@ pub struct AgentConnection {
     /// the tree without waiting, so the agent may still be alive and still
     /// needs the backstop.
     pub child_pid: Arc<std::sync::atomic::AtomicU32>,
-}
-
-impl AgentConnection {
-    pub fn info(&self) -> ConnectionInfo {
-        ConnectionInfo {
-            id: self.id.clone(),
-            agent_type: self.agent_type,
-            status: self.status.clone(),
-        }
-    }
 }
 
 /// Build an AcpAgent from registry metadata.
@@ -2176,10 +2165,10 @@ fn agent_debug_callback(
 /// codeg's own question and result tools ([`codeg_tool_auto_allow_option`]),
 /// and the history parser. So codeg turns lazy loading off, as it was through
 /// 1.1.83 (which takes the flag too). An option `qoder --acp` does not know
-/// makes it exit, but each release tried from 1.1.0 to 1.1.88 (1.1.0, 1.1.30,
-/// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86, 1.1.87, 1.1.88)
-/// takes `--settings`, and 1.1.30 and 1.1.64 open sessions with this one as
-/// without it.
+/// makes it exit, but each release tried from 1.1.0 to 1.1.89 (1.1.0, 1.1.30,
+/// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86, 1.1.87, 1.1.88,
+/// 1.1.89) takes `--settings`, and 1.1.30 and 1.1.64 open sessions with this
+/// one as without it.
 pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
 /// The arguments codeg adds after an npx agent's registry `args`: for Qoder,
@@ -3006,7 +2995,6 @@ pub async fn spawn_agent_connection(
         AgentConnection {
             id: connection_id,
             agent_type,
-            status: ConnectionStatus::Connecting,
             owner_window_label,
             cmd_tx,
             handshake: handshake.clone(),
@@ -21460,8 +21448,9 @@ const KIMI_EXIT_PLAN_MODE_REVIEW_TITLE: &str = "Presenting plan and exiting plan
 /// Whether a Kimi Code frame settles an `ExitPlanMode` call `failed` although
 /// the review's own answer was not an error.
 ///
-/// 2.6.0 and 2.6.1 settle every answered plan review `failed`: their tool
-/// executor turns the review's answer into a veto, so approving the plan,
+/// 2.6.0 and 2.6.1 (and, by its unchanged source, 2.6.2) settle every
+/// answered plan review `failed`: their tool executor turns the review's
+/// answer into a veto, so approving the plan,
 /// dismissing the review or asking for a revision ends the call exactly like
 /// a rejection, and the plan card would show an approved plan as an error.
 /// Only the wording of the result still tells them apart (see

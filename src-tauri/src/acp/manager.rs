@@ -798,7 +798,6 @@ impl ConnectionManager {
         let conn = AgentConnection {
             id: id.to_string(),
             agent_type,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -842,7 +841,6 @@ impl ConnectionManager {
         let conn = AgentConnection {
             id: id.to_string(),
             agent_type,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -2964,18 +2962,18 @@ impl ConnectionManager {
     /// the two and conclude nothing is running.
     pub async fn live_or_draining_agent_names(&self) -> Vec<String> {
         let connections = self.connections.lock().await;
-        let mut names: Vec<String> = connections
-            .values()
-            .filter(|c| {
-                matches!(
-                    c.status,
-                    ConnectionStatus::Connecting
-                        | ConnectionStatus::Connected
-                        | ConnectionStatus::Prompting
-                )
-            })
-            .map(|c| c.agent_type.to_string())
-            .collect();
+        let mut names = Vec::new();
+        for connection in connections.values() {
+            let state = connection.state.read().await;
+            if matches!(
+                state.status,
+                ConnectionStatus::Connecting
+                    | ConnectionStatus::Connected
+                    | ConnectionStatus::Prompting
+            ) {
+                names.push(connection.agent_type.to_string());
+            }
+        }
         let mut draining = self.draining.lock().await;
         prune_reaped(&mut draining);
         names.extend(draining.iter().map(|c| c.agent.to_string()));
@@ -3505,8 +3503,34 @@ impl ConnectionManager {
     }
 
     pub async fn list_connections(&self) -> Vec<ConnectionInfo> {
-        let connections = self.connections.lock().await;
-        connections.values().map(|c| c.info()).collect()
+        // Status comes from the shared SessionState: the connection driver
+        // publishes every transition there (`emit_with_state`), and snapshots
+        // and event consumers read the same field. Copy the state handles
+        // while holding the map lock, then read them after releasing it, so
+        // one connection's busy writer cannot stall the map for everyone.
+        let entries = {
+            let connections = self.connections.lock().await;
+            connections
+                .values()
+                .map(|connection| {
+                    (
+                        connection.id.clone(),
+                        connection.agent_type,
+                        Arc::clone(&connection.state),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut result = Vec::with_capacity(entries.len());
+        for (id, agent_type, state) in entries {
+            result.push(ConnectionInfo {
+                id,
+                agent_type,
+                status: state.read().await.status.clone(),
+            });
+        }
+        result
     }
 
     /// Raw per-connection rows for the pet panel's active-session list.
@@ -4540,6 +4564,27 @@ impl ConnectionManager {
         None
     }
 
+    /// What `conn_id` is still doing now that its turn has ended — the input
+    /// of `acp::turn_end_hold`. `None` when the connection is gone or its
+    /// agent has ended.
+    pub(crate) async fn turn_end_probe(
+        &self,
+        conn_id: &str,
+    ) -> Option<crate::acp::turn_end_hold::TurnEndProbe> {
+        let now = chrono::Utc::now();
+        let (state, agent_type, live): (_, _, std::collections::HashSet<String>) = {
+            let conns = self.connections.lock().await;
+            let conn = conns.get(conn_id)?;
+            (
+                conn.state.clone(),
+                conn.agent_type,
+                conns.keys().cloned().collect(),
+            )
+        };
+        let s = state.read().await;
+        crate::acp::turn_end_hold::probe(&s, agent_type, now, |child| live.contains(child))
+    }
+
     /// End every connection under `lock` (all idle — the caller checked
     /// [`Self::busy_reason`]) and then release the locks. `disconnect` does not
     /// take the prompt lock, so ending them while it is held cannot deadlock.
@@ -5561,6 +5606,56 @@ mod tests {
         assert_eq!(current(&options, "mode"), "plan");
     }
 
+    #[tokio::test]
+    async fn list_connections_reports_live_session_status() {
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+
+        // The connection driver advances the shared session state through its
+        // status events; inventory must report that authoritative state.
+        let state = {
+            let connections = mgr.connections.lock().await;
+            connections.get("c1").unwrap().state.clone()
+        };
+        state.write().await.status = ConnectionStatus::Prompting;
+
+        let rows = mgr.list_connections().await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "c1");
+        assert_eq!(rows[0].status, ConnectionStatus::Prompting);
+    }
+
+    /// The restore gate reads the same session status. A connection still in
+    /// its handshake counts; one whose driver has already published a terminal
+    /// status (it is unwinding, its map entry not yet removed) does not — the
+    /// filter `restore::live_agent_names` documents, which the frozen spawn-time
+    /// copy used to defeat by reporting every entry as `Connecting`.
+    #[tokio::test]
+    async fn live_or_draining_agent_names_follows_session_status() {
+        let mgr = ConnectionManager::new();
+        for (id, agent_type) in [
+            ("handshake", AgentType::Codex),
+            ("errored", AgentType::ClaudeCode),
+            ("closed", AgentType::Gemini),
+        ] {
+            mgr.insert_test_connection(id, agent_type, None, EventEmitter::Noop)
+                .await;
+        }
+        for (id, status) in [
+            ("handshake", ConnectionStatus::Connecting),
+            ("errored", ConnectionStatus::Error),
+            ("closed", ConnectionStatus::Disconnected),
+        ] {
+            mgr.get_state(id).await.unwrap().write().await.status = status;
+        }
+
+        assert_eq!(
+            mgr.live_or_draining_agent_names().await,
+            vec!["Codex CLI".to_string()]
+        );
+    }
+
     /// An agent that has left the connection map but not yet exited can still
     /// be appending to the transcript a restore is about to unlink, so the
     /// gate has to see it. `disconnect` drops the map entry immediately, which
@@ -5735,7 +5830,6 @@ mod tests {
         AgentConnection {
             id: id.to_string(),
             agent_type: crate::models::agent::AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -6327,7 +6421,6 @@ mod tests {
         let conn = AgentConnection {
             id: conn_id.to_string(),
             agent_type,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -7502,7 +7595,6 @@ mod tests {
         let conn = AgentConnection {
             id: "c-shield".to_string(),
             agent_type: AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -9276,7 +9368,6 @@ mod tests {
         let conn = AgentConnection {
             id: conn_id.to_string(),
             agent_type: crate::models::agent::AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),
@@ -10086,7 +10177,6 @@ mod tests {
         let conn = AgentConnection {
             id: "c-relink".to_string(),
             agent_type: AgentType::ClaudeCode,
-            status: ConnectionStatus::Connected,
             owner_window_label: "test-window".to_string(),
             cmd_tx: tx,
             handshake: tokio_util::sync::CancellationToken::new(),

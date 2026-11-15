@@ -1676,6 +1676,20 @@ export function buildStreamingTurnsFromLiveMessage(
 const lastStreamingBuilds = new Map<string, BuiltStreamingTurns>()
 const LAST_STREAMING_BUILDS = 8
 
+/** Retain only the message the runtime session is still streaming. */
+function releaseInactiveStreamingBuilds(
+  conversationId: number,
+  liveMessageId: string | null
+): void {
+  const prefix = `${conversationId}:`
+  const activeKey = liveMessageId === null ? null : `${prefix}${liveMessageId}`
+  for (const key of lastStreamingBuilds.keys()) {
+    if (key.startsWith(prefix) && key !== activeKey) {
+      lastStreamingBuilds.delete(key)
+    }
+  }
+}
+
 /** Whether two values built from the same live content read the same: equal
  *  primitives, or plain objects and arrays of such, field by field. */
 function sameBuiltValue(a: unknown, b: unknown): boolean {
@@ -4406,7 +4420,31 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
   get
 ) => {
   const dispatch = (action: Action): void => {
-    set((state) => reducer(state, action))
+    set((state) => {
+      const next = reducer(state, action)
+      // The entry-count LRU alone can retain eight complete replies after
+      // their sessions close or replace their live data. Keep reuse scoped to
+      // the current live message; promoted turns remain owned by localTurns.
+      if (action.type === "RESET") {
+        lastStreamingBuilds.clear()
+      } else if (action.type === "MIGRATE_CONVERSATION") {
+        if (action.fromConversationId !== action.toConversationId) {
+          releaseInactiveStreamingBuilds(action.fromConversationId, null)
+        }
+        releaseInactiveStreamingBuilds(
+          action.toConversationId,
+          next.byConversationId.get(action.toConversationId)?.liveMessage?.id ??
+            null
+        )
+      } else {
+        releaseInactiveStreamingBuilds(
+          action.conversationId,
+          next.byConversationId.get(action.conversationId)?.liveMessage?.id ??
+            null
+        )
+      }
+      return next
+    })
   }
 
   /**

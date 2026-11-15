@@ -1185,10 +1185,10 @@
       "configManagement": "DeepSeek Harness 配置",
       "configDescription": "端点与密钥是 deepseek-acp 启动时读取的环境变量。模型和推理档位是会话级选择器，在输入框里切换。",
       "baseUrlLabel": "API 端点",
-      "baseUrlHint": "留空则使用官方端点。保存后对新建的会话生效——正在进行的会话需要重新连接才会切换。",
-      "baseUrlInvalid": "请填写完整的 http(s) 地址且不带查询参数，例如 https://api.deepseek.com",
+      "baseUrlHint": "留空则使用官方端点。自定义端点须提供 DeepSeek 兼容 Anthropic 的 Messages API。保存后对新建的会话生效——正在进行的会话需要重新连接才会切换。",
+      "baseUrlInvalid": "请填写完整的 http(s) 地址且不带查询参数，例如 https://api.deepseek.com/anthropic",
       "apiKeyLabel": "API 密钥",
-      "apiKeyHint": "以 DEEPSEEK_API_KEY 传给智能体。环境变量的优先级高于凭据文件，因此若用终端登录，这里留空即可。"
+      "apiKeyHint": "以 DEEPSEEK_API_KEY 传给智能体。终端登录（deepseek-acp --setup）存下的密钥优先于这里，因此用终端登录过的话，要换密钥请重新登录。"
     },
     "codex": {
       "configDescription": "支持 API URL、API Key、模型名称快捷配置，并与 `auth.json` / `config.toml` 双向联动。",
@@ -1594,6 +1594,10 @@
       "sendAttributionHeaderAria": "向接口发送 Claude Code 归属/计费标识",
       "disableNonessentialTraffic": "禁用遥测或多余的网络请求",
       "disableNonessentialTrafficAria": "禁用 Claude Code 遥测或多余的网络请求",
+      "promptCacheMode": "缓存模式",
+      "promptCacheMain": "主智能体使用 1 小时缓存",
+      "promptCacheSubagent": "子智能体使用 1 小时缓存",
+      "promptCacheHint": "开启会在 settings.json 写入 \"1h\"；关闭则删除该项，Claude Code 沿用默认缓存时长。1 小时缓存在较长停顿后依然有效，但每次写入缓存的计费高于 5 分钟缓存。",
       "gatewayDiscovery": "让 Claude 列出网关的 Claude 模型",
       "gatewayDiscoveryAria": "让 Claude Code 列出网关的 Claude 模型",
       "gatewayDiscoveryHint": "Claude 自己向 API 地址查询模型，只保留含 “claude” 或 “anthropic” 的 ID，下一个会话起出现。",
@@ -5475,15 +5479,17 @@
       "customAgents": "自定义智能体",
       "quickMessages": "快捷消息",
       "taskTemplates": "任务模板",
-      "preferences": "应用偏好（语言、外观、开关）",
-      "assistants": "助手"
+      "preferences": "应用偏好（语言、开关）",
+      "assistants": "助手",
+      "appearance": "外观（明暗模式、主题色、缩放、字体、背景设置、自定义样式）"
     },
     "scopeExcluded": {
       "conversations": "会话记录与历史",
       "uploads": "上传的文件与图片",
       "workspaces": "工作区项目与路径",
       "mcp": "MCP 服务器（归各 CLI 自己管）",
-      "credentials": "登录凭据与令牌"
+      "credentials": "登录凭据与令牌",
+      "backgroundImage": "背景图片文件本身（各机器各自保留）"
     },
     "fileTitle": "配置文件",
     "exportButton": "导出到文件",
@@ -5512,7 +5518,7 @@
     "profile": "配置集",
     "profileHint": "使用相同配置集的设备共享同一份配置；想区分工作与个人环境时可以分开命名。",
     "autoSyncLabel": "自动上传",
-    "autoSyncHint": "定期检查，只在配置发生变化时上传。",
+    "autoSyncHint": "定期检查，只在配置发生变化时上传。服务器上若是另一台机器上传的快照，在你恢复它或选择替换之前不会被覆盖。",
     "intervalLabel": "检查间隔",
     "intervalOption": "每 {minutes} 分钟",
     "saveButton": "保存",
@@ -5533,7 +5539,7 @@
     "plaintextWarning": "快照以明文上传且包含 API 密钥，请只使用只有你能访问的 WebDAV 服务器。同步凭据本身不会写入快照。",
     "importConfirmTitle": "导入配置？",
     "importConfirmBody": "文件中的条目将在本机新增或更新，文件未涉及的本地条目会保留。",
-    "restartHint": "部分改动（外观、语言、服务商列表）需要重启 codeg 后才会生效。",
+    "restartHint": "部分改动（语言、服务商列表）需要重启 codeg 后才会生效。",
     "importConfirmAction": "导入",
     "restoreConfirmTitle": "从远程恢复？",
     "restoreConfirmBody": "将把 {device} 在 {time} 上传的快照应用到本机，快照未涉及的本地条目会保留。",
@@ -5547,7 +5553,8 @@
       "quickMessages": "{count} 条快捷消息",
       "taskTemplates": "{count} 个任务模板",
       "preferences": "{count} 项应用偏好",
-      "assistants": "{count} 个助手"
+      "assistants": "{count} 个助手",
+      "appearance": "{count} 项外观设置"
     },
     "rollbackTitle": "撤销导入",
     "rollbackHint": "每次导入和每次还原前，都会先保存这台设备当时的配置，最近十份会保留下来。",
@@ -5564,7 +5571,17 @@
     "passphraseKeep": "留空则沿用已保存的口令",
     "passphrasePlaceholder": "加密口令",
     "passphraseHint": "只保存在这台设备的钥匙串里，不会上传。请在你的其他设备上输入同一个口令。",
-    "assistantsRenamed": "有 {count} 个助手与本机已有的助手重名，已自动改名。"
+    "assistantsRenamed": "有 {count} 个助手与本机已有的助手重名，已自动改名。",
+    "conflictTitle": "自动上传已暂停",
+    "conflictBody": "服务器上有一份来自 {device}、{time} 的快照，本机还没有恢复过。上传会替换它，而服务器不保留旧版本。",
+    "conflictRestore": "恢复它",
+    "conflictOverwrite": "用本机配置替换",
+    "conflictUnknownDevice": "未知设备",
+    "conflictChanged": "服务器上的快照又变了，请先查看新的那份再决定是否替换。",
+    "overwriteConfirmTitle": "替换服务器上的快照？",
+    "overwriteConfirmBody": "来自 {device}、{time} 的快照将被本机配置替换。服务器不保留旧版本，那台机器的设置之后只能从那台机器上找回。",
+    "overwriteConfirmAction": "替换",
+    "lastPulledAt": "上次恢复：{time}"
   },
   "backup": {
     "restore": {
@@ -6334,6 +6351,8 @@
     "actionCancelTask": "取消任务",
     "actionRespond": "去回应",
     "actionRespondHint": "打开会话，处理 agent 的权限请求、提问或计划审批",
+    "actionStopBackgroundWait": "停止等待",
+    "actionStopBackgroundWaitHint": "不再等后台任务，立即结算任务；仍在运行的后台任务会被结束",
     "awaitingInputHint": "agent 已暂停，在等你处理权限请求、回答提问或审批计划。在会话里回应后，任务会自动继续运行。",
     "actionRetry": "重试",
     "actionRequeue": "重新排队",
@@ -6482,6 +6501,7 @@
     "settingsAutoCompact": "自动压缩上下文阈值",
     "settingsAutoCompactHint": "继续处理、重试或合并前，若会话上下文占用达到该比例，先压缩再发送任务消息。0 表示关闭。",
     "compactingNote": "正在压缩会话上下文…",
+    "backgroundWaitNote": "{count, plural, =0 {正在等待后台任务完成…} other {正在等待 # 个后台任务完成…}}",
     "settingsCompactCommand": "压缩命令",
     "settingsCompactCommandHint": "留空则按智能体自身提供的命令（或已知默认值）自动选择。",
     "settingsCompactCommandPlaceholder": "/compact",
@@ -6571,6 +6591,8 @@
     "eventCleanupFailed": "worktree 清理失败",
     "eventResumeFallback": "会话恢复失败，已改用新会话",
     "eventContextCompact": "上下文压缩",
+    "eventBackgroundWait": "等待后台任务",
+    "eventBackgroundWaitEnd": "后台等待结束",
     "eventUserAction": "用户操作",
     "eventDiffStat": "变更快照",
     "eventForgeWriteback": "已回写评论",
@@ -6923,6 +6945,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "模型列表",
+    "builtInCatalogNotice": "从 deepseek-acp 0.10.0 起，模型列表内置在智能体中，不再读取 harness 设置文档，因此无法在这里编辑。之前在这里保存的列表仍留在文件里，但不再生效。",
     "description": "DeepSeek 会话可切换的模型。保存在 harness 的设置文档里，代理在启动时读取——保存后对之后新建的会话生效。",
     "inheritedBadge": "代理默认",
     "inheritedHint": "尚未保存过列表，这些是代理内置的模型。保存会把它们固定下来，之后升级代理也不再自动变化。文件：",

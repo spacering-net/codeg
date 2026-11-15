@@ -110,6 +110,11 @@ pub struct ApplyReport {
     /// unique) — so the confirmation can say so.
     #[serde(default)]
     pub renamed: usize,
+    /// `localStorage` appearance values the client that ran this apply should
+    /// adopt (see `appearance::appearance_to_adopt`). Returned to that client
+    /// only — never broadcast, because every browser has its own storage.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub appearance: BTreeMap<String, String>,
 }
 
 /// Read every domain out of the local database.
@@ -183,6 +188,9 @@ pub async fn apply_snapshot_core(
     {
         emit_event(emitter, ASSISTANT_CHANGED_EVENT, AssistantChange::Resync);
     }
+    // Only now, after the commit: a rolled-back apply must not tell the client
+    // to restyle itself with values that never landed.
+    report.appearance = super::appearance::appearance_to_adopt(snapshot);
     Ok(report)
 }
 

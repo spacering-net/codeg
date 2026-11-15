@@ -13,6 +13,16 @@
 //! image support). So an edit here changes what can be PICKED, never what the
 //! endpoint accepts.
 //!
+//! Only deepseek-acp 0.9.0 and earlier read this section. 0.10.0 (DSH 0.2)
+//! drops the file-backed settings provider (`dsh-settings-file`) that laid
+//! `$DSH_HOME/settings.yaml` over the plugin configs: the official route takes
+//! the catalog built into the bridge, and the bridge's own document,
+//! `$DSH_HOME/deepseek-acp/settings.yaml`, holds only `llm-pi-ai` routes
+//! (measured: a two-model `llm-deepseek.models` list replaces the dropdown on
+//! 0.9.0 and leaves 0.11.0's built-in pair). The settings page therefore shows
+//! the editor only for an install older than 0.10.0
+//! (`deepseekReadsHarnessCatalog`); these commands stay for it.
+//!
 //! Two upstream facts shape the surface:
 //!
 //! * The settings provider is mounted with `watch: false` — one client

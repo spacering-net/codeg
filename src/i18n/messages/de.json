@@ -1185,10 +1185,10 @@
       "configManagement": "DeepSeek-Harness-Konfiguration",
       "configDescription": "Endpunkt und Schlüssel sind Umgebungsvariablen, die deepseek-acp beim Start liest. Modell und Denkstufe sind Auswahlfelder pro Sitzung — sie werden im Eingabefeld gewählt.",
       "baseUrlLabel": "API-Endpunkt",
-      "baseUrlHint": "Leer lassen für den offiziellen Endpunkt. Gilt für Sitzungen, die nach dem Speichern starten – eine laufende Sitzung muss neu verbinden.",
-      "baseUrlInvalid": "Vollständige http(s)-URL ohne Query-String eingeben, zum Beispiel https://api.deepseek.com",
+      "baseUrlHint": "Leer lassen für den offiziellen Endpunkt. Ein eigener Endpunkt muss die Anthropic-kompatible Messages-API von DeepSeek bereitstellen. Gilt für Sitzungen, die nach dem Speichern starten – eine laufende Sitzung muss neu verbinden.",
+      "baseUrlInvalid": "Vollständige http(s)-URL ohne Query-String eingeben, zum Beispiel https://api.deepseek.com/anthropic",
       "apiKeyLabel": "API-Schlüssel",
-      "apiKeyHint": "Wird dem Agenten als DEEPSEEK_API_KEY übergeben. Eine Umgebungsvariable hat Vorrang vor der Zugangsdatendatei – lass das Feld leer, wenn du dich im Terminal anmeldest."
+      "apiKeyHint": "Wird dem Agenten als DEEPSEEK_API_KEY übergeben. Ein per Terminal-Anmeldung (deepseek-acp --setup) gespeicherter Schlüssel hat Vorrang vor diesem – wenn du dich so angemeldet hast, änderst du den Schlüssel durch erneutes Anmelden."
     },
     "codex": {
       "configDescription": "Unterstützt schnelle Konfiguration von API-URL, API-Key und Modellname und synchronisiert mit `auth.json` / `config.toml`.",
@@ -1594,6 +1594,10 @@
       "sendAttributionHeaderAria": "Attributions-/Abrechnungskennung von Claude Code an die API senden",
       "disableNonessentialTraffic": "Telemetrie oder überflüssige Netzwerkanfragen deaktivieren",
       "disableNonessentialTrafficAria": "Telemetrie oder überflüssige Netzwerkanfragen von Claude Code deaktivieren",
+      "promptCacheMode": "Cache-Modus",
+      "promptCacheMain": "1-Stunden-Cache für den Hauptagenten",
+      "promptCacheSubagent": "1-Stunden-Cache für Subagenten",
+      "promptCacheHint": "Ein schreibt \"1h\" in settings.json; Aus entfernt den Schlüssel, und Claude Code nutzt seine Standard-Cache-Dauer. Der 1-Stunden-Cache bleibt auch nach längeren Pausen erhalten, jeder Cache-Schreibvorgang wird aber höher abgerechnet als beim 5-Minuten-Cache.",
       "gatewayDiscovery": "Claude die Claude-Modelle des Gateways auflisten lassen",
       "gatewayDiscoveryAria": "Claude Code die Claude-Modelle des Gateways auflisten lassen",
       "gatewayDiscoveryHint": "Claude fragt die API-URL selbst nach Modellen und behält nur IDs, die „claude“ oder „anthropic“ enthalten; sie erscheinen ab der nächsten Sitzung.",
@@ -5475,15 +5479,17 @@
       "customAgents": "Eigene Agenten",
       "quickMessages": "Schnellnachrichten",
       "taskTemplates": "Aufgabenvorlagen",
-      "preferences": "App-Einstellungen (Sprache, Aussehen, Schalter)",
-      "assistants": "Assistenten"
+      "preferences": "App-Einstellungen (Sprache, Schalter)",
+      "assistants": "Assistenten",
+      "appearance": "Darstellung (Hell/Dunkel, Designfarbe, Zoom, Schriftarten, Hintergrundeinstellungen, eigene Stile)"
     },
     "scopeExcluded": {
       "conversations": "Unterhaltungen und Verlauf",
       "uploads": "Hochgeladene Dateien und Bilder",
       "workspaces": "Arbeitsbereich-Projekte und Pfade",
       "mcp": "MCP-Server (gehören zur jeweiligen CLI)",
-      "credentials": "Anmeldedaten und Tokens"
+      "credentials": "Anmeldedaten und Tokens",
+      "backgroundImage": "Das Hintergrundbild selbst (bleibt auf jedem Gerät)"
     },
     "fileTitle": "Konfigurationsdatei",
     "exportButton": "In Datei exportieren",
@@ -5512,7 +5518,7 @@
     "profile": "Profil",
     "profileHint": "Geräte mit demselben Profil teilen sich eine Konfiguration. Verwende getrennte Profile, um Arbeit und Privates zu trennen.",
     "autoSyncLabel": "Automatisch hochladen",
-    "autoSyncHint": "Prüft regelmäßig und lädt nur hoch, wenn sich die Konfiguration geändert hat.",
+    "autoSyncHint": "Prüft regelmäßig und lädt nur hoch, wenn sich die Konfiguration geändert hat. Einen Snapshot, den ein anderes Gerät hochgeladen hat, ersetzt es erst, wenn Sie ihn wiederhergestellt oder das Ersetzen bestätigt haben.",
     "intervalLabel": "Prüfintervall",
     "intervalOption": "Alle {minutes} Minuten",
     "saveButton": "Speichern",
@@ -5533,7 +5539,7 @@
     "plaintextWarning": "Der Snapshot wird unverschlüsselt hochgeladen und enthält API-Schlüssel. Nutze daher einen WebDAV-Server, auf den nur du zugreifen kannst. Die Zugangsdaten der Synchronisierung selbst sind nie Teil des Snapshots.",
     "importConfirmTitle": "Konfiguration importieren?",
     "importConfirmBody": "Einträge aus der Datei werden auf diesem Gerät hinzugefügt oder aktualisiert. Vorhandene Einträge, die in der Datei nicht vorkommen, bleiben erhalten.",
-    "restartHint": "Einige Änderungen – Darstellung, Sprache und die Anbieterliste – werden erst nach einem Neustart von codeg wirksam.",
+    "restartHint": "Einige Änderungen – Sprache und die Anbieterliste – werden erst nach einem Neustart von codeg wirksam.",
     "importConfirmAction": "Importieren",
     "restoreConfirmTitle": "Vom Server wiederherstellen?",
     "restoreConfirmBody": "Der Snapshot von {device} vom {time} wird auf dieses Gerät angewendet. Vorhandene Einträge, die im Snapshot fehlen, bleiben erhalten.",
@@ -5547,7 +5553,8 @@
       "quickMessages": "{count, plural, one {# Schnellnachricht} other {# Schnellnachrichten}}",
       "taskTemplates": "{count, plural, one {# Aufgabenvorlage} other {# Aufgabenvorlagen}}",
       "preferences": "{count, plural, one {# Einstellung} other {# Einstellungen}}",
-      "assistants": "{count, plural, one {# Assistent} other {# Assistenten}}"
+      "assistants": "{count, plural, one {# Assistent} other {# Assistenten}}",
+      "appearance": "{count, plural, one {# Darstellungseinstellung} other {# Darstellungseinstellungen}}"
     },
     "rollbackTitle": "Import rückgängig machen",
     "rollbackHint": "Jeder Import und jede Wiederherstellung sichern vorher den Stand dieses Geräts. Die letzten zehn bleiben erhalten.",
@@ -5564,7 +5571,17 @@
     "passphraseKeep": "Leer lassen, um die gespeicherte Passphrase zu behalten",
     "passphrasePlaceholder": "Passphrase zur Verschlüsselung",
     "passphraseHint": "Bleibt im Schlüsselbund dieses Geräts und wird nie hochgeladen. Gib auf deinen anderen Geräten dieselbe Passphrase ein.",
-    "assistantsRenamed": "{count, plural, one {# Assistent wurde umbenannt: Hier gab es schon einen mit seinem Namen.} other {# Assistenten wurden umbenannt: Hier gab es schon welche mit ihren Namen.}}"
+    "assistantsRenamed": "{count, plural, one {# Assistent wurde umbenannt: Hier gab es schon einen mit seinem Namen.} other {# Assistenten wurden umbenannt: Hier gab es schon welche mit ihren Namen.}}",
+    "conflictTitle": "Automatisches Hochladen pausiert",
+    "conflictBody": "Auf dem Server liegt ein Snapshot von {device} vom {time}, den dieses Gerät nicht wiederhergestellt hat. Hochladen würde ihn ersetzen, und der Server behält keine ältere Kopie.",
+    "conflictRestore": "Wiederherstellen",
+    "conflictOverwrite": "Durch dieses Gerät ersetzen",
+    "conflictUnknownDevice": "einem unbekannten Gerät",
+    "conflictChanged": "Der Snapshot auf dem Server hat sich erneut geändert. Prüfen Sie den neuen, bevor Sie ihn ersetzen.",
+    "overwriteConfirmTitle": "Snapshot auf dem Server ersetzen?",
+    "overwriteConfirmBody": "Der Snapshot von {device} vom {time} wird durch die Konfiguration dieses Geräts ersetzt. Der Server behält keine ältere Kopie; die Einstellungen jenes Geräts lassen sich dann nur noch dort wiederfinden.",
+    "overwriteConfirmAction": "Ersetzen",
+    "lastPulledAt": "Zuletzt wiederhergestellt: {time}"
   },
   "backup": {
     "restore": {
@@ -6334,6 +6351,8 @@
     "actionCancelTask": "Aufgabe abbrechen",
     "actionRespond": "Antworten",
     "actionRespondHint": "Öffnet die Konversation, um auf die Berechtigungsanfrage, Frage oder den Plan des Agenten zu reagieren",
+    "actionStopBackgroundWait": "Nicht mehr warten",
+    "actionStopBackgroundWaitHint": "Die Aufgabe jetzt abschließen, statt auf ihre Hintergrundarbeit zu warten; was noch läuft, wird beendet",
     "awaitingInputHint": "Der Agent pausiert und wartet darauf, dass du über eine Berechtigungsanfrage entscheidest, eine Frage beantwortest oder einen Plan prüfst. Antworte in der Konversation, dann läuft die Aufgabe von selbst weiter.",
     "actionRetry": "Erneut versuchen",
     "actionRequeue": "Erneut einreihen",
@@ -6482,6 +6501,7 @@
     "settingsAutoCompact": "Schwelle für automatisches Komprimieren",
     "settingsAutoCompactHint": "Vor einer Folge-, Wiederholungs- oder Merge-Runde die Sitzung komprimieren, wenn das Kontextfenster mindestens so voll ist. 0 = aus.",
     "compactingNote": "Sitzungskontext wird verdichtet …",
+    "backgroundWaitNote": "{count, plural, =0 {Warte auf das Ende der Hintergrundarbeit…} one {Warte auf # Hintergrundaufgabe…} other {Warte auf # Hintergrundaufgaben…}}",
     "settingsCompactCommand": "Komprimierungsbefehl",
     "settingsCompactCommandHint": "Leer lassen, um den vom Agenten angebotenen Befehl bzw. dessen bekannten Standard zu verwenden.",
     "settingsCompactCommandPlaceholder": "/compact",
@@ -6571,6 +6591,8 @@
     "eventCleanupFailed": "Worktree-Aufräumen fehlgeschlagen",
     "eventResumeFallback": "Sitzungsfortsetzung fehlgeschlagen, neue Sitzung",
     "eventContextCompact": "Kontext-Komprimierung",
+    "eventBackgroundWait": "Warten auf Hintergrundarbeit",
+    "eventBackgroundWaitEnd": "Warten auf Hintergrundarbeit beendet",
     "eventUserAction": "Benutzeraktion",
     "eventDiffStat": "Änderungs-Snapshot",
     "eventForgeWriteback": "Im Eintrag kommentiert",
@@ -6923,6 +6945,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "Modellliste",
+    "builtInCatalogNotice": "Ab deepseek-acp 0.10.0 ist die Modellliste in den Agenten eingebaut und wird nicht mehr aus dem Harness-Einstellungsdokument gelesen, daher lässt sie sich hier nicht bearbeiten. Eine früher hier gespeicherte Liste bleibt in der Datei, hat aber keine Wirkung.",
     "description": "Die Modelle, zwischen denen eine DeepSeek-Sitzung wechseln kann. Sie stehen im Einstellungsdokument des Harness, das der Agent beim Start liest – gespeicherte Änderungen greifen für danach gestartete Sitzungen.",
     "inheritedBadge": "Agent-Standard",
     "inheritedHint": "Es ist noch keine Liste gespeichert, dies sind die eingebauten Modelle des Agenten. Speichern legt sie fest; spätere Agent-Versionen ändern sie dann nicht mehr von selbst. Datei:",

@@ -11505,8 +11505,12 @@ pub(crate) fn agent_env_keys(agent_type: AgentType) -> (&'static str, &'static s
         // `llm-deepseek` adapter through the launch-environment snapshot —
         // which, when the host installs none (deepseek-acp does not), falls
         // back to `process.env`, so codeg's launch env reaches it. It resolves
-        // per request (`config.baseURL ?? env ?? https://api.deepseek.com`),
-        // NOT at load. `DEEPSEEK_ACP_PROVIDER` is a different thing entirely —
+        // per request (`config.baseURL ?? env ?? <default>`), NOT at load. The
+        // default and the protocol moved in deepseek-acp 0.10.0: through 0.9.0
+        // OpenAI Chat Completions at `https://api.deepseek.com`, since then
+        // DeepSeek's Anthropic-compatible Messages API (`<base>/v1/messages`)
+        // at `https://api.deepseek.com/anthropic`, so a bound endpoint must
+        // serve the latter. `DEEPSEEK_ACP_PROVIDER` is a different thing entirely —
         // the provider ROUTE id (`deepseek-official`), a registry key rather
         // than a URL — so it must not ride the base-url slot, or binding a
         // model provider would write an endpoint into the route selector and

@@ -1185,10 +1185,10 @@
       "configManagement": "DeepSeek Harness の設定",
       "configDescription": "エンドポイントと API キーは deepseek-acp が起動時に読み込む環境変数です。モデルと推論レベルはセッションごとのセレクターなので、入力欄で切り替えます。",
       "baseUrlLabel": "API エンドポイント",
-      "baseUrlHint": "空欄なら公式エンドポイントを使います。保存後に開始したセッションから有効になります。実行中のセッションは再接続してください。",
-      "baseUrlInvalid": "クエリ文字列を含まない完全な http(s) URL を入力してください（例：https://api.deepseek.com）",
+      "baseUrlHint": "空欄なら公式エンドポイントを使います。独自のエンドポイントは DeepSeek の Anthropic 互換 Messages API を提供している必要があります。保存後に開始したセッションから有効になります。実行中のセッションは再接続してください。",
+      "baseUrlInvalid": "クエリ文字列を含まない完全な http(s) URL を入力してください（例：https://api.deepseek.com/anthropic）",
       "apiKeyLabel": "API キー",
-      "apiKeyHint": "DEEPSEEK_API_KEY としてエージェントに渡されます。環境変数は認証情報ファイルより優先されるため、ターミナルでログインする場合は空のままにしてください。"
+      "apiKeyHint": "DEEPSEEK_API_KEY としてエージェントに渡されます。ターミナルでのログイン（deepseek-acp --setup）で保存したキーがこちらより優先されるため、その方法でログインした場合は、もう一度ログインしてキーを変更してください。"
     },
     "codex": {
       "configDescription": "API URL、API Key、モデル名を素早く設定でき、`auth.json` / `config.toml` と同期します。",
@@ -1594,6 +1594,10 @@
       "sendAttributionHeaderAria": "API に Claude Code の帰属/課金識別子を送信",
       "disableNonessentialTraffic": "テレメトリや不要なネットワークリクエストを無効化",
       "disableNonessentialTrafficAria": "Claude Code のテレメトリや不要なネットワークリクエストを無効化",
+      "promptCacheMode": "キャッシュモード",
+      "promptCacheMain": "メインエージェントで 1 時間キャッシュを使用",
+      "promptCacheSubagent": "サブエージェントで 1 時間キャッシュを使用",
+      "promptCacheHint": "オンにすると settings.json に \"1h\" を書き込み、オフにするとその項目を削除して Claude Code は既定のキャッシュ期間を使います。1 時間キャッシュは長めの中断後も有効ですが、キャッシュ書き込みの料金は 5 分キャッシュより高くなります。",
       "gatewayDiscovery": "ゲートウェイの Claude モデルを Claude に一覧させる",
       "gatewayDiscoveryAria": "ゲートウェイの Claude モデルを Claude Code に一覧させる",
       "gatewayDiscoveryHint": "Claude 自身が API の URL にモデルを問い合わせ、「claude」または「anthropic」を含む ID だけを残します。次のセッションから表示されます。",
@@ -5475,15 +5479,17 @@
       "customAgents": "カスタムエージェント",
       "quickMessages": "クイックメッセージ",
       "taskTemplates": "タスクテンプレート",
-      "preferences": "アプリ設定（言語・外観・切り替え）",
-      "assistants": "アシスタント"
+      "preferences": "アプリ設定（言語・切り替え）",
+      "assistants": "アシスタント",
+      "appearance": "外観（ライト／ダーク、テーマカラー、ズーム、フォント、背景の設定、カスタムスタイル）"
     },
     "scopeExcluded": {
       "conversations": "会話履歴",
       "uploads": "アップロードしたファイルと画像",
       "workspaces": "ワークスペースのプロジェクトとパス",
       "mcp": "MCP サーバー（各 CLI が管理）",
-      "credentials": "ログイン認証情報とトークン"
+      "credentials": "ログイン認証情報とトークン",
+      "backgroundImage": "背景画像ファイルそのもの（各マシンに残ります）"
     },
     "fileTitle": "設定ファイル",
     "exportButton": "ファイルに書き出す",
@@ -5512,7 +5518,7 @@
     "profile": "プロファイル",
     "profileHint": "同じプロファイルを使うマシンは同じ設定を共有します。仕事用と個人用を分けたい場合は別のプロファイル名にしてください。",
     "autoSyncLabel": "自動でアップロード",
-    "autoSyncHint": "定期的に確認し、設定が変わったときだけ送信します。",
+    "autoSyncHint": "定期的に確認し、設定が変わったときだけ送信します。別のマシンがアップロードしたスナップショットは、復元するか置き換えを選ぶまで上書きしません。",
     "intervalLabel": "確認間隔",
     "intervalOption": "{minutes} 分ごと",
     "saveButton": "保存",
@@ -5533,7 +5539,7 @@
     "plaintextWarning": "スナップショットは暗号化せずに送信され、API キーも含まれます。自分だけがアクセスできる WebDAV サーバーを使ってください。同期用の認証情報自体は含まれません。",
     "importConfirmTitle": "設定を読み込みますか？",
     "importConfirmBody": "ファイルの項目がこのマシンに追加・更新されます。ファイルにない既存項目はそのまま残ります。",
-    "restartHint": "外観・言語・プロバイダー一覧などの一部の変更は、codeg を再起動すると反映されます。",
+    "restartHint": "言語・プロバイダー一覧などの一部の変更は、codeg を再起動すると反映されます。",
     "importConfirmAction": "読み込む",
     "restoreConfirmTitle": "リモートから復元しますか？",
     "restoreConfirmBody": "{device} が {time} に作成したスナップショットをこのマシンに適用します。スナップショットにない既存項目は残ります。",
@@ -5547,7 +5553,8 @@
       "quickMessages": "クイックメッセージ {count} 件",
       "taskTemplates": "タスクテンプレート {count} 件",
       "preferences": "アプリ設定 {count} 件",
-      "assistants": "アシスタント {count} 件"
+      "assistants": "アシスタント {count} 件",
+      "appearance": "外観設定 {count} 件"
     },
     "rollbackTitle": "インポートを元に戻す",
     "rollbackHint": "インポートと復元のたびに、直前のこのマシンの設定を保存します。最新の 10 件が残ります。",
@@ -5564,7 +5571,17 @@
     "passphraseKeep": "空のままにすると保存済みのパスフレーズを使います",
     "passphrasePlaceholder": "暗号化パスフレーズ",
     "passphraseHint": "このマシンのキーチェーンにのみ保存され、アップロードされません。他のマシンでも同じパスフレーズを入力してください。",
-    "assistantsRenamed": "このマシンに同じ名前のアシスタントがあったため、{count} 件の名前を変更しました。"
+    "assistantsRenamed": "このマシンに同じ名前のアシスタントがあったため、{count} 件の名前を変更しました。",
+    "conflictTitle": "自動アップロードを一時停止しています",
+    "conflictBody": "サーバーには {device} が {time} に作成した、このマシンでまだ復元していないスナップショットがあります。アップロードするとそれを置き換え、サーバーには以前のコピーが残りません。",
+    "conflictRestore": "復元する",
+    "conflictOverwrite": "このマシンの設定で置き換える",
+    "conflictUnknownDevice": "不明なマシン",
+    "conflictChanged": "サーバーのスナップショットがまた変わりました。置き換える前に新しいものを確認してください。",
+    "overwriteConfirmTitle": "サーバーのスナップショットを置き換えますか？",
+    "overwriteConfirmBody": "{device} が {time} に作成したスナップショットを、このマシンの設定で置き換えます。サーバーには以前のコピーが残らないため、そのマシンの設定はそのマシンからしか取り戻せません。",
+    "overwriteConfirmAction": "置き換える",
+    "lastPulledAt": "最終復元：{time}"
   },
   "backup": {
     "restore": {
@@ -6334,6 +6351,8 @@
     "actionCancelTask": "タスクをキャンセル",
     "actionRespond": "応答する",
     "actionRespondHint": "会話を開いて、エージェントの権限リクエスト・質問・計画の承認に対応します",
+    "actionStopBackgroundWait": "待機をやめる",
+    "actionStopBackgroundWaitHint": "バックグラウンド作業を待たずに今すぐタスクを確定します。実行中の作業は停止されます",
     "awaitingInputHint": "エージェントは一時停止し、権限リクエストへの対応、質問への回答、または計画の承認を待っています。会話で応答すると、タスクは自動的に再開します。",
     "actionRetry": "再試行",
     "actionRequeue": "再キュー",
@@ -6482,6 +6501,7 @@
     "settingsAutoCompact": "自動コンパクトのしきい値",
     "settingsAutoCompactHint": "フォローアップ・再試行・マージの前に、コンテキストウィンドウの使用率がこの値以上ならセッションを圧縮してから送信します。0 で無効。",
     "compactingNote": "セッションのコンテキストを圧縮中…",
+    "backgroundWaitNote": "{count, plural, =0 {バックグラウンド作業の完了を待っています…} other {# 件のバックグラウンド作業の完了を待っています…}}",
     "settingsCompactCommand": "コンパクトコマンド",
     "settingsCompactCommandHint": "空欄ならエージェントが提供するコマンド（または既知の既定値）を自動で使います。",
     "settingsCompactCommandPlaceholder": "/compact",
@@ -6571,6 +6591,8 @@
     "eventCleanupFailed": "worktree のクリーンアップに失敗",
     "eventResumeFallback": "セッション再開に失敗し新規セッションへ",
     "eventContextCompact": "コンテキスト圧縮",
+    "eventBackgroundWait": "バックグラウンド作業を待機",
+    "eventBackgroundWaitEnd": "バックグラウンド待機を終了",
     "eventUserAction": "ユーザー操作",
     "eventDiffStat": "変更スナップショット",
     "eventForgeWriteback": "項目にコメント済み",
@@ -6923,6 +6945,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "モデル一覧",
+    "builtInCatalogNotice": "deepseek-acp 0.10.0 以降、モデル一覧はエージェントに組み込まれ、harness の設定ファイルからは読み込まれなくなったため、ここでは編集できません。以前ここで保存した一覧はファイルに残りますが、効果はありません。",
     "description": "DeepSeek セッションで切り替えられるモデルです。harness の設定ドキュメントに保存され、エージェントは起動時に読み込みます——保存後に開始されたセッションから反映されます。",
     "inheritedBadge": "エージェント既定",
     "inheritedHint": "まだ一覧が保存されていないため、これはエージェント内蔵のモデルです。保存すると固定され、以降のエージェント更新でも自動では変わりません。ファイル：",

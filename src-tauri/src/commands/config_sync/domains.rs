@@ -48,6 +48,7 @@ pub const DOMAIN_ASSISTANTS: &str = "assistants";
 pub const DOMAIN_QUICK_MESSAGES: &str = "quickMessages";
 pub const DOMAIN_TASK_TEMPLATES: &str = "taskTemplates";
 pub const DOMAIN_PREFERENCES: &str = "preferences";
+pub const DOMAIN_APPEARANCE: &str = "appearance";
 
 type CollectFn =
     for<'a> fn(&'a DatabaseConnection) -> BoxFuture<'a, Result<Value, AppCommandError>>;
@@ -155,6 +156,15 @@ pub const CONFIG_DOMAINS: &[ConfigDomain] = &[
         validate: validate_preferences,
         count: count_portable_preferences,
         apply: apply_preferences,
+    },
+    // The webview's localStorage appearance settings, via their database
+    // mirror — see `appearance`.
+    ConfigDomain {
+        id: DOMAIN_APPEARANCE,
+        collect: super::appearance::collect_appearance,
+        validate: super::appearance::validate_appearance,
+        count: super::appearance::count_appearance,
+        apply: super::appearance::apply_appearance,
     },
 ];
 

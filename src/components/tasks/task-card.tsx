@@ -212,16 +212,27 @@ export function isLiveStatus(task: WorkTask): boolean {
  *
  * The compaction outranks the agent's own last milestone because it is the
  * more recent truth AND the more surprising one — a card that has sat in
- * 准备中 or 合并中 for minutes has no other explanation on screen. Below it,
+ * 准备中 or 合并中 for minutes has no other explanation on screen. A turn
+ * held open for its background work outranks the milestone for the same
+ * reason: the agent's last word is usually "the tests are still running",
+ * and only this says the board is waiting on them. Below both,
  * `latest_progress` is already scoped to this generation by the backend, so
  * there is nothing here to guard against a previous round's leftovers.
  */
 export function liveNote(
   task: WorkTask,
-  t: (key: "compactingNote") => string
+  t: (
+    key: "compactingNote" | "backgroundWaitNote",
+    values?: { count: number }
+  ) => string
 ): string | null {
   if (!isLiveStatus(task)) return null
   if (task.compacting) return t("compactingNote")
+  if (task.background_wait) {
+    return t("backgroundWaitNote", {
+      count: task.background_wait.tasks.length,
+    })
+  }
   return task.latest_progress ?? null
 }
 

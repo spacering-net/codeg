@@ -38,6 +38,7 @@ import {
   Play,
   RotateCw,
   ListTodo,
+  TimerOff,
   Trash2,
   Undo2,
 } from "lucide-react"
@@ -55,6 +56,7 @@ import {
   workTaskRetry,
   workTaskReturn,
   workTaskStart,
+  workTaskStopBackgroundWait,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import {
@@ -698,6 +700,15 @@ export function TaskDetailSheet({
           })
           zoneActions.push(archive(t("actionArchive")))
           break
+      }
+      // A turn held open for its background work — the card's same escape
+      // (see `buildTaskActions`): settle now, ending what still runs.
+      if (task.background_wait) {
+        zoneActions.push({
+          icon: TimerOff,
+          label: t("actionStopBackgroundWait"),
+          onClick: () => run(() => workTaskStopBackgroundWait(task.id)),
+        })
       }
     }
   }
@@ -1866,6 +1877,8 @@ const EVENT_KIND_KEYS = {
   cleanup_failed: "eventCleanupFailed",
   resume_fallback: "eventResumeFallback",
   context_compact: "eventContextCompact",
+  background_wait: "eventBackgroundWait",
+  background_wait_end: "eventBackgroundWaitEnd",
   user_action: "eventUserAction",
   diff_stat: "eventDiffStat",
   forge_writeback: "eventForgeWriteback",
@@ -2066,6 +2079,29 @@ function timelineDetail(event: WorkTaskEvent): string | null {
         before && after ? `${before} → ${after}` : (before ?? str("reason"))
       return (
         [status, span, str("detail"), str("error")]
+          .filter(Boolean)
+          .join(" · ") || null
+      )
+    }
+    case "background_wait": {
+      const tasks = Array.isArray(p.tasks)
+        ? (p.tasks as unknown[]).filter((x) => typeof x === "string")
+        : []
+      return tasks.join(", ") || str("reason")
+    }
+    case "background_wait_end": {
+      const secs = typeof p.waited_secs === "number" ? p.waited_secs : null
+      const waited =
+        secs == null
+          ? null
+          : secs >= 60
+            ? `${Math.floor(secs / 60)}m ${secs % 60}s`
+            : `${secs}s`
+      const leftover = Array.isArray(p.leftover)
+        ? (p.leftover as unknown[]).filter((x) => typeof x === "string")
+        : []
+      return (
+        [str("outcome"), waited, leftover.join(", ") || null]
           .filter(Boolean)
           .join(" · ") || null
       )

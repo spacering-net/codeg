@@ -1185,10 +1185,10 @@
       "configManagement": "Configuración de DeepSeek Harness",
       "configDescription": "El endpoint y la clave son variables de entorno que deepseek-acp lee al arrancar. El modelo y el esfuerzo de razonamiento son selectores por sesión: se eligen en el campo de mensaje.",
       "baseUrlLabel": "Endpoint de la API",
-      "baseUrlHint": "Déjalo vacío para el endpoint oficial. Se aplica a las sesiones iniciadas tras guardar; vuelve a conectar una sesión en curso para que lo tome.",
-      "baseUrlInvalid": "Introduce una URL http(s) completa y sin cadena de consulta, por ejemplo https://api.deepseek.com",
+      "baseUrlHint": "Déjalo vacío para el endpoint oficial. Un endpoint propio debe ofrecer la API Messages de DeepSeek compatible con Anthropic. Se aplica a las sesiones iniciadas tras guardar; vuelve a conectar una sesión en curso para que lo tome.",
+      "baseUrlInvalid": "Introduce una URL http(s) completa y sin cadena de consulta, por ejemplo https://api.deepseek.com/anthropic",
       "apiKeyLabel": "Clave de API",
-      "apiKeyHint": "Se pasa al agente como DEEPSEEK_API_KEY. Una variable de entorno tiene prioridad sobre el archivo de credenciales, así que déjala vacía si inicias sesión desde la terminal."
+      "apiKeyHint": "Se pasa al agente como DEEPSEEK_API_KEY. Una clave guardada al iniciar sesión desde la terminal (deepseek-acp --setup) tiene prioridad sobre esta, así que si iniciaste sesión así, cambia la clave volviendo a iniciar sesión."
     },
     "codex": {
       "configDescription": "Admite configuración rápida de URL de API, API Key y nombre del modelo, y sincroniza con `auth.json` / `config.toml`.",
@@ -1594,6 +1594,10 @@
       "sendAttributionHeaderAria": "Enviar el identificador de atribución/facturación de Claude Code a la API",
       "disableNonessentialTraffic": "Desactivar la telemetría o las solicitudes de red innecesarias",
       "disableNonessentialTrafficAria": "Desactivar la telemetría o las solicitudes de red innecesarias de Claude Code",
+      "promptCacheMode": "Modo de caché",
+      "promptCacheMain": "Caché de 1 hora para el agente principal",
+      "promptCacheSubagent": "Caché de 1 hora para los subagentes",
+      "promptCacheHint": "Activado escribe \"1h\" en settings.json; desactivado elimina la clave y Claude Code usa su duración de caché predeterminada. La caché de 1 hora sigue activa tras pausas largas, pero cada escritura en caché se factura a una tarifa más alta que la de 5 minutos.",
       "gatewayDiscovery": "Dejar que Claude liste los modelos Claude de la pasarela",
       "gatewayDiscoveryAria": "Dejar que Claude Code liste los modelos Claude de la pasarela",
       "gatewayDiscoveryHint": "Claude pide los modelos a la URL de la API y solo conserva los ID que contienen «claude» o «anthropic»; aparecen desde la siguiente sesión.",
@@ -5475,15 +5479,17 @@
       "customAgents": "Agentes personalizados",
       "quickMessages": "Mensajes rápidos",
       "taskTemplates": "Plantillas de tareas",
-      "preferences": "Preferencias de la app (idioma, apariencia, interruptores)",
-      "assistants": "Asistentes"
+      "preferences": "Preferencias de la app (idioma, interruptores)",
+      "assistants": "Asistentes",
+      "appearance": "Apariencia (modo claro/oscuro, color del tema, zoom, fuentes, ajustes del fondo, estilos personalizados)"
     },
     "scopeExcluded": {
       "conversations": "Conversaciones e historial",
       "uploads": "Archivos e imágenes subidos",
       "workspaces": "Proyectos y rutas del espacio de trabajo",
       "mcp": "Servidores MCP (los gestiona cada CLI)",
-      "credentials": "Credenciales de acceso y tokens"
+      "credentials": "Credenciales de acceso y tokens",
+      "backgroundImage": "La imagen de fondo en sí (cada equipo conserva la suya)"
     },
     "fileTitle": "Archivo de configuración",
     "exportButton": "Exportar a un archivo",
@@ -5512,7 +5518,7 @@
     "profile": "Perfil",
     "profileHint": "Los equipos que comparten perfil comparten una misma configuración. Usa perfiles distintos para separar el entorno de trabajo del personal.",
     "autoSyncLabel": "Subir automáticamente",
-    "autoSyncHint": "Comprueba con regularidad y sube solo cuando la configuración ha cambiado.",
+    "autoSyncHint": "Comprueba con regularidad y sube solo cuando la configuración ha cambiado. Nunca reemplaza una instantánea que haya subido otro equipo hasta que la restaures o elijas reemplazarla.",
     "intervalLabel": "Intervalo de comprobación",
     "intervalOption": "Cada {minutes} minutos",
     "saveButton": "Guardar",
@@ -5533,7 +5539,7 @@
     "plaintextWarning": "La instantánea se sube sin cifrar e incluye claves de API, así que usa un servidor WebDAV al que solo tú tengas acceso. Las credenciales de sincronización nunca forman parte de la instantánea.",
     "importConfirmTitle": "¿Importar la configuración?",
     "importConfirmBody": "Las entradas del archivo se añadirán o actualizarán en este equipo. Las entradas existentes que el archivo no menciona se conservan.",
-    "restartHint": "Algunos cambios (apariencia, idioma y la lista de proveedores) se aplican al reiniciar codeg.",
+    "restartHint": "Algunos cambios (idioma y la lista de proveedores) se aplican al reiniciar codeg.",
     "importConfirmAction": "Importar",
     "restoreConfirmTitle": "¿Restaurar desde el servidor?",
     "restoreConfirmBody": "Se aplicará en este equipo la instantánea de {device} creada el {time}. Las entradas existentes que la instantánea no menciona se conservan.",
@@ -5547,7 +5553,8 @@
       "quickMessages": "{count, plural, one {# mensaje rápido} other {# mensajes rápidos}}",
       "taskTemplates": "{count, plural, one {# plantilla de tarea} other {# plantillas de tareas}}",
       "preferences": "{count, plural, one {# preferencia} other {# preferencias}}",
-      "assistants": "{count, plural, one {# asistente} other {# asistentes}}"
+      "assistants": "{count, plural, one {# asistente} other {# asistentes}}",
+      "appearance": "{count, plural, one {# ajuste de apariencia} other {# ajustes de apariencia}}"
     },
     "rollbackTitle": "Deshacer una importación",
     "rollbackHint": "Cada importación y cada restauración guardan antes el estado de este equipo. Se conservan las diez últimas.",
@@ -5564,7 +5571,17 @@
     "passphraseKeep": "Déjalo vacío para conservar la frase guardada",
     "passphrasePlaceholder": "Frase de contraseña de cifrado",
     "passphraseHint": "Se guarda en el llavero de este equipo y nunca se sube. Introduce la misma frase en tus otros equipos.",
-    "assistantsRenamed": "{count, plural, one {Se renombró # asistente: aquí ya había uno con su nombre.} other {Se renombraron # asistentes: aquí ya había otros con sus nombres.}}"
+    "assistantsRenamed": "{count, plural, one {Se renombró # asistente: aquí ya había uno con su nombre.} other {Se renombraron # asistentes: aquí ya había otros con sus nombres.}}",
+    "conflictTitle": "Subida automática en pausa",
+    "conflictBody": "El servidor tiene una instantánea de {device}, creada el {time}, que este equipo no ha restaurado. Subir la reemplazaría, y el servidor no guarda ninguna copia anterior.",
+    "conflictRestore": "Restaurarla",
+    "conflictOverwrite": "Reemplazarla por la de este equipo",
+    "conflictUnknownDevice": "un equipo desconocido",
+    "conflictChanged": "La instantánea del servidor ha vuelto a cambiar. Revisa la nueva antes de reemplazarla.",
+    "overwriteConfirmTitle": "¿Reemplazar la instantánea del servidor?",
+    "overwriteConfirmBody": "La instantánea de {device}, creada el {time}, se reemplazará por la configuración de este equipo. El servidor no guarda ninguna copia anterior, así que los ajustes de ese equipo solo podrán recuperarse desde él.",
+    "overwriteConfirmAction": "Reemplazar",
+    "lastPulledAt": "Última restauración: {time}"
   },
   "backup": {
     "restore": {
@@ -6334,6 +6351,8 @@
     "actionCancelTask": "Cancelar tarea",
     "actionRespond": "Responder",
     "actionRespondHint": "Abre la conversación para atender la solicitud de permiso, la pregunta o el plan del agente",
+    "actionStopBackgroundWait": "Dejar de esperar",
+    "actionStopBackgroundWaitHint": "Cerrar la tarea ahora sin esperar su trabajo en segundo plano; lo que siga en ejecución se detiene",
     "awaitingInputHint": "El agente está en pausa a la espera de que atiendas una solicitud de permiso, respondas una pregunta o revises un plan. Responde en la conversación y la tarea seguirá sola.",
     "actionRetry": "Reintentar",
     "actionRequeue": "Reencolar",
@@ -6482,6 +6501,7 @@
     "settingsAutoCompact": "Umbral de compactación automática",
     "settingsAutoCompactHint": "Antes de una ronda de seguimiento, reintento o fusión, compacta la sesión si su ventana de contexto está al menos así de llena. 0 = desactivado.",
     "compactingNote": "Compactando el contexto de la sesión…",
+    "backgroundWaitNote": "{count, plural, =0 {Esperando a que termine el trabajo en segundo plano…} one {Esperando a que termine # tarea en segundo plano…} other {Esperando a que terminen # tareas en segundo plano…}}",
     "settingsCompactCommand": "Comando de compactación",
     "settingsCompactCommandHint": "Déjalo en blanco para usar lo que ofrezca el agente, o su valor predeterminado conocido.",
     "settingsCompactCommandPlaceholder": "/compact",
@@ -6571,6 +6591,8 @@
     "eventCleanupFailed": "Fallo al limpiar el worktree",
     "eventResumeFallback": "La reanudación falló; se usó una sesión nueva",
     "eventContextCompact": "Compactación de contexto",
+    "eventBackgroundWait": "Esperando trabajo en segundo plano",
+    "eventBackgroundWaitEnd": "Fin de la espera en segundo plano",
     "eventUserAction": "Acción del usuario",
     "eventDiffStat": "Instantánea de cambios",
     "eventForgeWriteback": "Comentario publicado en el elemento",
@@ -6923,6 +6945,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "Lista de modelos",
+    "builtInCatalogNotice": "Desde deepseek-acp 0.10.0 la lista de modelos viene integrada en el agente y ya no se lee del documento de ajustes del harness, así que no se puede editar aquí. Una lista guardada aquí antes sigue en el archivo, pero no tiene efecto.",
     "description": "Los modelos entre los que puede cambiar una sesión de DeepSeek. Se guardan en el documento de ajustes del harness, que el agente lee al iniciarse: al guardar, se aplica a las sesiones iniciadas después.",
     "inheritedBadge": "Valores del agente",
     "inheritedHint": "Todavía no hay ninguna lista guardada, así que estos son los modelos integrados del agente. Guardarla los fija, y las versiones posteriores del agente ya no los cambiarán por su cuenta. Archivo:",

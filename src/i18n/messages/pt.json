@@ -1185,10 +1185,10 @@
       "configManagement": "Configuração do DeepSeek Harness",
       "configDescription": "O endpoint e a chave são variáveis de ambiente que o deepseek-acp lê ao iniciar. O modelo e o nível de raciocínio são seletores por sessão — escolha-os no campo de mensagem.",
       "baseUrlLabel": "Endpoint da API",
-      "baseUrlHint": "Deixe vazio para o endpoint oficial. Vale para as sessões iniciadas depois de salvar; reconecte uma sessão em andamento para que ela use o novo valor.",
-      "baseUrlInvalid": "Informe uma URL http(s) completa e sem query string, por exemplo https://api.deepseek.com",
+      "baseUrlHint": "Deixe vazio para o endpoint oficial. Um endpoint próprio precisa oferecer a API Messages da DeepSeek compatível com Anthropic. Vale para as sessões iniciadas depois de salvar; reconecte uma sessão em andamento para que ela use o novo valor.",
+      "baseUrlInvalid": "Informe uma URL http(s) completa e sem query string, por exemplo https://api.deepseek.com/anthropic",
       "apiKeyLabel": "Chave de API",
-      "apiKeyHint": "Enviada ao agente como DEEPSEEK_API_KEY. Uma variável de ambiente tem precedência sobre o arquivo de credenciais, então deixe em branco se você entrar pelo terminal."
+      "apiKeyHint": "Enviada ao agente como DEEPSEEK_API_KEY. Uma chave salva ao entrar pelo terminal (deepseek-acp --setup) tem precedência sobre esta, então, se você entrou assim, troque a chave entrando de novo."
     },
     "codex": {
       "configDescription": "Suporta configuração rápida de URL da API, API Key e nome do modelo, com sincronização para `auth.json` / `config.toml`.",
@@ -1594,6 +1594,10 @@
       "sendAttributionHeaderAria": "Enviar o identificador de atribuição/cobrança do Claude Code para a API",
       "disableNonessentialTraffic": "Desativar a telemetria ou solicitações de rede desnecessárias",
       "disableNonessentialTrafficAria": "Desativar a telemetria ou solicitações de rede desnecessárias do Claude Code",
+      "promptCacheMode": "Modo de cache",
+      "promptCacheMain": "Cache de 1 hora para o agente principal",
+      "promptCacheSubagent": "Cache de 1 hora para os subagentes",
+      "promptCacheHint": "Ligado grava \"1h\" em settings.json; desligado remove a chave e o Claude Code usa a duração de cache padrão. O cache de 1 hora continua válido após pausas longas, mas cada gravação em cache é cobrada a uma tarifa maior que a do cache de 5 minutos.",
       "gatewayDiscovery": "Deixar o Claude listar os modelos Claude do gateway",
       "gatewayDiscoveryAria": "Deixar o Claude Code listar os modelos Claude do gateway",
       "gatewayDiscoveryHint": "O Claude consulta a URL da API e mantém só os IDs que contêm “claude” ou “anthropic”; eles aparecem a partir da próxima sessão.",
@@ -5475,15 +5479,17 @@
       "customAgents": "Agentes personalizados",
       "quickMessages": "Mensagens rápidas",
       "taskTemplates": "Modelos de tarefa",
-      "preferences": "Preferências do app (idioma, aparência, opções)",
-      "assistants": "Assistentes"
+      "preferences": "Preferências do app (idioma, opções)",
+      "assistants": "Assistentes",
+      "appearance": "Aparência (modo claro/escuro, cor do tema, zoom, fontes, ajustes do plano de fundo, estilos personalizados)"
     },
     "scopeExcluded": {
       "conversations": "Conversas e histórico",
       "uploads": "Arquivos e imagens enviados",
       "workspaces": "Projetos e caminhos do espaço de trabalho",
       "mcp": "Servidores MCP (mantidos por cada CLI)",
-      "credentials": "Credenciais de login e tokens"
+      "credentials": "Credenciais de login e tokens",
+      "backgroundImage": "A imagem de fundo em si (cada máquina mantém a sua)"
     },
     "fileTitle": "Arquivo de configuração",
     "exportButton": "Exportar para arquivo",
@@ -5512,7 +5518,7 @@
     "profile": "Perfil",
     "profileHint": "Máquinas com o mesmo perfil compartilham uma configuração. Use perfis diferentes para separar trabalho e uso pessoal.",
     "autoSyncLabel": "Enviar automaticamente",
-    "autoSyncHint": "Verifica periodicamente e envia apenas quando a configuração muda.",
+    "autoSyncHint": "Verifica periodicamente e envia apenas quando a configuração muda. Nunca substitui um instantâneo enviado por outra máquina até você restaurá-lo ou escolher substituí-lo.",
     "intervalLabel": "Intervalo de verificação",
     "intervalOption": "A cada {minutes} minutos",
     "saveButton": "Salvar",
@@ -5533,7 +5539,7 @@
     "plaintextWarning": "O instantâneo é enviado sem criptografia e contém chaves de API, então use um servidor WebDAV que só você acesse. As credenciais de sincronização nunca fazem parte do instantâneo.",
     "importConfirmTitle": "Importar configuração?",
     "importConfirmBody": "Os itens do arquivo serão adicionados ou atualizados nesta máquina. Os itens existentes que o arquivo não menciona são mantidos.",
-    "restartHint": "Algumas alterações (aparência, idioma e a lista de provedores) só têm efeito depois de reiniciar o codeg.",
+    "restartHint": "Algumas alterações (idioma e a lista de provedores) só têm efeito depois de reiniciar o codeg.",
     "importConfirmAction": "Importar",
     "restoreConfirmTitle": "Restaurar do servidor?",
     "restoreConfirmBody": "O instantâneo de {device}, criado em {time}, será aplicado a esta máquina. Os itens existentes que o instantâneo não menciona são mantidos.",
@@ -5547,7 +5553,8 @@
       "quickMessages": "{count, plural, one {# mensagem rápida} other {# mensagens rápidas}}",
       "taskTemplates": "{count, plural, one {# modelo de tarefa} other {# modelos de tarefa}}",
       "preferences": "{count, plural, one {# preferência} other {# preferências}}",
-      "assistants": "{count, plural, one {# assistente} other {# assistentes}}"
+      "assistants": "{count, plural, one {# assistente} other {# assistentes}}",
+      "appearance": "{count, plural, one {# ajuste de aparência} other {# ajustes de aparência}}"
     },
     "rollbackTitle": "Desfazer uma importação",
     "rollbackHint": "Cada importação e cada restauração guardam antes o estado desta máquina. Os dez últimos são mantidos.",
@@ -5564,7 +5571,17 @@
     "passphraseKeep": "Deixe vazio para manter a frase-passe guardada",
     "passphrasePlaceholder": "Frase-passe de cifra",
     "passphraseHint": "Fica no porta-chaves desta máquina e nunca é enviada. Introduza a mesma frase-passe nas suas outras máquinas.",
-    "assistantsRenamed": "{count, plural, one {# assistente foi renomeado: já havia um com o mesmo nome aqui.} other {# assistentes foram renomeados: já havia outros com os mesmos nomes aqui.}}"
+    "assistantsRenamed": "{count, plural, one {# assistente foi renomeado: já havia um com o mesmo nome aqui.} other {# assistentes foram renomeados: já havia outros com os mesmos nomes aqui.}}",
+    "conflictTitle": "Envio automático pausado",
+    "conflictBody": "O servidor tem um instantâneo de {device}, criado em {time}, que esta máquina não restaurou. Enviar o substituiria, e o servidor não guarda nenhuma cópia anterior.",
+    "conflictRestore": "Restaurá-lo",
+    "conflictOverwrite": "Substituir pelo desta máquina",
+    "conflictUnknownDevice": "uma máquina desconhecida",
+    "conflictChanged": "O instantâneo no servidor mudou de novo. Verifique o novo antes de substituí-lo.",
+    "overwriteConfirmTitle": "Substituir o instantâneo do servidor?",
+    "overwriteConfirmBody": "O instantâneo de {device}, criado em {time}, será substituído pela configuração desta máquina. O servidor não guarda nenhuma cópia anterior, então as configurações daquela máquina só poderão ser recuperadas nela.",
+    "overwriteConfirmAction": "Substituir",
+    "lastPulledAt": "Última restauração: {time}"
   },
   "backup": {
     "restore": {
@@ -6334,6 +6351,8 @@
     "actionCancelTask": "Cancelar tarefa",
     "actionRespond": "Responder",
     "actionRespondHint": "Abre a conversa para tratar o pedido de permissão, a pergunta ou o plano do agente",
+    "actionStopBackgroundWait": "Parar de esperar",
+    "actionStopBackgroundWaitHint": "Concluir a tarefa agora sem esperar o trabalho em segundo plano; o que ainda estiver em execução é interrompido",
     "awaitingInputHint": "O agente está pausado aguardando você tratar um pedido de permissão, responder a uma pergunta ou revisar um plano. Responda na conversa e a tarefa continua sozinha.",
     "actionRetry": "Tentar novamente",
     "actionRequeue": "Reenfileirar",
@@ -6482,6 +6501,7 @@
     "settingsAutoCompact": "Limite de compactação automática",
     "settingsAutoCompactHint": "Antes de uma rodada de continuação, nova tentativa ou merge, compacta a sessão se a janela de contexto estiver ao menos assim cheia. 0 = desativado.",
     "compactingNote": "Compactando o contexto da sessão…",
+    "backgroundWaitNote": "{count, plural, =0 {Aguardando o trabalho em segundo plano terminar…} one {Aguardando # tarefa em segundo plano terminar…} other {Aguardando # tarefas em segundo plano terminarem…}}",
     "settingsCompactCommand": "Comando de compactação",
     "settingsCompactCommandHint": "Deixe em branco para usar o que o agente oferece, ou o padrão conhecido dele.",
     "settingsCompactCommandPlaceholder": "/compact",
@@ -6571,6 +6591,8 @@
     "eventCleanupFailed": "Falha na limpeza do worktree",
     "eventResumeFallback": "Retomada falhou; nova sessão usada",
     "eventContextCompact": "Compactação de contexto",
+    "eventBackgroundWait": "Aguardando trabalho em segundo plano",
+    "eventBackgroundWaitEnd": "Fim da espera em segundo plano",
     "eventUserAction": "Ação do usuário",
     "eventDiffStat": "Resumo das mudanças",
     "eventForgeWriteback": "Comentado no item",
@@ -6923,6 +6945,7 @@
   },
   "DeepSeekModelEditor": {
     "title": "Lista de modelos",
+    "builtInCatalogNotice": "A partir do deepseek-acp 0.10.0, a lista de modelos vem embutida no agente e não é mais lida do documento de configurações do harness, por isso não pode ser editada aqui. Uma lista salva aqui antes continua no arquivo, mas não tem efeito.",
     "description": "Os modelos entre os quais uma sessão do DeepSeek pode alternar. Ficam no documento de definições do harness, que o agente lê ao arrancar — guardar aplica-se às sessões iniciadas depois.",
     "inheritedBadge": "Predefinições do agente",
     "inheritedHint": "Ainda não há lista guardada, por isso estes são os modelos integrados do agente. Guardar fixa-os, e as versões seguintes do agente deixam de os alterar sozinhas. Ficheiro:",
