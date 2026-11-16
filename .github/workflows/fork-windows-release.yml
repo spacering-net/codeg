@@ -1,16 +1,20 @@
 name: Fork Windows Release
 
 # Fork-only workflow: builds the Windows NSIS installer and publishes it as a
-# release in this fork. Deliberately separate from release.yml so that file
-# stays byte-identical to upstream — syncing upstream never conflicts here.
+# release in this fork.
 #
-# Triggered by hand (workflow_dispatch) rather than a tag push: release.yml
-# also fires on `v*.*.*` tags and would fail on this fork (no Apple signing
-# secrets, no Docker Hub credentials). The tag is created by this workflow
-# itself via GITHUB_TOKEN, and GitHub does not chain workflows off events
-# created with GITHUB_TOKEN, so release.yml stays quiet.
+# Triggered by a `v*.*.*` tag push, or by hand via workflow_dispatch. The tag
+# must live on a commit that already carries this file, because GitHub reads
+# the workflow from the pushed ref. `release.yml` no longer has a tag trigger
+# in this fork, so a tag push runs this workflow only.
+#
+# Running this by hand is also fine: the tag input is used then, and the tag is
+# created by this workflow through GITHUB_TOKEN.
 
 on:
+  push:
+    tags:
+      - "v*.*.*"
   workflow_dispatch:
     inputs:
       tag:
@@ -61,10 +65,12 @@ jobs:
 
       - name: Verify tag matches app version
         shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           APP_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          if [[ "v$APP_VERSION" != "${{ inputs.tag }}" ]]; then
-            echo "::error::Tag ${{ inputs.tag }} does not match app version v$APP_VERSION"
+          if [[ "v$APP_VERSION" != "$RELEASE_TAG" ]]; then
+            echo "::error::Tag $RELEASE_TAG does not match app version v$APP_VERSION"
             exit 1
           fi
 
@@ -80,8 +86,8 @@ jobs:
           CODEG_SKIP_SIDECAR: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ inputs.tag }}
-          releaseName: codeg ${{ inputs.tag }}
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: codeg ${{ inputs.tag || github.ref_name }}
           releaseBody: "Fork build. Windows x64 NSIS installer only."
           releaseDraft: false
           prerelease: false
