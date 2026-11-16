@@ -38,6 +38,15 @@ describe("tab strip draft gating", () => {
   })
 })
 
+describe("tab waiting-state wiring", () => {
+  it("uses the live connection state and labels pending tabs accessibly", () => {
+    expect(tabItem).toContain("useConnectionWaiting(tab.id)")
+    expect(tabItem).toContain('data-conversation-activity="waiting"')
+    expect(tabItem).toContain('tSidebar("statusWaitingBadge")')
+    expect(tabItem).toContain("<CircleHelp")
+  })
+})
+
 describe("tab drag selection guard wiring", () => {
   it("suppresses text selection for EVERY tab drag, composed with the long-press handlers", () => {
     // Held on drag start / released on drag end + unmount, so within-group

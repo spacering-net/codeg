@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef } from "react"
 import { Reorder } from "motion/react"
 import type { PanInfo } from "motion/react"
-import { X } from "lucide-react"
+import { CircleHelp, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { cn, handleMiddleClickClose } from "@/lib/utils"
 import {
@@ -23,6 +23,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
 import { useLongPressDrag } from "@/hooks/use-long-press-drag"
+import { useConnectionWaiting } from "@/hooks/use-connection-waiting"
 import type { TabItem as TabItemData } from "@/contexts/tab-context"
 import type { SplitDirection } from "@/lib/tab-group-layout"
 
@@ -120,6 +121,8 @@ export const TabItem = memo(function TabItem({
   onTouchSortingEnd,
 }: TabItemProps) {
   const t = useTranslations("Folder.tabs")
+  const tSidebar = useTranslations("Folder.sidebar")
+  const isWaiting = useConnectionWaiting(tab.id)
   const itemRef = useRef<HTMLDivElement>(null)
 
   const resolvedFolderName = folderName ?? String(tab.folderId)
@@ -326,9 +329,22 @@ export const TabItem = memo(function TabItem({
                   ]
             )}
           >
-            <ConversationStatusDot
-              status={tab.status as ConversationStatus | undefined}
-            />
+            {isWaiting ? (
+              <span
+                data-conversation-activity="waiting"
+                className="flex size-3.5 shrink-0 items-center justify-center text-orange-700 dark:text-orange-400"
+                title={tSidebar("statusWaitingBadge")}
+              >
+                <CircleHelp className="size-3.5" aria-hidden />
+                <span className="sr-only">
+                  {tSidebar("statusWaitingBadge")}
+                </span>
+              </span>
+            ) : (
+              <ConversationStatusDot
+                status={tab.status as ConversationStatus | undefined}
+              />
+            )}
             <span
               className={cn(
                 // Embedded: grow + shrink as the tab tightens, but instead of an

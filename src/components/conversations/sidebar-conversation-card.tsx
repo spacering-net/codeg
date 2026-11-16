@@ -12,6 +12,7 @@ import {
   Pencil,
   Trash2,
   Circle,
+  CircleHelp,
   SquarePen,
   Loader2,
   XCircle,
@@ -25,6 +26,7 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
+import { useConnectionWaiting } from "@/hooks/use-connection-waiting"
 import { useTabStore } from "@/contexts/tab-context"
 import { emitAttachSessionToSession } from "@/lib/session-attachment-events"
 import type { DbConversationSummary, ConversationStatus } from "@/lib/types"
@@ -342,6 +344,17 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   ])
 
   const status = conversation.status as ConversationStatus
+  // 草稿绑定后可能保留原始 tab id，因此优先沿用当前真实连接键。
+  const contextKey = useTabStore(
+    (state) =>
+      state.tabs.find(
+        (tab) =>
+          tab.conversationId === conversation.id &&
+          tab.agentType === conversation.agent_type
+      )?.id ??
+      `conv-${conversation.folder_id}-${conversation.agent_type}-${conversation.id}`
+  )
+  const isWaiting = useConnectionWaiting(contextKey)
   const isRunning = status === "in_progress"
   const isCancelled = status === "cancelled"
   const isPinned = conversation.pinned_at != null
@@ -458,6 +471,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       )}
                       <ConversationStatusDot
                         status={status}
+                        waiting={isWaiting}
                         size="sm"
                         className="absolute -right-0.5 -bottom-0.5 ring-2 ring-sidebar"
                       />
@@ -582,10 +596,19 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                         // Roots swap the badge out for the hover actions; sub-sessions
                         // have no actions, so keep the badge (incl. the running
                         // spinner) visible on hover.
-                        !isSubsession && "group-hover:hidden"
+                        !isSubsession && !isWaiting && "group-hover:hidden"
                       )}
                     >
-                      {isRunning ? (
+                      {isWaiting ? (
+                        <span
+                          data-conversation-activity="waiting"
+                          className="inline-flex shrink-0 items-center gap-1 text-[11px] text-orange-700 dark:text-orange-400"
+                          title={tSidebar("statusWaitingBadge")}
+                        >
+                          <CircleHelp className="size-3.5" aria-hidden />
+                          {tSidebar("statusWaitingBadge")}
+                        </span>
+                      ) : isRunning ? (
                         <span
                           className="relative inline-flex shrink-0 items-center justify-center"
                           title={tSidebar("statusRunningBadge")}

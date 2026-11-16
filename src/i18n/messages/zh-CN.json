@@ -2232,6 +2232,7 @@
       "sectionOrderMoveDown": "下移",
       "sectionOrderItemLabel": "{name} — 第 {position} 位，共 {total} 位",
       "statusRunningBadge": "运行中",
+      "statusWaitingBadge": "待处理",
       "runningCountBadge": "{count} 个会话进行中",
       "statusCancelledBadge": "已取消",
       "originalWorkingDir": "最初运行目录",

@@ -2232,6 +2232,7 @@
       "sectionOrderMoveDown": "아래로 이동",
       "sectionOrderItemLabel": "{name} — {total}개 중 {position}번째",
       "statusRunningBadge": "실행 중",
+      "statusWaitingBadge": "처리 대기",
       "runningCountBadge": "{count}개 세션 실행 중",
       "statusCancelledBadge": "취소됨",
       "originalWorkingDir": "원래 작업 디렉터리",

@@ -24,6 +24,11 @@ import {
   resetAssistantsStore,
   useAssistantsStore,
 } from "@/stores/assistants-store"
+import {
+  StaticConnectionStoreProvider,
+  type ConnectionState,
+  type ConnectionStoreApi,
+} from "@/contexts/acp-connections-context"
 
 // AgentIcon renders exactly once per card body execution, so counting its
 // renders counts how many cards actually re-rendered (a card that bails out via
@@ -372,6 +377,85 @@ describe("SidebarConversationCard command-line badge", () => {
 })
 
 describe("SidebarConversationCard running badge", () => {
+  it("shows pending input separately from a running turn", () => {
+    onStatusChange.mockClear()
+    const tabId = "conv-1-claude_code-1"
+    const conversation = { ...conv(1), status: "in_progress" }
+    useTabStore.setState({
+      tabs: [
+        {
+          id: tabId,
+          kind: "conversation",
+          folderId: 1,
+          conversationId: 1,
+          agentType: "claude_code",
+          title: conversation.title ?? "",
+          isPinned: false,
+        },
+      ],
+    })
+
+    let connection = {
+      pendingPermission: {
+        request_id: "permission-1",
+        tool_call: {},
+        options: [],
+      },
+      pendingQuestion: null,
+      pendingAskQuestion: null,
+      pendingPlanApproval: null,
+    } as unknown as ConnectionState
+    const listeners = new Set<() => void>()
+    const store: ConnectionStoreApi = {
+      getConnection: (key) => (key === tabId ? connection : undefined),
+      getConnectPending: () => undefined,
+      getConnectError: () => undefined,
+      getActiveKey: () => null,
+      subscribeKey: (key, notify) => {
+        if (key !== tabId) return () => {}
+        listeners.add(notify)
+        return () => listeners.delete(notify)
+      },
+      subscribeActiveKey: () => () => {},
+    }
+
+    const { container, getByTitle, queryByTitle, getByText } = renderWithIntl(
+      <StaticConnectionStoreProvider store={store}>
+        <SidebarConversationCard
+          conversation={conversation}
+          isSelected={false}
+          timeLabel="5m"
+          onSelect={onSelect}
+          onDoubleClick={onDoubleClick}
+          onRename={onRename}
+          onDelete={onDelete}
+          onStatusChange={onStatusChange}
+        />
+      </StaticConnectionStoreProvider>
+    )
+
+    expect(getByTitle("Waiting")).toBeInTheDocument()
+    expect(getByText("Waiting")).toBeInTheDocument()
+    expect(container.querySelector(".bg-orange-500")).not.toBeNull()
+    expect(queryByTitle("Running")).toBeNull()
+
+    act(() => {
+      connection = {
+        pendingPermission: null,
+        pendingQuestion: null,
+        pendingAskQuestion: null,
+        pendingPlanApproval: null,
+      } as unknown as ConnectionState
+      listeners.forEach((notify) => notify())
+    })
+
+    expect(getByTitle("Running")).toBeInTheDocument()
+    expect(queryByTitle("Waiting")).toBeNull()
+    expect(onStatusChange).not.toHaveBeenCalled()
+    cleanup()
+    useTabStore.setState({ tabs: [] })
+  })
+
   it("turns a span around its icon, never the icon itself", () => {
     // An SVG element's turn animates on the main thread and lays the page out
     // every frame, for as long as the conversation runs.
