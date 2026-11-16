@@ -64,6 +64,7 @@ import {
 import { SessionDetailsDialog } from "./session-details-dialog"
 import { ConversationHeaderTags } from "./conversation-tag-picker"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { ConversationSubSessions } from "./conversation-sub-sessions"
 
 interface ConversationDetailHeaderProps {
   tabId: string
@@ -127,6 +128,10 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
       conversationId != null &&
       (s.conversations.find((c) => c.id === conversationId)?.pinned_at ??
         null) != null
+  )
+  const childCount = useAppWorkspaceStore(
+    (s) =>
+      s.conversations.find((c) => c.id === conversationId)?.child_count ?? 0
   )
   // Tags: offered only on a ROOT conversation of the sidebar list — the same
   // rows the sidebar lets you tag (a sub-session opened in a tab is not one).
@@ -297,7 +302,14 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           </div>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center">
+      <div className="flex shrink-0 items-center gap-2">
+        {conversationId != null ? (
+          <ConversationSubSessions
+            key={conversationId}
+            conversationId={conversationId}
+            childCount={childCount}
+          />
+        ) : null}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button

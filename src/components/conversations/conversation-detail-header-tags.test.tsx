@@ -55,6 +55,9 @@ vi.mock("@/stores/conversation-runtime-store", () => ({
 vi.mock("./session-details-dialog", () => ({
   SessionDetailsDialog: () => null,
 }))
+vi.mock("./conversation-sub-sessions", () => ({
+  ConversationSubSessions: () => null,
+}))
 vi.mock("@/components/chat/conversation-context-bar", () => ({
   ConversationHeaderFolderPicker: () => null,
 }))
