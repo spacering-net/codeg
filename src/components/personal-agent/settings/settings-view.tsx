@@ -5,9 +5,9 @@
  * place of the conversation, the roster and the side panel: the team — the
  * work assistants, the executor configs, the division of work — and the
  * preferences. An assistant's own settings are on its own page
- * (`bot-page.tsx`). The navigation down the side, [Back to the
- * conversation] over it; on a narrow screen it folds into a select at the
- * top.
+ * (`bot-page.tsx`). The navigation down the side under the title, the
+ * arrow before it going back to the conversation; on a narrow screen it
+ * folds into a select at the top.
  *
  * Read-only while the engine runs in another codeg process — except the
  * executor configs themselves, which are not the engine's (how the
@@ -133,17 +133,30 @@ export function SettingsView() {
     }
   })()
 
+  // Back to the conversation: an arrow on the title's line, as on an
+  // assistant's own page.
   const back = (
     <Button
-      size="sm"
+      size="icon-sm"
       variant="ghost"
-      className="h-7 gap-1 self-start px-2 text-muted-foreground hover:text-foreground"
+      className="shrink-0 text-muted-foreground hover:text-foreground"
       onClick={showConversation}
+      title={t("back")}
+      aria-label={t("back")}
       data-pa-settings-back
     >
-      <ArrowLeft className="size-3.5 rtl:rotate-180" aria-hidden />
-      {t("back")}
+      <ArrowLeft className="rtl:rotate-180" aria-hidden />
     </Button>
+  )
+  const title = (
+    <div className="min-w-0">
+      <h1 className="truncate text-base leading-6 font-semibold tracking-tight">
+        {t("viewTitle")}
+      </h1>
+      <p className="truncate text-xs leading-4 text-muted-foreground">
+        {t("viewSubtitle")}
+      </p>
+    </div>
   )
 
   return (
@@ -153,14 +166,9 @@ export function SettingsView() {
           className="flex w-60 shrink-0 flex-col border-e border-border/60"
           data-pa-settings-nav
         >
-          <div className="flex flex-col px-3 pt-3">{back}</div>
-          <div className="px-5 pt-4 pb-5">
-            <h1 className="text-lg leading-7 font-semibold tracking-tight">
-              {t("viewTitle")}
-            </h1>
-            <p className="text-xs leading-5 text-muted-foreground">
-              {t("viewSubtitle")}
-            </p>
+          <div className="flex items-center gap-1.5 px-3 pt-4 pb-5">
+            {back}
+            {title}
           </div>
           <nav
             aria-label={t("viewTitle")}
@@ -218,12 +226,15 @@ export function SettingsView() {
       )}
       <ScrollArea className="min-h-0 flex-1">
         <div
-          className="mx-auto w-full max-w-3xl px-4 pt-4 pb-12 sm:px-8 sm:pt-8"
+          className="mx-auto w-full max-w-3xl px-4 pt-4 pb-12 sm:px-8 sm:pt-6"
           data-pa-settings-body
         >
           {isMobile ? (
             <div className="mb-5 flex flex-col gap-3">
-              {back}
+              <div className="-ms-2 flex items-center gap-1.5">
+                {back}
+                {title}
+              </div>
               <Select
                 value={page}
                 onValueChange={(v) => openSettings(v as SettingsPage)}

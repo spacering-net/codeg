@@ -30,6 +30,7 @@ import {
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { SettingNote } from "@/components/shared/setting-card"
 import { useBotId } from "@/contexts/personal-agent-context"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -335,12 +336,12 @@ export function PersonaFiles({
 
   return (
     <div className="flex flex-col gap-3">
-      <SettingNote icon={FileText}>{t("filesNote")}</SettingNote>
-      <div className="flex min-h-[24rem] flex-col gap-3 sm:flex-row">
-        {/* The list: on a phone, a short scrolled strip over the file. */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+        {/* The list, as the settings' navigation is drawn: on a phone, a
+            short scrolled strip over the file. */}
         <nav
           aria-label={t("tabPersona")}
-          className="field-scrollbar flex max-h-44 shrink-0 flex-col gap-0.5 overflow-y-auto rounded-xl bg-muted/40 p-1.5 sm:max-h-[28rem] sm:w-44"
+          className="field-scrollbar -mx-1 flex max-h-44 shrink-0 flex-col gap-0.5 overflow-y-auto px-1 sm:max-h-none sm:w-48"
         >
           {FIXED_FILES.map((f) => {
             const Icon = f.icon
@@ -351,13 +352,23 @@ export function PersonaFiles({
                   selected={active === f.name}
                   dirty={isDirty(f.name)}
                   onClick={() => pick(f.name)}
-                  icon={<Icon className="size-3.5 shrink-0" aria-hidden />}
+                  icon={
+                    <Icon
+                      className={cn(
+                        "size-4 shrink-0",
+                        active === f.name
+                          ? "text-foreground"
+                          : "text-muted-foreground"
+                      )}
+                      aria-hidden
+                    />
+                  }
                   label={t(`fileGroups.${f.group}`)}
                   count={list ? list.length : undefined}
                   title={f.name}
                 />
                 {list && list.length > 0 ? (
-                  <div className="ms-3.5 flex flex-col gap-0.5 border-s border-border/70 ps-1.5">
+                  <div className="ms-[1.0625rem] flex flex-col gap-0.5 border-s border-border/70 ps-1.5">
                     {list.map((e) => (
                       <FileButton
                         key={e.name}
@@ -376,17 +387,17 @@ export function PersonaFiles({
             )
           })}
           {skills.length > 0 ? (
-            <div className="flex flex-col gap-0.5" data-pa-persona-skills>
-              <p className="flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.8125rem] text-muted-foreground">
-                <Workflow className="size-3.5 shrink-0" aria-hidden />
+            <div className="mt-3 flex flex-col gap-0.5" data-pa-persona-skills>
+              <p className="flex h-8 min-w-0 items-center gap-2.5 px-2 text-sm text-muted-foreground">
+                <Workflow className="size-4 shrink-0" aria-hidden />
                 <span className="min-w-0 flex-1 truncate">
                   {t("fileGroups.skills")}
                 </span>
-                <span className="shrink-0 text-[0.6875rem] text-muted-foreground/70 tabular-nums">
+                <span className="shrink-0 text-xs text-muted-foreground/70 tabular-nums">
                   {skills.length}
                 </span>
               </p>
-              <div className="ms-3.5 flex flex-col gap-0.5 border-s border-border/70 ps-1.5">
+              <div className="ms-[1.0625rem] flex flex-col gap-0.5 border-s border-border/70 ps-1.5">
                 {skills.map((k) => (
                   <FileButton
                     key={k.name}
@@ -403,37 +414,44 @@ export function PersonaFiles({
             </div>
           ) : null}
         </nav>
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-baseline gap-2">
-              <span className="truncate text-sm font-medium text-foreground">
-                {skill
-                  ? skill.title
-                  : isEntry
-                    ? (entry?.title ?? active)
-                    : fixed
-                      ? t(`fileGroups.${fixed.group}`)
-                      : active}
-              </span>
-              <span className="shrink-0 truncate font-mono text-[0.6875rem] text-muted-foreground">
-                {active}
-              </span>
-              {fixed || entry?.type || skill ? (
-                <span className="ms-auto shrink-0 rounded-full bg-foreground/[0.06] px-2 text-[0.6875rem] leading-5 text-muted-foreground">
+        {/* The file open: one card, its name and who writes it over it,
+            its buttons under it. */}
+        <div className="flex min-h-[26rem] min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70 bg-card transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50">
+          <div className="flex min-w-0 items-start gap-3 border-b border-border/60 px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-baseline gap-2">
+                <span className="truncate text-sm font-medium text-foreground">
                   {skill
-                    ? skill.off
-                      ? t("skillOff")
-                      : t("byAgent")
-                    : fixed
-                      ? writer
-                      : t(`entryType.${entry!.type!}`)}
+                    ? skill.title
+                    : isEntry
+                      ? (entry?.title ?? active)
+                      : fixed
+                        ? t(`fileGroups.${fixed.group}`)
+                        : active}
                 </span>
+                <span
+                  dir="ltr"
+                  className="min-w-0 truncate font-mono text-[0.6875rem] text-muted-foreground"
+                >
+                  {active}
+                </span>
+              </div>
+              {hint ? (
+                <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                  {hint}
+                </p>
               ) : null}
             </div>
-            {hint ? (
-              <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-                {hint}
-              </p>
+            {fixed || entry?.type || skill ? (
+              <Badge variant="secondary" className="mt-px font-normal">
+                {skill
+                  ? skill.off
+                    ? t("skillOff")
+                    : t("byAgent")
+                  : fixed
+                    ? writer
+                    : t(`entryType.${entry!.type!}`)}
+              </Badge>
             ) : null}
           </div>
           <Textarea
@@ -443,9 +461,9 @@ export function PersonaFiles({
             onChange={(e) =>
               setDrafts((d) => ({ ...d, [active]: e.target.value }))
             }
-            className="field-scrollbar min-h-64 flex-1 bg-background font-mono text-xs"
+            className="field-scrollbar min-h-72 flex-1 resize-none rounded-none border-0 bg-transparent px-4 py-3 font-mono text-xs leading-5 shadow-none focus-visible:ring-0 dark:bg-transparent"
           />
-          <div className="flex items-center justify-end gap-2">
+          <div className="flex min-h-12 items-center justify-end gap-2 border-t border-border/60 bg-muted/30 px-3 py-2">
             {skill && !confirming ? (
               <Button
                 type="button"
@@ -512,6 +530,7 @@ export function PersonaFiles({
           </div>
         </div>
       </div>
+      <SettingNote icon={FileText}>{t("filesNote")}</SettingNote>
     </div>
   )
 }
@@ -545,11 +564,11 @@ function FileButton({
       title={title}
       onClick={onClick}
       className={cn(
-        "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-lg px-2 text-start transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-        entry ? "text-xs" : "text-[0.8125rem]",
+        "flex w-full min-w-0 shrink-0 items-center rounded-lg px-2 text-start transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        entry ? "h-7 gap-1.5 text-[0.8125rem]" : "h-8 gap-2.5 text-sm",
         selected
-          ? "bg-background font-medium text-foreground shadow-xs"
-          : "text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground"
+          ? "bg-accent font-medium text-accent-foreground"
+          : "text-foreground/80 hover:bg-muted hover:text-foreground"
       )}
     >
       {icon}
@@ -561,7 +580,7 @@ function FileButton({
         />
       ) : null}
       {count != null && count > 0 ? (
-        <span className="shrink-0 text-[0.6875rem] text-muted-foreground/70 tabular-nums">
+        <span className="shrink-0 text-xs text-muted-foreground/70 tabular-nums">
           {count}
         </span>
       ) : null}

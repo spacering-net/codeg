@@ -256,7 +256,6 @@ export function WorkersPage({
     <div className="flex flex-col gap-3" data-pa-settings-page="workers">
       <PageHead
         title={t("nav.workers")}
-        description={t("pages.workers")}
         action={
           <Button
             size="sm"
@@ -754,7 +753,7 @@ export function ExecutorsPage({
   const clearRequest = usePersonalAgentUi((s) => s.clearExecutorEditor)
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="executors">
-      <PageHead title={t("nav.executors")} description={t("pages.executors")} />
+      <PageHead title={t("nav.executors")} />
       <SettingNote icon={Layers}>{t("team.sameBatch")}</SettingNote>
       <AssistantsPanel
         delegationEnabled={delegationEnabled}
@@ -868,7 +867,6 @@ export function DivisionPage({
     <div className="flex flex-col gap-3" data-pa-settings-page="division">
       <PageHead
         title={t("nav.division")}
-        description={t("pages.division")}
         onRestore={() =>
           void patch(
             restore.map((k) => ({ key: `team.division.${k}`, value: null }))

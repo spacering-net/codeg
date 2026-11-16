@@ -577,10 +577,28 @@ describe("the settings view", () => {
     )
   })
 
-  it("goes back to the conversation", () => {
+  it("goes back to the conversation from the arrow before its title", () => {
     draw()
-    fireEvent.click(document.querySelector("[data-pa-settings-back]")!)
+    const back = document.querySelector<HTMLElement>("[data-pa-settings-back]")!
+    expect(back.textContent).toBe("")
+    expect(back.getAttribute("aria-label")).toBe("Back to the conversation")
+    expect(back.parentElement!.querySelector("h1")?.textContent).toBe(
+      "Settings"
+    )
+    fireEvent.click(back)
     expect(usePersonalAgentUi.getState().settings).toBeNull()
+  })
+
+  it("heads each page with its title alone", () => {
+    usePersonalAgentUi.getState().openSettings("communication")
+    draw()
+    const page = document.querySelector<HTMLElement>(
+      '[data-pa-settings-page="communication"]'
+    )!
+    const head = page.firstElementChild!
+    expect(head.querySelector("h2")?.textContent).toBe("Communication")
+    // No line under it saying what the page is for.
+    expect(head.querySelector("p")).toBeNull()
   })
 
   it("sets how the assistants reach the owner on “Proactive & notifications”", async () => {

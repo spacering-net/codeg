@@ -3,8 +3,8 @@
 /**
  * The personal agent's buttons in the window's top-right chrome, left of
  * the window's own settings gear: a "⋯" menu with what acts on the agent
- * itself — its own page, the settings every assistant shares, the session it
- * runs on underneath, compacting that session's context (or, while a turn
+ * itself — the settings every assistant shares, the session it runs on
+ * underneath, compacting that session's context (or, while a turn
  * runs, stopping it: the reply being written, or the compaction), and
  * starting a new one — then the side panel's toggle, nearest the edge the
  * panel opens at; not while a page is over the conversation, the panel
@@ -16,7 +16,6 @@ import { useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   Eye,
-  IdCard,
   MoreHorizontal,
   OctagonX,
   PanelRight,
@@ -94,15 +93,6 @@ export function PersonalAgentChromeActions({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-52">
-          {configured ? (
-            <DropdownMenuItem
-              onClick={() => usePersonalAgentUi.getState().openBotPage()}
-              data-pa-menu-details
-            >
-              <IdCard className="size-4" />
-              {t("details")}
-            </DropdownMenuItem>
-          ) : null}
           <DropdownMenuItem
             onClick={() => usePersonalAgentUi.getState().openSettings()}
           >

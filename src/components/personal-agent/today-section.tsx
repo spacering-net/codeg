@@ -39,18 +39,24 @@ import {
 import { personalAgentItemAct, personalAgentNoticeAct } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type { DispatchInfo, PersonalAgentToday, TodayRow } from "@/lib/types"
-import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useRoster } from "@/stores/personal-agent-roster-store"
 import { refreshToday } from "@/stores/personal-agent-today-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { BotAvatar } from "./bot-avatar"
+import {
+  PanelGroup,
+  PanelIcon,
+  PanelItem,
+  PanelSection,
+  type PanelTone,
+} from "./panel-section"
 import { useSessionLinkOpener } from "./session-link"
 import { canOpenWork, useBotName, useOpenWork, workTargetOf } from "./shared"
 
 /** A row's lead, in px at 100% zoom: as a work card's avatar. */
-const LEAD_SIZE = 18
+const LEAD_SIZE = 20
 /** Rows a group shows before "show all". */
 const GROUP_SHOWN = 8
 
@@ -58,11 +64,11 @@ type GroupKey = "needs" | "watching" | "schedule" | "done"
 const GROUPS: readonly GroupKey[] = ["needs", "watching", "schedule", "done"]
 
 /** A group's marker, as the matters' sections mark theirs. */
-const GROUP_TONE: Record<GroupKey, string> = {
-  needs: "bg-amber-500",
-  watching: "bg-primary",
-  schedule: "bg-muted-foreground/50",
-  done: "bg-emerald-500",
+const GROUP_TONE: Record<GroupKey, PanelTone> = {
+  needs: "amber",
+  watching: "primary",
+  schedule: "muted",
+  done: "green",
 }
 
 /** Where a row opens: its card, a session, a task, a piece of work. */
@@ -220,13 +226,13 @@ function useNow(): number {
 }
 
 export function TodaySection({
-  head,
+  title,
   today,
   inDrawer,
   readOnly,
 }: {
-  /** The section's heading, as the activity's others have theirs. */
-  head: ReactNode
+  /** The section's title, as the activity's others have theirs. */
+  title: string
   today: PersonalAgentToday | null
   inDrawer: boolean
   /** The assistants run in another process: nothing is acted on here. */
@@ -253,16 +259,16 @@ export function TodaySection({
   }, [asked])
 
   return (
-    <section
+    <PanelSection
       ref={ref}
-      className="flex scroll-mt-3 flex-col gap-2"
+      title={title}
+      className="scroll-mt-3"
       data-pa-detail="today"
     >
-      {head}
       {today == null ? (
-        <div className="flex flex-col gap-2" aria-hidden>
-          <Skeleton className="h-4 w-24" />
-          <Skeleton className="h-12 w-full rounded-lg" />
+        <div className="flex flex-col gap-1.5" aria-hidden>
+          <Skeleton className="h-4 w-24 rounded-md" />
+          <Skeleton className="h-14 w-full rounded-2xl" />
         </div>
       ) : (
         <TodayBody
@@ -273,7 +279,7 @@ export function TodaySection({
         />
       )}
       {dialogs}
-    </section>
+    </PanelSection>
   )
 }
 
@@ -306,10 +312,10 @@ function TodayBody({
     ) : null
   if (shown.length === 0) {
     return (
-      <div className="flex flex-col gap-1">
+      <div className="flex flex-col gap-1.5">
         {preparing}
         <p
-          className="text-xs leading-5 text-muted-foreground"
+          className="rounded-2xl bg-muted/50 px-3 py-2.5 text-xs leading-5 text-muted-foreground"
           data-pa-today-empty
         >
           {t("empty")}
@@ -339,9 +345,9 @@ function TodayBody({
   )
 }
 
-/** A group: the chevron that folds it, its marker, its name and how many
- *  it holds — amber where the owner is waited on; the rows under it, the
- *  first few until "show all". */
+/** A group: its marker, its name and how many it holds — amber where the
+ *  owner is waited on — folding; the rows under it, the first few until
+ *  "show all". */
 function TodayGroup({
   group,
   count,
@@ -352,63 +358,29 @@ function TodayGroup({
   children: (all: boolean) => ReactNode
 }) {
   const t = useTranslations("PersonalAgent.today")
-  const stored = usePersonalAgentUi((s) => s.auxFolds[`today.${group}`])
-  const setFold = usePersonalAgentUi((s) => s.setAuxFold)
-  const open = stored ?? true
   const [all, setAll] = useState(false)
   return (
-    <section data-pa-today-group={group} className="flex flex-col gap-2">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setFold(`today.${group}`, !open)}
-        className="flex h-6 min-w-0 items-center gap-2 rounded-md pe-0.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <ChevronDown
-          className={cn(
-            "-ms-[3px] size-3.5 shrink-0 text-muted-foreground transition-transform",
-            !open && "-rotate-90 rtl:rotate-90"
-          )}
-          aria-hidden
-        />
-        <span
-          className={cn(
-            "h-3.5 w-[3px] shrink-0 rounded-full",
-            GROUP_TONE[group]
-          )}
-          aria-hidden
-        />
-        <span className="truncate text-xs font-semibold">
-          {t(`groups.${group}`)}
-        </span>
-        <span
-          className={cn(
-            "shrink-0 rounded-full px-1.5 py-0.5 text-[0.625rem] leading-none tabular-nums",
-            group === "needs"
-              ? "bg-amber-500/15 font-semibold text-amber-600 dark:text-amber-400"
-              : "bg-muted/70 font-medium text-muted-foreground"
-          )}
+    <PanelGroup
+      fold={`today.${group}`}
+      tone={GROUP_TONE[group]}
+      label={t(`groups.${group}`)}
+      count={count}
+      strong={group === "needs"}
+      data-pa-today-group={group}
+    >
+      {children(all)}
+      {!all && count > GROUP_SHOWN ? (
+        <Button
+          size="xs"
+          variant="ghost"
+          className="self-start text-muted-foreground"
+          onClick={() => setAll(true)}
+          data-pa-today-more={group}
         >
-          {count}
-        </span>
-      </button>
-      {open ? (
-        <div className="flex flex-col gap-1.5">
-          {children(all)}
-          {!all && count > GROUP_SHOWN ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              className="self-start text-muted-foreground"
-              onClick={() => setAll(true)}
-              data-pa-today-more={group}
-            >
-              {t("more", { count: count - GROUP_SHOWN })}
-            </Button>
-          ) : null}
-        </div>
+          {t("more", { count: count - GROUP_SHOWN })}
+        </Button>
       ) : null}
-    </section>
+    </PanelGroup>
   )
 }
 
@@ -431,11 +403,8 @@ function RowLead({ row }: { row: TodayRow }) {
     )
   }
   return (
-    <span
-      className="flex size-[1.125rem] items-center justify-center rounded-[0.3125rem] bg-muted text-muted-foreground"
-      title={row.project?.name ?? t("yours")}
-    >
-      <Folder className="size-3" aria-hidden />
+    <span title={row.project?.name ?? t("yours")} className="flex">
+      <PanelIcon icon={Folder} />
     </span>
   )
 }
@@ -591,52 +560,18 @@ function TodayRowCard({
     row.undo ? (
     <UndoAction row={row} />
   ) : null
-  const body = (
-    <>
-      <span className="flex min-w-0 items-start gap-2">
-        <span className="mt-px flex shrink-0">
-          <RowLead row={row} />
-        </span>
-        <span className="line-clamp-2 min-w-0 flex-1 text-[0.8125rem] leading-snug font-medium break-words text-foreground">
-          {title}
-        </span>
-      </span>
-      <span className="mt-1 block truncate ps-[1.625rem] text-[0.6875rem] text-muted-foreground">
-        {meta}
-      </span>
-      {row.text ? (
-        <span className="mt-1 line-clamp-2 ps-[1.625rem] text-[0.6875rem] leading-snug break-words text-muted-foreground">
-          {row.text}
-        </span>
-      ) : null}
-    </>
-  )
-  const shape =
-    "flex w-full min-w-0 flex-col rounded-lg border border-foreground/10 bg-card ws-msg-card px-2.5 py-2 text-start"
   return (
-    <div
-      className={cn(shape, onOpen && "transition-colors hover:border-primary")}
+    <PanelItem
+      media={<RowLead row={row} />}
+      title={title}
+      meta={meta}
+      notes={row.text ? [row.text] : []}
+      onOpen={onOpen}
+      openLabel={t("open")}
+      actions={actions}
       data-pa-today-row={row.kind}
       data-key={row.key}
-    >
-      {onOpen ? (
-        <button
-          type="button"
-          onClick={onOpen}
-          title={t("open")}
-          className="flex min-w-0 flex-col text-start outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {body}
-        </button>
-      ) : (
-        body
-      )}
-      {actions ? (
-        <div className="mt-1.5 flex flex-wrap gap-1 ps-[1.625rem]">
-          {actions}
-        </div>
-      ) : null}
-    </div>
+    />
   )
 }
 

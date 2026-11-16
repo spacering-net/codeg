@@ -8,7 +8,7 @@ import { copyTextToClipboard } from "@/lib/utils"
 
 /** One label–value row of the personal agent panel's status: a two-column
  *  grid (`grid-cols-[auto_minmax(0,1fr)]`) of label and value, one row per
- *  property. */
+ *  property, a hairline between rows. */
 export function PropertyRow({
   label,
   children,
@@ -17,9 +17,9 @@ export function PropertyRow({
   children: ReactNode
 }) {
   return (
-    <div className="group/prop col-span-2 grid grid-cols-subgrid items-center">
+    <div className="group/prop col-span-2 grid grid-cols-subgrid items-center border-b border-border/50 py-1.5 last:border-b-0">
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="flex h-5 min-w-0 items-center gap-1 text-foreground/80">
+      <dd className="flex h-6 min-w-0 items-center gap-1.5 text-foreground">
         {children}
       </dd>
     </div>
@@ -49,7 +49,7 @@ export function CopyPropertyButton({
       onClick={handleCopy}
       aria-label={copied ? copiedLabel : copyLabel}
       title={copied ? copiedLabel : copyLabel}
-      className="ms-auto inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-accent-foreground focus-visible:opacity-100 group-hover/prop:opacity-100 group-focus-within/prop:opacity-100"
+      className="-me-1 ms-auto inline-flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 group-hover/prop:opacity-100 group-focus-within/prop:opacity-100"
     >
       {copied ? (
         <Check className="size-3 text-green-500" />

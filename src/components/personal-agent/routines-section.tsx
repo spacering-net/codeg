@@ -2,14 +2,23 @@
 
 /**
  * The activity tab's "Routines" (6.9, 10.1): this assistant's routines, each with
- * when it runs, its next run and how its last went, and [Run now] [Pause /
- * Resume] [Edit] [Delete]. Empty: a line saying to ask for one in the
- * conversation, and [New routine].
+ * when it runs, its next run and how its last went; a switch that pauses and
+ * resumes it, and [Run now] [Edit] [Delete] in its menu — its title opens
+ * it to edit. Empty: a line saying to ask for one in the conversation, and
+ * [New routine]; with some, [+] at the section's head.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { CalendarClock, Plus, Zap } from "lucide-react"
+import {
+  CalendarClock,
+  MoreHorizontal,
+  Pencil,
+  Play,
+  Plus,
+  Trash2,
+  Zap,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import {
@@ -23,13 +32,22 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentRoutineAct, personalAgentRoutines } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type { Routine, RoutineAction } from "@/lib/types"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
+import { PanelIcon, PanelItem, PanelSection } from "./panel-section"
 import {
   OutcomeChip,
   precheckWords,
@@ -63,10 +81,10 @@ export function useRoutines(): Routine[] | null {
 }
 
 export function RoutinesSection({
-  head,
+  title,
   readOnly,
 }: {
-  head: ReactNode
+  title: string
   /** The assistants run in another process: nothing is acted on here. */
   readOnly: boolean
 }) {
@@ -83,16 +101,32 @@ export function RoutinesSection({
   const add = () =>
     openEditor({ botId, routineId: null, draft: null, noticeId: null })
   return (
-    <section
+    <PanelSection
       ref={ref}
-      className="flex scroll-mt-3 flex-col gap-2"
+      title={title}
+      count={list?.length ?? null}
+      action={
+        !readOnly && list != null && list.length > 0 ? (
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            className="text-muted-foreground"
+            onClick={add}
+            title={t("new")}
+            aria-label={t("new")}
+            data-pa-routine-new
+          >
+            <Plus aria-hidden />
+          </Button>
+        ) : null
+      }
+      className="scroll-mt-3"
       data-pa-detail="routines"
     >
-      {head}
       {list == null ? (
-        <Skeleton className="h-14 w-full rounded-xl" aria-hidden />
+        <Skeleton className="h-16 w-full rounded-2xl" aria-hidden />
       ) : list.length === 0 ? (
-        <div className="flex flex-col items-start gap-2">
+        <div className="flex flex-col items-start gap-2.5 rounded-2xl bg-muted/50 px-3 py-2.5">
           <p
             className="text-xs leading-5 text-muted-foreground"
             data-pa-routines-empty
@@ -100,32 +134,25 @@ export function RoutinesSection({
             {t("empty")}
           </p>
           {!readOnly ? (
-            <Button size="xs" variant="outline" onClick={add}>
-              <Plus aria-hidden />
-              {t("new")}
-            </Button>
-          ) : null}
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {list.map((r) => (
-            <RoutineCard key={r.id} r={r} readOnly={readOnly} />
-          ))}
-          {!readOnly ? (
             <Button
               size="xs"
-              variant="ghost"
-              className="self-start text-muted-foreground"
+              variant="outline"
+              className="bg-background"
               onClick={add}
-              data-pa-routine-new
             >
               <Plus aria-hidden />
               {t("new")}
             </Button>
           ) : null}
         </div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {list.map((r) => (
+            <RoutineCard key={r.id} r={r} readOnly={readOnly} />
+          ))}
+        </div>
       )}
-    </section>
+    </PanelSection>
   )
 }
 
@@ -157,97 +184,118 @@ function RoutineCard({ r, readOnly }: { r: Routine; readOnly: boolean }) {
     : r.trigger === "schedule" && r.next_run_at
       ? t("next", { when: when(r.next_run_at) })
       : null
+  const edit = () =>
+    openEditor({ botId, routineId: r.id, draft: null, noticeId: null })
   return (
-    <div
-      className="flex w-full min-w-0 flex-col rounded-xl border border-foreground/15 bg-card ws-msg-card p-3"
-      data-pa-routine={r.id}
-      data-pa-routine-enabled={r.enabled ? "on" : "off"}
-    >
-      <span className="flex min-w-0 items-start gap-2">
-        <Icon
-          className="mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-          aria-hidden
-        />
-        <span className="min-w-0 flex-1 text-[0.8125rem] leading-snug font-medium break-words text-foreground">
-          {r.title}
-        </span>
-        {last ? <OutcomeChip outcome={last.outcome} /> : null}
-      </span>
-      <span className="mt-1.5 block text-[0.6875rem] break-words text-muted-foreground">
-        <RoutineWhen cron={r.cron} event={r.event} zone={r.timezone} />
-        {" · "}
-        {t(`kind.${r.kind}` as "kind.brain")}
-        {precheck ? ` · ${precheck}` : null}
-      </span>
-      {state ? (
-        <span
-          className={
-            r.enabled
-              ? "mt-1 block text-[0.6875rem] text-muted-foreground tabular-nums"
-              : "mt-1 block text-[0.6875rem] text-amber-700 dark:text-amber-300"
-          }
-          data-pa-routine-state
-        >
-          {state}
-        </span>
-      ) : null}
-      {last ? (
-        <span className="mt-1 block text-[0.6875rem] text-muted-foreground tabular-nums">
-          {t("last", {
-            when: when(last.ended_at ?? last.started_at),
-            n: r.runs,
-          })}
-          {last.note && last.outcome !== "reported" ? ` · ${last.note}` : null}
-        </span>
-      ) : null}
-      {!readOnly ? (
-        <div className="mt-2 flex flex-wrap gap-1">
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={busy != null || !r.enabled}
-            onClick={() => void act("run_now")}
-            data-pa-routine-act="run_now"
-          >
-            {t("runNow")}
-          </Button>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={busy != null}
-            onClick={() => void act(r.enabled ? "pause" : "resume")}
-            data-pa-routine-act={r.enabled ? "pause" : "resume"}
-          >
-            {r.enabled ? t("pause") : t("resume")}
-          </Button>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={busy != null}
-            onClick={() =>
-              openEditor({
-                botId,
-                routineId: r.id,
-                draft: null,
-                noticeId: null,
-              })
-            }
-            data-pa-routine-act="edit"
-          >
-            {t("edit")}
-          </Button>
-          <Button
-            size="xs"
-            variant="ghost"
-            className="text-muted-foreground"
-            disabled={busy != null}
-            onClick={() => setDeleting(true)}
-            data-pa-routine-act="delete"
-          >
-            {t("delete")}
-          </Button>
-        </div>
-      ) : null}
+    <>
+      <PanelItem
+        media={<PanelIcon icon={Icon} />}
+        title={r.title}
+        onOpen={readOnly ? null : edit}
+        openLabel={t("edit")}
+        chip={
+          readOnly ? (
+            last ? (
+              <OutcomeChip outcome={last.outcome} />
+            ) : null
+          ) : (
+            <span className="flex items-center gap-0.5">
+              <Switch
+                checked={r.enabled}
+                disabled={busy != null}
+                onCheckedChange={(on) => void act(on ? "resume" : "pause")}
+                aria-label={t("enabled")}
+                title={r.enabled ? t("pause") : t("resume")}
+                data-pa-routine-act={r.enabled ? "pause" : "resume"}
+              />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    disabled={busy != null}
+                    aria-label={t("more")}
+                    title={t("more")}
+                    data-pa-routine-menu
+                  >
+                    <MoreHorizontal aria-hidden />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-36">
+                  <DropdownMenuItem
+                    disabled={!r.enabled}
+                    onSelect={() => void act("run_now")}
+                    data-pa-routine-act="run_now"
+                  >
+                    <Play aria-hidden />
+                    {t("runNow")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={edit} data-pa-routine-act="edit">
+                    <Pencil aria-hidden />
+                    {t("edit")}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={() => setDeleting(true)}
+                    data-pa-routine-act="delete"
+                  >
+                    <Trash2 aria-hidden />
+                    {t("delete")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </span>
+          )
+        }
+        meta={
+          <>
+            <RoutineWhen cron={r.cron} event={r.event} zone={r.timezone} />
+            {" · "}
+            {t(`kind.${r.kind}` as "kind.brain")}
+            {precheck ? ` · ${precheck}` : null}
+          </>
+        }
+        notes={[
+          ...(state
+            ? [
+                <span
+                  key="state"
+                  className={
+                    r.enabled
+                      ? "tabular-nums"
+                      : "text-amber-700 dark:text-amber-300"
+                  }
+                  data-pa-routine-state
+                >
+                  {state}
+                </span>,
+              ]
+            : []),
+          ...(last
+            ? [
+                <span
+                  key="last"
+                  className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 tabular-nums"
+                >
+                  {readOnly ? null : <OutcomeChip outcome={last.outcome} />}
+                  <span>
+                    {t("last", {
+                      when: when(last.ended_at ?? last.started_at),
+                      n: r.runs,
+                    })}
+                    {last.note && last.outcome !== "reported"
+                      ? ` · ${last.note}`
+                      : null}
+                  </span>
+                </span>,
+              ]
+            : []),
+        ]}
+        data-pa-routine={r.id}
+        data-pa-routine-enabled={r.enabled ? "on" : "off"}
+      />
       <AlertDialog open={deleting} onOpenChange={setDeleting}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -267,6 +315,6 @@ function RoutineCard({ r, readOnly }: { r: Routine; readOnly: boolean }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </>
   )
 }

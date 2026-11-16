@@ -8111,23 +8111,11 @@
         "about": "About you"
       },
       "pages": {
-        "identity": "The name and picture it goes by, and the agent it runs on — its mode and permissions included: codeg runs it as you pick.",
-        "persona": "Who it is, the rules it keeps and what it remembers: files in its working directory.",
-        "execution": "The executor config it dispatches to by default, and the template it was made from.",
-        "notify": "Whether this assistant notifies you, and whether it shows on the roster.",
-        "advanced": "Compaction, the handoff card, how much it runs at once, its built-in skill and its working directory.",
-        "workers": "Your work assistants, each with its own job, memory and conversation. Click one to open its own settings.",
-        "executors": "What the assistants hand work to: an agent, with its options and standing instructions.",
-        "division": "Who takes each kind of work first. The assistants go by it unless you name someone else, or the pick cannot take it right then.",
-        "communication": "How the assistants talk to you. Every assistant follows the same.",
         "communicationNote": "Tone and how they address you are not here: write them in each assistant's SOUL.md, and in the primary's USER.md.",
-        "proactive": "When and how the assistants reach you. Urgent news — your reminders, what waits for your answer or approval — comes at once; the rest waits while you type, while you are away and in your quiet hours. The same for every assistant.",
         "proactiveNote": "Each assistant's own switches — notify me, mute, hide — are on its Notifications page. codeg's notification switch and “hide contents” (Settings → Notifications) apply to the assistants too.",
         "byKind": "Adjust by kind",
         "byKindHint": "How much each kind of news may interrupt you. Urgent comes at once; normal waits for a good moment; low only goes to Today.",
-        "automation": "What the assistants do on their own, and what they ask you first. By default everything runs on its own and tells you on a card; each “ask me first” is yours to turn on.",
-        "automationNote": "What waits for you goes on a card holding exactly what will run, and runs when you click.",
-        "about": "What codeg goes by to get the time right for you: your time zone, and the hours it learns from when you are in codeg. The same for every assistant."
+        "automationNote": "What waits for you goes on a card holding exactly what will run, and runs when you click."
       },
       "prefs": {
         "default": "(default)",
@@ -8936,8 +8924,7 @@
       "newSession": "Start a new session…",
       "stopAll": "Stop everything",
       "stopAllHint": "Stop the reply, the work it handed out, and the messages nobody has started on",
-      "stoppedAll": "Stopped everything this assistant had going",
-      "details": "View details"
+      "stoppedAll": "Stopped everything this assistant had going"
     },
     "newSession": {
       "title": "Start a new session?",
@@ -9565,7 +9552,6 @@
       },
       "notify": "Notify me",
       "notifyHint": "When it finishes something or waits for you",
-      "settings": "Settings",
       "item": {
         "done": "Done",
         "later": "Later",
@@ -9586,8 +9572,12 @@
       },
       "workspace": {
         "empty": "Nothing running right now",
-        "open": "Open"
-      }
+        "open": "Open",
+        "emptyHint": "While work it handed out runs, its session shows here live.",
+        "whose": "{name}'s workspace"
+      },
+      "notifyOn": "on",
+      "notifyOff": "off"
     },
     "ladder": {
       "working": "Working",
@@ -10302,7 +10292,9 @@
         "open": "Open routines",
         "confirm": "Routine to confirm",
         "confirmChange": "Routine change to confirm"
-      }
+      },
+      "enabled": "Runs",
+      "more": "More actions"
     },
     "rules": {
       "mute": "Don't suggest these",

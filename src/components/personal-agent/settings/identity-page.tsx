@@ -57,7 +57,6 @@ import type {
 import { cn } from "@/lib/utils"
 
 import { BotFacePicker } from "../bot-face-picker"
-import { PageHead } from "./pref-pages"
 
 /** What the primary assistant starts with (10.6): a black blob. */
 const DEFAULT_AVATAR: BotAvatar = {
@@ -291,9 +290,11 @@ export function IdentityPage({
         void save()
       }}
     >
-      <PageHead
-        description={agent ? t("pages.identity") : t("setupDescription")}
-      />
+      {agent ? null : (
+        <p className="text-sm leading-6 text-pretty text-muted-foreground">
+          {t("setupDescription")}
+        </p>
+      )}
       <SettingCard>
         {/* Who it is: the avatar its messages carry and its name, side by
             side as in the assistant editor. A monogram is drawn from the

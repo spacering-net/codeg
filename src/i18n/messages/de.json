@@ -8112,23 +8112,11 @@
         "about": "Über dich"
       },
       "pages": {
-        "identity": "Der Name und das Bild, unter denen er auftritt, und der Agent, auf dem er läuft – samt Modus und Berechtigungen: codeg führt ihn so aus, wie du wählst.",
-        "persona": "Wer er ist, welche Regeln er befolgt und was er sich merkt: Dateien in seinem Arbeitsverzeichnis.",
-        "execution": "Die Ausführungskonfiguration, der er standardmäßig zuweist, und die Vorlage, aus der er erstellt wurde.",
-        "notify": "Ob dieser Assistent dich benachrichtigt und ob er in der Liste erscheint.",
-        "advanced": "Verdichtung, Übergabekarte, wie viel er gleichzeitig ausführt, sein integrierter Skill und sein Arbeitsverzeichnis.",
-        "workers": "Deine Arbeitsassistenten, jeder mit eigener Aufgabe, eigenem Gedächtnis und eigener Unterhaltung. Klicke auf einen, um seine Einstellungen zu öffnen.",
-        "executors": "Woran die Assistenten Arbeit abgeben: ein Agent mit seinen Optionen und dauerhaften Anweisungen.",
-        "division": "Wer welche Art von Arbeit zuerst übernimmt. Die Assistenten halten sich daran, es sei denn, du nennst jemand anderen oder die erste Wahl kann gerade nicht übernehmen.",
-        "communication": "Wie die Assistenten mit dir sprechen. Alle Assistenten folgen derselben Vorgabe.",
         "communicationNote": "Tonfall und Anrede stehen nicht hier: Schreib sie in die SOUL.md jedes Assistenten und in die USER.md des Hauptassistenten.",
-        "proactive": "Wann und wie die Assistenten dich erreichen. Dringendes – deine Erinnerungen, was auf deine Antwort oder Freigabe wartet – kommt sofort; der Rest wartet, während du tippst, während du weg bist und in deinen Ruhezeiten. Für alle Assistenten gleich.",
         "proactiveNote": "Die eigenen Schalter jedes Assistenten – benachrichtigen, stummschalten, ausblenden – sind auf seiner Seite „Benachrichtigungen“. Der Benachrichtigungsschalter von codeg und „Inhalte ausblenden“ (Einstellungen → Benachrichtigungen) gelten auch für die Assistenten.",
         "byKind": "Nach Art anpassen",
         "byKindHint": "Wie sehr dich jede Art von Neuigkeit unterbrechen darf. Dringend kommt sofort; normal wartet auf einen guten Moment; niedrig landet nur in „Heute“.",
-        "automation": "Was die Assistenten selbst erledigen und was sie dich vorher fragen. Standardmäßig läuft alles von selbst und wird dir auf einer Karte gemeldet; jedes „Frag mich vorher“ schaltest du selbst ein.",
-        "automationNote": "Was auf dich wartet, landet auf einer Karte mit genau dem, was ausgeführt wird, und läuft, wenn du klickst.",
-        "about": "Woran sich codeg hält, um die Zeit für dich richtig zu treffen: deine Zeitzone und die Zeiten, die es daraus lernt, wann du in codeg bist. Für alle Assistenten gleich."
+        "automationNote": "Was auf dich wartet, landet auf einer Karte mit genau dem, was ausgeführt wird, und läuft, wenn du klickst."
       },
       "prefs": {
         "default": "(Standard)",
@@ -8936,8 +8924,7 @@
       "newSession": "Neue Sitzung starten…",
       "stopAll": "Alles anhalten",
       "stopAllHint": "Hält die Antwort, die vergebene Arbeit und die noch nicht begonnenen Nachrichten an",
-      "stoppedAll": "Alles, was dieser Assistent laufen hatte, wurde angehalten",
-      "details": "Details anzeigen"
+      "stoppedAll": "Alles, was dieser Assistent laufen hatte, wurde angehalten"
     },
     "newSession": {
       "title": "Neue Sitzung starten?",
@@ -9565,7 +9552,6 @@
       },
       "notify": "Benachrichtigen",
       "notifyHint": "Wenn er etwas abschließt oder auf dich wartet",
-      "settings": "Einstellungen",
       "item": {
         "done": "Erledigt",
         "later": "Später",
@@ -9586,8 +9572,12 @@
       },
       "workspace": {
         "empty": "Gerade läuft nichts",
-        "open": "Öffnen"
-      }
+        "open": "Öffnen",
+        "emptyHint": "Solange delegierte Arbeit läuft, wird ihre Sitzung hier live angezeigt.",
+        "whose": "Arbeitsbereich von {name}"
+      },
+      "notifyOn": "an",
+      "notifyOff": "aus"
     },
     "ladder": {
       "working": "In Arbeit",
@@ -10302,7 +10292,9 @@
         "open": "Routinen öffnen",
         "confirm": "Zu bestätigende Routine",
         "confirmChange": "Zu bestätigende Routinenänderung"
-      }
+      },
+      "enabled": "Aktiv",
+      "more": "Weitere Aktionen"
     },
     "rules": {
       "mute": "So etwas nicht mehr vorschlagen",

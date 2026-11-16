@@ -103,8 +103,10 @@ vi.mock("@/stores/personal-agent-today-store", () => ({
   },
 }))
 vi.mock("./today-section", () => ({
-  TodaySection: ({ head }: { head: React.ReactNode }) => (
-    <section data-pa-detail="today">{head}</section>
+  TodaySection: ({ title }: { title: string }) => (
+    <section data-pa-detail="today">
+      <h3>{title}</h3>
+    </section>
   ),
 }))
 // The charts measure their box, which jsdom has none of: their own tests
@@ -483,14 +485,14 @@ describe("the activity's matters", () => {
     expect(group("external").textContent).toContain("When done: tell the owner")
     expect(group("agent").textContent).toContain("Fix the flaky test")
     expect(group("time").textContent).toContain("Look at the merge request")
-    // A section's chevron's stroke on the cards' edge, as the other
-    // sections have it.
-    expect(
-      within(group("owner"))
-        .getByRole("button", { name: /Waiting/ })
-        .querySelector("svg")!
-        .getAttribute("class")
-    ).toContain("-ms-[3px]")
+    // A group folds from its head: its marker, name and count, its chevron
+    // at the end.
+    const head = within(group("owner")).getByRole("button", { name: /Waiting/ })
+    expect(head.getAttribute("aria-expanded")).toBe("true")
+    expect(head.textContent).toContain("1")
+    expect(head.lastElementChild!.getAttribute("class")).toContain(
+      "lucide-chevron-down"
+    )
     // Each piece of work once; what ended is not among them.
     for (const title of [
       "Review the login fix",
@@ -791,7 +793,7 @@ describe("the activity's matters", () => {
   it("shows Today first on the primary, before its matters; its status is the stats'", async () => {
     todayFeed.active = []
     const { container } = draw()
-    await screen.findByRole("switch")
+    await screen.findByRole("button", { name: "Notify me" })
     const order = [...container.querySelectorAll("[data-pa-detail]")].map(
       (el) => el.getAttribute("data-pa-detail")
     )
@@ -808,18 +810,21 @@ describe("the activity's matters", () => {
     expect(todayFeed.active).toContain(true)
   })
 
-  it("ends with the switch to be told and the way to its settings", async () => {
+  it("has the bell to be told at the panel's top, nothing of it at the activity's end", async () => {
     draw()
-    const toggle = await screen.findByRole("switch")
-    await waitFor(() => expect(toggle.hasAttribute("disabled")).toBe(false))
-    expect(toggle.getAttribute("aria-checked")).toBe("true")
-    fireEvent.click(toggle)
+    const bell = await screen.findByRole("button", { name: "Notify me" })
+    await waitFor(() => expect(bell.hasAttribute("disabled")).toBe(false))
+    expect(bell.closest("[data-pa-aux-head]")).toBeTruthy()
+    expect(bell.getAttribute("aria-pressed")).toBe("true")
+    expect(bell.getAttribute("title")).toContain("Notify me · on")
+    fireEvent.click(bell)
     expect(api.personalAgentRosterAct).toHaveBeenCalledWith(1, {
       act: "notify",
       on: false,
     })
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
-    expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "identity" })
+    // Neither the switch nor [Settings] under the routines any more.
+    expect(screen.queryByRole("switch")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull()
   })
 })
 
@@ -860,11 +865,15 @@ describe("the output tab", () => {
       "Ship the page",
       "Look into the logs",
     ])
-    fireEvent.click(screen.getByRole("button", { name: "Tasks" }))
+    // The kinds, shadcn's toggle group: one picked at a time.
+    expect(
+      screen.getByRole("radio", { name: "All" }).getAttribute("aria-checked")
+    ).toBe("true")
+    fireEvent.click(screen.getByRole("radio", { name: "Tasks" }))
     expect(titles()).toEqual(["Ship the page"])
-    fireEvent.click(screen.getByRole("button", { name: "Reports" }))
+    fireEvent.click(screen.getByRole("radio", { name: "Reports" }))
     expect(titles()).toEqual(["Look into the logs"])
-    fireEvent.click(screen.getByRole("button", { name: "Documents" }))
+    fireEvent.click(screen.getByRole("radio", { name: "Documents" }))
     fireEvent.click(screen.getByText("notes/weekly.md").closest("button")!)
     expect(api.personalAgentOutputRead).toHaveBeenCalledWith(
       null,
@@ -915,12 +924,14 @@ describe("the workspace tab", () => {
     usePersonalAgentUi.setState({ auxTab: "workspace" })
     const { unmount } = draw()
     expect(await screen.findByText("Nothing running right now")).toBeTruthy()
-    // Its face is over the tabs: not again here.
+    // A screen with nothing on it, its face asleep on it, whose under it.
     const empty = document.querySelector("[data-pa-workspace-empty]")!
-    expect(empty.querySelector("[data-slot='bot-avatar']")).toBeNull()
-    expect(empty.querySelector("svg")!.getAttribute("class")).toContain(
-      "lucide-monitor"
-    )
+    expect(
+      empty
+        .querySelector("[data-slot='bot-avatar']")
+        ?.getAttribute("data-bot-look")
+    ).toBe("sleeping")
+    expect(empty.textContent).toContain("Nova's workspace")
     unmount()
     api.personalAgentDispatches.mockResolvedValue([
       dispatch({
@@ -935,7 +946,9 @@ describe("the workspace tab", () => {
     draw()
     const card = await screen.findByText("#2 Run the build")
     expect(
-      card.closest("section")!.querySelector("[data-live-transcript='31']")
+      card
+        .closest("[data-pa-workspace-item]")!
+        .querySelector("[data-live-transcript='31']")
     ).toBeTruthy()
   })
 })
@@ -976,7 +989,9 @@ describe("the stats tab's status", () => {
     expect(
       screen.getByRole("button", { name: /Context/ }).textContent
     ).toContain("45%")
-    expect(screen.getByRole("meter").getAttribute("aria-valuenow")).toBe("45")
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
+      "45"
+    )
     // The run log and the details stay folded, and open.
     expect(screen.queryByText("Dispatched conversations")).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: /Details/ }))
@@ -1019,19 +1034,21 @@ describe("the stats tab's status", () => {
       "A new session started on Claude Code (first session)",
     ])
     for (const li of lines) expect(li.querySelector("svg")).toBeNull()
-    // Every section's chevron on the rows' edge, its body flush with it.
+    // Each a folding card: its title first, its chevron at its head's end.
     for (const name of [/Context/, /Run log/, /Details/]) {
       const header = screen.getByRole("button", { name })
-      expect(header.firstElementChild!.className).toContain("-ms-[3px]")
-      expect(header.firstElementChild!.className).not.toContain("w-7")
-      expect(header.closest("section")!.querySelector(".ps-9")).toBeNull()
+      expect(header.closest("[data-slot='collapsible']")).toBeTruthy()
+      expect(header.firstElementChild!.textContent).toMatch(name)
+      expect(header.lastElementChild!.getAttribute("class")).toContain(
+        "lucide-chevron-down"
+      )
     }
   })
 
   it("keeps a section folded or open across a switch of tabs", async () => {
     draw()
     fireEvent.click(screen.getByRole("button", { name: /Context/ }))
-    expect(screen.queryByRole("meter")).toBeNull()
+    expect(screen.queryByRole("progressbar")).toBeNull()
     act(() => usePersonalAgentUi.setState({ auxTab: "output" }))
     act(() => usePersonalAgentUi.setState({ auxTab: "stats" }))
     expect(
@@ -1039,7 +1056,7 @@ describe("the stats tab's status", () => {
         .getByRole("button", { name: /Context/ })
         .getAttribute("aria-expanded")
     ).toBe("false")
-    expect(screen.queryByRole("meter")).toBeNull()
+    expect(screen.queryByRole("progressbar")).toBeNull()
   })
 })
 
@@ -1065,7 +1082,10 @@ describe("the stats tab's data", () => {
       tokens_synced_at: "2026-11-04T12:00:00Z",
     } satisfies PersonalAgentStats)
     draw()
-    const card = (await screen.findByText("Last 14 days")).closest("section")!
+    // Under its heading, four figures before the charts.
+    const card = (await screen.findByText("Last 14 days"))
+      .closest("section")!
+      .querySelector("dl")!
     // 6 messages and 6 replies; 6 handed out, 4 done, 2 failed.
     expect(within(card).getByText("12")).toBeTruthy()
     expect(within(card).getByText("You 6 · replies 6")).toBeTruthy()

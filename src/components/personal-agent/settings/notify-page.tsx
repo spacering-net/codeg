@@ -27,8 +27,6 @@ import {
   useRoster,
 } from "@/stores/personal-agent-roster-store"
 
-import { PageHead } from "./pref-pages"
-
 export function NotifyPage({
   agent,
   disabled,
@@ -36,7 +34,6 @@ export function NotifyPage({
   agent: PersonalAgentInfo
   disabled: boolean
 }) {
-  const t = useTranslations("PersonalAgent.settings")
   const tn = useTranslations("PersonalAgent.settings.notifyPage")
   useRoster()
   const entry = usePersonalAgentRoster((s) =>
@@ -52,7 +49,6 @@ export function NotifyPage({
   const off = disabled || !flags
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="notify">
-      <PageHead description={t("pages.notify")} />
       <SettingCard>
         <SettingRow
           icon={Bell}

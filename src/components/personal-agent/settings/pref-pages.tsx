@@ -805,39 +805,26 @@ function PrefRow({
   )
 }
 
-/** A page's heading: its title and what it is for, and [Restore defaults]. */
-/** A page's head: its title and what it is for — on an assistant's own
- *  page, whose tab names it, what it is for alone — and at its end what
- *  the page does first ([New work assistant]) or, on a page of
+/** A page's head: its title — the navigation's word for it — and at its
+ *  end what the page does first ([New work assistant]) or, on a page of
  *  preferences, [Restore defaults]. */
 export function PageHead({
   title,
-  description,
   onRestore,
   restoreDisabled,
   action,
 }: {
-  title?: string
-  description?: string
+  title: string
   onRestore?: () => void
   restoreDisabled?: boolean
   action?: ReactNode
 }) {
   const t = useTranslations("PersonalAgent.settings")
   return (
-    <div className="flex items-start justify-between gap-4 pb-1">
-      <div className="min-w-0 space-y-1.5">
-        {title ? (
-          <h2 className="text-lg leading-7 font-semibold tracking-tight">
-            {title}
-          </h2>
-        ) : null}
-        {description ? (
-          <p className="text-sm leading-6 text-pretty text-muted-foreground">
-            {description}
-          </p>
-        ) : null}
-      </div>
+    <div className="flex min-h-8 items-center justify-between gap-4 pb-2">
+      <h2 className="min-w-0 truncate text-xl leading-8 font-semibold tracking-tight">
+        {title}
+      </h2>
       {action ? <div className="shrink-0">{action}</div> : null}
       {onRestore ? (
         <Button
@@ -875,7 +862,6 @@ export function CommunicationPage({ account, disabled }: PageProps) {
     <div className="flex flex-col gap-3" data-pa-settings-page="communication">
       <PageHead
         title={t("nav.communication")}
-        description={t("pages.communication")}
         onRestore={() => void patch(restore)}
         restoreDisabled={disabled || restore.length === 0}
       />
@@ -1043,7 +1029,6 @@ export function AutomationPage({ account, disabled }: PageProps) {
     <div className="flex flex-col gap-3" data-pa-settings-page="automation">
       <PageHead
         title={t("nav.automation")}
-        description={t("pages.automation")}
         onRestore={() => void patch(restore)}
         restoreDisabled={disabled || restore.length === 0}
       />
@@ -1109,7 +1094,6 @@ export function ProactivePage({ account, disabled }: PageProps) {
     <div className="flex flex-col gap-3" data-pa-settings-page="proactive">
       <PageHead
         title={t("nav.proactive")}
-        description={t("pages.proactive")}
         onRestore={() => void patch(restore)}
         restoreDisabled={disabled || restore.length === 0}
       />

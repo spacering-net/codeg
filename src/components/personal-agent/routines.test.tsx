@@ -11,6 +11,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -351,21 +352,35 @@ function routine(patch: Partial<Routine> = {}): Routine {
 describe("the details' routines", () => {
   it("lists each with when it runs, its look first and how its last run went", async () => {
     api.personalAgentRoutines.mockResolvedValue([routine()])
-    wrap(<RoutinesSection head={<h3>Routines</h3>} readOnly={false} />)
+    const user = userEvent.setup()
+    wrap(<RoutinesSection title="Routines" readOnly={false} />)
     expect(await screen.findByText("Night CI")).toBeTruthy()
+    // The section's head: its title, how many, and [+].
+    expect(screen.getByRole("heading", { name: "Routines" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "New routine" })).toBeTruthy()
     expect(screen.getByText(/only with matters waiting over 4 h/)).toBeTruthy()
     expect(
       document.querySelector('[data-pa-routine-outcome="silent"]')
     ).toBeTruthy()
-    fireEvent.click(screen.getByText("Run now"))
+    // Run now, from its menu.
+    await user.click(screen.getByRole("button", { name: "More actions" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Run now" }))
     await waitFor(() =>
       expect(api.personalAgentRoutineAct).toHaveBeenCalledWith(7, 5, "run_now")
     )
-    fireEvent.click(screen.getByText("Pause"))
+    // Its switch pauses it.
+    const on = screen.getByRole("switch", { name: "Runs" })
+    expect(on.getAttribute("aria-checked")).toBe("true")
+    fireEvent.click(on)
     await waitFor(() =>
       expect(api.personalAgentRoutineAct).toHaveBeenCalledWith(7, 5, "pause")
     )
-    fireEvent.click(screen.getByText("Delete"))
+    // Its title opens it to edit.
+    fireEvent.click(screen.getByText("Night CI").closest("button")!)
+    expect(usePersonalAgentUi.getState().routineEditor?.routineId).toBe(5)
+    // Deleted from its menu, once confirmed.
+    await user.click(screen.getByRole("button", { name: "More actions" }))
+    await user.click(await screen.findByRole("menuitem", { name: "Delete" }))
     fireEvent.click(
       document.querySelector("[data-pa-routine-delete-confirm]") as Element
     )
@@ -378,9 +393,11 @@ describe("the details' routines", () => {
     api.personalAgentRoutines.mockResolvedValue([
       routine({ enabled: false, paused_reason: "failures" }),
     ])
-    wrap(<RoutinesSection head={null} readOnly={false} />, { zh: true })
+    wrap(<RoutinesSection title="例程" readOnly={false} />, { zh: true })
     expect(await screen.findByText("已暂停：连续失败 3 次")).toBeTruthy()
-    fireEvent.click(screen.getByText("恢复"))
+    const off = screen.getByRole("switch", { name: "启用" })
+    expect(off.getAttribute("aria-checked")).toBe("false")
+    fireEvent.click(off)
     await waitFor(() =>
       expect(api.personalAgentRoutineAct).toHaveBeenCalledWith(7, 5, "resume")
     )
@@ -388,12 +405,14 @@ describe("the details' routines", () => {
 
   it("none yet: how to get one", async () => {
     api.personalAgentRoutines.mockResolvedValue([])
-    wrap(<RoutinesSection head={null} readOnly={false} />)
+    wrap(<RoutinesSection title="Routines" readOnly={false} />)
     expect(
       await screen.findByText(
         "No routines yet. Ask it in the conversation to set one up."
       )
     ).toBeTruthy()
+    // No [+] at the head while the empty line offers it.
+    expect(document.querySelector("[data-pa-routine-new]")).toBeNull()
     fireEvent.click(screen.getByText("New routine"))
     expect(usePersonalAgentUi.getState().routineEditor?.routineId).toBeNull()
   })

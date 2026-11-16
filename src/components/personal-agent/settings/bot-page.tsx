@@ -4,9 +4,9 @@
  * An assistant's own page (13.1), in place of its conversation, the roster
  * kept beside it: its face, its name and what it is, over its tabs —
  * "Identity & brain", "Persona & memory", a work assistant's "Execution",
- * "Notifications", "Advanced". [Back to the conversation] closes it, and so
- * does picking an assistant on the roster. With no assistant set up yet, it
- * is the first setup: the identity tab alone.
+ * "Notifications", "Advanced". The arrow before its face goes back to the
+ * conversation, and so does picking an assistant on the roster. With no
+ * assistant set up yet, it is the first setup: the identity tab alone.
  *
  * Whose it is shows at once — the roster has every assistant's face and
  * name — while the tabs wait for the assistant to be read: never another's
@@ -36,7 +36,7 @@ import { NotifyPage } from "./notify-page"
 import { AdvancedPage, ExecutionPage, PersonaPage } from "./own-pages"
 
 /** The face in the page's head, in px at 100% zoom. */
-const HEAD_FACE = 56
+const HEAD_FACE = 48
 
 /** The face of an assistant not set up yet (as the identity page's). */
 const SETUP_FACE: BotAvatarValue = {
@@ -143,17 +143,20 @@ export function BotPage() {
         data-pa-bot-page-head
       >
         <div className={COLUMN}>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="-ms-2 mt-3 h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
-            onClick={showConversation}
-            data-pa-bot-page-back
-          >
-            <ArrowLeft className="size-3.5 rtl:rotate-180" aria-hidden />
-            {t("back")}
-          </Button>
-          <div className="mt-3 flex items-center gap-4" data-pa-face-host>
+          <div className="flex items-center gap-3 pt-5" data-pa-face-host>
+            {/* Back to the conversation: an arrow on the head's line, as a
+                page under another has it. */}
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="-ms-2 shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={showConversation}
+              title={t("back")}
+              aria-label={t("back")}
+              data-pa-bot-page-back
+            >
+              <ArrowLeft className="rtl:rotate-180" aria-hidden />
+            </Button>
             <BotAvatar
               avatar={entry?.avatar ?? agent?.avatar ?? SETUP_FACE}
               name={name}
@@ -162,11 +165,11 @@ export function BotPage() {
               look={setUp ? look : undefined}
             />
             <div className="min-w-0 flex-1">
-              <h1 className="truncate text-xl leading-7 font-semibold tracking-tight">
+              <h1 className="truncate text-lg leading-7 font-semibold tracking-tight">
                 {name}
               </h1>
               <p
-                className="truncate text-sm leading-5 text-muted-foreground"
+                className="truncate text-[0.8125rem] leading-5 text-muted-foreground"
                 data-pa-bot-page-subtitle
               >
                 {subtitle}
@@ -179,7 +182,7 @@ export function BotPage() {
               aria-label={name}
               // Over the head's bottom line, its underline on it; sideways
               // on a narrow screen.
-              className="mt-4 -mb-px flex h-auto max-w-full gap-6 overflow-x-auto p-0 pb-px [scrollbar-width:none] group-data-horizontal/tabs:h-auto"
+              className="mt-5 -mb-px flex h-auto max-w-full gap-6 overflow-x-auto p-0 pb-px [scrollbar-width:none] group-data-horizontal/tabs:h-auto"
             >
               {tabs.map((v) => (
                 <TabsTrigger
@@ -193,7 +196,7 @@ export function BotPage() {
               ))}
             </TabsList>
           ) : (
-            <div className="h-4" />
+            <div className="h-5" />
           )}
         </div>
       </header>

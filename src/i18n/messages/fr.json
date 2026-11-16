@@ -8112,23 +8112,11 @@
         "about": "À propos de vous"
       },
       "pages": {
-        "identity": "Le nom et l'image sous lesquels il se présente, et l'agent sur lequel il s'exécute, mode et permissions compris : codeg l'exécute comme vous l'avez choisi.",
-        "persona": "Qui il est, les règles qu'il respecte et ce dont il se souvient : des fichiers dans son répertoire de travail.",
-        "execution": "La configuration d'exécution à laquelle il confie le travail par défaut, et le modèle à partir duquel il a été créé.",
-        "notify": "Si cet assistant vous prévient, et s'il apparaît dans la liste.",
-        "advanced": "Compactage, fiche de passation, combien il exécute à la fois, sa compétence intégrée et son répertoire de travail.",
-        "workers": "Vos assistants de travail, chacun avec son rôle, sa mémoire et sa conversation. Cliquez sur l'un d'eux pour ouvrir ses réglages.",
-        "executors": "Ce à quoi les assistants confient le travail : un agent, avec ses options et ses instructions permanentes.",
-        "division": "Qui prend en premier chaque type de travail. Les assistants s'y tiennent, sauf si vous désignez quelqu'un d'autre ou si le premier choix ne peut pas le prendre à ce moment-là.",
-        "communication": "Comment les assistants vous parlent. Tous suivent les mêmes réglages.",
         "communicationNote": "Le ton et la façon de s'adresser à vous ne sont pas ici : écrivez-les dans le SOUL.md de chaque assistant et dans le USER.md du principal.",
-        "proactive": "Quand et comment les assistants vous joignent. L'urgent — vos rappels, ce qui attend votre réponse ou votre approbation — arrive aussitôt ; le reste attend pendant que vous tapez, pendant votre absence et pendant vos heures calmes. Pareil pour tous les assistants.",
         "proactiveNote": "Les interrupteurs propres à chaque assistant — me prévenir, sourdine, masquer — sont sur sa page Notifications. L'interrupteur des notifications de codeg et « masquer le contenu » (Réglages → Notifications) s'appliquent aussi aux assistants.",
         "byKind": "Ajuster par type",
         "byKindHint": "À quel point chaque type de nouvelle peut vous interrompre. L'urgent arrive aussitôt ; le normal attend un bon moment ; le faible ne va que dans Aujourd'hui.",
-        "automation": "Ce que les assistants font d'eux-mêmes, et ce qu'ils vous demandent d'abord. Par défaut, tout s'exécute seul et vous est signalé sur une carte ; chaque « me demander d'abord » est à activer par vous.",
-        "automationNote": "Ce qui vous attend figure sur une carte indiquant exactement ce qui sera exécuté, et s'exécute quand vous cliquez.",
-        "about": "Ce sur quoi codeg s’appuie pour caler l’heure sur vous : votre fuseau horaire, et les horaires qu’il apprend de vos moments dans codeg. Le même pour tous les assistants."
+        "automationNote": "Ce qui vous attend figure sur une carte indiquant exactement ce qui sera exécuté, et s'exécute quand vous cliquez."
       },
       "prefs": {
         "default": "(par défaut)",
@@ -8936,8 +8924,7 @@
       "newSession": "Démarrer une nouvelle session…",
       "stopAll": "Tout arrêter",
       "stopAllHint": "Arrête la réponse, le travail confié et les messages que personne n’a commencés",
-      "stoppedAll": "Tout ce que cet assistant avait en cours a été arrêté",
-      "details": "Voir les détails"
+      "stoppedAll": "Tout ce que cet assistant avait en cours a été arrêté"
     },
     "newSession": {
       "title": "Démarrer une nouvelle session ?",
@@ -9565,7 +9552,6 @@
       },
       "notify": "Me prévenir",
       "notifyHint": "Quand il termine quelque chose ou vous attend",
-      "settings": "Réglages",
       "item": {
         "done": "Fait",
         "later": "Plus tard",
@@ -9586,8 +9572,12 @@
       },
       "workspace": {
         "empty": "Rien en cours pour le moment",
-        "open": "Ouvrir"
-      }
+        "open": "Ouvrir",
+        "emptyHint": "Pendant que le travail confié s'exécute, sa session s'affiche ici en direct.",
+        "whose": "Espace de travail de {name}"
+      },
+      "notifyOn": "activé",
+      "notifyOff": "désactivé"
     },
     "ladder": {
       "working": "En cours",
@@ -10302,7 +10292,9 @@
         "open": "Ouvrir les routines",
         "confirm": "Routine à confirmer",
         "confirmChange": "Changement de routine à confirmer"
-      }
+      },
+      "enabled": "Active",
+      "more": "Plus d'actions"
     },
     "rules": {
       "mute": "Ne plus proposer ce genre",

@@ -3,8 +3,9 @@
 /**
  * The personal agent page's side panel, under the window's top band as the
  * other full pages have it (the tasks' board). On top, who it is: its face,
- * alive, and its name; under them a row of tabs (10.1), the first open by
- * default:
+ * alive, and its name, with the bell that says whether it notifies the
+ * owner at the top's end; under them shadcn's tabs (10.1), the first open by
+ * default — each tab of shadcn's pieces (`panel-section.tsx`):
  * - Activity: on the primary, "Today": every assistant's day in four groups
  *   (6.3, `today-section.tsx`); its open matters, as the workspace's task
  *   tab shows a board: sections by whom each piece waits on — the owner
@@ -16,28 +17,35 @@
  *   done or dropped. A reminder, a follow-up or a question jumps to the
  *   message it came from, says when it is due and how it comes back, and the
  *   owner can settle it there: done, put off (15 minutes, an hour, tomorrow
- *   morning, or with no set time), dropped. Then its routines, "Notify me"
- *   and the way to its settings. The tab counts what waits on the owner.
+ *   morning, or with no set time), dropped. Then its routines. The tab
+ *   counts what waits on the owner.
  * - Output: what it made, newest first — the work that ended (tasks, the
  *   reports of the rest) and the documents it wrote in its working
  *   directory — filtered by kind.
  * - Workspace: the work running now, each as a small live view of its
- *   session; asleep when nothing runs.
+ *   session; a screen with its face asleep on it when nothing runs.
  * - Stats: how it runs, as Session Details shows a conversation — what it
  *   runs on, its state, model and mode, its session (which opens), its
- *   connection, its working directory (copyable) — then folding sections:
- *   its context, the run log, the details; then its numbers: the last two
- *   weeks in four figures, then the charts.
+ *   connection, its working directory (copyable) — then folding cards: its
+ *   context, the run log, the details; then its numbers: the last two weeks
+ *   in four figures, then the charts.
  *
  * Its own panel rather than the workspace's aux panel, which a full-page
  * route closes. Its pieces are the workspace panel's own where they can be
  * (Session Details' property rows and sections).
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react"
 import { useLocale, useTranslations } from "next-intl"
 import {
   Bell,
+  BellOff,
   ChevronDown,
   Ear,
   FileText,
@@ -56,7 +64,14 @@ import { toast } from "sonner"
 
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { AgentIcon } from "@/components/agent-icon"
-import { InsightsSection } from "./panel-section"
+import {
+  PanelCard,
+  PanelGroup,
+  PanelIcon,
+  PanelItem,
+  PanelSection,
+  type PanelTone,
+} from "./panel-section"
 import { CopyPropertyButton, PropertyRow } from "./property-row"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import {
@@ -68,7 +83,9 @@ import {
 import { MessageResponse } from "@/components/ai-elements/message"
 import { LiveTranscriptView } from "@/components/message/live-transcript-view"
 import { TaskTranscriptView } from "@/components/tasks/task-transcript-dialog"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -81,10 +98,19 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Switch } from "@/components/ui/switch"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Toggle } from "@/components/ui/toggle"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useAcpActions } from "@/contexts/acp-connections-context"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
@@ -147,10 +173,13 @@ import { TodaySection } from "./today-section"
 
 /** Run-log lines the status tab lists. */
 const RUN_LOG_LINES = 50
-/** An executor's avatar on a work card, in px at 100% zoom. */
-const CARD_AVATAR_SIZE = 18
+/** An executor's avatar on a work card, in px at 100% zoom: as a kind's
+ *  icon tile. */
+const CARD_AVATAR_SIZE = 20
 /** The assistant's face at the head of the panel, in px at 100% zoom. */
 const HEAD_AVATAR_SIZE = 64
+/** Its face on the workspace's empty screen, in px at 100% zoom. */
+const WORKSPACE_FACE = 44
 /** The dispatches the work tab reads: enough for the ended list. */
 const DISPATCH_PAGE = 200
 /** Days the stats tab covers. */
@@ -174,13 +203,12 @@ const GROUPS: Group[] = ["owner", "external", "agent", "time", "none"]
 
 /** A section's marker, as the task tab marks its columns: what waits on the
  *  owner amber, what moves the theme's colour. */
-const GROUP_TONE: Record<Group | "ended", string> = {
-  owner: "bg-amber-500",
-  external: "bg-primary",
-  agent: "bg-violet-500",
-  time: "bg-muted-foreground/50",
-  none: "bg-muted-foreground/30",
-  ended: "bg-muted-foreground/30",
+const GROUP_TONE: Record<Group, PanelTone> = {
+  owner: "amber",
+  external: "primary",
+  agent: "violet",
+  time: "muted",
+  none: "faint",
 }
 
 /** The icon of a matter that is not handed-out work. */
@@ -190,14 +218,6 @@ const KIND_ICON: Record<Exclude<ItemKind, "dispatch">, LucideIcon> = {
   question: MessageCircleQuestionMark,
   message: MessagesSquare,
   when_mentioned: Ear,
-}
-
-/** The folding sections, by key, and whether each starts open. */
-const FOLD_START: Record<string, boolean> = {
-  "work.ended": false,
-  "status.context": true,
-  "status.runLog": false,
-  "status.details": false,
 }
 
 /** One open thing in the work tab: an entry of the ledger, with its
@@ -215,14 +235,6 @@ interface Matter {
  *  entry says. */
 function waitsOwner(state: DispatchState | null | undefined): boolean {
   return state === "waiting_input" || state === "review"
-}
-
-/** Whether a folding section is open, and the way to fold it: kept in the
- *  page's store, so switching tabs keeps it. */
-function useFold(key: string): [boolean, (open: boolean) => void] {
-  const stored = usePersonalAgentUi((s) => s.auxFolds[key])
-  const setFold = usePersonalAgentUi((s) => s.setAuxFold)
-  return [stored ?? FOLD_START[key] ?? true, (open) => setFold(key, open)]
 }
 
 /** A read, and the assistant it is of (`null`: the primary). */
@@ -351,24 +363,42 @@ export function PersonalAgentAuxPanel({
         onValueChange={(v) => setTab(v as AuxTab)}
         className="flex h-full min-h-0 flex-col gap-0"
       >
-        <AuxHead snapshot={snapshot}>
-          {/* Pills on the panel's ground, no track under them; a row too
-              long for a narrow panel wraps, centred. */}
-          <TabsList
-            aria-label={t("title")}
-            className="h-auto max-w-full flex-wrap justify-center gap-1 bg-transparent p-0 group-data-horizontal/tabs:h-auto"
-          >
-            {TABS.map((value) => (
-              <PanelTab
-                key={value}
-                value={value}
-                label={tabs(value)}
-                // What waits on the owner is in their activity: counted
-                // there, for a pointer and a screen reader too.
-                waiting={value === "activity" ? waiting : 0}
-                waitingLabel={t("waiting", { count: waiting })}
-              />
-            ))}
+        <AuxHead snapshot={snapshot} inDrawer={inDrawer}>
+          {/* shadcn's own tabs, the width of the panel: a word too long
+              for a narrow one gives way at its end. */}
+          <TabsList aria-label={t("title")} className="w-full">
+            {TABS.map((value) => {
+              const label = tabs(value)
+              // What waits on the owner is in their activity: counted
+              // there, for a pointer and a screen reader too.
+              const count = value === "activity" ? waiting : 0
+              const name =
+                count > 0
+                  ? `${label} · ${t("waiting", { count: waiting })}`
+                  : label
+              return (
+                <TabsTrigger
+                  key={value}
+                  value={value}
+                  title={name}
+                  aria-label={name}
+                  data-pa-aux-tab={value}
+                  // Each as wide as its word, the rest shared: a longer
+                  // word is not cut while the panel has room for it.
+                  className="min-w-0 flex-auto px-1.5"
+                >
+                  <span className="min-w-0 truncate">{label}</span>
+                  {count > 0 ? (
+                    <Badge
+                      aria-hidden
+                      className="h-4 min-w-4 bg-amber-500/15 px-1 text-[0.625rem] text-amber-700 tabular-nums dark:bg-amber-400/15 dark:text-amber-300"
+                    >
+                      {count}
+                    </Badge>
+                  ) : null}
+                </TabsTrigger>
+              )
+            })}
           </TabsList>
         </AuxHead>
         <TabsContent value="activity" className="mt-0 min-h-0 flex-1">
@@ -378,7 +408,7 @@ export function PersonalAgentAuxPanel({
           <OutputTab work={work} />
         </TabsContent>
         <TabsContent value="workspace" className="mt-0 min-h-0 flex-1">
-          <WorkspaceTab work={work} />
+          <WorkspaceTab snapshot={snapshot} work={work} />
         </TabsContent>
         <TabsContent value="stats" className="mt-0 min-h-0 flex-1">
           <StatsTab snapshot={snapshot} />
@@ -389,12 +419,16 @@ export function PersonalAgentAuxPanel({
 }
 
 /** Who the panel is about, over its tabs: its face — alive, as on the
- *  roster, its star on the primary's — and its name. */
+ *  roster, its star on the primary's — and its name; at the top's end
+ *  (its start in the drawer, whose close button has the end) whether it
+ *  notifies the owner. */
 function AuxHead({
   snapshot,
+  inDrawer,
   children,
 }: {
   snapshot: PersonalAgentSnapshot
+  inDrawer: boolean
   children: ReactNode
 }) {
   const t = useTranslations("PersonalAgent")
@@ -405,8 +439,14 @@ function AuxHead({
   return (
     <header
       data-pa-aux-head
-      className="flex shrink-0 flex-col items-center gap-3 px-3 pt-6 pb-3"
+      className="relative flex shrink-0 flex-col items-center gap-3 px-4 pt-7 pb-3"
     >
+      {agent ? (
+        <NotifyToggle
+          snapshot={snapshot}
+          className={cn("absolute top-2", inDrawer ? "start-2" : "end-2")}
+        />
+      ) : null}
       {agent ? (
         <BotAvatar
           avatar={agent.avatar}
@@ -418,7 +458,7 @@ function AuxHead({
       ) : null}
       <h2
         title={name}
-        className="max-w-full truncate text-base leading-6 font-medium"
+        className="max-w-full truncate text-base leading-6 font-semibold"
       >
         {name}
       </h2>
@@ -427,215 +467,123 @@ function AuxHead({
   )
 }
 
-/** A tab under the name: a word in a pill, filled while it is open; what
- *  waits on the owner as a count after it. */
-function PanelTab({
-  value,
-  label,
-  waiting,
-  waitingLabel,
+/** "Notify me" (10.10): whether it notifies the owner when it is done or
+ *  waits for them — the roster's switch, a bell pressed while it does. */
+function NotifyToggle({
+  snapshot,
+  className,
 }: {
-  value: AuxTab
-  label: string
-  waiting: number
-  waitingLabel: string
+  snapshot: PersonalAgentSnapshot
+  className?: string
 }) {
-  const name = waiting > 0 ? `${label} · ${waitingLabel}` : label
+  const t = useTranslations("PersonalAgent.detail")
+  const { botId } = usePersonalAgent()
+  const readOnly = snapshot.status.engine !== "here"
+  const entry = usePersonalAgentRoster((s) =>
+    s.entries?.find((e) => e.id === (snapshot.agent?.id ?? botId))
+  )
+  useRoster()
+  const on = entry?.roster.notify ?? true
+  const label = `${t("notify")} · ${on ? t("notifyOn") : t("notifyOff")}`
   return (
-    <TabsTrigger
-      value={value}
-      title={name}
-      aria-label={name}
-      data-pa-aux-tab={value}
-      className="h-7 flex-none rounded-full px-3 text-[0.8125rem] text-muted-foreground hover:text-foreground data-active:bg-muted data-active:text-foreground dark:data-active:border-transparent dark:data-active:bg-muted"
+    <Toggle
+      size="sm"
+      pressed={on}
+      disabled={readOnly || !entry}
+      onPressedChange={(next) => {
+        if (!entry) return
+        void personalAgentRosterAct(entry.id, {
+          act: "notify",
+          on: next,
+        }).catch((e) => toast.error(toErrorMessage(e)))
+      }}
+      aria-label={t("notify")}
+      title={`${label}\n${t("notifyHint")}`}
+      data-pa-detail-notify={on ? "on" : "off"}
+      className={cn(
+        "size-8 min-w-8 px-0 text-muted-foreground aria-pressed:bg-transparent aria-pressed:text-foreground hover:aria-pressed:bg-muted",
+        className
+      )}
     >
-      {label}
-      {waiting > 0 ? (
-        <span
-          aria-hidden
-          className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-amber-500/15 px-1 text-[0.625rem] leading-none font-semibold text-amber-700 tabular-nums dark:text-amber-300"
-        >
-          {waiting}
-        </span>
-      ) : null}
-    </TabsTrigger>
+      {on ? <Bell aria-hidden /> : <BellOff aria-hidden />}
+    </Toggle>
   )
 }
 
-/** A tab's body when it has nothing to show: its icon, what that means and
- *  — when there is something to say — what would fill it, as the
- *  workspace panel's tabs say it. */
+/** A tab's body when it has nothing to show: shadcn's empty state on a
+ *  soft tile — its icon, what that means and, when there is something to
+ *  say, what would fill it. */
 function EmptyState({
   icon: Icon,
   title,
   hint,
+  children,
 }: {
   icon: LucideIcon
   title: string
   hint?: string
+  children?: ReactNode
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 p-6 text-center">
-      <Icon className="size-8 text-muted-foreground/40" aria-hidden />
-      <div className="flex flex-col gap-1">
-        <p className="text-sm font-medium">{title}</p>
-        {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
-      </div>
-    </div>
+    <Empty className="flex-none gap-3 rounded-2xl bg-muted/50 px-6 py-10">
+      <EmptyHeader className="gap-1.5">
+        {children ?? (
+          <EmptyMedia variant="icon" className="mb-1 bg-background shadow-xs">
+            <Icon className="size-5 text-muted-foreground" aria-hidden />
+          </EmptyMedia>
+        )}
+        <EmptyTitle className="text-sm font-medium tracking-normal">
+          {title}
+        </EmptyTitle>
+        {hint ? (
+          <EmptyDescription className="text-xs/relaxed">
+            {hint}
+          </EmptyDescription>
+        ) : null}
+      </EmptyHeader>
+    </Empty>
+  )
+}
+
+/** A line that says a list is empty, on the items' soft ground. */
+function NoneLine({ children, ...props }: ComponentProps<"p">) {
+  return (
+    <p
+      className="rounded-2xl bg-muted/50 px-3 py-2.5 text-xs leading-5 text-muted-foreground"
+      {...props}
+    >
+      {children}
+    </p>
   )
 }
 
 // ── work ────────────────────────────────────────────────────────────────────
 
-/** A section of the work tab, as the task tab draws its columns: the
- *  chevron that folds it, its marker, its name and how many it holds — the
- *  count amber where the owner is waited on. What ended starts folded. The
- *  chevron's stroke is on the cards' edge, as the other tabs' sections have
- *  theirs (`InsightsSection`'s `flush`). */
+/** A section of the work tab, as the task tab draws its columns: its
+ *  marker, its name and how many it holds — the count amber where the
+ *  owner is waited on — folding. */
 function WorkSection({
   group,
   label,
   count,
   children,
 }: {
-  group: Group | "ended"
+  group: Group
   label: string
   count: number
   children: ReactNode
 }) {
-  const [open, setOpen] = useFold(`work.${group}`)
   return (
-    <section data-pa-group={group} className="flex flex-col gap-2">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className="flex h-6 min-w-0 items-center gap-2 rounded-md pe-0.5 text-start outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <ChevronDown
-          className={cn(
-            // The glyph's box has 3px of air before its stroke.
-            "-ms-[3px] size-3.5 shrink-0 text-muted-foreground transition-transform",
-            !open && "-rotate-90 rtl:rotate-90"
-          )}
-          aria-hidden
-        />
-        <span
-          className={cn(
-            "h-3.5 w-[3px] shrink-0 rounded-full",
-            GROUP_TONE[group]
-          )}
-          aria-hidden
-        />
-        <span className="truncate text-xs font-semibold">{label}</span>
-        <span
-          className={cn(
-            "shrink-0 rounded-full px-1.5 py-0.5 text-[0.625rem] leading-none tabular-nums",
-            group === "owner"
-              ? "bg-amber-500/15 font-semibold text-amber-600 dark:text-amber-400"
-              : "bg-muted/70 font-medium text-muted-foreground"
-          )}
-        >
-          {count}
-        </span>
-      </button>
-      {open ? <div className="flex flex-col gap-2">{children}</div> : null}
-    </section>
-  )
-}
-
-/** One card of the work tab, as the task tab's cards are: what leads it (an
- *  avatar, a kind's icon) beside what it is, where it stands at its end; a
- *  quiet line under them, and notes. The whole card opens what it is about,
- *  when it opens anything. */
-function WorkCard({
-  mark,
-  title,
-  chip,
-  meta,
-  notes = [],
-  onOpen,
-  openLabel,
-  extra,
-  actions,
-}: {
-  mark: ReactNode
-  title: string
-  chip?: ReactNode
-  meta: string | null
-  notes?: string[]
-  onOpen?: (() => void) | null
-  openLabel?: string
-  /** More under it, before the buttons: a task's card (8.5). */
-  extra?: ReactNode
-  /** Buttons under it, apart from what opening it does. */
-  actions?: ReactNode
-}) {
-  const body = (
-    <>
-      <span className="flex min-w-0 items-start gap-2">
-        {/* On the first line of a title that wraps. */}
-        <span className="mt-px flex shrink-0">{mark}</span>
-        <span className="min-w-0 flex-1 text-[0.8125rem] leading-snug font-medium break-words text-foreground">
-          {title}
-        </span>
-        {chip}
-      </span>
-      {meta ? (
-        <span className="mt-1.5 block truncate text-[0.6875rem] text-muted-foreground">
-          {meta}
-        </span>
-      ) : null}
-      {notes.map((note, i) => (
-        <span
-          key={i}
-          className="mt-1.5 line-clamp-2 text-[0.6875rem] leading-snug break-words text-muted-foreground"
-        >
-          {note}
-        </span>
-      ))}
-    </>
-  )
-  // `ws-msg-card` turns it translucent over a workspace background image, as
-  // the task cards do; the border is a shade of the text, the token hairline
-  // all but vanishing white on white.
-  const shape =
-    "flex w-full min-w-0 flex-col rounded-xl border border-foreground/15 bg-card ws-msg-card p-3 text-start"
-  if (actions || extra) {
-    return (
-      <div className={shape}>
-        {onOpen ? (
-          <button
-            type="button"
-            onClick={onOpen}
-            title={openLabel}
-            className="flex min-w-0 flex-col text-start outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {body}
-          </button>
-        ) : (
-          body
-        )}
-        {extra}
-        {actions ? (
-          <div className="mt-2 flex flex-wrap gap-1">{actions}</div>
-        ) : null}
-      </div>
-    )
-  }
-  if (!onOpen) return <div className={shape}>{body}</div>
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      title={openLabel}
-      className={cn(
-        shape,
-        "transition-colors hover:border-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-      )}
+    <PanelGroup
+      fold={`work.${group}`}
+      tone={GROUP_TONE[group]}
+      label={label}
+      count={count}
+      strong={group === "owner"}
+      data-pa-group={group}
     >
-      {body}
-    </button>
+      {children}
+    </PanelGroup>
   )
 }
 
@@ -661,8 +609,8 @@ function DispatchCard({
   const target = workTargetOf(d)
   const canOpen = canOpenWork(target)
   return (
-    <WorkCard
-      mark={
+    <PanelItem
+      media={
         <ExecutorAvatar
           id={d.executor.assistant_id}
           name={d.executor.name}
@@ -867,12 +815,8 @@ function ItemCard({
       </>
     )
   return (
-    <WorkCard
-      mark={
-        <span className="flex size-[1.125rem] items-center justify-center text-muted-foreground">
-          <Icon className="size-3.5" aria-hidden />
-        </span>
-      }
+    <PanelItem
+      media={<PanelIcon icon={Icon} />}
       title={item.summary}
       chip={
         item.at_due === "act" && item.due_at ? (
@@ -966,12 +910,12 @@ function MatterCard({
  *  insets. */
 function WorkSkeleton() {
   return (
-    <div className="flex flex-col gap-3 p-3" aria-hidden>
+    <div className="flex flex-col gap-4" aria-hidden>
       {[2, 1].map((cards, section) => (
-        <div key={section} className="flex flex-col gap-2">
-          <Skeleton className="h-4 w-24" />
+        <div key={section} className="flex flex-col gap-1.5">
+          <Skeleton className="h-4 w-24 rounded-md" />
           {Array.from({ length: cards }, (_, i) => (
-            <Skeleton key={i} className="h-16 w-full rounded-xl" />
+            <Skeleton key={i} className="h-16 w-full rounded-2xl" />
           ))}
         </div>
       ))}
@@ -991,13 +935,7 @@ function WorkBody({
   const now = useNow()
   if (work == null) return <WorkSkeleton />
   const { open } = work
-  if (open.length === 0) {
-    return (
-      <p className="text-xs leading-5 text-muted-foreground">
-        {t("matters.noneOpen")}
-      </p>
-    )
-  }
+  if (open.length === 0) return <NoneLine>{t("matters.noneOpen")}</NoneLine>
   return (
     <div className="flex flex-col gap-3">
       {GROUPS.map((g) => {
@@ -1038,8 +976,8 @@ function PathValue({ path }: { path: string }) {
   )
 }
 
-/** How full the context is: a bar with the auto-compaction threshold as a
- *  tick across it. */
+/** How full the context is: shadcn's progress bar, amber past the
+ *  auto-compaction threshold, which is a tick across it. */
 function ContextMeter({
   percent,
   threshold,
@@ -1050,26 +988,21 @@ function ContextMeter({
   const ratio = percent == null ? 0 : Math.min(100, Math.max(0, percent))
   const hot = percent != null && threshold > 0 && percent >= threshold
   return (
-    <div
-      className="relative h-1.5 rounded-full bg-foreground/10"
-      role="meter"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={percent == null ? undefined : Math.round(ratio)}
-    >
-      {ratio > 0 ? (
-        <span
-          className={cn(
-            "absolute inset-y-0 start-0 rounded-full",
-            hot ? "bg-amber-500" : "bg-primary"
-          )}
-          style={{ width: `${ratio}%` }}
-        />
-      ) : null}
+    <div className="relative">
+      <Progress
+        value={percent == null ? null : Math.round(ratio)}
+        // shadcn's bar draws the value but leaves it off the root.
+        aria-valuenow={percent == null ? undefined : Math.round(ratio)}
+        className={cn(
+          // Filled from the reading's start in either direction.
+          "h-1.5 bg-foreground/10 rtl:-scale-x-100",
+          hot && "[&>[data-slot=progress-indicator]]:bg-amber-500"
+        )}
+      />
       {threshold > 0 && threshold < 100 ? (
         <span
           aria-hidden
-          className="absolute -top-1 h-3.5 w-0.5 -translate-x-1/2 rounded-full bg-muted-foreground/70 rtl:translate-x-1/2"
+          className="absolute -top-1 h-3.5 w-0.5 -translate-x-1/2 rounded-full bg-foreground/50 ring-2 ring-card rtl:translate-x-1/2"
           style={{ insetInlineStart: `${threshold}%` }}
         />
       ) : null}
@@ -1186,7 +1119,7 @@ function StatusRows({
           : "bg-emerald-500"
   return (
     <div data-pa-status className="min-w-0">
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-2xs">
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 text-xs">
         <PropertyRow label={t("agent")}>
           {agent ? (
             <span aria-hidden className="inline-flex shrink-0">
@@ -1197,17 +1130,18 @@ function StatusRows({
             {agent?.label_snapshot.agent ?? "—"}
           </span>
           {readOnly ? null : (
-            <button
-              type="button"
-              className="ms-auto inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="-me-1 ms-auto shrink-0 text-muted-foreground"
               title={to("editBrain")}
               aria-label={to("editBrain")}
               onClick={() =>
                 usePersonalAgentUi.getState().openBotPage("identity")
               }
             >
-              <Settings2 className="size-3" aria-hidden />
-            </button>
+              <Settings2 aria-hidden />
+            </Button>
           )}
         </PropertyRow>
         {word ? (
@@ -1241,9 +1175,10 @@ function StatusRows({
               : t("noSegment")}
           </span>
           {seg?.conversation_id != null ? (
-            <button
-              type="button"
-              className="ms-auto inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="-me-1 ms-auto shrink-0 text-muted-foreground"
               title={tPage("viewSession")}
               aria-label={tPage("viewSession")}
               onClick={() =>
@@ -1252,8 +1187,8 @@ function StatusRows({
                 )
               }
             >
-              <SquareArrowOutUpRight className="size-3" aria-hidden />
-            </button>
+              <SquareArrowOutUpRight aria-hidden />
+            </Button>
           ) : null}
         </PropertyRow>
         {seg ? (
@@ -1283,7 +1218,7 @@ function StatusRows({
         ) : null}
       </dl>
       {seg?.pending_reason ? (
-        <p className="mt-2 text-2xs leading-4 text-amber-700 dark:text-amber-300">
+        <p className="mt-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs leading-5 text-amber-800 dark:text-amber-200">
           {t("pendingValue", { reason: tr(seg.pending_reason) })}
         </p>
       ) : null}
@@ -1304,7 +1239,6 @@ function ContextSection({
   const t = useTranslations("PersonalAgent.status")
   const to = useTranslations("PersonalAgent.overview")
   const when = useWhen()
-  const [open, setOpen] = useFold("status.context")
   const [resuming, setResuming] = useState(false)
   const botId = useBotId()
   const { status } = snapshot
@@ -1312,71 +1246,67 @@ function ContextSection({
   const last = status.last_compaction
   const percent = status.usage?.percent ?? null
   return (
-    <InsightsSection
+    <PanelCard
+      fold="status.context"
       title={t("context")}
       summary={percent == null ? "—" : `${Math.round(percent)}%`}
-      open={open}
-      onOpenChange={setOpen}
-      flush
     >
-      {open ? (
-        <div className="flex flex-col gap-1.5 pt-1.5 pb-1">
-          <ContextMeter
-            percent={percent}
-            threshold={status.auto_compact_percent}
-          />
-          <p className="mt-1 text-2xs leading-4 text-muted-foreground">
-            {status.auto_compact_percent > 0
-              ? t("threshold", { percent: status.auto_compact_percent })
-              : t("thresholdOff")}
+      <div className="flex flex-col gap-1">
+        <ContextMeter
+          percent={percent}
+          threshold={status.auto_compact_percent}
+        />
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+          {status.auto_compact_percent > 0
+            ? t("threshold", { percent: status.auto_compact_percent })
+            : t("thresholdOff")}
+        </p>
+        <p className="text-xs leading-5 text-muted-foreground">
+          {status.usage
+            ? t("usageValue", {
+                percent: Math.round(status.usage.percent),
+                source: t(`usageSource.${status.usage.source}`),
+              })
+            : status.connected
+              ? t("usageUnknown")
+              : t("usageUnknownOffline")}
+        </p>
+        {last ? (
+          <p className="text-xs leading-5 text-muted-foreground">
+            {to("lastCompaction", {
+              when: when(last.at),
+              outcome: t(`compactionStatus.${last.status}`),
+              range:
+                last.before_percent != null && last.after_percent != null
+                  ? ` · ${Math.round(last.before_percent)}% → ${Math.round(last.after_percent)}%`
+                  : "",
+            })}
           </p>
-          <p className="text-2xs leading-4 text-muted-foreground">
-            {status.usage
-              ? t("usageValue", {
-                  percent: Math.round(status.usage.percent),
-                  source: t(`usageSource.${status.usage.source}`),
-                })
-              : status.connected
-                ? t("usageUnknown")
-                : t("usageUnknownOffline")}
-          </p>
-          {last ? (
-            <p className="text-2xs leading-4 text-muted-foreground">
-              {to("lastCompaction", {
-                when: when(last.at),
-                outcome: t(`compactionStatus.${last.status}`),
-                range:
-                  last.before_percent != null && last.after_percent != null
-                    ? ` · ${Math.round(last.before_percent)}% → ${Math.round(last.after_percent)}%`
-                    : "",
-              })}
-            </p>
-          ) : null}
-          {seg?.auto_compact_paused ? (
-            <div className="mt-1 flex items-center justify-between gap-2 rounded-md bg-amber-500/10 px-2 py-1.5 text-2xs">
-              <span className="text-amber-800 dark:text-amber-200">
-                {t("paused")}
-              </span>
-              <Button
-                variant="outline"
-                size="xs"
-                className="gap-1 bg-background"
-                disabled={resuming || readOnly}
-                onClick={() => {
-                  setResuming(true)
-                  personalAgentResumeAutoCompact(botId)
-                    .catch((e) => toast.error(toErrorMessage(e)))
-                    .finally(() => setResuming(false))
-                }}
-              >
-                <Play className="size-3" aria-hidden />
-                {t("resume")}
-              </Button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </InsightsSection>
+        ) : null}
+        {seg?.auto_compact_paused ? (
+          <div className="mt-1.5 flex items-center justify-between gap-2 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs">
+            <span className="text-amber-800 dark:text-amber-200">
+              {t("paused")}
+            </span>
+            <Button
+              variant="outline"
+              size="xs"
+              className="gap-1 bg-background"
+              disabled={resuming || readOnly}
+              onClick={() => {
+                setResuming(true)
+                personalAgentResumeAutoCompact(botId)
+                  .catch((e) => toast.error(toErrorMessage(e)))
+                  .finally(() => setResuming(false))
+              }}
+            >
+              <Play aria-hidden />
+              {t("resume")}
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </PanelCard>
   )
 }
 
@@ -1388,7 +1318,6 @@ function RunLogSection() {
   const when = useWhen()
   const { rows } = usePersonalAgent()
   const line = useRunLogLine()
-  const [open, setOpen] = useFold("status.runLog")
   const markers = useMemo(
     () =>
       rows
@@ -1398,34 +1327,28 @@ function RunLogSection() {
     [rows]
   )
   return (
-    <InsightsSection
+    <PanelCard
+      fold="status.runLog"
       title={to("runLog")}
       summary={markers.length}
-      open={open}
-      onOpenChange={setOpen}
-      flush
     >
-      {open ? (
-        markers.length === 0 ? (
-          <p className="text-2xs leading-6 text-muted-foreground">
-            {t("empty")}
-          </p>
-        ) : (
-          <ul className="flex flex-col">
-            {markers.map((m) => (
-              <li key={m.id} className="flex min-w-0 items-start gap-3 py-1">
-                <span className="min-w-0 flex-1 text-xs leading-4 break-words text-foreground/85">
-                  {line(m)}
-                </span>
-                <span className="shrink-0 text-2xs leading-4 text-muted-foreground tabular-nums">
-                  {when(m.created_at)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )
-      ) : null}
-    </InsightsSection>
+      {markers.length === 0 ? (
+        <p className="text-xs leading-5 text-muted-foreground">{t("empty")}</p>
+      ) : (
+        <ul className="flex flex-col divide-y divide-border/50">
+          {markers.map((m) => (
+            <li key={m.id} className="flex min-w-0 items-start gap-3 py-1.5">
+              <span className="min-w-0 flex-1 text-xs leading-5 break-words text-foreground/85">
+                {line(m)}
+              </span>
+              <span className="shrink-0 text-2xs leading-5 text-muted-foreground tabular-nums">
+                {when(m.created_at)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </PanelCard>
   )
 }
 
@@ -1439,9 +1362,9 @@ function DetailRow({
   children: ReactNode
 }) {
   return (
-    <div className="col-span-2 grid grid-cols-subgrid items-baseline">
+    <div className="col-span-2 grid grid-cols-subgrid items-baseline border-b border-border/50 py-1.5 last:border-b-0">
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 leading-5 break-words text-foreground/80">
+      <dd className="min-w-0 leading-5 break-words text-foreground/85">
         {children}
       </dd>
     </div>
@@ -1451,80 +1374,71 @@ function DetailRow({
 function DetailsSection({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
   const t = useTranslations("PersonalAgent.status")
   const to = useTranslations("PersonalAgent.overview")
-  const [open, setOpen] = useFold("status.details")
   const { status } = snapshot
   const seg = status.segment
   const check = status.last_check
   return (
-    <InsightsSection
-      title={to("details")}
-      summary={null}
-      open={open}
-      onOpenChange={setOpen}
-      flush
-    >
-      {open ? (
-        <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 pt-1 text-2xs">
-          {seg?.handoff_size != null ? (
-            <DetailRow label={t("handoff")}>
-              {t("handoffSize", { size: seg.handoff_size })}
-              {seg.handoff_trimmed ? ` · ${t("handoffTrimmed")}` : ""}
-            </DetailRow>
-          ) : null}
-          {seg ? (
-            <DetailRow label={t("compactions")}>
-              {t("compactionCounts", {
-                auto: seg.compactions_auto,
-                manual: seg.compactions_manual,
-                agent: seg.compactions_agent,
-              })}
-            </DetailRow>
-          ) : null}
-          <DetailRow label={to("command")}>
-            {status.compact_command ? (
-              <span dir="ltr" className="font-mono">
-                {status.compact_command}
-              </span>
-            ) : (
-              t("noCommand")
-            )}
+    <PanelCard fold="status.details" title={to("details")}>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 text-xs">
+        {seg?.handoff_size != null ? (
+          <DetailRow label={t("handoff")}>
+            {t("handoffSize", { size: seg.handoff_size })}
+            {seg.handoff_trimmed ? ` · ${t("handoffTrimmed")}` : ""}
           </DetailRow>
-          {check ? (
-            <DetailRow label={t("lastCheck")}>
-              {t(`check.${check.outcome}`)}
-            </DetailRow>
-          ) : null}
-          <DetailRow label={t("queued")}>
-            {t("queuedValue", {
-              messages: status.queued_messages,
-              events: status.pending_events,
+        ) : null}
+        {seg ? (
+          <DetailRow label={t("compactions")}>
+            {t("compactionCounts", {
+              auto: seg.compactions_auto,
+              manual: seg.compactions_manual,
+              agent: seg.compactions_agent,
             })}
           </DetailRow>
-          <DetailRow label={t("dispatchSlots")}>
-            {status.dispatch_limit > 0
-              ? t("slotsValue", {
-                  running: status.dispatch_running,
-                  limit: status.dispatch_limit,
-                  queued: status.dispatch_queued,
-                })
-              : t("slotsUnlimited", {
-                  running: status.dispatch_running,
-                  queued: status.dispatch_queued,
-                })}
+        ) : null}
+        <DetailRow label={to("command")}>
+          {status.compact_command ? (
+            <span dir="ltr" className="font-mono">
+              {status.compact_command}
+            </span>
+          ) : (
+            t("noCommand")
+          )}
+        </DetailRow>
+        {check ? (
+          <DetailRow label={t("lastCheck")}>
+            {t(`check.${check.outcome}`)}
           </DetailRow>
-          <DetailRow label={t("engine")}>
-            {status.engine === "here" ? t("engineHere") : t("engineElsewhere")}
+        ) : null}
+        <DetailRow label={t("queued")}>
+          {t("queuedValue", {
+            messages: status.queued_messages,
+            events: status.pending_events,
+          })}
+        </DetailRow>
+        <DetailRow label={t("dispatchSlots")}>
+          {status.dispatch_limit > 0
+            ? t("slotsValue", {
+                running: status.dispatch_running,
+                limit: status.dispatch_limit,
+                queued: status.dispatch_queued,
+              })
+            : t("slotsUnlimited", {
+                running: status.dispatch_running,
+                queued: status.dispatch_queued,
+              })}
+        </DetailRow>
+        <DetailRow label={t("engine")}>
+          {status.engine === "here" ? t("engineHere") : t("engineElsewhere")}
+        </DetailRow>
+        {status.last_error ? (
+          <DetailRow label={t("lastError")}>
+            <span className="text-red-700 dark:text-red-300">
+              {status.last_error}
+            </span>
           </DetailRow>
-          {status.last_error ? (
-            <DetailRow label={t("lastError")}>
-              <span className="text-red-700 dark:text-red-300">
-                {status.last_error}
-              </span>
-            </DetailRow>
-          ) : null}
-        </dl>
-      ) : null}
-    </InsightsSection>
+        ) : null}
+      </dl>
+    </PanelCard>
   )
 }
 
@@ -1542,13 +1456,13 @@ function Figure({
   sub?: string
 }) {
   return (
-    <div className="min-w-0">
-      <dt className="truncate text-2xs text-muted-foreground">{label}</dt>
-      <dd className="text-lg leading-6 font-semibold text-foreground tabular-nums">
+    <div className="ws-msg-card min-w-0 rounded-2xl bg-muted/50 px-3 py-2.5">
+      <dt className="truncate text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 text-xl leading-7 font-semibold tracking-tight text-foreground tabular-nums">
         {value}
       </dd>
       {sub ? (
-        <dd className="truncate text-[0.625rem] leading-4 text-muted-foreground">
+        <dd className="truncate text-2xs leading-4 text-muted-foreground">
           {sub}
         </dd>
       ) : null}
@@ -1644,32 +1558,9 @@ function UsageCurve({ stats }: { stats: PersonalAgentStats }) {
   )
 }
 
-/** A chart of the stats tab, as a folding section: its title and total
- *  over it. */
-function ChartSection({
-  fold,
-  title,
-  summary,
-  children,
-}: {
-  fold: string
-  title: string
-  summary: ReactNode
-  children: ReactNode
-}) {
-  const [open, setOpen] = useFold(fold)
-  return (
-    <InsightsSection
-      title={title}
-      summary={summary}
-      open={open}
-      onOpenChange={setOpen}
-      flush
-    >
-      {open ? <div className="pt-1">{children}</div> : null}
-    </InsightsSection>
-  )
-}
+/** A chart of the stats tab, as a folding card: its title and total in
+ *  its header. */
+const ChartSection = PanelCard
 
 /** Its numbers: the stats tab's second part. */
 function StatsBody() {
@@ -1692,10 +1583,11 @@ function StatsBody() {
   const stats = ofBot(statsOf, botId)
   if (!stats) {
     return (
-      <SyncedSpinner
-        small
-        className="mx-auto my-8 size-4 text-muted-foreground"
-      />
+      <div className="grid grid-cols-2 gap-2" aria-hidden>
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-[4.75rem] rounded-2xl" />
+        ))}
+      </div>
     )
   }
   const sum = (pick: (d: PersonalAgentStats["days"][number]) => number) =>
@@ -1755,45 +1647,38 @@ function StatsBody() {
     hint: t("completedHint", { count: e.completed }),
   }))
   return (
-    <div className="tu-viz min-w-0 space-y-4 text-sm">
-      <section className="min-w-0 rounded-lg border border-border/70 bg-muted/40 p-3">
-        <p className="text-[0.8125rem] leading-[1.125rem] font-semibold">
-          {t("range", { days: STATS_DAYS })}
-        </p>
-        <dl className="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-3">
-          <Figure
-            label={t("figure.conversation")}
-            value={String(owner + replies)}
-            sub={t("figure.conversationSub", { owner, replies })}
-          />
-          <Figure
-            label={t("figure.dispatches")}
-            value={String(handed)}
-            sub={t("figure.dispatchesSub", { completed, failed })}
-          />
-          <Figure
-            label={t("figure.completion")}
-            value={
-              handed > 0 ? `${Math.round((completed / handed) * 100)}%` : "—"
-            }
-            sub={t("figure.completionSub")}
-          />
-          <Figure
-            label={t("figure.tokens")}
-            value={
-              synced ? formatTokenCount(agentTokens + dispatchTokens) : "—"
-            }
-            sub={
-              synced
-                ? t("figure.tokensSub", {
-                    agent: formatTokenCount(agentTokens),
-                    dispatch: formatTokenCount(dispatchTokens),
-                  })
-                : t("figure.tokensUnsynced")
-            }
-          />
-        </dl>
-      </section>
+    <div className="tu-viz flex min-w-0 flex-col gap-2 text-sm">
+      <dl className="grid grid-cols-2 gap-2">
+        <Figure
+          label={t("figure.conversation")}
+          value={String(owner + replies)}
+          sub={t("figure.conversationSub", { owner, replies })}
+        />
+        <Figure
+          label={t("figure.dispatches")}
+          value={String(handed)}
+          sub={t("figure.dispatchesSub", { completed, failed })}
+        />
+        <Figure
+          label={t("figure.completion")}
+          value={
+            handed > 0 ? `${Math.round((completed / handed) * 100)}%` : "—"
+          }
+          sub={t("figure.completionSub")}
+        />
+        <Figure
+          label={t("figure.tokens")}
+          value={synced ? formatTokenCount(agentTokens + dispatchTokens) : "—"}
+          sub={
+            synced
+              ? t("figure.tokensSub", {
+                  agent: formatTokenCount(agentTokens),
+                  dispatch: formatTokenCount(dispatchTokens),
+                })
+              : t("figure.tokensUnsynced")
+          }
+        />
+      </dl>
       <ChartSection
         fold="stats.interactions"
         title={t("interactions")}
@@ -1859,17 +1744,19 @@ function StatsBody() {
 
 // ── the tabs ────────────────────────────────────────────────────────────────
 
-/** A heading over one of a tab's parts. */
-function SectionHead({ children }: { children: ReactNode }) {
+/** A tab's body, scrolled: its parts one under another. */
+function TabBody({ children }: { children: ReactNode }) {
   return (
-    <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-      {children}
-    </h3>
+    <ScrollArea className="h-full">
+      <div className="flex min-w-0 flex-col gap-6 px-4 pt-3 pb-6">
+        {children}
+      </div>
+    </ScrollArea>
   )
 }
 
 /** What it is about: on the primary, today; its open matters, its
- *  routines; then "Notify me" and the way to its settings. */
+ *  routines. */
 function ActivityTab({
   snapshot,
   work,
@@ -1882,99 +1769,61 @@ function ActivityTab({
   const t = useTranslations("PersonalAgent.detail")
   const { botId } = usePersonalAgent()
   const readOnly = snapshot.status.engine !== "here"
-  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
-  const entry = usePersonalAgentRoster((s) =>
-    s.entries?.find((e) => e.id === (snapshot.agent?.id ?? botId))
-  )
-  useRoster()
-  const notify = entry?.roster.notify ?? true
   // "Today" is the primary's: every assistant's, held while it shows.
   const today = useToday(botId == null)
   return (
-    <ScrollArea className="h-full">
-      <div className="flex min-w-0 flex-col gap-5 p-3 pt-2">
-        {botId == null ? (
-          <TodaySection
-            head={<SectionHead>{t("sections.today")}</SectionHead>}
-            today={today}
-            inDrawer={inDrawer}
-            readOnly={readOnly}
-          />
-        ) : null}
-        <section className="flex flex-col gap-2" data-pa-detail="matters">
-          <SectionHead>{t("sections.matters")}</SectionHead>
-          <WorkBody work={work} inDrawer={inDrawer} />
-        </section>
-        <RoutinesSection
-          head={<SectionHead>{t("sections.routines")}</SectionHead>}
+    <TabBody>
+      {botId == null ? (
+        <TodaySection
+          title={t("sections.today")}
+          today={today}
+          inDrawer={inDrawer}
           readOnly={readOnly}
         />
-        <section className="flex flex-col gap-3 border-t border-border/60 pt-3">
-          <label className="flex items-center justify-between gap-3">
-            <span className="flex min-w-0 flex-col">
-              <span className="text-sm">{t("notify")}</span>
-              <span className="text-xs text-muted-foreground">
-                {t("notifyHint")}
-              </span>
-            </span>
-            <Switch
-              checked={notify}
-              disabled={readOnly || !entry}
-              onCheckedChange={(on) => {
-                if (!entry) return
-                void personalAgentRosterAct(entry.id, {
-                  act: "notify",
-                  on,
-                }).catch((e) => toast.error(toErrorMessage(e)))
-              }}
-              data-pa-detail-notify
-            />
-          </label>
-          <Button
-            size="sm"
-            variant="outline"
-            className="self-start"
-            onClick={() => openBotPage("identity")}
-            data-pa-detail-settings
-          >
-            <Settings2 aria-hidden />
-            {t("settings")}
-          </Button>
-        </section>
-      </div>
-    </ScrollArea>
+      ) : null}
+      <PanelSection
+        title={t("sections.matters")}
+        count={work?.open.length ?? null}
+        data-pa-detail="matters"
+      >
+        <WorkBody work={work} inDrawer={inDrawer} />
+      </PanelSection>
+      <RoutinesSection title={t("sections.routines")} readOnly={readOnly} />
+    </TabBody>
   )
 }
 
 /** How it runs — what on, its context, its run log and details — then its
  *  numbers. */
 function StatsTab({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
-  const t = useTranslations("PersonalAgent.detail")
+  const td = useTranslations("PersonalAgent.data")
   const ts = useTranslations("PersonalAgent.status")
   const readOnly = snapshot.status.engine !== "here"
   return (
-    <ScrollArea className="h-full">
-      <div className="flex min-w-0 flex-col gap-5 p-3 pt-2">
-        <section
-          className="flex min-w-0 flex-col gap-4 text-sm"
-          data-pa-detail="status"
-        >
-          {readOnly ? (
-            <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-800 dark:text-amber-200">
-              {ts("elsewhere")}
-            </p>
-          ) : null}
-          <StatusRows snapshot={snapshot} readOnly={readOnly} />
-          <ContextSection snapshot={snapshot} readOnly={readOnly} />
-          <RunLogSection />
-          <DetailsSection snapshot={snapshot} />
-        </section>
-        <section className="flex flex-col gap-2" data-pa-detail="data">
-          <SectionHead>{t("sections.data")}</SectionHead>
-          <StatsBody />
-        </section>
-      </div>
-    </ScrollArea>
+    <TabBody>
+      {/* How it runs: its rows under the tabs, no heading of their own,
+          then the folding cards. */}
+      <section
+        className="flex min-w-0 flex-col gap-2.5 text-sm"
+        data-pa-detail="status"
+      >
+        {readOnly ? (
+          <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-800 dark:text-amber-200">
+            {ts("elsewhere")}
+          </p>
+        ) : null}
+        <StatusRows snapshot={snapshot} readOnly={readOnly} />
+        <ContextSection snapshot={snapshot} readOnly={readOnly} />
+        <RunLogSection />
+        <DetailsSection snapshot={snapshot} />
+      </section>
+      <PanelSection
+        title={td("range", { days: STATS_DAYS })}
+        data-pa-detail="data"
+      >
+        <StatsBody />
+      </PanelSection>
+    </TabBody>
   )
 }
 
@@ -1986,6 +1835,7 @@ const OUTPUT_KINDS: readonly OutputKind[] = ["all", "tasks", "reports", "docs"]
  *  directory. */
 function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
   const t = useTranslations("PersonalAgent.detail.output")
+  const tabs = useTranslations("PersonalAgent.detail.tabs")
   const { botId, dispatchVersion } = usePersonalAgent()
   const now = useNow()
   const [kind, setKind] = useState<OutputKind>("all")
@@ -2047,22 +1897,33 @@ function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
   ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 flex-wrap gap-1 px-3 pt-2 pb-1">
-        {OUTPUT_KINDS.map((k) => (
-          <Button
-            key={k}
-            size="xs"
-            variant={k === kind ? "secondary" : "ghost"}
-            aria-pressed={k === kind}
-            onClick={() => setKind(k)}
-            data-pa-output-kind={k}
-          >
-            {t(k)}
-          </Button>
-        ))}
+      {/* Which kind: shadcn's toggle group, a pill each. */}
+      <div className="shrink-0 px-4 pt-3 pb-2">
+        <ToggleGroup
+          type="single"
+          size="sm"
+          spacing={1}
+          value={kind}
+          onValueChange={(v) => {
+            if (v) setKind(v as OutputKind)
+          }}
+          aria-label={tabs("output")}
+          className="flex-wrap"
+        >
+          {OUTPUT_KINDS.map((k) => (
+            <ToggleGroupItem
+              key={k}
+              value={k}
+              data-pa-output-kind={k}
+              className="h-7 min-w-0 px-2.5 text-xs font-normal text-muted-foreground data-[state=on]:font-medium data-[state=on]:text-foreground"
+            >
+              <span className="truncate">{t(k)}</span>
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-2 p-3 pt-1">
+        <div className="flex flex-col gap-1.5 px-4 pt-1 pb-6">
           {work == null || docs == null ? (
             <WorkSkeleton />
           ) : shown.length === 0 ? (
@@ -2072,13 +1933,9 @@ function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
               "dispatch" in x ? (
                 <DispatchCard key={x.key} d={x.dispatch} now={now} />
               ) : (
-                <WorkCard
+                <PanelItem
                   key={x.key}
-                  mark={
-                    <span className="flex size-[1.125rem] items-center justify-center text-muted-foreground">
-                      <FileText className="size-3.5" aria-hidden />
-                    </span>
-                  }
+                  media={<PanelIcon icon={FileText} />}
                   title={x.doc.path}
                   meta={t("docEdited", {
                     when: formatRelative(x.doc.modified_at, now),
@@ -2165,35 +2022,69 @@ function TaskPreview({ taskId }: { taskId: number }) {
 /** The work running now, each as a small live view of its session; an
  *  empty screen when nothing runs. While the drawer shows one of them, the previews stand
  *  aside: one surface follows a connection at a time. */
-function WorkspaceTab({ work }: { work: ReturnType<typeof useWork> }) {
+function WorkspaceTab({
+  snapshot,
+  work,
+}: {
+  snapshot: PersonalAgentSnapshot
+  work: ReturnType<typeof useWork>
+}) {
   const t = useTranslations("PersonalAgent.detail.workspace")
+  const tPage = useTranslations("PersonalAgent")
   const openWork = useOpenWork()
+  const agent = snapshot.agent
+  const name = agent?.name?.trim() || tPage("title")
   const drawerOpen = usePersonalAgentUi((s) => s.workOpen)
   const running = (work?.open ?? [])
     .map((m) => m.dispatch)
     .filter((d): d is DispatchInfo => d != null && STREAMING.has(d.state))
-  if (work == null) return <WorkSkeleton />
-  // Its face is over the tabs, asleep when nothing runs: here, a screen
-  // with nothing on it.
+  if (work == null) {
+    return (
+      <div className="px-4 pt-3">
+        <WorkSkeleton />
+      </div>
+    )
+  }
+  // A screen with nothing on it, its face asleep on it as over the tabs;
+  // whose screen it is under it.
   if (running.length === 0) {
     return (
-      <div data-pa-workspace-empty className="h-full">
-        <EmptyState icon={Monitor} title={t("empty")} />
+      <div data-pa-workspace-empty className="flex flex-col gap-2 px-4 pt-3">
+        <EmptyState icon={Monitor} title={t("empty")} hint={t("emptyHint")}>
+          {agent ? (
+            <EmptyMedia className="mb-1">
+              <BotAvatar
+                avatar={agent.avatar}
+                name={name}
+                size={WORKSPACE_FACE}
+                look="sleeping"
+              />
+            </EmptyMedia>
+          ) : null}
+        </EmptyState>
+        <p className="text-center text-xs text-muted-foreground">
+          {t("whose", { name })}
+        </p>
       </div>
     )
   }
   return (
     <ScrollArea className="h-full">
-      <div className="flex flex-col gap-3 p-3 pt-2">
+      <div className="flex flex-col gap-3 px-4 pt-3 pb-6">
         {running.map((d) => {
           const target = workTargetOf(d)
           return (
-            <section
+            <Card
               key={d.id}
               data-pa-workspace-item={d.id}
-              className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-foreground/15 bg-card"
+              className="ws-msg-card min-w-0 gap-0 py-0"
             >
               <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+                <ExecutorAvatar
+                  id={d.executor.assistant_id}
+                  name={d.executor.name}
+                  size={CARD_AVATAR_SIZE}
+                />
                 <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-medium">
                   #{d.id} {d.title}
                 </span>
@@ -2222,7 +2113,7 @@ function WorkspaceTab({ work }: { work: ReturnType<typeof useWork> }) {
                   )}
                 </div>
               )}
-            </section>
+            </Card>
           )
         })}
       </div>

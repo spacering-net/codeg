@@ -8112,23 +8112,11 @@
         "about": "Sobre ti"
       },
       "pages": {
-        "identity": "El nombre y la imagen con los que se presenta, y el agente sobre el que funciona, modo y permisos incluidos: codeg lo ejecuta tal como lo elijas.",
-        "persona": "Quién es, las reglas que sigue y lo que recuerda: archivos en su directorio de trabajo.",
-        "execution": "La configuración de ejecución a la que asigna trabajo por defecto y la plantilla a partir de la que se creó.",
-        "notify": "Si este asistente te avisa, y si aparece en la lista.",
-        "advanced": "Compactación, tarjeta de traspaso, cuánto ejecuta a la vez, su habilidad integrada y su directorio de trabajo.",
-        "workers": "Tus asistentes de trabajo, cada uno con su propia función, memoria y conversación. Haz clic en uno para abrir sus ajustes.",
-        "executors": "A quién asignan trabajo los asistentes: un agente, con sus opciones e instrucciones permanentes.",
-        "division": "Quién se encarga primero de cada tipo de trabajo. Los asistentes lo siguen salvo que nombres a otro o que la primera opción no pueda asumirlo en ese momento.",
-        "communication": "Cómo te hablan los asistentes. Todos siguen lo mismo.",
         "communicationNote": "El tono y cómo se dirigen a ti no están aquí: escríbelos en el SOUL.md de cada asistente y en el USER.md del principal.",
-        "proactive": "Cuándo y cómo te avisan los asistentes. Lo urgente —tus recordatorios, lo que espera tu respuesta o tu aprobación— llega al momento; lo demás espera mientras escribes, mientras no estás y en tus horas de silencio. Igual para todos los asistentes.",
         "proactiveNote": "Los interruptores de cada asistente —avisarme, silenciar, ocultar— están en su página Avisos. El interruptor general de notificaciones de codeg y «ocultar el contenido» (Ajustes → Notificaciones) también se aplican a los asistentes.",
         "byKind": "Ajustar por tipo",
         "byKindHint": "Cuánto puede interrumpirte cada tipo de noticia. Lo urgente llega al momento; lo normal espera un buen momento; lo bajo solo va a Hoy.",
-        "automation": "Lo que los asistentes hacen por su cuenta y lo que te preguntan antes. Por defecto todo se hace solo y te lo cuentan en una tarjeta; cada «pregúntame antes» lo activas tú.",
-        "automationNote": "Lo que espera por ti va en una tarjeta con exactamente lo que se ejecutará, y se ejecuta cuando haces clic.",
-        "about": "Lo que codeg usa para acertar con la hora: tu zona horaria y el horario que aprende de cuándo estás en codeg. Igual para todos los asistentes."
+        "automationNote": "Lo que espera por ti va en una tarjeta con exactamente lo que se ejecutará, y se ejecuta cuando haces clic."
       },
       "prefs": {
         "default": "(predeterminado)",
@@ -8936,8 +8924,7 @@
       "newSession": "Iniciar una sesión nueva…",
       "stopAll": "Detener todo",
       "stopAllHint": "Detiene la respuesta, el trabajo que encargó y los mensajes que nadie ha empezado",
-      "stoppedAll": "Se detuvo todo lo que tenía en marcha este asistente",
-      "details": "Ver detalles"
+      "stoppedAll": "Se detuvo todo lo que tenía en marcha este asistente"
     },
     "newSession": {
       "title": "¿Iniciar una sesión nueva?",
@@ -9565,7 +9552,6 @@
       },
       "notify": "Avisarme",
       "notifyHint": "Cuando termine algo o te esté esperando",
-      "settings": "Ajustes",
       "item": {
         "done": "Hecho",
         "later": "Más tarde",
@@ -9586,8 +9572,12 @@
       },
       "workspace": {
         "empty": "Ahora no hay nada en marcha",
-        "open": "Abrir"
-      }
+        "open": "Abrir",
+        "emptyHint": "Mientras se ejecuta el trabajo que delegó, su sesión se ve aquí en directo.",
+        "whose": "Espacio de trabajo de {name}"
+      },
+      "notifyOn": "activado",
+      "notifyOff": "desactivado"
     },
     "ladder": {
       "working": "En curso",
@@ -10302,7 +10292,9 @@
         "open": "Abrir rutinas",
         "confirm": "Rutina por confirmar",
         "confirmChange": "Cambio de rutina por confirmar"
-      }
+      },
+      "enabled": "Activa",
+      "more": "Más acciones"
     },
     "rules": {
       "mute": "No sugerir esto",

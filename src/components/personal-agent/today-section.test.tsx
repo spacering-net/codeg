@@ -188,7 +188,7 @@ function draw(
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <TodaySection
-        head={<h3>Today</h3>}
+        title="Today"
         today={data}
         inDrawer={inDrawer}
         readOnly={readOnly}

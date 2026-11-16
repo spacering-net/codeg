@@ -46,7 +46,6 @@ import { useAssistants } from "@/stores/assistants-store"
 
 import { PersonaFiles } from "../persona-files"
 import { useBotTemplates } from "../use-templates"
-import { PageHead } from "./pref-pages"
 import { useSettingsPatch } from "./use-settings"
 
 interface OwnPageProps {
@@ -64,10 +63,8 @@ export function PersonaPage({
   /** The file to open on (7.7). */
   entry?: string | null
 }) {
-  const t = useTranslations("PersonalAgent.settings")
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="persona">
-      <PageHead description={t("pages.persona")} />
       <PersonaFiles key={entry ?? ""} botId={bot} initial={entry} />
     </div>
   )
@@ -152,7 +149,6 @@ export function AdvancedPage({ agent, bot, disabled }: OwnPageProps) {
   const pathValue = path ?? (agent.workdir_custom ? agent.workdir : "")
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="advanced">
-      <PageHead description={t("pages.advanced")} />
       <SettingCard>
         <SettingRow
           icon={Shrink}
@@ -313,7 +309,6 @@ export function ExecutionPage({ agent, bot, disabled }: OwnPageProps) {
   }
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="execution">
-      <PageHead description={t("pages.execution")} />
       <SettingCard>
         <SettingRow
           icon={Workflow}

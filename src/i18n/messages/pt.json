@@ -8112,23 +8112,11 @@
         "about": "Sobre você"
       },
       "pages": {
-        "identity": "O nome e a imagem com que ele se apresenta, e o agente em que roda, incluindo modo e permissões: o codeg o executa como você escolher.",
-        "persona": "Quem ele é, as regras que segue e o que lembra: arquivos no diretório de trabalho dele.",
-        "execution": "A configuração de execução à qual ele atribui trabalho por padrão e o modelo a partir do qual foi criado.",
-        "notify": "Se este assistente avisa você, e se aparece na lista.",
-        "advanced": "Compactação, cartão de passagem, quanto ele roda ao mesmo tempo, a habilidade integrada e o diretório de trabalho.",
-        "workers": "Seus assistentes de trabalho, cada um com sua função, memória e conversa. Clique em um para abrir as configurações dele.",
-        "executors": "A quem os assistentes repassam trabalho: um agente, com as opções e instruções permanentes dele.",
-        "division": "Quem assume primeiro cada tipo de trabalho. Os assistentes seguem isso, a menos que você indique outro ou que a primeira opção não possa assumir naquele momento.",
-        "communication": "Como os assistentes falam com você. Todos seguem o mesmo.",
         "communicationNote": "O tom e como chamam você não ficam aqui: escreva isso no SOUL.md de cada assistente e no USER.md do principal.",
-        "proactive": "Quando e como os assistentes chamam você. O urgente — seus lembretes, o que espera sua resposta ou aprovação — chega na hora; o resto espera enquanto você digita, enquanto está fora e nas suas horas de silêncio. Igual para todos os assistentes.",
         "proactiveNote": "Os interruptores de cada assistente — avisar-me, silenciar, ocultar — ficam na página Notificações dele. O interruptor geral de notificações do codeg e “ocultar conteúdo” (Configurações → Notificações) valem também para os assistentes.",
         "byKind": "Ajustar por tipo",
         "byKindHint": "Quanto cada tipo de novidade pode interromper você. O urgente chega na hora; o normal espera um bom momento; o baixo só vai para Hoje.",
-        "automation": "O que os assistentes fazem sozinhos e o que perguntam a você antes. Por padrão, tudo roda sozinho e avisa você em um cartão; cada “perguntar antes” é você quem ativa.",
-        "automationNote": "O que espera por você vai para um cartão com exatamente o que será executado, e roda quando você clica.",
-        "about": "O que o codeg usa para acertar o horário para você: seu fuso horário e os horários que ele aprende de quando você está no codeg. O mesmo para todos os assistentes."
+        "automationNote": "O que espera por você vai para um cartão com exatamente o que será executado, e roda quando você clica."
       },
       "prefs": {
         "default": "(padrão)",
@@ -8936,8 +8924,7 @@
       "newSession": "Iniciar uma nova sessão…",
       "stopAll": "Parar tudo",
       "stopAllHint": "Para a resposta, o trabalho delegado e as mensagens que ninguém começou",
-      "stoppedAll": "Tudo o que este assistente tinha em andamento foi parado",
-      "details": "Ver detalhes"
+      "stoppedAll": "Tudo o que este assistente tinha em andamento foi parado"
     },
     "newSession": {
       "title": "Iniciar uma nova sessão?",
@@ -9565,7 +9552,6 @@
       },
       "notify": "Avisar-me",
       "notifyHint": "Quando terminar algo ou estiver esperando você",
-      "settings": "Configurações",
       "item": {
         "done": "Concluído",
         "later": "Mais tarde",
@@ -9586,8 +9572,12 @@
       },
       "workspace": {
         "empty": "Nada em execução agora",
-        "open": "Abrir"
-      }
+        "open": "Abrir",
+        "emptyHint": "Enquanto o trabalho delegado corre, a sua sessão aparece aqui em direto.",
+        "whose": "Espaço de trabalho de {name}"
+      },
+      "notifyOn": "ativado",
+      "notifyOff": "desativado"
     },
     "ladder": {
       "working": "Em andamento",
@@ -10302,7 +10292,9 @@
         "open": "Abrir rotinas",
         "confirm": "Rotina a confirmar",
         "confirmChange": "Alteração de rotina a confirmar"
-      }
+      },
+      "enabled": "Ativa",
+      "more": "Mais ações"
     },
     "rules": {
       "mute": "Não sugerir isso",

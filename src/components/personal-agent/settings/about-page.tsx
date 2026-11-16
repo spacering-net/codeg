@@ -163,7 +163,6 @@ export function AboutPage({
     <div className="flex flex-col gap-3" data-pa-settings-page="about">
       <PageHead
         title={t("nav.about")}
-        description={t("pages.about")}
         onRestore={() => void patch(restore).then(() => load())}
         restoreDisabled={disabled || restore.length === 0}
       />

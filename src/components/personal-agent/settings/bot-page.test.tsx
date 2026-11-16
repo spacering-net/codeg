@@ -326,9 +326,14 @@ describe("an assistant's own page", () => {
     expect(identity.props).toMatchObject({ disabled: true })
   })
 
-  it("goes back to the conversation", () => {
+  it("goes back to the conversation from the arrow before its face", () => {
     draw()
-    fireEvent.click(document.querySelector("[data-pa-bot-page-back]")!)
+    const back = document.querySelector<HTMLElement>("[data-pa-bot-page-back]")!
+    // An arrow on the head's line, named for a pointer and a screen reader.
+    expect(back.textContent).toBe("")
+    expect(back.getAttribute("aria-label")).toBe("Back to the conversation")
+    expect(back.parentElement!.querySelector("h1")?.textContent).toBe("Nova")
+    fireEvent.click(back)
     expect(usePersonalAgentUi.getState().botPage).toBeNull()
   })
 })
