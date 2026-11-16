@@ -29,6 +29,46 @@ export function followsBottom({
   return was
 }
 
+/** How long after the reader's own input — a wheel, a touch, a key, the
+ *  pointer pressed on the list or its bar — a scroll counts as theirs. */
+export const USER_SCROLL_MS = 600
+
+/**
+ * What a scroll event means for following the bottom. Near the bottom, the
+ * list follows. A scroll of the reader's (their input just before it)
+ * follows `followsBottom`. Any other is the list's own — the virtual list
+ * keeping what is drawn in place as it measures rows, a glide down: it does
+ * not change whether the list follows, and one that took a following list
+ * off its bottom is undone (`restick`), but for the glide, which gets there
+ * itself.
+ */
+export function afterScroll({
+  was,
+  gap,
+  top,
+  lastTop,
+  user,
+  gliding,
+}: {
+  was: boolean
+  gap: number
+  top: number
+  lastTop: number
+  /** The reader's input came just before it. */
+  user: boolean
+  /** A glide to the bottom asked for is under way. */
+  gliding: boolean
+}): { following: boolean; restick: boolean } {
+  if (gap < STICK_PX) return { following: true, restick: false }
+  if (user) {
+    return {
+      following: followsBottom({ was, gap, top, lastTop }),
+      restick: false,
+    }
+  }
+  return { following: was, restick: was && !gliding }
+}
+
 /**
  * Whether the way back down shows (the round button over the list): the
  * reader stopped following and is more than half a view up from the bottom

@@ -6,15 +6,19 @@
  * at its foot, and the side panel (who it is, what it is about, what it made
  * and handed out, its numbers) beside it behind a line, or as a drawer on a
  * narrow screen. Under the window's top band, as the other full pages are:
- * the band's title is its avatar and name, and its state a word after them;
- * its actions — its own page, the settings, the session underneath,
- * compacting, a new session — are in the window chrome's "⋯" menu. The
- * sessions it reaches — its own, and those of the work it handed out — open
- * in a drawer on the right, over the page.
+ * the band's title is its avatar and name — a capsule that lists the
+ * assistants to switch to — and its state a word after them; the settings
+ * every assistant shares are a button in the window chrome, by the panel's
+ * toggle, and what acts on the assistant itself — the session underneath,
+ * compacting, a new session — is in the "⋯" by its face on the panel. The
+ * roster stands beside the conversation only when the owner keeps it shown.
+ * The sessions it reaches — its own, and those of the work it handed out —
+ * open in a drawer on the right, over the page.
  *
  * In place of the conversation, two pages, the side panel standing aside
- * while either is open: the assistant's own page, the roster kept beside it,
- * and the settings every assistant shares, across the whole page.
+ * while either is open: the assistant's own page, the roster (when shown)
+ * kept beside it, and the settings every assistant shares, across the whole
+ * page.
  *
  * A workbench route, so the workspace's providers (the live connection store,
  * the assistants) are all there.
@@ -22,6 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
+import { ChevronDown } from "lucide-react"
 import { toast } from "sonner"
 
 import { SessionLinkOpenerContext } from "@/components/ai-elements/session-link-opener"
@@ -50,6 +55,11 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -70,7 +80,13 @@ import {
   PersonalAgentHistorySearch,
 } from "./history-search"
 import { PersonalAgentAuxPanel } from "./aux-panel"
-import { PersonalAgentRoster } from "./roster"
+import {
+  PersonalAgentRoster,
+  useRosterDialogs,
+  useRosterUpkeep,
+  type RosterDialogs,
+} from "./roster"
+import { useRosterShown } from "./roster-resize"
 import { PersonalAgentComposer } from "./composer"
 import { usePersonalAgentAttachment } from "./live-turn"
 import { MessageList } from "./message-list"
@@ -108,29 +124,72 @@ export function PersonalAgentPageTitle() {
   const agent = snapshot?.agent ?? null
   const title = agent?.name?.trim() || t("title")
   const look = useBotLook(agent?.id ?? null)
+  const readOnly = snapshot?.status.engine !== "here"
+  // The roster in a popover under the capsule. Its dialogs are kept here,
+  // the popover closing as one opens.
+  const [rosterOpen, setRosterOpen] = useState(false)
+  const rosterDialogs = useRosterDialogs()
+  const dialogs = useMemo<RosterDialogs>(() => {
+    const closing =
+      <A extends unknown[]>(open: (...args: A) => void) =>
+      (...args: A) => {
+        setRosterOpen(false)
+        open(...args)
+      }
+    const api = rosterDialogs.api
+    return {
+      add: closing(api.add),
+      remove: closing(api.remove),
+      group: closing(api.group),
+      edit: closing(api.edit),
+    }
+  }, [rosterDialogs.api])
   return (
     <WorkbenchPageTitle
       title=""
       // The messages carry no avatar of the agent's own: it is here, once,
-      // with its name, as a capsule that opens the panel on its activity.
+      // with its name, as a capsule that lists the assistants to switch to.
       leading={
         agent ? (
-          <button
-            type="button"
-            data-pa-title-capsule
-            data-pa-face-host
-            onClick={() => showAux("activity")}
-            title={t("detail.open")}
-            className="flex min-w-0 items-center gap-1.5 rounded-full border border-border/70 bg-background/60 py-0.5 ps-1 pe-2.5 text-[0.8125rem] font-semibold transition-colors hover:bg-foreground/10"
-          >
-            <BotAvatar
-              avatar={agent.avatar}
-              name={title}
-              size={TITLE_AVATAR_SIZE}
-              look={look}
-            />
-            <span className="min-w-0 truncate">{title}</span>
-          </button>
+          <>
+            <Popover open={rosterOpen} onOpenChange={setRosterOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  data-pa-title-capsule
+                  data-pa-face-host
+                  title={t("bots.roster.switch")}
+                  className="flex min-w-0 items-center gap-1.5 rounded-full border border-border/70 bg-background/60 py-0.5 ps-1 pe-2 text-[0.8125rem] font-semibold transition-colors hover:bg-foreground/10 aria-expanded:bg-foreground/10"
+                >
+                  <BotAvatar
+                    avatar={agent.avatar}
+                    name={title}
+                    size={TITLE_AVATAR_SIZE}
+                    look={look}
+                  />
+                  <span className="min-w-0 truncate">{title}</span>
+                  <ChevronDown
+                    aria-hidden
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                  />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="start"
+                sideOffset={6}
+                data-pa-roster-pop
+                className="max-h-[min(34rem,var(--radix-popover-content-available-height))] w-72 gap-0 overflow-hidden p-0"
+              >
+                <PersonalAgentRoster
+                  variant="popover"
+                  readOnly={readOnly}
+                  dialogs={dialogs}
+                  onPick={() => setRosterOpen(false)}
+                />
+              </PopoverContent>
+            </Popover>
+            {rosterDialogs.node}
+          </>
         ) : (
           <span className="truncate text-[0.8125rem] font-semibold">
             {title}
@@ -247,14 +306,16 @@ export function PersonalAgentPage() {
   }, [status?.engine, botId])
 
   const readOnly = status?.engine !== "here"
+  // The roster's upkeep, drawn or not; drawn as a column only when the
+  // owner keeps it shown (the title's capsule lists them either way).
+  useRosterUpkeep(readOnly)
+  const [rosterShown] = useRosterShown()
   const agentName = agent?.name?.trim() || t("title")
-  // "Follow the assistant's colour": its conversation takes its face's
-  // colour for the theme's (10.7).
+  // Its face's colour, which the owner's bubbles take; with "follow the
+  // assistant's colour" on, the theme's colour in its conversation too
+  // (10.7).
   const [accent] = usePaAccent()
-  const accentColor =
-    accent === "bot" && agent?.avatar?.kind === "face"
-      ? agent.avatar.color
-      : null
+  const faceColor = agent?.avatar?.kind === "face" ? agent.avatar.color : null
   const liveRowId = liveRowOf(rows, status?.live_reply?.row_id ?? null)
   const rowsById = useMemo(() => {
     const m = new Map<number, TimelineRow>()
@@ -354,8 +415,8 @@ export function PersonalAgentPage() {
   ) : (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex min-h-0 flex-1">
-        {isMobile ? null : (
-          <PersonalAgentRoster compact={false} readOnly={readOnly} />
+        {isMobile || !rosterShown ? null : (
+          <PersonalAgentRoster variant="column" readOnly={readOnly} />
         )}
         {botPageOpen ? (
           <div className="flex min-w-0 flex-1 flex-col">
@@ -370,12 +431,15 @@ export function PersonalAgentPage() {
               // while (a switch read in time never dims at all).
               switching && "opacity-60 delay-500 duration-200"
             )}
-            data-pa-accent={accentColor ?? undefined}
+            data-pa-face={faceColor ?? undefined}
+            data-pa-accent={
+              (accent === "bot" && faceColor != null) || undefined
+            }
             data-pa-switching={switching || undefined}
             inert={switching || undefined}
           >
-            {isMobile ? (
-              <PersonalAgentRoster compact readOnly={readOnly} />
+            {isMobile && rosterShown ? (
+              <PersonalAgentRoster variant="strip" readOnly={readOnly} />
             ) : null}
             {readOnly || noAssistants ? (
               <div className="mx-auto flex w-full chat-content-w shrink-0 flex-col gap-1 px-4 pt-2">

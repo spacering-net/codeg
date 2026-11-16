@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-import { farFromBottom, followsBottom, STICK_PX } from "./follow-bottom"
+import {
+  afterScroll,
+  farFromBottom,
+  followsBottom,
+  STICK_PX,
+} from "./follow-bottom"
 
 describe("followsBottom", () => {
   it("follows near the bottom, whatever it did before", () => {
@@ -48,5 +53,45 @@ describe("farFromBottom", () => {
 
   it("does not while the list follows, however far its content grew", () => {
     expect(farFromBottom({ following: true, gap: 5000, view: 800 })).toBe(false)
+  })
+})
+
+describe("afterScroll", () => {
+  const base = { gap: 300, top: 600, lastTop: 900, gliding: false }
+
+  it("follows near the bottom, whoever scrolled", () => {
+    expect(afterScroll({ ...base, was: false, gap: 0, user: false })).toEqual({
+      following: true,
+      restick: false,
+    })
+  })
+
+  it("lets the reader's own scroll up leave the bottom", () => {
+    expect(afterScroll({ ...base, was: true, user: true })).toEqual({
+      following: false,
+      restick: false,
+    })
+  })
+
+  it("puts a following list back when its own move took it off the bottom", () => {
+    // virtua keeping what is drawn in place as it measures the rows: no
+    // input of the reader's before it.
+    expect(afterScroll({ ...base, was: true, user: false })).toEqual({
+      following: true,
+      restick: true,
+    })
+  })
+
+  it("leaves a reader up the page where they are on the list's own moves", () => {
+    expect(afterScroll({ ...base, was: false, user: false })).toEqual({
+      following: false,
+      restick: false,
+    })
+  })
+
+  it("lets a glide to the bottom get there itself", () => {
+    expect(
+      afterScroll({ ...base, was: true, user: false, gliding: true })
+    ).toEqual({ following: true, restick: false })
   })
 })

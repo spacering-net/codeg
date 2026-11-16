@@ -32,8 +32,15 @@
  *   delete.
  * - Rows come and go by their height (the motion tokens), not at once.
  * - On a narrow screen, a strip of faces over the page.
+ * - The column (or the strip) shows only when the owner keeps it shown
+ *   (`useRosterShown`): the workspace has its own sidebar. The title's
+ *   capsule opens the same list in a popover either way — the primary a row
+ *   like the others, with no dragging and no hover cards — and under it a
+ *   new work assistant and the switch that shows the column.
  *
- * Opening an assistant takes away the owner's own unread mark on it.
+ * Opening an assistant takes away the owner's own unread mark on it, and
+ * one deleted takes the page back to the primary (`useRosterUpkeep`, the
+ * page's, shown or not).
  */
 
 import {
@@ -58,6 +65,7 @@ import {
   MailOpen,
   MessageSquareText,
   OctagonX,
+  PanelLeft,
   Pin,
   PinOff,
   Plus,
@@ -92,6 +100,7 @@ import {
   HoverCardTrigger,
 } from "@/components/ui/hover-card"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import {
   personalAgentBotCopy,
   personalAgentRosterAct,
@@ -114,6 +123,7 @@ import { BotInfoDialog } from "./bot-info-dialog"
 import { NewBotDialog } from "./new-bot-dialog"
 import {
   groupRoster,
+  plainLine,
   rosterTime,
   sectionNames,
   viewOf,
@@ -122,6 +132,7 @@ import {
 import {
   ROSTER_RAIL_WIDTH,
   RosterResizeHandle,
+  useRosterShown,
   useRosterWidth,
 } from "./roster-resize"
 import { useBotName } from "./shared"
@@ -305,7 +316,9 @@ export function rowLine(
       tone: "plain",
     }
   }
-  if (live.last_line) return { text: live.last_line.text, tone: "plain" }
+  if (live.last_line) {
+    return { text: plainLine(live.last_line.text), tone: "plain" }
+  }
   return null
 }
 
@@ -393,13 +406,135 @@ function AnimatedRows({
   )
 }
 
+/** What the roster's rows ask of its dialogs: held by what stays mounted —
+ *  the column itself, or the title's capsule for its popover, which closes
+ *  as one opens. */
+export interface RosterDialogs {
+  add: () => void
+  remove: (id: number) => void
+  group: (entry: RosterEntry) => void
+  edit: (entry: RosterEntry) => void
+}
+
+/** What moves `b` into the group `name` (`null`: the rest): out of the
+ *  pinned ones, and — dragged out of the hidden ones — shown. */
+function groupActs(
+  b: RosterEntry,
+  name: string | null,
+  show: boolean
+): RosterAct[] {
+  const r = b.roster
+  const acts: RosterAct[] = []
+  if ((r?.section?.trim() || null) !== name) {
+    acts.push({ act: "section", name })
+  }
+  // Its group first: unpinned before, it would show a moment where it was.
+  if (r?.pinned_at) acts.push({ act: "unpin" })
+  if (show && r?.hidden) acts.push({ act: "show" })
+  return acts
+}
+
+async function runActs(id: number, acts: RosterAct[]): Promise<void> {
+  try {
+    for (const a of acts) await personalAgentRosterAct(id, a)
+  } catch (e) {
+    toast.error(toErrorMessage(e))
+  }
+}
+
+/** The roster's dialogs — a new assistant, deleting one, naming a group for
+ *  one, its name and face — and the way to open each. */
+export function useRosterDialogs(): { api: RosterDialogs; node: ReactNode } {
+  const [adding, setAdding] = useState(false)
+  const [deleting, setDeleting] = useState<number | null>(null)
+  const [grouping, setGrouping] = useState<RosterEntry | null>(null)
+  const [editing, setEditing] = useState<RosterEntry | null>(null)
+  const api = useMemo<RosterDialogs>(
+    () => ({
+      add: () => setAdding(true),
+      remove: setDeleting,
+      group: setGrouping,
+      edit: setEditing,
+    }),
+    []
+  )
+  const node = (
+    <>
+      <NewBotDialog open={adding} onOpenChange={setAdding} />
+      <BotDeleteDialog
+        botId={deleting}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null)
+        }}
+      />
+      <NewGroupDialog
+        key={grouping?.id ?? "none"}
+        target={grouping}
+        onClose={() => setGrouping(null)}
+        onSave={(name) => {
+          if (grouping)
+            void runActs(grouping.id, groupActs(grouping, name, true))
+          setGrouping(null)
+        }}
+      />
+      <BotInfoDialog
+        bot={editing}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null)
+        }}
+      />
+    </>
+  )
+  return { api, node }
+}
+
+/**
+ * What the roster keeps right whether it is drawn or not: the one shown,
+ * deleted (here or in another window), gives way to the primary; and
+ * opening one takes the owner's unread mark away — on opening, not when the
+ * owner marks the one open (it then stays marked till the next).
+ */
+export function useRosterUpkeep(readOnly: boolean) {
+  const entries = useRoster()
+  const viewBot = usePersonalAgentUi((s) => s.viewBot)
+  const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
+  useEffect(() => {
+    if (entries && viewBot != null && !entries.some((b) => b.id === viewBot)) {
+      setViewBot(null)
+    }
+  }, [entries, viewBot, setViewBot])
+  const list = entries ?? []
+  const currentId =
+    viewBot ?? list.find((e) => e.kind === "primary")?.id ?? null
+  const unreadMarked =
+    list.find((e) => e.id === currentId)?.roster?.unread_mark === true
+  const [opened, setOpened] = useState<number | null>(null)
+  const [clearFor, setClearFor] = useState<number | null>(null)
+  if (currentId != null && currentId !== opened) {
+    setOpened(currentId)
+    setClearFor(unreadMarked ? currentId : null)
+  }
+  useEffect(() => {
+    if (readOnly || clearFor == null) return
+    void personalAgentRosterAct(clearFor, { act: "mark_read" }).catch(() => {})
+  }, [clearFor, readOnly])
+}
+
 export function PersonalAgentRoster({
-  compact,
+  variant,
   readOnly,
+  dialogs: heldDialogs,
+  onPick,
 }: {
-  /** A strip of faces (a narrow screen). */
-  compact: boolean
+  /** A column beside the conversation; a strip of faces (a narrow
+   *  screen); or the title capsule's popover. */
+  variant: "column" | "strip" | "popover"
   readOnly: boolean
+  /** Its dialogs, when what holds it closes before they would (the
+   *  popover); otherwise its own. */
+  dialogs?: RosterDialogs
+  /** Told when an assistant is opened (its conversation or its page). */
+  onPick?: () => void
 }) {
   const t = useTranslations("PersonalAgent")
   const tt = useActivityTranslate()
@@ -412,10 +547,9 @@ export function PersonalAgentRoster({
   const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
   const showConversation = usePersonalAgentUi((s) => s.showConversation)
   const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
-  const [adding, setAdding] = useState(false)
-  const [deleting, setDeleting] = useState<number | null>(null)
-  const [grouping, setGrouping] = useState<RosterEntry | null>(null)
-  const [editing, setEditing] = useState<RosterEntry | null>(null)
+  const own = useRosterDialogs()
+  const dialogs = heldDialogs ?? own.api
+  const popover = variant === "popover"
   const [showHidden, setShowHidden] = useState(false)
   const [folded, toggleFold] = useFolded()
   // A row dragged by the pointer: where it is, and the group under it.
@@ -438,33 +572,12 @@ export function PersonalAgentRoster({
   const swallowClick = useRef(false)
   const navRef = useRef<HTMLElement | null>(null)
   const [size, setSize] = useRosterWidth()
+  const [shown, setShown] = useRosterShown()
   const now = useRosterNow(entries)
   const list = useMemo(() => entries ?? [], [entries])
 
-  // The one shown was deleted (here or in another window): back to the
-  // primary.
-  useEffect(() => {
-    if (entries && viewBot != null && !entries.some((b) => b.id === viewBot)) {
-      setViewBot(null)
-    }
-  }, [entries, viewBot, setViewBot])
-
   const currentId =
     viewBot ?? list.find((e) => e.kind === "primary")?.id ?? null
-  const current = list.find((e) => e.id === currentId) ?? null
-  // Opening it takes the owner's unread mark away — on opening, not when
-  // the owner marks the one open (it then stays marked till the next).
-  const unreadMarked = current?.roster?.unread_mark === true
-  const [opened, setOpened] = useState<number | null>(null)
-  const [clearFor, setClearFor] = useState<number | null>(null)
-  if (currentId != null && currentId !== opened) {
-    setOpened(currentId)
-    setClearFor(unreadMarked ? currentId : null)
-  }
-  useEffect(() => {
-    if (readOnly || clearFor == null) return
-    void personalAgentRosterAct(clearFor, { act: "mark_read" }).catch(() => {})
-  }, [clearFor, readOnly])
 
   const groups = useMemo(
     () => groupRoster(list, now, locale),
@@ -481,9 +594,12 @@ export function PersonalAgentRoster({
   const go = (b: RosterEntry) => {
     setViewBot(b.kind === "primary" ? null : b.id)
     showConversation()
+    onPick?.()
   }
-  const openDetails = (b: RosterEntry) =>
+  const openDetails = (b: RosterEntry) => {
     openBotPage("identity", { bot: b.kind === "primary" ? null : b.id })
+    onPick?.()
+  }
   const act = (b: RosterEntry, a: RosterAct) => {
     void personalAgentRosterAct(b.id, a).catch((e) =>
       toast.error(toErrorMessage(e))
@@ -508,34 +624,23 @@ export function PersonalAgentRoster({
     opts: { before?: number | null; show?: boolean } = {}
   ) => {
     if (g.kind === "new") {
-      setGrouping(b)
+      dialogs.group(b)
       return
     }
     const r = b.roster
-    const show = opts.show && r?.hidden
-    const acts: RosterAct[] = []
-    if (g.kind === "pinned") {
-      if (show) acts.push({ act: "show" })
-      if (!r?.pinned_at) acts.push({ act: "pin" })
-      // Newly pinned, it goes at the end; anywhere else, the order says.
-      if (r?.pinned_at || opts.before != null) {
-        acts.push({ act: "order", ids: pinnedOrder(b.id, opts.before ?? null) })
-      }
-    } else {
+    if (g.kind !== "pinned") {
       const name = g.kind === "section" ? g.name : null
-      if ((r?.section?.trim() || null) !== name) {
-        acts.push({ act: "section", name })
-      }
-      // Its group first: unpinned before, it would show a moment where it
-      // was.
-      if (r?.pinned_at) acts.push({ act: "unpin" })
-      if (show) acts.push({ act: "show" })
+      await runActs(b.id, groupActs(b, name, opts.show === true))
+      return
     }
-    try {
-      for (const a of acts) await personalAgentRosterAct(b.id, a)
-    } catch (e) {
-      toast.error(toErrorMessage(e))
+    const acts: RosterAct[] = []
+    if (opts.show && r?.hidden) acts.push({ act: "show" })
+    if (!r?.pinned_at) acts.push({ act: "pin" })
+    // Newly pinned, it goes at the end; anywhere else, the order says.
+    if (r?.pinned_at || opts.before != null) {
+      acts.push({ act: "order", ids: pinnedOrder(b.id, opts.before ?? null) })
     }
+    await runActs(b.id, acts)
   }
 
   /** Whether `b` put in `g` would move: not into the group it is in. */
@@ -647,7 +752,7 @@ export function PersonalAgentRoster({
   /** A work assistant's row, dragged by the pointer onto a group. Not by
    *  touch: a finger on the list scrolls it. */
   const dragHandlers = (b: RosterEntry) =>
-    readOnly || b.kind === "primary"
+    readOnly || popover || b.kind === "primary"
       ? {}
       : {
           onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
@@ -754,7 +859,7 @@ export function PersonalAgentRoster({
   const shownLineOf = (b: RosterEntry, view: BotView): RowLine | null => {
     const line = view.stale ? null : rowLine(tt, b, view, now)
     const last = b.live?.last_line
-    return line ?? (last ? { text: last.text, tone: "plain" } : null)
+    return line ?? (last ? { text: plainLine(last.text), tone: "plain" } : null)
   }
 
   /** The card a face shows when hovered: who, what it is doing, its work
@@ -854,7 +959,7 @@ export function PersonalAgentRoster({
           </ContextMenuItem>
           <ContextMenuItem
             disabled={readOnly}
-            onSelect={() => setEditing(b)}
+            onSelect={() => dialogs.edit(b)}
             data-pa-roster-edit={b.id}
           >
             <UserPen aria-hidden />
@@ -893,7 +998,7 @@ export function PersonalAgentRoster({
                   {tr("menu.noGroup")}
                 </ContextMenuItem>
                 <ContextMenuSeparator />
-                <ContextMenuItem onSelect={() => setGrouping(b)}>
+                <ContextMenuItem onSelect={() => dialogs.group(b)}>
                   {tr("menu.newGroup")}
                 </ContextMenuItem>
               </ContextMenuSubContent>
@@ -947,7 +1052,7 @@ export function PersonalAgentRoster({
             <ContextMenuItem
               disabled={readOnly}
               variant="destructive"
-              onSelect={() => setDeleting(b.id)}
+              onSelect={() => dialogs.remove(b.id)}
             >
               <Trash2 aria-hidden />
               {tr("menu.delete")}
@@ -1035,6 +1140,8 @@ export function PersonalAgentRoster({
         </span>
       </button>
     )
+    // In the popover its line says enough: no card on hover.
+    if (popover) return menu(b, button)
     return (
       <HoverCard openDelay={500} closeDelay={80}>
         {menu(b, <HoverCardTrigger asChild>{button}</HoverCardTrigger>)}
@@ -1057,43 +1164,17 @@ export function PersonalAgentRoster({
       disabled={readOnly}
       aria-label={tr("add")}
       title={tr("add")}
-      onClick={() => setAdding(true)}
+      onClick={() => dialogs.add()}
       data-pa-roster-add
     >
       <Plus aria-hidden />
     </Button>
   )
 
-  const dialogs = (
-    <>
-      <NewBotDialog open={adding} onOpenChange={setAdding} />
-      <BotDeleteDialog
-        botId={deleting}
-        onOpenChange={(open) => {
-          if (!open) setDeleting(null)
-        }}
-      />
-      <NewGroupDialog
-        key={grouping?.id ?? "none"}
-        target={grouping}
-        onClose={() => setGrouping(null)}
-        onSave={(name) => {
-          if (grouping) {
-            void moveTo(grouping, { kind: "section", name }, { show: true })
-          }
-          setGrouping(null)
-        }}
-      />
-      <BotInfoDialog
-        bot={editing}
-        onOpenChange={(open) => {
-          if (!open) setEditing(null)
-        }}
-      />
-    </>
-  )
+  // Its own dialogs, unless what holds it keeps them.
+  const dialogNodes = heldDialogs ? null : own.node
 
-  if (compact) {
+  if (variant === "strip") {
     const strip = [
       ...(groups.primary ? [groups.primary] : []),
       ...groups.pinned,
@@ -1130,7 +1211,7 @@ export function PersonalAgentRoster({
           })}
           {add}
         </div>
-        {dialogs}
+        {dialogNodes}
       </>
     )
   }
@@ -1242,7 +1323,7 @@ export function PersonalAgentRoster({
     <button
       type="button"
       disabled={readOnly}
-      onClick={() => setAdding(true)}
+      onClick={() => dialogs.add()}
       aria-label={rail ? tr("add") : undefined}
       title={rail ? tr("add") : undefined}
       data-pa-roster-add
@@ -1266,7 +1347,7 @@ export function PersonalAgentRoster({
     </button>
   )
 
-  if (size.rail) {
+  if (size.rail && !popover) {
     const others = [
       ...groups.pinned,
       ...groups.sections.flatMap((s) => s.entries),
@@ -1306,7 +1387,7 @@ export function PersonalAgentRoster({
           </div>
         </nav>
         <RosterResizeHandle size={size} onSize={setSize} />
-        {dialogs}
+        {dialogNodes}
       </>
     )
   }
@@ -1338,6 +1419,80 @@ export function PersonalAgentRoster({
 
   const hasGroups = groups.pinned.length > 0 || groups.sections.length > 0
   const dragged = drag ? (list.find((e) => e.id === drag.id) ?? null) : null
+
+  if (popover) {
+    const rows = (entries: readonly RosterEntry[]) =>
+      entries.map((b) => (
+        <div key={b.id} className="py-0.5">
+          {row(b)}
+        </div>
+      ))
+    return (
+      <div
+        data-pa-roster
+        data-pa-roster-popover
+        className="flex max-h-[inherit] min-h-0 flex-col"
+      >
+        <div className="field-scrollbar min-h-0 flex-1 overflow-y-auto p-1.5">
+          {primary ? rows([primary]) : null}
+          {/* The groups, each its name over its rows, a little apart. */}
+          <div className="flex flex-col gap-1">
+            {groups.pinned.length > 0 ? (
+              <div data-pa-roster-group="pinned">
+                {groupHead(tr("pinned"))}
+                {rows(groups.pinned)}
+              </div>
+            ) : null}
+            {groups.sections.map((sec) => (
+              <div key={sec.name} data-pa-roster-group={sec.name}>
+                {groupHead(sec.name, sec.name)}
+                {folded.has(sec.name) ? null : rows(sec.entries)}
+              </div>
+            ))}
+            {groups.rest.length > 0 ? (
+              <div data-pa-roster-group="rest">
+                {hasGroups ? groupHead(tr("others")) : null}
+                {rows(groups.rest)}
+              </div>
+            ) : null}
+            {groups.hidden.length > 0 ? (
+              <div data-pa-roster-group="hidden">
+                {hiddenToggle(false)}
+                {showHidden ? rows(groups.hidden) : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        {/* A new one, and whether the list also stands beside the
+            conversation. */}
+        <div
+          data-pa-roster-foot
+          className="flex flex-col gap-0.5 border-t border-border/60 p-1.5"
+        >
+          {addButton(false)}
+          <label
+            htmlFor="pa-roster-shown"
+            className="flex w-full cursor-pointer items-center gap-2.5 rounded-xl px-2 py-1.5 text-sm text-foreground/80 transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <span
+              aria-hidden
+              className="flex size-7 shrink-0 items-center justify-center text-muted-foreground"
+            >
+              <PanelLeft className="size-4" />
+            </span>
+            <span className="min-w-0 flex-1 truncate">{tr("showColumn")}</span>
+            <Switch
+              id="pa-roster-shown"
+              checked={shown}
+              onCheckedChange={setShown}
+              data-pa-roster-shown
+            />
+          </label>
+        </div>
+        {dialogNodes}
+      </div>
+    )
+  }
 
   return (
     <>
@@ -1415,7 +1570,7 @@ export function PersonalAgentRoster({
         </div>
       </nav>
       <RosterResizeHandle size={size} onSize={setSize} />
-      {dialogs}
+      {dialogNodes}
       {/* The row dragged, under the pointer. */}
       {drag && dragged
         ? createPortal(

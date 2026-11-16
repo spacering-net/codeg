@@ -56,7 +56,7 @@ vi.mock("@/components/settings/assistant-editor-dialog", () => ({
 
 import { BotDeleteDialog } from "./bot-delete-dialog"
 import { NewBotDialog } from "./new-bot-dialog"
-import { PersonalAgentRoster } from "./roster"
+import { PersonalAgentRoster, useRosterUpkeep } from "./roster"
 
 function wrap(node: React.ReactNode) {
   return render(
@@ -124,7 +124,7 @@ describe("a new work assistant", () => {
     usePersonalAgentUi.setState({ botPage: { tab: "notify" } })
     wrap(
       <>
-        <PersonalAgentRoster compact={false} readOnly={false} />
+        <PersonalAgentRoster variant="column" readOnly={false} />
         <NewBotDialog open onOpenChange={() => {}} />
       </>
     )
@@ -160,7 +160,7 @@ describe("a new work assistant", () => {
     api.personalAgentBots.mockResolvedValue([bot(1, "primary", "Nova")])
     wrap(
       <>
-        <PersonalAgentRoster compact={false} readOnly={false} />
+        <PersonalAgentRoster variant="column" readOnly={false} />
         <NewBotDialog open onOpenChange={() => {}} />
       </>
     )
@@ -267,7 +267,7 @@ describe("the roster", () => {
       bot(1, "primary", "Nova"),
       bot(9, "worker", "Reviewer"),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     const reviewer = await screen.findByText("Reviewer")
     fireEvent.click(reviewer)
     expect(usePersonalAgentUi.getState().viewBot).toBe(9)
@@ -275,13 +275,84 @@ describe("the roster", () => {
     expect(usePersonalAgentUi.getState().viewBot).toBeNull()
   })
 
-  it("goes back to the primary when the one shown is gone", async () => {
+  it("goes back to the primary when the one shown is gone, drawn or not", async () => {
     usePersonalAgentUi.setState({ viewBot: 42 })
     api.personalAgentBots.mockResolvedValue([bot(1, "primary", "Nova")])
-    wrap(<PersonalAgentRoster compact readOnly={false} />)
+    // The page keeps it, with no roster drawn (it is off at first).
+    function Upkeep() {
+      useRosterUpkeep(false)
+      return null
+    }
+    wrap(<Upkeep />)
     await waitFor(() =>
       expect(usePersonalAgentUi.getState().viewBot).toBeNull()
     )
+  })
+})
+
+describe("the roster in the title capsule's popover", () => {
+  const dialogs = () => ({
+    add: vi.fn(),
+    remove: vi.fn(),
+    group: vi.fn(),
+    edit: vi.fn(),
+  })
+
+  it("lists them, the primary a row of its own first, and closes on a pick", async () => {
+    api.personalAgentBots.mockResolvedValue([
+      bot(1, "primary", "Nova"),
+      bot(9, "worker", "Reviewer"),
+    ])
+    const onPick = vi.fn()
+    const held = dialogs()
+    wrap(
+      <PersonalAgentRoster
+        variant="popover"
+        readOnly={false}
+        dialogs={held}
+        onPick={onPick}
+      />
+    )
+    const reviewer = await screen.findByText("Reviewer")
+    expect(
+      [...document.querySelectorAll("[data-pa-roster-bot]")].map((r) =>
+        r.getAttribute("data-pa-roster-bot")
+      )
+    ).toEqual(["1", "9"])
+    // A row like the others, not the column's tile.
+    expect(document.querySelector("[data-pa-roster-primary]")).toBeNull()
+    fireEvent.click(reviewer)
+    expect(usePersonalAgentUi.getState().viewBot).toBe(9)
+    expect(onPick).toHaveBeenCalledTimes(1)
+    // A new one: the dialog its holder keeps, the popover closing.
+    fireEvent.click(screen.getByText("New work assistant"))
+    expect(held.add).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole("dialog")).toBeNull()
+  })
+
+  it("shows the roster beside the conversation from its switch, kept for next time", async () => {
+    window.localStorage.removeItem("pa:roster:shown:v1")
+    api.personalAgentBots.mockResolvedValue([bot(1, "primary", "Nova")])
+    wrap(
+      <PersonalAgentRoster
+        variant="popover"
+        readOnly={false}
+        dialogs={dialogs()}
+      />
+    )
+    await screen.findByText("Nova")
+    const shown = screen.getByRole("switch", { name: "Show in a sidebar" })
+    // Off at first: the workspace has its own sidebar.
+    expect(shown.getAttribute("aria-checked")).toBe("false")
+    try {
+      fireEvent.click(shown)
+      expect(window.localStorage.getItem("pa:roster:shown:v1")).toBe("1")
+      await waitFor(() =>
+        expect(shown.getAttribute("aria-checked")).toBe("true")
+      )
+    } finally {
+      window.localStorage.removeItem("pa:roster:shown:v1")
+    }
   })
 })
 

@@ -17,6 +17,18 @@
 
 import type { BotLive, BotLook, RosterEntry } from "@/lib/types"
 
+/** A line an assistant last said, as a row shows it: its first line of
+ *  markdown as plain words — no emphasis, code or strike marks, a link its
+ *  text, no heading, quote or list mark before it (a mark left open by the
+ *  cut it was given, too). */
+export function plainLine(text: string): string {
+  return text
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\*\*|__|~~|`/g, "")
+    .replace(/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/, "")
+    .trim()
+}
+
 /** Waiting on the owner this long is `stuck`. */
 export const STUCK_AFTER_MS = 120_000
 

@@ -123,7 +123,7 @@ export function ExchangeRow({ item }: { item: ExchangeItem }) {
       data-pa-divider
       data-pa-exchange
       className={cn(
-        "flex flex-col items-center gap-0.5 py-2 select-none first:pt-0",
+        "flex flex-col items-center gap-0.5 py-2 select-none [[data-pa-row-first]>&:first-child]:pt-0",
         enter
       )}
     >

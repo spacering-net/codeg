@@ -24,7 +24,8 @@
  * - a state that stays (the owner's message that never finished, with the
  *   way to send it again) is a line under the bubble, in the flow.
  * A divider (a time, the "new messages" line) keeps as much room under it as
- * over it, and the message under it starts right there.
+ * over it, and the message under it starts right there (beside it in its
+ * row, or in the next row: `data-pa-under-line`).
  */
 
 import { createContext, useContext, useRef, useState } from "react"
@@ -230,7 +231,9 @@ export function MessageRow({
         "group/msg relative flex min-w-0 flex-col",
         side === "start" ? "items-start" : "items-end",
         GAP[gap],
-        "[[data-pa-divider]+&]:mt-0",
+        // Right under a line — beside it, or the row over it in the list
+        // drawn a row at a time — it takes no room of its own.
+        "[[data-pa-divider]+&]:mt-0 [[data-pa-under-line]>&:first-child]:mt-0",
         enter
       )}
     >

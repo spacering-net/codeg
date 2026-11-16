@@ -253,7 +253,7 @@
     },
     "paAccent": {
       "title": "Couleur d’accent des assistants",
-      "description": "La couleur de vos bulles, des bordures et des boutons des cartes dans la conversation d’un assistant.",
+      "description": "La couleur des bordures et des boutons des cartes dans la conversation d’un assistant ; vos bulles prennent toujours la couleur de l’assistant.",
       "default": "Par défaut",
       "bot": "Suivre la couleur de l’assistant"
     }
@@ -8915,7 +8915,7 @@
       "more": "Plus",
       "showPanel": "Afficher le panneau latéral",
       "hidePanel": "Masquer le panneau latéral",
-      "settings": "Réglages de l'agent personnel…",
+      "settings": "Réglages de l'agent personnel",
       "viewSession": "Voir la session sous-jacente",
       "compact": "Compacter le contexte",
       "compactHint": "Compacter maintenant le contexte de la session",
@@ -9333,7 +9333,9 @@
         "prStuck": "#{id} est en conflit : {title}",
         "prChecks": "#{id} vérifications en attente {passed}/{total}",
         "resize": "Redimensionner la liste des assistants",
-        "dropNewGroup": "Déposer ici pour un nouveau groupe"
+        "dropNewGroup": "Déposer ici pour un nouveau groupe",
+        "switch": "Changer d’assistant",
+        "showColumn": "Afficher dans une barre latérale"
       },
       "choice": {
         "other": "Autre",
@@ -9536,7 +9538,6 @@
     },
     "detail": {
       "title": "Détails",
-      "open": "Afficher les détails",
       "close": "Masquer les détails",
       "tabs": {
         "activity": "Activité",

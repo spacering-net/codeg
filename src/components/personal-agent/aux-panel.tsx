@@ -3,8 +3,9 @@
 /**
  * The personal agent page's side panel, under the window's top band as the
  * other full pages have it (the tasks' board). On top, who it is: its face,
- * alive, and its name, with the bell that says whether it notifies the
- * owner at the top's end; under them shadcn's tabs (10.1), the first open by
+ * alive, and its name, the bell that says whether it notifies the owner in
+ * one corner and the "⋯" of what acts on it in the other; under them
+ * shadcn's tabs (10.1), the first open by
  * default — each tab of shadcn's pieces (`panel-section.tsx`):
  * - Activity: on the primary, "Today": every assistant's day in four groups
  *   (6.3, `today-section.tsx`); its open matters, as the workspace's task
@@ -73,6 +74,7 @@ import {
   type PanelTone,
 } from "./panel-section"
 import { CopyPropertyButton, PropertyRow } from "./property-row"
+import { AgentMenu } from "./agent-menu"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import {
   RankedBars,
@@ -419,9 +421,10 @@ export function PersonalAgentAuxPanel({
 }
 
 /** Who the panel is about, over its tabs: its face — alive, as on the
- *  roster, its star on the primary's — and its name; at the top's end
- *  (its start in the drawer, whose close button has the end) whether it
- *  notifies the owner. */
+ *  roster, its star on the primary's — and its name; in the top's corners,
+ *  as far from either edge, whether it notifies the owner (the bell, at the
+ *  start) and what acts on it (the "⋯", at the end — in the drawer left of
+ *  its close button, which has the right). */
 function AuxHead({
   snapshot,
   inDrawer,
@@ -442,10 +445,21 @@ function AuxHead({
       className="relative flex shrink-0 flex-col items-center gap-3 px-4 pt-7 pb-3"
     >
       {agent ? (
-        <NotifyToggle
-          snapshot={snapshot}
-          className={cn("absolute top-2", inDrawer ? "start-2" : "end-2")}
-        />
+        <>
+          <NotifyToggle
+            snapshot={snapshot}
+            className={cn(
+              "absolute",
+              inDrawer ? "top-2.5 left-3" : "start-2 top-2"
+            )}
+          />
+          <AgentMenu
+            className={cn(
+              "absolute",
+              inDrawer ? "top-2.5 right-12" : "end-2 top-2"
+            )}
+          />
+        </>
       ) : null}
       {agent ? (
         <BotAvatar

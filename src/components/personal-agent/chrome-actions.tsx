@@ -2,161 +2,56 @@
 
 /**
  * The personal agent's buttons in the window's top-right chrome, left of
- * the window's own settings gear: a "⋯" menu with what acts on the agent
- * itself — the settings every assistant shares, the session it runs on
- * underneath, compacting that session's context (or, while a turn
- * runs, stopping it: the reply being written, or the compaction), and
- * starting a new one — then the side panel's toggle, nearest the edge the
- * panel opens at; not while a page is over the conversation, the panel
- * standing aside for it. Two buttons, the room the chrome keeps for a
- * route's own (`RIGHT_CHROME_CLUSTER`).
+ * the window's own settings gear: the settings every assistant shares, then
+ * the side panel's toggle, nearest the edge the panel opens at — not while
+ * a page is over the conversation, the panel standing aside for it. What
+ * acts on one assistant (its session, compacting, a new session, stopping
+ * everything) is on the panel, by its face (`AgentMenu`). Two buttons, the
+ * room the chrome keeps for a route's own (`RIGHT_CHROME_CLUSTER`).
  */
 
-import { useState } from "react"
 import { useTranslations } from "next-intl"
-import {
-  Eye,
-  MoreHorizontal,
-  OctagonX,
-  PanelRight,
-  RotateCcw,
-  Settings2,
-  Shrink,
-  Square,
-} from "lucide-react"
-import { toast } from "sonner"
+import { PanelRight, Settings2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import type { WorkbenchChromeActionsProps } from "@/components/workbench/workbench-content"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
-import {
-  personalAgentCancel,
-  personalAgentCompact,
-  personalAgentStopAll,
-} from "@/lib/api"
-import { toErrorMessage } from "@/lib/app-error"
-import {
-  PERSONAL_AGENT_EVENTS,
-  usePersonalAgentUi,
-} from "@/stores/personal-agent-ui-store"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 export function PersonalAgentChromeActions({
   buttonClassName,
   iconClassName,
 }: WorkbenchChromeActionsProps) {
   const t = useTranslations("PersonalAgent.menu")
-  const { snapshot, botId } = usePersonalAgent()
+  const { snapshot } = usePersonalAgent()
   const auxOpen = usePersonalAgentUi((s) => s.auxOpen)
   const toggleAux = usePersonalAgentUi((s) => s.toggleAux)
+  const settingsOpen = usePersonalAgentUi((s) => s.settings != null)
   const pageOver = usePersonalAgentUi(
     (s) => s.settings != null || s.botPage != null
   )
-  const [acting, setActing] = useState(false)
-  const status = snapshot?.status ?? null
   const configured = snapshot?.agent != null
-  const readOnly = status?.engine !== "here"
-  const turn = status?.turn ?? null
-  // The notes before a compaction are part of it (7.7).
-  const compacting = turn?.kind === "compaction" || turn?.flush === true
-  const hasSession = status?.segment?.conversation_id != null
-  const act = async (fn: () => Promise<void>, done?: string) => {
-    setActing(true)
-    try {
-      await fn()
-      if (done) toast.message(done)
-    } catch (e) {
-      toast.error(toErrorMessage(e))
-    } finally {
-      setActing(false)
-    }
-  }
   const panelLabel = auxOpen ? t("hidePanel") : t("showPanel")
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={buttonClassName}
-            title={t("more")}
-            aria-label={t("more")}
-          >
-            <MoreHorizontal className={iconClassName} />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-52">
-          <DropdownMenuItem
-            onClick={() => usePersonalAgentUi.getState().openSettings()}
-          >
-            <Settings2 className="size-4" />
-            {t("settings")}
-          </DropdownMenuItem>
-          {configured ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                disabled={!hasSession}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new Event(PERSONAL_AGENT_EVENTS.openSession)
-                  )
-                }
-              >
-                <Eye className="size-4" />
-                {t("viewSession")}
-              </DropdownMenuItem>
-              {turn ? (
-                <DropdownMenuItem
-                  disabled={readOnly || acting}
-                  onClick={() => void act(() => personalAgentCancel(botId))}
-                >
-                  <Square className="size-4" />
-                  {compacting ? t("stopCompaction") : t("stopReply")}
-                </DropdownMenuItem>
-              ) : (
-                <DropdownMenuItem
-                  disabled={readOnly || acting || !status?.segment}
-                  title={t("compactHint")}
-                  onClick={() => void act(() => personalAgentCompact(botId))}
-                >
-                  <Shrink className="size-4" />
-                  {t("compact")}
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem
-                disabled={readOnly || !status?.segment}
-                onClick={() =>
-                  window.dispatchEvent(
-                    new Event(PERSONAL_AGENT_EVENTS.newSession)
-                  )
-                }
-              >
-                <RotateCcw className="size-4" />
-                {t("newSession")}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                disabled={readOnly || acting}
-                title={t("stopAllHint")}
-                onClick={() =>
-                  void act(() => personalAgentStopAll(botId), t("stoppedAll"))
-                }
-              >
-                <OctagonX className="size-4" />
-                {t("stopAll")}
-              </DropdownMenuItem>
-            </>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {/* Pressed while they are open: pressed again, back to the
+          conversation. */}
+      <Button
+        variant="ghost"
+        size="icon"
+        className={buttonClassName}
+        onClick={() => {
+          const ui = usePersonalAgentUi.getState()
+          if (settingsOpen) ui.showConversation()
+          else ui.openSettings()
+        }}
+        title={t("settings")}
+        aria-label={t("settings")}
+        aria-pressed={settingsOpen}
+        data-pa-chrome-settings
+      >
+        <Settings2 className={iconClassName} />
+      </Button>
       {configured && !pageOver ? (
         <Button
           variant="ghost"

@@ -167,7 +167,7 @@ type Placed = Exclude<MessageItem, { kind: "time" }>
 
 /** A line across the list, as a time line is: what is above it closes its
  *  run, what is under it starts one. */
-function isLine(item: MessageItem | undefined): boolean {
+export function isLine(item: MessageItem | undefined): boolean {
   return item?.kind === "time" || item?.kind === "exchange"
 }
 
@@ -424,24 +424,55 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
   return items
 }
 
-/** Every row id a list of items draws (a turn's cards included): what a jump
- *  can land on. */
+/** The row ids an item draws (a turn's cards included): what a jump can
+ *  land on. */
+export function itemRowIds(item: MessageItem): number[] {
+  // A turn's text before a line is no row of its own: the line draws it.
+  if (item.kind === "time" || item.kind === "said") return []
+  if (item.kind === "reply") {
+    return [
+      item.anchor.id,
+      ...(item.row ? [item.row.id] : []),
+      ...item.attached.map((r) => r.id),
+    ]
+  }
+  if (item.kind === "exchange") return item.rows.map((r) => r.id)
+  return [item.row.id]
+}
+
+/** Every row id a list of items draws. */
 export function drawnRowIds(items: readonly MessageItem[]): Set<number> {
   const ids = new Set<number>()
-  for (const item of items) {
-    // A turn's text before a line is no row of its own: the line draws it.
-    if (item.kind === "time" || item.kind === "said") continue
-    if (item.kind === "reply") {
-      ids.add(item.anchor.id)
-      if (item.row) ids.add(item.row.id)
-      for (const r of item.attached) ids.add(r.id)
-    } else if (item.kind === "exchange") {
-      for (const r of item.rows) ids.add(r.id)
-    } else {
-      ids.add(item.row.id)
-    }
-  }
+  for (const item of items) for (const id of itemRowIds(item)) ids.add(id)
   return ids
+}
+
+/** A row of the list as it is drawn a screen at a time: one item, keyed as
+ *  the item is (an item keeps its row, and what is in it, whatever comes in
+ *  around it). */
+export interface ListRow {
+  key: string
+  item: MessageItem
+  /** The "new messages" line goes right over it, in its row. */
+  newLine: boolean
+  /** The item over it is a line (a time, the lines between assistants): a
+   *  message right under one takes no room of its own over it, as under the
+   *  "new messages" line. */
+  underLine: boolean
+}
+
+/** The list's items as the rows it is drawn in, the "new messages" line
+ *  over item `newLineAt` (`-1`: none). */
+export function listRowsOf(
+  items: readonly MessageItem[],
+  newLineAt: number
+): ListRow[] {
+  return items.map((item, i) => ({
+    key: item.key,
+    item,
+    newLine: i === newLineAt,
+    underLine: isLine(items[i - 1]),
+  }))
 }
 
 /** Where the "new messages" line goes for row `rowId`: before the item that

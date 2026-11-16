@@ -253,7 +253,7 @@
     },
     "paAccent": {
       "title": "助手强调色",
-      "description": "助手对话里你的气泡、卡片的强调边和卡片按钮用什么颜色。",
+      "description": "助手对话里卡片的强调边和卡片按钮用什么颜色；你的气泡始终用助手的颜色。",
       "default": "默认",
       "bot": "跟随助手颜色"
     }
@@ -8915,7 +8915,7 @@
       "more": "更多",
       "showPanel": "显示辅助面板",
       "hidePanel": "隐藏辅助面板",
-      "settings": "个人助手设置…",
+      "settings": "个人助手设置",
       "viewSession": "查看底层会话",
       "compact": "压缩上下文",
       "compactHint": "现在就压缩会话的上下文",
@@ -9333,7 +9333,9 @@
         "prStuck": "#{id} 有冲突：{title}",
         "prChecks": "#{id} 等检查 {passed}/{total}",
         "resize": "调整助手列表宽度",
-        "dropNewGroup": "拖到这里新建分组"
+        "dropNewGroup": "拖到这里新建分组",
+        "switch": "切换助手",
+        "showColumn": "在侧边栏显示"
       },
       "choice": {
         "other": "其他",
@@ -9536,7 +9538,6 @@
     },
     "detail": {
       "title": "详情",
-      "open": "显示详情",
       "close": "收起详情",
       "tabs": {
         "activity": "动态",

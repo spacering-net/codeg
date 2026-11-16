@@ -253,7 +253,7 @@
     },
     "paAccent": {
       "title": "Assistant accent colour",
-      "description": "The colour of your bubbles, card edges and card buttons in an assistant's conversation.",
+      "description": "The colour of the card edges and card buttons in an assistant's conversation; your own bubbles always take the assistant's colour.",
       "default": "Default",
       "bot": "Follow the assistant's colour"
     }
@@ -8915,7 +8915,7 @@
       "more": "More",
       "showPanel": "Show the side panel",
       "hidePanel": "Hide the side panel",
-      "settings": "Personal agent settings…",
+      "settings": "Personal agent settings",
       "viewSession": "View the session underneath",
       "compact": "Compact the context",
       "compactHint": "Compact the session's context now",
@@ -9333,7 +9333,9 @@
         "prStuck": "#{id} has a conflict: {title}",
         "prChecks": "#{id} waiting for checks {passed}/{total}",
         "resize": "Resize the assistant list",
-        "dropNewGroup": "Drop here for a new group"
+        "dropNewGroup": "Drop here for a new group",
+        "switch": "Switch assistant",
+        "showColumn": "Show in a sidebar"
       },
       "choice": {
         "other": "Other",
@@ -9536,7 +9538,6 @@
     },
     "detail": {
       "title": "Details",
-      "open": "Show the details",
       "close": "Hide the details",
       "tabs": {
         "activity": "Activity",

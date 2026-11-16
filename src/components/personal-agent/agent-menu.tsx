@@ -1,0 +1,127 @@
+"use client"
+
+/**
+ * The "⋯" by an assistant's face at the side panel's top: what acts on that
+ * assistant itself — the session it runs on underneath, compacting that
+ * session's context (or, while a turn runs, stopping it: the reply being
+ * written, or the compaction), starting a new one, and stopping everything
+ * it has going.
+ */
+
+import { useState } from "react"
+import { useTranslations } from "next-intl"
+import {
+  Eye,
+  MoreHorizontal,
+  OctagonX,
+  RotateCcw,
+  Shrink,
+  Square,
+} from "lucide-react"
+import { toast } from "sonner"
+
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { usePersonalAgent } from "@/contexts/personal-agent-context"
+import {
+  personalAgentCancel,
+  personalAgentCompact,
+  personalAgentStopAll,
+} from "@/lib/api"
+import { toErrorMessage } from "@/lib/app-error"
+import { cn } from "@/lib/utils"
+import { PERSONAL_AGENT_EVENTS } from "@/stores/personal-agent-ui-store"
+
+export function AgentMenu({ className }: { className?: string }) {
+  const t = useTranslations("PersonalAgent.menu")
+  const { snapshot, botId } = usePersonalAgent()
+  const [acting, setActing] = useState(false)
+  const status = snapshot?.status ?? null
+  const readOnly = status?.engine !== "here"
+  const turn = status?.turn ?? null
+  // The notes before a compaction are part of it (7.7).
+  const compacting = turn?.kind === "compaction" || turn?.flush === true
+  const hasSession = status?.segment?.conversation_id != null
+  const act = async (fn: () => Promise<void>, done?: string) => {
+    setActing(true)
+    try {
+      await fn()
+      if (done) toast.message(done)
+    } catch (e) {
+      toast.error(toErrorMessage(e))
+    } finally {
+      setActing(false)
+    }
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={cn("text-muted-foreground", className)}
+          title={t("more")}
+          aria-label={t("more")}
+          data-pa-agent-menu
+        >
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-52">
+        <DropdownMenuItem
+          disabled={!hasSession}
+          onClick={() =>
+            window.dispatchEvent(new Event(PERSONAL_AGENT_EVENTS.openSession))
+          }
+        >
+          <Eye className="size-4" />
+          {t("viewSession")}
+        </DropdownMenuItem>
+        {turn ? (
+          <DropdownMenuItem
+            disabled={readOnly || acting}
+            onClick={() => void act(() => personalAgentCancel(botId))}
+          >
+            <Square className="size-4" />
+            {compacting ? t("stopCompaction") : t("stopReply")}
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuItem
+            disabled={readOnly || acting || !status?.segment}
+            title={t("compactHint")}
+            onClick={() => void act(() => personalAgentCompact(botId))}
+          >
+            <Shrink className="size-4" />
+            {t("compact")}
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem
+          disabled={readOnly || !status?.segment}
+          onClick={() =>
+            window.dispatchEvent(new Event(PERSONAL_AGENT_EVENTS.newSession))
+          }
+        >
+          <RotateCcw className="size-4" />
+          {t("newSession")}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          disabled={readOnly || acting}
+          title={t("stopAllHint")}
+          onClick={() =>
+            void act(() => personalAgentStopAll(botId), t("stoppedAll"))
+          }
+        >
+          <OctagonX className="size-4" />
+          {t("stopAll")}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}

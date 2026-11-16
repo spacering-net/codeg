@@ -12,15 +12,23 @@
  * and answers as the side panel's does (the same line, thickening under the
  * pointer and while dragged); the arrow keys move it too (past the least
  * width onto the rail, and back), and a double click puts it back.
+ *
+ * Whether it stands beside the conversation at all is the owner's too
+ * (`useRosterShown`): off at first, the title's capsule listing them.
  */
 
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useRef, useState, useSyncExternalStore } from "react"
 import { useTranslations } from "next-intl"
 
 import { RESIZE_HANDLE_CLASS } from "@/components/ui/resizable"
 import { cn } from "@/lib/utils"
 
 export const ROSTER_WIDTH_KEY = "pa:roster:width:v1"
+/** "1" while the roster stands as a column beside the conversation; off by
+ *  default — the workspace has its own sidebar, and the title's capsule
+ *  lists the assistants. */
+export const ROSTER_SHOWN_KEY = "pa:roster:shown:v1"
+const SHOWN_CHANGED = "codeg:pa-roster-shown-changed"
 /** "1" while the list is folded to its rail. */
 export const ROSTER_RAIL_KEY = "pa:roster:rail:v1"
 /** In rem: 240px at 100%. */
@@ -111,6 +119,43 @@ export function useRosterWidth(): [
     if (keep) storeSize(s)
   }, [])
   return [size, set]
+}
+
+function readShown(): boolean {
+  try {
+    return window.localStorage.getItem(ROSTER_SHOWN_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+function subscribeShown(onChange: () => void): () => void {
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === null || e.key === ROSTER_SHOWN_KEY) onChange()
+  }
+  window.addEventListener("storage", onStorage)
+  window.addEventListener(SHOWN_CHANGED, onChange)
+  return () => {
+    window.removeEventListener("storage", onStorage)
+    window.removeEventListener(SHOWN_CHANGED, onChange)
+  }
+}
+
+export function setRosterShown(shown: boolean): void {
+  try {
+    if (shown) window.localStorage.setItem(ROSTER_SHOWN_KEY, "1")
+    else window.localStorage.removeItem(ROSTER_SHOWN_KEY)
+  } catch {
+    // Not kept; this window still follows it.
+  }
+  window.dispatchEvent(new Event(SHOWN_CHANGED))
+}
+
+/** Whether the roster stands as a column beside the conversation (kept in
+ *  this browser, every window following a change), and the way to set it. */
+export function useRosterShown(): [boolean, (shown: boolean) => void] {
+  const shown = useSyncExternalStore(subscribeShown, readShown, () => false)
+  return [shown, setRosterShown]
 }
 
 /** How many pixels a rem is now (the app zoom sets it). */

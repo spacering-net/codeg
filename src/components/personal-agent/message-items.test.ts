@@ -5,6 +5,7 @@ import type { TimelineRow } from "@/lib/types"
 import {
   buildMessageItems,
   drawnRowIds,
+  listRowsOf,
   isUnseen,
   newLineIndex,
   type MessageItem,
@@ -470,6 +471,75 @@ describe("newLineIndex", () => {
   it("finds nothing for a row no item draws", () => {
     const items = buildMessageItems([row(1, "owner")])
     expect(newLineIndex(items, 9)).toBe(-1)
+  })
+})
+
+describe("listRowsOf", () => {
+  const line = (id: number, patch: Partial<TimelineRow>) =>
+    row(id, "exchange", {
+      data: { direction: "out", peer: { id: 2, name: "Dev" } },
+      ...patch,
+    })
+  const shapeOf = (rows: ReturnType<typeof listRowsOf>) =>
+    rows.map((r) => [
+      shape([r.item])[0],
+      r.key === r.item.key,
+      r.newLine,
+      r.underLine,
+    ])
+
+  it("draws each item a row, keyed as the item, saying what is under a line", () => {
+    const items = buildMessageItems([
+      row(1, "owner", { batch_id: 7, status: "answered" }),
+      row(2, "reply", { batch_id: 7, data: { state: "done" } }),
+      line(3, { batch_id: 7 }),
+      line(4, { batch_id: 7 }),
+    ])
+    expect(shapeOf(listRowsOf(items, -1))).toEqual([
+      ["time", true, false, false],
+      ["owner:1", true, false, true],
+      ["exchange:3,4", true, false, false],
+      ["reply:2[]", true, false, true],
+    ])
+  })
+
+  it("keeps an item's row when older messages take the time line over it", () => {
+    // Its key is its own, not the time line's: what is in it (an answer
+    // being typed into a card) stays.
+    const reply = (more: TimelineRow[]) =>
+      listRowsOf(
+        buildMessageItems([
+          ...more,
+          row(100, "reply", {
+            batch_id: 7,
+            data: { state: "done" },
+            created_at: "2026-11-04T10:00:40Z",
+          }),
+        ]),
+        -1
+      ).find((r) => r.item.kind === "reply")!
+    const alone = reply([])
+    const after = reply([
+      row(99, "owner", { created_at: "2026-11-04T10:00:39Z" }),
+    ])
+    expect(alone.underLine).toBe(true)
+    expect(after.underLine).toBe(false)
+    expect(after.key).toBe(alone.key)
+  })
+
+  it("puts the new-messages line in the row of the item it goes over", () => {
+    const items = buildMessageItems([
+      row(1, "owner", { created_at: "2026-11-04T09:00:00Z" }),
+      row(2, "reply", {
+        batch_id: 7,
+        data: { state: "done" },
+        created_at: "2026-11-04T10:00:00Z",
+      }),
+    ])
+    // time, owner:1, time, reply:2 — new from the reply: over its time line.
+    const rows = listRowsOf(items, newLineIndex(items, 2))
+    expect(rows.map((r) => r.newLine)).toEqual([false, false, true, false])
+    expect(rows[2].item.kind).toBe("time")
   })
 })
 

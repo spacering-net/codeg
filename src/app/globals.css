@@ -4246,145 +4246,130 @@ div.monaco-diff-editor.side-by-side .editor.modified {
    Material's state layers). Being translucent, the washes read the same
    over a workspace background image. */
 
-/* Personal agent: the owner's bubble is a tint of the theme's primary over
-   the page, so it reads as theirs in every theme; the assistant's bubbles
-   (below) are grey. Base colour first: an engine without color-mix keeps
-   the page colour, not a solid primary. What sits inside (a quote) washes
-   it with more of the primary: a deeper tint of the same hue. Over a
-   workspace background image it turns translucent like the conversation's
-   message surfaces (`ws-msg-*`), with their hairline ring. */
-/* The assistants page with "follow the assistant's colour" on (10.7): its
-   conversation takes the assistant's colour for the theme's — the owner's
-   bubbles, the cards' accent edges and buttons. Each colour once for the
-   light theme and once for the dark. The unread dot keeps its blue (it is
-   not the theme's colour). */
-[data-pa-accent="black"] {
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --ring: oklch(0.205 0 0);
+/* Personal agent: an assistant's face colour (10.7), on its conversation
+   (`data-pa-face`): once for the light theme and once for the dark, with
+   the text that reads on it. The owner's bubbles are always a tint of it;
+   with "follow the assistant's colour" on (`data-pa-accent`) it is the
+   theme's colour there too — the cards' accent edges and buttons. The
+   unread dot keeps its blue (it is not the theme's colour). */
+[data-pa-face="black"] {
+  --pa-face: oklch(0.205 0 0);
+  --pa-face-foreground: oklch(0.985 0 0);
 }
-.dark [data-pa-accent="black"] {
-  --primary: oklch(0.87 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.87 0 0);
+.dark [data-pa-face="black"] {
+  --pa-face: oklch(0.87 0 0);
+  --pa-face-foreground: oklch(0.205 0 0);
 }
-[data-pa-accent="brown"] {
-  --primary: oklch(0.473 0.137 46.201);
-  --primary-foreground: oklch(0.985 0 0);
-  --ring: oklch(0.473 0.137 46.201);
+[data-pa-face="brown"] {
+  --pa-face: oklch(0.473 0.137 46.201);
+  --pa-face-foreground: oklch(0.985 0 0);
 }
-.dark [data-pa-accent="brown"] {
-  --primary: oklch(0.666 0.179 58.318);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.666 0.179 58.318);
+.dark [data-pa-face="brown"] {
+  --pa-face: oklch(0.666 0.179 58.318);
+  --pa-face-foreground: oklch(0.205 0 0);
 }
-[data-pa-accent="red"] {
-  --primary: oklch(0.577 0.245 27.325);
-  --primary-foreground: oklch(0.985 0 0);
-  --ring: oklch(0.577 0.245 27.325);
+[data-pa-face="red"] {
+  --pa-face: oklch(0.577 0.245 27.325);
+  --pa-face-foreground: oklch(0.985 0 0);
 }
-.dark [data-pa-accent="red"] {
-  --primary: oklch(0.704 0.191 22.216);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.704 0.191 22.216);
+.dark [data-pa-face="red"] {
+  --pa-face: oklch(0.704 0.191 22.216);
+  --pa-face-foreground: oklch(0.205 0 0);
 }
-[data-pa-accent="orange"] {
-  --primary: oklch(0.646 0.222 41.116);
-  --primary-foreground: oklch(0.985 0 0);
-  --ring: oklch(0.646 0.222 41.116);
+[data-pa-face="orange"] {
+  --pa-face: oklch(0.646 0.222 41.116);
+  --pa-face-foreground: oklch(0.985 0 0);
 }
-.dark [data-pa-accent="orange"] {
-  --primary: oklch(0.75 0.183 55.934);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.75 0.183 55.934);
+.dark [data-pa-face="orange"] {
+  --pa-face: oklch(0.75 0.183 55.934);
+  --pa-face-foreground: oklch(0.205 0 0);
 }
-[data-pa-accent="yellow"] {
-  --primary: oklch(0.795 0.184 86.047);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.795 0.184 86.047);
+[data-pa-face="yellow"] {
+  --pa-face: oklch(0.795 0.184 86.047);
+  --pa-face-foreground: oklch(0.205 0 0);
 }
-.dark [data-pa-accent="yellow"] {
-  --primary: oklch(0.905 0.182 98.111);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.905 0.182 98.111);
+.dark [data-pa-face="yellow"] {
+  --pa-face: oklch(0.905 0.182 98.111);
+  --pa-face-foreground: oklch(0.205 0 0);
 }
-[data-pa-accent="green"] {
-  --primary: oklch(0.627 0.194 149.214);
-  --primary-foreground: oklch(0.985 0 0);
-  --ring: oklch(0.627 0.194 149.214);
+[data-pa-face="green"] {
+  --pa-face: oklch(0.627 0.194 149.214);
+  --pa-face-foreground: oklch(0.985 0 0);
 }
-.dark [data-pa-accent="green"] {
-  --primary: oklch(0.792 0.209 151.711);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.792 0.209 151.711);
+.dark [data-pa-face="green"] {
+  --pa-face: oklch(0.792 0.209 151.711);
+  --pa-face-foreground: oklch(0.205 0 0);
 }
-[data-pa-accent="teal"] {
-  --primary: oklch(0.6 0.118 184.704);
-  --primary-foreground: oklch(0.985 0 0);
-  --ring: oklch(0.6 0.118 184.704);
+[data-pa-face="teal"] {
+  --pa-face: oklch(0.6 0.118 184.704);
+  --pa-face-foreground: oklch(0.985 0 0);
 }
-.dark [data-pa-accent="teal"] {
-  --primary: oklch(0.777 0.152 181.912);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.777 0.152 181.912);
+.dark [data-pa-face="teal"] {
+  --pa-face: oklch(0.777 0.152 181.912);
+  --pa-face-foreground: oklch(0.205 0 0);
 }
-[data-pa-accent="blue"] {
-  --primary: oklch(0.546 0.245 262.881);
-  --primary-foreground: oklch(0.985 0 0);
-  --ring: oklch(0.546 0.245 262.881);
+[data-pa-face="blue"] {
+  --pa-face: oklch(0.546 0.245 262.881);
+  --pa-face-foreground: oklch(0.985 0 0);
 }
-.dark [data-pa-accent="blue"] {
-  --primary: oklch(0.707 0.165 254.624);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.707 0.165 254.624);
+.dark [data-pa-face="blue"] {
+  --pa-face: oklch(0.707 0.165 254.624);
+  --pa-face-foreground: oklch(0.205 0 0);
 }
-[data-pa-accent="purple"] {
-  --primary: oklch(0.541 0.281 293.009);
-  --primary-foreground: oklch(0.985 0 0);
-  --ring: oklch(0.541 0.281 293.009);
+[data-pa-face="purple"] {
+  --pa-face: oklch(0.541 0.281 293.009);
+  --pa-face-foreground: oklch(0.985 0 0);
 }
-.dark [data-pa-accent="purple"] {
-  --primary: oklch(0.702 0.183 293.541);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.702 0.183 293.541);
+.dark [data-pa-face="purple"] {
+  --pa-face: oklch(0.702 0.183 293.541);
+  --pa-face-foreground: oklch(0.205 0 0);
 }
-[data-pa-accent="magenta"] {
-  --primary: oklch(0.591 0.293 322.896);
-  --primary-foreground: oklch(0.985 0 0);
-  --ring: oklch(0.591 0.293 322.896);
+[data-pa-face="magenta"] {
+  --pa-face: oklch(0.591 0.293 322.896);
+  --pa-face-foreground: oklch(0.985 0 0);
 }
-.dark [data-pa-accent="magenta"] {
-  --primary: oklch(0.74 0.238 322.16);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.74 0.238 322.16);
+.dark [data-pa-face="magenta"] {
+  --pa-face: oklch(0.74 0.238 322.16);
+  --pa-face-foreground: oklch(0.205 0 0);
 }
-[data-pa-accent="gray"] {
-  --primary: oklch(0.446 0.043 257.281);
-  --primary-foreground: oklch(0.985 0 0);
-  --ring: oklch(0.446 0.043 257.281);
+[data-pa-face="gray"] {
+  --pa-face: oklch(0.446 0.043 257.281);
+  --pa-face-foreground: oklch(0.985 0 0);
 }
-.dark [data-pa-accent="gray"] {
-  --primary: oklch(0.704 0.04 256.788);
-  --primary-foreground: oklch(0.205 0 0);
-  --ring: oklch(0.704 0.04 256.788);
+.dark [data-pa-face="gray"] {
+  --pa-face: oklch(0.704 0.04 256.788);
+  --pa-face-foreground: oklch(0.205 0 0);
+}
+[data-pa-accent][data-pa-face] {
+  --primary: var(--pa-face);
+  --primary-foreground: var(--pa-face-foreground);
+  --ring: var(--pa-face);
 }
 
+/* Personal agent: the owner's bubble is a tint of the assistant's face
+   colour over the page (the theme's primary for one with a picture for a
+   face), so it reads as theirs, in that conversation's colour; the
+   assistant's bubbles (below) are grey. What sits inside (a quote) washes
+   it with more of it: a deeper tint of the same hue. Over a workspace
+   background image it turns translucent like the conversation's message
+   surfaces (`ws-msg-*`), with their hairline ring. */
 .pa-owner-bubble {
-  --pa-inset: color-mix(in oklab, var(--primary) 6%, transparent);
-  --pa-inset-hover: color-mix(in oklab, var(--primary) 10%, transparent);
-  --pa-inset-active: color-mix(in oklab, var(--primary) 14%, transparent);
-  background-color: color-mix(in oklab, var(--background) 89%, var(--primary));
+  --pa-own: var(--pa-face, var(--primary));
+  --pa-inset: color-mix(in oklab, var(--pa-own) 7%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--pa-own) 11%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--pa-own) 15%, transparent);
+  background-color: color-mix(in oklab, var(--background) 86%, var(--pa-own));
 }
 .dark .pa-owner-bubble {
-  --pa-inset: color-mix(in oklab, var(--primary) 8%, transparent);
-  --pa-inset-hover: color-mix(in oklab, var(--primary) 12%, transparent);
-  --pa-inset-active: color-mix(in oklab, var(--primary) 16%, transparent);
-  background-color: color-mix(in oklab, var(--background) 80%, var(--primary));
+  --pa-inset: color-mix(in oklab, var(--pa-own) 9%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--pa-own) 13%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--pa-own) 17%, transparent);
+  background-color: color-mix(in oklab, var(--background) 76%, var(--pa-own));
 }
 [data-workspace-bg="on"] .pa-owner-bubble {
   background-color: color-mix(
     in oklab,
-    color-mix(in oklab, var(--muted) 89%, var(--primary)) 58%,
+    color-mix(in oklab, var(--muted) 86%, var(--pa-own)) 58%,
     transparent
   );
   box-shadow: inset 0 0 0 1px var(--border);
@@ -4448,6 +4433,86 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 }
 .pa-agent-bubble [data-streamdown="code-block-header"] {
   box-shadow: none;
+}
+
+/* Personal agent: a button standing on an assistant's bubble — a card's
+   "hand it to the assistant", "open the task" — is raised off its grey: the
+   page's colour with a hairline and a soft shadow (in the dark theme a step
+   lighter than the bubble), a little deeper under the pointer; the input
+   colour the outline buttons wash themselves with elsewhere is the bubble's
+   own grey, and left it a muddy patch. A ghost button takes the bubble's
+   own step deeper under the pointer, not the page's grey (the bubble's).
+   Not one on a card of its own inside it (a json-render card), which has
+   its own surface; the focus ring keeps its shadow. */
+.pa-agent-bubble
+  :is(
+    [data-slot="button"][data-variant="outline"],
+    [data-slot="button"][data-variant="secondary"]
+  ):not([data-slot="card"] *) {
+  border-color: transparent;
+  background-color: var(--background);
+  /* Under its border too: no grey seam inside the hairline. */
+  background-clip: border-box;
+}
+.pa-agent-bubble
+  :is(
+    [data-slot="button"][data-variant="outline"],
+    [data-slot="button"][data-variant="secondary"]
+  ):not([data-slot="card"] *):not(:focus-visible) {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent),
+    0 1px 2px color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+.pa-agent-bubble
+  :is(
+    [data-slot="button"][data-variant="outline"],
+    [data-slot="button"][data-variant="secondary"]
+  ):not([data-slot="card"] *):hover {
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 3%,
+    var(--background)
+  );
+}
+.dark
+  .pa-agent-bubble
+  :is(
+    [data-slot="button"][data-variant="outline"],
+    [data-slot="button"][data-variant="secondary"]
+  ):not([data-slot="card"] *) {
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 20%,
+    var(--background)
+  );
+}
+.dark
+  .pa-agent-bubble
+  :is(
+    [data-slot="button"][data-variant="outline"],
+    [data-slot="button"][data-variant="secondary"]
+  ):not([data-slot="card"] *):not(:focus-visible) {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+.dark
+  .pa-agent-bubble
+  :is(
+    [data-slot="button"][data-variant="outline"],
+    [data-slot="button"][data-variant="secondary"]
+  ):not([data-slot="card"] *):hover {
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 25%,
+    var(--background)
+  );
+}
+.pa-agent-bubble
+  [data-slot="button"][data-variant="ghost"]:not([data-slot="card"] *):hover,
+.pa-agent-bubble
+  [data-slot="button"][data-variant="ghost"][aria-expanded="true"]:not(
+    [data-slot="card"] *
+  ) {
+  background-color: var(--pa-inset-hover);
 }
 
 /* Personal agent: the bubble a right-click opened its menu on, ringed in the

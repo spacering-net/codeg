@@ -253,7 +253,7 @@
     },
     "paAccent": {
       "title": "助手強調色",
-      "description": "助手對話中，你的對話泡泡、卡片強調邊框與卡片按鈕所用的顏色。",
+      "description": "助手對話中卡片強調邊框與卡片按鈕所用的顏色；你的對話泡泡一律使用助手的顏色。",
       "default": "預設",
       "bot": "跟隨助手顏色"
     }
@@ -8915,7 +8915,7 @@
       "more": "更多",
       "showPanel": "顯示輔助面板",
       "hidePanel": "隱藏輔助面板",
-      "settings": "個人助理設定…",
+      "settings": "個人助理設定",
       "viewSession": "查看底層工作階段",
       "compact": "壓縮上下文",
       "compactHint": "現在就壓縮工作階段的上下文",
@@ -9333,7 +9333,9 @@
         "prStuck": "#{id} 有衝突：{title}",
         "prChecks": "#{id} 等檢查 {passed}/{total}",
         "resize": "調整助手列表寬度",
-        "dropNewGroup": "拖到這裡新增群組"
+        "dropNewGroup": "拖到這裡新增群組",
+        "switch": "切換助手",
+        "showColumn": "在側邊欄顯示"
       },
       "choice": {
         "other": "其他",
@@ -9536,7 +9538,6 @@
     },
     "detail": {
       "title": "詳情",
-      "open": "顯示詳情",
       "close": "收合詳情",
       "tabs": {
         "activity": "動態",

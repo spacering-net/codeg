@@ -253,7 +253,7 @@
     },
     "paAccent": {
       "title": "Akzentfarbe der Assistenten",
-      "description": "Die Farbe deiner Sprechblasen, der Kartenränder und der Kartenschaltflächen im Gespräch mit einem Assistenten.",
+      "description": "Die Farbe der Kartenränder und Kartenschaltflächen im Gespräch mit einem Assistenten; deine Sprechblasen haben immer die Farbe des Assistenten.",
       "default": "Standard",
       "bot": "Farbe des Assistenten übernehmen"
     }
@@ -8915,7 +8915,7 @@
       "more": "Mehr",
       "showPanel": "Seitenbereich einblenden",
       "hidePanel": "Seitenbereich ausblenden",
-      "settings": "Einstellungen des persönlichen Agenten…",
+      "settings": "Einstellungen des persönlichen Agenten",
       "viewSession": "Zugrunde liegende Sitzung ansehen",
       "compact": "Kontext komprimieren",
       "compactHint": "Den Kontext der Sitzung jetzt komprimieren",
@@ -9333,7 +9333,9 @@
         "prStuck": "#{id} hat einen Konflikt: {title}",
         "prChecks": "#{id} wartet auf Checks {passed}/{total}",
         "resize": "Breite der Assistentenliste ändern",
-        "dropNewGroup": "Hier ablegen für eine neue Gruppe"
+        "dropNewGroup": "Hier ablegen für eine neue Gruppe",
+        "switch": "Assistent wechseln",
+        "showColumn": "In einer Seitenleiste anzeigen"
       },
       "choice": {
         "other": "Andere",
@@ -9536,7 +9538,6 @@
     },
     "detail": {
       "title": "Details",
-      "open": "Details anzeigen",
       "close": "Details ausblenden",
       "tabs": {
         "activity": "Aktivität",

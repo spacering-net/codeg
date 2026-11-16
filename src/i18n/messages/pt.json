@@ -253,7 +253,7 @@
     },
     "paAccent": {
       "title": "Cor de destaque dos assistentes",
-      "description": "A cor dos seus balões e das bordas e botões dos cartões na conversa de um assistente.",
+      "description": "A cor das bordas e dos botões dos cartões na conversa de um assistente; os seus balões têm sempre a cor do assistente.",
       "default": "Padrão",
       "bot": "Seguir a cor do assistente"
     }
@@ -8915,7 +8915,7 @@
       "more": "Mais",
       "showPanel": "Mostrar o painel lateral",
       "hidePanel": "Ocultar o painel lateral",
-      "settings": "Configurações do agente pessoal…",
+      "settings": "Configurações do agente pessoal",
       "viewSession": "Ver a sessão subjacente",
       "compact": "Compactar o contexto",
       "compactHint": "Compactar agora o contexto da sessão",
@@ -9333,7 +9333,9 @@
         "prStuck": "#{id} tem um conflito: {title}",
         "prChecks": "#{id} aguardando verificações {passed}/{total}",
         "resize": "Redimensionar a lista de assistentes",
-        "dropNewGroup": "Solte aqui para um novo grupo"
+        "dropNewGroup": "Solte aqui para um novo grupo",
+        "switch": "Mudar de assistente",
+        "showColumn": "Mostrar numa barra lateral"
       },
       "choice": {
         "other": "Outro",
@@ -9536,7 +9538,6 @@
     },
     "detail": {
       "title": "Detalhes",
-      "open": "Ver os detalhes",
       "close": "Ocultar os detalhes",
       "tabs": {
         "activity": "Atividade",

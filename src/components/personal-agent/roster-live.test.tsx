@@ -76,9 +76,15 @@ vi.mock("@/contexts/tab-context", () => ({
 import { OwnerBubble } from "./owner-bubble"
 import { buildMessageItems, type MessageItem } from "./message-items"
 import { ownerWaitTargets, waitsForOwner } from "./message-list"
-import { PersonalAgentRoster } from "./roster"
+import { PersonalAgentRoster, useRosterUpkeep } from "./roster"
 import { PageScopeContext, type PageScope } from "./shared"
 import { StatusLine, VAGUE_DELAY_MS } from "./status-line"
+
+/** The roster's column with the upkeep the page keeps for it. */
+function RosterWithUpkeep() {
+  useRosterUpkeep(false)
+  return <PersonalAgentRoster variant="column" readOnly={false} />
+}
 
 const NOW = Date.now()
 const iso = (ms: number) => new Date(NOW + ms).toISOString()
@@ -233,7 +239,7 @@ describe("the roster", () => {
         },
       }),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Dev")
     const rows = [...document.querySelectorAll("[data-pa-roster-bot]")]
     // The primary on top, then the waiting, then the working.
@@ -296,7 +302,7 @@ describe("the roster", () => {
         work_on_hand: [hand(233, "working"), hand(234, "mergeable")],
       }),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Dev")
     const line = document.querySelector(
       "[data-pa-roster-bot='2'] [data-pa-roster-line]"
@@ -308,7 +314,7 @@ describe("the roster", () => {
 
   it("follows each one's state as it is pushed, and lets a stale one rest", async () => {
     api.personalAgentBots.mockResolvedValue([entry(1, "Nova"), entry(2, "Dev")])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Dev")
     act(() =>
       events.handlers.get("personal-agent://bots")?.({
@@ -377,7 +383,7 @@ describe("the roster", () => {
       entry(4, "Old", {}, { hidden: true }),
       entry(5, "Ann"),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Dev")
     // Each group's name where its rows' faces are, a folding one's chevron
     // after its name; one class for them all.
@@ -425,7 +431,7 @@ describe("the roster", () => {
       entry(2, "Dev"),
       entry(3, "Ops"),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Dev")
     const nav = document.querySelector("[data-pa-roster]")!
     // No title, no search: the primary first.
@@ -474,7 +480,7 @@ describe("the roster", () => {
       entry(2, "Dev", { last_activity_at: iso(-day) }),
       entry(3, "Ops", { last_activity_at: iso(-30 * day) }),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Dev")
     const time = (id: number) =>
       document.querySelector(`[data-pa-roster-bot='${id}'] .tabular-nums`)
@@ -493,7 +499,7 @@ describe("the roster", () => {
       entry(4, "Old", {}, { hidden: true }),
     ])
     try {
-      wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+      wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
       const tiles = await waitFor(() => {
         const found = [...document.querySelectorAll("[data-pa-rail-tile]")]
         expect(found.length).toBe(3)
@@ -540,7 +546,8 @@ describe("the roster", () => {
       entry(2, "Dev", {}, { unread_mark: true }),
       entry(3, "Ops"),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    // The page keeps the roster's upkeep, drawn or not.
+    wrap(<RosterWithUpkeep />)
     await screen.findByText("Dev")
     fireEvent.click(screen.getByText("Dev"))
     expect(usePersonalAgentUi.getState().viewBot).toBe(2)
@@ -610,7 +617,7 @@ function dragRow(from: string, to: () => Element | null, y = 30, fromY = 10) {
 describe("the roster's menu and drags (polish round 4)", () => {
   it("opens an assistant's page and edits its name and face from its menu, each item with its icon", async () => {
     api.personalAgentBots.mockResolvedValue([entry(1, "Nova"), entry(2, "Dev")])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Dev")
     fireEvent.contextMenu(screen.getByText("Dev"))
     let menu = await screen.findByRole("menu")
@@ -661,7 +668,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
 
   it("lets the primary go by the default name", async () => {
     api.personalAgentBots.mockResolvedValue([entry(1, "Nova"), entry(2, "Dev")])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Dev")
     fireEvent.contextMenu(screen.getByText("Nova"))
     fireEvent.click(
@@ -689,7 +696,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(3, "Ops", {}, { section: "codeg" }),
       entry(5, "Ann"),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Ann")
     const group = (name: string) =>
       document.querySelector(`[data-pa-roster-group="${name}"]`)!
@@ -735,7 +742,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(3, "Ops", {}, { pinned_at: iso(-200), sort_order: 1 }),
       entry(5, "Ann"),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Ann")
     // Dev's row from 0 to 40, Ops's from 40 to 80.
     for (const [name, top] of [
@@ -791,7 +798,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(3, "Ops", {}, { pinned_at: iso(-200), sort_order: 1 }),
       entry(5, "Ann", {}, { pinned_at: iso(-100), sort_order: 2 }),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Ann")
     for (const [name, top] of [
       ["Dev", 0],
@@ -821,7 +828,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(2, "Dev", {}, { pinned_at: iso(-100) }),
       entry(5, "Ann"),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Ann")
     dragRow("Dev", () => document.querySelector('[data-pa-drop="new"]'))
     const dialog = await screen.findByRole("dialog", { name: "New group" })
@@ -844,7 +851,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(5, "Ann"),
     ])
     const { unmount } = wrap(
-      <PersonalAgentRoster compact={false} readOnly={false} />
+      <PersonalAgentRoster variant="column" readOnly={false} />
     )
     await screen.findByText("Ann")
     const row = rowOf("Ann")
@@ -876,7 +883,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
     })
     unmount()
     // Read-only: no drag at all.
-    wrap(<PersonalAgentRoster compact={false} readOnly />)
+    wrap(<PersonalAgentRoster variant="column" readOnly />)
     await screen.findByText("Ann")
     dragRow("Ann", () => screen.getByText("Ops"))
     await act(async () => {})
@@ -892,7 +899,7 @@ describe("the roster's menu and drags (polish round 4)", () => {
       entry(2, "Dev", {}, { pinned_at: iso(-100), section: "codeg" }),
       entry(3, "Ops", {}, { section: "codeg" }),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Dev")
     fireEvent.contextMenu(screen.getByText("Dev"))
     const menu = await screen.findByRole("menu")
@@ -954,7 +961,7 @@ describe("the roster's store (review round 1)", () => {
     api.personalAgentBots.mockResolvedValue([
       entry(1, "Nova", { activity_known: false }),
     ])
-    wrap(<PersonalAgentRoster compact={false} readOnly />)
+    wrap(<PersonalAgentRoster variant="column" readOnly />)
     await screen.findByText("Nova")
     const reads = api.personalAgentBots.mock.calls.length
     await act(async () => {
@@ -968,7 +975,7 @@ describe("the roster's store (review round 1)", () => {
   it("leaves the open one marked when the owner marks it", async () => {
     api.personalAgentBots.mockResolvedValue([entry(1, "Nova"), entry(2, "Dev")])
     usePersonalAgentUi.setState({ viewBot: 2 })
-    wrap(<PersonalAgentRoster compact={false} readOnly={false} />)
+    wrap(<RosterWithUpkeep />)
     await screen.findByText("Dev")
     act(() =>
       usePersonalAgentRoster

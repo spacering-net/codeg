@@ -4,6 +4,7 @@ import type { BotLive, RosterEntry } from "@/lib/types"
 
 import {
   groupRoster,
+  plainLine,
   rosterOrder,
   rosterTime,
   sectionNames,
@@ -193,5 +194,29 @@ describe("a row's time", () => {
   it("is the clock for a time ahead of this one, and nothing for none", () => {
     expect(rosterTime(local(2026, 10, 16, 8, 0), now, "en")).toMatch(/^08:00/)
     expect(rosterTime("not a time", now, "en")).toBe("")
+  })
+})
+
+describe("plainLine", () => {
+  it("shows a markdown line as plain words", () => {
+    expect(
+      plainLine("my-app 已整理为 **10 个本地提交**，最新提交 `f3bbb85`。")
+    ).toBe("my-app 已整理为 10 个本地提交，最新提交 f3bbb85。")
+    expect(plainLine("## Done: see [the PR](https://x/1) ~~now~~")).toBe(
+      "Done: see the PR now"
+    )
+    expect(plainLine("- first of a list")).toBe("first of a list")
+    expect(plainLine("> quoted __words__")).toBe("quoted words")
+  })
+
+  it("drops a mark the cut left open", () => {
+    expect(plainLine("建议优先做 **Slowday 首页待办本机保")).toBe(
+      "建议优先做 Slowday 首页待办本机保"
+    )
+  })
+
+  it("leaves a lone star and a plain line alone", () => {
+    expect(plainLine("2 * 3 = 6")).toBe("2 * 3 = 6")
+    expect(plainLine("all quiet")).toBe("all quiet")
   })
 })
