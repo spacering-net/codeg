@@ -126,8 +126,9 @@ export function newBotUid(): string {
 
 /** Each colour's body, tuned once for the light theme and once for the
  *  dark one so it stands off either background; literal strings so
- *  Tailwind sees them. */
-const BODY: Record<BotColor, string> = {
+ *  Tailwind sees them. The owner's bubbles in an assistant's conversation
+ *  take the same steps (`--pa-body` in globals.css). */
+export const FACE_BODY: Record<BotColor, string> = {
   black: "fill-neutral-900 dark:fill-neutral-200",
   brown: "fill-amber-800 dark:fill-amber-600",
   red: "fill-red-500 dark:fill-red-400",
@@ -142,8 +143,9 @@ const BODY: Record<BotColor, string> = {
 }
 
 /** The eyes: light on the darker bodies, dark on the light ones (as the
- *  text colour, so filled capsules and stroked arcs both take it). */
-const EYES: Record<BotColor, string> = {
+ *  text colour, so filled capsules and stroked arcs both take it). The
+ *  words on the owner's bubbles take the same (`--pa-eyes`). */
+export const FACE_EYES: Record<BotColor, string> = {
   black: "text-white dark:text-neutral-900",
   brown: "text-white",
   red: "text-white",
@@ -608,14 +610,14 @@ function FaceAvatar({
         </defs>
         <g className="pa-face-body">
           <g className="pa-face-perk">
-            <path d={outline} className={BODY[color]} />
+            <path d={outline} className={FACE_BODY[color]} />
             <g clipPath={`url(#${clip})`}>
               <g transform={`translate(0 ${EYES_AT[displayed]})`}>
                 <g
                   className="pa-face-gaze"
                   style={eyesTo ? { transform: eyesTo } : undefined}
                 >
-                  <g className={cn("pa-face-lids", EYES[color])}>
+                  <g className={cn("pa-face-lids", FACE_EYES[color])}>
                     {eyesOf(displayed)}
                   </g>
                 </g>

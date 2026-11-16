@@ -43,7 +43,10 @@ vi.mock("@/lib/platform", () => ({
 vi.mock("@/contexts/personal-agent-context", () => ({
   useBotId: () => null,
   usePersonalAgentChanges: () => {},
+  usePrefetchAssistant: () => prefetched.read,
 }))
+// Who the roster read ahead (its rows' pointer, or a press).
+const prefetched = vi.hoisted(() => ({ read: vi.fn() }))
 const editor = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
 }))
@@ -298,7 +301,7 @@ describe("the roster in the title capsule's popover", () => {
     edit: vi.fn(),
   })
 
-  it("lists them, the primary a row of its own first, and closes on a pick", async () => {
+  it("lists them, the primary's square tile on top, and closes on a pick", async () => {
     api.personalAgentBots.mockResolvedValue([
       bot(1, "primary", "Nova"),
       bot(9, "worker", "Reviewer"),
@@ -319,15 +322,65 @@ describe("the roster in the title capsule's popover", () => {
         r.getAttribute("data-pa-roster-bot")
       )
     ).toEqual(["1", "9"])
-    // A row like the others, not the column's tile.
-    expect(document.querySelector("[data-pa-roster-primary]")).toBeNull()
+    // The column's tile, as on the sidebar — no hover card in a popover.
+    const tile = document.querySelector<HTMLElement>("[data-pa-roster-primary]")
+    expect(tile?.getAttribute("data-pa-roster-bot")).toBe("1")
+    expect(tile?.textContent).toContain("Nova")
+    expect(tile?.hasAttribute("data-pa-rail-tile")).toBe(false)
     fireEvent.click(reviewer)
     expect(usePersonalAgentUi.getState().viewBot).toBe(9)
     expect(onPick).toHaveBeenCalledTimes(1)
-    // A new one: the dialog its holder keeps, the popover closing.
-    fireEvent.click(screen.getByText("New work assistant"))
+    // The foot, one row: the sidebar's switch at its start, a new one at
+    // its end — the dialog its holder keeps, the popover closing.
+    const foot = document.querySelector<HTMLElement>("[data-pa-roster-foot]")!
+    const [first, last] = [...foot.children]
+    expect(first.querySelector("[data-pa-roster-shown]")).not.toBeNull()
+    expect(first.textContent).toBe("Sidebar")
+    expect(last.textContent).toBe("New assistant")
+    fireEvent.click(screen.getByRole("button", { name: "New assistant" }))
     expect(held.add).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole("dialog")).toBeNull()
+  })
+
+  it("reads a work assistant ahead once the pointer rests on it, or it is pressed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      prefetched.read.mockClear()
+      api.personalAgentBots.mockResolvedValue([
+        bot(1, "primary", "Nova"),
+        bot(9, "worker", "Reviewer"),
+        bot(10, "worker", "Writer"),
+      ])
+      wrap(
+        <PersonalAgentRoster
+          variant="popover"
+          readOnly={false}
+          dialogs={dialogs()}
+        />
+      )
+      const row = (id: number) =>
+        document.querySelector<HTMLElement>(`[data-pa-roster-bot="${id}"]`)!
+      await screen.findByText("Reviewer")
+      // Passing over on the way elsewhere reads none.
+      fireEvent.pointerEnter(row(9))
+      act(() => vi.advanceTimersByTime(60))
+      fireEvent.pointerLeave(row(9))
+      act(() => vi.advanceTimersByTime(500))
+      expect(prefetched.read).not.toHaveBeenCalled()
+      // Resting on it does.
+      fireEvent.pointerEnter(row(9))
+      act(() => vi.advanceTimersByTime(150))
+      expect(prefetched.read).toHaveBeenCalledWith(9)
+      // Pressed: at once.
+      fireEvent.pointerDown(row(10))
+      expect(prefetched.read).toHaveBeenLastCalledWith(10)
+      // The primary is always read.
+      prefetched.read.mockClear()
+      fireEvent.pointerDown(row(1))
+      expect(prefetched.read).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("shows the roster beside the conversation from its switch, kept for next time", async () => {

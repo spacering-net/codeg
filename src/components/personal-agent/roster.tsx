@@ -34,9 +34,10 @@
  * - On a narrow screen, a strip of faces over the page.
  * - The column (or the strip) shows only when the owner keeps it shown
  *   (`useRosterShown`): the workspace has its own sidebar. The title's
- *   capsule opens the same list in a popover either way — the primary a row
- *   like the others, with no dragging and no hover cards — and under it a
- *   new work assistant and the switch that shows the column.
+ *   capsule opens the same list in a popover either way — the primary's
+ *   square tile on top as on the column, no dragging, no hover cards — and
+ *   at its foot, one row: the switch that shows the column at its start, a
+ *   new work assistant at its end.
  *
  * Opening an assistant takes away the owner's own unread mark on it, and
  * one deleted takes the page back to the primary (`useRosterUpkeep`, the
@@ -44,6 +45,7 @@
  */
 
 import {
+  Fragment,
   useEffect,
   useMemo,
   useRef,
@@ -65,7 +67,6 @@ import {
   MailOpen,
   MessageSquareText,
   OctagonX,
-  PanelLeft,
   Pin,
   PinOff,
   Plus,
@@ -110,6 +111,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { RosterAct, RosterEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useRoster } from "@/stores/personal-agent-roster-store"
+import { usePrefetchAssistant } from "@/contexts/personal-agent-context"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import {
@@ -148,6 +150,9 @@ const FOLDED_KEY = "pa:roster:folded:v1"
 /** How far the pointer moves, pressed on a row, before the row is
  *  dragged. */
 const DRAG_START_PX = 5
+/** How long the pointer rests on a row before its assistant is read ahead:
+ *  passing over the list on the way elsewhere reads none. */
+const WARM_AFTER_MS = 120
 
 /** Where a dragged row can be put: among the pinned ones, in a group of the
  *  owner's, with the rest, or in a group to name. */
@@ -578,6 +583,34 @@ export function PersonalAgentRoster({
 
   const currentId =
     viewBot ?? list.find((e) => e.kind === "primary")?.id ?? null
+
+  // A work assistant read ahead once the pointer rests on it, or the moment
+  // it is pressed: the switch the click then makes is at once (its store
+  // kept warm, `usePrefetchAssistant`).
+  const prefetch = usePrefetchAssistant()
+  const warmTimer = useRef<number | null>(null)
+  const stopWarming = () => {
+    if (warmTimer.current != null) window.clearTimeout(warmTimer.current)
+    warmTimer.current = null
+  }
+  useEffect(() => stopWarming, [])
+  const warmOn = (b: RosterEntry) =>
+    b.kind === "primary" || b.id === currentId
+      ? {}
+      : {
+          onPointerEnter: () => {
+            stopWarming()
+            warmTimer.current = window.setTimeout(
+              () => prefetch(b.id),
+              WARM_AFTER_MS
+            )
+          },
+          onPointerLeave: stopWarming,
+          onPointerDownCapture: () => {
+            stopWarming()
+            prefetch(b.id)
+          },
+        }
 
   const groups = useMemo(
     () => groupRoster(list, now, locale),
@@ -1093,6 +1126,7 @@ export function PersonalAgentRoster({
         }}
         onFocus={hoverOnly}
         {...dragHandlers(b)}
+        {...warmOn(b)}
         className={cn(
           "relative flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-start transition-colors",
           isCurrent
@@ -1198,6 +1232,7 @@ export function PersonalAgentRoster({
                 aria-label={faceLabel(b, view)}
                 title={botName(b)}
                 onClick={() => go(b)}
+                {...warmOn(b)}
                 className={cn(
                   "shrink-0 rounded-full p-0.5 transition-colors",
                   b.id === currentId
@@ -1220,38 +1255,38 @@ export function PersonalAgentRoster({
 
   /** A face that says no more than itself — the primary's tile, one on the
    *  rail: its line and its work in hand on the card it shows when
-   *  hovered. */
+   *  hovered (not in the popover, which has no hover cards). */
   const tile = (b: RosterEntry, look: (view: BotView) => ReactNode) => {
     const view = viewOf(b.live, now, b.roster?.unread_mark)
     const isCurrent = b.id === currentId
+    const button = (
+      <button
+        type="button"
+        data-pa-roster-bot={b.id}
+        data-pa-roster-primary={b.kind === "primary" || undefined}
+        data-pa-roster-look={view.look}
+        data-pa-face-host
+        aria-current={isCurrent ? "page" : undefined}
+        onClick={() => go(b)}
+        onFocus={hoverOnly}
+        {...warmOn(b)}
+        className={cn(
+          "flex shrink-0 flex-col items-center justify-center rounded-xl text-center transition-colors",
+          isCurrent
+            ? "bg-accent text-accent-foreground"
+            : "text-foreground/85 hover:bg-muted"
+        )}
+        {...(size.rail && !popover
+          ? { "aria-label": faceLabel(b, view), "data-pa-rail-tile": "" }
+          : {})}
+      >
+        {look(view)}
+      </button>
+    )
+    if (popover) return <Fragment key={b.id}>{menu(b, button)}</Fragment>
     return (
       <HoverCard key={b.id} openDelay={500} closeDelay={80}>
-        {menu(
-          b,
-          <HoverCardTrigger asChild>
-            <button
-              type="button"
-              data-pa-roster-bot={b.id}
-              data-pa-roster-primary={b.kind === "primary" || undefined}
-              data-pa-roster-look={view.look}
-              data-pa-face-host
-              aria-current={isCurrent ? "page" : undefined}
-              onClick={() => go(b)}
-              onFocus={hoverOnly}
-              className={cn(
-                "flex shrink-0 flex-col items-center justify-center rounded-xl text-center transition-colors",
-                isCurrent
-                  ? "bg-accent text-accent-foreground"
-                  : "text-foreground/85 hover:bg-muted"
-              )}
-              {...(size.rail
-                ? { "aria-label": faceLabel(b, view), "data-pa-rail-tile": "" }
-                : {})}
-            >
-              {look(view)}
-            </button>
-          </HoverCardTrigger>
-        )}
+        {menu(b, <HoverCardTrigger asChild>{button}</HoverCardTrigger>)}
         <HoverCardContent
           side="right"
           align="start"
@@ -1434,7 +1469,9 @@ export function PersonalAgentRoster({
         className="flex max-h-[inherit] min-h-0 flex-col"
       >
         <div className="field-scrollbar min-h-0 flex-1 overflow-y-auto p-1.5">
-          {primary ? rows([primary]) : null}
+          {primary ? (
+            <div className="pt-1.5">{primaryTile(primary)}</div>
+          ) : null}
           {/* The groups, each its name over its rows, a little apart. */}
           <div className="flex flex-col gap-1">
             {groups.pinned.length > 0 ? (
@@ -1463,31 +1500,37 @@ export function PersonalAgentRoster({
             ) : null}
           </div>
         </div>
-        {/* A new one, and whether the list also stands beside the
-            conversation. */}
+        {/* One row: whether the list also stands beside the conversation,
+            and a new one. */}
         <div
           data-pa-roster-foot
-          className="flex flex-col gap-0.5 border-t border-border/60 p-1.5"
+          className="flex items-center justify-between gap-2 border-t border-border/60 p-1.5"
         >
-          {addButton(false)}
           <label
             htmlFor="pa-roster-shown"
-            className="flex w-full cursor-pointer items-center gap-2.5 rounded-xl px-2 py-1.5 text-sm text-foreground/80 transition-colors hover:bg-muted hover:text-foreground"
+            title={tr("showColumn")}
+            className="flex min-w-0 cursor-pointer items-center gap-2 rounded-full py-1 ps-1.5 pe-2.5 text-sm text-foreground/80 transition-colors hover:bg-muted hover:text-foreground"
           >
-            <span
-              aria-hidden
-              className="flex size-7 shrink-0 items-center justify-center text-muted-foreground"
-            >
-              <PanelLeft className="size-4" />
-            </span>
-            <span className="min-w-0 flex-1 truncate">{tr("showColumn")}</span>
             <Switch
               id="pa-roster-shown"
               checked={shown}
               onCheckedChange={setShown}
+              aria-label={tr("showColumn")}
               data-pa-roster-shown
             />
+            <span className="min-w-0 truncate">{tr("sidebar")}</span>
           </label>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={readOnly}
+            onClick={() => dialogs.add()}
+            className="min-w-0 shrink text-foreground/80 hover:text-foreground"
+            data-pa-roster-add
+          >
+            <Plus aria-hidden />
+            <span className="min-w-0 truncate">{tr("addShort")}</span>
+          </Button>
         </div>
         {dialogNodes}
       </div>

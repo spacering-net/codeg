@@ -7909,7 +7909,8 @@
       "newMessages": "New messages",
       "openTask": "Open on the board",
       "openConversation": "Open the conversation",
-      "viewSession": "View session"
+      "viewSession": "View session",
+      "loading": "Loading the conversation…"
     },
     "work": {
       "taskNotStarted": "This task hasn't started yet. Its session shows here once it does.",
@@ -9335,7 +9336,10 @@
         "resize": "Resize the assistant list",
         "dropNewGroup": "Drop here for a new group",
         "switch": "Switch assistant",
-        "showColumn": "Show in a sidebar"
+        "showColumn": "Show in a sidebar",
+        "sidebar": "Sidebar",
+        "addShort": "New assistant",
+        "opening": "Opening {name}…"
       },
       "choice": {
         "other": "Other",

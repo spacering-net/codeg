@@ -7909,7 +7909,8 @@
       "newMessages": "Mensajes nuevos",
       "openTask": "Abrir en el tablero",
       "openConversation": "Abrir la conversación",
-      "viewSession": "Ver conversación"
+      "viewSession": "Ver conversación",
+      "loading": "Cargando la conversación…"
     },
     "work": {
       "taskNotStarted": "Esta tarea aún no ha empezado. Su conversación aparecerá aquí en cuanto empiece.",
@@ -9335,7 +9336,10 @@
         "resize": "Cambiar el ancho de la lista de asistentes",
         "dropNewGroup": "Suelta aquí para un grupo nuevo",
         "switch": "Cambiar de asistente",
-        "showColumn": "Mostrar en una barra lateral"
+        "showColumn": "Mostrar en una barra lateral",
+        "sidebar": "Barra lateral",
+        "addShort": "Nuevo asistente",
+        "opening": "Abriendo {name}…"
       },
       "choice": {
         "other": "Otro",

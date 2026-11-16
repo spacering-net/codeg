@@ -60,9 +60,9 @@ vi.mock("@/contexts/personal-agent-context", () => ({
   usePersonalAgent: () => ({
     botId: ctx.botId,
     snapshot: ctx.snapshot,
-    switching: ctx.switching,
     refresh: vi.fn(),
   }),
+  usePersonalAgentSwitch: () => ({ switching: ctx.switching, to: null }),
 }))
 
 import { BotPage } from "./bot-page"

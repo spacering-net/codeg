@@ -4246,12 +4246,99 @@ div.monaco-diff-editor.side-by-side .editor.modified {
    Material's state layers). Being translucent, the washes read the same
    over a workspace background image. */
 
+/* Personal agent: an assistant's face itself, on its conversation
+   (`data-pa-face`): its body's colour and its eyes', the very palette steps
+   its face is drawn in (`FACE_BODY`, `FACE_EYES` in bot-avatar.tsx) — for
+   the owner's bubbles, which are its body's colour with the words in its
+   eyes'. */
+[data-pa-face="black"] {
+  --pa-body: var(--color-neutral-900);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="black"] {
+  --pa-body: var(--color-neutral-200);
+  --pa-eyes: var(--color-neutral-900);
+}
+[data-pa-face="brown"] {
+  --pa-body: var(--color-amber-800);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="brown"] {
+  --pa-body: var(--color-amber-600);
+}
+[data-pa-face="red"] {
+  --pa-body: var(--color-red-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="red"] {
+  --pa-body: var(--color-red-400);
+}
+[data-pa-face="orange"] {
+  --pa-body: var(--color-orange-500);
+  --pa-eyes: var(--color-neutral-900);
+}
+.dark [data-pa-face="orange"] {
+  --pa-body: var(--color-orange-400);
+}
+[data-pa-face="yellow"] {
+  --pa-body: var(--color-yellow-400);
+  --pa-eyes: var(--color-neutral-900);
+}
+.dark [data-pa-face="yellow"] {
+  --pa-body: var(--color-yellow-300);
+}
+[data-pa-face="green"] {
+  --pa-body: var(--color-green-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="green"] {
+  --pa-body: var(--color-green-400);
+  --pa-eyes: var(--color-neutral-900);
+}
+[data-pa-face="teal"] {
+  --pa-body: var(--color-teal-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="teal"] {
+  --pa-body: var(--color-teal-400);
+  --pa-eyes: var(--color-neutral-900);
+}
+[data-pa-face="blue"] {
+  --pa-body: var(--color-blue-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="blue"] {
+  --pa-body: var(--color-blue-400);
+}
+[data-pa-face="purple"] {
+  --pa-body: var(--color-violet-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="purple"] {
+  --pa-body: var(--color-violet-400);
+}
+[data-pa-face="magenta"] {
+  --pa-body: var(--color-fuchsia-500);
+  --pa-eyes: var(--color-white);
+}
+.dark [data-pa-face="magenta"] {
+  --pa-body: var(--color-fuchsia-400);
+}
+[data-pa-face="gray"] {
+  --pa-body: var(--color-slate-400);
+  --pa-eyes: var(--color-neutral-900);
+}
+.dark [data-pa-face="gray"] {
+  --pa-body: var(--color-slate-500);
+  --pa-eyes: var(--color-white);
+}
+
 /* Personal agent: an assistant's face colour (10.7), on its conversation
    (`data-pa-face`): once for the light theme and once for the dark, with
-   the text that reads on it. The owner's bubbles are always a tint of it;
-   with "follow the assistant's colour" on (`data-pa-accent`) it is the
-   theme's colour there too — the cards' accent edges and buttons. The
-   unread dot keeps its blue (it is not the theme's colour). */
+   the text that reads on it. With "follow the assistant's colour" on
+   (`data-pa-accent`) it is the theme's colour there — the cards' accent
+   edges and buttons. The unread dot keeps its blue (it is not the theme's
+   colour). */
 [data-pa-face="black"] {
   --pa-face: oklch(0.205 0 0);
   --pa-face-foreground: oklch(0.985 0 0);
@@ -4346,33 +4433,27 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   --ring: var(--pa-face);
 }
 
-/* Personal agent: the owner's bubble is a tint of the assistant's face
-   colour over the page (the theme's primary for one with a picture for a
-   face), so it reads as theirs, in that conversation's colour; the
-   assistant's bubbles (below) are grey. What sits inside (a quote) washes
-   it with more of it: a deeper tint of the same hue. Over a workspace
-   background image it turns translucent like the conversation's message
-   surfaces (`ws-msg-*`), with their hairline ring. */
+/* Personal agent: the owner's bubble is the assistant's face — its body's
+   colour, the words in its eyes' (the theme's colour and the words on it,
+   for one with a picture for a face) — so it reads as theirs, in that
+   conversation's colour; the assistant's bubbles (below) are grey. What
+   sits inside (a quote) washes it with the words' colour, and takes it for
+   its own words and its edge (set on what is inside: the bubble's own
+   colour falls back on the theme's). It stays solid over a workspace
+   background image: the colour is what says whose it is. */
 .pa-owner-bubble {
-  --pa-own: var(--pa-face, var(--primary));
-  --pa-inset: color-mix(in oklab, var(--pa-own) 7%, transparent);
-  --pa-inset-hover: color-mix(in oklab, var(--pa-own) 11%, transparent);
-  --pa-inset-active: color-mix(in oklab, var(--pa-own) 15%, transparent);
-  background-color: color-mix(in oklab, var(--background) 86%, var(--pa-own));
+  --pa-own: var(--pa-body, var(--primary));
+  --pa-own-ink: var(--pa-eyes, var(--primary-foreground));
+  --foreground: var(--pa-own-ink);
+  --muted-foreground: color-mix(in oklab, var(--pa-own-ink) 72%, transparent);
+  --pa-inset: color-mix(in oklab, var(--pa-own-ink) 14%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--pa-own-ink) 20%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--pa-own-ink) 26%, transparent);
+  background-color: var(--pa-own);
+  color: var(--pa-own-ink);
 }
-.dark .pa-owner-bubble {
-  --pa-inset: color-mix(in oklab, var(--pa-own) 9%, transparent);
-  --pa-inset-hover: color-mix(in oklab, var(--pa-own) 13%, transparent);
-  --pa-inset-active: color-mix(in oklab, var(--pa-own) 17%, transparent);
-  background-color: color-mix(in oklab, var(--background) 76%, var(--pa-own));
-}
-[data-workspace-bg="on"] .pa-owner-bubble {
-  background-color: color-mix(
-    in oklab,
-    color-mix(in oklab, var(--muted) 86%, var(--pa-own)) 58%,
-    transparent
-  );
-  box-shadow: inset 0 0 0 1px var(--border);
+.pa-owner-bubble > * {
+  --primary: var(--pa-own-ink);
 }
 
 /* Personal agent: the bubbles on the assistants' side — the personal
@@ -4384,7 +4465,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
    washes it with more of the text colour: a deeper grey in the light theme,
    a lighter one in the dark — the step a dark theme's raised surfaces take.
    Over a workspace background image the bubble turns translucent as the
-   owner's does, with its hairline. */
+   conversation's message surfaces do, with their hairline. */
 .pa-agent-bubble {
   --pa-inset: color-mix(in oklab, var(--foreground) 4%, transparent);
   --pa-inset-hover: color-mix(in oklab, var(--foreground) 7%, transparent);
@@ -4514,17 +4595,104 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   ) {
   background-color: var(--pa-inset-hover);
 }
+/* Personal agent: a ghost button with words on an assistant's bubble — "not
+   now", "don't bring these up again", "make a team" — is a soft patch of
+   the bubble a step deeper, so it reads as a button and not as words
+   beside the raised ones; deeper under the pointer. One of an icon alone
+   keeps to the bubble until hovered: its shape says it is a button. Not
+   on a card of its own inside it. */
+.pa-agent-bubble {
+  --pa-tonal: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --pa-tonal-hover: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+.dark .pa-agent-bubble {
+  --pa-tonal: color-mix(in oklab, var(--foreground) 8%, transparent);
+  --pa-tonal-hover: color-mix(in oklab, var(--foreground) 13%, transparent);
+}
+.pa-agent-bubble
+  [data-slot="button"][data-variant="ghost"]:not([data-size^="icon"]):not(
+    [data-slot="card"] *
+  ) {
+  background-color: var(--pa-tonal);
+}
+.pa-agent-bubble
+  [data-slot="button"][data-variant="ghost"]:not([data-size^="icon"]):not(
+    [data-slot="card"] *
+  ):is(:hover, [aria-expanded="true"]) {
+  background-color: var(--pa-tonal-hover);
+}
 
 /* Personal agent: the bubble a right-click opened its menu on, ringed in the
    theme's colour (as a jump flashes it, softer) until the menu closes. */
 [data-pa-frame][data-state="open"] > [data-bubble] {
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--primary) 30%, transparent);
 }
-[data-workspace-bg="on"] [data-pa-frame][data-state="open"] > .pa-owner-bubble,
 [data-workspace-bg="on"] [data-pa-frame][data-state="open"] > .pa-agent-bubble {
   box-shadow:
     inset 0 0 0 1px var(--border),
     0 0 0 2px color-mix(in oklab, var(--primary) 30%, transparent);
+}
+
+/* Personal agent: switching to another assistant (`SwitchVeil`). What the
+   page shows is the last one's, faded a little once the read takes a
+   moment — a quick one never flickers — under a thin bar running along the
+   conversation's top, which comes in after the same moment. Under reduced
+   motion the bar stands still. */
+[data-pa-switch-veil] > :not([data-pa-switch-bar]) {
+  transition: opacity 150ms ease-out;
+}
+[data-pa-switch-veil][data-pa-switching] > :not([data-pa-switch-bar]) {
+  opacity: 0.55;
+  transition-delay: 120ms;
+}
+[data-pa-switch-bar] {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  z-index: 20;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  animation: pa-delayed-in 200ms ease-out 120ms both;
+}
+[data-pa-switch-bar] > span {
+  position: absolute;
+  inset-block: 0;
+  width: 40%;
+  border-radius: 9999px;
+  background-color: var(--pa-face, var(--primary));
+  animation: pa-switch-bar 1.1s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@keyframes pa-switch-bar {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+[dir="rtl"] [data-pa-switch-bar] > span {
+  animation-direction: reverse;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-pa-switch-bar] > span {
+    width: 100%;
+    opacity: 0.5;
+    animation: none;
+  }
+}
+/* Comes in only once a wait takes a moment: what shows while something is
+   read (the conversation's shape before it is). */
+@keyframes pa-delayed-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.pa-delayed-in {
+  animation: pa-delayed-in 200ms ease-out 150ms both;
 }
 
 /* Personal agent: an executor's avatar with its agent's mark at its bottom

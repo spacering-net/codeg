@@ -15,7 +15,11 @@
  * as a short one does. A row is a message with the lines right over it; a
  * card waiting for the owner stays drawn wherever the view is, and so do
  * the rows near the end once the view is there. Older messages loaded in
- * keep the row the reader was looking at where it was.
+ * keep the row the reader was looking at where it was. Opened, or another
+ * assistant shown, it draws its newest rows alone until it is at its
+ * bottom, then the rest above them (`TAIL_ROWS`), and comes in — a little
+ * up into place when the chat view moves; a row is drawn again only when
+ * it changes.
  *
  * What the assistants said is new to the owner until they see it: while
  * the list is at its bottom in a window that has focus, everything up to
@@ -32,13 +36,15 @@
  * Two pills float over it (10.7): "N items need you" while cards in it wait
  * for the owner (a click scrolls to the first), and "New messages" while the
  * reader is up the page and something came in under them (a click goes to
- * the bottom). Up the page more than half a view with nothing new under
- * them, a round button with an arrow takes them down instead, as the
- * conversations' does. A message that comes in while the page is open rises
- * into place; what was there, or is loaded from further back, does not.
+ * the bottom). Up the page with nothing new under them, the conversations'
+ * own round button takes them down instead, shown when it would show there
+ * (past `use-stick-to-bottom`'s slack), gliding when the chat view moves. A
+ * message that comes in while the page is open rises into place; what was
+ * there, or is loaded from further back, does not.
  */
 
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -59,6 +65,7 @@ import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { rowsKeptNearEnd } from "@/components/message/virtualized-message-thread"
+import { ScrollToLatestButton } from "@/components/ai-elements/message-thread"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
@@ -70,7 +77,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
-import { useReducedMotion } from "@/hooks/use-chat-motion"
+import { useChatMotion, useReducedMotion } from "@/hooks/use-chat-motion"
 import { toErrorMessage } from "@/lib/app-error"
 import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -421,6 +428,39 @@ function Pill({
   )
 }
 
+/**
+ * One row virtua draws: a column, as the list was — a message's room over
+ * it is its own; one right under a line takes none (`data-pa-under-line`,
+ * or the "new messages" line beside it in its row). Drawn again only when
+ * its row is: the list's own state (shown, following, the way down) moves
+ * nothing in it.
+ */
+const RowView = memo(function RowView({
+  row,
+  enters,
+  onSeen,
+}: {
+  row: ListRow
+  enters: boolean
+  onSeen: () => void
+}) {
+  return (
+    <div
+      data-pa-row={row.key}
+      data-pa-row-first={row.first || undefined}
+      data-pa-under-line={row.underLine || undefined}
+      className={cn("flex min-w-0 flex-col", row.first && "pt-4")}
+    >
+      {row.newLine ? <NewLine onSeen={onSeen} /> : null}
+      {/* What came in rises into place on its own element (see
+          MessageEnterContext). */}
+      <MessageEnterContext.Provider value={enters}>
+        <Item item={row.item} />
+      </MessageEnterContext.Provider>
+    </div>
+  )
+})
+
 function Item({ item }: { item: MessageItem }) {
   switch (item.kind) {
     case "time":
@@ -515,6 +555,12 @@ const JUMP_FRAMES = 90
 const JUMP_HOLD_MS = 1000
 /** Room (px) over a jump's message taller than the view. */
 const JUMP_EDGE_PX = 16
+/** Opened, or another assistant shown: the rows drawn at first, the newest
+ *  — enough to fill the view and the room drawn round it. virtua starts at
+ *  the top with rows it has not measured, so with the whole page it would
+ *  draw most of it on the way to the bottom; the rest come in above once
+ *  the list is there, as older ones do. */
+const TAIL_ROWS = 16
 
 /** A jump's message in the list: its own element, or — `row`: one drawn
  *  without its id (a card inside a turn's bubble) — its row's. */
@@ -570,6 +616,8 @@ export function MessageList({
   const { botId, rows, hasOlder, loadOlder, loadSince, snapshot } =
     usePersonalAgent()
   const reduced = useReducedMotion()
+  // A glide down when the chat view moves (as a conversation's does).
+  const motion = useChatMotion()
   const items = useMemo(() => buildMessageItems(rows), [rows])
   const rowsById = scope.rowsById
 
@@ -672,7 +720,7 @@ export function MessageList({
   }, [])
   // The same, for what renders on it.
   const [bottomed, setBottomed] = useState(true)
-  // Scrolled up more than half a view: the way back down shows.
+  // Away from the bottom (`farFromBottom`): the way back down shows.
   const [far, setFar] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [preview, setPreview] = useState<number | null>(null)
@@ -689,6 +737,11 @@ export function MessageList({
   // when switching): it opens at its bottom, as a list just opened does,
   // with nothing of the last one's left over — in the render that first
   // draws it, and scrolled there before it paints.
+  // Its newest rows alone until it is at its bottom (`TAIL_ROWS`): from
+  // the row picked when it opened (`tailKey`), so rows coming in at the end
+  // meanwhile only add to it.
+  const [tailOnly, setTailOnly] = useState(true)
+  const [tailKey, setTailKey] = useState<string | null>(null)
   const [shownBot, setShownBot] = useState(botId)
   if (shownBot !== botId) {
     setShownBot(botId)
@@ -697,6 +750,8 @@ export function MessageList({
     setPreview(null)
     setLoadingOlder(false)
     setSettled(false)
+    setTailOnly(true)
+    setTailKey(null)
   }
   const scrolledFor = useRef(botId)
   useLayoutEffect(() => {
@@ -723,7 +778,6 @@ export function MessageList({
         farFromBottom({
           following: atBottom.current,
           gap: el.scrollHeight - el.scrollTop - el.clientHeight,
-          view: el.clientHeight,
         })
       )
     const follow = () => {
@@ -794,7 +848,9 @@ export function MessageList({
   }, [scrollReady, toEnd, keepPlace, holdJump])
 
   // Put at its bottom a few frames running — the rows there drawn and
-  // measured in between — before it shows.
+  // measured in between — before it shows: its newest rows first, then
+  // (the rest drawn in above, `shift`) a couple more frames.
+  const tailingRef = useRef(false)
   useEffect(() => {
     if (!scrollReady || settled) return
     let frames = 0
@@ -803,12 +859,15 @@ export function MessageList({
       const el = scrollRef.current
       if (el && atBottom.current) toEnd(el)
       frames += 1
-      if (frames >= 3) setSettled(true)
-      else raf = requestAnimationFrame(step)
+      if (frames < 2) raf = requestAnimationFrame(step)
+      else {
+        setTailOnly(false)
+        if (!tailingRef.current) setSettled(true)
+      }
     }
     raf = requestAnimationFrame(step)
     return () => cancelAnimationFrame(raf)
-  }, [scrollReady, settled, botId, toEnd])
+  }, [scrollReady, settled, botId, toEnd, tailOnly])
 
   const flash = useCallback(
     (el: HTMLElement) => {
@@ -854,12 +913,12 @@ export function MessageList({
       atBottom.current = true
       setBottomed(true)
       setFar(false)
-      if (glide && !reduced) {
+      if (glide && motion) {
         gliding.current = true
         el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
       } else toEnd(el)
     },
-    [clearNewFrom, reduced, toEnd]
+    [clearNewFrom, motion, toEnd]
   )
   useEffect(() => {
     sentRef.current = () => toBottom()
@@ -962,14 +1021,40 @@ export function MessageList({
       })),
     [placed, newLineAt, hasOlder]
   )
-  // Which row draws each message: where a jump scrolls to.
+  // Opened, the newest rows alone (`TAIL_ROWS`), from the row picked then.
+  if (tailOnly && !settled && tailKey == null && listRows.length > TAIL_ROWS) {
+    setTailKey(listRows[listRows.length - TAIL_ROWS].key)
+  }
+  const tailAt =
+    tailOnly && tailKey != null
+      ? listRows.findIndex((r) => r.key === tailKey)
+      : -1
+  const base = Math.max(0, tailAt)
+  const drawn = useMemo(
+    () => (base > 0 ? listRows.slice(base) : listRows),
+    [listRows, base]
+  )
+  const tailing = base > 0
+  useLayoutEffect(() => {
+    tailingRef.current = tailing
+  }, [tailing])
+  // Which row draws each message — where a jump scrolls to — among those
+  // drawn; and, while only the newest are, whether one is held at all (a
+  // jump to it waits for the rest).
   const rowIndex = useMemo(() => {
     const m = new Map<number, number>()
-    listRows.forEach((row, i) => {
+    drawn.forEach((row, i) => {
       for (const id of itemRowIds(row.item)) m.set(id, i)
     })
     return m
-  }, [listRows])
+  }, [drawn])
+  const heldIds = useMemo(() => {
+    if (!tailing) return null
+    const held = new Set<number>()
+    for (const row of listRows)
+      for (const id of itemRowIds(row.item)) held.add(id)
+    return held
+  }, [listRows, tailing])
 
   // The way to load older messages, over the rows: virtua is told its
   // height.
@@ -995,39 +1080,49 @@ export function MessageList({
   }, [])
 
   const rowIndexRef = useRef(rowIndex)
+  const heldIdsRef = useRef(heldIds)
   useLayoutEffect(() => {
     rowIndexRef.current = rowIndex
-  }, [rowIndex])
+    heldIdsRef.current = heldIds
+  }, [rowIndex, heldIds])
 
-  // Older messages loaded in above: the view keeps to what it showed (virtua
-  // counts from the end) — on the render that draws them, and only then:
-  // rows added after it (more coming in at the end) are not more of them.
-  // Marked only when the first row changes, so a reply growing costs no
-  // second render.
+  // Older messages loaded in above, or the rest drawn in above the newest:
+  // the view keeps to what it showed (virtua counts from the end) — on the
+  // render that draws them, and only then: rows added after it (more coming
+  // in at the end) are not more of them. Marked only when the first row
+  // changes, so a reply growing costs no second render.
   const firstRowId = rows[0]?.id ?? null
   const [shiftMark, setShiftMark] = useState({
     bot: botId,
     first: firstRowId,
-    length: listRows.length,
+    base,
+    length: drawn.length,
     shift: false,
   })
-  if (shiftMark.bot !== botId || shiftMark.first !== firstRowId) {
+  if (
+    shiftMark.bot !== botId ||
+    shiftMark.first !== firstRowId ||
+    shiftMark.base !== base
+  ) {
     setShiftMark({
       bot: botId,
       first: firstRowId,
-      length: listRows.length,
+      base,
+      length: drawn.length,
       shift:
         shiftMark.bot === botId &&
-        shiftMark.first != null &&
-        firstRowId != null &&
-        firstRowId < shiftMark.first,
+        ((shiftMark.first != null &&
+          firstRowId != null &&
+          firstRowId < shiftMark.first) ||
+          base < shiftMark.base),
     })
   }
   const shift =
     shiftMark.shift &&
     shiftMark.bot === botId &&
     shiftMark.first === firstRowId &&
-    shiftMark.length === listRows.length
+    shiftMark.base === base &&
+    shiftMark.length === drawn.length
 
   // Kept drawn whatever the scroll: a card waiting for the owner (what they
   // started typing into it stays), and the rows near the end once the view
@@ -1042,15 +1137,16 @@ export function MessageList({
       if (at != null) keep.add(at)
     }
     if (keepFromKey != null) {
-      const from = listRows.findIndex((r) => r.key === keepFromKey)
-      if (from >= 0) for (let i = from; i < listRows.length; i++) keep.add(i)
+      const from = drawn.findIndex((r) => r.key === keepFromKey)
+      if (from >= 0) for (let i = from; i < drawn.length; i++) keep.add(i)
     }
     return keep.size > 0 ? [...keep].sort((a, b) => a - b) : undefined
-  }, [waits, rowIndex, keepFromKey, listRows])
-  const listRowsRef = useRef(listRows)
+  }, [waits, rowIndex, keepFromKey, drawn])
+  // The rows virtua is handed, by its indexes.
+  const listRowsRef = useRef(drawn)
   useLayoutEffect(() => {
-    listRowsRef.current = listRows
-  }, [listRows])
+    listRowsRef.current = drawn
+  }, [drawn])
   const updateKept = useCallback((offset: number) => {
     const handle = listRef.current
     if (!handle) return
@@ -1069,13 +1165,20 @@ export function MessageList({
       updateKept(listRef.current?.scrollOffset ?? 0)
     )
     return () => cancelAnimationFrame(frame)
-  }, [listRows, updateKept])
+  }, [drawn, updateKept])
 
   // ── jumps ───────────────────────────────────────────────────────────────
   // A jump asked for before the list is drawn: made once it is.
   const queuedJump = useRef<number | null>(null)
   const scrollToRow = useCallback(
     (id: number): boolean => {
+      // Held, but not drawn while only the newest rows are: once the rest
+      // are.
+      if (tailingRef.current && heldIdsRef.current?.has(id)) {
+        atBottom.current = false
+        queuedJump.current = id
+        return true
+      }
       const index = rowIndexRef.current.get(id)
       if (index == null) return false
       const handle = listRef.current
@@ -1178,23 +1281,12 @@ export function MessageList({
 
   const shown = scrollReady && settled
   const renderRow = (row: ListRow) => (
-    // A column, as the list was: a message's room over it is its own; one
-    // right under a line takes none (`data-pa-under-line`, or the "new
-    // messages" line beside it in its row).
-    <div
+    <RowView
       key={row.key}
-      data-pa-row={row.key}
-      data-pa-row-first={row.first || undefined}
-      data-pa-under-line={row.underLine || undefined}
-      className={cn("flex min-w-0 flex-col", row.first && "pt-4")}
-    >
-      {row.newLine ? <NewLine onSeen={clearNewFrom} /> : null}
-      {/* What came in rises into place on its own element (see
-          MessageEnterContext). */}
-      <MessageEnterContext.Provider value={enters(row.item)}>
-        <Item item={row.item} />
-      </MessageEnterContext.Provider>
-    </div>
+      row={row}
+      enters={enters(row.item)}
+      onSeen={clearNewFrom}
+    />
   )
 
   return (
@@ -1225,17 +1317,18 @@ export function MessageList({
           <ArrowDown className="size-3.5" aria-hidden />
           {tp("newMessages")}
         </Pill>
-        {/* Up the page with nothing new under them: the way back down, as
-            a conversation's (the pill above says more when there is). */}
-        <Pill
-          shown={far && !newBelow && shown}
-          className="bottom-3 size-8 justify-center p-0"
-          label={tp("toBottom")}
-          onClick={() => toBottom(true)}
-          data-pa-pill="bottom"
-        >
-          <ArrowDown className="size-4" aria-hidden />
-        </Pill>
+        {/* Up the page with nothing new under them: the way back down —
+            a conversation's own, shown when it would show there (the pill
+            above says more when there is). */}
+        {far && !newBelow && shown ? (
+          <ScrollToLatestButton
+            className="z-10"
+            onClick={() => toBottom(true)}
+            title={tp("toBottom")}
+            aria-label={tp("toBottom")}
+            data-pa-pill="bottom"
+          />
+        ) : null}
         <ScrollArea
           className="min-h-0 flex-1"
           onViewportRef={onViewport}
@@ -1248,9 +1341,12 @@ export function MessageList({
               // The bottom keeps room for the last message's actions, which
               // float under it.
               "ws-msg-scope mx-auto flex w-full chat-content-w flex-col px-4 pb-8",
-              // Drawn once it is at its bottom: no flash of the oldest
-              // messages first.
-              !shown && "invisible"
+              // Drawn once it is at its bottom — no flash of the oldest
+              // messages first — and coming in then, a little up into
+              // place, when the chat view moves (an assistant switched to).
+              motion && "transition-[opacity,translate] duration-200 ease-out",
+              !shown && "invisible opacity-0",
+              !shown && motion && "translate-y-1.5"
             )}
           >
             {hasOlder ? (
@@ -1324,7 +1420,7 @@ export function MessageList({
                 </Button>
               </div>
             ) : null}
-            {scrollReady && listRows.length > 0 ? (
+            {scrollReady && drawn.length > 0 ? (
               <Virtualizer
                 // Each assistant's list measured afresh.
                 key={String(botId)}
@@ -1336,7 +1432,7 @@ export function MessageList({
                 shift={shift}
                 keepMounted={keepMounted}
                 onScroll={updateKept}
-                data={listRows}
+                data={drawn}
               >
                 {renderRow}
               </Virtualizer>

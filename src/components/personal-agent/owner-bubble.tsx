@@ -1,8 +1,9 @@
 "use client"
 
 /**
- * One of the owner's messages: a bubble on the right, tinted with the
- * theme's colour, the quote it replies to at its top, its images in a grid.
+ * One of the owner's messages: a bubble on the right in the assistant's
+ * face — its body's colour, the words in its eyes' (globals.css) — the
+ * quote it replies to at its top, its images in a grid.
  * While the assistant has not started on it, "unread" sits beside the
  * bubble's foot. Once it has — the message went into a turn, or was folded
  * into the one running — a 👍 sits on the bubble's corner (10.7), popping on

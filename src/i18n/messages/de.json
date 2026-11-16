@@ -7909,7 +7909,8 @@
       "newMessages": "Neue Nachrichten",
       "openTask": "Im Board öffnen",
       "openConversation": "Unterhaltung öffnen",
-      "viewSession": "Konversation anzeigen"
+      "viewSession": "Konversation anzeigen",
+      "loading": "Unterhaltung wird geladen…"
     },
     "work": {
       "taskNotStarted": "Diese Aufgabe hat noch nicht begonnen. Sobald sie startet, erscheint ihre Konversation hier.",
@@ -9335,7 +9336,10 @@
         "resize": "Breite der Assistentenliste ändern",
         "dropNewGroup": "Hier ablegen für eine neue Gruppe",
         "switch": "Assistent wechseln",
-        "showColumn": "In einer Seitenleiste anzeigen"
+        "showColumn": "In einer Seitenleiste anzeigen",
+        "sidebar": "Seitenleiste",
+        "addShort": "Neuer Assistent",
+        "opening": "{name} wird geöffnet…"
       },
       "choice": {
         "other": "Andere",

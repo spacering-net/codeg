@@ -4,6 +4,7 @@ import {
   afterScroll,
   farFromBottom,
   followsBottom,
+  NEAR_BOTTOM_PX,
   STICK_PX,
 } from "./follow-bottom"
 
@@ -46,13 +47,17 @@ describe("followsBottom", () => {
 })
 
 describe("farFromBottom", () => {
-  it("shows the way down once the reader is more than half a view up", () => {
-    expect(farFromBottom({ following: false, gap: 401, view: 800 })).toBe(true)
-    expect(farFromBottom({ following: false, gap: 400, view: 800 })).toBe(false)
+  it("shows the way down past the conversation's slack, as it shows there", () => {
+    expect(farFromBottom({ following: false, gap: NEAR_BOTTOM_PX + 1 })).toBe(
+      true
+    )
+    expect(farFromBottom({ following: false, gap: NEAR_BOTTOM_PX })).toBe(false)
+    // A glance up a little way, not half a view: it shows.
+    expect(farFromBottom({ following: false, gap: 120 })).toBe(true)
   })
 
   it("does not while the list follows, however far its content grew", () => {
-    expect(farFromBottom({ following: true, gap: 5000, view: 800 })).toBe(false)
+    expect(farFromBottom({ following: true, gap: 5000 })).toBe(false)
   })
 })
 

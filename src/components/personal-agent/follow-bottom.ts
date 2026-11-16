@@ -69,22 +69,23 @@ export function afterScroll({
   return { following: was, restick: was && !gliding }
 }
 
+/** Within this of the bottom no way back down shows: `use-stick-to-bottom`'s
+ *  own slack, which a conversation's button goes by. */
+export const NEAR_BOTTOM_PX = 70
+
 /**
- * Whether the way back down shows (the round button over the list): the
- * reader stopped following and is more than half a view up from the bottom
- * — a glance up past the last message or two does not bring it.
+ * Whether the way back down shows (the round button over the list), as it
+ * does over a conversation: the reader stopped following and is further
+ * from the bottom than `NEAR_BOTTOM_PX`.
  */
 export function farFromBottom({
   following,
   gap,
-  view,
 }: {
   /** Whether the list follows its bottom (`followsBottom`). */
   following: boolean
   /** The distance from the view's bottom to the content's. */
   gap: number
-  /** The view's height. */
-  view: number
 }): boolean {
-  return !following && gap > view / 2
+  return !following && gap > NEAR_BOTTOM_PX
 }

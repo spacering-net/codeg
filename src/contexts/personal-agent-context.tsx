@@ -78,14 +78,39 @@ interface PersonalAgentContextValue {
   quoted: ReadonlyMap<number, TimelineRow | null>
   /** Ask for rows a quote names that are not held. */
   requestQuoted: (ids: number[]) => void
-  /** Another assistant was picked and is still being read: this store is
-   *  the one the page showed, drawn as it is but not to act on. */
-  switching?: boolean
 }
 
 const PersonalAgentContext = createContext<PersonalAgentContextValue | null>(
   null
 )
+
+/** A switch to another assistant under way (`ViewedPersonalAgentProvider`):
+ *  the one picked (`to`, `null` the primary) is still being read, and the
+ *  store the page reads is the one it showed, drawn as it is but not to act
+ *  on. Apart from the store, so marking it re-renders only what shows it,
+ *  not everything that reads the store. */
+export interface PersonalAgentSwitch {
+  switching: boolean
+  to: number | null
+}
+
+const NOT_SWITCHING: PersonalAgentSwitch = { switching: false, to: null }
+
+const PersonalAgentSwitchContext =
+  createContext<PersonalAgentSwitch>(NOT_SWITCHING)
+
+/** Whether the page is switching to another assistant, and to which. */
+export function usePersonalAgentSwitch(): PersonalAgentSwitch {
+  return useContext(PersonalAgentSwitchContext)
+}
+
+/** Read an assistant ahead (its store kept live for a while), so switching
+ *  to it is at once: the pointer resting on its row, or pressed on it. */
+const PrefetchAssistantContext = createContext<(bot: number) => void>(() => {})
+
+export function usePrefetchAssistant(): (bot: number) => void {
+  return useContext(PrefetchAssistantContext)
+}
 
 /** The assistant the enclosing store holds (`null`: the primary), for the
  *  calls a component makes about it. */
@@ -658,6 +683,11 @@ function pendingStore(botId: number): PersonalAgentContextValue {
  *  picked is read; then it shows the one picked, read or not. */
 export const SWITCH_HOLD_MS = 1500
 
+/** How many work assistants besides the one shown stay read and live — the
+ *  last ones shown, and those read ahead — so going back to one, or to one
+ *  the pointer rested on, is at once. */
+export const WARM_STORES = 3
+
 /** Holds a work assistant's store and hands it up; renders nothing. */
 function ViewedStore({
   botId,
@@ -687,9 +717,12 @@ function isReady(value: PersonalAgentContextValue | null): boolean {
  * switching assistants remounts nothing of the workspace.
  *
  * Switching, the page goes on showing the assistant it showed — its store
- * kept, live, and marked `switching`, so the page draws it but takes no
- * action on it — until the one picked is read (`SWITCH_HOLD_MS` at most),
- * and then shows that one whole: never a page emptied while it loads.
+ * kept, live, and marked switching (`usePersonalAgentSwitch`), so the page
+ * draws it but takes no action on it — until the one picked is read
+ * (`SWITCH_HOLD_MS` at most), and then shows that one whole: never a page
+ * emptied while it loads. The last few shown, and those read ahead
+ * (`usePrefetchAssistant`), stay read and live (`WARM_STORES`): switching
+ * to one of them is at once.
  */
 export function ViewedPersonalAgentProvider({
   viewBot,
@@ -720,6 +753,21 @@ export function ViewedPersonalAgentProvider({
   )
   const primaryId = primary?.snapshot?.agent?.id ?? null
   const other = viewBot != null && viewBot !== primaryId ? viewBot : null
+  // The work assistants kept read besides the one picked, the latest
+  // first: the last ones shown, and those read ahead.
+  const [warm, setWarm] = useState<readonly number[]>([])
+  const [warmFor, setWarmFor] = useState<number | null>(other)
+  if (warmFor !== other) {
+    setWarmFor(other)
+    if (warmFor != null) setWarm((held) => warmFirst(held, warmFor))
+  }
+  const prefetch = useCallback(
+    (bot: number) => {
+      if (bot === primaryId) return
+      setWarm((held) => (held[0] === bot ? held : warmFirst(held, bot)))
+    },
+    [primaryId]
+  )
   // The store picked (`null`: the primary's), and the one the page shows.
   const [shown, setShown] = useState<number | null>(other)
   // Waiting for the one picked given up, this switch: a new pick waits
@@ -743,27 +791,38 @@ export function ViewedPersonalAgentProvider({
     return () => window.clearTimeout(timer)
   }, [switching, other])
   const held = switching ? storeOf(shown) : null
-  const value = useMemo(
-    () =>
-      held
-        ? { ...held, switching: true }
-        : (storeOf(other) ?? pendingStore(other ?? 0)),
-    // `storeOf` reads `primary` and `stores`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [held, other, primary, stores]
+  // The store the page showed, as it is, while another is read: marking it
+  // switching apart from it re-renders nothing that only reads the store.
+  const value = held ?? storeOf(other)
+  const pending = useMemo(() => pendingStore(other ?? 0), [other])
+  const switchState = useMemo<PersonalAgentSwitch>(
+    () => (switching ? { switching: true, to: other } : NOT_SWITCHING),
+    [switching, other]
   )
-  // The store picked, and the one still shown while it is read.
-  const mounted = [other, switching ? shown : null].filter(
-    (b, i, all): b is number => b != null && all.indexOf(b) === i
+  // The store picked, the one still shown while it is read, and those kept
+  // warm.
+  const mounted = [other, switching ? shown : null, ...warm].filter(
+    (b, i, all): b is number =>
+      b != null && b !== primaryId && all.indexOf(b) === i
   )
   return (
     <PrimaryAgentContext.Provider value={primary}>
       {mounted.map((bot) => (
         <ViewedStore key={bot} botId={bot} onValue={onValue} onGone={onGone} />
       ))}
-      <PersonalAgentContext.Provider value={value}>
-        {children}
-      </PersonalAgentContext.Provider>
+      <PrefetchAssistantContext.Provider value={prefetch}>
+        <PersonalAgentSwitchContext.Provider value={switchState}>
+          <PersonalAgentContext.Provider value={value ?? pending}>
+            {children}
+          </PersonalAgentContext.Provider>
+        </PersonalAgentSwitchContext.Provider>
+      </PrefetchAssistantContext.Provider>
     </PrimaryAgentContext.Provider>
   )
+}
+
+/** `bot` first among those kept warm, the oldest let go past
+ *  `WARM_STORES`. */
+function warmFirst(held: readonly number[], bot: number): number[] {
+  return [bot, ...held.filter((b) => b !== bot)].slice(0, WARM_STORES)
 }

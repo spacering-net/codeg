@@ -65,6 +65,7 @@ vi.mock("@/contexts/personal-agent-context", () => ({
     liveReplies: new Map(),
     rows: [],
   }),
+  usePrefetchAssistant: () => () => {},
 }))
 vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({ setRoute: vi.fn(), openConversations: vi.fn() }),

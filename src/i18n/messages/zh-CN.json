@@ -7909,7 +7909,8 @@
       "newMessages": "以下是新消息",
       "openTask": "在看板中打开",
       "openConversation": "打开会话",
-      "viewSession": "查看会话"
+      "viewSession": "查看会话",
+      "loading": "正在载入对话…"
     },
     "work": {
       "taskNotStarted": "这个任务还没开始，开始后这里会显示它的会话。",
@@ -9335,7 +9336,10 @@
         "resize": "调整助手列表宽度",
         "dropNewGroup": "拖到这里新建分组",
         "switch": "切换助手",
-        "showColumn": "在侧边栏显示"
+        "showColumn": "在侧边栏显示",
+        "sidebar": "侧边栏",
+        "addShort": "新建助手",
+        "opening": "正在打开 {name}…"
       },
       "choice": {
         "other": "其他",

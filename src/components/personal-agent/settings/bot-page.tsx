@@ -20,7 +20,10 @@ import { ArrowLeft } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { usePersonalAgent } from "@/contexts/personal-agent-context"
+import {
+  usePersonalAgent,
+  usePersonalAgentSwitch,
+} from "@/contexts/personal-agent-context"
 import type { BotAvatar as BotAvatarValue } from "@/lib/types"
 import { useRoster } from "@/stores/personal-agent-roster-store"
 import {
@@ -55,7 +58,8 @@ export function BotPage() {
   const viewBot = usePersonalAgentUi((s) => s.viewBot)
   const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   const showConversation = usePersonalAgentUi((s) => s.showConversation)
-  const { snapshot, botId, switching } = usePersonalAgent()
+  const { snapshot, botId } = usePersonalAgent()
+  const { switching } = usePersonalAgentSwitch()
   const entries = useRoster()
   const templates = useBotTemplates()
   const botName = useBotName()

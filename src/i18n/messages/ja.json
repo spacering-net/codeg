@@ -7909,7 +7909,8 @@
       "newMessages": "ここから新着メッセージ",
       "openTask": "ボードで開く",
       "openConversation": "会話を開く",
-      "viewSession": "会話を表示"
+      "viewSession": "会話を表示",
+      "loading": "会話を読み込んでいます…"
     },
     "work": {
       "taskNotStarted": "このタスクはまだ始まっていません。始まるとここに会話が表示されます。",
@@ -9335,7 +9336,10 @@
         "resize": "アシスタント一覧の幅を変更",
         "dropNewGroup": "ここにドロップして新しいグループに",
         "switch": "アシスタントを切り替え",
-        "showColumn": "サイドバーに表示"
+        "showColumn": "サイドバーに表示",
+        "sidebar": "サイドバー",
+        "addShort": "新しいアシスタント",
+        "opening": "{name} を開いています…"
       },
       "choice": {
         "other": "その他",

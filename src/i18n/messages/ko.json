@@ -7909,7 +7909,8 @@
       "newMessages": "여기부터 새 메시지",
       "openTask": "보드에서 열기",
       "openConversation": "대화 열기",
-      "viewSession": "대화 보기"
+      "viewSession": "대화 보기",
+      "loading": "대화를 불러오는 중…"
     },
     "work": {
       "taskNotStarted": "이 작업은 아직 시작되지 않았습니다. 시작되면 여기에 대화가 표시됩니다.",
@@ -9335,7 +9336,10 @@
         "resize": "어시스턴트 목록 너비 조정",
         "dropNewGroup": "여기에 놓아 새 그룹 만들기",
         "switch": "어시스턴트 전환",
-        "showColumn": "사이드바에 표시"
+        "showColumn": "사이드바에 표시",
+        "sidebar": "사이드바",
+        "addShort": "새 어시스턴트",
+        "opening": "{name} 여는 중…"
       },
       "choice": {
         "other": "기타",

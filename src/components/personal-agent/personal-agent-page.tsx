@@ -20,11 +20,26 @@
  * kept beside it, and the settings every assistant shares, across the whole
  * page.
  *
+ * Switching assistants: the capsule names the one picked at once, a
+ * spinner for its chevron, while the page goes on showing the last one —
+ * not to act on, faded a little and a thin bar running along its top once
+ * the read takes a moment (`SwitchVeil`); then the new one's conversation
+ * comes in at its bottom. One read ahead (the pointer resting on its row)
+ * or shown lately switches at once. Before an assistant's conversation is
+ * read at all, the page is its shape (`ConversationSkeleton`).
+ *
  * A workbench route, so the workspace's providers (the live connection store,
  * the assistants) are all there.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react"
 import { useTranslations } from "next-intl"
 import { ChevronDown } from "lucide-react"
 import { toast } from "sonner"
@@ -43,6 +58,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import {
   Drawer,
   DrawerContent,
@@ -61,13 +77,17 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
-import { usePersonalAgent } from "@/contexts/personal-agent-context"
+import {
+  usePersonalAgent,
+  usePersonalAgentSwitch,
+} from "@/contexts/personal-agent-context"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { personalAgentKeepalive, personalAgentNewSession } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAssistants } from "@/stores/assistants-store"
+import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
 import { usePaAccent } from "@/lib/personal-agent-accent"
 import {
   PERSONAL_AGENT_EVENTS,
@@ -96,6 +116,7 @@ import { SettingsView } from "./settings/settings-view"
 import {
   PageScopeContext,
   useBotLook,
+  useBotName,
   useStatusWord,
   type PageScope,
 } from "./shared"
@@ -116,13 +137,100 @@ const KEEPALIVE_MS = 30_000
  *  zoom (10.6). */
 const TITLE_AVATAR_SIZE = 18
 
+/**
+ * What the page draws while another assistant is read: the one it showed,
+ * not to act on, faded a little once the read takes a moment (a quick one
+ * never flickers), with a thin bar running along its top (`bar`). Its own
+ * component, reading the switch alone: marking it re-renders this, the page
+ * passed in as it was drawn.
+ */
+function SwitchVeil({
+  bar = false,
+  className,
+  children,
+  ...rest
+}: ComponentProps<"div"> & { bar?: boolean }) {
+  const { switching } = usePersonalAgentSwitch()
+  return (
+    <div
+      {...rest}
+      data-pa-switch-veil
+      data-pa-switching={switching || undefined}
+      inert={switching || undefined}
+      className={cn("relative", className)}
+    >
+      {bar && switching ? (
+        <div aria-hidden data-pa-switch-bar>
+          <span />
+        </div>
+      ) : null}
+      {children}
+    </div>
+  )
+}
+
+/** Bubbles' shapes, the newest at the foot: a conversation, waiting. */
+const SKELETON_BUBBLES: readonly { end: boolean; w: string; h: string }[] = [
+  { end: false, w: "62%", h: "4.5rem" },
+  { end: true, w: "38%", h: "2.5rem" },
+  { end: false, w: "74%", h: "6rem" },
+  { end: true, w: "30%", h: "2.5rem" },
+  { end: false, w: "56%", h: "3.5rem" },
+]
+
+/** The page before an assistant's conversation is read: its column, the
+ *  shapes of a few bubbles breathing, coming in only once the read takes
+ *  a moment. */
+function ConversationSkeleton() {
+  const t = useTranslations("PersonalAgent.timeline")
+  return (
+    <div
+      role="status"
+      aria-label={t("loading")}
+      data-pa-skeleton
+      className="pa-delayed-in flex h-full min-h-0 flex-col"
+    >
+      <div className="mx-auto flex w-full min-h-0 chat-content-w flex-1 flex-col justify-end gap-4 overflow-hidden px-4 pb-8">
+        {SKELETON_BUBBLES.map((b, i) => (
+          <div
+            key={i}
+            className={cn(
+              "shrink-0 rounded-2xl bg-muted motion-safe:animate-pulse",
+              b.end ? "self-end" : "self-start"
+            )}
+            style={{ width: b.w, height: b.h }}
+          />
+        ))}
+      </div>
+      <div className="mx-auto w-full shrink-0 chat-content-w px-4 pb-4">
+        <div className="h-24 rounded-3xl border border-border/70 bg-muted/40" />
+      </div>
+    </div>
+  )
+}
+
 export function PersonalAgentPageTitle() {
   const t = useTranslations("PersonalAgent")
-  const { snapshot } = usePersonalAgent()
+  const { snapshot, botId } = usePersonalAgent()
   const showAux = usePersonalAgentUi((s) => s.showAux)
   const word = useStatusWord()
-  const agent = snapshot?.agent ?? null
-  const title = agent?.name?.trim() || t("title")
+  const botName = useBotName()
+  // Switching, or shown before it is read: the one picked, at once — its
+  // face and name from the roster — with a spinner for the chevron while it
+  // is read.
+  const { switching, to } = usePersonalAgentSwitch()
+  const reading = switching || snapshot == null
+  const pickedId = switching ? to : botId
+  const picked = usePersonalAgentRoster((s) =>
+    reading
+      ? (s.entries?.find((e) =>
+          pickedId == null ? e.kind === "primary" : e.id === pickedId
+        ) ?? null)
+      : null
+  )
+  const shown = snapshot?.agent ?? null
+  const agent = picked ?? shown
+  const title = picked ? botName(picked) : shown?.name?.trim() || t("title")
   const look = useBotLook(agent?.id ?? null)
   const readOnly = snapshot?.status.engine !== "here"
   // The roster in a popover under the capsule. Its dialogs are kept here,
@@ -158,7 +266,12 @@ export function PersonalAgentPageTitle() {
                   type="button"
                   data-pa-title-capsule
                   data-pa-face-host
-                  title={t("bots.roster.switch")}
+                  aria-busy={picked != null || undefined}
+                  title={
+                    picked
+                      ? t("bots.roster.opening", { name: title })
+                      : t("bots.roster.switch")
+                  }
                   className="flex min-w-0 items-center gap-1.5 rounded-full border border-border/70 bg-background/60 py-0.5 ps-1 pe-2 text-[0.8125rem] font-semibold transition-colors hover:bg-foreground/10 aria-expanded:bg-foreground/10"
                 >
                   <BotAvatar
@@ -168,10 +281,19 @@ export function PersonalAgentPageTitle() {
                     look={look}
                   />
                   <span className="min-w-0 truncate">{title}</span>
-                  <ChevronDown
-                    aria-hidden
-                    className="size-3.5 shrink-0 text-muted-foreground"
-                  />
+                  {picked ? (
+                    <span data-pa-title-opening className="flex shrink-0">
+                      <SyncedSpinner
+                        small
+                        className="size-3.5 text-muted-foreground"
+                      />
+                    </span>
+                  ) : (
+                    <ChevronDown
+                      aria-hidden
+                      className="size-3.5 shrink-0 text-muted-foreground"
+                    />
+                  )}
                 </button>
               </PopoverTrigger>
               <PopoverContent
@@ -237,7 +359,7 @@ export function PersonalAgentPage() {
   useAssistantShortcuts()
   // Session links in its replies open their conversations.
   const openSession = useSessionLinkOpener()
-  const { botId, snapshot, rows, loading, switching } = usePersonalAgent()
+  const { botId, snapshot, rows, loading } = usePersonalAgent()
   const assistants = useAssistants()
   const isMobile = useIsMobile()
   const auxOpen = usePersonalAgentUi((s) => s.auxOpen)
@@ -367,7 +489,9 @@ export function PersonalAgentPage() {
     jumpTo(pendingJump.row)
   }, [pendingJump, agentId, loading, pageOver, jumpTo])
 
-  if (!snapshot || loading) return <div className="h-full" />
+  // Read for the first time, or switched to before it was read: the shape of
+  // a conversation, waiting.
+  if (!snapshot || loading) return <ConversationSkeleton />
 
   if (!agent && settingsOpen) return <SettingsView />
   // The first setup: the identity tab of the page it will have.
@@ -423,20 +547,13 @@ export function PersonalAgentPage() {
             <BotPage />
           </div>
         ) : (
-          <div
-            className={cn(
-              "flex min-w-0 flex-1 flex-col transition-opacity",
-              // While another assistant is read, this one stays drawn — no
-              // emptied page — but not to act on; dimmed only if it takes a
-              // while (a switch read in time never dims at all).
-              switching && "opacity-60 delay-500 duration-200"
-            )}
+          <SwitchVeil
+            bar
+            className="flex min-w-0 flex-1 flex-col"
             data-pa-face={faceColor ?? undefined}
             data-pa-accent={
               (accent === "bot" && faceColor != null) || undefined
             }
-            data-pa-switching={switching || undefined}
-            inert={switching || undefined}
           >
             {isMobile && rosterShown ? (
               <PersonalAgentRoster variant="strip" readOnly={readOnly} />
@@ -478,19 +595,15 @@ export function PersonalAgentPage() {
               onClearQuote={() => setQuoting(null)}
               onSent={() => sentRef.current?.()}
             />
-          </div>
+          </SwitchVeil>
         )}
       </div>
     </div>
   )
   const aux = (
-    <div
-      className="h-full"
-      data-pa-switching={switching || undefined}
-      inert={switching || undefined}
-    >
+    <SwitchVeil className="h-full">
       <PersonalAgentAuxPanel snapshot={snapshot} inDrawer={isMobile} />
-    </div>
+    </SwitchVeil>
   )
 
   return (

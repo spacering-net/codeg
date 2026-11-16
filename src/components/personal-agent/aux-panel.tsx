@@ -38,7 +38,9 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ComponentProps,
   type ReactNode,
@@ -139,6 +141,7 @@ import type {
   TimelineRow,
   WaitsFor,
 } from "@/lib/types"
+import { useChatMotion } from "@/hooks/use-chat-motion"
 import { cn } from "@/lib/utils"
 import {
   usePersonalAgentRoster,
@@ -354,8 +357,23 @@ export function PersonalAgentAuxPanel({
   const setTab = usePersonalAgentUi((s) => s.setAuxTab)
   const work = useWork()
   const waiting = work?.open.filter((m) => m.group === "owner").length ?? 0
+  // Another assistant shown: its panel comes in, as its conversation does.
+  const asideRef = useRef<HTMLElement | null>(null)
+  const motion = useChatMotion()
+  const agentId = snapshot.agent?.id ?? null
+  const shownFor = useRef(agentId)
+  useLayoutEffect(() => {
+    if (shownFor.current === agentId) return
+    shownFor.current = agentId
+    if (!motion) return
+    asideRef.current?.animate?.([{ opacity: 0 }, { opacity: 1 }], {
+      duration: 200,
+      easing: "ease-out",
+    })
+  }, [agentId, motion])
   return (
     <aside
+      ref={asideRef}
       data-pa-aux
       aria-label={t("title")}
       className="flex h-full min-h-0 flex-col overflow-hidden"
@@ -446,17 +464,22 @@ function AuxHead({
     >
       {agent ? (
         <>
+          {/* As far from the top as from the sides, to the eye: the
+              bell is as tall as its box is wide less a little, the "⋯" a
+              flat row in the middle of its own — their boxes a little
+              nearer the top than the sides, the pair reads as much below
+              the top as in from the sides. */}
           <NotifyToggle
             snapshot={snapshot}
             className={cn(
               "absolute",
-              inDrawer ? "top-2.5 left-3" : "start-2 top-2"
+              inDrawer ? "top-2.5 left-3" : "start-2 top-1.5"
             )}
           />
           <AgentMenu
             className={cn(
               "absolute",
-              inDrawer ? "top-2.5 right-12" : "end-2 top-2"
+              inDrawer ? "top-2.5 right-12" : "end-2 top-1.5"
             )}
           />
         </>
