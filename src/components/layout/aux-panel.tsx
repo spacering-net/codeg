@@ -290,7 +290,7 @@ export function AuxPanel() {
                 fight the drawer's own swipe-to-close. */}
             <TabsList
               variant="line"
-              className="h-10 w-full shrink-0 justify-start border-b border-border ws-chrome-border px-3 group-data-horizontal/tabs:h-10"
+              className="h-11 w-full shrink-0 justify-start overflow-x-auto overscroll-x-contain border-b border-border ws-chrome-border px-2 touch-pan-x group-data-horizontal/tabs:h-11"
             >
               {shownTabs.map((tab) => (
                 <MobileAuxTabTrigger
@@ -367,7 +367,13 @@ function MobileAuxTabTrigger({
   const { triggerProps } = useTabReselect(selected, onReselect)
   const Icon = TAB_ICONS[tab]
   return (
-    <TabsTrigger value={tab} title={label} aria-label={label} {...triggerProps}>
+    <TabsTrigger
+      value={tab}
+      title={label}
+      aria-label={label}
+      className="min-h-10 min-w-11 flex-none touch-manipulation"
+      {...triggerProps}
+    >
       <Icon className="h-3.5 w-3.5" />
     </TabsTrigger>
   )

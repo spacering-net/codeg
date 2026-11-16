@@ -426,6 +426,7 @@ pub struct TabsChanged {
     pub version: i64,
     pub origin: String,
     pub tabs: Vec<crate::models::OpenedTab>,
+    pub pane_state: Option<crate::models::PaneState>,
 }
 
 /// Global side-channel for cross-client automation list + run sync. Mirrors
@@ -770,6 +771,7 @@ mod tests {
                 version: 6,
                 origin: "win-abc".to_string(),
                 tabs: vec![],
+                pane_state: None,
             },
         );
 

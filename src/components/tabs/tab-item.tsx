@@ -25,6 +25,7 @@ import {
 import { useLongPressDrag } from "@/hooks/use-long-press-drag"
 import type { TabItem as TabItemData } from "@/contexts/tab-context"
 import type { SplitDirection } from "@/lib/tab-group-layout"
+import { useTabStore } from "@/stores/tab-store"
 
 /** A group this tab could move to (every group EXCEPT the tab's own), labeled
  *  by its traversal-order number and its selected tab's title. */
@@ -120,6 +121,8 @@ export const TabItem = memo(function TabItem({
   onTouchSortingEnd,
 }: TabItemProps) {
   const t = useTranslations("Folder.tabs")
+  const tPanes = useTranslations("ConversationPanes")
+  const paneState = useTabStore((state) => state.paneState)
   const itemRef = useRef<HTMLDivElement>(null)
 
   const resolvedFolderName = folderName ?? String(tab.folderId)
@@ -381,6 +384,31 @@ export const TabItem = memo(function TabItem({
             {t("closeOthers")}
           </ContextMenuItem>
           <ContextMenuSeparator />
+          {paneState && paneState.panes.length > 1 && (
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>{tPanes("move")}</ContextMenuSubTrigger>
+              <ContextMenuSubContent>
+                {paneState.panes
+                  .filter(
+                    (pane) =>
+                      !Object.prototype.hasOwnProperty.call(
+                        pane.assignments,
+                        tab.id
+                      )
+                  )
+                  .map((pane) => (
+                    <ContextMenuItem
+                      key={pane.id}
+                      onSelect={() =>
+                        useTabStore.getState().moveTabToPane(tab.id, pane.id)
+                      }
+                    >
+                      {pane.name}
+                    </ContextMenuItem>
+                  ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
           {/* IDEA-style split-group vocabulary. Plain "Split" seeds the new
               group with a fresh draft (a conversation can't be open in two
               groups at once), "Split and Move" relocates this tab. */}

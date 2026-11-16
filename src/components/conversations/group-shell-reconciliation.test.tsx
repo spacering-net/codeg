@@ -158,7 +158,7 @@ describe("split group shell source shape", () => {
   // wrapper] siblings, the behavioural proof above no longer describes
   // production.
   it("keeps strip, title bar, and content wrapper as plain sibling slots", () => {
-    const shellStart = source.indexOf("const renderGroupShell = (groupId")
+    const shellStart = source.indexOf("const renderGroupShell = (")
     expect(shellStart).toBeGreaterThan(-1)
     const shellBody = source.slice(shellStart, shellStart + 6000)
     const stripIdx = shellBody.indexOf("{isSplit && (")

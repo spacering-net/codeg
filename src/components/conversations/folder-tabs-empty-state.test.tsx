@@ -8,6 +8,7 @@ import { FolderTabsEmptyState } from "./folder-tabs-empty-state"
 
 const h = vi.hoisted(() => ({
   activeFolder: null as Partial<FolderDetail> | null,
+  paneState: null as { activePaneId: string } | null,
   openNewConversationTab: vi.fn(),
   openChatModeTab: vi.fn(),
 }))
@@ -16,6 +17,9 @@ vi.mock("@/contexts/active-folder-context", () => ({
   useActiveFolder: () => ({ activeFolder: h.activeFolder }),
 }))
 vi.mock("@/contexts/tab-context", () => ({
+  useTabStore: (
+    selector: (state: { paneState: typeof h.paneState }) => unknown
+  ) => selector({ paneState: h.paneState }),
   useTabActions: () => ({
     openNewConversationTab: h.openNewConversationTab,
     openChatModeTab: h.openChatModeTab,
@@ -32,6 +36,7 @@ function renderEmpty() {
 
 describe("FolderTabsEmptyState", () => {
   beforeEach(() => {
+    h.paneState = null
     h.openNewConversationTab.mockClear()
     h.openChatModeTab.mockClear()
   })
@@ -60,5 +65,17 @@ describe("FolderTabsEmptyState", () => {
     fireEvent.click(screen.getByRole("button", { name: "New chat" }))
     expect(h.openChatModeTab).toHaveBeenCalledTimes(1)
     expect(h.openNewConversationTab).not.toHaveBeenCalled()
+  })
+
+  it("explains how to open a conversation when a Pane is empty", () => {
+    h.activeFolder = null
+    h.paneState = { activePaneId: "pane-1" }
+    renderEmpty()
+    expect(screen.getByText("No conversations open in this Pane")).toBeTruthy()
+    expect(
+      screen.getByText(
+        "Open a conversation from the sidebar or start a new one."
+      )
+    ).toBeTruthy()
   })
 })

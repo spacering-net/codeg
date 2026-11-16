@@ -94,6 +94,9 @@ pub struct OpenedTab {
 pub struct OpenedTabsSnapshot {
     pub items: Vec<OpenedTab>,
     pub version: i64,
+    // 响应沿用约定的 snake_case 外层键，PaneState 内部字段则固定为 camelCase。
+    #[serde(rename = "pane_state")]
+    pub pane_state: Option<super::pane::PaneState>,
 }
 
 /// Response for `save_opened_tabs`: whether the compare-and-set was applied, the
@@ -106,6 +109,8 @@ pub struct SaveTabsOutcome {
     pub accepted: bool,
     pub version: i64,
     pub tabs: Vec<OpenedTab>,
+    #[serde(rename = "pane_state")]
+    pub pane_state: Option<super::pane::PaneState>,
 }
 
 #[derive(Debug, Clone, Serialize)]

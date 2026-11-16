@@ -62,6 +62,7 @@ export function TabBar({ groupId, maximizeControl = false }: TabBarProps) {
   const tabsFollowFolder = useFolderTabsStore((s) => s.enabled)
   const tabs = useVisibleConversationTabs()
   const activeTabId = useTabStore((s) => s.activeTabId)
+  const hasPanes = useTabStore((s) => s.paneState != null)
   const groupOf = useTabStore((s) => s.groupOf)
   const groupLayout = useTabStore((s) => s.groupLayout)
   const groupSelection = useTabStore((s) => s.groupSelection)
@@ -311,7 +312,10 @@ export function TabBar({ groupId, maximizeControl = false }: TabBarProps) {
 
   // While tabs follow the folder, the unsplit strip stays up for a folder with
   // nothing open: its "+" is how that folder gets its first conversation.
-  if (groupTabs.length === 0 && (groupId != null || !tabsFollowFolder)) {
+  if (
+    groupTabs.length === 0 &&
+    (groupId != null || (!tabsFollowFolder && !hasPanes))
+  ) {
     return null
   }
 

@@ -868,6 +868,7 @@ pub async fn remove_folder_from_workspace_core(
             crate::web::event_bridge::TabsChanged {
                 version: inv.version,
                 origin: "server".to_string(),
+                pane_state: inv.pane_state,
                 tabs,
             },
         );

@@ -10,7 +10,12 @@ use crate::db::entities::opened_tab;
 use crate::db::error::DbError;
 use crate::db::service::app_metadata_service;
 use crate::models::agent::AgentType;
-use crate::models::OpenedTab;
+use crate::models::{OpenedTab, OpenedTabsSnapshot, PaneState};
+
+mod pane_state;
+
+#[cfg(test)]
+mod tests;
 
 /// Serializes all version-mutating tab operations within the process so the
 /// logical clock advances strictly sequentially. Two concurrent writers would
@@ -29,6 +34,7 @@ fn version_lock() -> &'static Mutex<()> {
 /// accepted mutation; used for compare-and-set (lost-update prevention) and for
 /// client-side echo/ordering on the `tabs://changed` side-channel.
 const OPENED_TABS_VERSION_KEY: &str = "opened_tabs_version";
+const OPENED_TABS_PANE_STATE_KEY: &str = "opened_tabs_pane_state";
 
 /// Outcome of a compare-and-set tab save.
 pub struct CasOutcome {
@@ -38,6 +44,7 @@ pub struct CasOutcome {
     pub version: i64,
     /// Canonical persisted tab set after the call.
     pub tabs: Vec<OpenedTab>,
+    pub pane_state: Option<PaneState>,
 }
 
 fn parse_agent_type(s: &str) -> Option<AgentType> {
@@ -78,11 +85,49 @@ pub async fn list_all_tabs<C: ConnectionTrait>(conn: &C) -> Result<Vec<OpenedTab
 /// which a client could then CAS-save as if it were current, dropping the
 /// concurrent change.
 pub async fn snapshot_tabs(conn: &DatabaseConnection) -> Result<(Vec<OpenedTab>, i64), DbError> {
+    let snapshot = snapshot_tabs_with_panes(conn).await?;
+    Ok((snapshot.items, snapshot.version))
+}
+
+pub async fn snapshot_tabs_with_panes(
+    conn: &DatabaseConnection,
+) -> Result<OpenedTabsSnapshot, DbError> {
     let txn = conn.begin().await?;
     let tabs = list_all_tabs(&txn).await?;
     let version = get_tabs_version(&txn).await?;
+    let pane_state = read_pane_state(&txn, &tabs).await?;
     txn.commit().await?;
-    Ok((tabs, version))
+    Ok(OpenedTabsSnapshot {
+        items: tabs,
+        version,
+        pane_state,
+    })
+}
+
+async fn read_pane_state<C: ConnectionTrait>(
+    conn: &C,
+    tabs: &[OpenedTab],
+) -> Result<Option<PaneState>, DbError> {
+    let Some(raw) = app_metadata_service::get_value_conn(conn, OPENED_TABS_PANE_STATE_KEY).await?
+    else {
+        return Ok(None);
+    };
+    let state = serde_json::from_str(&raw)
+        .map_err(|error| DbError::Validation(format!("stored pane_state: {error}")))?;
+    pane_state::validate_stored(&state)?;
+    Ok(Some(pane_state::normalize(state, tabs)))
+}
+
+async fn persist_pane_state<C: ConnectionTrait>(
+    conn: &C,
+    state: &Option<PaneState>,
+) -> Result<(), DbError> {
+    if let Some(state) = state {
+        let json = serde_json::to_string(state)
+            .map_err(|error| DbError::Validation(format!("pane_state: {error}")))?;
+        app_metadata_service::upsert_value(conn, OPENED_TABS_PANE_STATE_KEY, &json).await?;
+    }
+    Ok(())
 }
 
 /// Replace all tabs with the given list (full replacement).
@@ -149,30 +194,55 @@ pub async fn save_all_tabs_cas(
     items: Vec<OpenedTab>,
     expected_version: i64,
 ) -> Result<CasOutcome, DbError> {
+    save_all_tabs_cas_with_panes(conn, items, expected_version, None).await
+}
+
+pub async fn save_all_tabs_cas_with_panes(
+    conn: &DatabaseConnection,
+    items: Vec<OpenedTab>,
+    expected_version: i64,
+    pane_state: Option<PaneState>,
+) -> Result<CasOutcome, DbError> {
     let _guard = version_lock().lock().await;
     let txn = conn.begin().await?;
 
     let current = get_tabs_version(&txn).await?;
     if current != expected_version {
         let tabs = list_all_tabs(&txn).await?;
+        let pane_state = read_pane_state(&txn, &tabs).await?;
         txn.commit().await?;
         return Ok(CasOutcome {
             accepted: false,
             version: current,
             tabs,
+            pane_state,
         });
     }
 
+    // 先校验再写任何标签或版本；过期请求只返回当前真相，不检查或采用旧布局。
+    if let Some(state) = &pane_state {
+        pane_state::validate(state, &items)?;
+    }
+    let pane_state = match pane_state {
+        Some(state) => Some(state),
+        None => read_pane_state(&txn, &list_all_tabs(&txn).await?).await?,
+    };
     save_all_tabs(&txn, items).await?;
     let next = current + 1;
     app_metadata_service::upsert_value(&txn, OPENED_TABS_VERSION_KEY, &next.to_string()).await?;
     let tabs = list_all_tabs(&txn).await?;
+    let pane_state = pane_state.map(|state| pane_state::normalize(state, &tabs));
+    if let Some(state) = &pane_state {
+        pane_state::validate(state, &tabs)?;
+    }
+    persist_pane_state(&txn, &pane_state).await?;
     txn.commit().await?;
 
     Ok(CasOutcome {
         accepted: true,
         version: next,
         tabs,
+        pane_state,
     })
 }
 
@@ -189,6 +259,7 @@ pub async fn save_all_tabs_cas(
 pub struct TabInvalidation {
     pub version: i64,
     pub emit: Option<Vec<OpenedTab>>,
+    pub pane_state: Option<PaneState>,
 }
 
 /// The server-side tab mutations that run under [`mutate_tabs_and_bump`].
@@ -229,15 +300,15 @@ async fn mutate_tabs_and_bump(
     };
     let next = get_tabs_version(&txn).await? + 1;
     app_metadata_service::upsert_value(&txn, OPENED_TABS_VERSION_KEY, &next.to_string()).await?;
-    let emit = if changed > 0 {
-        Some(list_all_tabs(&txn).await?)
-    } else {
-        None
-    };
+    let tabs = list_all_tabs(&txn).await?;
+    let pane_state = read_pane_state(&txn, &tabs).await?;
+    persist_pane_state(&txn, &pane_state).await?;
+    let emit = if changed > 0 { Some(tabs) } else { None };
     txn.commit().await?;
     Ok(TabInvalidation {
         version: next,
         emit,
+        pane_state,
     })
 }
 

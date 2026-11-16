@@ -516,7 +516,7 @@ const FolderPicker = memo(function FolderPicker({
         type="button"
         title={title}
         className={cn(
-          "flex shrink-0 items-center rounded-sm text-sm outline-none transition-colors",
+          "flex max-w-[35vw] min-w-0 shrink items-center rounded-sm text-sm outline-none transition-colors md:max-w-none md:shrink-0",
           editable
             ? "cursor-pointer text-primary hover:text-primary/80 focus-visible:ring-[3px] focus-visible:ring-ring/50"
             : "cursor-default text-muted-foreground"
@@ -525,7 +525,7 @@ const FolderPicker = memo(function FolderPicker({
         {/* Full display — the folder crumb never truncates; the neighbouring
             conversation title takes the ellipsis when the header runs out of
             room (see conversation-detail-header). */}
-        <span className="whitespace-nowrap">{headerLabel}</span>
+        <span className="truncate md:whitespace-nowrap">{headerLabel}</span>
       </button>
     ) : (
       <Button

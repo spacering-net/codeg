@@ -14,6 +14,10 @@ import { useWorkspaceActions } from "@/contexts/workspace-context"
 import { useSortedAvailableAgents } from "@/hooks/use-sorted-available-agents"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import {
+  getConversationPanesEnabled,
+  subscribeConversationPanesPreference,
+} from "@/lib/conversation-pane-prefs"
+import {
   dropParkedFolderGroupViews,
   pruneOrphanDraftsOnce,
   runCorrectionOnce,
@@ -46,6 +50,13 @@ interface TabProviderProps {
  * store; this component renders nothing but `children`.
  */
 export function TabProvider({ children }: TabProviderProps) {
+  useEffect(
+    () =>
+      subscribeConversationPanesPreference(() => {
+        useTabStore.getState().setPanesEnabled(getConversationPanesEnabled())
+      }),
+    []
+  )
   const t = useTranslations("Folder.tabContext")
   const { activateConversationPane } = useWorkspaceActions()
   const { disconnect } = useAcpActions()
@@ -76,6 +87,11 @@ export function TabProvider({ children }: TabProviderProps) {
   const previewReplacedTabIds = useTabStore((s) => s.previewReplacedTabIds)
   const draftRetargetRequests = useTabStore((s) => s.draftRetargetRequests)
   const tabsHydrated = useTabStore((s) => s.tabsHydrated)
+  const paneState = useTabStore((s) => s.paneState)
+  const groupLayout = useTabStore((s) => s.groupLayout)
+  const groupOf = useTabStore((s) => s.groupOf)
+  const groupSelection = useTabStore((s) => s.groupSelection)
+  const tileByGroup = useTabStore((s) => s.tileByGroup)
   const saveReconcileTick = useTabStore((s) => s.saveReconcileTick)
   const reseedTick = useTabStore((s) => s.reseedTick)
 
@@ -140,7 +156,17 @@ export function TabProvider({ children }: TabProviderProps) {
   // Debounced compare-and-set save + broadcast.
   useEffect(() => {
     useTabStore.getState().runSaveEffect()
-  }, [rawTabs, activeTabId, tabsHydrated, saveReconcileTick])
+  }, [
+    rawTabs,
+    activeTabId,
+    tabsHydrated,
+    saveReconcileTick,
+    paneState,
+    groupLayout,
+    groupOf,
+    groupSelection,
+    tileByGroup,
+  ])
 
   // Clear a pending save only on unmount — NOT on every effect re-run.
   useEffect(() => () => useTabStore.getState().clearSaveTimer(), [])
@@ -218,6 +244,7 @@ export function TabProvider({ children }: TabProviderProps) {
   useEffect(() => {
     if (!tabsHydrated || !foldersHydrated) return
     pruneOrphanDraftsOnce()
+    if (useTabStore.getState().paneState) return
     if (
       !shouldSeedConversation(
         useFolderTabsStore.getState().enabled,

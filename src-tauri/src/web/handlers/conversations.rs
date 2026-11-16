@@ -71,6 +71,7 @@ pub struct SaveOpenedTabsParams {
     pub items: Vec<OpenedTab>,
     pub expected_version: i64,
     pub origin: String,
+    pub pane_state: Option<PaneState>,
 }
 
 pub async fn save_opened_tabs(
@@ -78,12 +79,13 @@ pub async fn save_opened_tabs(
     Json(params): Json<SaveOpenedTabsParams>,
 ) -> Result<Json<SaveTabsOutcome>, AppCommandError> {
     Ok(Json(
-        conv_commands::save_opened_tabs_core(
+        conv_commands::save_opened_tabs_with_panes_core(
             &state.db.conn,
             &state.emitter,
             params.items,
             params.expected_version,
             params.origin,
+            params.pane_state,
         )
         .await?,
     ))

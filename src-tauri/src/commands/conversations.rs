@@ -157,12 +157,10 @@ pub async fn list_child_conversations(
 pub async fn list_opened_tabs_core(
     conn: &sea_orm::DatabaseConnection,
 ) -> Result<OpenedTabsSnapshot, AppCommandError> {
-    // Single-transaction snapshot: reading tabs and version separately could
-    // tear under a concurrent save (old tabs stamped with the new version).
-    let (items, version) = tab_service::snapshot_tabs(conn)
+    // 三者必须在同一事务读取，避免把旧标签或旧布局误标成新版本后覆盖其他端。
+    tab_service::snapshot_tabs_with_panes(conn)
         .await
-        .map_err(AppCommandError::from)?;
-    Ok(OpenedTabsSnapshot { items, version })
+        .map_err(AppCommandError::from)
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -185,18 +183,39 @@ pub async fn save_opened_tabs_core(
     expected_version: i64,
     origin: String,
 ) -> Result<SaveTabsOutcome, AppCommandError> {
-    let outcome = tab_service::save_all_tabs_cas(conn, items, expected_version)
+    save_opened_tabs_with_panes_core(conn, emitter, items, expected_version, origin, None).await
+}
+
+pub async fn save_opened_tabs_with_panes_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    items: Vec<OpenedTab>,
+    expected_version: i64,
+    origin: String,
+    pane_state: Option<PaneState>,
+) -> Result<SaveTabsOutcome, AppCommandError> {
+    let outcome = tab_service::save_all_tabs_cas_with_panes(conn, items, expected_version, pane_state)
         .await
-        .map_err(AppCommandError::from)?;
+        .map_err(|error| match error {
+            crate::db::error::DbError::Validation(message) => AppCommandError::invalid_input(message),
+            error => AppCommandError::from(error),
+        })?;
 
     if outcome.accepted {
-        emit_tabs_changed(emitter, outcome.version, outcome.tabs.clone(), origin);
+        emit_tabs_changed(
+            emitter,
+            outcome.version,
+            outcome.tabs.clone(),
+            origin,
+            outcome.pane_state.clone(),
+        );
     }
 
     Ok(SaveTabsOutcome {
         accepted: outcome.accepted,
         version: outcome.version,
         tabs: outcome.tabs,
+        pane_state: outcome.pane_state,
     })
 }
 
@@ -208,13 +227,15 @@ pub async fn save_opened_tabs(
     items: Vec<OpenedTab>,
     expected_version: i64,
     origin: String,
+    pane_state: Option<PaneState>,
 ) -> Result<SaveTabsOutcome, AppCommandError> {
-    save_opened_tabs_core(
+    save_opened_tabs_with_panes_core(
         &db.conn,
         &EventEmitter::Tauri(app),
         items,
         expected_version,
         origin,
+        pane_state,
     )
     .await
 }
@@ -2425,6 +2446,7 @@ pub(crate) fn emit_tabs_changed(
     version: i64,
     tabs: Vec<OpenedTab>,
     origin: String,
+    pane_state: Option<PaneState>,
 ) {
     emit_event(
         emitter,
@@ -2433,6 +2455,7 @@ pub(crate) fn emit_tabs_changed(
             version,
             origin,
             tabs,
+            pane_state,
         },
     );
 }
@@ -2453,7 +2476,13 @@ pub(crate) async fn cleanup_tabs_for_deleted_conversation(
     match tab_service::delete_conversation_tabs_and_bump(conn, conversation_id).await {
         Ok(inv) => {
             if let Some(tabs) = inv.emit {
-                emit_tabs_changed(emitter, inv.version, tabs, "server".to_string());
+                emit_tabs_changed(
+                    emitter,
+                    inv.version,
+                    tabs,
+                    "server".to_string(),
+                    inv.pane_state,
+                );
             }
         }
         Err(e) => tracing::error!(
@@ -3204,7 +3233,13 @@ pub async fn move_conversations_core(
         match tab_service::retarget_conversation_tabs_and_bump(conn, &moved_rows).await {
             Ok(inv) => {
                 if let Some(tabs) = inv.emit {
-                    emit_tabs_changed(emitter, inv.version, tabs, "server".to_string());
+                    emit_tabs_changed(
+                        emitter,
+                        inv.version,
+                        tabs,
+                        "server".to_string(),
+                        inv.pane_state,
+                    );
                 }
             }
             Err(e) => tracing::error!("[conversations] tab retarget after move failed: {e}"),

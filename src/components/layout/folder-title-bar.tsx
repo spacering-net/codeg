@@ -26,9 +26,10 @@ import { WorkbenchRouteChromeActions } from "@/components/workbench/workbench-co
 import { MAC_TRAFFIC_LIGHT_INSET } from "@/lib/window-chrome"
 import { cn } from "@/lib/utils"
 import { WindowControls } from "./window-controls"
+import { MobileTabSwitcher } from "./mobile-tab-switcher"
 
 /**
- * Mobile-only workspace title bar (`h-10`, matching the desktop column strip).
+ * Mobile-only workspace title bar with touch-sized actions and a tab switcher.
  *
  * On desktop the full-width title bar was removed: its buttons were relocated
  * into fixed corner overlays (`LeftEdgeChrome` / `RightEdgeChrome`) and its
@@ -77,7 +78,7 @@ export function FolderTitleBar() {
   }, [activeFolder, openChatModeTab, openNewConversationTab, openConversations])
 
   return (
-    <div className="flex h-10 shrink-0 items-stretch border-b border-border ws-chrome-border bg-muted/70 select-none">
+    <div className="flex h-11 shrink-0 items-stretch border-b border-border ws-chrome-border bg-muted/70 select-none">
       {/* macOS traffic-light inset — a window-drag region so the left cluster
           clears the OS-drawn lights. */}
       {showMacInset && (
@@ -90,11 +91,11 @@ export function FolderTitleBar() {
       {/* Left cluster: sidebar toggle + search + new conversation. Search sits
           directly after the toggle, mirroring the desktop `LeftEdgeChrome`
           order (toggle → search) so the two bars read the same. */}
-      <div className="flex shrink-0 items-center gap-1 pl-2">
+      <div className="flex shrink-0 items-center gap-0.5 pl-1">
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 shrink-0"
+          className="size-10 shrink-0 touch-manipulation"
           onClick={toggle}
           title={tTitleBar(sidebarOpen ? "hideSidebar" : "showSidebar")}
           aria-label={tTitleBar(sidebarOpen ? "hideSidebar" : "showSidebar")}
@@ -109,7 +110,7 @@ export function FolderTitleBar() {
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 shrink-0"
+          className="size-10 shrink-0 touch-manipulation"
           onClick={() => setSearchOpen(true)}
           title={tTitleBar("search")}
           aria-label={tTitleBar("search")}
@@ -119,13 +120,14 @@ export function FolderTitleBar() {
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 shrink-0"
+          className="size-10 shrink-0 touch-manipulation"
           onClick={handleNewConversation}
           title={tCard("newConversation")}
           aria-label={tCard("newConversation")}
         >
           <SquarePen className="h-4 w-4" />
         </Button>
+        <MobileTabSwitcher />
       </div>
       {/* Empty middle is a full-height window-drag region. */}
       <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
@@ -135,7 +137,7 @@ export function FolderTitleBar() {
           of such a route is the breadcrumb at the head of its title (the route
           overlay renders the same WorkbenchRouteStrip the desktop shell does),
           so there is no back arrow here. */}
-      <div className="flex shrink-0 items-center gap-1 pr-2">
+      <div className="flex shrink-0 items-center gap-0.5 pr-1">
         {/* Conversations only, exactly as on desktop (see RightEdgeChrome): a
             full-page route overlays the workspace the terminal and aux panel act
             on, so toggling either there does nothing you can see. This bar sits
@@ -146,7 +148,10 @@ export function FolderTitleBar() {
             <Button
               variant="ghost"
               size="icon"
-              className={cn("h-8 w-8 shrink-0", terminalOpen && "bg-accent")}
+              className={cn(
+                "size-10 shrink-0 touch-manipulation",
+                terminalOpen && "bg-accent"
+              )}
               onClick={() => toggleTerminal()}
               disabled={!activeFolder}
               title={tTitleBar("toggleTerminal")}
@@ -157,7 +162,10 @@ export function FolderTitleBar() {
             <Button
               variant="ghost"
               size="icon"
-              className={cn("h-8 w-8 shrink-0", auxPanelOpen && "bg-accent")}
+              className={cn(
+                "size-10 shrink-0 touch-manipulation",
+                auxPanelOpen && "bg-accent"
+              )}
               onClick={toggleAuxPanel}
               disabled={!activeFolder && !isChatMode}
               title={tTitleBar("toggleAuxPanel")}
@@ -168,13 +176,13 @@ export function FolderTitleBar() {
           </>
         )}
         <WorkbenchRouteChromeActions
-          buttonClassName="h-8 w-8 shrink-0"
+          buttonClassName="size-10 shrink-0 touch-manipulation"
           iconClassName="h-4 w-4"
         />
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8 shrink-0"
+          className="size-10 shrink-0 touch-manipulation"
           onClick={handleOpenSettings}
           title={tTitleBar("openSettings")}
           aria-label={tTitleBar("openSettings")}

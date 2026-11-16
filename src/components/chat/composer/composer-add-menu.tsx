@@ -131,7 +131,10 @@ export function ComposerAddMenu({
           disabled={disabled}
           variant="ghost"
           size="icon-xs"
-          className={cn("shrink-0 text-muted-foreground", triggerClassName)}
+          className={cn(
+            "size-10 shrink-0 touch-manipulation text-muted-foreground md:size-6",
+            triggerClassName
+          )}
           title={t("addActions")}
           aria-label={t("addActions")}
         >

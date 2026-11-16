@@ -20,12 +20,12 @@ export function StatusBar() {
     // command control room. The branch selector and context-window circle live
     // in the below-composer row, so those are the bar's only two clusters.
     return (
-      <div className="h-8 shrink-0 border-t border-border ws-chrome-border ws-surface-muted px-3 flex items-center justify-between text-xs text-muted-foreground">
-        <div className="flex items-center gap-3">
+      <div className="h-8 shrink-0 overflow-hidden border-t border-border ws-chrome-border ws-surface-muted px-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
           <QuickActionsDropdown />
           <StatusBarStats />
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-2">
           <StatusBarUpdate />
           <CommandDropdown />
           {/* Narrow is a viewport width, not a browser: a desktop window

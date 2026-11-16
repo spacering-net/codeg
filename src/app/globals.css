@@ -14,6 +14,16 @@
    Tailwind v4 does not scan. */
 @source "../../node_modules/@json-render/shadcn/dist";
 
+/* 手机输入长路径时不撑宽页面，编辑区滚到边缘也不把手势传给聊天记录。 */
+@media (max-width: 767px) {
+  .codeg-composer-scroll {
+    overscroll-behavior-y: contain;
+  }
+  .codeg-composer .tiptap {
+    overflow-wrap: anywhere;
+  }
+}
+
 :root {
   /* 默认界面字体 = Inter（与 DEFAULT_UI_FONT_ID = "inter" 一致，须等于
      font-presets.ts 的 resolveFontStack("inter", "", "sans")，否则首屏到水合会闪字），
