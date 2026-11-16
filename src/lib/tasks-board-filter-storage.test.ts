@@ -45,8 +45,8 @@ describe("tasks view mode storage", () => {
 })
 
 describe("tasks time filter storage", () => {
-  it("defaults to one week and remembers every choice, including all time", () => {
-    expect(loadTasksTimeFilter()).toBe("7d")
+  it("defaults to all time and remembers every choice", () => {
+    expect(loadTasksTimeFilter()).toBe("all")
     for (const range of ["24h", "7d", "30d"] as const) {
       saveTasksTimeFilter(range)
       expect(loadTasksTimeFilter()).toBe(range)
@@ -56,9 +56,9 @@ describe("tasks time filter storage", () => {
     expect(loadTasksTimeFilter()).toBe("all")
   })
 
-  it("falls back to one week for an unrecognized stored value", () => {
+  it("falls back to all time for an unrecognized stored value", () => {
     localStorage.setItem(TIME_FILTER_KEY, "yesterday")
-    expect(loadTasksTimeFilter()).toBe("7d")
+    expect(loadTasksTimeFilter()).toBe("all")
   })
 
   it("handles unavailable storage", () => {
@@ -67,7 +67,7 @@ describe("tasks time filter storage", () => {
       .mockImplementation(() => {
         throw new Error("Storage denied")
       })
-    expect(loadTasksTimeFilter()).toBe("7d")
+    expect(loadTasksTimeFilter()).toBe("all")
     getItem.mockRestore()
     const setItem = vi
       .spyOn(Storage.prototype, "setItem")
@@ -81,8 +81,8 @@ describe("tasks time filter storage", () => {
   it("keeps mounted consumers in sync in both directions", () => {
     const page = renderHook(() => useTasksTimeFilter())
     const sidebar = renderHook(() => useTasksTimeFilter())
-    expect(page.result.current).toBe("7d")
-    expect(sidebar.result.current).toBe("7d")
+    expect(page.result.current).toBe("all")
+    expect(sidebar.result.current).toBe("all")
 
     act(() => saveTasksTimeFilter("24h"))
     expect(page.result.current).toBe("24h")
@@ -97,25 +97,25 @@ describe("tasks time filter storage", () => {
     const { result } = renderHook(() => useTasksTimeFilter())
     expect(result.current).toBe("30d")
     act(() => {
-      localStorage.setItem(TIME_FILTER_KEY, "all")
+      localStorage.setItem(TIME_FILTER_KEY, "7d")
       window.dispatchEvent(
         new StorageEvent("storage", { key: TIME_FILTER_KEY })
       )
     })
-    expect(result.current).toBe("all")
+    expect(result.current).toBe("7d")
     act(() => {
       localStorage.removeItem(TIME_FILTER_KEY)
       window.dispatchEvent(
         new StorageEvent("storage", { key: TIME_FILTER_KEY })
       )
     })
-    expect(result.current).toBe("7d")
+    expect(result.current).toBe("all")
     act(() => saveTasksTimeFilter("24h"))
     act(() => {
       localStorage.clear()
       window.dispatchEvent(new StorageEvent("storage", { key: null }))
     })
-    expect(result.current).toBe("7d")
+    expect(result.current).toBe("all")
   })
 
   it("shares changes even when storage refuses a write", () => {

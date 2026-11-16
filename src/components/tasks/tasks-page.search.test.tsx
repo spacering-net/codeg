@@ -246,6 +246,20 @@ describe("TasksPage recent-update filter", () => {
     }
   )
 
+  it("shows every task by default", () => {
+    mount()
+    expect(
+      screen.getByRole("combobox", { name: "Updated: All time" })
+    ).toBeInTheDocument()
+    for (const title of [
+      "Recent fix",
+      "Weekly fix",
+      "Monthly fix",
+      "Older fix",
+    ])
+      expect(screen.getByText(title)).toBeInTheDocument()
+  })
+
   it("restores the selected window on the next visit", async () => {
     const user = userEvent.setup()
     const { unmount } = mount()

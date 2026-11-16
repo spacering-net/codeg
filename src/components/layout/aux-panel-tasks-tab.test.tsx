@@ -13,6 +13,7 @@ import {
   resetTasksBoardFilterCacheForTests,
   resetTasksTimeFilterCacheForTests,
   saveTasksBoardFilter,
+  saveTasksTimeFilter,
 } from "@/lib/tasks-board-filter-storage"
 import type { WorkTask } from "@/lib/types"
 import { peekTasksFocus } from "@/lib/workbench-focus"
@@ -363,15 +364,14 @@ describe("shared task time filter", () => {
   const sidebar = () =>
     within(screen.getByRole("region", { name: "Project tasks" }))
 
-  it("defaults both views to one week and follows changes from either picker immediately", async () => {
+  it("defaults both views to all time and follows changes from either picker immediately", async () => {
     const user = userEvent.setup()
     mountBoth()
     for (const surface of [page(), sidebar()]) {
       expect(
-        surface.getByRole("combobox", { name: "Updated: Last 7 days" })
+        surface.getByRole("combobox", { name: "Updated: All time" })
       ).toBeInTheDocument()
-      expect(surface.getByText("Weekly fix")).toBeInTheDocument()
-      expect(surface.queryByText("Monthly fix")).not.toBeInTheDocument()
+      expect(surface.getByText("Older fix")).toBeInTheDocument()
     }
 
     await user.click(sidebar().getByRole("combobox", { name: /^Updated:/ }))
@@ -394,25 +394,27 @@ describe("shared task time filter", () => {
     }
   })
 
-  it("remembers an explicit all-time choice for both views on the next visit", async () => {
+  it("remembers the chosen window for both views on the next visit", async () => {
     const user = userEvent.setup()
     const { unmount } = mountBoth()
     await user.click(sidebar().getByRole("combobox", { name: /^Updated:/ }))
-    await user.click(screen.getByRole("option", { name: "All time" }))
+    await user.click(screen.getByRole("option", { name: "Last 7 days" }))
     unmount()
     resetTasksTimeFilterCacheForTests()
     mountBoth()
     for (const surface of [page(), sidebar()]) {
       expect(
-        surface.getByRole("combobox", { name: "Updated: All time" })
+        surface.getByRole("combobox", { name: "Updated: Last 7 days" })
       ).toBeInTheDocument()
-      expect(surface.getByText("Older fix")).toBeInTheDocument()
+      expect(surface.getByText("Weekly fix")).toBeInTheDocument()
+      expect(surface.queryByText("Monthly fix")).not.toBeInTheDocument()
     }
   })
 
   it("clears the shared time filter from the sidebar empty state", async () => {
     const user = userEvent.setup()
     view.tasks = [view.tasks[2]]
+    saveTasksTimeFilter("7d")
     mountBoth()
     expect(sidebar().getByText(enMessages.Tasks.listEmpty)).toBeInTheDocument()
     await user.click(sidebar().getByRole("button", { name: "All time" }))
@@ -433,6 +435,7 @@ describe("shared task time filter", () => {
         updated_at: new Date(now - 7 * day + 30_000).toISOString(),
       }),
     ]
+    saveTasksTimeFilter("7d")
     mount()
     expect(screen.getByText("Expiring task")).toBeInTheDocument()
     act(() => {

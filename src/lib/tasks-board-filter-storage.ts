@@ -20,7 +20,10 @@ export const DEFAULT_TASKS_BOARD_FILTER: TasksBoardFilter = {
   showArchived: false,
 }
 
-export const DEFAULT_TASKS_TIME_FILTER: TasksTimeRange = "7d"
+// All time: a narrower default would hide long-running unfinished tasks and
+// lock board reordering (which needs every card visible) for anyone who never
+// touched the picker.
+export const DEFAULT_TASKS_TIME_FILTER: TasksTimeRange = "all"
 
 /** How the tasks page lays its rows out: four-column board, or flat list. */
 export type TasksViewMode = "board" | "list"
@@ -199,7 +202,7 @@ export function saveTasksStatusFilter(group: TasksStatusGroup | null): void {
   }
 }
 
-/** Both task surfaces share this preference; missing entries use one week. */
+/** Both task surfaces share this preference; missing entries mean all time. */
 export function loadTasksTimeFilter(): TasksTimeRange {
   if (typeof window === "undefined") return DEFAULT_TASKS_TIME_FILTER
   try {
@@ -216,7 +219,6 @@ export function loadTasksTimeFilter(): TasksTimeRange {
 export function saveTasksTimeFilter(range: TasksTimeRange): void {
   if (typeof window === "undefined") return
   try {
-    // "all" is an explicit choice, distinct from the default for no entry.
     localStorage.setItem(TIME_FILTER_KEY, range)
   } catch {
     /* ignore */
