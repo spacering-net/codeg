@@ -1,0 +1,29 @@
+name: Pin linuxdeploy
+description: Use a checksum-verified linuxdeploy with the modern AppImage library exclusions
+
+runs:
+  using: composite
+  steps:
+    - name: Seed Tauri's linuxdeploy cache
+      shell: bash
+      env:
+        LINUXDEPLOY_RELEASE: 1-alpha-20251107-1
+        LINUXDEPLOY_SHA256: c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
+      run: |
+        set -euo pipefail
+        if [[ "$(uname -m)" != "x86_64" ]]; then
+          echo "The pinned linuxdeploy asset is x86_64 only" >&2
+          exit 1
+        fi
+
+        download="$(mktemp "$RUNNER_TEMP/linuxdeploy.XXXXXX")"
+        trap 'rm -f -- "$download"' EXIT
+        curl -fsSL --retry 3 --retry-all-errors \
+          "https://github.com/linuxdeploy/linuxdeploy/releases/download/${LINUXDEPLOY_RELEASE}/linuxdeploy-x86_64.AppImage" \
+          -o "$download"
+        printf '%s  %s\n' "$LINUXDEPLOY_SHA256" "$download" | sha256sum --check -
+
+        # tauri-bundler uses this cached executable when it builds AppImages.
+        cache_dir="$HOME/.cache/tauri"
+        mkdir -p "$cache_dir"
+        install -m 755 "$download" "$cache_dir/linuxdeploy-x86_64.AppImage"
