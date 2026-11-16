@@ -1,10 +1,12 @@
 "use client"
 
 import { useSyncExternalStore } from "react"
+import { TASKS_TIME_RANGES, type TasksTimeRange } from "./tasks-time-filter"
 
 const BOARD_FILTER_KEY = "workspace:tasks-board-filter"
 const VIEW_MODE_KEY = "workspace:tasks-view-mode"
 const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
+const TIME_FILTER_KEY = "workspace:tasks-time-filter"
 
 /** Visibility toggles of the tasks board's filter popover. */
 export interface TasksBoardFilter {
@@ -186,6 +188,27 @@ export function saveTasksStatusFilter(group: TasksStatusGroup | null): void {
   try {
     if (group == null) localStorage.removeItem(STATUS_FILTER_KEY)
     else localStorage.setItem(STATUS_FILTER_KEY, group)
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Unknown or missing entries preserve the unfiltered task view. */
+export function loadTasksTimeFilter(): TasksTimeRange {
+  if (typeof window === "undefined") return "all"
+  try {
+    const raw = localStorage.getItem(TIME_FILTER_KEY)
+    return TASKS_TIME_RANGES.find((range) => range === raw) ?? "all"
+  } catch {
+    return "all"
+  }
+}
+
+export function saveTasksTimeFilter(range: TasksTimeRange): void {
+  if (typeof window === "undefined") return
+  try {
+    if (range === "all") localStorage.removeItem(TIME_FILTER_KEY)
+    else localStorage.setItem(TIME_FILTER_KEY, range)
   } catch {
     /* ignore */
   }

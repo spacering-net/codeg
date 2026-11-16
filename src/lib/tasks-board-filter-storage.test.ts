@@ -4,10 +4,12 @@ import {
   DEFAULT_TASKS_BOARD_FILTER,
   getTasksBoardFilter,
   loadTasksStatusFilter,
+  loadTasksTimeFilter,
   loadTasksViewMode,
   resetTasksBoardFilterCacheForTests,
   saveTasksBoardFilter,
   saveTasksStatusFilter,
+  saveTasksTimeFilter,
   saveTasksViewMode,
   subscribeTasksBoardFilter,
   useTasksBoardFilter,
@@ -15,6 +17,7 @@ import {
 
 const VIEW_MODE_KEY = "workspace:tasks-view-mode"
 const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
+const TIME_FILTER_KEY = "workspace:tasks-time-filter"
 
 const BOARD_FILTER_KEY = "workspace:tasks-board-filter"
 
@@ -35,6 +38,41 @@ describe("tasks view mode storage", () => {
   it("falls back to the board on a junk entry", () => {
     localStorage.setItem(VIEW_MODE_KEY, "gallery")
     expect(loadTasksViewMode()).toBe("board")
+  })
+})
+
+describe("tasks time filter storage", () => {
+  it("defaults to all time and round-trips each recent range", () => {
+    expect(loadTasksTimeFilter()).toBe("all")
+    for (const range of ["24h", "7d", "30d"] as const) {
+      saveTasksTimeFilter(range)
+      expect(loadTasksTimeFilter()).toBe(range)
+    }
+    saveTasksTimeFilter("all")
+    expect(localStorage.getItem(TIME_FILTER_KEY)).toBeNull()
+    expect(loadTasksTimeFilter()).toBe("all")
+  })
+
+  it("falls back to all time for an unrecognized stored value", () => {
+    localStorage.setItem(TIME_FILTER_KEY, "yesterday")
+    expect(loadTasksTimeFilter()).toBe("all")
+  })
+
+  it("handles unavailable storage", () => {
+    const getItem = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new Error("Storage denied")
+      })
+    expect(loadTasksTimeFilter()).toBe("all")
+    getItem.mockRestore()
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new Error("Storage denied")
+      })
+    expect(() => saveTasksTimeFilter("24h")).not.toThrow()
+    setItem.mockRestore()
   })
 })
 
