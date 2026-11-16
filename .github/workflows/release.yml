@@ -1,9 +1,10 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  # Fork: no tag trigger. This workflow needs Apple signing and Docker Hub
+  # credentials that do not exist here, so a `v*.*.*` push would only produce
+  # a red run. Use fork-windows-release.yml for fork builds.
+  workflow_dispatch:
 
 env:
   RUST_BACKTRACE: short

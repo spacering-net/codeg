@@ -1,0 +1,91 @@
+name: Fork Windows Release
+
+# Fork-only workflow: builds the Windows NSIS installer and publishes it as a
+# release in this fork. Deliberately separate from release.yml so that file
+# stays byte-identical to upstream — syncing upstream never conflicts here.
+#
+# Triggered by hand (workflow_dispatch) rather than a tag push: release.yml
+# also fires on `v*.*.*` tags and would fail on this fork (no Apple signing
+# secrets, no Docker Hub credentials). The tag is created by this workflow
+# itself via GITHUB_TOKEN, and GitHub does not chain workflows off events
+# created with GITHUB_TOKEN, so release.yml stays quiet.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag; must equal v + tauri.conf.json version"
+        required: true
+        default: "v0.45.0"
+
+env:
+  RUST_BACKTRACE: short
+  HUSKY: 0
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows x64 installer
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "pnpm"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          shared-key: x86_64-pc-windows-msvc
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches app version
+        shell: bash
+        run: |
+          APP_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [[ "v$APP_VERSION" != "${{ inputs.tag }}" ]]; then
+            echo "::error::Tag ${{ inputs.tag }} does not match app version v$APP_VERSION"
+            exit 1
+          fi
+
+      - name: Stage sidecars for Tauri bundle
+        shell: bash
+        run: pnpm tauri:prepare-sidecars --target x86_64-pc-windows-msvc
+
+      - name: Build installer and publish release
+        uses: tauri-apps/tauri-action@v0.6.1
+        env:
+          # Sidecars were staged for the matrix target above; keep
+          # beforeBuildCommand from rebuilding them for the host triple.
+          CODEG_SKIP_SIDECAR: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ inputs.tag }}
+          releaseName: codeg ${{ inputs.tag }}
+          releaseBody: "Fork build. Windows x64 NSIS installer only."
+          releaseDraft: false
+          prerelease: false
+          tauriScript: pnpm tauri
+          args: --target x86_64-pc-windows-msvc --bundles nsis --config ${{ github.workspace }}/src-tauri/tauri-fork-windows.conf.json
+          includeUpdaterJson: false
+          retryAttempts: 2

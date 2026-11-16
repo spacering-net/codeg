@@ -47,6 +47,9 @@ coverage/
 *.p12
 certificate-base64.txt
 
+# Tauri updater signing keys (`pnpm tauri signer generate -w .key/<name>.key`).
+/.key/
+
 # Agent
 .claude
 .docs
