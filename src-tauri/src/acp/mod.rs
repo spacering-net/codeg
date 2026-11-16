@@ -2,6 +2,7 @@ pub mod agent_mentions;
 pub mod air_contract;
 pub mod agent_process;
 pub mod agent_session;
+pub mod antigravity_accounts;
 pub mod antigravity_login;
 pub mod background_watch;
 pub mod binary_cache;
