@@ -71,8 +71,21 @@ vi.mock("@/contexts/workbench-route-context", () => ({
 }))
 vi.mock("@/stores/app-workspace-store", () => ({
   useAppWorkspaceStore: <T,>(
-    selector: (s: { allFolders: never[]; branches: Map<number, string> }) => T
-  ) => selector({ allFolders: h.allFolders, branches: h.branches }),
+    selector: (s: {
+      allFolders: never[]
+      branches: Map<number, string>
+      conversations: never[]
+      conversationsLoading: boolean
+      conversationsError: string | null
+    }) => T
+  ) =>
+    selector({
+      allFolders: h.allFolders,
+      branches: h.branches,
+      conversations: [],
+      conversationsLoading: false,
+      conversationsError: null,
+    }),
 }))
 // One group holds every tab: the unsplit layout.
 vi.mock("@/stores/tab-store", () => ({
@@ -107,11 +120,17 @@ vi.mock("@/contexts/tab-context", () => {
       reorderGroupTabs: vi.fn(),
       updateTabDrag: vi.fn(),
       endTabDrag: vi.fn(),
+      openTab: vi.fn(),
       openNewConversationTab: vi.fn(),
       openChatModeTab: vi.fn(),
     }),
     useTabStore: <T,>(selector: (s: Record<string, unknown>) => T) =>
-      selector({ ...store, groupLayout: h.groupLayout, tabs: h.tabs }),
+      selector({
+        ...store,
+        groupLayout: h.groupLayout,
+        tabs: h.tabs,
+        rawTabs: h.tabs,
+      }),
   }
 })
 // The tab itself is not what these tests are about.
@@ -316,5 +335,73 @@ describe("TabBar — tabs follow the folder", () => {
     act(() => useFolderTabsStore.setState({ enabled: true, scope: 1 }))
     renderStrip({ groupId: "g-main" })
     expect(newConversation()).toBeNull()
+  })
+})
+
+describe("TabBar — history entry", () => {
+  beforeEach(() => {
+    act(() => useFolderTabsStore.setState({ enabled: true, scope: 1 }))
+  })
+  afterEach(() => {
+    act(() => resetFolderTabsStore())
+  })
+
+  it("keeps a fixed leading history button, including when the folder has no tabs", () => {
+    const view = renderStrip()
+    const button = screen.getByRole("button", { name: "Conversation history" })
+    expect(
+      button.compareDocumentPosition(document.querySelector("[data-tab-id]")!) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    h.tabs = []
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <TabBar />
+      </NextIntlClientProvider>
+    )
+    expect(
+      screen.getByRole("button", { name: "Conversation history" })
+    ).toBeInTheDocument()
+  })
+
+  it("renders only one history entry across split strips", () => {
+    h.tabs = [conversationTab("conv-1"), conversationTab("conv-2")]
+    h.groupOf = { "conv-1": "left", "conv-2": "right" }
+    h.visibleLayout = h.groupLayout = {
+      type: "split",
+      id: "s",
+      orientation: "horizontal",
+      ratios: [0.5, 0.5],
+      children: [
+        { type: "group", id: "left" },
+        { type: "group", id: "right" },
+      ],
+    }
+    renderStrip({ groupId: "left" })
+    renderStrip({ groupId: "right" })
+    expect(
+      screen.getAllByRole("button", { name: "Conversation history" })
+    ).toHaveLength(1)
+  })
+
+  it("does not add desktop history to mobile, normal mode or the chat scope", () => {
+    h.isMobile = true
+    const mobile = renderStrip()
+    expect(
+      screen.queryByRole("button", { name: "Conversation history" })
+    ).toBeNull()
+    mobile.unmount()
+    h.isMobile = false
+    act(() => useFolderTabsStore.setState({ enabled: false }))
+    const normal = renderStrip()
+    expect(
+      screen.queryByRole("button", { name: "Conversation history" })
+    ).toBeNull()
+    normal.unmount()
+    act(() => useFolderTabsStore.setState({ enabled: true, scope: "global" }))
+    renderStrip()
+    expect(
+      screen.queryByRole("button", { name: "Conversation history" })
+    ).toBeNull()
   })
 })
