@@ -49,6 +49,12 @@ import {
   type CustomThemeToken,
   type TokenOverrides,
 } from "@/lib/custom-style"
+import {
+  PRESET_LIBRARY,
+  presetPreviewColors,
+  presetToCustomTheme,
+  type PresetLibraryEntry,
+} from "@/lib/theme-preset-library"
 import { copyTextToClipboard, cn } from "@/lib/utils"
 import { CustomCssDialog } from "./custom-css-dialog"
 
@@ -239,6 +245,17 @@ export function CustomStyleSection() {
     toast.success(t("customStyle.toasts.imported"))
   }, [importDraft, replaceCustomTheme, t])
 
+  // 套用预设 = 整组替换覆盖，和「导入主题」走同一条路径。关闭状态下套用只会
+  // 让人以为没反应，所以顺手把开关打开。
+  const onApplyPreset = useCallback(
+    (entry: PresetLibraryEntry) => {
+      replaceCustomTheme(presetToCustomTheme(entry))
+      if (!customThemeEnabled) setCustomThemeEnabled(true)
+      toast.success(t("customStyle.presetApplied", { name: entry.label }))
+    },
+    [customThemeEnabled, replaceCustomTheme, setCustomThemeEnabled, t]
+  )
+
   const escapeHint = useMemo(
     () =>
       t("customStyle.escapeHint", {
@@ -368,6 +385,48 @@ export function CustomStyleSection() {
                 {t("customStyle.enableTheme")}
               </span>
             </label>
+
+            {/* ===== 主题预设库 =====
+                一键把整套配色覆盖换成某个 shadcn 生态主题。落点和「导入主题」完全
+                一样（replaceCustomTheme），所以套用之后下面的 token 仍可逐个微调。 */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className={fieldLabel}>
+                  {t("customStyle.presetsTitle")}
+                </span>
+                <span className="text-2xs tabular-nums text-muted-foreground">
+                  {PRESET_LIBRARY.length}
+                </span>
+              </div>
+              <div className="grid max-h-60 grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                {PRESET_LIBRARY.map((entry) => (
+                  <button
+                    key={entry.id}
+                    type="button"
+                    disabled={themeDisabled}
+                    title={entry.label}
+                    onClick={() => onApplyPreset(entry)}
+                    className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <span className="flex shrink-0 overflow-hidden rounded-[3px] ring-1 ring-border">
+                      {presetPreviewColors(entry, isDarkMode).map(
+                        (color, index) => (
+                          <span
+                            key={index}
+                            className="size-2.5"
+                            style={{ backgroundColor: color }}
+                          />
+                        )
+                      )}
+                    </span>
+                    <span className="truncate text-2xs">{entry.label}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-2xs text-muted-foreground leading-4">
+                {t("customStyle.presetsHint")}
+              </p>
+            </div>
 
             <p className="flex items-center gap-1.5 text-2xs text-muted-foreground">
               {isDarkMode ? (
