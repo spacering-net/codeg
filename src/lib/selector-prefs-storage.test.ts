@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import {
   getSavedModeId,
   getSavedPrefsForConnect,
+  getSavedSelections,
   saveConfigPreference,
   saveModePreference,
 } from "./selector-prefs-storage"
@@ -33,6 +34,38 @@ describe("selector-prefs-storage", () => {
     expect(getSavedPrefsForConnect("grok")).toEqual({
       modeId: null,
       configValues: null,
+    })
+  })
+
+  it("seeds a picker with the last selections, config values always an object", () => {
+    // What a surface that creates a conversation (the task / automation
+    // editors) starts from: an object it can spread, not the connect shape's
+    // nullable one — and the same values the chat composer last saved.
+    expect(getSavedSelections("codex")).toEqual({
+      modeId: null,
+      configValues: {},
+    })
+    saveModePreference("codex", {
+      current_mode_id: "plan",
+      available_modes: [],
+    })
+    saveConfigPreference("codex", "sandbox", "danger-full-access")
+    expect(getSavedSelections("codex")).toEqual({
+      modeId: "plan",
+      configValues: { sandbox: "danger-full-access" },
+    })
+  })
+
+  it("heals the cursor variant in the seed a picker reads", () => {
+    // Same rule as the connect path: a picker must not be seeded with a model
+    // id the agent has since stopped accepting.
+    seed({
+      cursor: {
+        configValues: { model: "claude-opus-5[thinking=true,fast=false]" },
+      },
+    })
+    expect(getSavedSelections("cursor").configValues).toEqual({
+      model: "claude-opus-5",
     })
   })
 
