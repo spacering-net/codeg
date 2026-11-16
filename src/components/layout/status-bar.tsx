@@ -31,8 +31,8 @@ export function StatusBar() {
           {/* Narrow is a viewport width, not a browser: a desktop window
               shrunk below the breakpoint must still say the web service is
               listening. Renders nothing outside the local desktop. */}
-          <StatusBarWebService />
           <StatusBarMcp />
+          <StatusBarWebService />
           <StatusBarAlerts />
         </div>
       </div>
@@ -73,14 +73,12 @@ export function StatusBar() {
         {/* Computer use: which windows agents may see right now. Renders
             nothing unless the desktop runtime has it switched on. */}
         <StatusBarComputer />
-        {/* Web service (remote access): whether the desktop is reachable over
-            HTTP right now, and how far. Beside computer use because both say
-            what is exposed. Local desktop only. */}
-        <StatusBarWebService />
-        {/* codeg-mcp service health. Sits next to the alerts bell because the
-            two answer adjacent questions — "is something wrong right now?" —
-            and both open a top-anchored popover from this corner. */}
+        {/* codeg-mcp service health. Opens a top-anchored popover from this
+            corner. */}
         <StatusBarMcp />
+        {/* Web service (remote access): whether the desktop is reachable over
+            HTTP right now, and how far. Local desktop only. */}
+        <StatusBarWebService />
         <StatusBarAlerts />
       </div>
     </div>
