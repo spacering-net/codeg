@@ -20,6 +20,8 @@ export const DEFAULT_TASKS_BOARD_FILTER: TasksBoardFilter = {
   showArchived: false,
 }
 
+export const DEFAULT_TASKS_TIME_FILTER: TasksTimeRange = "7d"
+
 /** How the tasks page lays its rows out: four-column board, or flat list. */
 export type TasksViewMode = "board" | "list"
 
@@ -105,8 +107,12 @@ function bindFilterWindow(): void {
   filterWindowBound = true
   window.addEventListener("storage", (event) => {
     // `key === null` is a wholesale `localStorage.clear()` elsewhere.
-    if (event.key !== null && event.key !== BOARD_FILTER_KEY) return
-    publishTasksBoardFilter(loadTasksBoardFilter())
+    if (event.key === null || event.key === BOARD_FILTER_KEY) {
+      publishTasksBoardFilter(loadTasksBoardFilter())
+    }
+    if (event.key === null || event.key === TIME_FILTER_KEY) {
+      publishTasksTimeFilter(loadTasksTimeFilter())
+    }
   })
 }
 
@@ -193,23 +199,68 @@ export function saveTasksStatusFilter(group: TasksStatusGroup | null): void {
   }
 }
 
-/** Unknown or missing entries preserve the unfiltered task view. */
+/** Both task surfaces share this preference; missing entries use one week. */
 export function loadTasksTimeFilter(): TasksTimeRange {
-  if (typeof window === "undefined") return "all"
+  if (typeof window === "undefined") return DEFAULT_TASKS_TIME_FILTER
   try {
     const raw = localStorage.getItem(TIME_FILTER_KEY)
-    return TASKS_TIME_RANGES.find((range) => range === raw) ?? "all"
+    return (
+      TASKS_TIME_RANGES.find((range) => range === raw) ??
+      DEFAULT_TASKS_TIME_FILTER
+    )
   } catch {
-    return "all"
+    return DEFAULT_TASKS_TIME_FILTER
   }
 }
 
 export function saveTasksTimeFilter(range: TasksTimeRange): void {
   if (typeof window === "undefined") return
   try {
-    if (range === "all") localStorage.removeItem(TIME_FILTER_KEY)
-    else localStorage.setItem(TIME_FILTER_KEY, range)
+    // "all" is an explicit choice, distinct from the default for no entry.
+    localStorage.setItem(TIME_FILTER_KEY, range)
   } catch {
     /* ignore */
   }
+  publishTasksTimeFilter(range)
+}
+
+let timeFilterSnapshot: TasksTimeRange | null = null
+const timeFilterListeners = new Set<() => void>()
+
+function publishTasksTimeFilter(range: TasksTimeRange): void {
+  if (timeFilterSnapshot === range) return
+  timeFilterSnapshot = range
+  for (const listener of timeFilterListeners) listener()
+}
+
+function subscribeTasksTimeFilter(onChange: () => void): () => void {
+  bindFilterWindow()
+  timeFilterListeners.add(onChange)
+  return () => {
+    timeFilterListeners.delete(onChange)
+  }
+}
+
+function getTasksTimeFilter(): TasksTimeRange {
+  bindFilterWindow()
+  if (typeof window === "undefined") return DEFAULT_TASKS_TIME_FILTER
+  timeFilterSnapshot ??= loadTasksTimeFilter()
+  return timeFilterSnapshot
+}
+
+function getServerTasksTimeFilter(): TasksTimeRange {
+  return DEFAULT_TASKS_TIME_FILTER
+}
+
+/** Follow changes from either task surface and from other app windows. */
+export function useTasksTimeFilter(): TasksTimeRange {
+  return useSyncExternalStore(
+    subscribeTasksTimeFilter,
+    getTasksTimeFilter,
+    getServerTasksTimeFilter
+  )
+}
+
+export function resetTasksTimeFilterCacheForTests(): void {
+  timeFilterSnapshot = null
 }

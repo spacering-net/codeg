@@ -10,6 +10,10 @@ import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
+import {
+  resetTasksTimeFilterCacheForTests,
+  saveTasksTimeFilter,
+} from "@/lib/tasks-board-filter-storage"
 import type { WorkTask } from "@/lib/types"
 
 const view = {
@@ -108,6 +112,8 @@ const searchBox = () => screen.getByRole("textbox", { name: "Search tasks" })
 
 beforeEach(() => {
   localStorage.clear()
+  resetTasksTimeFilterCacheForTests()
+  saveTasksTimeFilter("all")
   view.viewMode = "board"
   view.tasks = [
     task({ id: 1, title: "Fix the login timeout", status: "todo" }),
@@ -174,6 +180,8 @@ describe("TasksPage recent-update filter", () => {
   const day = 24 * 60 * 60 * 1000
 
   beforeEach(() => {
+    localStorage.removeItem("workspace:tasks-time-filter")
+    resetTasksTimeFilterCacheForTests()
     vi.spyOn(Date, "now").mockReturnValue(now)
     view.tasks = [
       task({
@@ -253,6 +261,7 @@ describe("TasksPage recent-update filter", () => {
   it("combines with search and status, and clears only the time window from an empty list", async () => {
     const user = userEvent.setup()
     view.viewMode = "list"
+    saveTasksTimeFilter("all")
     mount()
     await user.type(searchBox(), "Monthly")
     await user.click(

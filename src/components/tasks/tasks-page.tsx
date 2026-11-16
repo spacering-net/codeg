@@ -12,16 +12,7 @@ import { createPortal } from "react-dom"
 import { Reorder, type PanInfo } from "motion/react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import {
-  Clock,
-  Funnel,
-  Play,
-  Plus,
-  ListTodo,
-  Search,
-  Tag,
-  X,
-} from "lucide-react"
+import { Funnel, Play, Plus, ListTodo, Search, Tag, X } from "lucide-react"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { workTaskArchive, workTaskReorder, workTaskStart } from "@/lib/api"
@@ -31,16 +22,12 @@ import {
   DEFAULT_TASKS_BOARD_FILTER,
   loadTasksBoardFilter,
   loadTasksStatusFilter,
-  loadTasksTimeFilter,
   saveTasksBoardFilter,
   saveTasksStatusFilter,
   saveTasksTimeFilter,
+  useTasksTimeFilter,
 } from "@/lib/tasks-board-filter-storage"
-import {
-  TASKS_TIME_RANGES,
-  taskMatchesTimeRange,
-  type TasksTimeRange,
-} from "@/lib/tasks-time-filter"
+import { taskMatchesTimeRange } from "@/lib/tasks-time-filter"
 import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
 import { FolderSelect } from "@/components/shared/folder-select"
 import { Button } from "@/components/ui/button"
@@ -76,6 +63,7 @@ import { StatusChip, TaskCard } from "./task-card"
 import { TaskList } from "./task-list"
 import { searchTerms, taskMatchesSearch } from "./task-search"
 import { TaskSettingsDialog } from "./task-settings-dialog"
+import { TaskTimeFilter } from "./task-time-filter"
 import { OPEN_TASK_SETTINGS_EVENT } from "./tasks-chrome-actions"
 import { TasksSkeleton } from "./tasks-skeleton"
 import { useTaskDialogs } from "./use-task-dialogs"
@@ -98,13 +86,6 @@ const EMPTY_LABEL_KEYS = {
 /** The status select's "no filter" option — a sentinel, because Radix reserves
  *  the empty string for "no value chosen". */
 const ALL_STATUSES = "__all__"
-
-const TIME_LABEL_KEYS = {
-  "24h": "timeFilter24h",
-  "7d": "timeFilter7d",
-  "30d": "timeFilter30d",
-  all: "timeFilterAll",
-} as const satisfies Record<TasksTimeRange, string>
 
 /** The cards inside a column. gap-4 — the same gutter the columns keep from
  *  each other and from the window edge — so a card is inset by 1rem on all
@@ -182,10 +163,7 @@ export function TasksPage() {
   useEffect(() => {
     saveTasksStatusFilter(statusFilter)
   }, [statusFilter])
-  const [timeFilter, setTimeFilter] = useState(loadTasksTimeFilter)
-  useEffect(() => {
-    saveTasksTimeFilter(timeFilter)
-  }, [timeFilter])
+  const timeFilter = useTasksTimeFilter()
   // Keyword search over both views. Deliberately NOT remembered across visits,
   // unlike the toggles above: a search left behind from last time silently
   // hides tasks on a board that otherwise looks normal.
@@ -620,30 +598,10 @@ export function TasksPage() {
             </PopoverContent>
           </Popover>
 
-          <Select
+          <TaskTimeFilter
             value={timeFilter}
-            onValueChange={(value) => setTimeFilter(value as TasksTimeRange)}
-          >
-            <SelectTrigger
-              size="sm"
-              aria-label={`${t("timeFilter")}: ${t(TIME_LABEL_KEYS[timeFilter])}`}
-              title={t("timeFilter")}
-              className="h-8 w-auto min-w-0 gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none ws-msg-chip hover:bg-muted"
-            >
-              <Clock
-                className="size-3.5 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TASKS_TIME_RANGES.map((range) => (
-                <SelectItem key={range} value={range}>
-                  {t(TIME_LABEL_KEYS[range])}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+            onValueChange={saveTasksTimeFilter}
+          />
 
           {/* Status filter — list-only: the board already sorts by status into
               its four columns, so there is nothing there for it to narrow.
@@ -739,7 +697,7 @@ export function TasksPage() {
           filtered={statusFilter != null}
           onClearFilter={() => setStatusFilter(null)}
           onClearTimeFilter={
-            timeFilter === "all" ? undefined : () => setTimeFilter("all")
+            timeFilter === "all" ? undefined : () => saveTasksTimeFilter("all")
           }
           searchQuery={searching ? searchInput.trim() : null}
           onClearSearch={() => setSearchInput("")}

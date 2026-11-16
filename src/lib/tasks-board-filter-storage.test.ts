@@ -7,12 +7,14 @@ import {
   loadTasksTimeFilter,
   loadTasksViewMode,
   resetTasksBoardFilterCacheForTests,
+  resetTasksTimeFilterCacheForTests,
   saveTasksBoardFilter,
   saveTasksStatusFilter,
   saveTasksTimeFilter,
   saveTasksViewMode,
   subscribeTasksBoardFilter,
   useTasksBoardFilter,
+  useTasksTimeFilter,
 } from "./tasks-board-filter-storage"
 
 const VIEW_MODE_KEY = "workspace:tasks-view-mode"
@@ -24,6 +26,7 @@ const BOARD_FILTER_KEY = "workspace:tasks-board-filter"
 beforeEach(() => {
   localStorage.clear()
   resetTasksBoardFilterCacheForTests()
+  resetTasksTimeFilterCacheForTests()
 })
 
 describe("tasks view mode storage", () => {
@@ -42,20 +45,20 @@ describe("tasks view mode storage", () => {
 })
 
 describe("tasks time filter storage", () => {
-  it("defaults to all time and round-trips each recent range", () => {
-    expect(loadTasksTimeFilter()).toBe("all")
+  it("defaults to one week and remembers every choice, including all time", () => {
+    expect(loadTasksTimeFilter()).toBe("7d")
     for (const range of ["24h", "7d", "30d"] as const) {
       saveTasksTimeFilter(range)
       expect(loadTasksTimeFilter()).toBe(range)
     }
     saveTasksTimeFilter("all")
-    expect(localStorage.getItem(TIME_FILTER_KEY)).toBeNull()
+    expect(localStorage.getItem(TIME_FILTER_KEY)).toBe("all")
     expect(loadTasksTimeFilter()).toBe("all")
   })
 
-  it("falls back to all time for an unrecognized stored value", () => {
+  it("falls back to one week for an unrecognized stored value", () => {
     localStorage.setItem(TIME_FILTER_KEY, "yesterday")
-    expect(loadTasksTimeFilter()).toBe("all")
+    expect(loadTasksTimeFilter()).toBe("7d")
   })
 
   it("handles unavailable storage", () => {
@@ -64,7 +67,7 @@ describe("tasks time filter storage", () => {
       .mockImplementation(() => {
         throw new Error("Storage denied")
       })
-    expect(loadTasksTimeFilter()).toBe("all")
+    expect(loadTasksTimeFilter()).toBe("7d")
     getItem.mockRestore()
     const setItem = vi
       .spyOn(Storage.prototype, "setItem")
@@ -73,6 +76,63 @@ describe("tasks time filter storage", () => {
       })
     expect(() => saveTasksTimeFilter("24h")).not.toThrow()
     setItem.mockRestore()
+  })
+
+  it("keeps mounted consumers in sync in both directions", () => {
+    const page = renderHook(() => useTasksTimeFilter())
+    const sidebar = renderHook(() => useTasksTimeFilter())
+    expect(page.result.current).toBe("7d")
+    expect(sidebar.result.current).toBe("7d")
+
+    act(() => saveTasksTimeFilter("24h"))
+    expect(page.result.current).toBe("24h")
+    expect(sidebar.result.current).toBe("24h")
+    act(() => saveTasksTimeFilter("all"))
+    expect(page.result.current).toBe("all")
+    expect(sidebar.result.current).toBe("all")
+  })
+
+  it("restores stored choices and follows other windows' writes and clears", () => {
+    localStorage.setItem(TIME_FILTER_KEY, "30d")
+    const { result } = renderHook(() => useTasksTimeFilter())
+    expect(result.current).toBe("30d")
+    act(() => {
+      localStorage.setItem(TIME_FILTER_KEY, "all")
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: TIME_FILTER_KEY })
+      )
+    })
+    expect(result.current).toBe("all")
+    act(() => {
+      localStorage.removeItem(TIME_FILTER_KEY)
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: TIME_FILTER_KEY })
+      )
+    })
+    expect(result.current).toBe("7d")
+    act(() => saveTasksTimeFilter("24h"))
+    act(() => {
+      localStorage.clear()
+      window.dispatchEvent(new StorageEvent("storage", { key: null }))
+    })
+    expect(result.current).toBe("7d")
+  })
+
+  it("shares changes even when storage refuses a write", () => {
+    const page = renderHook(() => useTasksTimeFilter())
+    const sidebar = renderHook(() => useTasksTimeFilter())
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new Error("Storage denied")
+      })
+    try {
+      act(() => saveTasksTimeFilter("30d"))
+      expect(page.result.current).toBe("30d")
+      expect(sidebar.result.current).toBe("30d")
+    } finally {
+      setItem.mockRestore()
+    }
   })
 })
 
