@@ -8,10 +8,11 @@
  *
  * - **Mirror**: whenever a synced key changes, the whole synced set is sent to
  *   the backend, which keeps it in one database row the `appearance` domain
- *   carries. A local desktop window also mirrors on launch (its localStorage is
- *   THE appearance of that machine); a browser does not, because in server mode
- *   every browser has its own appearance and merely opening one must not
- *   replace what the others set.
+ *   carries. A local desktop window also mirrors on launch, but only when the
+ *   database holds nothing yet (see `adoptOrMirrorAppearanceOnLaunch`); a
+ *   browser never mirrors on launch, because in server mode every browser has
+ *   its own appearance and merely opening one must not replace what the others
+ *   set.
  * - **Adopt**: a restore / import / rollback returns the applied values to the
  *   client that ran it, which writes them into localStorage and announces each
  *   one as a `storage` event — the path every provider already follows when
@@ -56,6 +57,7 @@ export const SYNCED_APPEARANCE_KEYS = [
   "codeg-workspace-bg-panel-opacity",
   "codeg-custom-theme",
   "codeg-custom-theme-enabled",
+  "codeg-theme-preset",
   "codeg-custom-css",
   "codeg-custom-css-enabled",
 ] as const
@@ -112,9 +114,35 @@ export function scheduleAppearanceMirror(delayMs = MIRROR_DELAY_MS): void {
   }, delayMs)
 }
 
-/** Launch-time mirror: local desktop windows only (see the module comment). */
-export function mirrorAppearanceOnLaunch(): void {
-  if (isLocalDesktop()) scheduleAppearanceMirror()
+/**
+ * Launch step for a local desktop window: the appearance stored in the
+ * database wins, and the window's own `localStorage` only travels up when the
+ * database holds nothing yet.
+ *
+ * The two orders exist because two clients now write that store — this window
+ * and a host app that embeds Codeg (see the embed's `__CODEG_EMBEDDED__`
+ * marker). Without the adopt half, a window would boot on whatever its own
+ * `localStorage` last said and then overwrite the store with it, so the
+ * appearance the embed set would live only until Codeg was opened on its own.
+ *
+ * A browser stays out of it, for the reason in the module comment: each browser
+ * has its own appearance, and merely opening one must not replace the others'.
+ */
+export async function adoptOrMirrorAppearanceOnLaunch(): Promise<void> {
+  if (!isLocalDesktop()) return
+  try {
+    const stored =
+      await getTransport().call<AppearanceValues | null>("get_appearance_settings")
+    if (stored && Object.keys(stored).length > 0) {
+      adoptSyncedAppearance(stored)
+      return
+    }
+  } catch (err) {
+    // Reading failed: mirroring up keeps the store at least as current as this
+    // window is, which is what the launch step did before there was an adopt.
+    console.error("[appearance-sync] launch read failed", err)
+  }
+  scheduleAppearanceMirror()
 }
 
 /**

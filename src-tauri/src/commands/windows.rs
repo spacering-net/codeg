@@ -1977,6 +1977,19 @@ pub async fn update_traffic_light_position(
     Ok(())
 }
 
+/// Persist a mode and move the cached copy the window builders read, in one
+/// place: the `invoke` command and the web route both go through here, so a
+/// client that is not this desktop window can record the same preference.
+pub async fn set_appearance_mode<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+    mode: &str,
+) -> Result<(), AppCommandError> {
+    CACHED_APPEARANCE_MODE.store(mode_from_str(mode), AtomicOrdering::Relaxed);
+    app_metadata_service::upsert_value(conn, APPEARANCE_MODE_DB_KEY, mode)
+        .await
+        .map_err(AppCommandError::from)
+}
+
 /// Persist the user's appearance mode ("dark" / "light" / "system") to DB
 /// and update the in-memory cache so that subsequent window creations use the
 /// correct native background color.
@@ -1986,11 +1999,22 @@ pub async fn update_appearance_mode(
     db: tauri::State<'_, AppDatabase>,
     mode: String,
 ) -> Result<(), AppCommandError> {
-    CACHED_APPEARANCE_MODE.store(mode_from_str(&mode), AtomicOrdering::Relaxed);
+    set_appearance_mode(&db.conn, &mode).await
+}
 
-    let _ = app_metadata_service::upsert_value(&db.conn, APPEARANCE_MODE_DB_KEY, &mode).await;
-
-    Ok(())
+/// The appearance as last mirrored to this data directory (the same row the
+/// `appearance` config-sync domain carries).
+///
+/// The desktop window's launch step prefers it over its own `localStorage`:
+/// a host app that embeds Codeg writes the appearance there (see
+/// `__CODEG_EMBEDDED__`), and this window would otherwise boot on whatever it
+/// last stored and mirror that back over it.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn get_appearance_settings(
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<crate::commands::config_sync::appearance::AppearanceValues, AppCommandError> {
+    Ok(crate::commands::config_sync::appearance::read_appearance_mirror(&db.conn).await)
 }
 
 // ─── System tray icon ──────────────────────────────────────────────────

@@ -906,8 +906,10 @@ fn beside_the_desktop_app(exe: &std::path::Path) -> bool {
 }
 
 fn default_data_dir() -> PathBuf {
+    // The same folder the desktop app falls back to — WingHarness's `codeg`
+    // directory — so a server started by hand and that app share one database.
     dirs::data_dir()
-        .map(|d| d.join("codeg"))
+        .map(|d| codeg_lib::paths::wingharness_codeg_dir(&d))
         .unwrap_or_else(|| PathBuf::from(".codeg-data"))
 }
 

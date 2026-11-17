@@ -167,6 +167,8 @@ export function CustomStyleSection() {
     customTheme,
     setCustomThemeToken,
     replaceCustomTheme,
+    activePreset,
+    setActivePreset,
     customThemeEnabled,
     setCustomThemeEnabled,
     customCss,
@@ -246,14 +248,22 @@ export function CustomStyleSection() {
   }, [importDraft, replaceCustomTheme, t])
 
   // 套用预设 = 整组替换覆盖，和「导入主题」走同一条路径。关闭状态下套用只会
-  // 让人以为没反应，所以顺手把开关打开。
+  // 让人以为没反应，所以顺手把开关打开。套完记下预设 id：配色本身已经在
+  // customTheme 里，这条只用来把卡片标成「使用中」（见 STORAGE_KEY_THEME_PRESET）。
   const onApplyPreset = useCallback(
     (entry: PresetLibraryEntry) => {
       replaceCustomTheme(presetToCustomTheme(entry))
+      setActivePreset(entry.id)
       if (!customThemeEnabled) setCustomThemeEnabled(true)
       toast.success(t("customStyle.presetApplied", { name: entry.label }))
     },
-    [customThemeEnabled, replaceCustomTheme, setCustomThemeEnabled, t]
+    [
+      customThemeEnabled,
+      replaceCustomTheme,
+      setActivePreset,
+      setCustomThemeEnabled,
+      t,
+    ]
   )
 
   const escapeHint = useMemo(
@@ -405,8 +415,13 @@ export function CustomStyleSection() {
                     type="button"
                     disabled={themeDisabled}
                     title={entry.label}
+                    aria-pressed={activePreset === entry.id}
                     onClick={() => onApplyPreset(entry)}
-                    className="flex items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50"
+                    className={cn(
+                      "flex items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-50",
+                      activePreset === entry.id &&
+                        "border-primary/60 bg-primary/5 ring-1 ring-inset ring-primary/40"
+                    )}
                   >
                     <span className="flex shrink-0 overflow-hidden rounded-[3px] ring-1 ring-border">
                       {presetPreviewColors(entry, isDarkMode).map(

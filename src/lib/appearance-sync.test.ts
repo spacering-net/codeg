@@ -4,7 +4,7 @@ import { resolve } from "node:path"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const env = vi.hoisted(() => ({ localDesktop: true }))
-const call = vi.hoisted(() => vi.fn(async () => null))
+const call = vi.hoisted(() => vi.fn(async (): Promise<unknown> => null))
 
 vi.mock("./platform", () => ({
   isLocalDesktop: () => env.localDesktop,
@@ -16,9 +16,9 @@ vi.mock("./transport", () => ({
 import * as appearanceScript from "./appearance-script"
 import {
   SYNCED_APPEARANCE_KEYS,
+  adoptOrMirrorAppearanceOnLaunch,
   adoptSyncedAppearance,
   isSyncedAppearanceKey,
-  mirrorAppearanceOnLaunch,
   readSyncedAppearance,
 } from "./appearance-sync"
 
@@ -36,13 +36,15 @@ const DEVICE_LOCAL = new Set([
 
 beforeEach(() => {
   window.localStorage.clear()
-  call.mockClear()
+  call.mockReset()
+  call.mockImplementation(async () => null)
   env.localDesktop = true
   vi.useFakeTimers()
 })
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 describe("the synced key list", () => {
@@ -158,14 +160,52 @@ describe("adoptSyncedAppearance", () => {
   })
 })
 
-describe("mirrorAppearanceOnLaunch", () => {
-  it("mirrors a local desktop window's appearance", async () => {
-    window.localStorage.setItem("codeg-zoom-level", "125")
-    mirrorAppearanceOnLaunch()
+describe("adoptOrMirrorAppearanceOnLaunch", () => {
+  it("adopts what the database holds instead of overwriting it", async () => {
+    call.mockResolvedValueOnce({ "codeg-zoom-level": "125", theme: "dark" })
+    window.localStorage.setItem("codeg-zoom-level", "90")
+
+    await adoptOrMirrorAppearanceOnLaunch()
+
+    expect(call.mock.calls[0]).toEqual(["get_appearance_settings"])
+    expect(window.localStorage.getItem("codeg-zoom-level")).toBe("125")
+    expect(window.localStorage.getItem("theme")).toBe("dark")
+    // The adopt announces each write, which the provider treats like any other
+    // window's change; the mirror that follows carries the adopted values back.
     await vi.runAllTimersAsync()
+    expect(call).toHaveBeenCalledWith("config_sync_mirror_appearance", {
+      values: { "codeg-zoom-level": "125", theme: "dark" },
+    })
+  })
+
+  it("mirrors a local desktop window's appearance when the database holds none", async () => {
+    for (const empty of [null, {}]) {
+      call.mockClear()
+      call.mockResolvedValueOnce(empty)
+      window.localStorage.setItem("codeg-zoom-level", "125")
+      await adoptOrMirrorAppearanceOnLaunch()
+      await vi.runAllTimersAsync()
+      expect(call).toHaveBeenCalledWith("config_sync_mirror_appearance", {
+        values: { "codeg-zoom-level": "125" },
+      })
+    }
+  })
+
+  /// The read is the only thing standing between a launch and its stored
+  /// appearance; if it cannot answer, the window's own appearance still travels
+  /// up, which is what the launch step did before there was an adopt.
+  it("mirrors up when the stored appearance cannot be read", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {})
+    call.mockRejectedValueOnce(new Error("no transport"))
+    window.localStorage.setItem("codeg-zoom-level", "125")
+
+    await adoptOrMirrorAppearanceOnLaunch()
+    await vi.runAllTimersAsync()
+
     expect(call).toHaveBeenCalledWith("config_sync_mirror_appearance", {
       values: { "codeg-zoom-level": "125" },
     })
+    expect(errors).toHaveBeenCalled()
   })
 
   /// In server mode every browser has its own appearance: merely opening one
@@ -173,7 +213,7 @@ describe("mirrorAppearanceOnLaunch", () => {
   it("leaves a browser's appearance alone until it changes something", async () => {
     env.localDesktop = false
     window.localStorage.setItem("codeg-zoom-level", "125")
-    mirrorAppearanceOnLaunch()
+    await adoptOrMirrorAppearanceOnLaunch()
     await vi.runAllTimersAsync()
     expect(call).not.toHaveBeenCalled()
   })

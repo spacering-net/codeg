@@ -227,11 +227,11 @@ pub fn codeg_text_generation_root() -> PathBuf {
 /// The data directory the desktop app exports as `CODEG_DATA_DIR` at the top
 /// of `run()`, before the logging init or anything else reads it: a preset
 /// `CODEG_DATA_DIR` (the operator's, or inherited from the codeg that launched
-/// this one), else the platform data directory joined with the bundle
-/// identifier — exactly what Tauri's `app_data_dir()` returns, which is not
-/// available until `setup`. Absolutized either way, like
-/// [`resolve_effective_data_dir`]; `None` when there is no platform data
-/// directory, where `setup` fails on `app_data_dir()` all the same.
+/// this one), else [`wingharness_codeg_dir`] — WingHarness's data directory
+/// with `codeg` under it, so this app opened on its own and the same app
+/// embedded in WingHarness read and write one database. Absolutized either
+/// way, like [`resolve_effective_data_dir`]; `None` when there is no platform
+/// data directory, where `setup` fails on `app_data_dir()` all the same.
 ///
 /// Exporting it only in `setup`, as the desktop app used to, left the log
 /// directory to depend on how the process was started: a launch from the
@@ -241,12 +241,48 @@ pub fn codeg_text_generation_root() -> PathBuf {
 pub fn desktop_data_dir(
     preset: Option<&std::ffi::OsStr>,
     platform_data_dir: Option<&Path>,
-    identifier: &str,
 ) -> Option<PathBuf> {
     if let Some(custom) = preset.filter(|s| !s.is_empty()) {
         return Some(crate::git_credential::absolutize(Path::new(custom)));
     }
-    platform_data_dir.map(|dir| crate::git_credential::absolutize(&dir.join(identifier)))
+    platform_data_dir.map(|dir| crate::git_credential::absolutize(&wingharness_codeg_dir(dir)))
+}
+
+/// WingHarness's app-data folder, and the file naming its data directory.
+const WINGHARNESS_IDENTIFIER: &str = "com.anfioo.wingharness";
+/// WingHarness reads this same file from the same folder (`config::POINTER_FILE`).
+const WINGHARNESS_POINTER_FILE: &str = "data-dir.txt";
+/// The folder WingHarness keeps this app's state in (`CodegConfig::resolved_data_dir`).
+const WINGHARNESS_CODEG_DIR_NAME: &str = "codeg";
+
+/// Where WingHarness keeps this app's data: `<its data directory>/codeg`.
+///
+/// WingHarness may be pointed at another data directory at runtime, and that
+/// folder stays the single answer for both apps — the pointer file beside its
+/// default folder is read here with the same rules WingHarness applies (a
+/// relative path, a blank file or a path that is not a directory is no
+/// pointer), so relocating the data directory moves this app along with it.
+pub fn wingharness_codeg_dir(platform_data_dir: &Path) -> PathBuf {
+    let base = platform_data_dir.join(WINGHARNESS_IDENTIFIER);
+    let configured = std::fs::read_to_string(base.join(WINGHARNESS_POINTER_FILE))
+        .ok()
+        .map(|text| {
+            // Notepad's BOM, then Explorer's "Copy as path" quotes.
+            text.trim_matches('\u{feff}')
+                .trim()
+                .trim_matches('"')
+                .trim()
+                .to_string()
+        })
+        .filter(|text| !text.is_empty())
+        .map(PathBuf::from)
+        // Relative paths would resolve against the working directory, which is
+        // not something a user can reason about; a file is not a directory.
+        .filter(|path| path.is_absolute())
+        .filter(|path| !path.exists() || path.is_dir());
+    configured
+        .unwrap_or(base)
+        .join(WINGHARNESS_CODEG_DIR_NAME)
 }
 
 /// Single source of truth for "where does the database live, and where
@@ -336,35 +372,78 @@ mod tests {
     use super::*;
 
     /// The desktop app's data directory, decided before anything reads it: a
-    /// preset `CODEG_DATA_DIR` wins, else the platform data directory joined
-    /// with the bundle identifier — Tauri's `app_data_dir()`. Absolute either
-    /// way, since it is exported to every subprocess.
+    /// preset `CODEG_DATA_DIR` wins, else WingHarness's data directory with
+    /// `codeg` under it. Absolute either way, since it is exported to every
+    /// subprocess.
     #[test]
-    fn the_desktop_data_dir_is_the_preset_else_the_identifier_dir() {
+    fn the_desktop_data_dir_is_the_preset_else_wingharness_codeg() {
         let platform = std::env::temp_dir().join("platform-data");
         let preset = std::env::temp_dir().join("preset-data");
         assert_eq!(
-            desktop_data_dir(None, Some(&platform), "app.codeg"),
-            Some(platform.join("app.codeg"))
+            desktop_data_dir(None, Some(&platform)),
+            Some(platform.join(WINGHARNESS_IDENTIFIER).join("codeg"))
         );
         assert_eq!(
-            desktop_data_dir(Some(std::ffi::OsStr::new("")), Some(&platform), "app.codeg"),
-            Some(platform.join("app.codeg")),
+            desktop_data_dir(Some(std::ffi::OsStr::new("")), Some(&platform)),
+            Some(platform.join(WINGHARNESS_IDENTIFIER).join("codeg")),
             "an empty preset is no preset"
         );
         assert_eq!(
-            desktop_data_dir(Some(preset.as_os_str()), Some(&platform), "app.codeg"),
+            desktop_data_dir(Some(preset.as_os_str()), Some(&platform)),
             Some(preset.clone())
         );
         assert_eq!(
-            desktop_data_dir(Some(preset.as_os_str()), None, "app.codeg"),
+            desktop_data_dir(Some(preset.as_os_str()), None),
             Some(preset)
         );
-        assert_eq!(desktop_data_dir(None, None, "app.codeg"), None);
-        let relative = desktop_data_dir(Some(std::ffi::OsStr::new("data")), None, "app.codeg")
+        assert_eq!(desktop_data_dir(None, None), None);
+        let relative = desktop_data_dir(Some(std::ffi::OsStr::new("data")), None)
             .expect("a relative preset");
         assert!(relative.is_absolute(), "{}", relative.display());
         assert!(relative.ends_with("data"));
+    }
+
+    /// The pointer file is WingHarness's: the same folder, the same rules, so a
+    /// data directory moved there moves this app's too.
+    #[test]
+    fn wingharness_codeg_follows_the_pointer_file() {
+        let platform = tempfile::tempdir().unwrap();
+        let base = platform.path().join(WINGHARNESS_IDENTIFIER);
+        let pointer = base.join(WINGHARNESS_POINTER_FILE);
+        assert_eq!(
+            wingharness_codeg_dir(platform.path()),
+            base.join("codeg"),
+            "no pointer means WingHarness's own folder"
+        );
+
+        let moved = platform.path().join("moved-data");
+        std::fs::create_dir(&moved).unwrap();
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(&pointer, format!("\u{feff}\"{}\"\r\n", moved.display())).unwrap();
+        assert_eq!(
+            wingharness_codeg_dir(platform.path()),
+            moved.join("codeg"),
+            "a BOM and the quotes Explorer's copy adds are no part of the path"
+        );
+
+        std::fs::write(&pointer, "relative\\data\n").unwrap();
+        assert_eq!(
+            wingharness_codeg_dir(platform.path()),
+            base.join("codeg"),
+            "a relative path is not something a user can reason about"
+        );
+
+        std::fs::write(&pointer, "   \n").unwrap();
+        assert_eq!(wingharness_codeg_dir(platform.path()), base.join("codeg"));
+
+        let file = platform.path().join("not-a-dir");
+        std::fs::write(&file, b"x").unwrap();
+        std::fs::write(&pointer, format!("{}\n", file.display())).unwrap();
+        assert_eq!(
+            wingharness_codeg_dir(platform.path()),
+            base.join("codeg"),
+            "a file would make every create_dir_all fail"
+        );
     }
 
     /// The shape `fs::canonicalize` hands back on Windows, and the one that

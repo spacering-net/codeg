@@ -570,7 +570,6 @@ mod tauri_app {
         let desktop_data_dir = paths::desktop_data_dir(
             std::env::var_os("CODEG_DATA_DIR").as_deref(),
             dirs::data_dir().as_deref(),
-            &context.config().identifier,
         );
         if let Some(data_dir) = &desktop_data_dir {
             // SAFETY: single-threaded as argued above.
@@ -776,28 +775,13 @@ mod tauri_app {
                 // `run()` exported the effective root as `CODEG_DATA_DIR`
                 // before the logging init (see `paths::desktop_data_dir`),
                 // so this resolves to it; nothing writes the variable after
-                // that. The derivation `run()` falls back to is Tauri's own
-                // — the platform data directory joined with the identifier —
-                // checked here on the raw values, since the exported root
-                // would only echo itself back: were the two ever to part, a
-                // plain launch would open a database Tauri's directory does
-                // not hold.
+                // that. The default it falls back to is *not* Tauri's
+                // `app_data_dir()` — that one is the identifier-derived
+                // `%APPDATA%\app.codeg`, while the root is WingHarness's
+                // `codeg` folder (see `paths::wingharness_codeg_dir`) — so the
+                // two are expected to name different folders and are not
+                // compared here.
                 let effective_data_dir = paths::resolve_effective_data_dir(&app_data_dir);
-                let derived_data_dir = paths::desktop_data_dir(
-                    None,
-                    dirs::data_dir().as_deref(),
-                    &app.config().identifier,
-                );
-                if derived_data_dir.as_deref()
-                    != Some(git_credential::absolutize(&app_data_dir).as_path())
-                {
-                    tracing::warn!(
-                        "[paths][WARN] the data directory derived at startup ({:?}) differs from Tauri's app_data_dir ({}); the database follows {}",
-                        derived_data_dir,
-                        app_data_dir.display(),
-                        effective_data_dir.display()
-                    );
-                }
 
                 // `CODEG_HOME` overrides `CODEG_DATA_DIR` inside
                 // `paths::codeg_uploads_root` / `codeg_pets_root` for
@@ -2039,6 +2023,7 @@ mod tauri_app {
                 windows::focus_conversation,
                 crate::deep_link::take_pending_deep_link,
                 windows::update_traffic_light_position,
+                windows::get_appearance_settings,
                 windows::update_appearance_mode,
                 windows::set_tray_locale,
                 pet_commands::pet_list,

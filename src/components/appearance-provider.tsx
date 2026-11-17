@@ -63,6 +63,7 @@ import {
   STORAGE_KEY_CUSTOM_CSS,
   STORAGE_KEY_CUSTOM_CSS_ENABLED,
   STORAGE_KEY_CUSTOM_STYLE_SUSPENDED,
+  STORAGE_KEY_THEME_PRESET,
 } from "@/lib/appearance-script"
 import {
   applyCustomCss,
@@ -99,8 +100,8 @@ import {
 } from "@/lib/workspace-background"
 import { downloadWorkspaceBgMarket } from "@/lib/workspace-background-market"
 import {
+  adoptOrMirrorAppearanceOnLaunch,
   isSyncedAppearanceKey,
-  mirrorAppearanceOnLaunch,
   scheduleAppearanceMirror,
 } from "@/lib/appearance-sync"
 
@@ -202,6 +203,9 @@ type AppearanceContextValue = {
   setCustomThemeToken: (token: CustomThemeToken, value: string | null) => void
   /** 整体替换主题覆盖（导入 / 清空用）。 */
   replaceCustomTheme: (theme: CustomTheme) => void
+  /** 当前套用的是预设库里的哪一套（预设 id）；手动微调过 token 或没套用则为 null。 */
+  activePreset: string | null
+  setActivePreset: (id: string | null) => void
   customThemeEnabled: boolean
   setCustomThemeEnabled: (on: boolean) => void
   /** 已剥离 @import 并经 CSSOM 复核的用户 CSS。 */
@@ -550,6 +554,13 @@ export function AppearanceProvider({
   const [customStyleSuspended, setCustomStyleSuspendedState] =
     useState<boolean>(() => readBool(STORAGE_KEY_CUSTOM_STYLE_SUSPENDED, false))
 
+  // 当前套用的是预设库里的哪一套。配色本身就在 customTheme 里，这里只记「用的是
+  // 哪个预设」，供设置页把对应卡片标成使用中；手动微调 token 之后它就不再成立，
+  // 由下面的 setter 清掉。
+  const [activePreset, setActivePresetState] = useState<string | null>(() =>
+    readStored(STORAGE_KEY_THEME_PRESET)
+  )
+
   // 逃生舱其一：本窗口由 `?safeStyle=1` 打开时，本窗口内一切自定义样式不生效，
   // 但不写入偏好 —— 用「安全外观」打开设置页去关自定义 CSS，不该顺手改掉别的窗口。
   const [safeStyleRequested] = useState<boolean>(() => isSafeStyleRequested())
@@ -694,6 +705,26 @@ export function AppearanceProvider({
 
   // ─── 自定义样式：setter ───
 
+  /**
+   * 记录当前套用的预设。配色本身在 customTheme 里（那才是绘制来源），这里只留
+   * 「用的是哪一套」的标记：设置页据此高亮卡片，配置快照和嵌入宿主也读得到。
+   * 传 null = 不再对应任何预设（手改 token、导入自定义 JSON 之后）。
+   */
+  const setActivePreset = useCallback((id: string | null) => {
+    setActivePresetState(id)
+    if (id !== null) {
+      persist(STORAGE_KEY_THEME_PRESET, id)
+      return
+    }
+    try {
+      localStorage.removeItem(STORAGE_KEY_THEME_PRESET)
+    } catch {
+      // 同 persist
+    }
+    // 删除不走 persist，镜像得自己排一次，否则后端那份还留着旧的标记。
+    scheduleAppearanceMirror()
+  }, [])
+
   const setCustomThemeToken = useCallback(
     (token: CustomThemeToken, value: string | null) => {
       setCustomThemeState((prev) => {
@@ -703,13 +734,20 @@ export function AppearanceProvider({
         else next[token] = value
         return { ...prev, [mode]: next }
       })
+      // 改了一个 token，这套配色就不再是那个预设了。
+      setActivePreset(null)
     },
-    [isDarkMode]
+    [isDarkMode, setActivePreset]
   )
 
-  const replaceCustomTheme = useCallback((theme: CustomTheme) => {
-    setCustomThemeState(sanitizeCustomTheme(theme))
-  }, [])
+  const replaceCustomTheme = useCallback(
+    (theme: CustomTheme) => {
+      setCustomThemeState(sanitizeCustomTheme(theme))
+      // 整份替换来源未知；套预设的调用方随后会自己 setActivePreset(id)。
+      setActivePreset(null)
+    },
+    [setActivePreset]
+  )
 
   const setCustomThemeEnabled = useCallback((on: boolean) => {
     setCustomThemeEnabledState(on)
@@ -831,9 +869,10 @@ export function AppearanceProvider({
     } catch {
       // localStorage unavailable
     }
-    // 本机桌面窗口的 localStorage 就是这台机器的外观：启动时镜像一次，让配置
-    // 快照从第一次上传起就带上它（浏览器不在启动时镜像，见 lib/appearance-sync）。
-    mirrorAppearanceOnLaunch()
+    // 外观以数据库里那份为准：本机桌面窗口启动时先采信它（不重载，写完自己派发
+    // storage 事件），库里还没有东西才把本机这份镜像上去。浏览器不在启动时采信，
+    // 见 lib/appearance-sync。
+    void adoptOrMirrorAppearanceOnLaunch()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1152,6 +1191,10 @@ export function AppearanceProvider({
           readBool(STORAGE_KEY_CUSTOM_STYLE_SUSPENDED, false)
         )
       }
+      // 另一窗口换了预设（或被手动微调清掉）：标记跟着走，设置页的「使用中」才对。
+      if (e.key === STORAGE_KEY_THEME_PRESET) {
+        setActivePresetState(e.newValue ?? null)
+      }
       // Sync appearance mode to Tauri DB when changed in another window
       if (e.key === "theme") {
         syncAppearanceMode(e.newValue ?? "system")
@@ -1215,6 +1258,8 @@ export function AppearanceProvider({
         customTheme,
         setCustomThemeToken,
         replaceCustomTheme,
+        activePreset,
+        setActivePreset,
         customThemeEnabled,
         setCustomThemeEnabled,
         customCss,

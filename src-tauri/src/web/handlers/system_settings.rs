@@ -5,10 +5,12 @@ use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
+use crate::commands::config_sync::appearance;
 use crate::commands::system_settings as settings_commands;
 use crate::commands::system_settings::{
     LANGUAGE_SETTINGS_UPDATED_EVENT, SYSTEM_LANGUAGE_SETTINGS_KEY, SYSTEM_PROXY_SETTINGS_KEY,
 };
+use crate::commands::windows as windows_commands;
 use crate::db::service::app_metadata_service;
 use crate::models::*;
 use crate::network::proxy;
@@ -30,6 +32,11 @@ pub struct UpdateLanguageSettingsParams {
 #[derive(Deserialize)]
 pub struct UpdateTerminalSettingsParams {
     pub settings: SystemTerminalSettings,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateAppearanceModeParams {
+    pub mode: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +65,27 @@ pub async fn get_system_terminal_settings(
     let db = &state.db;
     let settings = settings_commands::load_system_terminal_settings(&db.conn).await?;
     Ok(Json(settings))
+}
+
+/// The appearance as last mirrored to this data directory, and the mode beside
+/// it. A client whose own `localStorage` is not the authority — the desktop
+/// window at launch, an embedding host's page — boots from this.
+pub async fn get_appearance_settings(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<appearance::AppearanceValues>, AppCommandError> {
+    let db = &state.db;
+    Ok(Json(
+        appearance::read_appearance_mirror(&db.conn).await,
+    ))
+}
+
+pub async fn update_appearance_mode(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<UpdateAppearanceModeParams>,
+) -> Result<Json<()>, AppCommandError> {
+    let db = &state.db;
+    windows_commands::set_appearance_mode(&db.conn, &params.mode).await?;
+    Ok(Json(()))
 }
 
 pub async fn get_available_terminal_shells(
