@@ -13,8 +13,10 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from "react"
 import { useTranslations } from "next-intl"
@@ -4211,8 +4213,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // Set of refs (not callbacks) so unmount cleanup matches the original
   // registration even when caller-side handler identity changes per render.
   // Populated by the `useAcpEvent` hook; read by the primary `acp://event`
-  // listener and the buffered-events replay loop.
-  const eventSubscribersRef = useRef<Set<EventSubscriberRef>>(new Set())
+  // listener and the buffered-events replay loop. The set is created once as
+  // part of the context value (`eventSubscriberApi`), so the provider can hand
+  // it out without reading the ref during render.
+  const [eventSubscriberApi] = useState<AcpEventSubscriberApi>(() => ({
+    subscribers: new Set(),
+  }))
+  const eventSubscribersRef = useRef<Set<EventSubscriberRef>>(
+    eventSubscriberApi.subscribers
+  )
 
   // ── Notify helpers ──
 
@@ -7899,7 +7908,6 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       waitForListenerReady,
     ]
   )
-  connectRef.current = connect
 
   const disconnect = useCallback(
     async (contextKey: string): Promise<boolean> => {
@@ -8156,7 +8164,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     [connect, disconnect, resolveReconnectRequest, waitForConnectSettled]
   )
 
-  reconnectRef.current = reconnect
+  // Synced in a layout effect rather than during render. Every reader runs
+  // after the commit: `connectRef` from a connect() `finally` (async, so past
+  // any awaiting), `reconnectRef` from a toast's Retry click.
+  useLayoutEffect(() => {
+    connectRef.current = connect
+    reconnectRef.current = reconnect
+  })
 
   const dismissConfigStale = useCallback(
     (contextKey: string) => {
@@ -8613,11 +8627,6 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       dismissSessionFailuresAction,
       registerSessionFailureActions,
     ]
-  )
-
-  const eventSubscriberApi = useMemo<AcpEventSubscriberApi>(
-    () => ({ subscribers: eventSubscribersRef.current }),
-    []
   )
 
   return (

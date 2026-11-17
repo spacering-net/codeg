@@ -131,7 +131,6 @@ export function ActivityRow({
     if (!styles.animationName || styles.animationName === "none") {
       // No slide to wait for (reduced motion, chat animations off): the panel
       // goes in the same flush as the close, before it paints again.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setClosing(false)
       return
     }

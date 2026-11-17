@@ -168,6 +168,7 @@ export function OpenCodeConnectDialog({
   // OpenCode keeps it, and codeg only ever writes one.
   useEffect(() => {
     if (!open || !editProviderId) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- form seeding when the parent opens the dialog in edit mode
     setSelected(editProviderId)
     setBaseUrlOverride(editBaseUrl)
     setInitialBaseUrl(editBaseUrl)

@@ -341,8 +341,8 @@ export function DeepSeekModelListEditor({
   }, [])
 
   useEffect(() => {
+    // `loading` starts true, and this mount-only load is its only producer.
     let alive = true
-    setLoading(true)
     void loadDeepSeekModelCatalog()
       .then((next) => {
         if (!alive) return

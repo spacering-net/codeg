@@ -388,9 +388,8 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       // it stays inert until `referenceSearch` is set (checked at runtime in the
       // controller). `mentionController` (stable, from useMemo) captures refs
       // but only dereferences them inside event-time callbacks, never during
-      // render — the React Compiler lint can't prove that. Mirrors Tiptap's own
-      // React suggestion pattern (render() → component.ref.onKeyDown).
-      // eslint-disable-next-line react-hooks/refs
+      // render. Mirrors Tiptap's own React suggestion pattern
+      // (render() → component.ref.onKeyDown).
       extensions: buildComposerExtensions({
         placeholder: getPlaceholder,
         mentionController,

@@ -234,6 +234,7 @@ export function ChannelEventsTab() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial config fetch; the loader flips its loading flag first
     loadConfig()
   }, [loadConfig])
 

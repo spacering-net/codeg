@@ -106,5 +106,8 @@ export function redirectToCodegLogin(): void {
   keepSrnResultForLogin()
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(PROXY_AUTH_KEY)
+  // A full page load is intended: it drops every in-memory session and
+  // connection the rejected token was holding.
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full reload is intended
   window.location.href = "/login"
 }

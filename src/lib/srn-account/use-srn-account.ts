@@ -403,6 +403,9 @@ export function useSrnAccount(
     if (!web || !readYet || waitingResult === null) return
     const result = takeWaitingSrnResult()
     if (result === null) return
+    // Consumes a result held outside React (taken off the address) once the
+    // account has been read; the notice it yields can only be set from here.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reads an external one-shot slot
     setResultNotice(srnProblemOfResult(result))
     setFailure(null)
     onOutcomeRef.current?.()

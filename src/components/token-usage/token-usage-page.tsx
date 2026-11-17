@@ -444,6 +444,7 @@ export function TokenUsagePage() {
   }, [range, folderIds, agentTypes, models, effectiveBucket, now])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- report fetch; load() clears the error flag before awaiting
     void load()
   }, [load])
 
@@ -546,6 +547,7 @@ export function TokenUsagePage() {
     if (autoSyncedRef.current || !status) return
     autoSyncedRef.current = true
     if (status.running || status.stale_conversations === 0) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot backend sync; runSync flips the syncing flag before awaiting
     void runSync("incremental", { silent: true })
   }, [status, runSync])
 

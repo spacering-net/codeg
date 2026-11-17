@@ -871,6 +871,7 @@ export function AppearanceProvider({
   // reload helper。
   useEffect(() => {
     if (!workspaceBgEnabled) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async load from disk (external system)
     void reloadWorkspaceBackgroundImage()
   }, [workspaceBgEnabled, reloadWorkspaceBackgroundImage])
 

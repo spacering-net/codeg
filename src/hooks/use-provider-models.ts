@@ -124,6 +124,7 @@ export function useProviderModels(input: ProviderModelsInput | null) {
 
   useEffect(() => {
     seq.current += 1
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- pairs with abandoning the in-flight request (seq ref) on a new key
     setFetching(false)
   }, [key])
   useEffect(

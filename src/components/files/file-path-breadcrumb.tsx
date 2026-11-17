@@ -259,6 +259,7 @@ function DirectoryTree({
   // Load the root level whenever the popover roots at a new directory.
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resets the tree and shows the spinner as the fetch for the new root starts
     setRootLoading(true)
     setExpanded(new Set())
     loadedDirsRef.current = new Set()
@@ -313,19 +314,24 @@ function DirectoryTree({
 
   const renderNodes = useCallback(
     (dirAbs: string): ReactNode => {
-      const nodes = childrenByDir.get(dirAbs)
-      if (!nodes) return null
-      return nodes.map((node) => {
-        const abs = joinFsPath(dirAbs, node.name)
-        if (node.kind === "dir") {
-          return (
-            <FileTreeFolder key={abs} path={abs} name={node.name}>
-              {renderNodes(abs)}
-            </FileTreeFolder>
-          )
-        }
-        return <FileTreeFile key={abs} path={abs} name={node.name} />
-      })
+      // A plain inner function recurses into itself; the memoised callback
+      // can't reference its own binding before it is declared.
+      const render = (dir: string): ReactNode => {
+        const nodes = childrenByDir.get(dir)
+        if (!nodes) return null
+        return nodes.map((node) => {
+          const abs = joinFsPath(dir, node.name)
+          if (node.kind === "dir") {
+            return (
+              <FileTreeFolder key={abs} path={abs} name={node.name}>
+                {render(abs)}
+              </FileTreeFolder>
+            )
+          }
+          return <FileTreeFile key={abs} path={abs} name={node.name} />
+        })
+      }
+      return render(dirAbs)
     },
     [childrenByDir]
   )
