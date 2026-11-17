@@ -51,6 +51,15 @@ describe("会话连接键解析", () => {
     expect(remounted.result.current).toBe("new-draft-902")
   })
 
+  it("没有任何卡片挂载期间开关的 tab 也记得（侧栏折叠时不渲染卡片）", () => {
+    setTabs([convTab("new-draft-905", 905)])
+    setTabs([])
+    const { result } = renderHook(() =>
+      useConversationConnectionKey(1, "claude_code", 905)
+    )
+    expect(result.current).toBe("new-draft-905")
+  })
+
   it("移动后的会话关掉 tab 仍用旧文件夹的 id", () => {
     setTabs([convTab("conv-1-claude_code-903", 903)])
     const { result } = renderHook(() =>

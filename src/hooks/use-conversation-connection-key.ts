@@ -35,19 +35,16 @@ function rememberConversationTabs(
   }
 }
 
-let tracking = false
-
-/** Starts recording on first use rather than at import, so merely importing
- *  this module never touches the store. Idempotent; never unsubscribes — the
- *  map serves the whole app session. */
-function ensureTracking() {
-  if (tracking) return
-  tracking = true
-  rememberConversationTabs(useTabStore.getState().tabs)
-  useTabStore.subscribe((state, prev) => {
-    if (state.tabs !== prev.tabs) rememberConversationTabs(state.tabs)
-  })
-}
+// Recording starts when this module loads (with the app bundle), not when the
+// first sidebar card mounts: a collapsed sidebar renders no cards, and a draft
+// bound and closed meanwhile must still be remembered. Never unsubscribes — the
+// map serves the whole app session. Imported from the store module itself
+// rather than `@/contexts/tab-context`, so tests mocking that context with a
+// selector-only hook still load this module.
+rememberConversationTabs(useTabStore.getState().tabs)
+useTabStore.subscribe((state, prev) => {
+  if (state.tabs !== prev.tabs) rememberConversationTabs(state.tabs)
+})
 
 /** The connection key for a conversation's live state: its open tab's id, else
  *  the id of the tab it was last open in, else the canonical tab id. */
@@ -56,7 +53,6 @@ export function useConversationConnectionKey(
   agentType: AgentType,
   conversationId: number
 ): string {
-  ensureTracking()
   const openTabId = useTabStore(
     (state) =>
       state.tabs.find(
