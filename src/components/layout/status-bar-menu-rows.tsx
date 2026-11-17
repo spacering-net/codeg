@@ -6,18 +6,18 @@
  * whole menu keeps to one grid, set by the account's head.
  *
  * The grid, in the content's padding box: a glyph column as wide as the
- * head's 36px avatar (8–44px), then 9px, then the label edge (53px). A row's
+ * head's 32px avatar (10–42px), then 8px, then the label edge (50px). A row's
  * icon is 18px: the app's usual 16px looked lost beside the avatar, and
  * anything near its size would compete with it. Centred in that column
- * (17–35px, `ps-4.25`), every icon sits on the avatar's axis, and an 18px gap
- * puts its label on the head's text edge. The avatar stays a little under
- * the height of the two lines beside it, which keeps that gap a natural one:
- * a 40px avatar needed 23px. Trailing marks — counts, the ↗ of a page in the
- * browser, a submenu's › — end on one edge (`pe-3`), and need no more than
- * 12px from a label, which may run on into the rest of the gap. Labels are a
- * step above the app's 14px menu text, so they hold their own beside those
- * icons (see {@link MENU_TEXT}). Dropdown rows elsewhere in the app keep the
- * shared, tighter look; these classes are this menu's alone.
+ * (17–35px, `ps-4.25`), every icon sits on the avatar's axis, and a 15px gap
+ * puts its label on the head's text edge. The avatar is about as tall as the
+ * ink of the two lines beside it, which keeps that gap a natural one: a 36px
+ * avatar needed 18px, a 40px one 23px. Trailing marks — counts, the ↗ of a
+ * page in the browser, a submenu's › — end on one edge (`pe-3`), and need no
+ * more than 12px from a label, which may run on into the rest of the gap.
+ * Labels are a step above the app's 14px menu text, so they hold their own
+ * beside those icons (see {@link MENU_TEXT}). Dropdown rows elsewhere in the
+ * app keep the shared, tighter look; these classes are this menu's alone.
  */
 
 import {
@@ -38,17 +38,18 @@ import {
 import { cn } from "@/lib/utils"
 
 /** The head's avatar — or the ring in its place — which sets the grid. */
-export const MENU_AVATAR = "size-9"
+export const MENU_AVATAR = "size-8"
 
-/** The head's own padding and gap: its avatar starts the glyph column, and
+/** The head's own padding and gap: its avatar starts the glyph column, as
+ *  far in from the head's lit edge as from its top and bottom (10px), and
  *  the gap after it reaches the label edge. */
-export const MENU_HEAD_GRID = "gap-2.25 ps-2 pe-3"
+export const MENU_HEAD_GRID = "gap-2 py-1.75 ps-2.5 pe-3"
 
 /** The leading icon's box, and the start padding and gap that put it on the
  *  avatar's axis and its words on the label edge. For the notes under the
  *  head, which are not rows but keep to the same column. The stroke is
  *  thinned in step with the size, so its weight stays the app's 16px one. */
-export const MENU_ICON_COLUMN = "gap-4.5 ps-4.25"
+export const MENU_ICON_COLUMN = "gap-3.75 ps-4.25"
 export const MENU_ICON = "size-4.5 stroke-[1.78]"
 
 /** A row's words: 15px, which balances the 18px icons where the app's 14px
@@ -68,8 +69,8 @@ export const MENU_SMALL_TEXT = "text-[0.78125rem] leading-4"
 const MENU_ROW_GRID = `min-h-9 pe-3 ${MENU_TEXT} ${MENU_ICON_COLUMN} [&>:where(svg:first-child)]:text-muted-foreground [&>svg:first-child:not([class*='size-'])]:size-4.5 [&>svg:first-child:not([class*='size-'])]:stroke-[1.78]`
 
 /** A label with a mark after it: 12px clear of the mark rather than the
- *  icon's 18px, which the longest labels need (the remote workspaces'). */
-const LABEL_BEFORE_MARK = "-me-1.5"
+ *  icon's 15px, which the longest labels need (the remote workspaces'). */
+const LABEL_BEFORE_MARK = "-me-0.75"
 
 /** The submenu row's look: the shared item's, with an open state, which the
  *  shared sub-trigger has but this one is drawn without. */

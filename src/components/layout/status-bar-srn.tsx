@@ -199,13 +199,13 @@ function StateLine({
 
 /** The head's box: its picture first on the grid, its words on the label
  *  edge. */
-const HEAD_BOX = `flex items-center py-2 ${MENU_HEAD_GRID}`
+const HEAD_BOX = `flex items-center ${MENU_HEAD_GRID}`
 
 /**
  * The account's words in its head, the same in every state: a name, and one
  * line under it — the number when signed in, the state otherwise. In a
  * remote workspace window a quiet line under them says whose account this
- * is. They start on the label edge, after the head's round 36px picture.
+ * is. They start on the label edge, after the head's round 32px picture.
  * The name is the strongest line in the menu: a pixel above the rows'
  * labels, and heavier; the line under it is the menu's quieter size.
  */
@@ -343,8 +343,8 @@ function RingIdentity({
           "flex shrink-0 items-center justify-center rounded-full bg-muted text-foreground/70 ring-1 ring-foreground/5"
         )}
       >
-        {/* Half the circle, as the rows' icons are half the avatar. */}
-        <SrnRingIcon className="size-4.5" />
+        {/* Half the circle: any larger, it crowds the circle's edge. */}
+        <SrnRingIcon className="size-4" />
       </span>
       <IdentityWords title={t("name")} sub={sub} foot={foot} />
     </div>
@@ -834,9 +834,11 @@ function useAccountParts(
                 <SrnAvatar
                   account={who}
                   fetch={account.avatar}
+                  // An initial a little under half the circle: any larger,
+                  // it reads as a badge rather than a picture.
                   className={cn(
                     MENU_AVATAR,
-                    "text-base ring-1 ring-foreground/10"
+                    "text-sm ring-1 ring-foreground/10"
                   )}
                 />
               }
