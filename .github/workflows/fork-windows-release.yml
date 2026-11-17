@@ -3,7 +3,7 @@ name: Fork Windows Release
 # Fork-only workflow: builds the Windows NSIS installer and publishes it as a
 # release in this fork, under this fork's own version numbering.
 #
-# Each release carries two things:
+# Each release carries three things:
 #
 #   *_x64-setup.exe (+ the updater's .nsis.zip/.sig and latest.json)
 #       the desktop app. Its bundle holds the frontend export (tauri.conf.json
@@ -17,6 +17,15 @@ name: Fork Windows Release
 #       two have to travel together and come from one commit — a server paired
 #       with a `web/` from another commit answers 404 for whatever they do not
 #       share, which is far harder to diagnose than a missing file.
+#
+#   server.json
+#       where to find that archive: version, tag, url, sha256, size. It lives in
+#       its own file rather than as an extra field of `latest.json` because
+#       `tauri-action` generates and rewrites `latest.json` on every release,
+#       and because describing a second, differently-shaped artifact inside the
+#       desktop updater's manifest would mean editing a file other tools parse
+#       under their own spec. Fixed name, no tag in it, so
+#       `releases/latest/download/server.json` always resolves.
 #
 # Manual only (`workflow_dispatch`), because a release carries two inputs that
 # no tag can express:
@@ -221,6 +230,8 @@ jobs:
               folder (`web/` has to sit beside the exe) and run the server from there,
               or point a host app that embeds Codeg at that folder. It shares the data
               directory the desktop app uses.
+            - `server.json` — where that archive is: version, tag, `url`, `sha256`,
+              `size`. Poll `releases/latest/download/server.json` for it.
           releaseDraft: false
           prerelease: false
           tauriScript: pnpm tauri
@@ -239,3 +250,52 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
         run: gh release upload "$TAG" "dist/codeg-server-web-$TAG-windows-x64.zip" --clobber
+
+      # Describes the archive attached above, so a host has one fixed URL to poll
+      # instead of knowing this release's tag. The key inside `platforms` is the
+      # updater's target spelling, so the same lookup the desktop manifest uses
+      # works here; the value deliberately carries `sha256`/`size` and no
+      # `signature` — the archive is unsigned, and an empty signature would
+      # invite a caller to "verify" nothing. Add the field when it is signed.
+      - name: Publish server.json
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+          ZIP: codeg-server-web-${{ steps.version.outputs.tag }}-windows-x64.zip
+        run: |
+          set -euo pipefail
+          path="dist/$ZIP"
+          test -f "$path" || {
+            echo "::error::$path is missing"
+            exit 1
+          }
+          # Absolute release URL: unlike `latest/download/<name>`, this keeps
+          # pointing at the archive even after a newer release exists, which is
+          # what a host that pinned a version needs.
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$ZIP"
+          SHA256=$(sha256sum "$path" | cut -d' ' -f1)
+          SIZE=$(wc -c < "$path" | tr -d ' ')
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          export URL SHA256 SIZE PUB_DATE
+          node -e '
+            const manifest = {
+              version: process.env.APP_VERSION,
+              tag: process.env.TAG,
+              pub_date: process.env.PUB_DATE,
+              platforms: {
+                "windows-x86_64": {
+                  url: process.env.URL,
+                  sha256: process.env.SHA256,
+                  size: Number(process.env.SIZE),
+                },
+              },
+            };
+            require("fs").writeFileSync(
+              "dist/server.json",
+              JSON.stringify(manifest, null, 2) + "\n",
+            );
+          '
+          cat dist/server.json
+          gh release upload "$TAG" dist/server.json --clobber
