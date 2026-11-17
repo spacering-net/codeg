@@ -13,7 +13,7 @@ vi.mock("@/components/layout/status-bar-alerts", () => ({
   StatusBarAlerts: () => null,
 }))
 vi.mock("@/components/layout/status-bar-mcp", () => ({
-  StatusBarMcp: () => null,
+  StatusBarMcp: () => <span data-testid="mcp-service" />,
 }))
 vi.mock("@/components/layout/status-bar-computer", () => ({
   StatusBarComputer: () => null,
@@ -44,9 +44,15 @@ describe("StatusBar", () => {
   it.each([
     ["wide", false],
     ["narrow", true],
-  ])("carries the web-service item in the %s layout", (_label, mobile) => {
+  ])("orders service items in the %s layout", (_label, mobile) => {
     viewport.mobile = mobile
     render(<StatusBar />)
     expect(screen.getByTestId("web-service")).toBeInTheDocument()
+    expect(screen.getByTestId("mcp-service")).toBeInTheDocument()
+    expect(
+      screen
+        .getAllByTestId(/^(mcp|web)-service$/)
+        .map((element) => element.dataset.testid)
+    ).toEqual(["mcp-service", "web-service"])
   })
 })

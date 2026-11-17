@@ -75,6 +75,10 @@ use crate::web::event_bridge::{
     emit_with_state, emit_with_state_built, emit_with_state_gated, EventEmitter,
 };
 
+#[cfg(test)]
+#[path = "connection_message_boundaries_tests.rs"]
+mod message_boundary_tests;
+
 /// Injected into the agent process only when the user has opted in — see
 /// [`force_command_color_enabled`] for why it is not a default.
 ///
@@ -15238,6 +15242,7 @@ async fn run_conversation_loop(
                 // would need the idle→active edge tracked — not worth it to
                 // save one held ring reading.
                 cb_state.codex_context_readings.turn_started();
+                cb_state.codex_last_message_id = None;
                 cb_state.kiro_calls.clear();
                 // OpenCode's per-call names and inputs live for one turn; its
                 // sub-agent launches persist, as a background child outlives
@@ -20654,6 +20659,10 @@ struct CodeBuddyLiveState {
     /// (not content) addressing keeps two runs that share an objective from
     /// colliding in the reducer's id-keyed live block list.
     codex_goal_seq: u64,
+    /// Last non-empty Codex prose message. A new message needs a Markdown
+    /// paragraph boundary when it would otherwise merge into the same live
+    /// text block (e.g. commentary immediately followed by a Mermaid fence).
+    codex_last_message_id: Option<String>,
     /// Cursor tool calls announced with the identity-less "MCP: tool" title.
     /// Only these are eligible for the completion-time result sniff
     /// (`cursor_companion_title_from_content`) — a `shell`/`read` call whose
@@ -25403,6 +25412,61 @@ fn compaction_summary_text(value: Option<&serde_json::Value>) -> Option<String> 
     (!out.is_empty()).then_some(out)
 }
 
+/// Preserve Codex's message boundaries before the shared delta accumulator
+/// drops ACP `messageId`. Apply the separator to the emitted delta itself so
+/// live clients, event replay and backend snapshots all receive the same text.
+fn codex_message_text(
+    state: &SessionState,
+    agent_type: AgentType,
+    cb_state: &mut CodeBuddyLiveState,
+    message_id: Option<&str>,
+    parent_tool_use_id: Option<&str>,
+    text: String,
+) -> String {
+    if agent_type != AgentType::Codex || text.is_empty() {
+        return text;
+    }
+    let Some(message_id) = message_id.filter(|id| !id.is_empty()) else {
+        return text;
+    };
+    if cb_state.codex_last_message_id.as_deref() == Some(message_id) {
+        return text;
+    }
+    if cb_state
+        .codex_last_message_id
+        .replace(message_id.to_string())
+        .is_none()
+    {
+        return text;
+    }
+    let Some(crate::acp::session_state::LiveContentBlock::Text {
+        text: previous,
+        parent_tool_use_id: previous_parent,
+    }) = state
+        .live_message
+        .as_ref()
+        .and_then(|live| live.content.last())
+    else {
+        return text;
+    };
+    if previous.is_empty() || previous_parent.as_deref() != parent_tool_use_id {
+        return text;
+    }
+    let newlines = previous
+        .bytes()
+        .rev()
+        .take_while(|b| *b == b'\n')
+        .take(2)
+        .count()
+        + text.bytes().take_while(|b| *b == b'\n').take(2).count();
+    let separator = &"\n\n"[newlines.min(2)..];
+    if separator.is_empty() {
+        text
+    } else {
+        format!("{separator}{text}")
+    }
+}
+
 /// Convert a SessionUpdate into AcpEvent(s) and emit to frontend.
 ///
 /// `raw_output_cache` is a per-session cache used to detect cumulative
@@ -25526,14 +25590,20 @@ async fn emit_conversation_update(
                                 (Some(command), None) => remote_control_reply(command, &text.text),
                                 _ => None,
                             };
-                        emit_with_state(
-                            state,
-                            emitter,
-                            AcpEvent::ContentDelta {
-                                text: text.text,
+                        emit_with_state_built(state, emitter, |state| {
+                            let text = codex_message_text(
+                                state,
+                                agent_type,
+                                cb_state,
+                                message_id.as_ref().map(|id| &*id.0),
+                                parent_tool_use_id.as_deref(),
+                                text.text,
+                            );
+                            Some(AcpEvent::ContentDelta {
+                                text,
                                 parent_tool_use_id,
-                            },
-                        )
+                            })
+                        })
                         .await;
                         if let Some(remote_control) = remote_control {
                             cb_state.claude_remote_control = None;
