@@ -49,17 +49,24 @@ export function createFrontendMemoryController(options: {
   let sampleStartedAtMs = 0
   let worker: Promise<void> | undefined
   let attemptedEpoch = -1
+  let resumeWhenActive = false
   let unsubscribe: (() => void) | undefined
   const now = options.now ?? Date.now
 
+  function active() {
+    if (options.active()) return true
+    resumeWhenActive = true
+    return false
+  }
+
   async function applyLatest() {
-    while (!disposed && desired && options.active()) {
+    while (!disposed && desired && active()) {
       const target = desired
       attemptedEpoch = target.epoch
       // A prior report may already be inside real IPC. The mode acknowledgement
       // is sent only after it settles, never just when the setter returns.
       await options.idle()
-      if (disposed || !options.active()) return
+      if (disposed || !active()) return
       if (target !== desired) continue
       if (target.sampleSequence > completedSampleSequence) {
         const startedAt = now()
@@ -69,7 +76,7 @@ export function createFrontendMemoryController(options: {
           sampledEpoch = target.epoch
           sampleStartedAtMs = startedAt
         }
-        if (disposed || !options.active()) return
+        if (disposed || !active()) return
         if (target !== desired) continue
         if (!sent) return // No successful boundary sample, no completion claim.
       }
@@ -89,7 +96,7 @@ export function createFrontendMemoryController(options: {
         if (target !== desired) continue
         return
       }
-      if (disposed || !options.active()) return
+      if (disposed || !active()) return
       if (target !== desired) continue
       acknowledgedEpoch = target.epoch
       return
@@ -97,7 +104,8 @@ export function createFrontendMemoryController(options: {
   }
 
   function startWorker() {
-    if (!worker) {
+    if (!worker && !disposed && active()) {
+      resumeWhenActive = false
       worker = applyLatest()
         .catch(() => {})
         .finally(() => {
@@ -148,10 +156,12 @@ export function createFrontendMemoryController(options: {
   return {
     ready,
     tick: () => {
+      if (disposed || !active()) return Promise.resolve(false)
+      // A remote-mode interval must neither spin microtasks nor lose the
+      // latest desired control. Resume only on a real active tick/event.
+      if (resumeWhenActive) startWorker()
       if (
-        disposed ||
         worker ||
-        !options.active() ||
         !desired?.reportingEnabled ||
         acknowledgedEpoch !== desired.epoch
       )

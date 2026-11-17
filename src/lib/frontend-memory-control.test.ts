@@ -73,6 +73,58 @@ function harness() {
 }
 
 describe("acknowledged frontend memory controls", () => {
+  it("does not spin workers or report while inactive, then acknowledges the latest mode on an active tick", async () => {
+    const h = harness()
+    h.active.mockReturnValue(false)
+    h.initial.resolve(mode())
+    await h.controller.ready
+    await settle()
+    const inactiveChecks = h.active.mock.calls.length
+    if (inactiveChecks > 8) {
+      h.controller.dispose()
+      expect(inactiveChecks).toBeLessThanOrEqual(8)
+      return
+    }
+    h.event(mode(1, { reportingEnabled: false }))
+    await settle()
+    expect(h.acknowledgements()).toHaveLength(0)
+    expect(h.idle).not.toHaveBeenCalled()
+    expect(h.flush).not.toHaveBeenCalled()
+    expect(await h.controller.tick()).toBe(false)
+    h.active.mockReturnValue(true)
+    expect(await h.controller.tick()).toBe(false)
+    await settle()
+    expect(h.acknowledgements()).toEqual([
+      expect.objectContaining({ epoch: 1, reportingEnabled: false }),
+    ])
+    h.controller.dispose()
+  })
+
+  it("defers a mode interrupted during drain until a later active tick", async () => {
+    const h = harness()
+    h.initial.resolve(mode())
+    await h.controller.ready
+    const drain = deferred<void>()
+    h.idle.mockImplementation(() => drain.promise)
+    h.event(mode(1, { sampleSequence: 1 }))
+    await settle()
+    h.active.mockReturnValue(false)
+    drain.resolve()
+    await settle()
+    expect(h.acknowledgements()).toHaveLength(1)
+    expect(h.flush).not.toHaveBeenCalled()
+    h.active.mockReturnValue(true)
+    expect(await h.controller.tick()).toBe(false)
+    await settle()
+    expect(h.acknowledgements().slice(-1)[0]).toMatchObject({
+      epoch: 1,
+      sampledEpoch: 1,
+      sampleSequence: 1,
+    })
+    expect(h.flush).toHaveBeenCalledTimes(1)
+    h.controller.dispose()
+  })
+
   it("subscribes before reading and rejects a stale initial snapshot", async () => {
     const h = harness()
     expect(h.subscribe).toHaveBeenCalledWith(
