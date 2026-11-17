@@ -130,6 +130,9 @@ pub struct FrontendMemoryWindow {
 pub struct FrontendMemorySnapshot {
     pub enabled: bool,
     pub windows: Vec<FrontendMemoryWindow>,
+    /// Native app-command indicators, separate from renderer-supplied metrics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_ipc: Option<crate::native_ipc_memory::NativeIpcMemorySnapshot>,
 }
 
 #[derive(Default)]
@@ -213,7 +216,11 @@ pub fn frontend_memory_snapshot() -> FrontendMemorySnapshot {
     } else {
         Vec::new()
     };
-    FrontendMemorySnapshot { enabled, windows }
+    FrontendMemorySnapshot {
+        enabled,
+        windows,
+        native_ipc: crate::native_ipc_memory::snapshot(),
+    }
 }
 
 #[cfg(test)]

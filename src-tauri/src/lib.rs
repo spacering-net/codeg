@@ -50,6 +50,7 @@ pub mod intern;
 pub mod keyring_store;
 pub mod logging;
 pub mod models;
+pub mod native_ipc_memory;
 mod network;
 pub mod office_watch;
 pub mod parsers;
@@ -1802,7 +1803,7 @@ mod tauri_app {
                     }
                 }
             })
-            .invoke_handler(tauri::generate_handler![
+            .invoke_handler(crate::native_ipc_memory::generate_handler![
                 browser_commands::browser_capabilities,
                 browser_commands::browser_open_tab,
                 browser_commands::browser_close,
