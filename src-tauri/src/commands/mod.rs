@@ -1,6 +1,10 @@
 pub mod acp;
 #[cfg(feature = "tauri-runtime")]
 pub mod app_update;
+/// The window appearance mode row and its cache. Like `browser_tools`, compiled
+/// in both runtimes: the web route records the same preference in server mode,
+/// where `windows` (which needs the tauri stack) does not exist.
+pub mod appearance_mode;
 pub mod assistants;
 pub mod automation;
 pub mod background;

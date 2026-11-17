@@ -5,12 +5,12 @@ use serde::Deserialize;
 
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
+use crate::commands::appearance_mode;
 use crate::commands::config_sync::appearance;
 use crate::commands::system_settings as settings_commands;
 use crate::commands::system_settings::{
     LANGUAGE_SETTINGS_UPDATED_EVENT, SYSTEM_LANGUAGE_SETTINGS_KEY, SYSTEM_PROXY_SETTINGS_KEY,
 };
-use crate::commands::windows as windows_commands;
 use crate::db::service::app_metadata_service;
 use crate::models::*;
 use crate::network::proxy;
@@ -84,7 +84,7 @@ pub async fn update_appearance_mode(
     Json(params): Json<UpdateAppearanceModeParams>,
 ) -> Result<Json<()>, AppCommandError> {
     let db = &state.db;
-    windows_commands::set_appearance_mode(&db.conn, &params.mode).await?;
+    appearance_mode::set_mode(&db.conn, &params.mode).await?;
     Ok(Json(()))
 }
 

@@ -881,7 +881,9 @@ mod tauri_app {
 
                 // Load saved appearance settings before any window is created.
                 tauri::async_runtime::block_on(windows::load_saved_zoom(&db.conn));
-                tauri::async_runtime::block_on(windows::load_saved_appearance_mode(&db.conn));
+                tauri::async_runtime::block_on(crate::commands::appearance_mode::load_saved(
+                    &db.conn,
+                ));
 
                 // System tray: required for the WeChat-style hide-on-close
                 // flow on Windows/Linux (no built-in dock to bring the
