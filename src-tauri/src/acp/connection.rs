@@ -2953,6 +2953,9 @@ pub async fn spawn_agent_connection(
     let claude_projects_dir = crate::parsers::claude::resolve_claude_projects_dir_for_env(
         &crate::parsers::AgentEnv::from_overrides(runtime_env.clone()),
     );
+    // Where this launch's agent keeps its MCP servers, for the same reason: a
+    // `CODEX_HOME` or `CLAUDE_CONFIG_DIR` in the per-agent env moves the file.
+    let mcp_env = crate::parsers::AgentEnv::from_overrides(runtime_env.clone());
 
     let mut terminal_base_env = terminal_env_from_runtime(&runtime_env);
     // Also surface a codeg-installed OfficeCLI on the terminal's PATH: agents run
@@ -3041,6 +3044,7 @@ pub async fn spawn_agent_connection(
             fs_policy,
             host_tools,
             claude_projects_dir,
+            mcp_env,
             stderr_tail,
         )
         .await;
@@ -7768,10 +7772,24 @@ fn agent_delivers_wire_mcp(agent_type: AgentType) -> bool {
     !matches!(agent_type, AgentType::Pi | AgentType::Cline)
 }
 
-/// Agents that load the MCP servers codeg's MCP settings manage from their OWN
+/// Whether the built-in `codeg-mcp` companion can reach `agent_type`'s
+/// sessions at all: the agent takes MCP servers on `session/new`
+/// (`supports_mcp`) and hands them to its model
+/// ([`agent_delivers_wire_mcp`]). Whether it is injected into a given launch
+/// still depends on the tool groups switched on in Settings. The MCP
+/// inventory shows the companion as a read-only row for these agents.
+pub(crate) fn agent_takes_codeg_mcp(agent_type: AgentType) -> bool {
+    registry::get_agent_meta(agent_type).supports_mcp && agent_delivers_wire_mcp(agent_type)
+}
+
+/// Agents that load the MCP servers codeg's MCP page manages from their OWN
 /// config file, so [`load_mcp_servers_for_agent`] forwards none of them over
 /// the wire; see the notes there for each one.
-fn agent_reads_own_mcp_config(agent_type: AgentType) -> bool {
+///
+/// The MCP engine tells the page the same thing per agent
+/// (`commands::mcp_engine::agents::spec`'s `delivery`); a test there keeps the
+/// two lists in step.
+pub(crate) fn agent_reads_own_mcp_config(agent_type: AgentType) -> bool {
     matches!(
         agent_type,
         AgentType::Hermes
@@ -7859,10 +7877,25 @@ async fn sign_in_trae_with_pat(
     Ok(())
 }
 
+/// [`load_mcp_servers_for_agent_with_env`] with codeg's own environment.
+#[cfg(test)]
+fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
+    load_mcp_servers_for_agent_with_env(agent_type, &crate::parsers::AgentEnv::inherited())
+}
+
 /// Load MCP servers configured for `agent_type` and convert them into the
 /// ACP wire format. Errors and unsupported entries are logged and skipped so
 /// a single malformed entry never blocks a session from starting.
-fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
+///
+/// `env` is the environment the agent is launched with: a `CODEX_HOME` or
+/// `CLAUDE_CONFIG_DIR` set in the agent's own settings moves the file its
+/// servers are read from, the same way it moves the file the MCP page shows
+/// and edits. An entry the agent's own flag turns off (Codex's
+/// `enabled = false`) is not sent.
+fn load_mcp_servers_for_agent_with_env(
+    agent_type: AgentType,
+    env: &crate::parsers::AgentEnv,
+) -> Vec<McpServer> {
     // Hermes, Kimi Code, Grok, and Cursor each read their own native MCP
     // config at launch — Hermes from `~/.hermes/config.yaml` (`mcp_servers`,
     // registered as `mcp-<name>` toolsets), Kimi Code from
@@ -7925,7 +7958,8 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
     if agent_reads_own_mcp_config(agent_type) {
         return Vec::new();
     }
-    let entries = match crate::commands::mcp::read_servers_for_agent_type(agent_type) {
+    let entries = match crate::commands::mcp_engine::session::servers_for_session(agent_type, env)
+    {
         Ok(map) => map,
         Err(err) => {
             tracing::error!(
@@ -8574,6 +8608,9 @@ async fn run_connection(
     host_tools: HostToolsPolicy,
     // Where a Claude launch writes its transcripts (see `spawn_if_claude`).
     claude_projects_dir: PathBuf,
+    // The environment the agent was launched with, for finding the config
+    // file its MCP servers are read from (`load_mcp_servers_for_agent_with_env`).
+    mcp_env: crate::parsers::AgentEnv,
     // Connection-scoped agent stderr buffer, shared with the `with_debug`
     // callback installed by `build_agent`. Read only when a turn ends without
     // agent output, to attach evidence to the synthesized error.
@@ -9308,7 +9345,14 @@ async fn run_connection(
             // ACP spec; HTTP/SSE are gated on `mcp_capabilities.{http,sse}`.
             let mut mcp_servers: Vec<McpServer> = if offer_mcp {
                 let mcp_caps = &init_resp.agent_capabilities.mcp_capabilities;
-                load_mcp_servers_for_agent(agent_type)
+                // What this agent just declared, kept for the MCP page: it
+                // marks the HTTP and SSE servers a session would leave out.
+                crate::commands::mcp_engine::session::record_declared_capabilities(
+                    agent_type,
+                    mcp_caps.http,
+                    mcp_caps.sse,
+                );
+                load_mcp_servers_for_agent_with_env(agent_type, &mcp_env)
                     .into_iter()
                     .filter(|s| match s {
                         McpServer::Stdio(_) => true,
@@ -36868,6 +36912,7 @@ mod tests {
                         HostToolsPolicy::from_env(&BTreeMap::new()),
                         // Watched only for a Claude launch.
                         cwd.join("claude-projects"),
+                        crate::parsers::AgentEnv::inherited(),
                         Arc::new(StderrTail::new()),
                     ));
                     let _ = ended_tx.send(ended);

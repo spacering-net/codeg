@@ -647,8 +647,29 @@ pub(crate) fn apply_pending_restore_with_paths(
     write_snapshot_manifest(&backup_dir, &pending.created_at, &units)?;
 
     let state_dir = staging.join(SWAP_STATE_DIR);
+    // Replacing Codeg's skill store happens under the skills lock, like every
+    // other write to it (another Codeg of this user may be writing there).
+    // Not had in time: nothing moves, and the next start tries again.
+    let skills_unit = units.iter().find(|unit| unit.id == "skills");
+    let _skills_lock = match skills_unit {
+        Some(_) => Some(crate::skills::startup::lock_for_restore().map_err(|err| {
+            std::io::Error::other(format!(
+                "{err}; the restore will be applied at the next start"
+            ))
+        })?),
+        None => None,
+    };
     for unit in &units {
         swap_unit(&state_dir, unit)?;
+    }
+    if let Some(unit) = skills_unit {
+        // The link record from before the restore knows the copies made
+        // since the backup; the startup reconcile then follows the disk.
+        if let Err(err) =
+            crate::skills::startup::absorb_record_after_restore(&unit.live, &unit.snapshot)
+        {
+            tracing::warn!("[RESTORE] skills link record: {err}");
+        }
     }
 
     // Commit only after a fully successful swap. On a mid-swap crash we return

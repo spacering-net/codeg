@@ -26,7 +26,10 @@ vi.mock("@/contexts/tab-context", () => ({
 vi.mock("@/lib/transport", () => ({
   getTransport: () => ({ subscribe: async () => () => {} }),
 }))
-vi.mock("@/lib/deep-link", () => ({ takePendingDeepLink: async () => null }))
+vi.mock("@/lib/deep-link", () => ({
+  takePendingDeepLink: async () => null,
+  takePendingHarnessLink: async () => null,
+}))
 
 import { DeepLinkBootstrap } from "./deep-link-bootstrap"
 

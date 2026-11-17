@@ -97,12 +97,29 @@ const LAUNCHER_VALUES: &[&str] = &[
 /// codeg's), except that a launcher value codeg sets on purpose stays.
 ///
 /// For a command that inherits codeg's environment: after `env_clear` this
-/// would add variables back. Does nothing outside an AppImage.
+/// would add variables back. Does nothing outside an AppImage — except that
+/// everywhere it also drops [`CODEG_ONLY`]: settings for codeg itself that
+/// no program it starts has any business with.
 pub fn restore(command: &mut Command) {
+    drop_codeg_only(command);
     if let Some(image) = Image::current() {
         image.restore_command(command, |key| std::env::var_os(key));
     }
 }
+
+/// Only the [`CODEG_ONLY`] half of [`restore`], for a spawn that keeps the
+/// rest of codeg's environment on purpose (`commands::local_command`).
+pub fn drop_codeg_only(command: &mut Command) {
+    for key in CODEG_ONLY {
+        command.env_remove(key);
+    }
+}
+
+/// codeg's own settings that never reach a program it starts, AppImage or
+/// not: Codeg Web's SRN sign-in (`srn::web::config`) — the public URL, the
+/// client ID and, above all, the path of the client secret's file. Agents,
+/// terminals and their MCP servers run code the operator does not control.
+pub const CODEG_ONLY: &[&str] = crate::srn::web::config::CHILD_HIDDEN_ENV;
 
 /// [`restore`] for a tokio command.
 pub fn restore_tokio(command: &mut tokio::process::Command) {
@@ -112,6 +129,9 @@ pub fn restore_tokio(command: &mut tokio::process::Command) {
 /// [`restore`] for the built-in terminal's shell, whose command carries a
 /// copy of the whole environment.
 pub fn restore_pty(command: &mut portable_pty::CommandBuilder) {
+    for key in CODEG_ONLY {
+        command.env_remove(key);
+    }
     if let Some(image) = Image::current() {
         image.restore_pty_command(command);
     }
