@@ -11901,6 +11901,15 @@ fn config_option_already_holds(option: &SessionConfigOption, value: &str) -> boo
 /// says nothing about which release is actually running, and pruning on that
 /// assumption would silently discard a still-valid pick on an older adapter.
 ///
+/// One selector no longer makes the error certain: since claude-agent-acp
+/// 0.107.3 (#1630), Claude Code's model selector passes an id it does not list
+/// to the CLI, which checks it with a one-token API request and runs it if the
+/// account or gateway serves it. The screen still applies there. A saved pick
+/// that the selector stopped listing moves to the row that replaced it when
+/// codeg recognizes the rename ([`heal_retired_model_pick`]); any other is
+/// skipped as before, since replaying a stale pick would cost that request on
+/// every connect.
+///
 /// Deliberately narrow, in three ways:
 ///
 /// * Only a `select`. A boolean takes both values by construction.

@@ -3405,9 +3405,159 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   * Per its changelog, CLI 2.1.323 also stops offering "don't ask
             //     again" for Bash writes into `.git` or `.claude`. codeg lists
             //     the permission options the adapter sends.
+            //
+            // 0.107.3 (over 0.107.1 and 0.107.2, all 2026-11-16) moves the
+            // Claude Agent SDK to 0.3.325 (Claude Code 2.1.323 → 2.1.325) and
+            // the ACP SDK 2.6.0 → 2.7.0; `engines.node` stays ">=22". Measured
+            // live with the same harness, 0.107.0 and 0.107.3 side by side.
+            // The twelve earlier scenarios match apart from timing (a gateway
+            // retry in one run, request order) and the reworded description
+            // of a bundled skill. Four new ones, a `ScheduleWakeup` fire, a
+            // cron fire in a resumed session, Fast mode across a model switch
+            // and mid-turn, and model ids the selector does not list, show
+            // what (qqqqq) and (rrrrr) say. CLI 2.1.325 adds no `type` literal
+            // that looks like a transcript record type; the new ones belong
+            // to its internal view-state machine.
+            //
+            // (qqqqq) **Three fixes codeg gets with the bump, with no change.**
+            //   * #1622 ends the autonomous-turn async task of a cycle that no
+            //     turn claims. A `ScheduleWakeup` or cron fire with no prompt
+            //     open gets its `async_task_spawned` ("Claude is working", "A
+            //     scheduled wakeup fired (set for …)."), but its result has no
+            //     `origin`, so 0.107.0 left the task open. Measured: the row
+            //     stayed `running` after the cycle's reply until the next
+            //     prompt closed it; 0.107.3 completes it with the cycle's
+            //     result. Until then codeg's async-task strip kept the row, and
+            //     `has_live_async_task` exempted the connection from the idle
+            //     sweeps and kept a work task's or automation's turn-end hold
+            //     (`turn_end_hold`) waiting, both up to the background
+            //     keep-alive window.
+            //   * #1623 and #1636 read Claude Code's stream from a session's
+            //     setup response and from a query restart on, not from the
+            //     next prompt. Measured with a durable every-minute cron
+            //     (`CronCreate`): the resumed CLI ran the fire before any
+            //     prompt, and 0.107.0 sent nothing for it. The first prompt
+            //     then took the cron cycle's reply as its own, ended with the
+            //     cron cycle's result, and left its own cycle as a "Claude is
+            //     working" task that never completed. 0.107.3 reports the fire
+            //     as it comes (an autonomous-turn task, "A scheduled task
+            //     fired.", then `completed`), and the prompt gets only its own
+            //     answer. codeg draws such a cycle from the transcript, which
+            //     `background_watch` reads from before the session is
+            //     established, so the early cycle shows like any other one
+            //     outside a turn.
+            //   * #1637 keeps Fast mode on when it is turned on after a model
+            //     switch or during a turn. Measured with
+            //     `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1`: after a switch from
+            //     `opus` to `fable`, turning Fast mode back on was undone at
+            //     the next prompt on 0.107.0 and holds on 0.107.3. Turned on
+            //     mid-turn, it went back off at the turn's end on 0.107.0 (and
+            //     on again a turn later); it stays on on 0.107.3. The switch to
+            //     Fable still drops it at the next prompt without a notice, as
+            //     Claude Code does. codeg replays a saved model before the
+            //     other saved options at connect
+            //     (`order_preferred_config_values`), so a saved Fable and Fast
+            //     mode pair lands on both pins.
+            //
+            // (rrrrr) **#1630 passes a model id that the selector does not list
+            // to Claude Code**, which checks it with a one-token API request
+            // and runs it if the account or gateway serves it. Measured
+            // through the gateway: `claude-opus-4-6` and `claude-fable-5-1`,
+            // which 0.107.0 refused with -32602, are taken and listed; an id
+            // the API answers with 404 is refused with -32602 and Claude
+            // Code's reason ("Model 'gpt-4' not found"). codeg does not send
+            // such ids. Its pickers list only the selector's rows. At connect,
+            // `heal_retired_model_pick` moves a saved pick that the selector
+            // no longer lists to the row that replaced it when codeg
+            // recognizes the rename, and `config_option_rejects_value` still
+            // screens out any other: replaying a stale pick would cost that
+            // API request on every connect. #1633 resolves a preference
+            // without a version (`opus[1m]`) to the newest listed row; the row
+            // values codeg sends resolve exactly, as before.
+            //
+            // (sssss) Nothing to change in codeg, each checked:
+            //   * #1641 (Claude Enterprise plans) and #1609 (the SDK's
+            //     `tokenSource: "none"`) change only the `--hide-claude-auth`
+            //     guard, and codeg does not pass the flag.
+            //   * #1618, #1632 and #1607 change only the v2 agent; codeg speaks
+            //     v1. ACP SDK 2.7.0 (#1629) brings v2's `replay_complete` and
+            //     the unstable schema 1.32.0 additions, which the v1 agent
+            //     does not send to codeg.
+            //   * Per its changelog, CLI 2.1.325 runs sandboxed Bash through
+            //     the normal permission flow by default, offers a bare "Always
+            //     allow" rule in SDK hosts only when saving it would allow that
+            //     command again, and asks before a scheduled task or `/loop`
+            //     runs a skill that declares `allowed-tools` or hooks. codeg
+            //     shows the permission requests and options the adapter sends.
+            //
+            // 0.108.0 (2026-11-17) moves the Claude Agent SDK to 0.3.326
+            // (Claude Code 2.1.325 → 2.1.326); the ACP SDK stays 2.7.0 and
+            // `engines.node` ">=22". Measured live with the same harness,
+            // 0.107.3 and 0.108.0 side by side: the seventeen earlier
+            // scenarios match apart from timing (a gateway connection reset in
+            // one run, request order) and two reworded slash-command
+            // descriptions. `initialize` adds only `mcpCapabilities.acp:
+            // true`, a field the schema crate reads only under its
+            // `unstable_mcp_over_acp` feature, which codeg does not enable.
+            // Three new scenarios (MCP servers through new, resume and load, a
+            // 6 s foreground command, and plan approval with and without the
+            // setting) show what (ttttt) and (uuuuu) say. CLI 2.1.326's new
+            // `type` literals are a Claude Code Remote worker's late-allow
+            // record and stream message, and internal states; none is a record
+            // of a local session's transcript.
+            //
+            // (ttttt) **Two changes codeg gets with the bump, with no change.**
+            //   * #1647 sends a session's MCP servers to the CLI in the SDK's
+            //     initialize request (`--await-initialize`), not in
+            //     `--mcp-config` on its command line. Measured with a stdio
+            //     server shaped like codeg-mcp (a secret in its args, one in
+            //     its env): on 0.107.3 the CLI's command line held both, on
+            //     0.108.0 neither, and the server connected and answered a tool
+            //     call after `session/new`, `session/resume` and `session/load`
+            //     alike. So codeg-mcp's `--token` and the env of the servers
+            //     codeg passes no longer show in the Claude CLI's `ps` line.
+            //     codeg-mcp's own command line still carries `--token`, as
+            //     with every agent. A CLI named by `CLAUDE_CODE_EXECUTABLE`
+            //     keeps `--mcp-config`; codeg does not set it.
+            //   * #1627 offers "Yes, clear context and …" on plan approval only
+            //     when Claude Code's `showClearContextOnPlanAccept` setting is
+            //     on. Measured: 0.108.0 offers `exit-plan-default`,
+            //     `exit-plan-auto`, `exit-plan-bypass` and `reject` by default,
+            //     and `exit-plan-clear-auto` again with the setting. codeg
+            //     renders the options the adapter sends, and keeps the default:
+            //     the clear-context row is the one that truncates a later
+            //     `session/load` at the plan ((dd), still open upstream).
+            //
+            // (uuuuu) **#1587 streams a foreground Bash command's output, but
+            // not to codeg.** The adapter reads the CLI's `local_bash` task
+            // output while the command runs, only for a client that declared
+            // `_meta.terminal_output_delta` and is not AIR. codeg declares no
+            // terminal extension to Claude (`build_client_capabilities`) and is
+            // an AIR client, so declaring it would not help. Measured: the
+            // command's tool call gets its whole output with the result, at
+            // the same frames on 0.107.3 and 0.108.0.
+            //
+            // (vvvvv) Nothing to change in codeg, each checked:
+            //   * #1645 serves MCP servers that a client declares with
+            //     `"type": "acp"` over the ACP connection (`mcp/message`).
+            //     codeg declares no server of that type: codeg-mcp is a stdio
+            //     server, which Claude already supports.
+            //   * #1644 settles a `confirmWithUser` question's tool call, which
+            //     only a client with form elicitation got. codeg does not
+            //     declare form elicitation to Claude.
+            //   * #1638 keeps a workflow agent's permission-request tool call
+            //     out of the main turn's unfinished tools, which failed that
+            //     turn with `incomplete_tool_call` when workflows (codeg's
+            //     ultracode option) run in a permission mode that asks. #1451
+            //     keeps an autonomous result that names the original prompt
+            //     from settling a steered turn early; codeg steers Claude
+            //     natively (`steering_prompt_required_min_version`). #1419
+            //     keeps a malformed Read or Edit path from failing the prompt.
+            //     Each is a fix on paths codeg already takes, checked by the
+            //     adapter's tests; not reproduced live.
             distribution: AgentDistribution::Npx {
-                version: "0.107.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.107.0",
+                version: "0.108.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.108.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -9200,8 +9350,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.107.0",
-            "@agentclientprotocol/claude-agent-acp@0.107.0",
+            "0.108.0",
+            "@agentclientprotocol/claude-agent-acp@0.108.0",
             Some("22.0.0"),
         );
         assert_npx_version(
