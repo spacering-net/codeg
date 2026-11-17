@@ -1,6 +1,7 @@
 // Optional numeric diagnostics. Never serialize application state or force GC.
 import { isDesktop, isRemoteDesktopMode } from "@/lib/transport"
 import { readBrowserMemoryCounters } from "./frontend-memory-browser"
+import { createFrontendMemoryController } from "./frontend-memory-control"
 import {
   createDomMutationMemoryCounters,
   readTauriMemoryCalls,
@@ -142,7 +143,8 @@ export function createFrontendMemoryTracker(options: {
   let surfaceMounts = 0
   let surfaceUnmounts = 0
   let htmlReader: Reader | undefined
-  let inFlight = false
+  let pendingFlush: Promise<boolean> | undefined
+  let browserCountersEnabled = true
   const now = options.now ?? (() => performance.now())
 
   function remember(
@@ -314,7 +316,7 @@ export function createFrontendMemoryTracker(options: {
         /* page is navigating */
       }
     }
-    if (options.browserCounters) {
+    if (browserCountersEnabled && options.browserCounters) {
       try {
         merge(options.browserCounters())
       } catch {
@@ -338,18 +340,23 @@ export function createFrontendMemoryTracker(options: {
     return { reporterId: options.reporterId, metrics }
   }
 
-  function flush(): Promise<void> {
-    if (inFlight) return Promise.resolve()
+  function flush(): Promise<boolean> {
+    if (disposed) return Promise.resolve(false)
+    if (pendingFlush) return pendingFlush
     // Sampling is synchronous. The pending send owns numbers only, never
     // a read callback or a dereferenced retired store.
     const snapshot = sample()
-    inFlight = true
-    return Promise.resolve()
-      .then(() => options.send(snapshot))
-      .catch(() => {})
-      .finally(() => {
-        inFlight = false
+    pendingFlush = Promise.resolve()
+      .then(async () => {
+        if (disposed) return false
+        await options.send(snapshot)
+        return true
       })
+      .catch(() => false)
+      .finally(() => {
+        pendingFlush = undefined
+      })
+    return pendingFlush
   }
 
   return {
@@ -362,6 +369,10 @@ export function createFrontendMemoryTracker(options: {
     },
     sample,
     flush,
+    idle: () => pendingFlush ?? Promise.resolve(false),
+    setBrowserCountersEnabled: (enabled: boolean) => {
+      browserCountersEnabled = enabled
+    },
     dispose: () => {
       if (disposed) return
       disposed = true
@@ -394,8 +405,9 @@ function tracker(): Tracker | undefined {
     )
       return
     const mutations = createDomMutationMemoryCounters()
+    const reporterId = crypto.randomUUID()
     singleton = createFrontendMemoryTracker({
-      reporterId: crypto.randomUUID(),
+      reporterId,
       iframeCount: () => document.querySelectorAll("iframe").length,
       documentState: () => ({
         hidden: document.hidden,
@@ -415,18 +427,39 @@ function tracker(): Tracker | undefined {
     })
     if (pendingHtmlReader) singleton.setHtmlReader(pendingHtmlReader)
     const current = singleton
+    let active = true
+    let controller:
+      | ReturnType<typeof createFrontendMemoryController>
+      | undefined
+    void import("@/lib/transport")
+      .then(({ getShellTransport }) => {
+        if (!active) return
+        controller = createFrontendMemoryController({
+          reporterId,
+          transport: getShellTransport(),
+          flush: current.flush,
+          idle: current.idle,
+          setBrowserCountersEnabled: current.setBrowserCountersEnabled,
+          active: () => !isRemoteDesktopMode(),
+        })
+      })
+      .catch(() => {})
     const timer = window.setInterval(() => {
-      if (!isRemoteDesktopMode()) void current.flush()
+      void controller?.tick()
     }, 15_000)
-    window.addEventListener("pagehide", (event) => {
+    const pagehide = (event: PageTransitionEvent) => {
       if (event.persisted) return
+      active = false
       clearInterval(timer)
+      controller?.dispose()
       current.dispose()
+      window.removeEventListener("pagehide", pagehide)
       // A non-persisted pagehide can be followed by a remount in the same
       // renderer during a Tauri navigation. Do not leave a disposed tracker
       // in the singleton: the next Provider must create a fresh timer.
       if (singleton === current) singleton = undefined
-    })
+    }
+    window.addEventListener("pagehide", pagehide)
   }
   return singleton
 }

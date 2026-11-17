@@ -25,6 +25,50 @@ function controllableWeakRefs() {
 }
 
 describe("frontend memory diagnostics collector", () => {
+  it("skips only optional browser reads and drains the same pending send", async () => {
+    let resolveSend!: () => void
+    const browser = vi.fn(() => ({ domElements: 12 }))
+    const provider = vi.fn(() => ({ connections: 2 }))
+    const send = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSend = resolve
+        })
+    )
+    const tracker = createFrontendMemoryTracker({
+      reporterId: "opaque",
+      send,
+      browserCounters: browser,
+    })
+    tracker.registerProvider({}, provider)
+    tracker.setBrowserCountersEnabled(false)
+    const first = tracker.flush()
+    expect(tracker.flush()).toBe(first)
+    expect(tracker.idle()).toBe(first)
+    await Promise.resolve()
+    expect(browser).not.toHaveBeenCalled()
+    expect(provider).toHaveBeenCalledTimes(1)
+    resolveSend()
+    expect(await first).toBe(true)
+    tracker.setBrowserCountersEnabled(true)
+    expect(tracker.sample().metrics).toMatchObject({
+      connections: 2,
+      domElements: 12,
+    })
+    expect(browser).toHaveBeenCalledTimes(1)
+    tracker.dispose()
+  })
+
+  it("does not start a queued send or new sample after disposal", async () => {
+    const send = vi.fn(async () => {})
+    const tracker = createFrontendMemoryTracker({ reporterId: "opaque", send })
+    const pending = tracker.flush()
+    tracker.dispose()
+    expect(await pending).toBe(false)
+    expect(await tracker.flush()).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+  })
+
   it("keeps numeric snapshots separate from provider lifetimes", () => {
     let now = 0
     const send = vi.fn(async () => {})
