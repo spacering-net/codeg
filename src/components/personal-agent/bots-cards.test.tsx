@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
@@ -237,20 +238,50 @@ describe("the opening choice card", () => {
     expect(screen.queryByText("Review a PR")).toBeNull()
     fireEvent.click(line)
     expect(screen.getByText("Review a PR")).toBeTruthy()
-    expect(screen.queryByText("Change role")).toBeNull()
+    // Its role still said, no longer changed.
+    expect(screen.getByText("Role")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /Change role/ })).toBeNull()
   })
 
-  it("says what codeg made for it, item by item, and changes its role", async () => {
+  it("says what codeg set up for it, line by line, and changes its role", async () => {
     api.personalAgentBotSetTemplate.mockResolvedValue(starter())
-    draw(starter())
-    const made = screen.getByText(
-      "Brain same as the primary assistant's; executor config on Claude Code, 2 options picked for you"
-    )
+    draw(starter({ template_name: "Reviewer" }))
+    const setup = document.querySelector<HTMLElement>("[data-pa-starter-foot]")!
+    expect(within(setup).getByText("Set up for it")).toBeTruthy()
+    // A label, what it is and how to change it, a line each.
+    expect(
+      [...setup.querySelector("dl")!.children]
+        .filter((c) => c.tagName === "DT")
+        .map((d) => d.textContent)
+    ).toEqual(["Role", "Brain", "Executor config"])
+    expect(within(setup).getByText("Reviewer")).toBeTruthy()
+    expect(
+      within(setup).getByText("· same as the primary assistant's")
+    ).toBeTruthy()
+    // The options picked, folded under the executor's line; open, by where
+    // each came from.
+    const made = within(setup).getByRole("button", {
+      name: /2 options picked for you/,
+    })
+    expect(made.getAttribute("aria-expanded")).toBe("false")
+    expect(screen.queryByText("agent's default")).toBeNull()
     fireEvent.click(made)
-    expect(screen.getByText("agent's default")).toBeTruthy()
-    expect(screen.getByText("from another config")).toBeTruthy()
+    const picked = setup.querySelector<HTMLElement>("[data-pa-starter-picked]")!
+    expect(
+      [...picked.children].map((g) =>
+        [...g.querySelectorAll("p, dt, dd")].map((e) => e.textContent)
+      )
+    ).toEqual([
+      ["from another config", "Effort", "High"],
+      ["agent's default", "Model", "Sonnet"],
+    ])
+
     fireEvent.click(screen.getByRole("button", { name: "Change brain" }))
     expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "identity" })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Change executor config" })
+    )
+    expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "execution" })
     const role = screen.getByRole("button", { name: /Change role/ })
     await waitFor(() => expect(role.hasAttribute("disabled")).toBe(false))
     await userEvent.click(role)
@@ -258,6 +289,30 @@ describe("the opening choice card", () => {
     await waitFor(() =>
       expect(api.personalAgentBotSetTemplate).toHaveBeenCalledWith(7, "dev")
     )
+  })
+
+  it("names the executor config it was bound to, an existing one", () => {
+    draw(
+      starter({
+        made: {
+          brain: { agent: "Codex", same_as_primary: false, picked: [] },
+          executor: {
+            id: 3,
+            name: "My Codex",
+            agent: "Codex CLI",
+            created: false,
+            picked: [],
+          },
+        },
+      })
+    )
+    const setup = document.querySelector<HTMLElement>("[data-pa-starter-foot]")!
+    expect(within(setup).getByText("My Codex")).toBeTruthy()
+    expect(within(setup).getByText("· an existing one")).toBeTruthy()
+    expect(within(setup).getByText("Codex")).toBeTruthy()
+    expect(within(setup).queryByText(/same as the primary/)).toBeNull()
+    // Nothing picked: nothing to open.
+    expect(setup.querySelector("[data-pa-starter-made]")).toBeNull()
   })
 })
 

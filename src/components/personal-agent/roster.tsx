@@ -1323,14 +1323,14 @@ export function PersonalAgentRoster({
    *  rail, an eye and the count. */
   const hiddenToggle = (rail: boolean) => {
     const count = tr("hiddenCount", { count: groups.hidden.length })
-    return (
+    const toggle = (
       <button
         type="button"
-        className={cn(
+        className={
           rail
             ? "mt-1 flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-xs text-muted-foreground tabular-nums transition-colors hover:bg-muted hover:text-foreground"
-            : cn(HEAD_CLASS, "w-full text-start hover:text-foreground")
-        )}
+            : FOLD_CLASS
+        }
         aria-expanded={showHidden}
         aria-label={rail ? (showHidden ? tr("hideHidden") : count) : undefined}
         title={rail ? count : undefined}
@@ -1350,6 +1350,7 @@ export function PersonalAgentRoster({
         )}
       </button>
     )
+    return rail ? toggle : <div className={HEAD_CLASS}>{toggle}</div>
   }
 
   /** [+ new work assistant], at the foot: a row's geometry, a circle with a
@@ -1428,24 +1429,26 @@ export function PersonalAgentRoster({
   }
 
   /** A group's name over its rows, on their faces' edge; one the owner
-   *  made folds, its chevron after its name. */
+   *  made folds — pressed on its name and chevron, not across the row. */
   const groupHead = (label: string, foldName?: string) =>
     foldName ? (
-      <button
-        type="button"
-        className={cn(HEAD_CLASS, "w-full text-start hover:text-foreground")}
-        aria-expanded={!folded.has(foldName)}
-        aria-label={
-          folded.has(foldName)
-            ? tr("expand", { name: label })
-            : tr("collapse", { name: label })
-        }
-        onClick={() => toggleFold(foldName)}
-        data-pa-roster-section={foldName}
-      >
-        <span className="truncate">{label}</span>
-        <FoldChevron open={!folded.has(foldName)} />
-      </button>
+      <div className={HEAD_CLASS}>
+        <button
+          type="button"
+          className={FOLD_CLASS}
+          aria-expanded={!folded.has(foldName)}
+          aria-label={
+            folded.has(foldName)
+              ? tr("expand", { name: label })
+              : tr("collapse", { name: label })
+          }
+          onClick={() => toggleFold(foldName)}
+          data-pa-roster-section={foldName}
+        >
+          <span className="truncate">{label}</span>
+          <FoldChevron open={!folded.has(foldName)} />
+        </button>
+      </div>
     ) : (
       <div className={HEAD_CLASS}>
         <span className="truncate">{label}</span>
@@ -1648,6 +1651,12 @@ function hoverOnly(e: { preventDefault: () => void }) {
 /** A group's name, over its rows: on the rows' faces' edge. */
 const HEAD_CLASS =
   "flex h-7 min-w-0 items-center gap-1 px-2 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase"
+
+/** A folding head's button: its name and chevron alone, the patch it
+ *  takes under the pointer as wide as they are — the name still on the
+ *  faces' edge. */
+const FOLD_CLASS =
+  "-mx-1.5 flex min-w-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-start tracking-wide uppercase transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
 
 /** After a folding group's name: down while it is open, toward the end of
  *  the line while it is folded. */

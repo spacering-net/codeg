@@ -815,6 +815,11 @@ describe("the activity's matters", () => {
     const bell = await screen.findByRole("button", { name: "Notify me" })
     await waitFor(() => expect(bell.hasAttribute("disabled")).toBe(false))
     expect(bell.closest("[data-pa-aux-head]")).toBeTruthy()
+    // In the top's corners, the bell's and the "⋯"'s boxes each as far from
+    // the top as from its side.
+    const more = screen.getByRole("button", { name: "More" })
+    expect(bell.className).toMatch(/(^| )start-2 top-2( |$)/)
+    expect(more.className).toMatch(/(^| )end-2 top-2( |$)/)
     expect(bell.getAttribute("aria-pressed")).toBe("true")
     expect(bell.getAttribute("title")).toContain("Notify me · on")
     fireEvent.click(bell)

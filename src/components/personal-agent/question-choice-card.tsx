@@ -18,7 +18,13 @@
 
 import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
-import { ChevronDown, ChevronLeft, ChevronRight, Send } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  PenLine,
+  Send,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -29,7 +35,13 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { QuestionSpec, TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-import { ChoiceKey, choiceRowClass } from "./choice-card"
+import {
+  CHOICE_INPUT_CLASS,
+  CHOICE_OTHER_CLASS,
+  CHOICE_WRITE_CLASS,
+  ChoiceKey,
+  choiceRowClass,
+} from "./choice-card"
 import { INSET_SURFACE, str, usePageScope } from "./shared"
 
 /** The brain's question rows this card draws: an `ask_user_question` with
@@ -262,13 +274,16 @@ function QuestionView({
       <p className="mb-2 text-sm font-medium break-words">
         {question.question}
       </p>
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-2">
         {question.options.map((o, i) => (
           <div
             key={`${i}-${o.label}`}
             className={choiceRowClass(pick.keys.includes(letter(i)))}
           >
-            <ChoiceKey letter={letter(i)} />
+            <ChoiceKey
+              letter={letter(i)}
+              chosen={pick.keys.includes(letter(i))}
+            />
             <span className="min-w-0 flex-1 break-words">{o.label}</span>
           </div>
         ))}
@@ -403,11 +418,7 @@ export function Stepper({
         {q.multi_select ? <span>{t("several")}</span> : null}
       </div>
       <p className="mb-2.5 text-sm font-medium break-words">{q.question}</p>
-      <div
-        role="group"
-        aria-label={q.question}
-        className="flex flex-col gap-1.5"
-      >
+      <div role="group" aria-label={q.question} className="flex flex-col gap-2">
         {q.options.map((o, i) => {
           const k = letter(i)
           const chosen = pick.keys.includes(k)
@@ -421,7 +432,7 @@ export function Stepper({
               onClick={() => choose(k)}
               className={choiceRowClass(chosen)}
             >
-              <ChoiceKey letter={k} />
+              <ChoiceKey letter={k} chosen={chosen} />
               <span className="min-w-0 flex-1 break-words">
                 {o.label}
                 {o.description ? (
@@ -435,7 +446,7 @@ export function Stepper({
         })}
         {showInput ? (
           <form
-            className="flex items-center gap-2"
+            className={CHOICE_WRITE_CLASS}
             onSubmit={(e) => {
               e.preventDefault()
               writeOwn()
@@ -451,7 +462,8 @@ export function Stepper({
                 setPicks(withPick({ ...pick, text: e.target.value }))
               }
               placeholder={t("otherPlaceholder")}
-              className="h-8 flex-1 bg-background text-sm"
+              aria-label={t("other")}
+              className={CHOICE_INPUT_CLASS}
               data-pa-choice-other-input
             />
             <Button
@@ -469,10 +481,11 @@ export function Stepper({
             disabled={blocked}
             data-pa-choice={otherKey ?? undefined}
             onClick={() => setWriting(true)}
-            className="flex w-full items-center gap-2 rounded-lg border border-dashed border-border/70 px-3 py-2 text-start text-sm text-muted-foreground transition-colors enabled:hover:bg-muted"
+            className={CHOICE_OTHER_CLASS}
           >
             {otherKey ? <ChoiceKey letter={otherKey} /> : null}
-            {t("other")}
+            <span className="min-w-0 flex-1 break-words">{t("other")}</span>
+            <PenLine aria-hidden className="size-3.5 shrink-0 opacity-60" />
           </button>
         )}
       </div>

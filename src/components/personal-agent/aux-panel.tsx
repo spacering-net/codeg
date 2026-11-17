@@ -464,22 +464,20 @@ function AuxHead({
     >
       {agent ? (
         <>
-          {/* As far from the top as from the sides, to the eye: the
-              bell is as tall as its box is wide less a little, the "⋯" a
-              flat row in the middle of its own — their boxes a little
-              nearer the top than the sides, the pair reads as much below
-              the top as in from the sides. */}
+          {/* Their boxes as far from the top as from the sides, by
+              measure — not nudged for the "⋯" being a flat row of dots
+              in the middle of its own. */}
           <NotifyToggle
             snapshot={snapshot}
             className={cn(
               "absolute",
-              inDrawer ? "top-2.5 left-3" : "start-2 top-1.5"
+              inDrawer ? "top-2.5 left-3" : "start-2 top-2"
             )}
           />
           <AgentMenu
             className={cn(
               "absolute",
-              inDrawer ? "top-2.5 right-12" : "end-2 top-1.5"
+              inDrawer ? "top-2.5 right-12" : "end-2 top-2"
             )}
           />
         </>

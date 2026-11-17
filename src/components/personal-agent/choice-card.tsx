@@ -16,14 +16,17 @@
  * [Change brain] [Change executor config].
  */
 
-import { useMemo, useState } from "react"
+import { Fragment, useMemo, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import {
+  Bot,
+  Brain,
+  BriefcaseBusiness,
   ChevronDown,
   ChevronRight,
-  MessageSquareDashed,
-  Repeat2,
+  PenLine,
   Send,
+  type LucideIcon,
 } from "lucide-react"
 
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
@@ -48,23 +51,29 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
-import { AGENT_SURFACE, str, usePageScope } from "./shared"
+import { AGENT_SURFACE, INSET_SURFACE, str, usePageScope } from "./shared"
 import { useBotTemplates } from "./use-templates"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
-/** A choice's letter, in its little box. */
+/** A choice's letter, on a little tile; the theme's colour on the one
+ *  picked. */
 export function ChoiceKey({
   letter,
+  chosen = false,
   className,
 }: {
   letter: string
+  chosen?: boolean
   className?: string
 }) {
   return (
     <span
       className={cn(
-        "flex size-5 shrink-0 items-center justify-center rounded border border-border/80 text-xs font-medium text-muted-foreground",
+        "flex size-6 shrink-0 items-center justify-center rounded-md text-xs font-semibold",
+        chosen
+          ? "bg-primary text-primary-foreground"
+          : "bg-foreground/[0.06] text-foreground/60",
         className
       )}
     >
@@ -73,13 +82,28 @@ export function ChoiceKey({
   )
 }
 
-/** A choice's row; `chosen` marks the one picked. */
+/** A choice's row, raised off the bubble (`.pa-choice` in globals.css);
+ *  `chosen` marks the one picked. */
 export function choiceRowClass(chosen: boolean): string {
   return cn(
-    "flex w-full items-center gap-2 rounded-lg border border-border/70 bg-background px-3 py-2 text-start text-sm transition-colors enabled:hover:bg-muted disabled:cursor-default",
-    chosen && "border-primary bg-primary/5"
+    "pa-choice flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-start text-sm transition-[background-color,box-shadow] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-default",
+    chosen && "pa-choice-chosen"
   )
 }
+
+/** "Other", to write one's own: the row's shape, a dashed line on the
+ *  bubble's colour. */
+export const CHOICE_OTHER_CLASS =
+  "pa-choice-other flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-start text-sm transition-colors outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+
+/** Writing one's own, in place of "Other": a raised row holding the field
+ *  and the send button. */
+export const CHOICE_WRITE_CLASS =
+  "pa-choice flex items-center gap-2.5 rounded-xl py-1 ps-3 pe-1 has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-1 has-[input:focus-visible]:outline-ring"
+
+/** The field in it: no box of its own — the row is. */
+export const CHOICE_INPUT_CLASS =
+  "h-8 flex-1 border-0 bg-transparent px-0 text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
 
 interface ChoiceOption {
   key: string
@@ -172,11 +196,13 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
 
   const body = (
     <>
-      <p className="mb-2.5 text-sm font-medium break-words">{question}</p>
+      <p className="mb-3 text-sm leading-6 font-medium break-words">
+        {question}
+      </p>
       <div
         role="group"
         aria-label={question}
-        className="flex flex-col gap-1.5"
+        className="flex flex-col gap-2"
         data-pa-choices
       >
         {options.map((o) => {
@@ -188,17 +214,29 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
                 disabled={answered || readOnly || busy != null}
                 data-pa-choice={o.key}
                 onClick={() => pick(o)}
+                aria-expanded={
+                  o.project ? choosingProject === o.key : undefined
+                }
                 className={choiceRowClass(chosen)}
               >
-                <ChoiceKey letter={o.key} />
+                <ChoiceKey letter={o.key} chosen={chosen} />
                 <span className="min-w-0 flex-1 break-words">{o.label}</span>
                 {busy === o.key ? (
                   <SyncedSpinner small className="size-3.5" />
+                ) : o.project && !answered ? (
+                  <ChevronDown
+                    aria-hidden
+                    className={cn(
+                      "size-4 shrink-0 text-muted-foreground transition-transform",
+                      choosingProject !== o.key && "-rotate-90 rtl:rotate-90"
+                    )}
+                  />
                 ) : null}
               </button>
               {choosingProject === o.key ? (
+                // Under the choice's words.
                 <div
-                  className="mt-1 ms-7 flex flex-wrap gap-1.5"
+                  className="mt-2 ms-11.5 flex flex-wrap gap-1.5"
                   data-pa-choice-projects
                 >
                   {projects.length === 0 ? (
@@ -227,7 +265,7 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
         })}
         {answered ? null : writing ? (
           <form
-            className="flex items-center gap-2"
+            className={CHOICE_WRITE_CLASS}
             onSubmit={(e) => {
               e.preventDefault()
               const v = text.trim()
@@ -240,7 +278,8 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
               value={text}
               onChange={(e) => setText(e.target.value)}
               placeholder={t("otherPlaceholder")}
-              className="h-8 flex-1 bg-background text-sm"
+              aria-label={other}
+              className={CHOICE_INPUT_CLASS}
               data-pa-choice-other-input
             />
             <Button
@@ -258,10 +297,11 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
             disabled={readOnly || busy != null}
             data-pa-choice={otherKey}
             onClick={() => setWriting(true)}
-            className="flex w-full items-center gap-2 rounded-lg border border-dashed border-border/70 px-3 py-2 text-start text-sm text-muted-foreground transition-colors enabled:hover:bg-muted"
+            className={CHOICE_OTHER_CLASS}
           >
             <ChoiceKey letter={otherKey} />
-            {other}
+            <span className="min-w-0 flex-1 break-words">{other}</span>
+            <PenLine aria-hidden className="size-3.5 shrink-0 opacity-60" />
           </button>
         )}
       </div>
@@ -297,7 +337,9 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
         className={cn(
           AGENT_SURFACE,
           bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          // One width, whatever its words: its set-up opening under it
+          // does not widen it.
+          "w-md max-w-full min-w-0 p-3.5 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
         )}
       >
         {answered && !unfolded ? (
@@ -346,7 +388,20 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
   )
 }
 
-/** Under a new assistant's opening card: what codeg made for it. */
+/** Where a picked option's value came from, in the order they are told. */
+const FROM_ORDER: readonly PickedOption["from"][] = [
+  "given",
+  "other_config",
+  "agent",
+]
+
+/**
+ * Under a new assistant's opening card: what codeg set up for it — a panel
+ * of three lines, each a label, what it is and how to change it: its role
+ * (while the card waits for an answer), its brain and its executor config.
+ * The options codeg picked for either open under its line, by where they
+ * came from.
+ */
 function StarterFoot({
   data,
   open,
@@ -361,7 +416,6 @@ function StarterFoot({
   const t = useTranslations("PersonalAgent.bots.choice")
   const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   const templates = useBotTemplates()
-  const [details, setDetails] = useState(false)
   const [switching, setSwitching] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const made = (data.made ?? {}) as Record<string, unknown>
@@ -369,19 +423,14 @@ function StarterFoot({
   const executor = (made.executor ?? {}) as Record<string, unknown>
   const picked = pickedOf(executor.picked)
   const brainPicked = pickedOf(brain.picked)
-  const filled = picked.filter((p) => p.from !== "given")
+  const filled = picked.filter((p) => p.from !== "given").length
   const template = str(data, "template")
-  const executorAgent = str(executor, "agent") ?? ""
-  const line = [
-    brain.same_as_primary === true
-      ? t("brainSame")
-      : t("brainOwn", { agent: str(brain, "agent") ?? "" }),
-    executor.created === false
-      ? t("executorBound", { name: str(executor, "name") ?? "" })
-      : filled.length > 0
-        ? t("executorFilled", { agent: executorAgent, count: filled.length })
-        : t("executorMade", { agent: executorAgent }),
-  ].join(t("joiner"))
+  const templateName =
+    str(data, "template_name") ??
+    templates?.find((tpl) => tpl.id === template)?.name ??
+    template ??
+    ""
+  const bound = executor.created === false
 
   const changeRole = async (id: string) => {
     if (botId == null) return
@@ -398,104 +447,188 @@ function StarterFoot({
 
   return (
     <div
-      className="mt-3 border-t border-border/50 pt-2 text-xs text-muted-foreground"
+      className={cn(INSET_SURFACE, "mt-4 rounded-xl px-3 pt-2.5 pb-2")}
       data-pa-starter-foot
     >
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 text-start hover:text-foreground"
-          onClick={() => setDetails((d) => !d)}
-          aria-expanded={details}
-          data-pa-starter-made
-        >
-          {details ? (
-            <ChevronDown className="size-3" aria-hidden />
-          ) : (
-            <ChevronRight className="size-3 rtl:rotate-180" aria-hidden />
-          )}
-          {line}
-        </button>
-        <span className="flex flex-wrap items-center gap-1">
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() => openBotPage("identity")}
-          >
-            {t("editBrain")}
-          </Button>
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() => openBotPage("execution")}
-          >
-            {t("editExecutor")}
-          </Button>
-          {open ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  disabled={readOnly || switching || !templates}
-                  data-pa-change-role
-                >
-                  {switching ? (
-                    <SyncedSpinner small />
-                  ) : (
-                    <Repeat2 aria-hidden />
-                  )}
-                  {t("changeRole")}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-64">
-                {(templates ?? []).map((tpl) => (
-                  <DropdownMenuItem
-                    key={tpl.id}
-                    disabled={tpl.id === template}
-                    onSelect={() => void changeRole(tpl.id)}
-                    data-pa-role={tpl.id}
-                    className="flex flex-col items-start gap-0.5"
+      <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+        {t("setup")}
+      </p>
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1">
+        <SetupLine
+          icon={BriefcaseBusiness}
+          label={t("role")}
+          value={templateName}
+          // Changed only before the card is answered: the answer is about
+          // the role.
+          action={
+            open ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={readOnly || switching || !templates}
+                    aria-label={t("changeRole")}
+                    title={t("changeRole")}
+                    data-pa-change-role
                   >
-                    <span className="text-sm">{tpl.name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {tpl.job}
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
-        </span>
-      </div>
-      {details ? (
-        <ul className="mt-1.5 space-y-0.5 ps-4" data-pa-starter-picked>
-          {[
-            ...brainPicked.map((p) => ({ p, brain: true })),
-            ...picked.map((p) => ({ p, brain: false })),
-          ].map(({ p, brain: isBrain }) => (
-            <li key={`${isBrain ? "b" : "e"}-${p.id}`} className="break-words">
-              <span className="text-foreground/80">
-                {isBrain ? t("brainItem", { name: p.name }) : p.name}
-              </span>
-              {": "}
-              {p.value_label}
-              <span className="ms-1 inline-flex items-center gap-0.5 rounded bg-muted px-1 text-[0.6875rem]">
-                <MessageSquareDashed className="size-2.5" aria-hidden />
-                {t(`from.${p.from}`)}
-              </span>
-            </li>
-          ))}
-          {picked.length === 0 && brainPicked.length === 0 ? (
-            <li>{t("nothingPicked")}</li>
-          ) : null}
-        </ul>
-      ) : null}
+                    {switching ? <SyncedSpinner small /> : null}
+                    {t("change")}
+                    <ChevronDown aria-hidden />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64">
+                  {(templates ?? []).map((tpl) => (
+                    <DropdownMenuItem
+                      key={tpl.id}
+                      disabled={tpl.id === template}
+                      onSelect={() => void changeRole(tpl.id)}
+                      data-pa-role={tpl.id}
+                      className="flex flex-col items-start gap-0.5"
+                    >
+                      <span className="text-sm">{tpl.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {tpl.job}
+                      </span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null
+          }
+        />
+        <SetupLine
+          icon={Brain}
+          label={t("brain")}
+          value={str(brain, "agent") ?? ""}
+          note={brain.same_as_primary === true ? t("sameAsPrimary") : null}
+          picked={brainPicked}
+          pickedLabel={t("options", { count: brainPicked.length })}
+          action={
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => openBotPage("identity")}
+              aria-label={t("editBrain")}
+              title={t("editBrain")}
+            >
+              {t("change")}
+            </Button>
+          }
+        />
+        <SetupLine
+          icon={Bot}
+          label={t("executor")}
+          value={(bound ? str(executor, "name") : str(executor, "agent")) ?? ""}
+          note={bound ? t("existing") : null}
+          picked={picked}
+          pickedLabel={
+            filled > 0
+              ? t("filled", { count: filled })
+              : t("options", { count: picked.length })
+          }
+          action={
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => openBotPage("execution")}
+              aria-label={t("editExecutor")}
+              title={t("editExecutor")}
+            >
+              {t("change")}
+            </Button>
+          }
+        />
+      </dl>
       {error ? (
-        <p role="alert" className="mt-1 break-words text-destructive">
+        <p role="alert" className="mt-1.5 text-xs break-words text-destructive">
           {error}
         </p>
       ) : null}
     </div>
+  )
+}
+
+/** One line of the set-up panel: its label, what it is — with a word on
+ *  it and the options picked, folded — and a button to change it. */
+function SetupLine({
+  icon: Icon,
+  label,
+  value,
+  note = null,
+  picked = [],
+  pickedLabel,
+  action,
+}: {
+  icon: LucideIcon
+  label: string
+  value: string
+  note?: string | null
+  picked?: readonly PickedOption[]
+  pickedLabel?: string
+  action: ReactNode | null
+}) {
+  const t = useTranslations("PersonalAgent.bots.choice")
+  const [unfolded, setUnfolded] = useState(false)
+  const groups = FROM_ORDER.map(
+    (from) => [from, picked.filter((p) => p.from === from)] as const
+  ).filter(([, items]) => items.length > 0)
+  return (
+    <>
+      <dt className="flex h-7 items-center gap-1.5 text-xs text-muted-foreground">
+        <Icon aria-hidden className="size-3.5 shrink-0" />
+        {label}
+      </dt>
+      <dd className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm">
+        <span className="min-w-0 truncate font-medium" title={value}>
+          {value}
+        </span>
+        {note ? (
+          <span className="text-xs text-muted-foreground">· {note}</span>
+        ) : null}
+        {picked.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setUnfolded((u) => !u)}
+            aria-expanded={unfolded}
+            className="-mx-1 inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:bg-(--pa-inset-hover) hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            data-pa-starter-made
+          >
+            <span>· {pickedLabel}</span>
+            <ChevronDown
+              aria-hidden
+              className={cn(
+                "size-3.5 transition-transform",
+                !unfolded && "-rotate-90 rtl:rotate-90"
+              )}
+            />
+          </button>
+        ) : null}
+      </dd>
+      <dd className="flex justify-end">{action}</dd>
+      {unfolded ? (
+        // Under the values, by where each came from.
+        <dd
+          className="col-span-2 col-start-2 mb-1 flex flex-col gap-2 border-s border-foreground/10 ps-3 pt-0.5 pb-1"
+          data-pa-starter-picked
+        >
+          {groups.map(([from, items]) => (
+            <div key={from}>
+              <p className="mb-1 text-xs text-muted-foreground">
+                {t(`from.${from}`)}
+              </p>
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[0.8125rem]">
+                {items.map((p) => (
+                  <Fragment key={p.id}>
+                    <dt className="text-foreground/65">{p.name}</dt>
+                    <dd className="min-w-0 break-words">{p.value_label}</dd>
+                  </Fragment>
+                ))}
+              </dl>
+            </div>
+          ))}
+        </dd>
+      ) : null}
+    </>
   )
 }

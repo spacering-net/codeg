@@ -4516,6 +4516,8 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   box-shadow: none;
 }
 
+/* A button a menu or popover opens from carries its trigger's slot in
+   place of "button" (`asChild`): matched by its variant all the same. */
 /* Personal agent: a button standing on an assistant's bubble — a card's
    "hand it to the assistant", "open the task" — is raised off its grey: the
    page's colour with a hairline and a soft shadow (in the dark theme a step
@@ -4527,8 +4529,8 @@ div.monaco-diff-editor.side-by-side .editor.modified {
    its own surface; the focus ring keeps its shadow. */
 .pa-agent-bubble
   :is(
-    [data-slot="button"][data-variant="outline"],
-    [data-slot="button"][data-variant="secondary"]
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
   ):not([data-slot="card"] *) {
   border-color: transparent;
   background-color: var(--background);
@@ -4537,8 +4539,8 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 }
 .pa-agent-bubble
   :is(
-    [data-slot="button"][data-variant="outline"],
-    [data-slot="button"][data-variant="secondary"]
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
   ):not([data-slot="card"] *):not(:focus-visible) {
   box-shadow:
     0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent),
@@ -4546,8 +4548,8 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 }
 .pa-agent-bubble
   :is(
-    [data-slot="button"][data-variant="outline"],
-    [data-slot="button"][data-variant="secondary"]
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
   ):not([data-slot="card"] *):hover {
   background-color: color-mix(
     in oklab,
@@ -4558,8 +4560,8 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 .dark
   .pa-agent-bubble
   :is(
-    [data-slot="button"][data-variant="outline"],
-    [data-slot="button"][data-variant="secondary"]
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
   ):not([data-slot="card"] *) {
   background-color: color-mix(
     in oklab,
@@ -4570,16 +4572,16 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 .dark
   .pa-agent-bubble
   :is(
-    [data-slot="button"][data-variant="outline"],
-    [data-slot="button"][data-variant="secondary"]
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
   ):not([data-slot="card"] *):not(:focus-visible) {
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent);
 }
 .dark
   .pa-agent-bubble
   :is(
-    [data-slot="button"][data-variant="outline"],
-    [data-slot="button"][data-variant="secondary"]
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
+    :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
   ):not([data-slot="card"] *):hover {
   background-color: color-mix(
     in oklab,
@@ -4588,11 +4590,14 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   );
 }
 .pa-agent-bubble
-  [data-slot="button"][data-variant="ghost"]:not([data-slot="card"] *):hover,
-.pa-agent-bubble
-  [data-slot="button"][data-variant="ghost"][aria-expanded="true"]:not(
+  :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="ghost"]:not(
     [data-slot="card"] *
-  ) {
+  ):hover,
+.pa-agent-bubble
+  :is(
+    [data-slot="button"],
+    [data-slot$="-trigger"]
+  )[data-variant="ghost"][aria-expanded="true"]:not([data-slot="card"] *) {
   background-color: var(--pa-inset-hover);
 }
 /* Personal agent: a ghost button with words on an assistant's bubble — "not
@@ -4610,16 +4615,68 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   --pa-tonal-hover: color-mix(in oklab, var(--foreground) 13%, transparent);
 }
 .pa-agent-bubble
-  [data-slot="button"][data-variant="ghost"]:not([data-size^="icon"]):not(
-    [data-slot="card"] *
-  ) {
+  :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="ghost"]:not(
+    [data-size^="icon"]
+  ):not([data-slot="card"] *) {
   background-color: var(--pa-tonal);
 }
 .pa-agent-bubble
-  [data-slot="button"][data-variant="ghost"]:not([data-size^="icon"]):not(
-    [data-slot="card"] *
-  ):is(:hover, [aria-expanded="true"]) {
+  :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="ghost"]:not(
+    [data-size^="icon"]
+  ):not([data-slot="card"] *):is(:hover, [aria-expanded="true"]) {
   background-color: var(--pa-tonal-hover);
+}
+
+/* Personal agent: a choice on a card — a new assistant's opening question,
+   an assistant's own questions — raised off the bubble as its outline
+   buttons are: the page's colour with a hairline and a soft shadow, the
+   hairline deeper under the pointer (not a grey fill: the bubble's own,
+   the row sank into it). In the dark theme a step lighter than the bubble.
+   The one picked is the theme colour's, its hairline whole. "Other", to
+   write one's own, is the bubble's with a dashed line, its words not
+   faded to look switched off. */
+.pa-choice {
+  background-color: var(--background);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--foreground) 9%, transparent),
+    0 1px 2px color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+button.pa-choice:enabled:not(.pa-choice-chosen):hover {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--foreground) 20%, transparent),
+    0 2px 6px color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+.dark .pa-choice {
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 12%,
+    var(--background)
+  );
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+.dark button.pa-choice:enabled:not(.pa-choice-chosen):hover {
+  background-color: color-mix(
+    in oklab,
+    var(--foreground) 16%,
+    var(--background)
+  );
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 18%, transparent);
+}
+.pa-choice.pa-choice-chosen {
+  background-color: color-mix(in oklab, var(--primary) 8%, var(--background));
+  box-shadow: 0 0 0 1.5px var(--primary);
+}
+.pa-choice-other {
+  border: 1px dashed color-mix(in oklab, var(--foreground) 22%, transparent);
+  color: color-mix(in oklab, var(--foreground) 78%, transparent);
+}
+.pa-choice-other:enabled:hover {
+  border-color: color-mix(in oklab, var(--foreground) 36%, transparent);
+  background-color: color-mix(in oklab, var(--background) 55%, transparent);
+  color: var(--foreground);
+}
+.dark .pa-choice-other:enabled:hover {
+  background-color: color-mix(in oklab, var(--foreground) 6%, transparent);
 }
 
 /* Personal agent: the bubble a right-click opened its menu on, ringed in the

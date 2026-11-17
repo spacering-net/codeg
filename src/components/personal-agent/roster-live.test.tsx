@@ -387,12 +387,14 @@ describe("the roster", () => {
     wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Dev")
     // Each group's name where its rows' faces are, a folding one's chevron
-    // after its name; one class for them all.
+    // after its name; one class for their heads. A folding one is pressed
+    // on its name and chevron, not across the head's row.
     const pinned = screen.getByText("Pinned").parentElement!
     const fold = screen.getByRole("button", { name: "Fold codeg" })
     expect(fold.firstElementChild!.textContent).toBe("codeg")
     expect(fold.lastElementChild!.tagName.toLowerCase()).toBe("svg")
-    expect(fold.className).toContain(pinned.className)
+    expect(fold.parentElement!.className).toBe(pinned.className)
+    expect(fold.className).not.toContain("w-full")
     expect(screen.getByText("Others").parentElement!.className).toBe(
       pinned.className
     )
@@ -400,7 +402,8 @@ describe("the roster", () => {
     expect(screen.queryByText("Old")).toBeNull()
     const hidden = screen.getByText("1 hidden").closest("button")!
     expect(hidden.closest("[data-pa-roster-foot]")).toBeNull()
-    expect(hidden.className).toContain(pinned.className)
+    expect(hidden.parentElement!.className).toBe(pinned.className)
+    expect(hidden.className).toBe(fold.className)
     expect(hidden.getAttribute("aria-expanded")).toBe("false")
     fireEvent.click(hidden)
     expect(hidden.getAttribute("aria-expanded")).toBe("true")

@@ -134,7 +134,7 @@ describe("the brain's question as a choice card", () => {
     fireEvent.click(screen.getByRole("button", { name: /Back/ }))
     expect(step()).toBe("1")
     expect(document.querySelector('[data-pa-choice="B"]')?.className).toContain(
-      "border-primary"
+      "pa-choice-chosen"
     )
     fireEvent.click(screen.getByRole("button", { name: "Next" }))
     expect(step()).toBe("2")
