@@ -18,7 +18,7 @@
 //!   running.
 //! - Windows: the installer's `bin\`, which holds nothing but
 //!   `codeg-cli.exe`. A debug build copies its own into
-//!   `%LOCALAPPDATA%\app.codeg\cli\bin\` — never into the roaming data
+//!   `%LOCALAPPDATA%\app.whcodeg\cli\bin\` — never into the roaming data
 //!   directory, which is no place for a program.
 //!
 //! A debug build names its command `codeg-cli-dev`, so it never takes the

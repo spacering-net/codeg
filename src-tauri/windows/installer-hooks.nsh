@@ -79,6 +79,18 @@
 ; and that codeg would be left without its command. One still running is
 ; renamed out of the way instead, so PATH stops finding a codeg-cli of an app
 ; that is gone; the next install, or the user once it ends, deletes it.
+;
+; A folder that already holds another application's installation is refused.
+; $INSTDIR is the user's choice and nothing in Tauri's template looks at what
+; is already there: the same codeg.exe and sidecars would be written over that
+; application's, and its uninstall.exe left describing files this installer
+; replaced. Two such applications are the official Codeg build and this fork's
+; pre-`whcodeg` release — same binary names, different product, and neither of
+; them this one. A folder this product installed into is told apart by the
+; marker every install of it writes (CODEG_REFUSE_FOREIGN_INSTALL_DIR below);
+; one without the marker is not this installer's to write in. An interactive
+; install says so and stops; a passive or silent one, the updater's included,
+; stops without the box, there being no one to click it.
 
 !define CODEG_TH32CS_SNAPPROCESS 0x2
 ; PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE
@@ -91,6 +103,10 @@
 ; AffinityMask, BasePriority, UniqueProcessId, InheritedFromUniqueProcessId.
 !define CODEG_PROCESS_BASIC_INFORMATION "i, p, p, i, p, p"
 !define CODEG_PROCESS_BASIC_INFORMATION_SIZE 24
+
+; Written into $INSTDIR at the end of every install and removed by the
+; uninstaller: this installer's own record that the folder is its.
+!define CODEG_INSTALL_MARKER ".whcodeg"
 
 ; Ends the processes that process $3 started, $4 (this installer) aside.
 ; The snapshot is a moment old, and the id it gives may belong to another
@@ -338,7 +354,43 @@ Function .onInstFailed
   !insertmacro CODEG_RESTORE_APP
 FunctionEnd
 
+; Stops the install when $INSTDIR already holds another application's
+; installation, told apart by the absence of CODEG_INSTALL_MARKER beside an
+; uninstall.exe — which only a previous install of this product leaves there.
+; Our own previous version, and an update, carry the marker and pass.
+;
+; No registry is read: the product name and the uninstall key's spelling are
+; the template's business, and the marker needs neither. A folder left by an
+; install that stopped before writing it is refused too — writing there again
+; would have to guess whose files it is overwriting, and picking another
+; folder costs the user one dialog.
+!macro CODEG_REFUSE_FOREIGN_INSTALL_DIR
+  ${If} ${FileExists} "$INSTDIR\uninstall.exe"
+  ${AndIfNot} ${FileExists} "$INSTDIR\${CODEG_INSTALL_MARKER}"
+    DetailPrint "$INSTDIR belongs to another application; refusing to install over it."
+    ${IfNot} ${Silent}
+    ${AndIf} $PassiveMode <> 1
+      MessageBox MB_ICONSTOP|MB_OK "$INSTDIR already holds another application's installation.$\r$\n$\r$\nChoose another folder: installing here would overwrite that application's files and leave its uninstaller describing ones it no longer has."
+    ${EndIf}
+    Abort
+  ${EndIf}
+!macroend
+
+; This folder is this product's from here on.
+!macro CODEG_WRITE_INSTALL_MARKER
+  ClearErrors
+  FileOpen $R8 "$INSTDIR\${CODEG_INSTALL_MARKER}" w
+  ${IfNot} ${Errors}
+    FileWrite $R8 "This folder belongs to this application's installation.$\r$\n"
+    FileWrite $R8 "Its installer refuses to write into a folder another application installed into.$\r$\n"
+    FileClose $R8
+  ${EndIf}
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
+  ; First: stop before touching, or killing, anything in a folder that is not
+  ; this product's to write in.
+  !insertmacro CODEG_REFUSE_FOREIGN_INSTALL_DIR
   ${If} $UpdateMode = 1
     !insertmacro CODEG_STOP_UPDATED_APP
   ${EndIf}
@@ -366,6 +418,7 @@ FunctionEnd
 !macro NSIS_HOOK_POSTINSTALL
   ; codeg.exe's own write can fail and be skipped.
   !insertmacro CODEG_RESTORE_APP
+  !insertmacro CODEG_WRITE_INSTALL_MARKER
   CreateDirectory "$INSTDIR\bin"
   !insertmacro CODEG_MOVE_ASIDE_IF_IN_USE "bin\codeg-cli.exe"
   ClearErrors
@@ -396,6 +449,7 @@ FunctionEnd
     ${EndIf}
   ${EndIf}
   Delete "$INSTDIR\bin\codeg-cli.exe.*.old"
+  Delete "$INSTDIR\${CODEG_INSTALL_MARKER}"
   RMDir "$INSTDIR\bin"
   RMDir "$INSTDIR"
 !macroend

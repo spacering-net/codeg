@@ -630,7 +630,7 @@ mod tauri_app {
         // Skipped in debug builds so a locally-built `cargo run` instance
         // can run alongside an installed release build of codeg during
         // development. Debug desktop builds use an isolated SQLite file, but
-        // they still share other `app.codeg` data-dir artifacts with release.
+        // they still share other `app.whcodeg` data-dir artifacts with release.
         #[cfg(not(debug_assertions))]
         let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // Second launches on Windows/Linux carry `codeg://…` on argv.
@@ -777,7 +777,7 @@ mod tauri_app {
                 // so this resolves to it; nothing writes the variable after
                 // that. The default it falls back to is *not* Tauri's
                 // `app_data_dir()` — that one is the identifier-derived
-                // `%APPDATA%\app.codeg`, while the root is WingHarness's
+                // `%APPDATA%\app.whcodeg`, while the root is WingHarness's
                 // `codeg` folder (see `paths::wingharness_codeg_dir`) — so the
                 // two are expected to name different folders and are not
                 // compared here.

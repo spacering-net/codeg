@@ -43,6 +43,16 @@ name: Fork Windows Release
 # running app (`tauri-codegen` embeds it into `PackageInfo`, so `getVersion()`
 # and the updater's "current version" both see it), and latest.json.
 #
+# `productName` and `identifier` are this fork's own (`whcodeg`, `app.whcodeg`),
+# not upstream's, so this build can be installed beside the official Codeg
+# instead of on top of it. On Windows the pair names the install directory, the
+# uninstall/ARP entry, the Start Menu folder, the `Run` value of "launch at
+# login", the WebView2 user-data directory and the notification app id — the
+# last two are the identifier's, and sharing them would have two running builds
+# fight over one WebView2 profile. The binaries keep their `codeg*` names:
+# `mainBinaryName` defaults to the cargo output name, so only the bundle and
+# registry identity changes.
+#
 # Ordering notes:
 #   * `wh01` < `wh02` … < `wh99` — an alphanumeric prerelease identifier is
 #     compared byte-wise, so the prefix is zero-padded to two digits, or
@@ -203,7 +213,7 @@ jobs:
           releaseBody: |
             Fork build. Windows x64. Base ${{ inputs.version }}, fork revision ${{ inputs.prefix }}.
 
-            - `codeg_*_x64-setup.exe` — the desktop app, NSIS installer.
+            - `whcodeg_*_x64-setup.exe` — the desktop app, NSIS installer.
             - `*.nsis.zip`, `*.nsis.zip.sig`, `latest.json` — the updater's artifact,
               its signature, and the manifest the app's update check reads.
             - `codeg-server-web-${{ steps.version.outputs.tag }}-windows-x64.zip` —

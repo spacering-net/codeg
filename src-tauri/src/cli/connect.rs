@@ -153,8 +153,14 @@ pub fn level(global: &GlobalArgs, env: &Env) -> Result<Level, Failure> {
         });
     }
     let dirs = match &env.platform_data_dir {
-        // The desktop's (`app.codeg`, its bundle identifier) and the server's.
-        Some(base) => vec![base.join("app.codeg"), base.join("codeg")],
+        // This app's (`app.whcodeg`, its bundle identifier), then the two
+        // identifiers it may still find a running Codeg under: the upstream
+        // one the fork used before, and the server's own directory name.
+        Some(base) => vec![
+            base.join("app.whcodeg"),
+            base.join("app.codeg"),
+            base.join("codeg"),
+        ],
         None => Vec::new(),
     };
     Ok(Level::DataDirs {
@@ -778,7 +784,11 @@ mod tests {
         assert_eq!(
             level(&global(), &env).unwrap(),
             Level::DataDirs {
-                dirs: vec!["/platform/app.codeg".into(), "/platform/codeg".into()],
+                dirs: vec![
+                    "/platform/app.whcodeg".into(),
+                    "/platform/app.codeg".into(),
+                    "/platform/codeg".into(),
+                ],
                 label: "the default data directories"
             }
         );

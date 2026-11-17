@@ -312,6 +312,13 @@ jobs:
       # tauri-action (it checks and launches the helper). A helper built
       # without its requirement refuses to start once it is Developer-ID
       # signed, and codeg will not build with one pin and not the other.
+      #
+      # Those two identifiers are `tauri.conf.json`'s `identifier` and its
+      # `.computer-helper` nest, and must be changed in the same commit as it:
+      # a fork build carries its own (`app.whcodeg`, `app.whcodeg.computer-helper`,
+      # see `fork-windows-release.yml`) and would otherwise pin a requirement
+      # naming an identity its binaries do not have. Unused while this fork
+      # releases Windows only.
       - name: Pin computer-use trust anchors (macOS)
         if: contains(matrix.target, 'apple-darwin')
         shell: bash
