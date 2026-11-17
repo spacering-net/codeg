@@ -7,6 +7,11 @@ overrides:
   # ansi-to-react (latest 6.2.6) still declares ^3, which has quadratic scans
   # in match(); the factory/tlds() API it calls is unchanged in 5.x.
   ansi-to-react>linkify-it: ^5.0.2
+  # monaco-editor (latest 0.57.0) pins dompurify 3.4.15 exactly, inside the
+  # advisories fixed in 3.4.17. Monaco never imports this package: it ships its
+  # own DOMPurify 3.4.15 in esm/ and min/, so this moves only the installed
+  # copy; the one the editor runs changes with a monaco release.
+  monaco-editor>dompurify: ^3.4.17
 
 allowBuilds:
   "@parcel/watcher": true
