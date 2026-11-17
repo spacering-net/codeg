@@ -1,6 +1,10 @@
 // Optional numeric diagnostics. Never serialize application state or force GC.
 import { isDesktop, isRemoteDesktopMode } from "@/lib/transport"
 import { readBrowserMemoryCounters } from "./frontend-memory-browser"
+import {
+  createDomMutationMemoryCounters,
+  readTauriMemoryCalls,
+} from "./frontend-memory-activity"
 
 export const MEMORY_METRIC_KEYS = [
   "providersActive",
@@ -55,6 +59,20 @@ export const MEMORY_METRIC_KEYS = [
   "runningAnimations",
   "resourceTimingEntries",
   "jsHeapUsedBytes",
+  "shellCallsStarted",
+  "shellCallsPending",
+  "shellCallsResolved",
+  "shellCallsRejected",
+  "shellCallsDiagnostics",
+  "shellCallsGitHead",
+  "shellCallsConnectionTouch",
+  "shellCallsMcpStatus",
+  "shellCallsOther",
+  "domMutationChildList",
+  "domMutationNodesAdded",
+  "domMutationNodesRemoved",
+  "domMutationAttributes",
+  "domMutationCharacterData",
   "overlayFoldRefetchEntries",
   "selectorsCacheEntries",
   "iframeCount",
@@ -93,6 +111,7 @@ export function createFrontendMemoryTracker(options: {
   iframeCount?: () => number
   documentState?: () => { hidden: boolean; focused: boolean }
   browserCounters?: Reader
+  activityCounters?: { read: Reader; dispose: () => void }
 }) {
   const weakReference = (
     globalThis as typeof globalThis & {
@@ -302,6 +321,13 @@ export function createFrontendMemoryTracker(options: {
         /* optional browser APIs must not prevent existing reports */
       }
     }
+    if (options.activityCounters) {
+      try {
+        merge(options.activityCounters.read())
+      } catch {
+        /* optional activity counters must not prevent existing reports */
+      }
+    }
     const elapsed = now() - started
     metrics.sampleDurationMicros = Number.isFinite(elapsed)
       ? Math.min(
@@ -337,6 +363,7 @@ export function createFrontendMemoryTracker(options: {
     sample,
     flush,
     dispose: () => {
+      if (disposed) return
       disposed = true
       providers.clear()
       retired.clear()
@@ -344,6 +371,11 @@ export function createFrontendMemoryTracker(options: {
       retiredTurns.clear()
       retiredViews.clear()
       htmlReader = undefined
+      try {
+        options.activityCounters?.dispose()
+      } catch {
+        /* diagnostics must not affect navigation */
+      }
     },
   }
 }
@@ -361,6 +393,7 @@ function tracker(): Tracker | undefined {
       typeof crypto.randomUUID !== "function"
     )
       return
+    const mutations = createDomMutationMemoryCounters()
     singleton = createFrontendMemoryTracker({
       reporterId: crypto.randomUUID(),
       iframeCount: () => document.querySelectorAll("iframe").length,
@@ -369,6 +402,10 @@ function tracker(): Tracker | undefined {
         focused: document.hasFocus(),
       }),
       browserCounters: readBrowserMemoryCounters,
+      activityCounters: {
+        read: () => ({ ...mutations.read(), ...readTauriMemoryCalls() }),
+        dispose: mutations.dispose,
+      },
       send: async (sample) => {
         // Always use the LOCAL shell transport; never send machine diagnostics
         // to a configured remote desktop/server or any external destination.

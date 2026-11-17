@@ -68,6 +68,20 @@ pub enum MemoryMetric {
     RunningAnimations,
     ResourceTimingEntries,
     JsHeapUsedBytes,
+    ShellCallsStarted,
+    ShellCallsPending,
+    ShellCallsResolved,
+    ShellCallsRejected,
+    ShellCallsDiagnostics,
+    ShellCallsGitHead,
+    ShellCallsConnectionTouch,
+    ShellCallsMcpStatus,
+    ShellCallsOther,
+    DomMutationChildList,
+    DomMutationNodesAdded,
+    DomMutationNodesRemoved,
+    DomMutationAttributes,
+    DomMutationCharacterData,
     OverlayFoldRefetchEntries,
     SelectorsCacheEntries,
     IframeCount,
@@ -265,7 +279,21 @@ mod tests {
                 "documentAnimations": 2,
                 "runningAnimations": 1,
                 "resourceTimingEntries": 17,
-                "jsHeapUsedBytes": 18
+                "jsHeapUsedBytes": 18,
+                "shellCallsStarted": 19,
+                "shellCallsPending": 1,
+                "shellCallsResolved": 17,
+                "shellCallsRejected": 1,
+                "shellCallsDiagnostics": 4,
+                "shellCallsGitHead": 5,
+                "shellCallsConnectionTouch": 6,
+                "shellCallsMcpStatus": 2,
+                "shellCallsOther": 2,
+                "domMutationChildList": 20,
+                "domMutationNodesAdded": 21,
+                "domMutationNodesRemoved": 22,
+                "domMutationAttributes": 23,
+                "domMutationCharacterData": 24
             }
         }"#;
         let parsed: FrontendMemorySample = serde_json::from_str(json).unwrap();
@@ -280,6 +308,8 @@ mod tests {
         assert_eq!(parsed.metrics[&MemoryMetric::DomElements], 16);
         assert_eq!(parsed.metrics[&MemoryMetric::ResourceTimingEntries], 17);
         assert_eq!(parsed.metrics[&MemoryMetric::JsHeapUsedBytes], 18);
+        assert_eq!(parsed.metrics[&MemoryMetric::ShellCallsStarted], 19);
+        assert_eq!(parsed.metrics[&MemoryMetric::DomMutationCharacterData], 24);
         assert_eq!(
             parsed.metrics[&MemoryMetric::HighlightCacheEstimatedBytes],
             14

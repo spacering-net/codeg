@@ -248,4 +248,32 @@ describe("frontend memory diagnostics collector", () => {
     expect(tracker.sample().metrics).toMatchObject({ connections: 1 })
     expect(tracker.sample().metrics).not.toHaveProperty("tauriCallbacks")
   })
+
+  it("owns activity cleanup and isolates failed activity reads from ordinary reports", () => {
+    let failed = false
+    const dispose = vi.fn()
+    const tracker = createFrontendMemoryTracker({
+      reporterId: "12345678-1234-4234-8234-123456789abc",
+      send: async () => {},
+      activityCounters: {
+        read: () => {
+          if (failed) throw new Error("Optional reader failed")
+          return { shellCallsPending: 2, domMutationChildList: 10 }
+        },
+        dispose,
+      },
+    })
+    tracker.registerProvider({}, () => ({ connections: 1 }))
+    expect(tracker.sample().metrics).toMatchObject({
+      connections: 1,
+      shellCallsPending: 2,
+      domMutationChildList: 10,
+    })
+    failed = true
+    expect(tracker.sample().metrics.connections).toBe(1)
+    expect(tracker.sample().metrics).not.toHaveProperty("shellCallsPending")
+    tracker.dispose()
+    tracker.dispose()
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
 })

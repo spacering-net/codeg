@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { TauriTransport } from "./tauri-transport"
+import { readTauriMemoryCalls } from "@/lib/frontend-memory-activity"
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -127,5 +128,53 @@ describe("Tauri event subscription lifetime", () => {
       event: "acp://event",
       eventId: 101,
     })
+  })
+})
+
+describe("opt-in numeric Tauri call activity", () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it("keeps disabled calls uninstrumented and preserves the result", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CODEG_MEMORY_DIAGNOSTICS", "0")
+    const before = readTauriMemoryCalls()
+    const result = { privateValue: "not inspected" }
+    const args = { privateArgument: "not inspected" }
+    mocks.invoke.mockReset().mockResolvedValueOnce(result)
+    expect(await new TauriTransport().call("owned_command", args)).toBe(result)
+    expect(mocks.invoke.mock.calls[0]?.[1]).toBe(args)
+    expect(readTauriMemoryCalls()).toEqual(before)
+  })
+
+  it("settles pending counters while preserving returned values and rejections", async () => {
+    vi.stubEnv("NEXT_PUBLIC_CODEG_MEMORY_DIAGNOSTICS", "1")
+    const before = readTauriMemoryCalls()
+    const result = { privateValue: "not inspected" }
+    const error = new Error("owned native failure")
+    let resolve: ((value: unknown) => void) | undefined
+    mocks.invoke.mockReset().mockImplementation((command) => {
+      if (command === "get_git_head") {
+        return new Promise((done) => {
+          resolve = done
+        })
+      }
+      return Promise.reject(error)
+    })
+    const pending = new TauriTransport().call("get_git_head")
+    await vi.waitFor(() => expect(resolve).toBeTypeOf("function"))
+    expect(readTauriMemoryCalls().shellCallsPending).toBe(
+      (before.shellCallsPending ?? 0) + 1
+    )
+    await expect(
+      new TauriTransport().call("unlisted_owned_command")
+    ).rejects.toBe(error)
+    resolve?.(result)
+    expect(await pending).toBe(result)
+    const after = readTauriMemoryCalls()
+    expect(after.shellCallsStarted).toBe((before.shellCallsStarted ?? 0) + 2)
+    expect(after.shellCallsPending).toBe(before.shellCallsPending)
+    expect(after.shellCallsResolved).toBe((before.shellCallsResolved ?? 0) + 1)
+    expect(after.shellCallsRejected).toBe((before.shellCallsRejected ?? 0) + 1)
+    expect(after.shellCallsGitHead).toBe((before.shellCallsGitHead ?? 0) + 1)
+    expect(after.shellCallsOther).toBe((before.shellCallsOther ?? 0) + 1)
   })
 })
