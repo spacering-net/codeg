@@ -3,6 +3,21 @@ name: Fork Windows Release
 # Fork-only workflow: builds the Windows NSIS installer and publishes it as a
 # release in this fork, under this fork's own version numbering.
 #
+# Each release carries two things:
+#
+#   *_x64-setup.exe (+ the updater's .nsis.zip/.sig and latest.json)
+#       the desktop app. Its bundle holds the frontend export (tauri.conf.json
+#       maps `../out` to `web/`), but no `codeg-server`: that is a separate
+#       binary target with its own feature set, which the bundler cannot pack.
+#
+#   codeg-server-web-<tag>-windows-x64.zip
+#       `codeg-server.exe` beside the `web/` export it serves, unzipped into one
+#       folder. This is what a WingHarness-style host embeds: it starts the
+#       server on a loopback port and shows the export in a child webview. The
+#       two have to travel together and come from one commit — a server paired
+#       with a `web/` from another commit answers 404 for whatever they do not
+#       share, which is far harder to diagnose than a missing file.
+#
 # Manual only (`workflow_dispatch`), because a release carries two inputs that
 # no tag can express:
 #
@@ -131,6 +146,44 @@ jobs:
         shell: bash
         run: pnpm tauri:prepare-sidecars --target x86_64-pc-windows-msvc
 
+      # Built before the installer is published, so a failure here stops the
+      # release instead of leaving one without the server bundle. Same target
+      # triple as the bundle: the cargo artifacts are then shared with the
+      # installer build that follows.
+      - name: Build codeg-server and the web export
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm build
+          test -f out/index.html || {
+            echo "::error::the web export produced no out/index.html"
+            exit 1
+          }
+          cargo build --release \
+            --target x86_64-pc-windows-msvc \
+            --no-default-features --features server-bin \
+            --bin codeg-server \
+            --manifest-path src-tauri/Cargo.toml
+
+      # `codeg-server` resolves `./web` next to where it runs, so the archive is
+      # the exe and the export side by side, with no wrapper folder: unzipping
+      # into the folder it will run from is the whole installation.
+      - name: Package codeg-server with its web export
+        shell: pwsh
+        run: |
+          $name = "codeg-server-web-${{ steps.version.outputs.tag }}-windows-x64"
+          $exe = "src-tauri/target/x86_64-pc-windows-msvc/release/codeg-server.exe"
+          if (-not (Test-Path $exe)) { throw "codeg-server.exe missing from the release build" }
+          if (-not (Test-Path "out/index.html")) { throw "the web export is missing out/index.html" }
+          $stage = Join-Path "dist" $name
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item $exe $stage
+          Copy-Item -Recurse "out" (Join-Path $stage "web")
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath "dist/$name.zip"
+          # Only the archive is kept; the staging copy is already inside it.
+          Remove-Item -Recurse -Force $stage
+          Get-Item "dist/$name.zip" | Format-List Name, Length
+
       - name: Build installer and publish release
         uses: tauri-apps/tauri-action@v0.6.1
         env:
@@ -147,7 +200,17 @@ jobs:
         with:
           tagName: ${{ steps.version.outputs.tag }}
           releaseName: codeg ${{ steps.version.outputs.tag }}
-          releaseBody: "Fork build. Windows x64 NSIS installer only. Base ${{ inputs.version }}, fork revision ${{ inputs.prefix }}."
+          releaseBody: |
+            Fork build. Windows x64. Base ${{ inputs.version }}, fork revision ${{ inputs.prefix }}.
+
+            - `codeg_*_x64-setup.exe` — the desktop app, NSIS installer.
+            - `*.nsis.zip`, `*.nsis.zip.sig`, `latest.json` — the updater's artifact,
+              its signature, and the manifest the app's update check reads.
+            - `codeg-server-web-${{ steps.version.outputs.tag }}-windows-x64.zip` —
+              `codeg-server.exe` with the `web/` export it serves. Unzip it into one
+              folder (`web/` has to sit beside the exe) and run the server from there,
+              or point a host app that embeds Codeg at that folder. It shares the data
+              directory the desktop app uses.
           releaseDraft: false
           prerelease: false
           tauriScript: pnpm tauri
@@ -156,3 +219,13 @@ jobs:
           args: --target x86_64-pc-windows-msvc --bundles nsis,updater
           includeUpdaterJson: true
           retryAttempts: 2
+
+      # After the action above, which is what creates the release — uploading
+      # before it would have nowhere to go. `--clobber` so a re-run of a failed
+      # job replaces the asset instead of refusing.
+      - name: Attach the server bundle to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh release upload "$TAG" "dist/codeg-server-web-$TAG-windows-x64.zip" --clobber
