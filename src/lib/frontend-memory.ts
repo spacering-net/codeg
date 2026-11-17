@@ -1,5 +1,6 @@
 // Optional numeric diagnostics. Never serialize application state or force GC.
 import { isDesktop, isRemoteDesktopMode } from "@/lib/transport"
+import { readBrowserMemoryCounters } from "./frontend-memory-browser"
 
 export const MEMORY_METRIC_KEYS = [
   "providersActive",
@@ -46,6 +47,14 @@ export const MEMORY_METRIC_KEYS = [
   "highlightWaiting",
   "documentHidden",
   "documentFocused",
+  "tauriCallbacks",
+  "domElements",
+  "domCanvases",
+  "terminalElements",
+  "documentAnimations",
+  "runningAnimations",
+  "resourceTimingEntries",
+  "jsHeapUsedBytes",
   "overlayFoldRefetchEntries",
   "selectorsCacheEntries",
   "iframeCount",
@@ -83,6 +92,7 @@ export function createFrontendMemoryTracker(options: {
   now?: () => number
   iframeCount?: () => number
   documentState?: () => { hidden: boolean; focused: boolean }
+  browserCounters?: Reader
 }) {
   const weakReference = (
     globalThis as typeof globalThis & {
@@ -285,6 +295,13 @@ export function createFrontendMemoryTracker(options: {
         /* page is navigating */
       }
     }
+    if (options.browserCounters) {
+      try {
+        merge(options.browserCounters())
+      } catch {
+        /* optional browser APIs must not prevent existing reports */
+      }
+    }
     const elapsed = now() - started
     metrics.sampleDurationMicros = Number.isFinite(elapsed)
       ? Math.min(
@@ -351,6 +368,7 @@ function tracker(): Tracker | undefined {
         hidden: document.hidden,
         focused: document.hasFocus(),
       }),
+      browserCounters: readBrowserMemoryCounters,
       send: async (sample) => {
         // Always use the LOCAL shell transport; never send machine diagnostics
         // to a configured remote desktop/server or any external destination.

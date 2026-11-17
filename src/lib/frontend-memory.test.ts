@@ -221,4 +221,31 @@ describe("frontend memory diagnostics collector", () => {
       runtimeTurnsRetired: 0,
     })
   })
+
+  it("validates browser counters and keeps reporting when a browser API fails", () => {
+    let failed = false
+    const tracker = createFrontendMemoryTracker({
+      reporterId: "12345678-1234-4234-8234-123456789abc",
+      browserCounters: () => {
+        if (failed) throw new Error("Optional API unavailable")
+        return {
+          tauriCallbacks: 12,
+          domElements: 100,
+          jsHeapUsedBytes: Number.NaN,
+          resourceTimingEntries: -1,
+          privateResourceName: "private",
+        } as never
+      },
+      send: async () => {},
+    })
+    tracker.registerProvider({}, () => ({ connections: 1 }))
+    const metrics = tracker.sample().metrics
+    expect(metrics).toMatchObject({ tauriCallbacks: 12, domElements: 100 })
+    expect(metrics).not.toHaveProperty("jsHeapUsedBytes")
+    expect(metrics).not.toHaveProperty("resourceTimingEntries")
+    expect(metrics).not.toHaveProperty("privateResourceName")
+    failed = true
+    expect(tracker.sample().metrics).toMatchObject({ connections: 1 })
+    expect(tracker.sample().metrics).not.toHaveProperty("tauriCallbacks")
+  })
 })

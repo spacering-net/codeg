@@ -60,6 +60,14 @@ pub enum MemoryMetric {
     HighlightWaiting,
     DocumentHidden,
     DocumentFocused,
+    TauriCallbacks,
+    DomElements,
+    DomCanvases,
+    TerminalElements,
+    DocumentAnimations,
+    RunningAnimations,
+    ResourceTimingEntries,
+    JsHeapUsedBytes,
     OverlayFoldRefetchEntries,
     SelectorsCacheEntries,
     IframeCount,
@@ -249,7 +257,15 @@ mod tests {
                 "highlightInFlight": 0,
                 "highlightWaiting": 0,
                 "documentHidden": 0,
-                "documentFocused": 1
+                "documentFocused": 1,
+                "tauriCallbacks": 15,
+                "domElements": 16,
+                "domCanvases": 0,
+                "terminalElements": 0,
+                "documentAnimations": 2,
+                "runningAnimations": 1,
+                "resourceTimingEntries": 17,
+                "jsHeapUsedBytes": 18
             }
         }"#;
         let parsed: FrontendMemorySample = serde_json::from_str(json).unwrap();
@@ -260,6 +276,10 @@ mod tests {
         );
         assert_eq!(parsed.metrics[&MemoryMetric::MessageViewsRetired], 12);
         assert_eq!(parsed.metrics[&MemoryMetric::DocumentFocused], 1);
+        assert_eq!(parsed.metrics[&MemoryMetric::TauriCallbacks], 15);
+        assert_eq!(parsed.metrics[&MemoryMetric::DomElements], 16);
+        assert_eq!(parsed.metrics[&MemoryMetric::ResourceTimingEntries], 17);
+        assert_eq!(parsed.metrics[&MemoryMetric::JsHeapUsedBytes], 18);
         assert_eq!(
             parsed.metrics[&MemoryMetric::HighlightCacheEstimatedBytes],
             14
