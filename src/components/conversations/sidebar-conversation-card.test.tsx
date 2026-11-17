@@ -438,6 +438,11 @@ describe("SidebarConversationCard running badge", () => {
     expect(getByText("Waiting")).toBeInTheDocument()
     expect(container.querySelector(".bg-orange-500")).not.toBeNull()
     expect(queryByTitle("Running")).toBeNull()
+    // Like the running spinner, the badge gives its slot to the hover actions
+    // on a root row instead of crowding the title beside them.
+    expect(getByTitle("Waiting").parentElement).toHaveClass(
+      "group-hover:hidden"
+    )
 
     act(() => {
       connection = {

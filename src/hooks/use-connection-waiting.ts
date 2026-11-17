@@ -1,33 +1,18 @@
 "use client"
 
 import { useCallback, useSyncExternalStore } from "react"
-import {
-  useOptionalConnectionStore,
-  type ConnectionState,
-} from "@/contexts/acp-connections-context"
-
-type WaitingConnection = Pick<
-  ConnectionState,
-  | "pendingPermission"
-  | "pendingQuestion"
-  | "pendingAskQuestion"
-  | "pendingPlanApproval"
->
+import { useOptionalConnectionStore } from "@/contexts/acp-connections-context"
+import { blockingPrompts } from "@/lib/blocking-prompts"
 
 const NO_SUBSCRIPTION = () => () => {}
 const NOT_WAITING = () => false
 
-export function hasPendingUserInput(
-  connection: WaitingConnection | null | undefined
-): boolean {
-  return Boolean(
-    connection?.pendingPermission ||
-    connection?.pendingQuestion ||
-    connection?.pendingAskQuestion ||
-    connection?.pendingPlanApproval
-  )
-}
-
+/**
+ * Whether the connection at `contextKey` is parked on the user — the same
+ * `blockingPrompts` notion the conversation panel's `awaitingUser` and the
+ * live-runs chip use, so the sidebar and tab strip never disagree with them.
+ * Re-renders only when that boolean flips, not on every connection update.
+ */
 export function useConnectionWaiting(contextKey: string): boolean {
   const store = useOptionalConnectionStore()
   const subscribe = useCallback(
@@ -36,7 +21,7 @@ export function useConnectionWaiting(contextKey: string): boolean {
     [contextKey, store]
   )
   const getSnapshot = useCallback(
-    () => hasPendingUserInput(store?.getConnection(contextKey)),
+    () => blockingPrompts(store?.getConnection(contextKey)) !== null,
     [contextKey, store]
   )
 

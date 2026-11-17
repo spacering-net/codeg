@@ -75,20 +75,19 @@ describe("会话待处理订阅", () => {
       },
     ],
     [
-      "提问",
-      {
-        pendingQuestion: {
-          tool_call_id: "tool-1",
-          question: "是否继续？",
-        },
-      },
-    ],
-    [
       "多选提问",
       {
         pendingAskQuestion: {
           question_id: "question-1",
-          questions: [],
+          questions: [
+            {
+              id: "q-1",
+              question: "选哪个？",
+              header: "方案",
+              options: [],
+              multi_select: false,
+            },
+          ],
           created_at: "2026-11-16T00:00:00Z",
         },
       },
@@ -118,6 +117,36 @@ describe("会话待处理订阅", () => {
     expect(result.current).toBe(false)
   })
 
+  // 与 blockingPrompts 同一口径：回合结束后的自由文本问题靠发下一条消息作答，
+  // 不阻塞 agent；没有题目的提问集不渲染卡片，也不算待处理。
+  const notPendingCases: [string, PendingConnectionPatch][] = [
+    [
+      "自由文本提问",
+      {
+        pendingQuestion: {
+          tool_call_id: "tool-1",
+          question: "是否继续？",
+        },
+      },
+    ],
+    [
+      "空提问集",
+      {
+        pendingAskQuestion: {
+          question_id: "question-1",
+          questions: [],
+          created_at: "2026-11-16T00:00:00Z",
+        },
+      },
+    ],
+  ]
+
+  it.each(notPendingCases)("%s 不显示为待处理", (_name, patch) => {
+    update("first", connection(patch))
+    const { result } = renderHook(() => useConnectionWaiting("first"))
+    expect(result.current).toBe(false)
+  })
+
   it("只在当前会话的待处理状态变化时重绘", () => {
     update("first", connection())
     let renders = 0
@@ -131,9 +160,10 @@ describe("会话待处理订阅", () => {
     update(
       "other",
       connection({
-        pendingQuestion: {
-          tool_call_id: "tool-2",
-          question: "另一个会话的问题",
+        pendingPermission: {
+          request_id: "permission-2",
+          tool_call: {},
+          options: [],
         },
       })
     )
@@ -142,9 +172,11 @@ describe("会话待处理订阅", () => {
     update(
       "first",
       connection({
-        pendingQuestion: {
+        pendingPlanApproval: {
+          approval_id: "approval-1",
           tool_call_id: "tool-1",
-          question: "是否继续？",
+          plan_markdown: "执行计划",
+          created_at: "2026-11-16T00:00:00Z",
         },
       })
     )

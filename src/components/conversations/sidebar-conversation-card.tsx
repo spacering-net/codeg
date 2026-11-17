@@ -596,7 +596,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                         // Roots swap the badge out for the hover actions; sub-sessions
                         // have no actions, so keep the badge (incl. the running
                         // spinner) visible on hover.
-                        !isSubsession && !isWaiting && "group-hover:hidden"
+                        !isSubsession && "group-hover:hidden"
                       )}
                     >
                       {isWaiting ? (
