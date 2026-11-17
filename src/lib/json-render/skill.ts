@@ -2,7 +2,7 @@ import { jsonRenderCatalog } from "./catalog"
 
 /**
  * The name of the skill Codeg links into the skill directory of every agent it
- * is enabled for (Settings > Skill Packs > UI). It is what the user types:
+ * is enabled for (Harness › Skill Packs › UI). It is what the user types:
  * `/ui-render` (`$ui-render` in Codex).
  */
 export const UI_RENDER_SKILL_NAME = "ui-render"

@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react"
 import {
+  Blocks,
   FolderGit2,
   FolderOpenDot,
   GamepadDirectional,
@@ -18,6 +19,7 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
+import { HarnessUpdatesBadge } from "@/components/harness/harness-updates-badge"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -31,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useAutomationsView } from "@/contexts/automations-view-context"
+import { useHarnessView } from "@/contexts/harness-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useOptionalWorkspaceActions } from "@/contexts/workspace-context"
@@ -47,8 +50,8 @@ import { RemoteWorkspaceManageDialog } from "./remote-workspace-manage-dialog"
 import { WorkspaceFolderDialog } from "./workspace-folder-dialog"
 
 /**
- * The quick-actions launcher pinned to the status bar's leading edge — the
- * window's bottom-left corner.
+ * The quick-actions launcher at the status bar's leading edge, just after the
+ * SRN account entry in the window's bottom-left corner.
  *
  * Every entry here already exists somewhere else (the sidebar's nav rows, the
  * folder-list context menu, the top-left chrome, the file tab strip's "+",
@@ -80,6 +83,7 @@ export function QuickActionsDropdown() {
 
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
+  const { updatesCount: harnessUpdates } = useHarnessView()
   const { setRoute, openConversations } = useWorkbenchRoute()
   // The file tab strip carries the other "+" for this; the launcher covers the
   // case that strip cannot — with no file tab open there is no strip at all.
@@ -154,9 +158,9 @@ export function QuickActionsDropdown() {
                 (0,1,0) — so the `h-3.5 w-3.5` spelling silently rendered this
                 glyph at 1rem, the largest icon on a bar whose others are
                 0.75–0.875rem. Spelling it `size-` is what opts out of that
-                rule. 0.875rem is also exactly the sidebar's nav-icon size, so
-                atop the bar's `pl-2` this glyph shares their leading edge, not
-                just their rail axis. */}
+                rule. 0.875rem is also exactly the sidebar's nav-icon size —
+                and the SRN entry's ring beside it, which now holds the bar's
+                leading rail. */}
             <GamepadDirectional aria-hidden="true" className="size-3.5" />
           </Button>
         </DropdownMenuTrigger>
@@ -272,6 +276,15 @@ export function QuickActionsDropdown() {
           <DropdownMenuItem onSelect={() => setRoute("canvas")}>
             <MapIcon />
             {tSidebar("canvas")}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setRoute("harness")}>
+            <Blocks />
+            <span className="min-w-0 flex-1 truncate">
+              {tSidebar("harness")}
+            </span>
+            {harnessUpdates > 0 && (
+              <HarnessUpdatesBadge count={harnessUpdates} />
+            )}
           </DropdownMenuItem>
 
           {desktop && (

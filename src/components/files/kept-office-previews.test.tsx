@@ -21,7 +21,6 @@ vi.mock("@/lib/api", () => ({
   startOfficeWatch: vi.fn(),
   stopOfficeWatch: vi.fn(),
   renewOfficeWatch: vi.fn(),
-  openSettingsWindow: vi.fn(),
 }))
 vi.mock("@/lib/transport", () => ({
   isDesktop: () => true,

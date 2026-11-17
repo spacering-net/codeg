@@ -45,6 +45,8 @@ import { TabProvider, useTabStore, useTabActions } from "@/contexts/tab-context"
 import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
 import { SearchDialogProvider } from "@/contexts/search-dialog-context"
 import { AutomationsViewProvider } from "@/contexts/automations-view-context"
+import { HarnessViewHost } from "@/components/harness/harness-view-host"
+import { HarnessUpdatesSync } from "@/lib/harness/use-harness-updates"
 import { TasksViewProvider } from "@/contexts/tasks-view-context"
 import { TaskFromMessageHost } from "@/components/tasks/task-from-message-host"
 import {
@@ -93,6 +95,7 @@ import {
   DeepLinkBootstrap,
   PetFocusBridge,
 } from "@/components/workspace/deep-link-bootstrap"
+import { HarnessLinkBootstrap } from "@/components/workspace/harness-link-bootstrap"
 import { WorkspaceOpenFolderListener } from "@/components/workspace/workspace-open-folder-listener"
 import { WorkspaceRestoreNotices } from "@/components/workspace/workspace-restore-notices"
 import { HeavyPluginsWarmup } from "@/components/ai-elements/heavy-plugins-warmup"
@@ -1555,22 +1558,44 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                             <SearchDialogProvider>
                               <AutomationsViewProvider>
                                 <TasksViewProvider>
-                                  <WorkbenchRouteProvider>
-                                    <WorkbenchRouteConversationSync />
-                                    {/* The task editor a message's "create
-                                          task" opens over the page it is on:
-                                          a transcript shows in a tab, a canvas
-                                          card or a drawer on any route, and
-                                          none of them keeps one of its own. */}
-                                    <TaskFromMessageHost />
-                                    {/* Inside WorkbenchRouteProvider: the
-                                          listener calls openConversations() to
-                                          surface a launcher-opened folder. */}
-                                    <WorkspaceOpenFolderListener />
-                                    <FolderLayoutShell>
-                                      {children}
-                                    </FolderLayoutShell>
-                                  </WorkbenchRouteProvider>
+                                  {/* Always mounted, like the two view
+                                        providers around it: the Harness page
+                                        unmounts whenever its route is left,
+                                        so the section it was on, what it was
+                                        asked to open and its sections' state
+                                        are kept here. The host is the provider
+                                        plus the backend's answer on whether
+                                        the catalog is offered (the
+                                        CODEG_HARNESS switch). */}
+                                  <HarnessViewHost>
+                                    {/* The host's update check of what it
+                                          installed from Harness: the
+                                          sidebar's badge count, kept current
+                                          with the page closed. */}
+                                    <HarnessUpdatesSync />
+                                    <WorkbenchRouteProvider>
+                                      <WorkbenchRouteConversationSync />
+                                      {/* The task editor a message's "create
+                                            task" opens over the page it is on:
+                                            a transcript shows in a tab, a canvas
+                                            card or a drawer on any route, and
+                                            none of them keeps one of its own. */}
+                                      <TaskFromMessageHost />
+                                      {/* Inside WorkbenchRouteProvider: the
+                                            listener calls openConversations() to
+                                            surface a launcher-opened folder. */}
+                                      <WorkspaceOpenFolderListener />
+                                      {/* An "Open in Codeg" link for a Harness
+                                            item opens it here, inside the route
+                                            and the Harness view it needs: the
+                                            page's own ?harness=, or the address
+                                            PetFocusBridge claimed. */}
+                                      <HarnessLinkBootstrap />
+                                      <FolderLayoutShell>
+                                        {children}
+                                      </FolderLayoutShell>
+                                    </WorkbenchRouteProvider>
+                                  </HarnessViewHost>
                                 </TasksViewProvider>
                               </AutomationsViewProvider>
                             </SearchDialogProvider>

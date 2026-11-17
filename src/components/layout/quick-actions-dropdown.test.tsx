@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
+import { useEffect } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 // The menu is a thin router over existing entry points, so every one of them is
@@ -94,13 +95,31 @@ vi.mock("./remote-workspace-manage-dialog", () => ({
 }))
 
 import { QuickActionsDropdown } from "./quick-actions-dropdown"
+import {
+  HarnessViewProvider,
+  useHarnessView,
+} from "@/contexts/harness-view-context"
 import enMessages from "@/i18n/messages/en.json"
+import { SIDEBAR_NAV_ITEM_IDS } from "@/lib/sidebar-view-mode-storage"
 
-/** Mount once, then open the (single) trigger. */
-async function mountAndOpen() {
+/** Reports a number of available updates to the Harness provider, as the
+ *  update check will. */
+function HarnessUpdates({ count }: { count: number }) {
+  const { setUpdatesCount } = useHarnessView()
+  useEffect(() => setUpdatesCount(count), [count, setUpdatesCount])
+  return null
+}
+
+/** Mount once, then open the (single) trigger. Under the real Harness provider
+ *  — it talks to no backend — so the row's badge is fed the way the app feeds
+ *  it. */
+async function mountAndOpen({ harnessUpdates = 0 } = {}) {
   render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <QuickActionsDropdown />
+      <HarnessViewProvider>
+        <HarnessUpdates count={harnessUpdates} />
+        <QuickActionsDropdown />
+      </HarnessViewProvider>
     </NextIntlClientProvider>
   )
   await reopen()
@@ -142,6 +161,8 @@ describe("QuickActionsDropdown", () => {
       AUTOMATIONS_ROW,
       "To-dos",
       FORGE_ROW,
+      "Infinite Canvas",
+      "Harness",
       "Open browser tab",
       "Show pet",
     ]) {
@@ -276,8 +297,60 @@ describe("QuickActionsDropdown", () => {
     expect(mocks.setRoute).toHaveBeenCalledWith("forge")
 
     await reopen()
+    await clickItem("Harness")
+    expect(mocks.setRoute).toHaveBeenCalledWith("harness")
+
+    await reopen()
     await clickItem("Show pet")
     expect(mocks.openPetWindow).toHaveBeenCalled()
+  })
+
+  it("lists every sidebar route, in the sidebar's own order", async () => {
+    await mountAndOpen()
+    await screen.findByRole("menuitem", { name: "Harness" })
+
+    // The same list the sidebar builds its rows from, so a route added there
+    // cannot be left out of — or misplaced in — the one menu that still
+    // reaches it with the sidebar collapsed or the row hidden.
+    const labels = SIDEBAR_NAV_ITEM_IDS.map(
+      (id) => enMessages.Folder.sidebar[id]
+    )
+    const rows = screen
+      .getAllByRole("menuitem")
+      // A badged row's text is its label plus the count.
+      .map((el) => labels.find((label) => el.textContent?.startsWith(label)))
+      .filter((label) => label !== undefined)
+    expect(rows).toEqual(labels)
+    expect(labels[labels.length - 1]).toBe("Harness")
+  })
+
+  it("keeps Harness reachable off the desktop", async () => {
+    desktop = false
+    await mountAndOpen()
+
+    // A route switch, not a desktop feature: it is how a web client — or
+    // anyone who hid the sidebar row — gets to the page at all.
+    await clickItem("Harness")
+    expect(mocks.setRoute).toHaveBeenCalledWith("harness")
+  })
+
+  it("carries no Harness badge while nothing has an update", async () => {
+    await mountAndOpen()
+    const row = await screen.findByRole("menuitem", { name: "Harness" })
+    expect(row.textContent).toBe("Harness")
+  })
+
+  it("carries the sidebar's updates badge on the Harness row", async () => {
+    await mountAndOpen({ harnessUpdates: 4 })
+
+    const row = await screen.findByRole("menuitem", {
+      name: "Harness 4 updates available",
+    })
+    const badge = row.querySelector('[title="4 updates available"]')
+    expect(badge).not.toBeNull()
+    // The To-dos tint: updates waiting are not a failure.
+    expect(badge?.className).toContain("bg-primary/10")
+    expect(badge?.className).not.toContain("destructive")
   })
 
   it("loads the remote connections only when its submenu opens", async () => {

@@ -76,6 +76,8 @@ fn spawn_local_command(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    // Not Codeg Web's SRN settings (the secret file's path among them).
+    crate::appimage_env::drop_codeg_only(child.as_std_mut());
     if let Some(dir) = resolve_working_dir(working_dir.as_deref()) {
         child.current_dir(dir);
     }
@@ -475,6 +477,51 @@ mod tests {
 
         // Generous: the wait ends as soon as the marker appears, and a login
         // shell's profile (nvm, conda, …) on a busy machine can take seconds.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Ok(contents) = std::fs::read_to_string(&marker) {
+                if !contents.is_empty() {
+                    assert_eq!(contents, expected);
+                    return;
+                }
+            }
+            assert!(Instant::now() < deadline, "command never wrote the marker");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    /// Codeg Web's SRN settings, the client secret file's path among them,
+    /// are codeg's own: a local command does not inherit them.
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn runs_command_without_codeg_s_srn_settings() {
+        use crate::srn::web::config::CHILD_HIDDEN_ENV;
+        use std::time::{Duration, Instant};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("marker.txt");
+        let report = CHILD_HIDDEN_ENV
+            .iter()
+            .map(|name| format!("${{{name}-unset}}"))
+            .collect::<Vec<_>>()
+            .join("|");
+        let vars: Vec<(&str, Option<&str>)> = CHILD_HIDDEN_ENV
+            .iter()
+            .map(|name| (*name, Some("/run/secrets/codeg-srn-client-secret")))
+            .collect();
+        temp_env::async_with_vars(vars, async {
+            run_local_command(
+                format!("printf '%s' \"{report}\" > '{}'", marker.display()),
+                None,
+                None,
+                Some(dir.path().to_str().expect("utf-8 temp path").into()),
+            )
+            .await
+            .expect("spawn");
+        })
+        .await;
+        let expected = vec!["unset"; CHILD_HIDDEN_ENV.len()].join("|");
+
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if let Ok(contents) = std::fs::read_to_string(&marker) {

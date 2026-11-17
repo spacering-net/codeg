@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import type { SkillsChanged } from "@/lib/skills/types"
 import type { AgentSkillItem, AgentSkillsListResult } from "@/lib/types"
 
 const mockListSkills =
@@ -15,6 +16,17 @@ vi.mock("@/lib/api", () => ({
     agentType: string
     workspacePath?: string | null
   }) => mockListSkills(params),
+}))
+
+// `skills://changed`, as the shared subscription hands it out.
+const changes = vi.hoisted(() => ({
+  listeners: new Set<(change: SkillsChanged | null) => void>(),
+}))
+vi.mock("@/lib/skills/changes", () => ({
+  listenSkillsChanged: (listener: (change: SkillsChanged | null) => void) => {
+    changes.listeners.add(listener)
+    return () => changes.listeners.delete(listener)
+  },
 }))
 
 import { invalidateAgentSkillsCache, useAgentSkills } from "./use-agent-skills"
@@ -295,5 +307,92 @@ describe("invalidateAgentSkillsCache", () => {
     expect(reopened.result.current).toEqual([])
     await waitFor(() => expect(ids(reopened.result.current)).toEqual(["y2"]))
     expect(mockListSkills).toHaveBeenCalledTimes(4)
+  })
+})
+
+function emit(change: SkillsChanged | null) {
+  act(() => {
+    for (const listener of [...changes.listeners]) listener(change)
+  })
+}
+
+// The Harness page changes skills inside the workspace window, where no focus
+// event follows: the composers' lists follow `skills://changed` instead.
+describe("useAgentSkills — skills://changed", () => {
+  it("rescans the named agent's folders on screen, with no focus event", async () => {
+    mockListSkills.mockResolvedValue(listing("deploy"))
+    const { result } = renderHook(() => ({
+      codex: useAgentSkills("codex", "/ws/e"),
+      claude: useAgentSkills("claude_code", "/ws/e"),
+    }))
+    await waitFor(() => {
+      expect(ids(result.current.codex)).toEqual(["deploy"])
+      expect(ids(result.current.claude)).toEqual(["deploy"])
+    })
+    expect(mockListSkills).toHaveBeenCalledTimes(2)
+
+    mockListSkills.mockResolvedValue(listing("deploy", "review"))
+    emit({ kinds: ["links"], agents: ["codex"] })
+
+    // Only Codex was named: one scan, for its folder.
+    expect(mockListSkills).toHaveBeenCalledTimes(3)
+    expect(mockListSkills.mock.calls[2][0].agentType).toBe("codex")
+    await waitFor(() =>
+      expect(ids(result.current.codex)).toEqual(["deploy", "review"])
+    )
+    expect(ids(result.current.claude)).toEqual(["deploy"])
+  })
+
+  it("rescans every folder on screen for a change that names nobody, or a reconnect", async () => {
+    mockListSkills.mockResolvedValue(listing("deploy"))
+    renderHook(() => ({
+      codex: useAgentSkills("codex", "/ws/f"),
+      claude: useAgentSkills("claude_code", "/ws/f"),
+    }))
+    await waitFor(() => expect(mockListSkills).toHaveBeenCalledTimes(2))
+
+    emit({ kinds: ["store"], agents: [] })
+    expect(mockListSkills).toHaveBeenCalledTimes(4)
+    emit(null)
+    expect(mockListSkills).toHaveBeenCalledTimes(6)
+  })
+
+  it("forgets a named agent's folder nothing reads, so its next reader scans afresh", async () => {
+    mockListSkills.mockResolvedValue(listing("deploy"))
+    const onScreen = renderHook(() => useAgentSkills("codex", "/ws/g"))
+    const closed = renderHook(() => useAgentSkills("codex", "/ws/h"))
+    await waitFor(() => expect(mockListSkills).toHaveBeenCalledTimes(2))
+    closed.unmount()
+
+    mockListSkills.mockResolvedValue(listing("review"))
+    emit({ kinds: ["links"], agents: ["codex"] })
+    expect(mockListSkills).toHaveBeenCalledTimes(3)
+    await waitFor(() =>
+      expect(ids(onScreen.result.current)).toEqual(["review"])
+    )
+
+    const reopened = renderHook(() => useAgentSkills("codex", "/ws/h"))
+    expect(reopened.result.current).toEqual([])
+    await waitFor(() =>
+      expect(ids(reopened.result.current)).toEqual(["review"])
+    )
+  })
+
+  it("stops following once nothing reads, and checks a kept list again on the next read", async () => {
+    mockListSkills.mockResolvedValue(listing("deploy"))
+    const first = renderHook(() => useAgentSkills("codex", "/ws/i"))
+    await waitFor(() => expect(ids(first.result.current)).toEqual(["deploy"]))
+    first.unmount()
+    expect(changes.listeners.size).toBe(0)
+
+    // A change nobody heard of: the next reader is shown what was kept, and
+    // the list is read again.
+    mockListSkills.mockResolvedValue(listing("deploy", "review"))
+    const second = renderHook(() => useAgentSkills("codex", "/ws/i"))
+    expect(ids(second.result.current)).toEqual(["deploy"])
+    await waitFor(() =>
+      expect(ids(second.result.current)).toEqual(["deploy", "review"])
+    )
+    expect(mockListSkills).toHaveBeenCalledTimes(2)
   })
 })

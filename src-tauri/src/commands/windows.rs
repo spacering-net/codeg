@@ -374,11 +374,6 @@ fn resolve_settings_route(section: Option<&str>) -> &'static str {
         Some("general") => "settings/general",
         Some("appearance") => "settings/appearance",
         Some("agents") => "settings/agents",
-        Some("mcp") => "settings/mcp",
-        Some("skills") => "settings/skills",
-        Some("experts") => "settings/experts",
-        Some("science") => "settings/science",
-        Some("office-tools") => "settings/office-tools",
         Some("collaboration") => "settings/collaboration",
         Some("browser") => "settings/browser",
         Some("computer-use") => "settings/computer-use",
@@ -388,6 +383,11 @@ fn resolve_settings_route(section: Option<&str>) -> &'static str {
         // Desktop only, like the page itself: the web nav hides it, so the web
         // `open_settings_window` deliberately has no arm for it.
         Some("web-service") => "settings/web-service",
+        // Anything else lands on Appearance, as an unnamed section does. That
+        // includes the MCP, Skills and Skill packs pages (and the Experts,
+        // Science and Office tools addresses that led to the last), which moved
+        // to the workspace's Harness page: an older window asking for one gets
+        // the Settings window rather than an error.
         _ => "settings/appearance",
     }
 }
@@ -2725,11 +2725,6 @@ mod settings_route_tests {
             "general",
             "appearance",
             "agents",
-            "mcp",
-            "skills",
-            "experts",
-            "science",
-            "office-tools",
             "collaboration",
             "browser",
             "computer-use",
@@ -2746,6 +2741,31 @@ mod settings_route_tests {
         }
         // An unnamed section keeps its long-standing desktop landing spot.
         assert_eq!(resolve_settings_route(None), "settings/appearance");
+    }
+
+    /// The MCP, Skills and Skill packs pages are gone from the Settings window
+    /// (they are sections of the workspace's Harness page now), and so are the
+    /// Experts, Science and Office tools addresses that redirected to the last.
+    /// A caller that still names one — an older window, a stale link — is not
+    /// sent to a route that no longer exists: it gets the Settings window on
+    /// the page an unknown section lands on.
+    #[test]
+    fn sections_moved_to_harness_fall_back_like_unknown_ones() {
+        for section in [
+            "mcp",
+            "skills",
+            "skill-packs",
+            "experts",
+            "science",
+            "office-tools",
+            "no-such-section",
+        ] {
+            assert_eq!(
+                resolve_settings_route(Some(section)),
+                "settings/appearance",
+                "section {section} must land where an unknown section does"
+            );
+        }
     }
 }
 

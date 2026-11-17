@@ -25,7 +25,12 @@ vi.mock("@/components/layout/command-dropdown", () => ({
   CommandDropdown: () => null,
 }))
 vi.mock("@/components/layout/quick-actions-dropdown", () => ({
-  QuickActionsDropdown: () => null,
+  QuickActionsDropdown: () => <span data-testid="quick-actions" />,
+}))
+vi.mock("@/components/layout/status-bar-srn", () => ({
+  StatusBarSrn: ({ compact }: { compact?: boolean }) => (
+    <span data-testid="srn" data-compact={compact ? "true" : "false"} />
+  ),
 }))
 vi.mock("@/components/layout/status-bar-web-service", () => ({
   StatusBarWebService: () => <span data-testid="web-service" />,
@@ -48,5 +53,22 @@ describe("StatusBar", () => {
     viewport.mobile = mobile
     render(<StatusBar />)
     expect(screen.getByTestId("web-service")).toBeInTheDocument()
+  })
+
+  /** The SRN entry holds the bar's leading corner — the sidebar's icon rail —
+   *  and the quick-actions launcher follows it. On phones it is the ring or
+   *  avatar alone. */
+  it.each([
+    ["wide", false],
+    ["narrow", true],
+  ])("leads with the SRN entry in the %s layout", (_label, mobile) => {
+    viewport.mobile = mobile
+    render(<StatusBar />)
+    const srn = screen.getByTestId("srn")
+    const quick = screen.getByTestId("quick-actions")
+    expect(
+      srn.compareDocumentPosition(quick) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    expect(srn).toHaveAttribute("data-compact", mobile ? "true" : "false")
   })
 })

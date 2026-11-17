@@ -24,6 +24,7 @@ use crate::acp::types::{
 };
 #[cfg(feature = "tauri-runtime")]
 use crate::acp::types::{ConnectionInfo, ForkResultInfo, PromptInputBlock};
+use crate::app_error::AppCommandError;
 use crate::db::service::agent_setting_service;
 use crate::db::service::model_provider_service;
 use crate::db::AppDatabase;
@@ -3137,6 +3138,21 @@ fn load_opencode_config_text() -> Option<String> {
     (!raw.trim().is_empty()).then(|| raw.to_string())
 }
 
+/// The MCP write lock, for the settings writers below that replace a file
+/// the MCP page also edits — `mcpServers` lives in Qoder's and Gemini's
+/// `settings.json`, `[mcp_servers]` in Grok's `config.toml`, `mcp_servers`
+/// in Hermes' `config.yaml`, `mcp.servers` in OpenCode's config, and Claude
+/// Code's `settings.json` holds the `enabledPlugins` the MCP engine keeps in
+/// step. One writer at a time keeps a save here from landing in the middle
+/// of an `mcp_apply` (see `commands::mcp_engine::lock`).
+///
+/// Taken by each writer for its own read-modify-write, never around a call
+/// to another one that takes it: the lock is not re-entrant.
+fn mcp_write_lock() -> Result<crate::commands::mcp_engine::lock::McpWriteGuard, AcpError> {
+    crate::commands::mcp_engine::lock::acquire_blocking()
+        .map_err(|e| AcpError::protocol(e.to_string()))
+}
+
 /// Write the panel's OpenCode config text as is, once it parses as OpenCode
 /// would parse it (JSON with comments and trailing commas, an object at the
 /// root). Written atomically, so OpenCode never reads a half-written file.
@@ -3148,6 +3164,8 @@ fn persist_opencode_config_text(text: &str) -> Result<(), AcpError> {
     } else {
         format!("{text}\n")
     };
+    // `mcp.servers` lives in this file.
+    let _mcp_lock = mcp_write_lock()?;
     crate::acp::opencode_config::write_atomic(&resolve_opencode_config_path(), &text)
         .map_err(|e| AcpError::protocol(format!("write OpenCode config failed: {e}")))
 }
@@ -9063,6 +9081,8 @@ pub(crate) fn acp_update_hermes_config_core(
     let home = hermes_home_dir();
     ensure_hermes_home_secure(&home)?;
 
+    // From the read of config.yaml to its write: `mcp_servers` lives in it.
+    let _mcp_lock = mcp_write_lock()?;
     // Build + validate everything BEFORE any write, so an invalid document or a
     // crafted key never half-applies (the secret in particular).
     let config_path = hermes_config_yaml_path();
@@ -9771,6 +9791,9 @@ fn persist_agent_local_config_json(
         ));
     }
 
+    // From the read to the write: Gemini's and Qoder's `settings.json` hold
+    // `mcpServers`, Claude Code's the `enabledPlugins` the MCP engine edits.
+    let _mcp_lock = mcp_write_lock()?;
     let mut base = if path.exists() {
         match fs::read_to_string(&path)
             .ok()
@@ -10300,17 +10323,6 @@ fn project_skill_bases(agent_type: AgentType, workspace: &str) -> Vec<PathBuf> {
     }
 }
 
-pub(crate) fn preferred_scope_skill_dir(
-    agent_type: AgentType,
-    scope: AgentSkillScope,
-    workspace_path: Option<&str>,
-) -> Result<PathBuf, AcpError> {
-    let dirs = scoped_skill_dirs(agent_type, scope, workspace_path)?;
-    dirs.into_iter()
-        .next()
-        .ok_or_else(|| AcpError::protocol("no skill directory resolved for this agent"))
-}
-
 fn is_markdown_file(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
@@ -10406,6 +10418,12 @@ pub(crate) fn build_skill_item(
         path: path.to_string_lossy().to_string(),
         description,
         read_only: false,
+        // Filled in by `crate::skills::world::annotate_items` where a listing
+        // is served.
+        link_target: None,
+        owner: crate::acp::types::AgentSkillOwner::Agent,
+        pack: None,
+        codeg_copy: false,
     }
 }
 
@@ -10413,7 +10431,7 @@ pub(crate) fn build_skill_item(
 /// (imagegen, skill-creator, etc.). We scan that directory so users see
 /// these in the `$` autocomplete and the Skills settings list — but any
 /// write to those files would clobber the CLI's own assets.
-fn is_read_only_skill_path(agent_type: AgentType, skill_path: &Path) -> bool {
+pub(crate) fn is_read_only_skill_path(agent_type: AgentType, skill_path: &Path) -> bool {
     let ro_root = match agent_type {
         AgentType::Codex => codex_home_dir().join("skills").join(".system"),
         // Cursor's bundled builtin skills; the CLI restores them on update,
@@ -10793,6 +10811,8 @@ fn persist_qoder_settings(text: &str) -> Result<(), AcpError> {
         fs::create_dir_all(parent)
             .map_err(|e| AcpError::protocol(format!("create qoder config dir failed: {e}")))?;
     }
+    // `mcpServers` lives in this file.
+    let _mcp_lock = mcp_write_lock()?;
     fs::write(&path, format!("{text}\n"))
         .map_err(|e| AcpError::protocol(format!("write qoder settings failed: {e}")))
 }
@@ -13509,6 +13529,8 @@ pub(crate) async fn acp_update_agent_config_core(
         //    snapshot can't silently drop config written by another window / the
         //    MCP settings path since the panel opened.
         if grok_config_toml.is_some() || grok_structured.is_some() {
+            // From the read to the write: `[mcp_servers]` lives in this file.
+            let _mcp_lock = mcp_write_lock()?;
             let base = match grok_config_toml {
                 Some(text) => text,
                 None => read_grok_config_or_empty()?,
@@ -15016,10 +15038,22 @@ pub async fn acp_reorder_agents(
     acp_reorder_agents_core(&agent_types, &db, &emitter).await
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+/// Every skill an agent sees in a scope, for the Skills page — each with where
+/// its link points and whose it is (`AgentSkillItem.owner`). Takes no lock.
 pub async fn acp_list_agent_skills(
     agent_type: AgentType,
     workspace_path: Option<String>,
+) -> Result<AgentSkillsListResult, AcpError> {
+    acp_list_agent_skills_with(agent_type, workspace_path, false).await
+}
+
+/// [`acp_list_agent_skills`]; with `include_broken`, dangling links under a
+/// skill's name are listed too (owner `broken`), so the page can offer to
+/// repair or remove them.
+pub(crate) async fn acp_list_agent_skills_with(
+    agent_type: AgentType,
+    workspace_path: Option<String>,
+    include_broken: bool,
 ) -> Result<AgentSkillsListResult, AcpError> {
     let Some(spec) = skill_storage_spec(agent_type) else {
         return Ok(AgentSkillsListResult {
@@ -15032,6 +15066,7 @@ pub async fn acp_list_agent_skills(
 
     let mut locations = Vec::new();
     let mut skills_by_key: BTreeMap<String, AgentSkillItem> = BTreeMap::new();
+    let mut scanned: Vec<(AgentSkillScope, PathBuf)> = Vec::new();
 
     for dir in &spec.global_dirs {
         locations.push(AgentSkillLocation {
@@ -15044,6 +15079,7 @@ pub async fn acp_list_agent_skills(
             let key = format!("global:{}", skill.id);
             skills_by_key.entry(key).or_insert(skill);
         }
+        scanned.push((AgentSkillScope::Global, dir.clone()));
     }
 
     if let Some(workspace) = workspace_path.as_deref().map(str::trim) {
@@ -15066,6 +15102,35 @@ pub async fn acp_list_agent_skills(
                     let key = format!("project:{}", skill.id);
                     skills_by_key.entry(key).or_insert(skill);
                 }
+                scanned.push((AgentSkillScope::Project, project_dir));
+            }
+        }
+    }
+
+    if include_broken {
+        for (scope, dir) in &scanned {
+            let prefix = match scope {
+                AgentSkillScope::Global => "global",
+                AgentSkillScope::Project => "project",
+            };
+            let Ok(entries) = fs::read_dir(dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let id = entry.file_name().to_string_lossy().into_owned();
+                let path = entry.path();
+                let dangling = fs::symlink_metadata(&path)
+                    .map(|meta| meta.file_type().is_symlink())
+                    .unwrap_or(false)
+                    && fs::metadata(&path).is_err();
+                if !dangling || validate_skill_id(&id).is_err() {
+                    continue;
+                }
+                skills_by_key
+                    .entry(format!("{prefix}:{id}"))
+                    .or_insert_with(|| {
+                        build_skill_item(id, *scope, AgentSkillLayout::SkillDirectory, path)
+                    });
             }
         }
     }
@@ -15081,6 +15146,7 @@ pub async fn acp_list_agent_skills(
             .cmp(&scope_rank(b.scope))
             .then_with(|| a.name.cmp(&b.name))
     });
+    crate::skills::world::annotate_items(&crate::skills::store_dir(), &mut skills);
 
     Ok(AgentSkillsListResult {
         supported: true,
@@ -15109,7 +15175,9 @@ pub(crate) async fn acp_list_agent_runtime_skills_core(
         .map(str::trim)
         .filter(|path| !path.is_empty())
         .map(Path::new);
-    Ok(crate::acp::opencode_skills::SkillSources::for_env(&env).listing(workspace))
+    let mut listing = crate::acp::opencode_skills::SkillSources::for_env(&env).listing(workspace);
+    crate::skills::world::annotate_items(&crate::skills::store_dir(), &mut listing.skills);
+    Ok(listing)
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -15142,45 +15210,331 @@ pub async fn acp_read_agent_skill(
     if is_read_only_skill_path(agent_type, Path::new(&skill.path)) {
         skill.read_only = true;
     }
+    crate::skills::world::annotate_items(
+        &crate::skills::store_dir(),
+        std::slice::from_mut(&mut skill),
+    );
     let content_path = skill_content_path(skill.layout, Path::new(&skill.path));
     let content = fs::read_to_string(&content_path)
         .map_err(|e| AcpError::protocol(format!("failed to read skill content: {e}")))?;
     Ok(AgentSkillContent { skill, content })
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn acp_save_agent_skill(
+/// A Skills page error with its stable code.
+fn skill_page_error(
+    base: AppCommandError,
+    code: &str,
+    detail: Option<String>,
+) -> AppCommandError {
+    crate::skills::coded_error(base, code, detail)
+}
+
+fn skill_page_input_error(error: AcpError) -> AppCommandError {
+    use crate::skills::model::codes;
+    skill_page_error(
+        AppCommandError::invalid_input(error.to_string()),
+        codes::SKILL_INVALID,
+        None,
+    )
+}
+
+/// Which agents read the directory a Skills page write went into.
+fn skill_page_readers(
+    ctx: &crate::skills::SkillsCtx,
+    path: &Path,
+    agent_type: AgentType,
+) -> Vec<AgentType> {
+    let readers = ctx.readers_of_entry(path);
+    if readers.is_empty() {
+        vec![agent_type]
+    } else {
+        readers
+    }
+}
+
+/// Where a Skills page write goes: the agent's directories of the scope, in
+/// its reading order, how it lays skills out, and — for each directory —
+/// the other agents that read it too (global directories several agents
+/// read, as the skills engine works them out; none for a project's).
+pub(crate) struct SkillPageDirs {
+    pub kind: SkillStorageKind,
+    pub dirs: Vec<PathBuf>,
+    /// Parallel to `dirs`: the OTHER agents reading each.
+    pub shared_with: Vec<Vec<AgentType>>,
+    /// Parallel to `dirs`: the agent CLI's own bundled skills (Codex's
+    /// `skills/.system`, …) — never where a new skill goes.
+    pub read_only: Vec<bool>,
+}
+
+/// Works out an agent's [`SkillPageDirs`] — called by the Skills page's save
+/// and delete once they hold the skills lock (and by a preflight, which takes
+/// none), so who reads each folder is what it is when the write happens, not
+/// what it was when the request came in.
+pub(crate) type SkillPageDirsFn<'a> =
+    dyn Fn() -> Result<SkillPageDirs, AppCommandError> + Send + Sync + 'a;
+
+impl SkillPageDirs {
+    /// `dirs` of `agent_type`, each with the other agents of `ctx` that
+    /// read it.
+    pub(crate) fn with_readers(
+        ctx: &crate::skills::SkillsCtx,
+        agent_type: AgentType,
+        kind: SkillStorageKind,
+        dirs: Vec<PathBuf>,
+    ) -> Self {
+        let shared_with = dirs
+            .iter()
+            .map(|dir| {
+                ctx.dir_info(dir)
+                    .map(|info| {
+                        info.readers
+                            .iter()
+                            .copied()
+                            .filter(|a| *a != agent_type)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+        let read_only = dirs
+            .iter()
+            .map(|dir| {
+                is_read_only_skill_path(agent_type, dir)
+                    || ctx
+                        .dir_info(dir)
+                        .is_some_and(|info| !info.read_only_for.is_empty())
+            })
+            .collect();
+        Self {
+            kind,
+            dirs,
+            shared_with,
+            read_only,
+        }
+    }
+
+    /// Where a new skill goes: the first folder only this agent reads that
+    /// is not the agent CLI's own.
+    fn own_dir(&self) -> Option<&PathBuf> {
+        self.dirs
+            .iter()
+            .zip(&self.shared_with)
+            .zip(&self.read_only)
+            .find(|((_, others), read_only)| others.is_empty() && !**read_only)
+            .map(|((dir, _), _)| dir)
+    }
+
+    /// The other agents reading the directory `entry` is in.
+    fn others_reading(&self, entry: &Path) -> Vec<AgentType> {
+        let Some(parent) = entry.parent() else {
+            return Vec::new();
+        };
+        let key = crate::skills::fsio::normalize(parent);
+        self.dirs
+            .iter()
+            .zip(&self.shared_with)
+            .find(|(dir, _)| {
+                crate::skills::fsio::same_path(&crate::skills::fsio::normalize(dir), &key)
+            })
+            .map(|(_, others)| others.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// The agent's [`SkillPageDirs`] for a scope, from the environment Codeg
+/// runs in.
+fn skill_page_dirs(
+    ctx: &crate::skills::SkillsCtx,
+    agent_type: AgentType,
+    scope: AgentSkillScope,
+    skill_id: &str,
+    workspace_path: Option<&str>,
+) -> Result<SkillPageDirs, AppCommandError> {
+    use crate::skills::model::codes;
+    let Some(spec) = skill_storage_spec(agent_type) else {
+        return Err(skill_page_error(
+            AppCommandError::invalid_input(format!(
+                "{agent_type} skills are not supported in Settings yet"
+            )),
+            codes::AGENT_UNSUPPORTED,
+            None,
+        ));
+    };
+    validate_skill_id(skill_id).map_err(skill_page_input_error)?;
+    let dirs =
+        scoped_skill_dirs(agent_type, scope, workspace_path).map_err(skill_page_input_error)?;
+    Ok(match scope {
+        AgentSkillScope::Global => SkillPageDirs::with_readers(ctx, agent_type, spec.kind, dirs),
+        AgentSkillScope::Project => SkillPageDirs {
+            kind: spec.kind,
+            shared_with: vec![Vec::new(); dirs.len()],
+            read_only: dirs
+                .iter()
+                .map(|dir| is_read_only_skill_path(agent_type, dir))
+                .collect(),
+            dirs,
+        },
+    })
+}
+
+fn agent_list(agents: &[AgentType]) -> String {
+    agents
+        .iter()
+        .map(|a| a.as_wire().into_owned())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// Create or save one of an agent's own skills (the Skills page).
+///
+/// Under the skills lock. Refused: a skill of the agent CLI itself
+/// (`read_only_skill`); a write that would land, through a link, in Codeg's
+/// store (`store_link_read_only` — a pack's, Harness's or Custom skill is
+/// changed in Codeg, or copied into a Custom skill, never through an agent's
+/// link); and, with `create`, an id that anything in the scope's directories
+/// or in Codeg's store already uses (`id_taken`). Without `create` (an older
+/// client that cannot say which it means) an existing skill is updated, as
+/// before. `SKILL.md` is replaced in one step.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn acp_save_agent_skill_core(
+    emitter: &EventEmitter,
     agent_type: AgentType,
     scope: AgentSkillScope,
     skill_id: String,
     content: String,
     workspace_path: Option<String>,
     layout: Option<AgentSkillLayout>,
-) -> Result<AgentSkillItem, AcpError> {
-    let Some(spec) = skill_storage_spec(agent_type) else {
-        return Err(AcpError::protocol(format!(
-            "{agent_type} skills are not supported in Settings yet"
-        )));
+    create: bool,
+) -> Result<AgentSkillItem, AppCommandError> {
+    let ctx = crate::skills::SkillsCtx::user();
+    // Checked now (an unsupported agent, a bad id), and worked out again
+    // under the lock.
+    skill_page_dirs(&ctx, agent_type, scope, &skill_id, workspace_path.as_deref())?;
+    let id = skill_id.clone();
+    let target = move || {
+        skill_page_dirs(
+            &crate::skills::SkillsCtx::user(),
+            agent_type,
+            scope,
+            &id,
+            workspace_path.as_deref(),
+        )
     };
-    let id = validate_skill_id(&skill_id)?;
-    let dirs = scoped_skill_dirs(agent_type, scope, workspace_path.as_deref())?;
-    let preferred_dir = preferred_scope_skill_dir(agent_type, scope, workspace_path.as_deref())?;
+    acp_save_agent_skill_in(
+        &ctx,
+        emitter,
+        agent_type,
+        scope,
+        skill_id,
+        content,
+        &target,
+        layout,
+        create,
+    )
+    .await
+}
 
-    fs::create_dir_all(&preferred_dir)
-        .map_err(|e| AcpError::protocol(format!("failed to create skills directory: {e}")))?;
+/// [`acp_save_agent_skill_core`] into the directories `target` names, with
+/// the store, lock and agents of `ctx`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn acp_save_agent_skill_in(
+    ctx: &crate::skills::SkillsCtx,
+    emitter: &EventEmitter,
+    agent_type: AgentType,
+    scope: AgentSkillScope,
+    skill_id: String,
+    content: String,
+    target: &SkillPageDirsFn<'_>,
+    layout: Option<AgentSkillLayout>,
+    create: bool,
+) -> Result<AgentSkillItem, AppCommandError> {
+    use crate::skills::model::codes;
+    let id = validate_skill_id(&skill_id).map_err(skill_page_input_error)?;
+    let store = ctx.store.clone();
 
-    let existing = locate_existing_skill_across_dirs(&dirs, spec.kind, &id, scope);
+    let _guard = ctx.lock().await.map_err(AppCommandError::from)?;
+
+    // Who reads which folder, as it is now that no other writer can change
+    // anything.
+    let target = target()?;
+    if target.dirs.is_empty() {
+        return Err(skill_page_input_error(AcpError::protocol(
+            "no skill directory resolved for this agent",
+        )));
+    }
+    // A new skill goes into the first directory only this agent reads (Cline:
+    // `~/.cline/skills`, not the `~/.agents/skills` it reads first), never a
+    // folder of the agent CLI's own: never where it would show up for other
+    // agents unasked, nor where the agent's CLI keeps its bundled skills.
+    let own_dir = target.own_dir().cloned();
+    let SkillPageDirs {
+        kind,
+        dirs,
+        shared_with,
+        read_only,
+    } = target;
+
+    if create {
+        let flat = matches!(kind, SkillStorageKind::SkillDirectoryOrMarkdownFile);
+        let taken = dirs
+            .iter()
+            .flat_map(|dir| {
+                let mut candidates = vec![dir.join(&id)];
+                if flat {
+                    candidates.push(dir.join(format!("{id}.md")));
+                }
+                candidates
+            })
+            .chain(std::iter::once(store.join(&id)))
+            .find(|path| fs::symlink_metadata(path).is_ok());
+        if let Some(path) = taken {
+            return Err(skill_page_error(
+                AppCommandError::already_exists(format!(
+                    "a skill named '{id}' already exists at {}",
+                    path.display()
+                )),
+                codes::ID_TAKEN,
+                Some(path.to_string_lossy().into_owned()),
+            ));
+        }
+    }
+
+    let existing = locate_existing_skill_across_dirs(&dirs, kind, &id, scope);
     if let Some(ref item) = existing {
-        if is_read_only_skill_path(agent_type, Path::new(&item.path)) {
-            return Err(AcpError::protocol(format!(
-                "skill '{id}' is a built-in system skill and cannot be modified"
-            )));
+        let in_read_only_dir = Path::new(&item.path).parent().is_some_and(|parent| {
+            dirs.iter()
+                .zip(&read_only)
+                .any(|(dir, read_only)| *read_only && dir.as_path() == parent)
+        });
+        if in_read_only_dir || is_read_only_skill_path(agent_type, Path::new(&item.path)) {
+            return Err(skill_page_error(
+                AppCommandError::permission_denied(format!(
+                    "skill '{id}' is a built-in system skill and cannot be modified"
+                )),
+                codes::READ_ONLY_SKILL,
+                None,
+            ));
         }
     }
     let mut skill = if let Some(item) = existing {
         item
     } else {
-        let new_layout = match spec.kind {
+        let Some(preferred_dir) = own_dir else {
+            // Every folder is read by other agents too, or is the CLI's own.
+            let mut others: Vec<AgentType> = shared_with.into_iter().flatten().collect();
+            others.sort();
+            others.dedup();
+            return Err(skill_page_error(
+                AppCommandError::invalid_input(format!(
+                    "{agent_type} has no skill folder of its own to put a new skill in (other agents read {}: {})",
+                    dirs[0].display(),
+                    agent_list(&others)
+                )),
+                codes::NO_OWN_DIRECTORY,
+                Some(agent_list(&others)),
+            ));
+        };
+        let new_layout = match kind {
             SkillStorageKind::SkillDirectoryOnly => AgentSkillLayout::SkillDirectory,
             SkillStorageKind::SkillDirectoryOrMarkdownFile => {
                 layout.unwrap_or(AgentSkillLayout::MarkdownFile)
@@ -15195,54 +15549,349 @@ pub async fn acp_save_agent_skill(
 
     let skill_path = PathBuf::from(&skill.path);
     let content_path = skill_content_path(skill.layout, &skill_path);
-
-    if skill.layout == AgentSkillLayout::SkillDirectory {
-        fs::create_dir_all(&skill_path).map_err(|e| {
-            AcpError::protocol(format!(
-                "failed to create skill directory '{}': {e}",
-                skill.path
-            ))
-        })?;
-    } else if let Some(parent) = content_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| {
-            AcpError::protocol(format!("failed to create skill parent directory: {e}"))
-        })?;
+    // Through a link into Codeg's store, the write would change Codeg's copy
+    // for every agent linked to it.
+    if crate::skills::fsio::resolves_into(&content_path, &store) {
+        return Err(skill_page_error(
+            AppCommandError::permission_denied(format!(
+                "'{id}' is Codeg's skill, linked here from its skill store; change it in Codeg, or copy it into a Custom skill"
+            )),
+            codes::STORE_LINK_READ_ONLY,
+            Some(content_path.to_string_lossy().into_owned()),
+        ));
     }
 
-    fs::write(&content_path, content)
-        .map_err(|e| AcpError::protocol(format!("failed to write skill content: {e}")))?;
+    let io_failure = |what: &str, err: std::io::Error| {
+        skill_page_error(
+            AppCommandError::io_error(format!("{what}: {err}")),
+            codes::IO_ERROR,
+            Some(err.to_string()),
+        )
+    };
+    if skill.layout == AgentSkillLayout::SkillDirectory {
+        fs::create_dir_all(&skill_path)
+            .map_err(|e| io_failure("failed to create skill directory", e))?;
+    } else if let Some(parent) = content_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| io_failure("failed to create skill parent directory", e))?;
+    }
+
+    crate::skills::fsio::write_content_atomic(&content_path, content.as_bytes())
+        .map_err(|e| io_failure("failed to write skill content", e))?;
 
     skill.description = read_skill_description(&content_path);
-
+    crate::skills::world::annotate_items(&store, std::slice::from_mut(&mut skill));
+    crate::skills::announce(
+        emitter,
+        [crate::skills::model::ChangedKind::AgentSkills],
+        skill_page_readers(ctx, &skill_path, agent_type),
+    );
     Ok(skill)
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+/// [`acp_save_agent_skill_core`] with the older arguments (an update when the
+/// skill exists), announcing nothing — what this module's tests call.
+#[cfg(test)]
+pub async fn acp_save_agent_skill(
+    agent_type: AgentType,
+    scope: AgentSkillScope,
+    skill_id: String,
+    content: String,
+    workspace_path: Option<String>,
+    layout: Option<AgentSkillLayout>,
+) -> Result<AgentSkillItem, AcpError> {
+    acp_save_agent_skill_core(
+        &EventEmitter::Noop,
+        agent_type,
+        scope,
+        skill_id,
+        content,
+        workspace_path,
+        layout,
+        false,
+    )
+    .await
+    .map_err(|e| AcpError::protocol(e.message))
+}
+
+/// What deleting one of an agent's skills does — or, with `preflight`,
+/// would do (snake_case on the wire).
+#[derive(Debug, Clone, Serialize)]
+pub struct SkillPageDeleteResult {
+    /// The entry was deleted (`false` for a preflight).
+    pub deleted: bool,
+    /// The entry: a folder, a flat `.md`, a link or a broken link.
+    pub path: String,
+    /// `folder` | `file` | `link` | `broken_link`.
+    pub kind: &'static str,
+    /// The OTHER agents that read the directory it is in, and lose it too.
+    pub shared_with: Vec<AgentType>,
+    /// Present iff `shared_with` is not empty: the acknowledgement of exactly
+    /// these effects, to send back with the real delete.
+    pub ack: Option<String>,
+}
+
+/// How a Skills page delete is confirmed: the same discipline as
+/// `skills_apply_links` — a delete in a directory other agents read needs the
+/// `ack` its preflight returned.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SkillPageDeleteConfirm {
+    pub preflight: bool,
+    pub ack: Option<String>,
+}
+
+/// Delete one of an agent's skills (the Skills page), under the skills lock.
+/// An entry that is a link — Codeg's or not — loses only the link; a broken
+/// link under the name can be deleted too. A skill of the agent CLI itself is
+/// refused (`read_only_skill`). In a directory other agents read, every one
+/// of them loses it: the real delete then needs the `ack` of a preflight
+/// (`acknowledgement_required`, or `effects_changed` when the effects are no
+/// longer those acknowledged; `i18n_params.detail` = those agents).
+pub(crate) async fn acp_delete_agent_skill_core(
+    emitter: &EventEmitter,
+    agent_type: AgentType,
+    scope: AgentSkillScope,
+    skill_id: String,
+    workspace_path: Option<String>,
+    confirm: SkillPageDeleteConfirm,
+) -> Result<SkillPageDeleteResult, AppCommandError> {
+    let ctx = crate::skills::SkillsCtx::user();
+    // Checked now, and worked out again under the lock.
+    skill_page_dirs(&ctx, agent_type, scope, &skill_id, workspace_path.as_deref())?;
+    let id = skill_id.clone();
+    let target = move || {
+        skill_page_dirs(
+            &crate::skills::SkillsCtx::user(),
+            agent_type,
+            scope,
+            &id,
+            workspace_path.as_deref(),
+        )
+    };
+    acp_delete_agent_skill_in(&ctx, emitter, agent_type, scope, skill_id, &target, confirm).await
+}
+
+/// [`acp_delete_agent_skill_core`] in the directories `target` names, with
+/// the store, lock and agents of `ctx`.
+pub(crate) async fn acp_delete_agent_skill_in(
+    ctx: &crate::skills::SkillsCtx,
+    emitter: &EventEmitter,
+    agent_type: AgentType,
+    scope: AgentSkillScope,
+    skill_id: String,
+    target: &SkillPageDirsFn<'_>,
+    confirm: SkillPageDeleteConfirm,
+) -> Result<SkillPageDeleteResult, AppCommandError> {
+    use crate::skills::model::codes;
+    let id = validate_skill_id(&skill_id).map_err(skill_page_input_error)?;
+
+    // A preflight reads; the real delete holds the lock from here on.
+    let _guard = if confirm.preflight {
+        None
+    } else {
+        Some(ctx.lock().await.map_err(AppCommandError::from)?)
+    };
+    // Who reads the folder, as it is now: the `ack` is checked against the
+    // agents that lose the skill at the moment it goes, not those of when
+    // the request came in (another agent may have started reading the
+    // folder while this one waited for the lock).
+    let target = target()?;
+
+    let skill_path = match locate_existing_skill_across_dirs(&target.dirs, target.kind, &id, scope)
+    {
+        Some(skill) => PathBuf::from(skill.path),
+        None => target
+            .dirs
+            .iter()
+            .map(|dir| dir.join(&id))
+            .find(|path| {
+                fs::symlink_metadata(path)
+                    .map(|meta| meta.file_type().is_symlink())
+                    .unwrap_or(false)
+            })
+            .ok_or_else(|| {
+                skill_page_error(
+                    AppCommandError::not_found(format!("skill not found: {id}")),
+                    codes::NOT_FOUND,
+                    None,
+                )
+            })?,
+    };
+    if is_read_only_skill_path(agent_type, &skill_path) {
+        return Err(skill_page_error(
+            AppCommandError::permission_denied(format!(
+                "skill '{id}' is a built-in system skill and cannot be deleted"
+            )),
+            codes::READ_ONLY_SKILL,
+            None,
+        ));
+    }
+    let kind = match crate::skills::link::inspect(&skill_path) {
+        crate::skills::link::RawEntry::Link { resolved: None, .. } => "broken_link",
+        crate::skills::link::RawEntry::Link { .. } => "link",
+        crate::skills::link::RawEntry::Dir => "folder",
+        _ => "file",
+    };
+    let mut others = target.others_reading(&skill_path);
+    others.sort();
+    others.dedup();
+    let token = (!others.is_empty()).then(|| {
+        crate::commands::mcp_engine::fsio::sha256_hex(
+            format!(
+                "skills-page-delete/1\n{}\n{}\n{kind}\n{}",
+                agent_type.as_wire(),
+                skill_path.to_string_lossy(),
+                agent_list(&others)
+            )
+            .as_bytes(),
+        )
+    });
+    let mut result = SkillPageDeleteResult {
+        deleted: false,
+        path: skill_path.to_string_lossy().into_owned(),
+        kind,
+        shared_with: others.clone(),
+        ack: token.clone(),
+    };
+    if confirm.preflight {
+        return Ok(result);
+    }
+    if let Some(token) = &token {
+        if confirm.ack.as_deref() != Some(token.as_str()) {
+            let code = if confirm.ack.is_some() {
+                codes::EFFECTS_CHANGED
+            } else {
+                codes::ACKNOWLEDGEMENT_REQUIRED
+            };
+            return Err(skill_page_error(
+                AppCommandError::invalid_input(format!(
+                    "{} is in a folder {} also read: deleting it deletes it for them too. Preflight the delete and send back its ack",
+                    skill_path.display(),
+                    agent_list(&others)
+                )),
+                code,
+                Some(agent_list(&others)),
+            ));
+        }
+    }
+    let readers = skill_page_readers(ctx, &skill_path, agent_type);
+    remove_skill_entry(&skill_path).map_err(|e| {
+        skill_page_error(
+            AppCommandError::io_error(format!("failed to delete skill entry: {e}")),
+            codes::REMOVE_FAILED,
+            Some(e.to_string()),
+        )
+    })?;
+    // Codeg's link or copy: off the record too.
+    let mut record = crate::skills::record::LinkRecord::load(&ctx.store);
+    let codeg = record.remove(&skill_path).is_some();
+    if codeg {
+        if let Err(err) = record.save(&ctx.store) {
+            tracing::warn!("[Skills] could not update the link record: {err}");
+        }
+    }
+    let mut kinds = vec![crate::skills::model::ChangedKind::AgentSkills];
+    if codeg {
+        kinds.push(crate::skills::model::ChangedKind::Links);
+    }
+    crate::skills::announce(emitter, kinds, readers);
+    result.deleted = true;
+    Ok(result)
+}
+
+/// [`acp_delete_agent_skill_core`] announcing nothing — what this module's
+/// tests call.
+#[cfg(test)]
 pub async fn acp_delete_agent_skill(
     agent_type: AgentType,
     scope: AgentSkillScope,
     skill_id: String,
     workspace_path: Option<String>,
 ) -> Result<(), AcpError> {
-    let Some(spec) = skill_storage_spec(agent_type) else {
-        return Err(AcpError::protocol(format!(
-            "{agent_type} skills are not supported in Settings yet"
-        )));
-    };
-    let id = validate_skill_id(&skill_id)?;
-    let dirs = scoped_skill_dirs(agent_type, scope, workspace_path.as_deref())?;
+    acp_delete_agent_skill_core(
+        &EventEmitter::Noop,
+        agent_type,
+        scope,
+        skill_id,
+        workspace_path,
+        SkillPageDeleteConfirm::default(),
+    )
+    .await
+    .map(|_| ())
+    .map_err(|e| AcpError::protocol(e.message))
+}
 
-    let skill = locate_existing_skill_across_dirs(&dirs, spec.kind, &id, scope)
-        .ok_or_else(|| AcpError::protocol(format!("skill not found: {id}")))?;
-    if is_read_only_skill_path(agent_type, Path::new(&skill.path)) {
-        return Err(AcpError::protocol(format!(
-            "skill '{id}' is a built-in system skill and cannot be deleted"
-        )));
+/// The Skills page's three commands as the desktop registers them. The
+/// shared functions above take no app handle; these add what the page can
+/// pass beside the older arguments (`include_broken`, `create`) and announce
+/// `skills://changed`.
+#[cfg(feature = "tauri-runtime")]
+pub mod skill_page {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn acp_list_agent_skills(
+        agent_type: AgentType,
+        workspace_path: Option<String>,
+        include_broken: Option<bool>,
+    ) -> Result<AgentSkillsListResult, AcpError> {
+        super::acp_list_agent_skills_with(
+            agent_type,
+            workspace_path,
+            include_broken.unwrap_or(false),
+        )
+        .await
     }
-    let skill_path = PathBuf::from(&skill.path);
-    remove_skill_entry(&skill_path)
-        .map_err(|e| AcpError::protocol(format!("failed to delete skill entry: {e}")))?;
-    Ok(())
+
+    #[allow(clippy::too_many_arguments)]
+    #[tauri::command]
+    pub async fn acp_save_agent_skill(
+        agent_type: AgentType,
+        scope: AgentSkillScope,
+        skill_id: String,
+        content: String,
+        workspace_path: Option<String>,
+        layout: Option<AgentSkillLayout>,
+        create: Option<bool>,
+        app: tauri::AppHandle,
+    ) -> Result<AgentSkillItem, AppCommandError> {
+        super::acp_save_agent_skill_core(
+            &EventEmitter::Tauri(app),
+            agent_type,
+            scope,
+            skill_id,
+            content,
+            workspace_path,
+            layout,
+            create.unwrap_or(false),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[tauri::command]
+    pub async fn acp_delete_agent_skill(
+        agent_type: AgentType,
+        scope: AgentSkillScope,
+        skill_id: String,
+        workspace_path: Option<String>,
+        preflight: Option<bool>,
+        ack: Option<String>,
+        app: tauri::AppHandle,
+    ) -> Result<SkillPageDeleteResult, AppCommandError> {
+        super::acp_delete_agent_skill_core(
+            &EventEmitter::Tauri(app),
+            agent_type,
+            scope,
+            skill_id,
+            workspace_path,
+            SkillPageDeleteConfirm {
+                preflight: preflight.unwrap_or(false),
+                ack,
+            },
+        )
+        .await
+    }
 }
 
 /// The plugins OpenCode's global config declares (`plugins`, plus 1.x
@@ -15549,13 +16198,16 @@ mod opencode_skills_tests {
     fn opencode_skill_roots_follow_its_config_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let (xdg, own) = (tmp.path().join("xdg"), tmp.path().join("own"));
-        let shared = home_dir_or_default().join(".agents").join("skills");
+        // `~/.agents/skills` is read under `temp_env`'s lock, like the spec:
+        // another test may be pointing HOME at a home of its own meanwhile.
+        let shared = || home_dir_or_default().join(".agents").join("skills");
         temp_env::with_vars(
             [
                 ("OPENCODE_CONFIG_DIR", None::<&Path>),
                 ("XDG_CONFIG_HOME", Some(xdg.as_path())),
             ],
             || {
+                let shared = shared();
                 let spec = skill_storage_spec(AgentType::OpenCode).expect("OpenCode has a store");
                 assert_eq!(spec.kind, SkillStorageKind::SkillDirectoryOrMarkdownFile);
                 assert_eq!(
@@ -15578,6 +16230,7 @@ mod opencode_skills_tests {
                 ("XDG_CONFIG_HOME", Some(xdg.as_path())),
             ],
             || {
+                let shared = shared();
                 let spec = skill_storage_spec(AgentType::OpenCode).expect("OpenCode has a store");
                 assert_eq!(
                     spec.global_dirs,
@@ -15594,7 +16247,15 @@ mod opencode_skills_tests {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("repo");
         let config = tmp.path().join("config");
-        temp_env::async_with_vars([("OPENCODE_CONFIG_DIR", Some(config.as_path()))], async {
+        // A home of the test's own too: a save consults Codeg's skill store.
+        let home = tmp.path().join("home");
+        temp_env::async_with_vars(
+            [
+                ("OPENCODE_CONFIG_DIR", Some(config.as_path())),
+                ("HOME", Some(home.as_path())),
+                ("USERPROFILE", Some(home.as_path())),
+            ],
+            async {
             write_skill(&workspace.join(".opencode/skills"), "bundle", "a bundle");
             fs::create_dir_all(workspace.join(".opencode/skill")).unwrap();
             fs::write(workspace.join(".opencode/skill/flat.md"), "a flat file").unwrap();
@@ -19442,6 +20103,56 @@ echo {"id":"codeg-models","type":"response","command":"get_available_models","su
         );
     }
 
+    /// The settings writers that replace a file the MCP page also edits take
+    /// the MCP write lock (`commands::mcp_engine::lock`): while another
+    /// writer holds it they write nothing, and they go ahead once it is let
+    /// go. Qoder's `settings.json`, OpenCode's config and its plugin list
+    /// stand for the rest here — theirs are the files an environment
+    /// variable can move into a temp directory.
+    #[test]
+    fn settings_writers_wait_for_the_mcp_write_lock() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let qoder = tmp.path().join("qoder");
+        let opencode = tmp.path().join("opencode");
+        temp_env::with_vars(
+            [
+                ("QODER_CONFIG_DIR", Some(qoder.as_path())),
+                ("OPENCODE_CONFIG_DIR", Some(opencode.as_path())),
+            ],
+            || {
+                let held = crate::commands::mcp_engine::lock::acquire_blocking().expect("lock");
+                let (done_tx, done_rx) = std::sync::mpsc::channel();
+                let writers = std::thread::spawn(move || {
+                    let outcome = persist_qoder_settings("{\"a\": 1}")
+                        .and_then(|()| persist_opencode_config_text("{\"model\": \"a/b\"}"))
+                        .and_then(|()| {
+                            opencode_plugins::add_plugin("some-plugin")
+                                .map(|_| ())
+                                .map_err(AcpError::Protocol)
+                        });
+                    let _ = done_tx.send(());
+                    outcome
+                });
+                assert!(
+                    done_rx.recv_timeout(Duration::from_millis(250)).is_err(),
+                    "a writer went ahead while the lock was someone else's"
+                );
+                assert!(!qoder.join("settings.json").exists());
+                assert!(!opencode.join("opencode.json").exists());
+
+                drop(held);
+                writers.join().expect("join").expect("the writers finish");
+                assert_eq!(
+                    fs::read_to_string(qoder.join("settings.json")).expect("qoder"),
+                    "{\"a\": 1}\n"
+                );
+                let config = fs::read_to_string(opencode.join("opencode.json")).expect("opencode");
+                assert!(config.contains("\"a/b\""), "{config}");
+                assert!(config.contains("some-plugin"), "{config}");
+            },
+        );
+    }
+
     #[test]
     fn codex_config_projection_tracks_model_provider_for_fingerprint() {
         // Two configs sharing one base_url but naming different providers must
@@ -19703,13 +20414,26 @@ wire_api = "chat"
         std::fs::create_dir_all(&saved).expect("create skill dir");
         std::fs::write(saved.join("SKILL.md"), "---\nname: demo\n---\nbody\n")
             .expect("write SKILL.md");
-        let listed = tokio::runtime::Runtime::new()
-            .expect("runtime")
-            .block_on(acp_list_agent_skills(
-                AgentType::DeepSeek,
-                Some(nested.to_string_lossy().to_string()),
-            ))
-            .expect("list skills");
+        // Under a home of the test's own: the listing also reads Codeg's skill
+        // store (who owns each skill), which must not be the real one.
+        let home = tmp.path().join("home");
+        let listed = temp_env::with_vars(
+            [
+                ("HOME", Some(home.as_os_str())),
+                ("USERPROFILE", Some(home.as_os_str())),
+                ("DSH_HOME", None),
+                ("DSH_AGENTS_HOME", None),
+            ],
+            || {
+                tokio::runtime::Runtime::new()
+                    .expect("runtime")
+                    .block_on(acp_list_agent_skills(
+                        AgentType::DeepSeek,
+                        Some(nested.to_string_lossy().to_string()),
+                    ))
+            },
+        )
+        .expect("list skills");
         assert!(
             listed.skills.iter().any(|s| s.id == "demo"),
             "skill saved at the git root must be listed from a nested workspace: {:?}",
@@ -19769,13 +20493,25 @@ wire_api = "chat"
         std::fs::create_dir_all(&saved).expect("create skill dir");
         std::fs::write(saved.join("SKILL.md"), "---\nname: demo\n---\nbody\n")
             .expect("write SKILL.md");
-        let listed = tokio::runtime::Runtime::new()
-            .expect("runtime")
-            .block_on(acp_list_agent_skills(
-                AgentType::KimiCode,
-                Some(nested.to_string_lossy().to_string()),
-            ))
-            .expect("list skills");
+        // Under a home of the test's own: the listing also reads Codeg's skill
+        // store (who owns each skill), which must not be the real one.
+        let home = tmp.path().join("home");
+        let listed = temp_env::with_vars(
+            [
+                ("HOME", Some(home.as_os_str())),
+                ("USERPROFILE", Some(home.as_os_str())),
+                ("KIMI_CODE_HOME", None),
+            ],
+            || {
+                tokio::runtime::Runtime::new()
+                    .expect("runtime")
+                    .block_on(acp_list_agent_skills(
+                        AgentType::KimiCode,
+                        Some(nested.to_string_lossy().to_string()),
+                    ))
+            },
+        )
+        .expect("list skills");
         assert!(
             listed.skills.iter().any(|s| s.id == "demo"),
             "skill saved at the git root must be listed from a nested workspace: {:?}",

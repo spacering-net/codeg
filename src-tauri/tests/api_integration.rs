@@ -818,3 +818,138 @@ async fn assistants_round_trip_over_http() {
     assert_eq!(ids, vec![b_id, a_id]);
     assert!(list[1]["deleted_at"].is_string());
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// Harness catalog (Discover) and the SpaceRing image proxy
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Nothing here may reach spacering.net. The first test runs with the catalog
+// switched off, where no command makes a request; the second only sends what
+// is refused before a request is made. Both set `CODEG_HARNESS` for their
+// duration (`temp_env` runs them one at a time), so neither depends on the
+// environment the tests were started in.
+
+/// The eight commands that ask the catalog, with arguments it would accept.
+fn harness_commands() -> [(&'static str, Value); 8] {
+    [
+        ("/api/harness_config", json!({})),
+        (
+            "/api/harness_list",
+            json!({ "q": "pdf", "kind": "skill", "sort": "popular" }),
+        ),
+        ("/api/harness_item", json!({ "itemRef": "anthropics/pdf" })),
+        (
+            "/api/harness_versions",
+            json!({ "itemRef": "anthropics/pdf" }),
+        ),
+        (
+            "/api/harness_readme",
+            json!({ "itemRef": "anthropics/pdf" }),
+        ),
+        (
+            "/api/harness_prompt",
+            json!({ "itemRef": "anthropics/pdf" }),
+        ),
+        (
+            "/api/harness_blob",
+            json!({ "sha256": "9f2c0d1e".repeat(8) }),
+        ),
+        (
+            "/api/srn_asset",
+            json!({ "path": "/api/avatars/0199b5e2-6c4f-7d1a-9f2e-3c8a1b5d7e90/4f1c2a9e8b7d6c5a.png" }),
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn harness_commands_are_routed_and_refuse_when_the_catalog_is_switched_off() {
+    temp_env::async_with_vars([("CODEG_HARNESS", Some("off"))], async {
+        let (server, _data, _static) = build_test_server().await;
+
+        // Not without the token, like every other command.
+        let resp = server.post("/api/harness_status").json(&json!({})).await;
+        assert_eq!(resp.status_code(), 401);
+
+        // The status is how a client learns the catalog is off: it answers.
+        let resp = server
+            .post("/api/harness_status")
+            .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+            .json(&json!({}))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        let status: Value = resp.json();
+        assert_eq!(status["enabled"], false);
+        let origin = status["origin"].as_str().expect("an origin");
+        assert!(
+            origin.starts_with("http") && !origin.ends_with('/'),
+            "{origin}"
+        );
+        assert_eq!(status.as_object().unwrap().len(), 2, "{status}");
+
+        // Everything else is routed (not the 501 of an unknown command) and
+        // refuses with the key the frontend sorts failures by.
+        for (path, args) in harness_commands() {
+            let resp = server
+                .post(path)
+                .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+                .json(&args)
+                .await;
+            assert_eq!(resp.status_code(), 403, "{path}");
+            let error: Value = resp.json();
+            assert_eq!(error["i18n_key"], "Harness.errors.disabled", "{path}");
+            assert_eq!(error["code"], "permission_denied", "{path}");
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn harness_commands_refuse_a_malformed_address_before_asking_the_catalog() {
+    temp_env::async_with_vars([("CODEG_HARNESS", None::<&str>)], async {
+        let (server, _data, _static) = build_test_server().await;
+        let call = |path: &'static str, args: Value| {
+            server
+                .post(path)
+                .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+                .json(&args)
+        };
+
+        let resp = call("/api/harness_status", json!({})).await;
+        assert_eq!(resp.status_code(), 200);
+        assert_eq!(resp.json::<Value>()["enabled"], true);
+
+        for (path, args) in [
+            ("/api/harness_item", json!({ "itemRef": "Anthropics/PDF" })),
+            ("/api/harness_versions", json!({ "itemRef": "../etc" })),
+            ("/api/harness_readme", json!({ "itemRef": "anthropics" })),
+            (
+                "/api/harness_prompt",
+                json!({ "itemRef": "anthropics/pdf/prompt" }),
+            ),
+            ("/api/srn_asset", json!({ "path": "/api/me" })),
+            (
+                "/api/srn_asset",
+                json!({ "path": "https://elsewhere.example/api/avatars/u/a.png" }),
+            ),
+            ("/api/srn_asset", json!({ "path": "/api/avatars/../me" })),
+            (
+                "/api/harness_blob",
+                json!({ "sha256": "9F2C0D1E".repeat(8) }),
+            ),
+            ("/api/harness_blob", json!({ "sha256": "../config" })),
+        ] {
+            let resp = call(path, args.clone()).await;
+            assert_eq!(resp.status_code(), 400, "{path} {args}");
+            let error: Value = resp.json();
+            assert_eq!(
+                error["i18n_key"], "Harness.errors.invalidRef",
+                "{path} {args}"
+            );
+        }
+
+        // The argument is `itemRef`: another spelling is not an argument.
+        let resp = call("/api/harness_item", json!({ "item_ref": "anthropics/pdf" })).await;
+        assert_eq!(resp.status_code(), 422);
+    })
+    .await;
+}
