@@ -27,6 +27,7 @@ import {
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
 import { useConnectionWaiting } from "@/hooks/use-connection-waiting"
+import { useConversationConnectionKey } from "@/hooks/use-conversation-connection-key"
 import { useTabStore } from "@/contexts/tab-context"
 import { emitAttachSessionToSession } from "@/lib/session-attachment-events"
 import type { DbConversationSummary, ConversationStatus } from "@/lib/types"
@@ -344,15 +345,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   ])
 
   const status = conversation.status as ConversationStatus
-  // 草稿绑定后可能保留原始 tab id，因此优先沿用当前真实连接键。
-  const contextKey = useTabStore(
-    (state) =>
-      state.tabs.find(
-        (tab) =>
-          tab.conversationId === conversation.id &&
-          tab.agentType === conversation.agent_type
-      )?.id ??
-      `conv-${conversation.folder_id}-${conversation.agent_type}-${conversation.id}`
+  // 连接以 tab id 为键：草稿绑定后保留 new-* id、移动后保留旧文件夹 id，
+  // 关掉仍在忙的 tab 后连接也还挂在那个 id 上。
+  const contextKey = useConversationConnectionKey(
+    conversation.folder_id,
+    conversation.agent_type,
+    conversation.id
   )
   const isWaiting = useConnectionWaiting(contextKey)
   const isRunning = status === "in_progress"
