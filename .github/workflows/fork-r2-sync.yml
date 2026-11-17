@@ -1,0 +1,484 @@
+name: "Fork R2 Sync"
+run-name: fork-r2-sync ${{ inputs.version }}-wh${{ inputs.prefix }}
+
+# Fork-only workflow: mirrors one release of this fork — the one
+# `fork-windows-release.yml` publishes — into the shared Cloudflare R2 bucket,
+# so the app and the server archive are served from Cloudflare instead of from
+# GitHub release URLs.
+#
+# Layout in the bucket (served from R2_PUBLIC_BASE, the bucket's public domain):
+#
+#   WhCodeg/<tag>/<asset>            e.g. WhCodeg/wh.01.0.45.0/latest.json
+#   WhCodeg/latest/latest.json       fixed pointer, desktop updater manifest
+#   WhCodeg/latest/server.json       fixed pointer, server archive manifest
+#
+# `WhCodeg/` sits at the bucket root, next to whatever else shares the bucket;
+# it is not nested inside another project's prefix. `latest/` is a reserved
+# folder name, so no release may be tagged `latest`.
+#
+# The same two inputs as fork-windows-release.yml, because the tag to mirror is
+# derived from them exactly the same way:
+#
+#   version — base version, e.g. 0.45.0
+#   prefix  — this fork's revision counter for that base, e.g. 01
+#   → tag   — wh.<prefix>.<version>, e.g. wh.01.0.45.0
+#
+# Only the download URLs change inside `latest.json` and `server.json`: the
+# GitHub release URLs are rewritten to this release's R2 folder, and the result
+# is verified to (a) no longer mention GitHub and (b) only name assets that
+# were actually uploaded, so a manifest can never advertise a 404. `sha256`,
+# `size` and the updater `signature` are carried over untouched — the bytes
+# behind them do not change, so the signature still verifies.
+#
+# Version ordering, the part that keeps a re-run from rolling clients back:
+#
+#   * `latest/` only ever moves forward: it is written when the mirrored tag is
+#     at least as new as what the pointer advertises, and left alone when it is
+#     older. Syncing an older tag on demand still fills in its own versioned
+#     folder. Equal tags are re-run only to finish an incomplete earlier run
+#     (a pointer that never landed), never to rewrite a complete one.
+#   * `0.45.0-wh02` > `0.45.0-wh01` (prefix breaks ties inside a base) and
+#     `0.46.0-wh01` > `0.45.0-wh99` (the base dominates the prefix). Both
+#     components are compared numerically, not as strings — which is also why
+#     the prefix is zero-padded to two digits in the tag.
+#   * A pointer whose `version` cannot be parsed is treated as "no pointer" and
+#     replaced, so a hand-edited manifest heals instead of blocking.
+#
+# Re-running is cheap and safe: versioned assets (installers, the .nsis.zip,
+# its .sig, the server archive) are immutable and left alone when already in
+# the bucket; manifests are always refreshed with `no-cache`, so a stale
+# manifest is not served from an edge cache. `force` exists for the one case
+# that needs it: re-uploading a tag whose versioned folder is complete but
+# whose contents are wrong.
+#
+# Needs the same R2 credentials as the bucket's other consumers:
+#   secrets.R2_ACCOUNT_ID, secrets.R2_BUCKET,
+#   secrets.R2_ACCESS_KEY_ID, secrets.R2_SECRET_ACCESS_KEY
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Base version of the release to mirror (e.g. 0.45.0)"
+        required: true
+        default: "0.45.0"
+      prefix:
+        description: "This fork's revision prefix for that base, 1-2 digits (e.g. 01)"
+        required: true
+        default: "01"
+      force:
+        description: "Re-upload even if this version is already in the bucket"
+        required: false
+        type: boolean
+        default: false
+
+env:
+  # Folder inside the bucket. The bucket is shared; this fork owns only this
+  # folder, so nothing here may write outside it.
+  R2_PREFIX: WhCodeg
+
+  # Public domain in front of the bucket — the bucket's root, so a key maps to
+  # a relative URL. This is what ends up inside the manifests.
+  R2_PUBLIC_BASE: https://wingharness.dpdns.org
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Resolve the release and the R2 state
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      app_version: ${{ steps.version.outputs.app_version }}
+      skip: ${{ steps.target.outputs.skip }}
+      update_pointer: ${{ steps.target.outputs.update_pointer }}
+    steps:
+      # Same numbering rules as fork-windows-release.yml. The version is not
+      # cross-checked against `src-tauri/tauri.conf.json` here: this job mirrors
+      # an existing release, and the tree's version file says nothing about a
+      # build published from some commit.
+      - name: Compute fork release version
+        id: version
+        shell: bash
+        env:
+          BASE_VERSION: ${{ inputs.version }}
+          PREFIX: ${{ inputs.prefix }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like 0.45.0, got '$BASE_VERSION'"
+            exit 1
+          fi
+          if [[ ! "$PREFIX" =~ ^[0-9]{1,2}$ ]]; then
+            echo "::error::prefix must be 1-2 digits, got '$PREFIX'"
+            exit 1
+          fi
+          # `10#` because a bare `01` would be read as octal, and `08`/`09`
+          # would then fail outright.
+          PADDED=$(printf "%02d" "$((10#$PREFIX))")
+          echo "app_version=${BASE_VERSION}-wh${PADDED}" >> "$GITHUB_OUTPUT"
+          echo "tag=wh.${PADDED}.${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide what to sync
+        id: target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+          FORCE: ${{ inputs.force }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          # `X.Y.Z-whNN` → one monotonic integer: the base dominates the
+          # prefix, the prefix breaks ties inside a base. The factors leave room
+          # for the full prefix range (1-99) without collision.
+          version_key() {
+            local version="$1" base prefix major minor patch
+            base="${version%%-wh*}"
+            prefix="${version##*-wh}"
+            IFS=. read -r major minor patch <<< "${base}"
+            echo "$(( major * 1000000000000 \
+                    + minor * 100000000 \
+                    + patch * 100000 \
+                    + 10#${prefix} ))"
+          }
+
+          # Anything unparseable counts as "no pointer": replacing a manifest we
+          # cannot reason about is safer than trusting its ordering.
+          pointer_key() {
+            local version="$1"
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-wh[0-9]{1,2}$ ]]; then
+              version_key "$version"
+            else
+              echo 0
+            fi
+          }
+
+          gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" --json tagName \
+            > /dev/null || {
+            echo "::error::${GITHUB_REPOSITORY} has no release ${TAG}; run fork-windows-release first"
+            exit 1
+          }
+
+          exists() {
+            aws s3api head-object \
+              --bucket "${R2_BUCKET}" --key "$1" \
+              --endpoint-url "${endpoint}" > /dev/null 2>&1
+          }
+
+          # The pointer's version is the only ordering input: it is what the
+          # updater and the host apps read.
+          pointer_version=""
+          if exists "${R2_PREFIX}/latest/latest.json"; then
+            pointer_version="$(
+              aws s3 cp "s3://${R2_BUCKET}/${R2_PREFIX}/latest/latest.json" - \
+                --endpoint-url "${endpoint}" --only-show-errors \
+                | jq -r '.version // ""' || true
+            )"
+          fi
+
+          incoming_key="$(version_key "${APP_VERSION}")"
+          pointer_key_value="$(pointer_key "${pointer_version}")"
+
+          # `false` only when the bucket already advertises something newer, so
+          # a manual re-sync of an old tag fills in its own folder but never
+          # rolls `latest/` back.
+          update_pointer=true
+          if [ "${incoming_key}" -lt "${pointer_key_value}" ]; then
+            update_pointer=false
+            echo "R2 advertises ${pointer_version}, newer than ${APP_VERSION}: ${R2_PREFIX}/latest/ is left alone."
+          fi
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "update_pointer=${update_pointer}" >> "$GITHUB_OUTPUT"
+
+          # Nothing to do only when everything already landed: this tag's
+          # manifests are in its folder *and* the pointers they belong to are in
+          # `latest/`. A run that died between those two writes therefore
+          # completes on the next run instead of being skipped as done.
+          if [ "${FORCE}" = "true" ]; then
+            echo "Force requested; syncing regardless of the bucket's state."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! exists "${R2_PREFIX}/${TAG}/latest.json"; then
+            echo "R2 has no manifest for ${TAG}; mirroring."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${incoming_key}" -gt "${pointer_key_value}" ] \
+            || [ "${pointer_version}" = "" ]; then
+            echo "R2's pointer (${pointer_version:-none}) does not cover ${APP_VERSION}; mirroring."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${incoming_key}" -eq "${pointer_key_value}" ] \
+            && exists "${R2_PREFIX}/${TAG}/server.json" \
+            && ! exists "${R2_PREFIX}/latest/server.json"; then
+            echo "R2 has the server manifest for ${TAG} but no server pointer; mirroring."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "R2 already has ${TAG}; nothing to mirror. Re-run with force to refresh the manifests."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+
+  sync:
+    name: Mirror into Cloudflare R2
+    needs: check
+    if: needs.check.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download the release assets
+        id: assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP}/r2-assets"
+          mkdir -p "${dir}"
+
+          # A release with no attachments is not worth failing over here; the
+          # rewrite step below reports the missing manifests instead.
+          gh release download "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" --dir "${dir}" --clobber || true
+
+          count="$(find "${dir}" -maxdepth 1 -type f | wc -l)"
+          echo "Downloaded ${count} file(s) from ${TAG}."
+          if [ "${count}" -eq 0 ]; then
+            echo "::error::release ${TAG} has no downloadable assets"
+            exit 1
+          fi
+          ls -l "${dir}"
+          echo "dir=${dir}" >> "$GITHUB_OUTPUT"
+
+      - name: Point the manifests at R2
+        shell: bash
+        env:
+          DIR: ${{ steps.assets.outputs.dir }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          r2_base="${R2_PUBLIC_BASE}/${R2_PREFIX}/${TAG}"
+          github_repo="https://github.com/${GITHUB_REPOSITORY}"
+          github_download="${github_repo}/releases/download/${TAG}"
+          # GitHub resolves `latest/download/<name>`; R2 does not, so both forms
+          # map to this release's versioned folder.
+          github_latest="${github_repo}/releases/latest/download"
+
+          # Every string in the document, not just the `url` fields: the
+          # manifests also carry bare download links inside free-form text.
+          rewrite() {
+            local file="$1"
+            jq --arg old_download "${github_download}" \
+               --arg old_latest "${github_latest}" \
+               --arg new "${r2_base}" \
+              'walk(if type == "string" then split($old_download) | join($new) else . end)
+               | walk(if type == "string" then split($old_latest) | join($new) else . end)' \
+              "${file}" > "${file}.tmp"
+            mv "${file}.tmp" "${file}"
+          }
+
+          for name in latest.json server.json; do
+            file="${DIR}/${name}"
+            if [ ! -f "${file}" ]; then
+              echo "This release carries no ${name}; nothing to rewrite."
+              continue
+            fi
+
+            rewrite "${file}"
+
+            if grep -qF "${github_download}" "${file}" \
+              || grep -qF "${github_latest}" "${file}"; then
+              echo "::error::${name} still points at GitHub"
+              exit 1
+            fi
+
+            # A download `url` may only name a file this run uploads, otherwise
+            # the manifest advertises a 404 the moment the sync finishes. Only
+            # `url` fields are checked: a link in the release notes is prose,
+            # and failing the sync over one would block a release nobody can
+            # download anyway because of it.
+            while IFS= read -r url; do
+              asset="$(basename "${url}")"
+              if [ ! -f "${DIR}/${asset}" ]; then
+                echo "::error::${name} references ${asset}, which release ${TAG} does not carry"
+                exit 1
+              fi
+            done < <(jq -r --arg base "${r2_base}/" \
+              '.. | objects | select(has("url")) | .url
+               | select(startswith($base))' "${file}" | sort -u)
+
+            echo "${name} now points at ${r2_base}."
+          done
+
+      - name: Upload to R2
+        shell: bash
+        env:
+          DIR: ${{ steps.assets.outputs.dir }}
+          TAG: ${{ needs.check.outputs.tag }}
+          UPDATE_POINTER: ${{ needs.check.outputs.update_pointer }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -euo pipefail
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          # Manifests are mutable and must never be served stale; everything
+          # else is immutable for its tag and is skipped when already there.
+          is_manifest() {
+            case "$1" in
+              latest.json | server.json) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          upload() {
+            local file="$1" key="$2" name
+            name="$(basename "${file}")"
+            if ! is_manifest "${name}" && aws s3api head-object \
+              --bucket "${R2_BUCKET}" --key "${key}" \
+              --endpoint-url "${endpoint}" > /dev/null 2>&1; then
+              echo "Already in R2: ${key}"
+              return 0
+            fi
+
+            echo "Uploading ${key}..."
+            if is_manifest "${name}"; then
+              aws s3 cp "${file}" "s3://${R2_BUCKET}/${key}" \
+                --endpoint-url "${endpoint}" --only-show-errors \
+                --cache-control "no-cache"
+            else
+              aws s3 cp "${file}" "s3://${R2_BUCKET}/${key}" \
+                --endpoint-url "${endpoint}" --only-show-errors
+            fi
+          }
+
+          # Installers and the server archive first, manifests last, so the
+          # manifest never names an object that is not in the bucket yet.
+          while IFS= read -r file; do
+            name="$(basename "${file}")"
+            if is_manifest "${name}"; then
+              continue
+            fi
+            upload "${file}" "${R2_PREFIX}/${TAG}/${name}"
+          done < <(find "${DIR}" -maxdepth 1 -type f | sort)
+
+          for name in latest.json server.json; do
+            if [ -f "${DIR}/${name}" ]; then
+              upload "${DIR}/${name}" "${R2_PREFIX}/${TAG}/${name}"
+            fi
+          done
+
+          # The fixed pointers follow the newest release only, so mirroring an
+          # older tag by hand cannot roll clients back.
+          for name in latest.json server.json; do
+            file="${DIR}/${name}"
+            if [ ! -f "${file}" ]; then
+              continue
+            fi
+            if [ "${UPDATE_POINTER}" = "true" ]; then
+              upload "${file}" "${R2_PREFIX}/latest/${name}"
+            else
+              echo "Leaving ${R2_PREFIX}/latest/${name} alone: it already advertises a newer version."
+            fi
+          done
+
+      - name: Verify what was published
+        shell: bash
+        env:
+          TAG: ${{ needs.check.outputs.tag }}
+          APP_VERSION: ${{ needs.check.outputs.app_version }}
+          UPDATE_POINTER: ${{ needs.check.outputs.update_pointer }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+
+          # A newly written object can answer 404 for a moment while the edge
+          # picks it up, so every request retries before it is believed.
+          fetch() {
+            local url="$1" out="$2" attempt
+            for attempt in 1 2 3 4 5 6; do
+              if curl -sf -o "${out}" --max-time 60 "${url}"; then
+                echo "OK ${url}"
+                return 0
+              fi
+              echo "Attempt ${attempt}/6 failed: ${url}"
+              sleep 5
+            done
+            echo "::error::${url} is not reachable"
+            return 1
+          }
+
+          # The manifests are only worth publishing if the files they name are
+          # served too — that is the join the app actually performs.
+          reachable() {
+            local url="$1" attempt status=""
+            for attempt in 1 2 3 4 5 6; do
+              status="$(curl -s -I -o /dev/null -w '%{http_code}' --max-time 60 "${url}" || true)"
+              if [ "${status}" = "200" ]; then
+                echo "OK ${url}"
+                return 0
+              fi
+              echo "Attempt ${attempt}/6 returned ${status}: ${url}"
+              sleep 5
+            done
+            echo "::error::${url} answered HTTP ${status}"
+            return 1
+          }
+
+          urls_of() {
+            jq -r '[.. | objects | select(has("url")) | .url] | unique | .[]' "$1"
+          }
+
+          fetch "${R2_PUBLIC_BASE}/${R2_PREFIX}/${TAG}/latest.json" "${tmp}/latest.json"
+          while IFS= read -r url; do
+            reachable "${url}"
+          done < <(urls_of "${tmp}/latest.json")
+
+          if [ "${UPDATE_POINTER}" = "true" ]; then
+            fetch "${R2_PUBLIC_BASE}/${R2_PREFIX}/latest/latest.json" "${tmp}/latest-pointer.json"
+            if [ "$(jq -r '.version // ""' "${tmp}/latest-pointer.json")" != "${APP_VERSION}" ]; then
+              echo "::error::${R2_PREFIX}/latest/latest.json advertises $(jq -r '.version // ""' "${tmp}/latest-pointer.json"), not ${APP_VERSION}"
+              exit 1
+            fi
+
+            fetch "${R2_PUBLIC_BASE}/${R2_PREFIX}/latest/server.json" "${tmp}/server-pointer.json"
+            while IFS= read -r url; do
+              reachable "${url}"
+            done < <(urls_of "${tmp}/server-pointer.json")
+          fi
+
+          {
+            echo "### R2 mirror: ${TAG}"
+            echo
+            echo "- Release folder: ${R2_PUBLIC_BASE}/${R2_PREFIX}/${TAG}/"
+            echo "- Updater manifest: ${R2_PUBLIC_BASE}/${R2_PREFIX}/${TAG}/latest.json"
+            echo "- Server manifest: ${R2_PUBLIC_BASE}/${R2_PREFIX}/${TAG}/server.json"
+            if [ "${UPDATE_POINTER}" = "true" ]; then
+              echo "- Fixed pointer (updater): ${R2_PUBLIC_BASE}/${R2_PREFIX}/latest/latest.json"
+              echo "- Fixed pointer (server): ${R2_PUBLIC_BASE}/${R2_PREFIX}/latest/server.json"
+            else
+              echo "- Fixed pointer: left alone, it already advertises a newer version"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
