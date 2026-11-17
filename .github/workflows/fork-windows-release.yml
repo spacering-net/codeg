@@ -19,9 +19,14 @@ name: Fork Windows Release
 # The tag is the human-facing name and only has to be unique per release. The
 # app version is what the updater actually compares, and it has to parse as
 # semver (`tauri-plugin-updater` deserializes both the manifest version and the
-# running version as `semver::Version`), which `wh.01.0.45.0` is not — hence
-# the two spellings. The version is injected at build time via `--config`
-# instead of being committed, so no version file in the tree has to change.
+# running version as `semver::Version`) — `wh.01.0.45.0` is not, hence the two
+# spellings.
+#
+# Nothing in the tree is versioned for this: the version is stamped into the
+# runner's working copy of `src-tauri/tauri.conf.json` and never committed. That
+# one field feeds all three consumers — the bundler (installer filename), the
+# running app (`tauri-codegen` embeds it into `PackageInfo`, so `getVersion()`
+# and the updater's "current version" both see it), and latest.json.
 #
 # Ordering notes:
 #   * `wh01` < `wh02` … < `wh99` — an alphanumeric prerelease identifier is
@@ -59,6 +64,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "pnpm"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          shared-key: x86_64-pc-windows-msvc
+
       - name: Compute fork release version
         id: version
         shell: bash
@@ -86,39 +113,16 @@ jobs:
           echo "app_version=${BASE_VERSION}-wh${PADDED}" >> "$GITHUB_OUTPUT"
           echo "tag=wh.${PADDED}.${BASE_VERSION}" >> "$GITHUB_OUTPUT"
 
-      # tauri-action reads `version` from the merged config, so the build, the
-      # installer's filename, the app's own reported version and the `version`
-      # field of latest.json all carry the fork numbering.
-      - name: Write version override config
+      # Ephemeral, runner-only: the working copy is thrown away, so the tree's
+      # version files never carry the fork numbering.
+      - name: Stamp fork version into the build
         shell: bash
         env:
           APP_VERSION: ${{ steps.version.outputs.app_version }}
         run: |
           set -euo pipefail
-          node -e 'const fs = require("fs"); fs.writeFileSync(process.argv[1], JSON.stringify({ version: process.env.APP_VERSION }, null, 2) + "\n")' src-tauri/tauri.release-version.json
-          cat src-tauri/tauri.release-version.json
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          run_install: false
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: "pnpm"
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./src-tauri -> target"
-          shared-key: x86_64-pc-windows-msvc
+          node -e 'const fs = require("fs"); const p = "src-tauri/tauri.conf.json"; const c = JSON.parse(fs.readFileSync(p, "utf8")); c.version = process.env.APP_VERSION; fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n")'
+          node -e 'console.log("building", require("./src-tauri/tauri.conf.json").version)'
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
@@ -149,6 +153,6 @@ jobs:
           tauriScript: pnpm tauri
           # `updater` emits the signed .nsis.zip + .sig that latest.json points
           # at, which is what the app's update check downloads.
-          args: --target x86_64-pc-windows-msvc --bundles nsis,updater --config ${{ github.workspace }}/src-tauri/tauri.release-version.json
+          args: --target x86_64-pc-windows-msvc --bundles nsis,updater
           includeUpdaterJson: true
           retryAttempts: 2
