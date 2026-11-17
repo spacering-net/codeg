@@ -23,7 +23,8 @@ pub enum CheckTrigger {
     #[default]
     Foreground,
     /// The network came back (the webview's `online` event): at most
-    /// hourly, counted from the last check SpaceRing answered.
+    /// hourly, counted from the last check SpaceRing answered, and not
+    /// within ten seconds of the last check (every window sends it).
     Online,
     /// The person asked: not throttled, but it joins a check under way and
     /// waits out SpaceRing's `Retry-After` (failing with `rateLimited`).

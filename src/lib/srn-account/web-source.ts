@@ -62,16 +62,26 @@ function learnOrigin(url: unknown): void {
 }
 
 /**
- * The website's list of connections. Its origin: what the page learned, else
- * the one the server's Harness catalog names — the same setting — else the
- * release one. Worked out without waiting, so that the new tab opens inside
- * the click that asked for it.
+ * A page of the website's console, in the interface's language. Its origin:
+ * what the page learned, else the one the server's Harness catalog names —
+ * the same setting — else the release one. Worked out without waiting, so
+ * that the new tab opens inside the click that asked for it.
  */
-export function srnManageConnectionsUrl(): string {
+function srnConsolePage(path: "" | "clients/"): string {
   const origin =
     learnedOrigin ?? getHarnessStatus().origin ?? DEFAULT_SRN_ORIGIN
   const zh = locale() === "zh_cn" || locale() === "zh_tw"
-  return `${origin}${zh ? "/zh" : ""}/console/clients/`
+  return `${origin}${zh ? "/zh" : ""}/console/${path}`
+}
+
+/** The website's list of connections. */
+export function srnManageConnectionsUrl(): string {
+  return srnConsolePage("clients/")
+}
+
+/** The console's front page. */
+export function srnConsoleUrl(): string {
+  return srnConsolePage("")
 }
 
 function isAccountProblem(value: unknown): boolean {
@@ -185,6 +195,9 @@ export const webSrnAccount: SrnAccountSource = {
   },
   openManageConnections: async () => {
     openInNewTab(srnManageConnectionsUrl())
+  },
+  openConsole: async () => {
+    openInNewTab(srnConsoleUrl())
   },
   // H1's image proxy has a route in Codeg Web too; the browser never asks
   // SpaceRing itself.

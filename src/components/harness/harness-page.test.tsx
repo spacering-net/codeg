@@ -177,7 +177,7 @@ describe("HarnessPage — sections", () => {
 
     expect(
       screen.getByText(
-        "Manage your agents' MCP servers, skills and skill packs, and find more from SpaceRing Harness under Discover."
+        "Manage your agents' MCP servers, skills and skill packs, and find more from SRN Harness under Discover."
       )
     ).toBeTruthy()
     expect(tabNames()).toEqual(["Discover", "MCP", "Skills", "Skill Packs"])
@@ -489,7 +489,7 @@ describe("HarnessPage — the segmented switch", () => {
 
 describe("HarnessPage — the top of the page on a phone", () => {
   const DESCRIPTION =
-    "Manage your agents' MCP servers, skills and skill packs, and find more from SpaceRing Harness under Discover."
+    "Manage your agents' MCP servers, skills and skill packs, and find more from SRN Harness under Discover."
 
   /** jsdom lays nothing out: say how wide the description's one line is,
    *  and how wide the sentence would need it to be. */

@@ -877,7 +877,7 @@ describe("Discover — the next page", () => {
 
     reachEnd()
     const alert = await screen.findByRole("alert")
-    expect(alert).toHaveTextContent("SpaceRing Harness could not be reached.")
+    expect(alert).toHaveTextContent("SRN Harness could not be reached.")
     expect(cardTitles()).toEqual(["Item 1", "Item 2"])
 
     failing = false
@@ -901,7 +901,7 @@ describe("Discover — when the catalog cannot be shown", () => {
 
     const alert = await screen.findByRole("alert")
     expect(alert).toHaveTextContent(
-      "SpaceRing Harness could not be reached. Check the connection and try again."
+      "SRN Harness could not be reached. Check the connection and try again."
     )
     expect(screen.queryByRole("list", { name: "Results" })).toBeNull()
 
@@ -927,19 +927,19 @@ describe("Discover — when the catalog cannot be shown", () => {
     [
       "a server error, with its status",
       backendError("server", { status: "503" }),
-      "SpaceRing Harness answered with an error (503). Try again in a moment.",
+      "SRN Harness answered with an error (503). Try again in a moment.",
       true,
     ],
     [
       "an answer that is too large",
       backendError("tooLarge"),
-      "The answer from SpaceRing Harness is larger than Codeg accepts.",
+      "The answer from SRN Harness is larger than Codeg accepts.",
       true,
     ],
     [
       "an answer that cannot be read",
       backendError("invalidResponse"),
-      "SpaceRing Harness sent an answer this Codeg cannot read. Updating Codeg may help.",
+      "SRN Harness sent an answer this Codeg cannot read. Updating Codeg may help.",
       true,
     ],
     [
@@ -989,7 +989,7 @@ describe("Discover — when the catalog cannot be shown", () => {
     backend.harness_list = () => "<html>not json</html>"
     render(<Harness />)
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "SpaceRing Harness sent an answer this Codeg cannot read."
+      "SRN Harness sent an answer this Codeg cannot read."
     )
   })
 })
@@ -1487,7 +1487,7 @@ describe("Discover — an item's detail", () => {
       name: "Description",
     })
     const alert = await within(description).findByRole("alert")
-    expect(alert).toHaveTextContent("SpaceRing Harness could not be reached.")
+    expect(alert).toHaveTextContent("SRN Harness could not be reached.")
     expect(
       await within(
         within(detail).getByRole("region", { name: "Versions" })

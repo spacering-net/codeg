@@ -41,9 +41,18 @@ pub const USE_RECORD_INTERVAL: Duration = Duration::from_secs(60 * 60);
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// After a check that got no answer, or while one is under way.
 pub const CHECK_RETRY: Duration = Duration::from_secs(60);
-/// How long a status request waits for `/me` before it answers with what it
-/// has ("could not confirm online").
+/// How long a check waits for `/me` before it records that SpaceRing did
+/// not answer ("could not confirm online").
 pub const CHECK_DEADLINE: Duration = Duration::from_secs(10);
+/// How long a status read waits for the check it started. A page should not
+/// sit on "loading" while SpaceRing is slow or out of reach: past this, the
+/// read answers with what the session's row says, and the check goes on to
+/// record its outcome for the next read.
+pub const CHECK_WAIT: Duration = Duration::from_secs(2);
+/// How long a sign-out waits for SpaceRing to confirm. The person's buttons
+/// wait with it, and the session here is already gone: no answer in time
+/// counts as no answer at all.
+pub const LOGOUT_DEADLINE: Duration = Duration::from_secs(5);
 /// How often expired rows are removed.
 pub const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
@@ -81,6 +90,24 @@ impl Clock {
             Self::System => Utc::now(),
             #[cfg(test)]
             Self::Manual(at) => *at.lock().unwrap(),
+        }
+    }
+}
+
+/// How long requests wait on SpaceRing, which tests shorten.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Waits {
+    /// A status read, for the check it started ([`CHECK_WAIT`]).
+    pub check: Duration,
+    /// A sign-out, for SpaceRing's confirmation ([`LOGOUT_DEADLINE`]).
+    pub logout: Duration,
+}
+
+impl Default for Waits {
+    fn default() -> Self {
+        Self {
+            check: CHECK_WAIT,
+            logout: LOGOUT_DEADLINE,
         }
     }
 }
@@ -139,9 +166,11 @@ pub struct SrnWeb {
     sealer: Sealer,
     db: DatabaseConnection,
     clock: Clock,
+    waits: Waits,
     /// Sessions whose online check is under way here.
-    checking: Mutex<HashSet<i32>>,
-    /// Revocations of replaced and expired sessions, which nobody waits for.
+    checking: Arc<Mutex<HashSet<i32>>>,
+    /// Online checks, and revocations of replaced and expired sessions:
+    /// work that outlives the request that started it.
     background: TaskTracker,
 }
 
@@ -163,6 +192,7 @@ impl SrnWeb {
             key,
             db,
             Clock::System,
+            Waits::default(),
         )
     }
 
@@ -172,6 +202,7 @@ impl SrnWeb {
         key: KeySource,
         db: DatabaseConnection,
         clock: Clock,
+        waits: Waits,
     ) -> Arc<Self> {
         let api = match &config {
             Some(config) => api.with_client_credentials(ClientSecretBasic::new(
@@ -186,7 +217,8 @@ impl SrnWeb {
             sealer: Sealer::new(key),
             db,
             clock,
-            checking: Mutex::new(HashSet::new()),
+            waits,
+            checking: Arc::default(),
             background: TaskTracker::new(),
         })
     }
@@ -503,9 +535,10 @@ impl SrnWeb {
 
     /// This browser's account. Confirms it with SpaceRing when the last
     /// confirmation is an hour old; SpaceRing's 401 ends the session here,
-    /// anything else keeps it as "could not confirm online".
+    /// anything else keeps it as "could not confirm online". A check that
+    /// takes longer than [`CHECK_WAIT`] is answered by a later read.
     pub async fn account(
-        &self,
+        self: &Arc<Self>,
         presented: &Presented,
         locale: Option<AppLocale>,
     ) -> (SrnWebAccountState, CookieChanges) {
@@ -547,7 +580,7 @@ impl SrnWeb {
     }
 
     async fn signed_in(
-        &self,
+        self: &Arc<Self>,
         row: srn_web_session::Model,
         cookie: Option<String>,
         mut cookies: CookieChanges,
@@ -587,7 +620,7 @@ impl SrnWeb {
         }
         if row.next_check_at <= now {
             match store::claim_check(&self.db, row.id, now, now + span(CHECK_RETRY)).await {
-                Ok(true) => return self.check(row, token, cookies).await,
+                Ok(true) => return self.check_briefly(row, token, cookies).await,
                 Ok(false) => {}
                 Err(error) => tracing::warn!("[srn-web] the online check was not claimed: {error}"),
             }
@@ -596,20 +629,50 @@ impl SrnWeb {
         (signed_in_state(&row, checking, None), cookies)
     }
 
+    /// Runs the check as a task of its own and waits for it at most
+    /// [`CHECK_WAIT`]. In time, its answer is this read's, as if the read
+    /// had made it. Otherwise the read answers with the row as it stands,
+    /// marked as checking, and the task records the outcome — a 401 or
+    /// another account included — for the next read: the row goes, and
+    /// that read clears the cookie of a session it no longer finds.
+    async fn check_briefly(
+        self: &Arc<Self>,
+        row: srn_web_session::Model,
+        token: AccessToken,
+        cookies: CookieChanges,
+    ) -> (SrnWebAccountState, CookieChanges) {
+        let (kept_row, kept_cookies) = (row.clone(), cookies.clone());
+        // Marked before the task is spawned, and until it ends (outcome
+        // recorded): no read in between sees a check as not under way.
+        let checking = Checking::start(&self.checking, row.id);
+        let service = Arc::clone(self);
+        let task = self.background.spawn(async move {
+            let _checking = checking;
+            service.check(row, token, cookies).await
+        });
+        match tokio::time::timeout(self.waits.check, task).await {
+            Ok(Ok(answer)) => answer,
+            Err(_) => (signed_in_state(&kept_row, true, None), kept_cookies),
+            // The task is gone without an answer (it panicked): the claim
+            // lapses after `CHECK_RETRY`, and a later read checks again.
+            Ok(Err(error)) => {
+                tracing::warn!("[srn-web] the online check ended without an outcome: {error}");
+                (signed_in_state(&kept_row, false, None), kept_cookies)
+            }
+        }
+    }
+
+    /// `/me`, and what its answer does to the session. Its own deadline
+    /// bounds it, whether a read still waits for it or not.
     async fn check(
         &self,
         row: srn_web_session::Model,
         token: AccessToken,
         cookies: CookieChanges,
     ) -> (SrnWebAccountState, CookieChanges) {
-        let answer = {
-            let _checking = Checking::start(&self.checking, row.id);
-            tokio::time::timeout(CHECK_DEADLINE, self.api.me(&token))
-                .await
-                .unwrap_or_else(|_| {
-                    Err(SrnError::Network("SpaceRing did not answer in time".into()))
-                })
-        };
+        let answer = tokio::time::timeout(CHECK_DEADLINE, self.api.me(&token))
+            .await
+            .unwrap_or_else(|_| Err(SrnError::Network("SRN did not answer in time".into())));
         let now = self.clock.now();
         let (state, outcome) = match answer {
             Ok(user) if user.srn == row.srn as u64 => {
@@ -788,7 +851,10 @@ impl SrnWeb {
         };
         let result = match token {
             Err(reason) => unconfirmed(reason),
-            Ok(token) => match self.api.logout(&token).await {
+            Ok(token) => match tokio::time::timeout(self.waits.logout, self.api.logout(&token))
+                .await
+                .unwrap_or_else(|_| Err(SrnError::Network("SRN did not answer in time".into())))
+            {
                 Ok(()) | Err(SrnError::Unauthorized) => {
                     tracing::info!("[srn-web] signed out");
                     SrnWebSignOutResult {
@@ -879,7 +945,7 @@ impl SrnWeb {
         revoke_with(&self.api, tokens).await;
     }
 
-    /// Waits for the revocations under way (tests).
+    /// Waits for the checks and revocations under way (tests).
     #[cfg(test)]
     pub(crate) async fn settle(&self) {
         self.background.close();
@@ -889,19 +955,22 @@ impl SrnWeb {
 }
 
 /// Marks a session's check as under way while it lives.
-struct Checking<'a> {
-    set: &'a Mutex<HashSet<i32>>,
+struct Checking {
+    set: Arc<Mutex<HashSet<i32>>>,
     id: i32,
 }
 
-impl<'a> Checking<'a> {
-    fn start(set: &'a Mutex<HashSet<i32>>, id: i32) -> Self {
+impl Checking {
+    fn start(set: &Arc<Mutex<HashSet<i32>>>, id: i32) -> Self {
         set.lock().unwrap().insert(id);
-        Self { set, id }
+        Self {
+            set: Arc::clone(set),
+            id,
+        }
     }
 }
 
-impl Drop for Checking<'_> {
+impl Drop for Checking {
     fn drop(&mut self) {
         self.set.lock().unwrap().remove(&self.id);
     }

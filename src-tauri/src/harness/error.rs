@@ -38,31 +38,31 @@ pub enum HarnessError {
     Disabled,
     /// The request did not get an answer. The text is the transport's own
     /// account, for the log and the error's `detail`.
-    #[error("SpaceRing could not be reached")]
+    #[error("SRN Harness could not be reached")]
     Network(String),
     /// SpaceRing asked to be left alone for this long. Also what a request
     /// gets, unsent, while that time has not passed.
-    #[error("SpaceRing asked for a pause of {seconds} s between requests")]
+    #[error("SRN Harness asked for a pause of {seconds} s between requests")]
     RateLimited { seconds: u64 },
-    #[error("SpaceRing has nothing at this address")]
+    #[error("SRN Harness has nothing at this address")]
     NotFound,
     /// An item address, an image path or a file's hash that cannot be one;
     /// no request was made.
     #[error("Not a Harness address")]
     InvalidRef,
-    #[error("SpaceRing answered HTTP {status}")]
+    #[error("SRN Harness answered HTTP {status}")]
     Server { status: u16 },
-    #[error("SpaceRing's answer is larger than Codeg accepts")]
+    #[error("The answer from SRN Harness is larger than Codeg accepts")]
     TooLarge,
     /// The answer arrived but is not what this request is answered with. The
     /// text says what was wrong, for the log and the error's `detail`.
-    #[error("SpaceRing's answer is not what was asked for")]
+    #[error("The answer from SRN Harness is not what was asked for")]
     InvalidResponse(String),
     /// `POST /resolve` answered 404. `/resolve` never answers that for an
     /// item — one it does not have comes back in the body as `unavailable` —
     /// so the endpoint itself is not there (a site that does not serve it
     /// yet): an item's current state cannot be confirmed.
-    #[error("SpaceRing cannot confirm this item's current state right now")]
+    #[error("SRN Harness cannot confirm this item's current state right now")]
     ResolveUnavailable,
 }
 
@@ -194,10 +194,10 @@ mod tests {
             let sent = wire(error.clone());
             assert_eq!(sent["i18n_key"], key, "{error:?}");
             assert_eq!(sent["i18n_params"], params, "{error:?}");
-            assert!(
-                !sent["message"].as_str().unwrap().is_empty(),
-                "{error:?} has no fallback text"
-            );
+            let message = sent["message"].as_str().unwrap();
+            assert!(!message.is_empty(), "{error:?} has no fallback text");
+            // the service a person reads about is SRN Harness
+            assert!(!message.contains("SpaceRing"), "{message}");
         }
     }
 

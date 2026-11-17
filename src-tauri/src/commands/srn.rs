@@ -73,17 +73,51 @@ pub async fn srn_sign_out(
         .await?)
 }
 
-/// Opens the website's list of connections ("Manage connections") in the
-/// system browser.
+/// Which SpaceRing console page [`srn_open_manage_connections`] opens.
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SrnConsolePage {
+    /// The list of connections ("Manage connections"), where one can be
+    /// removed by hand.
+    #[default]
+    Connections,
+    /// The console's front page ("Open SRN console").
+    Console,
+}
+
+/// Opens a page of the website's console in the system browser: the list of
+/// connections, unless `page` asks for the console's front page. An older
+/// frontend sends no `page` and gets the connections, as before.
 #[tauri::command]
 pub async fn srn_open_manage_connections(
     app: AppHandle,
     locale: Option<AppLocale>,
+    page: Option<SrnConsolePage>,
 ) -> Result<(), AppCommandError> {
     let language = desktop::page_language(&app, locale).await;
-    let url = desktop::service(&app).manage_connections_url(language);
+    let service = desktop::service(&app);
+    let url = match page.unwrap_or_default() {
+        SrnConsolePage::Connections => service.manage_connections_url(language),
+        SrnConsolePage::Console => service.console_url(language),
+    };
     use tauri_plugin_opener::OpenerExt;
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|_| crate::srn::error::Problem::OpenBrowser.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SrnConsolePage;
+
+    #[test]
+    fn the_console_page_reads_as_the_frontend_writes_it() {
+        let read = |raw: &str| serde_json::from_str::<SrnConsolePage>(raw);
+        assert!(matches!(read("\"console\""), Ok(SrnConsolePage::Console)));
+        assert!(matches!(
+            read("\"connections\""),
+            Ok(SrnConsolePage::Connections)
+        ));
+        assert!(read("\"elsewhere\"").is_err());
+    }
 }

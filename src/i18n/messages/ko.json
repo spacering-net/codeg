@@ -2519,11 +2519,8 @@
       },
       "quickActions": {
         "title": "빠른 작업",
-        "groups": {
-          "workspace": "워크스페이스",
-          "navigation": "탐색",
-          "more": "기타"
-        },
+        "openProject": "프로젝트 열기",
+        "more": "기타",
         "browserTab": "브라우저 탭 열기",
         "showPet": "펫 표시"
       },
@@ -7513,7 +7510,7 @@
   },
   "Harness": {
     "title": "Harness",
-    "description": "에이전트의 MCP 서버, 스킬, 스킬 팩을 관리합니다. “탐색”에서 SpaceRing Harness의 더 많은 항목을 찾아보세요.",
+    "description": "에이전트의 MCP 서버, 스킬, 스킬 팩을 관리합니다. “탐색”에서 SRN Harness의 더 많은 항목을 찾아보세요.",
     "descriptionNoDiscover": "에이전트의 MCP 서버, 스킬, 스킬 팩을 관리합니다.",
     "descriptionMore": "더보기",
     "descriptionLess": "접기",
@@ -7535,7 +7532,7 @@
       "itemNotChecked": "이 항목은 아직 확인되지 않았습니다.",
       "itemUnavailable": "Harness에 이 버전이 없습니다.",
       "reasons": {
-        "network": "SpaceRing Harness에 연결할 수 없습니다.",
+        "network": "SRN Harness에 연결할 수 없습니다.",
         "rateLimited": "Harness가 잠시 기다려 달라고 요청했습니다.",
         "server": "Harness가 오류를 반환했습니다({status}).",
         "other": "Harness가 이 Codeg에서 읽을 수 없는 응답을 보냈습니다."
@@ -7865,7 +7862,7 @@
         "paste": "설정 붙여넣기",
         "pasteHint": "README나 다른 에이전트의 설정 파일에서 가져옵니다.",
         "harness": "Harness에서 찾기",
-        "harnessHint": "SpaceRing Harness의 MCP 서버를 둘러봅니다."
+        "harnessHint": "SRN Harness의 MCP 서버를 둘러봅니다."
       },
       "list": {
         "serversLabel": "MCP 서버",
@@ -8674,7 +8671,7 @@
         "importTitle": "가져올 스킬 폴더 선택",
         "importFailed": "폴더를 가져오지 못했습니다.",
         "harness": "Harness에서 찾기",
-        "harnessHint": "SpaceRing Harness의 스킬을 둘러봅니다."
+        "harnessHint": "SRN Harness의 스킬을 둘러봅니다."
       },
       "list": {
         "label": "Codeg가 관리하는 스킬",
@@ -9461,13 +9458,13 @@
     },
     "errors": {
       "disabled": "이 Codeg에서는 “탐색”이 꺼져 있습니다.",
-      "network": "SpaceRing Harness에 연결할 수 없습니다. 연결을 확인한 뒤 다시 시도하세요.",
+      "network": "SRN Harness에 연결할 수 없습니다. 연결을 확인한 뒤 다시 시도하세요.",
       "rateLimited": "요청이 너무 많습니다. {seconds, number}초 후에 다시 시도하세요.",
       "notFound": "이 주소의 항목이 Harness에 없습니다. 이름이 바뀌었거나 삭제되었을 수 있습니다.",
       "invalidRef": "Harness 주소가 아닙니다. 주소는 “게시자/이름” 형식입니다.",
-      "server": "SpaceRing Harness가 오류({status})를 반환했습니다. 잠시 후 다시 시도하세요.",
-      "tooLarge": "SpaceRing Harness의 응답이 Codeg가 받는 크기를 넘었습니다.",
-      "invalidResponse": "SpaceRing Harness의 응답을 이 Codeg가 읽을 수 없습니다. Codeg를 업데이트하면 해결될 수 있습니다.",
+      "server": "SRN Harness가 오류({status})를 반환했습니다. 잠시 후 다시 시도하세요.",
+      "tooLarge": "SRN Harness의 응답이 Codeg가 받는 크기를 넘었습니다.",
+      "invalidResponse": "SRN Harness의 응답을 이 Codeg가 읽을 수 없습니다. Codeg를 업데이트하면 해결될 수 있습니다.",
       "recordUnreadable": "Harness에서 설치한 항목에 대한 Codeg의 설치 기록을 읽을 수 없습니다.",
       "resolveUnavailable": "지금은 Codeg가 Harness에서 이 항목의 현재 상태를 확인할 수 없어 아무것도 설치하지 않았습니다. 잠시 후 다시 시도하세요.",
       "unsupported": "이 Codeg는 너무 오래되어 Harness를 사용할 수 없습니다. 업데이트한 뒤 카탈로그를 둘러보세요.",
@@ -9783,7 +9780,6 @@
   },
   "SrnAccount": {
     "name": "SRN",
-    "account": "SpaceRing 계정",
     "trigger": {
       "account": "SRN 계정",
       "signedOut": "SRN 계정: 로그인 안 됨",
@@ -9794,7 +9790,7 @@
       "unavailable": "SRN 계정: 서버가 지금 확인할 수 없음"
     },
     "loading": "로그인 정보를 읽는 중…",
-    "notEnabled": "이 서버에서는 SRN 로그인이 켜져 있지 않습니다. Harness 둘러보기와 설치에는 로그인이 필요 없습니다.",
+    "notEnabled": "이 서버에서 꺼져 있음",
     "thisComputer": "원격 워크스페이스가 아닌 이 컴퓨터의 계정입니다.",
     "details": "자세히",
     "unknownError": "문제가 발생했습니다: {message}",
@@ -9802,74 +9798,59 @@
       "signIn": "SRN 로그인",
       "signingIn": "브라우저를 여는 중…",
       "signInAgain": "다시 로그인",
-      "reopen": "페이지 다시 열기",
-      "copyLink": "링크 복사",
+      "copyLink": "로그인 링크 복사",
       "copied": "복사됨",
-      "cancel": "취소",
+      "cancel": "로그인 취소",
       "checkAgain": "다시 확인",
       "checking": "확인 중…",
       "tryAgain": "다시 시도",
       "manageConnections": "연결 관리",
+      "openConsole": "SRN 콘솔 열기",
       "signOut": "로그아웃",
       "signingOut": "로그아웃하는 중…",
-      "goingToSpaceRing": "SpaceRing으로 이동하는 중…",
+      "goingToSrn": "SRN으로 이동하는 중…",
       "startOver": "처음부터 다시"
     },
     "signedOut": {
-      "badge": "로그인 안 됨",
-      "intro": "SRN은 SpaceRing 계정입니다. Harness 둘러보기와 설치에는 로그인이 필요 없습니다."
+      "badge": "로그인 안 됨"
     },
     "pending": {
-      "badge": "승인 대기",
-      "completingBadge": "마무리 중",
-      "hint": "브라우저의 SpaceRing 페이지에서 연결을 승인하세요. Codeg는 {time}까지 기다립니다.",
-      "hintNoTime": "브라우저의 SpaceRing 페이지에서 연결을 승인하세요.",
-      "webHint": "로그인이 {time}까지 SpaceRing을 기다립니다. 페이지를 다시 열어 마치거나 처음부터 다시 시작하세요.",
-      "webHintNoTime": "로그인이 SpaceRing을 기다리고 있습니다. 페이지를 다시 열어 마치거나 처음부터 다시 시작하세요.",
-      "completing": "브라우저에서 돌아왔습니다. 로그인을 마무리하는 중…",
-      "openBrowserFailed": "브라우저를 열 수 없습니다. 링크를 복사해 브라우저에서 여세요."
+      "line": "브라우저에서 계속하세요",
+      "webLine": "로그인이 끝나지 않았습니다",
+      "completingLine": "로그인을 마무리하는 중…",
+      "openBrowserFailed": "브라우저를 열 수 없습니다."
     },
     "signedIn": {
       "srn": "SRN {srn}",
-      "online": {
-        "confirmed": "온라인 확인됨",
-        "unconfirmed": "온라인 확인 안 됨",
-        "unchecked": "아직 확인 안 함"
-      },
-      "checkedAgo": "{ago} 확인함",
-      "confirmedAgo": "{ago} 마지막으로 확인됨",
-      "keptSignedIn": "이 컴퓨터에서는 로그인 상태가 유지됩니다. Codeg가 나중에 다시 확인합니다.",
-      "keptSignedInWeb": "이 브라우저에서는 로그인 상태가 유지됩니다. Codeg가 나중에 다시 확인합니다."
+      "unconfirmed": "온라인 확인 안 됨, 로그인 유지 중"
     },
     "unreadable": {
-      "badge": "읽을 수 없음",
-      "hint": "로그아웃된 것이 아닙니다. 로그인은 이 컴퓨터에 그대로 저장되어 있습니다. 다시 시도하거나, 다시 로그인해 교체하거나, 로그아웃해 삭제하세요."
+      "badge": "읽을 수 없음"
     },
     "unavailable": {
-      "badge": "사용 불가",
-      "hint": "이 서버가 지금은 로그인 여부를 확인할 수 없습니다. 로그아웃된 것은 아닙니다."
+      "badge": "사용 불가"
     },
     "signOut": {
-      "accountChanged": "로그인된 계정이 바뀌어 아무것도 로그아웃하지 않았습니다. 표시된 계정을 확인한 뒤 다시 시도하세요.",
-      "webSignedOutLocally": "이 브라우저에서 로그아웃했습니다. SpaceRing이 확인하지 않았으니 {url}에서 연결을 삭제하세요."
+      "accountChanged": "로그인된 계정이 바뀌어 로그아웃하지 않았습니다.",
+      "webSignedOutLocally": "이 브라우저에서 로그아웃했지만 SRN이 확인하지 않았습니다."
     },
     "errors": {
-      "network": "SpaceRing에 연결할 수 없습니다.",
-      "rateLimited": "SpaceRing이 {seconds}초 후에 다시 시도하라고 요청했습니다.",
-      "server": "SpaceRing이 오류를 반환했습니다(HTTP {status}).",
-      "invalidResponse": "SpaceRing의 응답을 사용할 수 없습니다.",
-      "clientRejected": "SpaceRing이 이 Codeg 빌드의 로그인을 받지 않습니다.",
+      "network": "SRN에 연결할 수 없습니다.",
+      "rateLimited": "SRN이 {seconds}초 후에 다시 시도하라고 요청했습니다.",
+      "server": "SRN이 오류를 반환했습니다(HTTP {status}).",
+      "invalidResponse": "SRN의 응답을 사용할 수 없습니다.",
+      "clientRejected": "이 Codeg 클라이언트는 SRN에 등록되어 있지 않거나 사용 중지되었습니다.",
       "exchangeFailed": "로그인을 완료하지 못했습니다. 다시 시작하세요.",
       "accessDenied": "브라우저에서 연결이 거부되었습니다.",
       "expired": "브라우저에서 돌아오기 전에 로그인이 만료되었습니다. 다시 시작하세요.",
-      "accountChanged": "SpaceRing이 확인한 계정이 로그인한 계정과 달라 아무것도 저장하지 않았습니다. 다시 로그인하세요.",
+      "accountChanged": "SRN이 다른 계정을 확인해 저장하지 않았습니다.",
       "keychainRead": "키체인에 저장된 로그인을 읽을 수 없습니다.",
       "keychainWrite": "키체인이 로그인을 저장하지 못해 로그인이 완료되지 않았습니다.",
       "keychainDelete": "키체인이 로그인을 삭제하지 못해 아무것도 로그아웃하지 않았습니다.",
       "keychainCleanup": "끝난 로그인이 아직 키체인에 남아 있습니다. 로그아웃하면 삭제됩니다.",
       "credentialInvalid": "키체인에 저장된 로그인은 이 Codeg가 읽을 수 없는 형식입니다.",
-      "revoked": "SpaceRing이 이 로그인을 종료했습니다. 다시 로그인하세요.",
-      "signedOutLocally": "이 컴퓨터에서 로그아웃했습니다. SpaceRing이 확인하지 않았으니 {url}에서 연결을 삭제하세요.",
+      "revoked": "SRN이 이 로그인을 종료했습니다. 다시 로그인하세요.",
+      "signedOutLocally": "이 컴퓨터에서 로그아웃했지만 SRN이 확인하지 않았습니다.",
       "alreadySignedIn": "이미 로그인되어 있습니다. 먼저 로그아웃하세요.",
       "noPendingSignIn": "브라우저 승인을 기다리는 로그인이 없습니다.",
       "openBrowser": "브라우저를 열 수 없습니다.",
@@ -9885,8 +9866,8 @@
       "storage": "서버의 데이터베이스가 응답하지 않았습니다."
     },
     "errorsPlain": {
-      "rateLimited": "SpaceRing이 잠시 후 다시 시도하라고 요청했습니다.",
-      "server": "SpaceRing이 오류를 반환했습니다."
+      "rateLimited": "SRN이 잠시 후 다시 시도하라고 요청했습니다.",
+      "server": "SRN이 오류를 반환했습니다."
     }
   }
 }

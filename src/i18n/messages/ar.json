@@ -2519,11 +2519,8 @@
       },
       "quickActions": {
         "title": "إجراءات سريعة",
-        "groups": {
-          "workspace": "مساحة العمل",
-          "navigation": "التنقل",
-          "more": "المزيد"
-        },
+        "openProject": "فتح مشروع",
+        "more": "المزيد",
         "browserTab": "فتح علامة تبويب المتصفح",
         "showPet": "إظهار الحيوان الأليف"
       },
@@ -7513,7 +7510,7 @@
   },
   "Harness": {
     "title": "Harness",
-    "description": "أدِر خوادم MCP والمهارات وحزم المهارات لدى وكلائك، واعثر على المزيد من SpaceRing Harness في «اكتشاف».",
+    "description": "أدِر خوادم MCP والمهارات وحزم المهارات لدى وكلائك، واعثر على المزيد من SRN Harness في «اكتشاف».",
     "descriptionNoDiscover": "أدِر خوادم MCP والمهارات وحزم المهارات لدى وكلائك.",
     "descriptionMore": "المزيد",
     "descriptionLess": "أقل",
@@ -7535,7 +7532,7 @@
       "itemNotChecked": "لم يتم التحقق من هذا العنصر بعد.",
       "itemUnavailable": "لا يُدرج Harness هذا الإصدار.",
       "reasons": {
-        "network": "تعذَّر الوصول إلى SpaceRing Harness.",
+        "network": "تعذَّر الوصول إلى SRN Harness.",
         "rateLimited": "طلب Harness التوقف مؤقتًا.",
         "server": "ردَّ Harness بخطأ ({status}).",
         "other": "أرسل Harness ردًّا لا يستطيع Codeg هذا قراءته."
@@ -7865,7 +7862,7 @@
         "paste": "لصق إعدادات",
         "pasteHint": "من ملف README أو من ملف وكيل آخر.",
         "harness": "البحث في Harness",
-        "harnessHint": "تصفَّح خوادم MCP في SpaceRing Harness."
+        "harnessHint": "تصفَّح خوادم MCP في SRN Harness."
       },
       "list": {
         "serversLabel": "خوادم MCP",
@@ -8674,7 +8671,7 @@
         "importTitle": "اختر مجلد المهارة الذي تريد استيراده",
         "importFailed": "لم يُستورد المجلد.",
         "harness": "البحث في Harness",
-        "harnessHint": "تصفَّح المهارات في SpaceRing Harness."
+        "harnessHint": "تصفَّح المهارات في SRN Harness."
       },
       "list": {
         "label": "المهارات التي يديرها Codeg",
@@ -9461,13 +9458,13 @@
     },
     "errors": {
       "disabled": "«اكتشاف» متوقف في هذا الـ Codeg.",
-      "network": "تعذَّر الوصول إلى SpaceRing Harness. تحقَّق من الاتصال ثم أعد المحاولة.",
+      "network": "تعذَّر الوصول إلى SRN Harness. تحقَّق من الاتصال ثم أعد المحاولة.",
       "rateLimited": "طلبات كثيرة جدًا. أعد المحاولة بعد {seconds, plural, zero {لحظات} one {ثانية واحدة} two {ثانيتين} few {# ثوانٍ} many {# ثانية} other {# ثانية}}.",
       "notFound": "لا يوجد في Harness عنصر بهذا العنوان. ربما أُعيدت تسميته أو أُزيل.",
       "invalidRef": "هذا ليس عنوانًا في Harness. يُكتب العنوان بالصيغة \u2066publisher/name\u2069.",
-      "server": "ردَّ SpaceRing Harness بخطأ ({status}). أعد المحاولة بعد قليل.",
-      "tooLarge": "ردُّ SpaceRing Harness أكبر مما يقبله Codeg.",
-      "invalidResponse": "أرسل SpaceRing Harness ردًّا لا يستطيع هذا الإصدار من Codeg قراءته. قد يحلّ تحديث Codeg المشكلة.",
+      "server": "ردَّ SRN Harness بخطأ ({status}). أعد المحاولة بعد قليل.",
+      "tooLarge": "ردُّ SRN Harness أكبر مما يقبله Codeg.",
+      "invalidResponse": "أرسل SRN Harness ردًّا لا يستطيع هذا الإصدار من Codeg قراءته. قد يحلّ تحديث Codeg المشكلة.",
       "recordUnreadable": "تعذّرت قراءة سجلّ Codeg لما ثبّته من Harness.",
       "resolveUnavailable": "لا يستطيع Codeg الآن التأكد من الحالة الحالية لهذا العنصر لدى Harness، لذا لم يُثبَّت أي شيء. أعد المحاولة لاحقًا.",
       "unsupported": "هذا الإصدار من Codeg أقدم من أن يدعم Harness. حدِّثه لتصفُّح الفهرس.",
@@ -9783,7 +9780,6 @@
   },
   "SrnAccount": {
     "name": "SRN",
-    "account": "حساب SpaceRing",
     "trigger": {
       "account": "حساب SRN",
       "signedOut": "حساب SRN: لم يتم تسجيل الدخول",
@@ -9794,7 +9790,7 @@
       "unavailable": "حساب SRN: لا يستطيع الخادم التحقق الآن"
     },
     "loading": "جارٍ قراءة تسجيل الدخول…",
-    "notEnabled": "لم يفعّل هذا الخادم تسجيل الدخول إلى SRN. لا يتطلب تصفح Harness والتثبيت منه تسجيل الدخول.",
+    "notEnabled": "غير مفعّل على هذا الخادم",
     "thisComputer": "هذا حساب هذا الحاسوب، لا حساب مساحة العمل البعيدة.",
     "details": "التفاصيل",
     "unknownError": "حدث خطأ: {message}",
@@ -9802,74 +9798,59 @@
       "signIn": "تسجيل الدخول إلى SRN",
       "signingIn": "جارٍ فتح المتصفح…",
       "signInAgain": "تسجيل الدخول مجددًا",
-      "reopen": "فتح الصفحة مجددًا",
-      "copyLink": "نسخ الرابط",
+      "copyLink": "نسخ رابط تسجيل الدخول",
       "copied": "تم النسخ",
-      "cancel": "إلغاء",
+      "cancel": "إلغاء تسجيل الدخول",
       "checkAgain": "تحقق مجددًا",
       "checking": "جارٍ التحقق…",
       "tryAgain": "إعادة المحاولة",
       "manageConnections": "إدارة الاتصالات",
+      "openConsole": "فتح لوحة تحكم SRN",
       "signOut": "تسجيل الخروج",
       "signingOut": "جارٍ تسجيل الخروج…",
-      "goingToSpaceRing": "جارٍ الانتقال إلى SpaceRing…",
+      "goingToSrn": "جارٍ الانتقال إلى SRN…",
       "startOver": "البدء من جديد"
     },
     "signedOut": {
-      "badge": "غير مسجَّل الدخول",
-      "intro": "SRN هو حسابك في SpaceRing. لا يتطلب تصفح Harness والتثبيت منه تسجيل الدخول."
+      "badge": "غير مسجَّل الدخول"
     },
     "pending": {
-      "badge": "بالانتظار",
-      "completingBadge": "جارٍ الإكمال",
-      "hint": "وافِق على الاتصال في صفحة SpaceRing في متصفحك. سينتظر Codeg حتى {time}.",
-      "hintNoTime": "وافِق على الاتصال في صفحة SpaceRing في متصفحك.",
-      "webHint": "ينتظر تسجيل الدخول SpaceRing حتى {time}. افتح الصفحة مجددًا لإكماله، أو ابدأ من جديد.",
-      "webHintNoTime": "ينتظر تسجيل الدخول SpaceRing. افتح الصفحة مجددًا لإكماله، أو ابدأ من جديد.",
-      "completing": "عاد المتصفح. جارٍ إكمال تسجيل الدخول…",
-      "openBrowserFailed": "تعذّر فتح المتصفح. انسخ الرابط وافتحه في متصفحك."
+      "line": "تابع في المتصفح",
+      "webLine": "لم يكتمل تسجيل الدخول",
+      "completingLine": "جارٍ إكمال تسجيل الدخول…",
+      "openBrowserFailed": "تعذّر فتح المتصفح."
     },
     "signedIn": {
       "srn": "SRN {srn}",
-      "online": {
-        "confirmed": "مؤكَّد عبر الإنترنت",
-        "unconfirmed": "غير مؤكَّد عبر الإنترنت",
-        "unchecked": "لم يُتحقَّق بعد"
-      },
-      "checkedAgo": "تم التحقق {ago}",
-      "confirmedAgo": "آخر تأكيد {ago}",
-      "keptSignedIn": "تبقى مسجَّل الدخول على هذا الحاسوب. سيتحقق Codeg مجددًا لاحقًا.",
-      "keptSignedInWeb": "تبقى مسجَّل الدخول في هذا المتصفح. سيتحقق Codeg مجددًا لاحقًا."
+      "unconfirmed": "تعذّر التأكيد عبر الإنترنت؛ ما زلت مسجَّل الدخول."
     },
     "unreadable": {
-      "badge": "تتعذّر القراءة",
-      "hint": "لم يتم تسجيل خروجك — ما زال تسجيل الدخول محفوظًا على هذا الحاسوب. أعد المحاولة، أو سجّل الدخول مجددًا لاستبداله، أو سجّل الخروج لحذفه."
+      "badge": "تتعذّر القراءة"
     },
     "unavailable": {
-      "badge": "غير متاح",
-      "hint": "لا يستطيع هذا الخادم الآن معرفة ما إذا كنت مسجَّل الدخول. لم يُسجَّل خروج أي حساب."
+      "badge": "غير متاح"
     },
     "signOut": {
-      "accountChanged": "تغيّر الحساب المسجَّل الدخول، لذا لم يُسجَّل خروج أي حساب. تحقّق من الحساب المعروض ثم أعد المحاولة.",
-      "webSignedOutLocally": "تم تسجيل الخروج في هذا المتصفح. لم يؤكّد SpaceRing ذلك — احذف الاتصال من \u2066{url}\u2069."
+      "accountChanged": "تغيّر الحساب المسجَّل الدخول، لذا لم يُسجَّل خروج أي حساب.",
+      "webSignedOutLocally": "تم تسجيل الخروج في هذا المتصفح، لكن SRN لم يؤكّد ذلك."
     },
     "errors": {
-      "network": "تعذّر الوصول إلى SpaceRing.",
-      "rateLimited": "طلب SpaceRing من Codeg الانتظار {seconds} ثانية قبل إعادة المحاولة.",
-      "server": "ردّ SpaceRing بخطأ (\u2066HTTP {status}\u2069).",
-      "invalidResponse": "تعذّر استخدام ردّ SpaceRing.",
-      "clientRejected": "لا يقبل SpaceRing تسجيل الدخول من إصدار Codeg هذا.",
+      "network": "تعذّر الوصول إلى SRN.",
+      "rateLimited": "طلب SRN من Codeg الانتظار {seconds} ثانية قبل إعادة المحاولة.",
+      "server": "ردّ SRN بخطأ (⁦HTTP {status}⁩).",
+      "invalidResponse": "تعذّر استخدام ردّ SRN.",
+      "clientRejected": "لا يتعرّف SRN على عميل Codeg هذا، أو أوقفه.",
       "exchangeFailed": "تعذّر إكمال تسجيل الدخول. ابدأه من جديد.",
       "accessDenied": "رُفض الاتصال في المتصفح.",
       "expired": "انتهت صلاحية تسجيل الدخول قبل عودة المتصفح. ابدأه من جديد.",
-      "accountChanged": "أكّد SpaceRing حسابًا مختلفًا عن الحساب الذي سجّل الدخول، لذا لم يُحفظ شيء. سجّل الدخول مجددًا.",
+      "accountChanged": "أكّد SRN حسابًا مختلفًا، لذا لم يُحفظ شيء.",
       "keychainRead": "تعذّرت قراءة تسجيل الدخول المحفوظ في سلسلة المفاتيح.",
       "keychainWrite": "لم تحفظ سلسلة المفاتيح تسجيل الدخول، لذا لم يكتمل.",
       "keychainDelete": "لم تحذف سلسلة المفاتيح تسجيل الدخول، لذا لم يُسجَّل خروج أي حساب.",
       "keychainCleanup": "ما زال تسجيل دخول منتهٍ محفوظًا في سلسلة المفاتيح. سجّل الخروج لحذفه.",
       "credentialInvalid": "تسجيل الدخول المحفوظ في سلسلة المفاتيح ليس بصيغة يستطيع Codeg هذا قراءتها.",
-      "revoked": "أنهى SpaceRing تسجيل الدخول هذا. سجّل الدخول مجددًا.",
-      "signedOutLocally": "تم تسجيل الخروج على هذا الحاسوب. لم يؤكّد SpaceRing ذلك — احذف الاتصال من \u2066{url}\u2069.",
+      "revoked": "أنهى SRN تسجيل الدخول هذا. سجّل الدخول مجددًا.",
+      "signedOutLocally": "تم تسجيل الخروج على هذا الحاسوب، لكن SRN لم يؤكّد ذلك.",
       "alreadySignedIn": "أنت مسجَّل الدخول بالفعل. سجّل الخروج أولًا.",
       "noPendingSignIn": "لا يوجد تسجيل دخول بانتظار المتصفح.",
       "openBrowser": "تعذّر فتح المتصفح.",
@@ -9885,8 +9866,8 @@
       "storage": "لم تستجب قاعدة بيانات الخادم."
     },
     "errorsPlain": {
-      "rateLimited": "طلب SpaceRing من Codeg الانتظار قبل إعادة المحاولة.",
-      "server": "ردّ SpaceRing بخطأ."
+      "rateLimited": "طلب SRN من Codeg الانتظار قبل إعادة المحاولة.",
+      "server": "ردّ SRN بخطأ."
     }
   }
 }

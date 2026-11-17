@@ -20,6 +20,7 @@ use super::test_support::{
     raw_get, wait_closed, MockSrn, RawResponse, Reply, AVATAR_PATH, USER_SRN,
 };
 use super::types::{CheckTrigger, SrnAccountChanged, SrnAccountState};
+use crate::harness::origin::Origin;
 
 const LOGIN: &str = "/api/client/v1/login-requests";
 const TOKEN: &str = "/api/client/v1/token";
@@ -126,6 +127,33 @@ impl Rig {
         json(&self.account.state())
     }
 
+    /// A sign-in another development Codeg, talking to another origin, wrote
+    /// into the entry they share.
+    fn foreign_record(&self) -> String {
+        store::encode(
+            &AccessToken::parse(&"f".repeat(43)).unwrap(),
+            &SrnUser {
+                srn: USER_SRN + 1,
+                name: "Grace Hopper".into(),
+                avatar_path: None,
+            },
+            &Environment {
+                origin: Origin::parse("http://127.0.0.1:4321").unwrap(),
+                client_id: "codeg-desktop-test".into(),
+                secret_name: SECRET.into(),
+            },
+        )
+    }
+
+    /// The environment the service was made with.
+    fn env(&self) -> Environment {
+        Environment {
+            origin: self.srn.origin().clone(),
+            client_id: "codeg-desktop-test".into(),
+            secret_name: SECRET.into(),
+        }
+    }
+
     /// A sign-in from before: a token SpaceRing issued, in the keychain.
     fn seed(&self) -> String {
         let token = self.srn.issue_token();
@@ -138,6 +166,7 @@ impl Rig {
                     name: "Ada Lovelace".into(),
                     avatar_path: Some(AVATAR_PATH.into()),
                 },
+                &self.env(),
             ),
         );
         token
@@ -861,6 +890,136 @@ async fn a_sign_in_that_is_not_one_is_unreadable_and_can_be_removed() {
     assert_eq!(rig.srn.count(LOGOUT), 0, "there was no token to tell it");
 }
 
+/// Development builds share one keychain entry: a sign-in another origin
+/// or client wrote is not signed in here, its token goes nowhere, and it is
+/// left alone until a sign-in here replaces it.
+#[tokio::test]
+async fn a_sign_in_kept_for_another_origin_or_client_is_not_this_ones() {
+    for (origin, client) in [
+        ("http://127.0.0.1:4321", "codeg-desktop-test"),
+        ("https://spacering.net", "codeg-desktop-other"),
+    ] {
+        let rig = rig().await;
+        let elsewhere = Environment {
+            origin: Origin::parse(origin).unwrap(),
+            client_id: client.into(),
+            secret_name: SECRET.into(),
+        };
+        let theirs = store::encode(
+            &AccessToken::parse(&"t".repeat(43)).unwrap(),
+            &SrnUser {
+                srn: USER_SRN,
+                name: "Ada Lovelace".into(),
+                avatar_path: None,
+            },
+            &elsewhere,
+        );
+        rig.store.put(SECRET, &theirs);
+        rig.account.startup().await;
+        assert_eq!(rig.state()["status"], "signedOut", "{origin} {client}");
+        assert_eq!(rig.srn.count(ME), 0, "its token was sent here");
+        // signing out here has nothing of its own to remove
+        rig.account
+            .sign_out(None, PageLanguage::English)
+            .await
+            .unwrap();
+        assert_eq!(rig.store.value(SECRET).as_deref(), Some(theirs.as_str()));
+        assert_eq!(rig.srn.count(LOGOUT), 0);
+        // a sign-in here replaces it with this build's own
+        rig.sign_in().await;
+        let raw = rig.store.value(SECRET).unwrap();
+        assert!(store::kept_for(&raw, &rig.env()));
+    }
+}
+
+/// Another development Codeg, talking elsewhere, signed in over the shared
+/// entry after this one read it: nothing this one does afterwards removes or
+/// rewrites that sign-in, and its token goes nowhere.
+#[tokio::test]
+async fn a_sign_in_written_over_this_ones_is_left_alone() {
+    // signing out: this one's own connection still ends on SpaceRing
+    let rig = self::rig().await;
+    let token = rig.seed();
+    rig.account.startup().await;
+    let theirs = rig.foreign_record();
+    rig.store.put(SECRET, &theirs);
+    rig.account
+        .sign_out(None, PageLanguage::English)
+        .await
+        .unwrap();
+    assert_eq!(rig.state()["status"], "signedOut");
+    assert_eq!(rig.store.value(SECRET).as_deref(), Some(theirs.as_str()));
+    assert_eq!(rig.srn.count(LOGOUT), 1);
+    assert!(!rig.srn.token_works(&token));
+
+    // SpaceRing ending this one's connection
+    let rig = self::rig().await;
+    rig.seed();
+    rig.account.startup().await;
+    let theirs = rig.foreign_record();
+    rig.store.put(SECRET, &theirs);
+    rig.srn
+        .script_me(Reply::Status(401, json!({ "error": "invalid_token" })));
+    let state = json(&rig.account.check(CheckTrigger::User).await.unwrap());
+    assert_eq!(state["status"], "signedOut");
+    assert_eq!(rig.store.value(SECRET).as_deref(), Some(theirs.as_str()));
+
+    // a new name on SpaceRing
+    let rig = self::rig().await;
+    rig.seed();
+    rig.account.startup().await;
+    let theirs = rig.foreign_record();
+    rig.store.put(SECRET, &theirs);
+    rig.srn.rename_user("Ada L.", None);
+    let state = json(&rig.account.check(CheckTrigger::User).await.unwrap());
+    assert_eq!(state["account"]["name"], "Ada L.");
+    assert_eq!(rig.store.value(SECRET).as_deref(), Some(theirs.as_str()));
+    // none of it sent the other sign-in's token
+    assert!(rig
+        .srn
+        .seen()
+        .iter()
+        .all(|seen| seen.header("authorization") != Some(&format!("Bearer {}", "f".repeat(43)))));
+}
+
+/// The keychain would not read at the start, and by the sign-out it holds
+/// another environment's sign-in: not this one's to remove.
+#[tokio::test]
+async fn signing_out_an_unread_sign_in_leaves_another_environments_alone() {
+    let rig = rig().await;
+    *rig.store.fail_get.lock().unwrap() = true;
+    rig.account.startup().await;
+    assert_eq!(rig.state()["status"], "credentialUnreadable");
+    *rig.store.fail_get.lock().unwrap() = false;
+    let theirs = rig.foreign_record();
+    rig.store.put(SECRET, &theirs);
+    rig.account
+        .sign_out(None, PageLanguage::English)
+        .await
+        .unwrap();
+    assert_eq!(rig.state()["status"], "signedOut");
+    assert_eq!(rig.store.value(SECRET).as_deref(), Some(theirs.as_str()));
+}
+
+#[tokio::test]
+async fn the_console_and_its_connections_are_on_the_sign_ins_origin() {
+    let rig = rig().await;
+    let origin = rig.srn.origin().as_str().to_string();
+    assert_eq!(
+        rig.account.console_url(PageLanguage::English),
+        format!("{origin}/console/")
+    );
+    assert_eq!(
+        rig.account.console_url(PageLanguage::SimplifiedChinese),
+        format!("{origin}/zh/console/")
+    );
+    assert_eq!(
+        rig.account
+            .manage_connections_url(PageLanguage::TraditionalChinese),
+        format!("{origin}/zh/console/clients/")
+    );
+}
+
 #[tokio::test]
 async fn a_sign_in_over_an_unreadable_one_replaces_it() {
     let rig = rig().await;
@@ -997,7 +1156,7 @@ async fn the_online_check_is_at_most_hourly_unless_asked_for() {
     assert_eq!(rig.srn.count(ME), 3, "an hour on");
 
     // no answer: a window coming forward waits a minute before trying again;
-    // the network coming back does not wait
+    // the network coming back waits ten seconds
     rig.srn.script_me(Reply::Slow(Duration::from_secs(5)));
     rig.clock.advance(Duration::from_secs(61 * 60));
     let state = json(&rig.account.check(CheckTrigger::Foreground).await.unwrap());
@@ -1007,6 +1166,10 @@ async fn the_online_check_is_at_most_hourly_unless_asked_for() {
         "SrnAccount.errors.network"
     );
     rig.srn.script_me(Reply::Normal);
+    rig.account.check(CheckTrigger::Foreground).await.unwrap();
+    rig.account.check(CheckTrigger::Online).await.unwrap();
+    assert_eq!(rig.srn.count(ME), 4, "just after the last try");
+    rig.clock.advance(Duration::from_secs(11));
     rig.account.check(CheckTrigger::Foreground).await.unwrap();
     assert_eq!(rig.srn.count(ME), 4, "within a minute of the last try");
     let state = json(&rig.account.check(CheckTrigger::Online).await.unwrap());
@@ -1028,6 +1191,53 @@ async fn the_online_check_is_at_most_hourly_unless_asked_for() {
     let state = json(&rig.account.check(CheckTrigger::User).await.unwrap());
     assert_eq!(rig.srn.count(ME), 7, "the pause is over");
     assert_eq!(state["online"]["status"], "confirmed");
+}
+
+#[tokio::test]
+async fn the_network_coming_back_in_every_window_is_one_check() {
+    let rig = rig_with(Config {
+        online_floor: Duration::from_secs(10),
+        ..Config::default()
+    })
+    .await;
+    rig.seed();
+    rig.account.startup().await;
+    rig.srn.stop();
+    rig.clock.advance(Duration::from_secs(61 * 60));
+    // each check ends with one event
+    let checks = || rig.host.events.lock().unwrap().len();
+    let before = checks();
+    // the first window's check fails at once: not quite online yet
+    rig.account.check(CheckTrigger::Online).await.unwrap();
+    assert_eq!(checks(), before + 1);
+    assert_eq!(rig.state()["online"]["status"], "unconfirmed");
+    // the other windows say so after it ended, within the floor
+    for _ in 0..3 {
+        rig.clock.advance(Duration::from_secs(3));
+        rig.account.check(CheckTrigger::Online).await.unwrap();
+    }
+    assert_eq!(checks(), before + 1, "one check for every window");
+    // past it, the network coming back checks again
+    rig.clock.advance(Duration::from_secs(2));
+    rig.account.check(CheckTrigger::Online).await.unwrap();
+    assert_eq!(checks(), before + 2, "past the floor");
+}
+
+#[tokio::test]
+async fn the_person_s_check_ignores_the_online_floor() {
+    let rig = rig().await;
+    rig.seed();
+    rig.srn.stop();
+    rig.account.startup().await;
+    // each check ends with one event
+    let checks = || rig.host.events.lock().unwrap().len();
+    let before = checks();
+    rig.account.check(CheckTrigger::Online).await.unwrap();
+    assert_eq!(checks(), before, "just after the startup check");
+    for _ in 0..3 {
+        rig.account.check(CheckTrigger::User).await.unwrap();
+    }
+    assert_eq!(checks(), before + 3, "each one asked for");
 }
 
 #[tokio::test]
@@ -1144,6 +1354,44 @@ async fn signing_out_removes_the_token_here_first() {
     );
     assert_eq!(rig.store.value(SECRET), None);
     assert!(rig.position("store delete") < rig.position("srn logout"));
+    assert_eq!(rig.state()["status"], "signedOut");
+}
+
+#[tokio::test]
+async fn a_sign_out_spacering_never_answers_is_unconfirmed_within_its_deadline() {
+    let rig = rig_with(Config {
+        logout_deadline: Duration::from_millis(150),
+        ..Config::default()
+    })
+    .await;
+    rig.seed();
+    rig.account.startup().await;
+    rig.srn.script_logout(Reply::Slow(Duration::from_secs(30)));
+    let started = Instant::now();
+    let out = serde_json::to_value(
+        rig.account
+            .sign_out(Some(USER_SRN), PageLanguage::English)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    // the deadline ended it, not the client's own two seconds
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        started.elapsed()
+    );
+    let manage = format!("{}/console/clients/", rig.srn.origin().as_str());
+    assert_eq!(out["state"], json!({ "status": "signedOut" }));
+    assert_eq!(out["remote"], "unconfirmed");
+    assert_eq!(out["manageConnectionsUrl"], manage);
+    assert_eq!(
+        key_of(&out["problem"]),
+        "SrnAccount.errors.signedOutLocally"
+    );
+    assert_eq!(out["problem"]["i18n_params"]["reason"], "network");
+    assert_eq!(rig.srn.count(LOGOUT), 1);
+    assert_eq!(rig.store.value(SECRET), None);
     assert_eq!(rig.state()["status"], "signedOut");
 }
 

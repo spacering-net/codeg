@@ -17,13 +17,14 @@
 //! also closes when its flow is cancelled, replaced or expires
 //! (`CancellationToken`).
 //!
-//! Every response is `Cache-Control: no-store`, `Content-Security-Policy:
-//! default-src 'none'`, `Referrer-Policy: no-referrer` and `Connection:
-//! close`. Nothing about a request — its address, its query, a header — is
-//! logged.
+//! Every response is `Cache-Control: no-store`, `Referrer-Policy:
+//! no-referrer`, `Connection: close` and under the page's
+//! `Content-Security-Policy` ([`page::CONTENT_SECURITY_POLICY`]: nothing may
+//! load or run but the page's own inline stylesheet, by its hash). Nothing
+//! about a request — its address, its query, a header — is logged.
 
 use std::net::Ipv4Addr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderValue, Method, StatusCode};
@@ -33,6 +34,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::page::{self, Outcome, PageLanguage};
 use super::pkce::{AuthCode, FlowSecret};
+use crate::harness::origin;
 
 /// The redirect's path, as the registration names it.
 pub(crate) const CALLBACK_PATH: &str = "/auth/callback";
@@ -119,7 +121,8 @@ async fn answer(State(expected): State<Arc<Expected>>, request: Request) -> Resp
         Some(outcome) => respond(
             StatusCode::OK,
             "text/html; charset=utf-8",
-            page::html(outcome, expected.language),
+            // a link back to Codeg only where `codeg://` is this build's
+            page::html(outcome, expected.language, origin::is_release_build()),
         ),
         None => respond(
             StatusCode::NOT_FOUND,
@@ -189,13 +192,19 @@ fn read_query(query: &str, expected: &FlowSecret) -> Option<Callback> {
     expected.matches(&state).then_some(callback)
 }
 
+/// The page's policy as a header value: visible ASCII (a base64 hash among
+/// fixed directives), so it always is one.
+static POLICY: LazyLock<HeaderValue> = LazyLock::new(|| {
+    HeaderValue::from_str(&page::CONTENT_SECURITY_POLICY).expect("the policy is visible ASCII")
+});
+
 fn respond(status: StatusCode, content_type: &'static str, body: String) -> Response {
     let mut response = (status, body).into_response();
     let headers = response.headers_mut();
+    headers.insert(header::CONTENT_SECURITY_POLICY, POLICY.clone());
     for (name, value) in [
         (header::CONTENT_TYPE, content_type),
         (header::CACHE_CONTROL, "no-store"),
-        (header::CONTENT_SECURITY_POLICY, "default-src 'none'"),
         (header::REFERRER_POLICY, "no-referrer"),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         // one request per connection: nothing is answered on it afterwards
@@ -306,6 +315,10 @@ mod tests {
             let answer = raw_get(port, &target, host.as_deref()).await.unwrap();
             assert_eq!(answer.status, 404, "{target} with {host:?}");
             assert_eq!(answer.header("cache-control"), Some("no-store"));
+            assert_eq!(
+                answer.header("content-security-policy"),
+                Some(page::CONTENT_SECURITY_POLICY.as_str())
+            );
         }
         let posted = crate::srn::test_support::raw_request(port, "POST", &good, Some(&host))
             .await
@@ -320,9 +333,16 @@ mod tests {
         assert_eq!(answer.status, 200);
         assert!(answer.body.contains("Return to Codeg"));
         assert_eq!(answer.header("cache-control"), Some("no-store"));
+        // the policy the page was written for: its stylesheet's hash
+        // (page.rs checks the hash against the stylesheet itself)
         assert_eq!(
             answer.header("content-security-policy"),
-            Some("default-src 'none'")
+            Some(page::CONTENT_SECURITY_POLICY.as_str())
+        );
+        assert!(answer.body.contains("<style>"));
+        assert_eq!(
+            answer.body.contains("href=\"codeg://open\""),
+            origin::is_release_build()
         );
         assert_eq!(answer.header("referrer-policy"), Some("no-referrer"));
         assert_eq!(answer.header("connection"), Some("close"));

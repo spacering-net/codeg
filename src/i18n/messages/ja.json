@@ -2519,11 +2519,8 @@
       },
       "quickActions": {
         "title": "クイック操作",
-        "groups": {
-          "workspace": "ワークスペース",
-          "navigation": "ナビゲーション",
-          "more": "その他"
-        },
+        "openProject": "プロジェクトを開く",
+        "more": "その他",
         "browserTab": "ブラウザータブを開く",
         "showPet": "ペットを表示"
       },
@@ -5238,8 +5235,8 @@
   "RemoteWorkspace": {
     "openLocalWorkspace": "ローカルワークスペースを開く",
     "openLocalFailed": "ローカルワークスペースを開けませんでした",
-    "openRemoteWorkspace": "リモートワークスペースを開く",
-    "manage": "リモートワークスペースを管理",
+    "openRemoteWorkspace": "リモートワークスペース",
+    "manage": "リモート接続を管理",
     "manageTitle": "リモートワークスペースの接続",
     "empty": "リモート接続はありません",
     "noMatches": "一致するリモート接続がありません",
@@ -7513,7 +7510,7 @@
   },
   "Harness": {
     "title": "Harness",
-    "description": "エージェントの MCP サーバー、スキル、スキルパックを管理します。「見つける」では SpaceRing Harness のアイテムをさらに探せます。",
+    "description": "エージェントの MCP サーバー、スキル、スキルパックを管理します。「見つける」では SRN Harness のアイテムをさらに探せます。",
     "descriptionNoDiscover": "エージェントの MCP サーバー、スキル、スキルパックを管理します。",
     "descriptionMore": "もっと見る",
     "descriptionLess": "折りたたむ",
@@ -7535,7 +7532,7 @@
       "itemNotChecked": "この項目はまだ確認されていません。",
       "itemUnavailable": "Harness にはこのバージョンがありません。",
       "reasons": {
-        "network": "SpaceRing Harness に接続できませんでした。",
+        "network": "SRN Harness に接続できませんでした。",
         "rateLimited": "Harness から待機を求められました。",
         "server": "Harness がエラーを返しました（{status}）。",
         "other": "Harness の応答をこの Codeg では読み取れません。"
@@ -7865,7 +7862,7 @@
         "paste": "設定を貼り付け",
         "pasteHint": "README やほかのエージェントの設定ファイルから。",
         "harness": "Harness で探す",
-        "harnessHint": "SpaceRing Harness の MCP サーバーを見ます。"
+        "harnessHint": "SRN Harness の MCP サーバーを見ます。"
       },
       "list": {
         "serversLabel": "MCP サーバー",
@@ -8674,7 +8671,7 @@
         "importTitle": "取り込むスキルフォルダーを選ぶ",
         "importFailed": "フォルダーを取り込めませんでした。",
         "harness": "Harness で探す",
-        "harnessHint": "SpaceRing Harness のスキルを見ます。"
+        "harnessHint": "SRN Harness のスキルを見ます。"
       },
       "list": {
         "label": "Codeg が管理するスキル",
@@ -9461,13 +9458,13 @@
     },
     "errors": {
       "disabled": "この Codeg では「見つける」がオフになっています。",
-      "network": "SpaceRing Harness に接続できませんでした。接続を確認して、もう一度お試しください。",
+      "network": "SRN Harness に接続できませんでした。接続を確認して、もう一度お試しください。",
       "rateLimited": "リクエストが多すぎます。{seconds, number} 秒後にもう一度お試しください。",
       "notFound": "このアドレスのアイテムは Harness にありません。名前が変わったか、削除された可能性があります。",
       "invalidRef": "これは Harness のアドレスではありません。アドレスは「公開者/名前」の形です。",
-      "server": "SpaceRing Harness がエラーを返しました（{status}）。しばらくしてからお試しください。",
-      "tooLarge": "SpaceRing Harness からの応答が、Codeg の受け付ける大きさを超えています。",
-      "invalidResponse": "SpaceRing Harness からの応答をこの Codeg は読み取れません。Codeg を更新すると解決する場合があります。",
+      "server": "SRN Harness がエラーを返しました（{status}）。しばらくしてからお試しください。",
+      "tooLarge": "SRN Harness からの応答が、Codeg の受け付ける大きさを超えています。",
+      "invalidResponse": "SRN Harness からの応答をこの Codeg は読み取れません。Codeg を更新すると解決する場合があります。",
       "recordUnreadable": "Codeg が Harness からインストールしたものの記録を読み取れませんでした。",
       "resolveUnavailable": "Codeg は今この項目の現在の状態を Harness に確認できないため、何もインストールしていません。しばらくしてからもう一度お試しください。",
       "unsupported": "この Codeg は古すぎて Harness を利用できません。更新してからカタログをご覧ください。",
@@ -9783,7 +9780,6 @@
   },
   "SrnAccount": {
     "name": "SRN",
-    "account": "SpaceRing アカウント",
     "trigger": {
       "account": "SRN アカウント",
       "signedOut": "SRN アカウント：未サインイン",
@@ -9794,7 +9790,7 @@
       "unavailable": "SRN アカウント：サーバーが今は確認できません"
     },
     "loading": "サインイン情報を読み込んでいます…",
-    "notEnabled": "このサーバーでは SRN へのサインインが有効になっていません。Harness の閲覧とインストールにサインインは不要です。",
+    "notEnabled": "このサーバーでは無効です",
     "thisComputer": "これはこのコンピューターのアカウントで、リモートワークスペースのものではありません。",
     "details": "詳細",
     "unknownError": "エラーが発生しました：{message}",
@@ -9802,91 +9798,76 @@
       "signIn": "SRN にサインイン",
       "signingIn": "ブラウザーを開いています…",
       "signInAgain": "もう一度サインイン",
-      "reopen": "ページを再度開く",
-      "copyLink": "リンクをコピー",
+      "copyLink": "サインインリンクをコピー",
       "copied": "コピーしました",
-      "cancel": "キャンセル",
+      "cancel": "サインインをキャンセル",
       "checkAgain": "再確認",
       "checking": "確認中…",
       "tryAgain": "再試行",
       "manageConnections": "接続を管理",
+      "openConsole": "SRN コンソールを開く",
       "signOut": "サインアウト",
       "signingOut": "サインアウトしています…",
-      "goingToSpaceRing": "SpaceRing に移動しています…",
+      "goingToSrn": "SRN に移動しています…",
       "startOver": "最初からやり直す"
     },
     "signedOut": {
-      "badge": "未サインイン",
-      "intro": "SRN は SpaceRing のアカウントです。Harness の閲覧とインストールにサインインは不要です。"
+      "badge": "未サインイン"
     },
     "pending": {
-      "badge": "承認待ち",
-      "completingBadge": "完了処理中",
-      "hint": "ブラウザーの SpaceRing のページで接続を承認してください。Codeg は {time} まで待機します。",
-      "hintNoTime": "ブラウザーの SpaceRing のページで接続を承認してください。",
-      "webHint": "サインインは {time} まで SpaceRing を待っています。ページを再度開いて完了するか、最初からやり直してください。",
-      "webHintNoTime": "サインインは SpaceRing を待っています。ページを再度開いて完了するか、最初からやり直してください。",
-      "completing": "ブラウザーから戻りました。サインインを完了しています…",
-      "openBrowserFailed": "ブラウザーを開けませんでした。リンクをコピーしてブラウザーで開いてください。"
+      "line": "ブラウザーで続けてください",
+      "webLine": "サインインが完了していません",
+      "completingLine": "サインインを完了しています…",
+      "openBrowserFailed": "ブラウザーを開けませんでした。"
     },
     "signedIn": {
       "srn": "SRN {srn}",
-      "online": {
-        "confirmed": "オンラインで確認済み",
-        "unconfirmed": "オンラインで確認できません",
-        "unchecked": "未確認"
-      },
-      "checkedAgo": "最終チェック：{ago}",
-      "confirmedAgo": "最終確認：{ago}",
-      "keptSignedIn": "このコンピューターではサインインしたままです。Codeg は後でもう一度確認します。",
-      "keptSignedInWeb": "このブラウザーではサインインしたままです。Codeg は後でもう一度確認します。"
+      "unconfirmed": "オンライン未確認（サインイン中）"
     },
     "unreadable": {
-      "badge": "読み取れません",
-      "hint": "サインアウトはされていません。サインインはこのコンピューターに保存されたままです。再試行するか、もう一度サインインして置き換えるか、サインアウトして削除してください。"
+      "badge": "読み取れません"
     },
     "unavailable": {
-      "badge": "利用不可",
-      "hint": "このサーバーは今、サインインしているかどうかを確認できません。サインアウトはされていません。"
+      "badge": "利用不可"
     },
     "signOut": {
-      "accountChanged": "サインイン中のアカウントが変わったため、サインアウトしませんでした。表示中のアカウントを確認してもう一度お試しください。",
-      "webSignedOutLocally": "このブラウザーではサインアウトしました。SpaceRing では確認できなかったため、{url} で接続を削除してください。"
+      "accountChanged": "アカウントが変わったため、サインアウトしませんでした。",
+      "webSignedOutLocally": "このブラウザーでサインアウトしました（SRN は未確認）。"
     },
     "errors": {
-      "network": "SpaceRing に接続できませんでした。",
-      "rateLimited": "SpaceRing から {seconds} 秒待ってから再試行するよう求められました。",
-      "server": "SpaceRing がエラーを返しました（HTTP {status}）。",
-      "invalidResponse": "SpaceRing の応答を利用できませんでした。",
-      "clientRejected": "SpaceRing はこの Codeg ビルドからのサインインを受け付けていません。",
+      "network": "SRN に接続できませんでした。",
+      "rateLimited": "SRN から {seconds} 秒待ってから再試行するよう求められました。",
+      "server": "SRN がエラーを返しました（HTTP {status}）。",
+      "invalidResponse": "SRN の応答を利用できませんでした。",
+      "clientRejected": "この Codeg クライアントは SRN で未登録か無効です。",
       "exchangeFailed": "サインインを完了できませんでした。もう一度始めてください。",
       "accessDenied": "ブラウザーで接続が拒否されました。",
-      "expired": "ブラウザーから戻る前にサインインの有効期限が切れました。もう一度始めてください。",
-      "accountChanged": "SpaceRing が確認したアカウントがサインインしたものと異なるため、何も保存されませんでした。もう一度サインインしてください。",
+      "expired": "ブラウザーが戻る前に有効期限が切れました。再度始めてください。",
+      "accountChanged": "SRN が別のアカウントを確認したため、保存していません。",
       "keychainRead": "キーチェーンに保存されたサインインを読み取れませんでした。",
-      "keychainWrite": "キーチェーンにサインインを保存できなかったため、サインインは完了しませんでした。",
-      "keychainDelete": "キーチェーンからサインインを削除できなかったため、サインアウトしていません。",
-      "keychainCleanup": "終了したサインインがキーチェーンに残っています。サインアウトすると削除されます。",
-      "credentialInvalid": "キーチェーンに保存されたサインインは、この Codeg では読み取れない形式です。",
-      "revoked": "SpaceRing がこのサインインを終了しました。もう一度サインインしてください。",
-      "signedOutLocally": "このコンピューターではサインアウトしました。SpaceRing では確認できなかったため、{url} で接続を削除してください。",
+      "keychainWrite": "キーチェーンに保存できず、サインインは完了しませんでした。",
+      "keychainDelete": "キーチェーンから削除できず、サインアウトしていません。",
+      "keychainCleanup": "キーチェーンに古いサインインがあります。サインアウトで削除できます。",
+      "credentialInvalid": "キーチェーンのサインインは、この Codeg では読み取れません。",
+      "revoked": "SRN がサインインを終了しました。再度サインインしてください。",
+      "signedOutLocally": "このコンピューターでサインアウトしました（SRN は未確認）。",
       "alreadySignedIn": "すでにサインインしています。先にサインアウトしてください。",
       "noPendingSignIn": "ブラウザーでの承認を待っているサインインはありません。",
       "openBrowser": "ブラウザーを開けませんでした。",
-      "loopback": "Codeg はこのコンピューターでブラウザーからの戻りを待ち受けられませんでした。",
+      "loopback": "Codeg はブラウザーからの戻りを待ち受けられませんでした。",
       "internal": "サインインを開始できませんでした。",
       "notEnabled": "このサーバーでは SRN へのサインインが有効になっていません。",
       "originRefused": "サインインはこのサーバー自身のアドレスから始める必要があります。",
       "invalidRequest": "リクエストを理解できませんでした。",
-      "flowMissing": "ブラウザーがこのサインインの Cookie を持たずに戻りました。このブラウザーで最初からやり直してください。",
+      "flowMissing": "Cookie なしで戻りました。このブラウザーでやり直してください。",
       "invalidCallback": "サインインの戻り情報が不完全です。最初からやり直してください。",
-      "sessionUnreadable": "このサーバーは保存されたサインインを読み取れませんでした。もう一度サインインしてください。",
+      "sessionUnreadable": "サーバーがサインインを読み取れません。再度サインインしてください。",
       "keyUnavailable": "サーバーがサインイン用の鍵を開けませんでした。",
       "storage": "サーバーのデータベースが応答しませんでした。"
     },
     "errorsPlain": {
-      "rateLimited": "SpaceRing から、しばらく待ってから再試行するよう求められました。",
-      "server": "SpaceRing がエラーを返しました。"
+      "rateLimited": "SRN から、しばらく待ってから再試行するよう求められました。",
+      "server": "SRN がエラーを返しました。"
     }
   }
 }

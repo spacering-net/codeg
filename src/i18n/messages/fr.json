@@ -2519,12 +2519,9 @@
       },
       "quickActions": {
         "title": "Actions rapides",
-        "groups": {
-          "workspace": "Espace de travail",
-          "navigation": "Navigation",
-          "more": "Plus"
-        },
-        "browserTab": "Ouvrir un onglet de navigateur",
+        "openProject": "Ouvrir un projet",
+        "more": "Plus",
+        "browserTab": "Nouvel onglet de navigateur",
         "showPet": "Afficher la mascotte"
       },
       "mcp": {
@@ -5238,8 +5235,8 @@
   "RemoteWorkspace": {
     "openLocalWorkspace": "Ouvrir l’espace de travail local",
     "openLocalFailed": "Impossible d’ouvrir l’espace de travail local",
-    "openRemoteWorkspace": "Ouvrir l’espace de travail distant",
-    "manage": "Gérer l’espace de travail distant",
+    "openRemoteWorkspace": "Espace de travail distant",
+    "manage": "Gérer les connexions",
     "manageTitle": "Connexions à l’espace de travail distant",
     "empty": "Aucune connexion distante",
     "noMatches": "Aucune connexion distante correspondante",
@@ -7513,7 +7510,7 @@
   },
   "Harness": {
     "title": "Harness",
-    "description": "Gérez les serveurs MCP, les compétences et les packs de compétences de vos agents, et trouvez-en d’autres sur SpaceRing Harness dans « Découvrir ».",
+    "description": "Gérez les serveurs MCP, les compétences et les packs de compétences de vos agents, et trouvez-en d’autres sur SRN Harness dans « Découvrir ».",
     "descriptionNoDiscover": "Gérez les serveurs MCP, les compétences et les packs de compétences de vos agents.",
     "descriptionMore": "Plus",
     "descriptionLess": "Moins",
@@ -7535,7 +7532,7 @@
       "itemNotChecked": "Cet élément n’a pas encore été vérifié.",
       "itemUnavailable": "Harness ne répertorie pas cette version.",
       "reasons": {
-        "network": "Impossible de joindre SpaceRing Harness.",
+        "network": "Impossible de joindre SRN Harness.",
         "rateLimited": "Harness a demandé une pause.",
         "server": "Harness a répondu par une erreur ({status}).",
         "other": "Harness a envoyé une réponse que ce Codeg ne sait pas lire."
@@ -7865,7 +7862,7 @@
         "paste": "Coller une configuration",
         "pasteHint": "Depuis un README ou le fichier d’un autre agent.",
         "harness": "Trouver sur Harness",
-        "harnessHint": "Parcourez les serveurs MCP de SpaceRing Harness."
+        "harnessHint": "Parcourez les serveurs MCP de SRN Harness."
       },
       "list": {
         "serversLabel": "Serveurs MCP",
@@ -8674,7 +8671,7 @@
         "importTitle": "Choisir le dossier de compétence à importer",
         "importFailed": "Le dossier n’a pas été importé.",
         "harness": "Trouver sur Harness",
-        "harnessHint": "Parcourir les compétences de SpaceRing Harness."
+        "harnessHint": "Parcourir les compétences de SRN Harness."
       },
       "list": {
         "label": "Compétences gérées par Codeg",
@@ -9461,13 +9458,13 @@
     },
     "errors": {
       "disabled": "« Découvrir » est désactivé sur ce Codeg.",
-      "network": "Impossible de joindre SpaceRing Harness. Vérifiez la connexion, puis réessayez.",
+      "network": "Impossible de joindre SRN Harness. Vérifiez la connexion, puis réessayez.",
       "rateLimited": "Trop de requêtes. Réessayez dans {seconds, plural, one {# seconde} other {# secondes}}.",
       "notFound": "Harness n’a aucun élément à cette adresse. Il a peut-être été renommé ou retiré.",
       "invalidRef": "Ce n’est pas une adresse Harness. Une adresse s’écrit éditeur/nom.",
-      "server": "SpaceRing Harness a répondu par une erreur ({status}). Réessayez dans un instant.",
-      "tooLarge": "La réponse de SpaceRing Harness dépasse la taille que Codeg accepte.",
-      "invalidResponse": "SpaceRing Harness a envoyé une réponse que ce Codeg ne sait pas lire. Mettre Codeg à jour peut aider.",
+      "server": "SRN Harness a répondu par une erreur ({status}). Réessayez dans un instant.",
+      "tooLarge": "La réponse de SRN Harness dépasse la taille que Codeg accepte.",
+      "invalidResponse": "SRN Harness a envoyé une réponse que ce Codeg ne sait pas lire. Mettre Codeg à jour peut aider.",
       "recordUnreadable": "Le relevé de Codeg de ce qu’il a installé depuis Harness n’a pas pu être lu.",
       "resolveUnavailable": "Codeg ne peut pas confirmer pour l’instant l’état actuel de cet élément auprès de Harness ; rien n’a donc été installé. Réessayez plus tard.",
       "unsupported": "Ce Codeg est trop ancien pour Harness. Mettez-le à jour pour parcourir le catalogue.",
@@ -9783,7 +9780,6 @@
   },
   "SrnAccount": {
     "name": "SRN",
-    "account": "compte SpaceRing",
     "trigger": {
       "account": "Compte SRN",
       "signedOut": "Compte SRN : non connecté",
@@ -9794,7 +9790,7 @@
       "unavailable": "Compte SRN : le serveur ne peut pas le dire pour l'instant"
     },
     "loading": "Lecture de la connexion…",
-    "notEnabled": "Ce serveur n'a pas activé la connexion à SRN. Parcourir et installer depuis Harness ne nécessite pas de connexion.",
+    "notEnabled": "Non activé sur ce serveur",
     "thisComputer": "C'est le compte de cet ordinateur, pas celui de l'espace de travail distant.",
     "details": "Détails",
     "unknownError": "Un problème est survenu : {message}",
@@ -9802,74 +9798,59 @@
       "signIn": "Se connecter à SRN",
       "signingIn": "Ouverture du navigateur…",
       "signInAgain": "Se reconnecter",
-      "reopen": "Rouvrir la page",
-      "copyLink": "Copier le lien",
+      "copyLink": "Copier le lien de connexion",
       "copied": "Copié",
-      "cancel": "Annuler",
+      "cancel": "Annuler la connexion",
       "checkAgain": "Vérifier à nouveau",
       "checking": "Vérification…",
       "tryAgain": "Réessayer",
       "manageConnections": "Gérer les connexions",
+      "openConsole": "Ouvrir la console SRN",
       "signOut": "Se déconnecter",
       "signingOut": "Déconnexion…",
-      "goingToSpaceRing": "Ouverture de SpaceRing…",
+      "goingToSrn": "Ouverture de SRN…",
       "startOver": "Recommencer"
     },
     "signedOut": {
-      "badge": "Non connecté",
-      "intro": "SRN est votre compte SpaceRing. Parcourir et installer depuis Harness ne nécessite pas de connexion."
+      "badge": "Non connecté"
     },
     "pending": {
-      "badge": "En attente",
-      "completingBadge": "Finalisation",
-      "hint": "Approuvez la connexion sur la page SpaceRing de votre navigateur. Codeg attend jusqu'à {time}.",
-      "hintNoTime": "Approuvez la connexion sur la page SpaceRing de votre navigateur.",
-      "webHint": "La connexion attend SpaceRing jusqu'à {time}. Rouvrez la page pour la terminer ou recommencez.",
-      "webHintNoTime": "La connexion attend SpaceRing. Rouvrez la page pour la terminer ou recommencez.",
-      "completing": "Le navigateur est revenu. Finalisation de la connexion…",
-      "openBrowserFailed": "Impossible d'ouvrir le navigateur. Copiez le lien et ouvrez-le dans votre navigateur."
+      "line": "Continuez dans le navigateur",
+      "webLine": "Connexion non terminée",
+      "completingLine": "Finalisation de la connexion…",
+      "openBrowserFailed": "Impossible d'ouvrir le navigateur."
     },
     "signedIn": {
       "srn": "SRN {srn}",
-      "online": {
-        "confirmed": "Confirmé en ligne",
-        "unconfirmed": "Non confirmé en ligne",
-        "unchecked": "Pas encore vérifié"
-      },
-      "checkedAgo": "Vérifié {ago}",
-      "confirmedAgo": "Dernière confirmation {ago}",
-      "keptSignedIn": "Vous restez connecté sur cet ordinateur. Codeg vérifiera à nouveau plus tard.",
-      "keptSignedInWeb": "Vous restez connecté dans ce navigateur. Codeg vérifiera à nouveau plus tard."
+      "unconfirmed": "Non confirmé ; toujours connecté."
     },
     "unreadable": {
-      "badge": "Illisible",
-      "hint": "Vous n'êtes pas déconnecté : la connexion reste enregistrée sur cet ordinateur. Réessayez, reconnectez-vous pour la remplacer ou déconnectez-vous pour la supprimer."
+      "badge": "Illisible"
     },
     "unavailable": {
-      "badge": "Indisponible",
-      "hint": "Ce serveur ne peut pas dire pour l'instant si vous êtes connecté. Rien n'a été déconnecté."
+      "badge": "Indisponible"
     },
     "signOut": {
-      "accountChanged": "Le compte connecté a changé, donc rien n'a été déconnecté. Vérifiez le compte affiché et réessayez.",
-      "webSignedOutLocally": "Déconnecté dans ce navigateur. SpaceRing ne l'a pas confirmé : supprimez la connexion sur {url}."
+      "accountChanged": "Le compte connecté a changé ; rien n'a été déconnecté.",
+      "webSignedOutLocally": "Déconnecté dans ce navigateur, mais SRN ne l'a pas confirmé."
     },
     "errors": {
-      "network": "Impossible de joindre SpaceRing.",
-      "rateLimited": "SpaceRing a demandé à Codeg d'attendre {seconds} s avant de réessayer.",
-      "server": "SpaceRing a répondu par une erreur (HTTP {status}).",
-      "invalidResponse": "La réponse de SpaceRing est inutilisable.",
-      "clientRejected": "SpaceRing n'accepte pas les connexions depuis cette version de Codeg.",
+      "network": "Impossible de joindre SRN.",
+      "rateLimited": "SRN a demandé à Codeg d'attendre {seconds} s avant de réessayer.",
+      "server": "SRN a répondu par une erreur (HTTP {status}).",
+      "invalidResponse": "La réponse de SRN est inutilisable.",
+      "clientRejected": "SRN ne reconnaît pas ce client Codeg, ou l'a désactivé.",
       "exchangeFailed": "La connexion n'a pas pu aboutir. Recommencez.",
       "accessDenied": "La connexion a été refusée dans le navigateur.",
       "expired": "La connexion a expiré avant le retour du navigateur. Recommencez.",
-      "accountChanged": "SpaceRing a confirmé un autre compte que celui qui s'est connecté ; rien n'a été conservé. Reconnectez-vous.",
+      "accountChanged": "SRN a confirmé un autre compte ; rien n'a été conservé.",
       "keychainRead": "Impossible de lire la connexion enregistrée dans le trousseau.",
       "keychainWrite": "Le trousseau n'a pas conservé la connexion ; elle n'a donc pas abouti.",
-      "keychainDelete": "Le trousseau n'a pas supprimé la connexion ; rien n'a donc été déconnecté.",
-      "keychainCleanup": "Une connexion terminée est encore enregistrée dans le trousseau. Déconnectez-vous pour la supprimer.",
-      "credentialInvalid": "La connexion enregistrée dans le trousseau n'est pas lisible par ce Codeg.",
-      "revoked": "SpaceRing a mis fin à cette connexion. Reconnectez-vous.",
-      "signedOutLocally": "Déconnecté sur cet ordinateur. SpaceRing ne l'a pas confirmé : supprimez la connexion sur {url}.",
+      "keychainDelete": "Le trousseau n'a pas supprimé la connexion ; rien n'est déconnecté.",
+      "keychainCleanup": "Une connexion terminée reste dans le trousseau : déconnectez-vous.",
+      "credentialInvalid": "Ce Codeg ne peut pas lire la connexion du trousseau.",
+      "revoked": "SRN a mis fin à cette connexion. Reconnectez-vous.",
+      "signedOutLocally": "Déconnecté sur cet ordinateur, mais SRN ne l'a pas confirmé.",
       "alreadySignedIn": "Vous êtes déjà connecté. Déconnectez-vous d'abord.",
       "noPendingSignIn": "Aucune connexion n'attend le navigateur.",
       "openBrowser": "Impossible d'ouvrir le navigateur.",
@@ -9878,15 +9859,15 @@
       "notEnabled": "Ce serveur n'a pas activé la connexion à SRN.",
       "originRefused": "La connexion doit partir de l'adresse propre de ce serveur.",
       "invalidRequest": "La requête n'a pas été comprise.",
-      "flowMissing": "Le navigateur est revenu sans le cookie de cette connexion. Recommencez dans ce navigateur.",
+      "flowMissing": "Le navigateur est revenu sans le cookie. Recommencez ici.",
       "invalidCallback": "La connexion est revenue incomplète. Recommencez.",
-      "sessionUnreadable": "Ce serveur n'a pas pu lire votre connexion enregistrée. Reconnectez-vous.",
+      "sessionUnreadable": "Ce serveur n'a pas pu lire votre connexion. Reconnectez-vous.",
       "keyUnavailable": "Le serveur n'a pas pu ouvrir sa clé de connexion.",
       "storage": "La base de données du serveur n'a pas répondu."
     },
     "errorsPlain": {
-      "rateLimited": "SpaceRing a demandé à Codeg d'attendre avant de réessayer.",
-      "server": "SpaceRing a répondu par une erreur."
+      "rateLimited": "SRN a demandé à Codeg d'attendre avant de réessayer.",
+      "server": "SRN a répondu par une erreur."
     }
   }
 }

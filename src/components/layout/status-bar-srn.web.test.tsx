@@ -5,6 +5,7 @@
  */
 import { StrictMode } from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -75,6 +76,13 @@ vi.mock("@/lib/pet/sprite-url", () => ({
   revokePetSpriteObjectUrl: () => {},
 }))
 
+// The quick actions under the account are `quick-actions-menu.test.tsx`'s.
+vi.mock("@/components/layout/quick-actions-menu", () => ({
+  useQuickActions: () => ({}),
+  QuickActionsItems: () => null,
+  QuickActionsDialogs: () => null,
+}))
+
 import { StatusBarSrn } from "./status-bar-srn"
 import { __resetSrnAvatarCacheForTests } from "@/lib/srn-account/use-srn-avatar"
 import { __resetSrnWebSourceForTests } from "@/lib/srn-account/web-source"
@@ -108,6 +116,12 @@ const signedIn = (online: Record<string, unknown> = {}) => ({
     problem: null,
     ...online,
   },
+})
+
+/** Signed in, but SpaceRing could not be reached to confirm it. */
+const UNCONFIRMED = signedIn({
+  status: "unconfirmed",
+  problem: problem("network", "network"),
 })
 
 /** What `GET /api/account/srn` answers from now on. */
@@ -149,8 +163,22 @@ async function settle() {
 }
 
 async function open() {
-  fireEvent.click(trigger())
+  await userEvent.click(trigger())
   await settle()
+}
+
+/** The menu's items, the head (signed in, the way to the console) as
+ *  "HEAD". */
+function items() {
+  return screen
+    .getAllByRole("menuitem")
+    .map((item) =>
+      item.hasAttribute("data-srn-head") ? "HEAD" : item.textContent
+    )
+}
+
+function consoleHead() {
+  return document.querySelector<HTMLElement>("[data-srn-head]")
 }
 
 function address() {
@@ -219,12 +247,8 @@ describe("Codeg Web — reading the account", () => {
     await settle()
     expect(trigger()).toHaveAttribute("data-srn-status", "notEnabled")
     await open()
-    expect(
-      screen.getByText(
-        "This server has not enabled SRN sign-in. Browsing and installing from Harness works without signing in."
-      )
-    ).toBeInTheDocument()
-    expect(screen.queryByRole("button", { name: "Sign in to SRN" })).toBeNull()
+    expect(screen.getByText("Not enabled on this server")).toBeInTheDocument()
+    expect(screen.queryByRole("menuitem")).toBeNull()
   })
 
   it("signed out, with the reason a session just ended", async () => {
@@ -239,15 +263,20 @@ describe("Codeg Web — reading the account", () => {
       "This server could not read your saved sign-in. Sign in again."
     )
     expect(
-      screen.getByRole("button", { name: "Sign in to SRN" })
+      screen.getByRole("menuitem", { name: "Sign in to SRN" })
     ).toBeInTheDocument()
   })
 
-  it("pending: open the page again, or start over — no copy, no cancel", async () => {
+  it("pending: starting over is the one row — no copy, no cancel, no page again", async () => {
     account({
       status: "pending",
       authorizationUrl: AUTH_URL,
       expiresAt: "2026-11-16T12:10:00.000Z",
+    })
+    const next = "https://spacering.net/authorize/#request_id=def"
+    runtime.routes["POST /api/account/srn/login"] = () => ({
+      status: 200,
+      body: { authorizationUrl: next, expiresAt: "2026-11-16T12:20:00Z" },
     })
     mount()
     await settle()
@@ -256,16 +285,21 @@ describe("Codeg Web — reading the account", () => {
       "waiting"
     )
     await open()
-    expect(screen.queryByRole("button", { name: "Copy link" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull()
-
-    fireEvent.click(screen.getByRole("button", { name: "Open page again" }))
-    await settle()
-    expect(navigate.sendTabTo).toHaveBeenCalledWith(AUTH_URL)
+    expect(screen.getByText("Sign-in not finished")).toBeInTheDocument()
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent)
+    ).toEqual(["Start over"])
+    expect(screen.queryByRole("alert")).toBeNull()
+    expect(screen.getByRole("menu")).not.toHaveTextContent(/waits|\d:\d\d/)
     expect(document.body.textContent).not.toContain(AUTH_URL)
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Start over" }))
+    await settle()
+    expect(requests("POST", "/api/account/srn/login")).toHaveLength(1)
+    expect(navigate.sendTabTo).toHaveBeenCalledWith(next)
   })
 
-  it("signed in: name, number, online state, and the avatar through the server's image proxy", async () => {
+  it("signed in: name and number in the head, which opens the console, sign-out, and the avatar through the server's image proxy", async () => {
     account(signedIn())
     mount()
     await settle()
@@ -275,10 +309,16 @@ describe("Codeg Web — reading the account", () => {
     ])
     await open()
     expect(screen.getByText("SRN 10001")).toBeInTheDocument()
-    expect(screen.getByText("Confirmed online")).toBeInTheDocument()
+    expect(screen.getByRole("menu")).not.toHaveTextContent(/Confirmed|Checked/)
+    expect(items()).toEqual(["HEAD", "Sign out"])
+    expect(consoleHead()).toHaveAccessibleName("Ada SRN 10001 Open SRN console")
+    expect(consoleHead()).toHaveAttribute(
+      "title",
+      "Ada\nSRN 10001\nOpen SRN console"
+    )
   })
 
-  it("could not confirm online: still signed in, with the reason", async () => {
+  it("could not confirm online: still signed in, one line, the reason under Details", async () => {
     account(
       signedIn({
         status: "unconfirmed",
@@ -289,11 +329,13 @@ describe("Codeg Web — reading the account", () => {
     await settle()
     await open()
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "SpaceRing could not be reached."
+      "Not confirmed online; still signed in."
     )
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "This browser stays signed in."
-    )
+    // The check is a link in the note; the rows are a signed-in account's.
+    expect(items()).toEqual(["HEAD", "Check again", "Details", "Sign out"])
+    fireEvent.click(screen.getByRole("menuitem", { name: "Details" }))
+    await settle()
+    expect(screen.getByText("SRN could not be reached.")).toBeInTheDocument()
   })
 
   it("unavailable: not signed out; try again reads again, and there is no sign-in", async () => {
@@ -307,10 +349,12 @@ describe("Codeg Web — reading the account", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "The server could not open its sign-in key."
     )
-    expect(screen.queryByRole("button", { name: "Sign in to SRN" })).toBeNull()
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent)
+    ).toEqual(["Try again"])
     const before = requests("GET", "/api/account/srn").length
     account(signedIn())
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Try again" }))
     await settle()
     expect(requests("GET", "/api/account/srn").length).toBeGreaterThan(before)
     expect(trigger()).toHaveTextContent("Ada")
@@ -353,7 +397,7 @@ describe("Codeg Web — signing in and out", () => {
     mount()
     await settle()
     await open()
-    fireEvent.click(screen.getByRole("button", { name: "Sign in to SRN" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign in to SRN" }))
     await settle()
     const [login] = requests("POST", "/api/account/srn/login")
     expect(header(login.init, "Content-Type")).toBe("application/json")
@@ -381,20 +425,31 @@ describe("Codeg Web — signing in and out", () => {
     await settle()
     await open()
     account({ status: "signedOut" })
-    fireEvent.click(screen.getByRole("button", { name: "Sign out" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign out" }))
     await settle()
     const [logout] = requests("POST", "/api/account/srn/logout")
     expect(json(logout.init)).toEqual({ expectedSrn: 10001, locale: "en" })
     expect(header(logout.init, "Authorization")).toBe("Bearer tok")
 
-    const block = screen.getByRole("alert")
-    expect(block).toHaveTextContent(
-      `Signed out in this browser. SpaceRing did not confirm — remove the connection at ${url}.`
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Signed out in this browser, but SRN did not confirm."
     )
-    expect(block).toHaveTextContent(
-      "This server could not read your saved sign-in."
+    expect(document.body.textContent).not.toContain(url)
+    // Why, under Details; the way to the website, as the note's link; and
+    // the sign-in, as the one row.
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent)
+    ).toEqual(["Manage connections", "Details", "Sign in to SRN"])
+    fireEvent.click(screen.getByRole("menuitem", { name: "Details" }))
+    await settle()
+    expect(
+      screen.getByText("This server could not read your saved sign-in.", {
+        exact: false,
+      })
+    ).toBeInTheDocument()
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Manage connections" })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Manage connections" }))
     expect(navigate.openInNewTab).toHaveBeenCalledWith(url)
   })
 
@@ -450,7 +505,7 @@ describe("Codeg Web — signing in and out", () => {
               resolve(realFetch(input as string, init) as unknown as Response)
           })
       )
-      fireEvent.click(screen.getByRole("button", { name: "Sign out" }))
+      fireEvent.click(screen.getByRole("menuitem", { name: "Sign out" }))
       await settle()
 
       if (when === "before") {
@@ -467,7 +522,7 @@ describe("Codeg Web — signing in and out", () => {
       expect(trigger()).toHaveAttribute("data-srn-status", "signedOut")
       if (remote === "unconfirmed") {
         expect(screen.getByRole("alert")).toHaveTextContent(
-          "Signed out in this browser. SpaceRing did not confirm"
+          "Signed out in this browser, but SRN did not confirm."
         )
       } else {
         expect(screen.queryByRole("alert")).toBeNull()
@@ -478,7 +533,7 @@ describe("Codeg Web — signing in and out", () => {
   // "Check again" only reads: an answer of it that a newer read overtook is
   // an older picture, and must not bring back an account already gone.
   it("a slow check again does not undo a newer read", async () => {
-    account(signedIn())
+    account(UNCONFIRMED)
     mount()
     await settle()
     await open()
@@ -493,10 +548,10 @@ describe("Codeg Web — signing in and out", () => {
             resolve(realFetch(input as string, init) as unknown as Response)
         })
     )
-    fireEvent.click(screen.getByRole("button", { name: "Check again" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Check again" }))
     await settle()
 
-    // Meanwhile the popover is closed and opened again, which reads: the
+    // Meanwhile the menu is closed and opened again, which reads: the
     // server has let the session go.
     account({ status: "signedOut", problem: problem("revoked", "revoked") })
     fireEvent.keyDown(document.activeElement ?? document.body, {
@@ -514,21 +569,117 @@ describe("Codeg Web — signing in and out", () => {
   })
 
   it('a check the server has under way does not hold "check again" down', async () => {
-    account(signedIn({ checking: true }))
+    account(signedIn({ ...UNCONFIRMED.online, checking: true }))
     mount()
     await settle()
     await open()
-    expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled()
+    expect(
+      screen.getByRole("menuitem", { name: "Check again" })
+    ).not.toHaveAttribute("data-disabled")
   })
 
-  it("manage connections opens the SpaceRing the server uses, in the interface's language", async () => {
+  it("the head opens the console's front page in a new tab, inside the click", async () => {
+    account(signedIn())
+    mount()
+    await settle()
+    await open()
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Ada SRN 10001 Open SRN console" })
+    )
+    // Synchronously: a tab opened after an await would be a popup.
+    expect(navigate.openInNewTab).toHaveBeenCalledWith(
+      "https://spacering.net/console/"
+    )
+    expect(navigate.sendTabTo).not.toHaveBeenCalled()
+    await settle()
+    expect(trigger()).toHaveAttribute("data-srn-status", "signedIn")
+    // The tab is open: the menu has done its part.
+    expect(screen.queryByRole("menu")).toBeNull()
+  })
+
+  it("the keyboard opens the console from the head too", async () => {
+    account(signedIn())
+    mount()
+    await settle()
+    await open()
+    const head = consoleHead() as HTMLElement
+    act(() => head.focus())
+    fireEvent.keyDown(head, { key: "Enter" })
+    expect(navigate.openInNewTab).toHaveBeenCalledWith(
+      "https://spacering.net/console/"
+    )
+    await settle()
+    expect(screen.queryByRole("menu")).toBeNull()
+  })
+
+  it.each([
+    ["not enabled", { status: "notEnabled" }],
+    ["signed out", { status: "signedOut" }],
+    [
+      "waiting for the browser",
+      {
+        status: "pending",
+        authorizationUrl: AUTH_URL,
+        expiresAt: "2026-11-16T12:10:00.000Z",
+      },
+    ],
+    [
+      "unavailable",
+      {
+        status: "unavailable",
+        problem: problem("keyUnavailable", "key_unavailable"),
+      },
+    ],
+  ])("%s: the head opens nothing", async (_label, state) => {
+    account(state)
+    mount()
+    await settle()
+    await open()
+    expect(consoleHead()).toBeNull()
+    expect(
+      screen.queryByRole("menuitem", { name: /Open SRN console/ })
+    ).toBeNull()
+    fireEvent.click(screen.getByText("SRN"))
+    await settle()
+    expect(navigate.openInNewTab).not.toHaveBeenCalled()
+  })
+
+  it("the console follows the SpaceRing the server uses, in the interface's language", async () => {
     runtime.harnessOrigin = "https://staging.spacering.net"
     runtime.locale = "zh_cn"
     account(signedIn())
     mount()
     await settle()
     await open()
-    fireEvent.click(screen.getByRole("button", { name: "Manage connections" }))
+    fireEvent.click(consoleHead() as HTMLElement)
+    expect(navigate.openInNewTab).toHaveBeenCalledWith(
+      "https://staging.spacering.net/zh/console/"
+    )
+  })
+
+  it("manage connections, after a sign-out SpaceRing did not confirm, follows the same SpaceRing and language", async () => {
+    runtime.harnessOrigin = "https://staging.spacering.net"
+    runtime.locale = "zh_tw"
+    account(signedIn())
+    runtime.routes["POST /api/account/srn/logout"] = () => ({
+      status: 200,
+      body: {
+        state: { status: "signedOut" },
+        remote: "unconfirmed",
+        problem: problem("signedOutLocally", "signed_out_locally", {
+          reason: "network",
+        }),
+      },
+    })
+    mount()
+    await settle()
+    await open()
+    account({ status: "signedOut" })
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign out" }))
+    await settle()
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Manage connections" })
+    )
     expect(navigate.openInNewTab).toHaveBeenCalledWith(
       "https://staging.spacering.net/zh/console/clients/"
     )
@@ -544,7 +695,7 @@ describe("Codeg Web — signing in and out", () => {
     await settle()
     await open()
     const before = requests("GET", "/api/account/srn").length
-    fireEvent.click(screen.getByRole("button", { name: "Sign out" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign out" }))
     await settle()
     expect(requests("GET", "/api/account/srn").length).toBeGreaterThan(before)
     expect(screen.getByRole("alert")).toHaveTextContent(
@@ -573,7 +724,7 @@ describe("Codeg Web — account answers are never the instance's login", () => {
     [
       502,
       problem("clientRejected", "client_rejected"),
-      "SpaceRing does not accept sign-ins from this Codeg build.",
+      "SRN does not recognise this Codeg client, or has turned it off.",
     ],
     [
       503,
@@ -587,7 +738,7 @@ describe("Codeg Web — account answers are never the instance's login", () => {
       mount()
       await settle()
       await open()
-      fireEvent.click(screen.getByRole("button", { name: "Sign in to SRN" }))
+      fireEvent.click(screen.getByRole("menuitem", { name: "Sign in to SRN" }))
       await settle()
       expect(screen.getByRole("alert")).toHaveTextContent(text)
       expect(unauthorized).not.toHaveBeenCalled()
@@ -603,7 +754,7 @@ describe("Codeg Web — account answers are never the instance's login", () => {
     mount()
     await settle()
     await open()
-    fireEvent.click(screen.getByRole("button", { name: "Sign in to SRN" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign in to SRN" }))
     await settle()
     expect(screen.getByRole("alert")).toHaveTextContent("HTTP 403")
     expect(unauthorized).not.toHaveBeenCalled()
@@ -617,7 +768,7 @@ describe("Codeg Web — account answers are never the instance's login", () => {
       status: 401,
       headers: { "WWW-Authenticate": 'Bearer realm="codeg"' },
     })
-    fireEvent.click(screen.getByRole("button", { name: "Sign in to SRN" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign in to SRN" }))
     await settle()
     expect(unauthorized).toHaveBeenCalledWith("codeg")
     expect(screen.queryByRole("alert")).toBeNull()
@@ -662,7 +813,7 @@ describe("Codeg Web — the result a sign-in comes back with", () => {
     mount()
     await settle()
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "SpaceRing asked Codeg to wait before trying again."
+      "SRN asked Codeg to wait before trying again."
     )
   })
 

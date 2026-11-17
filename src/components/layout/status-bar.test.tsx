@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const viewport = vi.hoisted(() => ({ mobile: false }))
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => viewport.mobile }))
 vi.mock("@/components/layout/status-bar-stats", () => ({
-  StatusBarStats: () => null,
+  StatusBarStats: () => <span data-testid="stats" />,
 }))
 vi.mock("@/components/layout/status-bar-tasks", () => ({
   StatusBarTasks: () => null,
@@ -23,9 +23,6 @@ vi.mock("@/components/layout/status-bar-update", () => ({
 }))
 vi.mock("@/components/layout/command-dropdown", () => ({
   CommandDropdown: () => null,
-}))
-vi.mock("@/components/layout/quick-actions-dropdown", () => ({
-  QuickActionsDropdown: () => <span data-testid="quick-actions" />,
 }))
 vi.mock("@/components/layout/status-bar-srn", () => ({
   StatusBarSrn: ({ compact }: { compact?: boolean }) => (
@@ -56,19 +53,19 @@ describe("StatusBar", () => {
   })
 
   /** The SRN entry holds the bar's leading corner — the sidebar's icon rail —
-   *  and the quick-actions launcher follows it. On phones it is the ring or
-   *  avatar alone. */
+   *  alone: its menu carries the quick actions, which no longer have a
+   *  launcher of their own. The workspace stats follow it. On phones it is
+   *  the ring or avatar alone. */
   it.each([
     ["wide", false],
     ["narrow", true],
   ])("leads with the SRN entry in the %s layout", (_label, mobile) => {
     viewport.mobile = mobile
-    render(<StatusBar />)
+    const { container } = render(<StatusBar />)
     const srn = screen.getByTestId("srn")
-    const quick = screen.getByTestId("quick-actions")
-    expect(
-      srn.compareDocumentPosition(quick) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy()
+    const leading = container.firstElementChild?.firstElementChild
+    expect(leading?.firstElementChild).toBe(srn)
+    expect(srn.nextElementSibling).toBe(screen.getByTestId("stats"))
     expect(srn).toHaveAttribute("data-compact", mobile ? "true" : "false")
   })
 })

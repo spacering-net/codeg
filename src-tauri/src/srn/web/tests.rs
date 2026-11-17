@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::http::Method;
 use axum_test::{TestRequest, TestResponse, TestServer};
@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use super::config::{ClientSecret, WebConfig, CALLBACK_PATH, CHILD_HIDDEN_ENV};
 use super::routes::{ACCOUNT_PATH, FLOW_COOKIE, LOGIN_PATH, LOGOUT_PATH, SESSION_COOKIE};
 use super::seal::{KeySource, Sealer, KEY_FILE_NAME};
-use super::service::{Clock, SrnWeb};
+use super::service::{Clock, SrnWeb, Waits};
 use crate::app_state::AppState;
 use crate::db::entities::{srn_web_login, srn_web_session};
 use crate::db::test_helpers::fresh_disk_db;
@@ -72,11 +72,21 @@ async fn rig() -> Rig {
 }
 
 async fn rig_with(access: Access) -> Rig {
+    rig_waiting(access, Waits::default()).await
+}
+
+async fn rig_waiting(access: Access, waits: Waits) -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let db = fresh_disk_db(dir.path()).await;
     let srn = MockSrn::start().await;
     let clock = Arc::new(Mutex::new(Utc::now()));
-    let service = service_on(&srn, &db.conn, &clock, KeySource::server_file(dir.path()));
+    let service = service_waiting(
+        &srn,
+        &db.conn,
+        &clock,
+        KeySource::server_file(dir.path()),
+        waits,
+    );
     let issuer = TestIssuer::new();
     let server = server_for(&db.conn, dir.path(), access, &issuer, Some(service.clone())).await;
     Rig {
@@ -97,12 +107,23 @@ fn service_on(
     clock: &Arc<Mutex<DateTime<Utc>>>,
     key: KeySource,
 ) -> Arc<SrnWeb> {
+    service_waiting(srn, conn, clock, key, Waits::default())
+}
+
+fn service_waiting(
+    srn: &MockSrn,
+    conn: &DatabaseConnection,
+    clock: &Arc<Mutex<DateTime<Utc>>>,
+    key: KeySource,
+    waits: Waits,
+) -> Arc<SrnWeb> {
     SrnWeb::assemble(
         Some(config(srn)),
         SrnApi::with_timeout(srn.origin().clone(), Duration::from_secs(2)),
         key,
         conn.clone(),
         Clock::Manual(clock.clone()),
+        waits,
     )
 }
 
@@ -276,6 +297,11 @@ impl Rig {
 
     fn advance(&self, by: Duration) {
         *self.clock.lock().unwrap() += chrono::Duration::from_std(by).unwrap();
+    }
+
+    /// The service's time, as the answers write it.
+    fn now(&self) -> String {
+        super::service::rfc3339(*self.clock.lock().unwrap())
     }
 
     async fn sessions(&self) -> Vec<srn_web_session::Model> {
@@ -779,6 +805,7 @@ async fn the_account_states_are_the_account_domain_s_own() {
         KeySource::server_file(rig.dir.path()),
         rig.conn.clone(),
         Clock::System,
+        Waits::default(),
     );
     for service in [Some(off), None] {
         let server = server_for(
@@ -936,6 +963,148 @@ async fn an_unanswered_or_busy_spacering_keeps_the_session() {
     );
     assert_eq!(rig.sessions().await.len(), 1);
     assert!(browser.session().is_some());
+}
+
+/// Short enough that an answer SpaceRing holds back for a second outlasts
+/// them, and well inside the client's own two seconds.
+fn short_waits() -> Waits {
+    Waits {
+        check: Duration::from_millis(150),
+        logout: Duration::from_millis(150),
+    }
+}
+
+#[tokio::test]
+async fn a_check_answered_in_time_is_the_read_s_own_answer() {
+    let rig = rig().await;
+    let mut browser = Browser::default();
+    rig.sign_in(&mut browser).await;
+    rig.advance(Duration::from_secs(61 * 60));
+    rig.srn.rename_user("Ada L.", None);
+    let state = rig.status(&mut browser).await;
+    assert_eq!(state["status"], "signedIn", "{state}");
+    assert_eq!(state["account"]["name"], "Ada L.");
+    assert_eq!(state["online"]["status"], "confirmed");
+    assert_eq!(state["online"]["checking"], false);
+    let row = &rig.sessions().await[0];
+    assert_eq!(
+        state["online"]["confirmedAt"],
+        super::service::rfc3339(row.last_confirmed_at.unwrap())
+    );
+    assert_eq!(state["online"]["confirmedAt"], rig.now());
+    assert_eq!(rig.srn.count(ME), 2);
+}
+
+#[tokio::test]
+async fn a_slow_check_answers_the_read_at_once_and_the_next_read_after_it() {
+    let rig = rig_waiting(Access::Token, short_waits()).await;
+    let mut browser = Browser::default();
+    rig.sign_in(&mut browser).await;
+    let before = rig.sessions().await[0].clone();
+    rig.advance(Duration::from_secs(61 * 60));
+    rig.srn.rename_user("Ada L.", None);
+    rig.srn.script_me(Reply::Slow(Duration::from_secs(1)));
+    let started = Instant::now();
+    let state = rig.status(&mut browser).await;
+    assert!(
+        started.elapsed() < Duration::from_millis(900),
+        "the read waited for /me: {:?}",
+        started.elapsed()
+    );
+    // what the row says, marked as checking
+    assert_eq!(state["status"], "signedIn", "{state}");
+    assert_eq!(state["account"]["name"], "Ada Lovelace");
+    assert_eq!(state["online"]["status"], "confirmed");
+    assert_eq!(state["online"]["checking"], true);
+    assert_eq!(
+        state["online"]["confirmedAt"],
+        super::service::rfc3339(before.last_confirmed_at.unwrap())
+    );
+    // a read meanwhile starts no second check
+    let meanwhile = rig.status(&mut browser).await;
+    assert_eq!(meanwhile["online"]["checking"], true);
+    // the check ends on its own and records what SpaceRing said
+    rig.service.settle().await;
+    assert_eq!(rig.srn.count(ME), 2, "the sign-in's and one check");
+    let row = &rig.sessions().await[0];
+    assert_eq!(row.display_name, "Ada L.");
+    assert_eq!(
+        super::service::rfc3339(row.last_confirmed_at.unwrap()),
+        rig.now()
+    );
+    assert_eq!(row.check_problem, None);
+    // which the next read says, without asking again
+    let after = rig.status(&mut browser).await;
+    assert_eq!(after["account"]["name"], "Ada L.");
+    assert_eq!(after["online"]["status"], "confirmed");
+    assert_eq!(after["online"]["checking"], false);
+    assert_eq!(
+        after["online"]["confirmedAt"],
+        super::service::rfc3339(row.last_confirmed_at.unwrap())
+    );
+    assert_eq!(rig.srn.count(ME), 2);
+    assert!(browser.session().is_some());
+}
+
+#[tokio::test]
+async fn a_slow_check_without_an_answer_is_recorded_as_one() {
+    let rig = rig_waiting(Access::Token, short_waits()).await;
+    let mut browser = Browser::default();
+    rig.sign_in(&mut browser).await;
+    rig.advance(Duration::from_secs(61 * 60));
+    rig.srn.script_me(Reply::Late(
+        Duration::from_secs(1),
+        Box::new(Reply::Status(503, json!({ "error": "server_error" }))),
+    ));
+    let state = rig.status(&mut browser).await;
+    assert_eq!(state["online"]["checking"], true);
+    assert_eq!(state["online"]["status"], "confirmed");
+    rig.service.settle().await;
+    assert_eq!(
+        rig.sessions().await[0].check_problem.as_deref(),
+        Some("server:503")
+    );
+    let after = rig.status(&mut browser).await;
+    assert_eq!(after["status"], "signedIn");
+    assert_eq!(after["online"]["status"], "unconfirmed");
+    assert_eq!(after["online"]["checking"], false);
+    assert_eq!(
+        after["online"]["problem"]["i18n_key"],
+        "SrnAccount.errors.server"
+    );
+    assert_eq!(rig.srn.count(ME), 2);
+}
+
+#[tokio::test]
+async fn a_slow_401_or_another_account_ends_the_session_for_the_next_read() {
+    let rig = rig_waiting(Access::Token, short_waits()).await;
+    let mut browser = Browser::default();
+    let someone_else = json!({ "user": { "srn": USER_SRN + 1, "name": "Grace", "image": null } });
+    for (reply, revoked_here) in [
+        (Reply::Status(401, json!({ "error": "invalid_token" })), 0),
+        (Reply::Json(someone_else), 1),
+    ] {
+        rig.sign_in(&mut browser).await;
+        rig.advance(Duration::from_secs(61 * 60));
+        let logouts = rig.srn.count(LOGOUT);
+        rig.srn
+            .script_me(Reply::Late(Duration::from_secs(1), Box::new(reply)));
+        let state = rig.status(&mut browser).await;
+        assert_eq!(state["status"], "signedIn", "{state}");
+        assert_eq!(state["online"]["checking"], true);
+        rig.service.settle().await;
+        assert!(
+            rig.sessions().await.is_empty(),
+            "the session outlived the answer"
+        );
+        assert_eq!(rig.srn.count(LOGOUT), logouts + revoked_here);
+        // the cookie of a session that is gone goes with the next read
+        assert!(browser.session().is_some());
+        let after = rig.status(&mut browser).await;
+        assert_eq!(after["status"], "signedOut", "{after}");
+        assert!(browser.session().is_none(), "the cookie was not cleared");
+        rig.srn.script_me(Reply::Normal);
+    }
 }
 
 #[tokio::test]
@@ -1121,6 +1290,35 @@ async fn a_sign_out_spacering_does_not_confirm_is_still_done_here() {
     let result: Value = rig.logout(&mut browser, json!({})).await.json();
     assert_eq!(result["remote"], "unconfirmed");
     assert_eq!(result["problem"]["i18n_params"]["reason"], "network");
+    assert!(rig.sessions().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_sign_out_spacering_never_answers_is_unconfirmed_within_its_deadline() {
+    let rig = rig_waiting(Access::Token, short_waits()).await;
+    let mut browser = Browser::default();
+    rig.sign_in(&mut browser).await;
+    rig.srn.script_logout(Reply::Slow(Duration::from_secs(30)));
+    let started = Instant::now();
+    let response = rig.logout(&mut browser, json!({})).await;
+    // the deadline ended it, not the client's own two seconds
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "{:?}",
+        started.elapsed()
+    );
+    let result: Value = response.json();
+    assert_eq!(result["state"], json!({ "status": "signedOut" }));
+    assert_eq!(result["remote"], "unconfirmed");
+    let url = format!("{}/console/clients/", rig.srn.origin());
+    assert_eq!(result["manageConnectionsUrl"], url);
+    assert_eq!(
+        result["problem"]["i18n_key"],
+        "SrnAccount.errors.signedOutLocally"
+    );
+    assert_eq!(result["problem"]["i18n_params"]["reason"], "network");
+    assert_eq!(rig.srn.count(LOGOUT), 1);
+    assert!(browser.session().is_none());
     assert!(rig.sessions().await.is_empty());
 }
 

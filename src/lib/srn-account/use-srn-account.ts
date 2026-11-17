@@ -56,6 +56,7 @@ export type SrnAction =
   | "check"
   | "signOut"
   | "manage"
+  | "console"
 
 /** Actions that change the account; the rest only read it (`check`, and
  *  `reopen`, which opens a page and answers the state as it is). */
@@ -130,7 +131,10 @@ export interface SrnAccountController {
   /** "Check again" when signed in; "try again" on an unreadable sign-in. */
   checkAgain: () => void
   signOut: () => void
-  openManageConnections: () => void
+  /** Opens the website's page; answers whether it went (a failure is kept
+   *  in `failure`), so a menu can close only once the page is open. */
+  openManageConnections: () => Promise<boolean>
+  openConsole: () => Promise<boolean>
 }
 
 export interface UseSrnAccountOptions {
@@ -264,7 +268,7 @@ export function useSrnAccount(
       const changesBefore = changesRef.current
       const changing = CHANGES_ACCOUNT.has(action)
       // Asked now, an answer that only reads is newer than reads asked
-      // before. One that answers no state ("manage connections") is not an
+      // before. One that answers no state (opening a website page) is not an
       // answer at all, and leaves the reads in flight alone.
       const seq = changing || !stateOf ? seqRef.current : ++seqRef.current
       setBusy(action)
@@ -355,9 +359,32 @@ export function useSrnAccount(
     })
   }, [run])
 
-  const openManageConnections = useCallback(() => {
-    void run("manage", (s) => s.openManageConnections())
-  }, [run])
+  // The page is asked for inside the call, before anything is awaited: on
+  // the Web the new tab has to open within the click.
+  const openPage = useCallback(
+    async (
+      action: "manage" | "console",
+      open: (source: SrnAccountSource) => Promise<void>
+    ) => {
+      let opened = false
+      await run(action, async (s) => {
+        await open(s)
+        opened = true
+      })
+      return opened
+    },
+    [run]
+  )
+
+  const openManageConnections = useCallback(
+    () => openPage("manage", (s) => s.openManageConnections()),
+    [openPage]
+  )
+
+  const openConsole = useCallback(
+    () => openPage("console", (s) => s.openConsole()),
+    [openPage]
+  )
 
   const clearFailure = useCallback(() => setFailure(null), [])
   const dismissResult = useCallback(() => setResultNotice(null), [])
@@ -400,5 +427,6 @@ export function useSrnAccount(
     checkAgain,
     signOut,
     openManageConnections,
+    openConsole,
   }
 }

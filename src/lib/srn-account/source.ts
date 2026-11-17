@@ -47,6 +47,8 @@ export interface SrnAccountSource {
   signOut(expectedSrn?: number): Promise<SrnSignOutResult>
   /** The website's list of connections, in a browser. */
   openManageConnections(): Promise<void>
+  /** The front page of the website's console, in a browser. */
+  openConsole(): Promise<void>
   /** The avatar's bytes, fetched by the backend that knows the account. */
   avatar(path: string): Promise<SrnAsset>
 }
@@ -94,6 +96,14 @@ export const desktopSrnAccount: SrnAccountSource = {
     ),
   openManageConnections: async () => {
     await shell().call("srn_open_manage_connections", { locale: locale() })
+  },
+  // One command opens both pages. A backend that predates `page` ignores it
+  // and opens the connections, which is still the console.
+  openConsole: async () => {
+    await shell().call("srn_open_manage_connections", {
+      locale: locale(),
+      page: "console",
+    })
   },
   avatar: async (path) => {
     if (!isSrnAvatarPath(path)) throw new Error("Not an SRN avatar")

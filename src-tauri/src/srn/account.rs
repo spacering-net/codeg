@@ -18,7 +18,9 @@
 //! and when the network comes back ([`CheckTrigger`]): at most once an hour
 //! counted from the last check SpaceRing answered, and — after one that got
 //! no answer — not again within a minute when the trigger is a window
-//! coming forward. A check the person asks for is not throttled, but joins
+//! coming forward, or within ten seconds when it is the network coming back
+//! (every window hears that, and a network that comes and goes says it
+//! again and again). A check the person asks for is not throttled, but joins
 //! one under way and respects SpaceRing's `Retry-After`. Only a 401 clears
 //! the sign-in; offline, 5xx and 429 keep the identity, marked unconfirmed
 //! with the reason.
@@ -54,6 +56,17 @@ pub(crate) const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// start another sooner than this.
 pub(crate) const RETRY_FLOOR: Duration = Duration::from_secs(60);
 
+/// The network coming back does not start a check sooner than this after
+/// the last one. Every window sends it, and a check that fails at once
+/// (still offline) ends before the other windows' arrive: without a floor,
+/// each would start its own.
+pub(crate) const ONLINE_FLOOR: Duration = Duration::from_secs(10);
+
+/// How long a sign-out waits for SpaceRing to confirm. The account's buttons
+/// wait with it, and the sign-in here is already gone: no answer in time
+/// counts as no answer at all.
+pub(crate) const LOGOUT_DEADLINE: Duration = Duration::from_secs(5);
+
 /// SpaceRing limits a device name to 80 UTF-16 units.
 const MAX_DEVICE_NAME_UNITS: usize = 80;
 
@@ -62,6 +75,8 @@ pub(crate) struct Config {
     pub flow_ttl: Duration,
     pub check_interval: Duration,
     pub retry_floor: Duration,
+    pub online_floor: Duration,
+    pub logout_deadline: Duration,
 }
 
 impl Default for Config {
@@ -70,6 +85,8 @@ impl Default for Config {
             flow_ttl: FLOW_TTL,
             check_interval: CHECK_INTERVAL,
             retry_floor: RETRY_FLOOR,
+            online_floor: ONLINE_FLOOR,
+            logout_deadline: LOGOUT_DEADLINE,
         }
     }
 }
@@ -352,6 +369,13 @@ impl AccountService {
     fn account_from(&self, read: Result<Option<String>, String>) -> Account {
         match read {
             Ok(None) => Account::SignedOut,
+            Ok(Some(raw)) if !store::kept_for(&raw, &self.env) => {
+                tracing::info!(
+                    "[srn] the keychain holds a sign-in for another origin or client; \
+                     not signed in here"
+                );
+                Account::SignedOut
+            }
             Ok(Some(raw)) => match store::decode(&raw, &self.env.origin) {
                 Some((token, user)) => Account::SignedIn(Box::new(Session {
                     token,
@@ -560,7 +584,7 @@ impl AccountService {
             return;
         }
         if let Err(detail) = self
-            .store_set(store::encode(&grant.token, &grant.user))
+            .store_set(store::encode(&grant.token, &grant.user, &self.env))
             .await
         {
             tracing::warn!("[srn] the keychain did not keep the sign-in: {detail}");
@@ -623,7 +647,10 @@ impl AccountService {
             }
         };
         if user != grant.user {
-            if let Err(detail) = self.store_set(store::encode(&grant.token, &user)).await {
+            if let Err(detail) = self
+                .store_set_if_holds(&grant.token, store::encode(&grant.token, &user, &self.env))
+                .await
+            {
                 tracing::warn!("[srn] the keychain did not take the confirmed name: {detail}");
             }
         }
@@ -668,10 +695,11 @@ impl AccountService {
     }
 
     /// Removes what a sign-in that will not happen wrote (the commit lock is
-    /// held). If the keychain will not let go, it is a [`Leftover`]: kept in
-    /// mind, shown, and removed by the next sign-out.
+    /// held), unless another Codeg has written over it since. If the keychain
+    /// will not let go, it is a [`Leftover`]: kept in mind, shown, and
+    /// removed by the next sign-out.
     async fn forget_written(&self, token: &AccessToken) {
-        if let Err(detail) = self.store_delete().await {
+        if let Err(detail) = self.store_delete_if_holds(token).await {
             tracing::warn!("[srn] the keychain did not remove an abandoned sign-in: {detail}");
             self.lock().leftover = Some(Leftover {
                 token: token.clone(),
@@ -804,9 +832,10 @@ impl AccountService {
         };
         let answered_lately = within(checks.last_answer, self.config.check_interval);
         let tried_lately = within(checks.last_attempt, self.config.retry_floor);
+        let tried_just_now = within(checks.last_attempt, self.config.online_floor);
         match trigger {
             CheckTrigger::User => true,
-            CheckTrigger::Online => !answered_lately,
+            CheckTrigger::Online => !answered_lately && !tried_just_now,
             CheckTrigger::Foreground => !answered_lately && !tried_lately,
         }
     }
@@ -888,7 +917,10 @@ impl AccountService {
             // copy follows, for the next start.
             let _commit = self.commit.lock().await;
             if self.lock().account_generation == generation {
-                if let Err(detail) = self.store_set(store::encode(&token, &user)).await {
+                if let Err(detail) = self
+                    .store_set_if_holds(&token, store::encode(&token, &user, &self.env))
+                    .await
+                {
                     tracing::warn!("[srn] the keychain did not take the new name: {detail}");
                 }
             }
@@ -907,7 +939,14 @@ impl AccountService {
             }
         }
         tracing::info!("[srn] SpaceRing ended the sign-in; signing out here");
-        let deleted = self.store_delete().await;
+        let ended = self
+            .lock()
+            .session_mut()
+            .map(|session| session.token.clone());
+        let deleted = match &ended {
+            Some(token) => self.store_delete_if_holds(token).await,
+            None => Ok(()),
+        };
         let mut inner = self.lock();
         inner.clear_running(id);
         if inner.account_generation != generation {
@@ -989,11 +1028,14 @@ impl AccountService {
             }
             had
         };
-        if !matches!(had, Had::Nothing) {
-            if let Err(detail) = self.store_delete().await {
-                tracing::warn!("[srn] the keychain did not remove the sign-in: {detail}");
-                return Err(Problem::KeychainDelete { detail });
-            }
+        let removed = match &had {
+            Had::Nothing => Ok(()),
+            Had::Token(token) | Had::Leftover(token) => self.store_delete_if_holds(token).await,
+            Had::Unreadable(_) => self.store_delete_unless_foreign().await,
+        };
+        if let Err(detail) = removed {
+            tracing::warn!("[srn] the keychain did not remove the sign-in: {detail}");
+            return Err(Problem::KeychainDelete { detail });
         }
         let state = {
             let mut inner = self.lock();
@@ -1036,15 +1078,20 @@ impl AccountService {
         Ok(match had {
             Had::Nothing => confirmed(RemoteSignOut::NotSignedIn),
             Had::Unreadable(problem) => unconfirmed(problem),
-            Had::Token(token) | Had::Leftover(token) => match self.api.logout(&token).await {
-                // A token SpaceRing does not accept is one whose connection
-                // is over: what signing out asks for.
-                Ok(()) | Err(SrnError::Unauthorized) => {
-                    tracing::info!("[srn] signed out");
-                    confirmed(RemoteSignOut::Confirmed)
+            Had::Token(token) | Had::Leftover(token) => {
+                match tokio::time::timeout(self.config.logout_deadline, self.api.logout(&token))
+                    .await
+                    .unwrap_or_else(|_| Err(SrnError::Network("SRN did not answer in time".into())))
+                {
+                    // A token SpaceRing does not accept is one whose connection
+                    // is over: what signing out asks for.
+                    Ok(()) | Err(SrnError::Unauthorized) => {
+                        tracing::info!("[srn] signed out");
+                        confirmed(RemoteSignOut::Confirmed)
+                    }
+                    Err(error) => unconfirmed(Problem::from_check(error)),
                 }
-                Err(error) => unconfirmed(Problem::from_check(error)),
-            },
+            }
         })
     }
 
@@ -1055,6 +1102,17 @@ impl AccountService {
             "/zh/console/clients/"
         } else {
             "/console/clients/"
+        };
+        format!("{}{path}", self.env.origin.as_str())
+    }
+
+    /// The website console's front page: `/console/`, or `/zh/console/` for
+    /// a Chinese interface.
+    pub fn console_url(&self, language: PageLanguage) -> String {
+        let path = if language.is_chinese() {
+            "/zh/console/"
+        } else {
+            "/console/"
         };
         format!("{}{path}", self.env.origin.as_str())
     }
@@ -1084,6 +1142,64 @@ impl AccountService {
             .await
             .unwrap_or_else(|error| Err(format!("the keychain task did not run: {error}")))
     }
+
+    // Every development build shares one entry, and another Codeg may have
+    // written over it since this one last read it (the commit lock is this
+    // process's only). So what changes or removes a sign-in reads the entry
+    // again first and touches it only while it is still this one's. A
+    // keychain has no compare-and-swap; the read narrows the window to the
+    // two calls.
+
+    /// What the entry holds now, for this environment.
+    async fn store_held(&self) -> Result<Held, String> {
+        Ok(match self.store_get().await? {
+            None => Held::Nothing,
+            Some(raw) if !store::kept_for(&raw, &self.env) => Held::Foreign,
+            Some(raw) => match store::decode(&raw, &self.env.origin) {
+                Some((token, _)) => Held::Token(token),
+                None => Held::Unreadable,
+            },
+        })
+    }
+
+    /// Removes the entry if it still holds `token`; anything else there is
+    /// left alone, and that is not a failure.
+    async fn store_delete_if_holds(&self, token: &AccessToken) -> Result<(), String> {
+        match self.store_held().await? {
+            Held::Token(held) if held == *token => self.store_delete().await,
+            _ => Ok(()),
+        }
+    }
+
+    /// Writes `value`, a record for `token`, if the entry still holds
+    /// `token`.
+    async fn store_set_if_holds(&self, token: &AccessToken, value: String) -> Result<(), String> {
+        match self.store_held().await? {
+            Held::Token(held) if held == *token => self.store_set(value).await,
+            _ => Ok(()),
+        }
+    }
+
+    /// Removes the entry unless it is another environment's sign-in: what a
+    /// sign-out of an unreadable sign-in clears, which has no token to
+    /// compare.
+    async fn store_delete_unless_foreign(&self) -> Result<(), String> {
+        match self.store_held().await? {
+            Held::Nothing | Held::Foreign => Ok(()),
+            Held::Token(_) | Held::Unreadable => self.store_delete().await,
+        }
+    }
+}
+
+/// What the keychain's entry holds, read again for a change to it.
+enum Held {
+    Nothing,
+    /// A sign-in of this environment's, and its token.
+    Token(AccessToken),
+    /// Something that is not a record, or not one this Codeg can read.
+    Unreadable,
+    /// Another environment's sign-in (`store::kept_for`).
+    Foreign,
 }
 
 /// What an error says about when to ask again: an answer counts for the

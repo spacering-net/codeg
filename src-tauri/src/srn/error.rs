@@ -30,23 +30,23 @@ pub enum SrnError {
     /// No answer: offline, DNS, TLS, refused, timed out, cut off. The text is
     /// the transport's own account (no request ever carries a secret in its
     /// address, so neither does this).
-    #[error("SpaceRing could not be reached")]
+    #[error("SRN could not be reached")]
     Network(String),
     /// HTTP 429, with the pause its `Retry-After` asked for.
-    #[error("SpaceRing asked for a pause of {seconds} s")]
+    #[error("SRN asked for a pause of {seconds} s")]
     RateLimited { seconds: u64 },
     /// HTTP 401 to a request that carried a token: SpaceRing no longer
     /// accepts it (revoked, expired, or never known).
-    #[error("SpaceRing no longer accepts this sign-in")]
+    #[error("SRN no longer accepts this sign-in")]
     Unauthorized,
     /// Any other answer that is not a success — a 3xx (never followed), a
     /// 4xx, a 5xx — with the `error` code its JSON body named, if it named
     /// one Codeg could keep.
-    #[error("SpaceRing answered HTTP {status}")]
+    #[error("SRN answered HTTP {status}")]
     Status { status: u16, error: Option<String> },
     /// A success that is not what was asked for. The text is Codeg's own
     /// description of what was wrong, never a piece of the answer.
-    #[error("SpaceRing's answer is not what was asked for: {0}")]
+    #[error("SRN's answer is not what was asked for: {0}")]
     InvalidResponse(&'static str),
 }
 
@@ -186,18 +186,22 @@ impl Problem {
     /// The English text, for a frontend without the key.
     fn message(&self) -> String {
         match self {
-            Self::Network { .. } => "SpaceRing could not be reached".into(),
+            Self::Network { .. } => "SRN could not be reached".into(),
             Self::RateLimited { seconds } => {
-                format!("SpaceRing asked Codeg to wait {seconds} s before trying again")
+                format!("SRN asked Codeg to wait {seconds} s before trying again")
             }
-            Self::Server { status } => format!("SpaceRing answered HTTP {status}"),
-            Self::InvalidResponse { .. } => "SpaceRing's answer could not be used".into(),
-            Self::ClientRejected => "SpaceRing does not accept sign-ins from this Codeg build".into(),
+            Self::Server { status } => format!("SRN answered HTTP {status}"),
+            Self::InvalidResponse { .. } => "SRN's answer could not be used".into(),
+            Self::ClientRejected => {
+                "SRN does not recognise this Codeg client, or has turned it off".into()
+            }
             Self::ExchangeFailed => "The sign-in could not be completed; start it again".into(),
             Self::AccessDenied => "The connection was declined in the browser".into(),
             Self::Expired => "The sign-in expired before the browser came back".into(),
-            Self::AccountChanged => "The SpaceRing account changed".into(),
-            Self::KeychainRead { .. } => "The sign-in stored in the keychain could not be read".into(),
+            Self::AccountChanged => "The SRN account changed".into(),
+            Self::KeychainRead { .. } => {
+                "The sign-in stored in the keychain could not be read".into()
+            }
             Self::KeychainWrite { .. } => {
                 "The keychain did not keep the sign-in, so it did not complete".into()
             }
@@ -208,10 +212,12 @@ impl Problem {
                 "A sign-in that did not complete is still in the keychain; sign out to remove it"
                     .into()
             }
-            Self::CredentialInvalid => "The sign-in stored in the keychain is not readable by this Codeg".into(),
-            Self::Revoked => "SpaceRing ended this sign-in".into(),
+            Self::CredentialInvalid => {
+                "The sign-in stored in the keychain is not readable by this Codeg".into()
+            }
+            Self::Revoked => "SRN ended this sign-in".into(),
             Self::SignedOutLocally { url, .. } => format!(
-                "Signed out on this computer; SpaceRing did not confirm. Remove the connection at {url}"
+                "Signed out on this computer; SRN did not confirm. Remove the connection at {url}"
             ),
             Self::AlreadySignedIn => "Already signed in".into(),
             Self::NoPendingSignIn => "No sign-in is waiting for the browser".into(),
@@ -404,7 +410,10 @@ mod tests {
             let key = sent["i18n_key"].as_str().unwrap().to_string();
             assert!(key.starts_with("SrnAccount.errors."), "{key}");
             assert_eq!(sent["i18n_params"]["code"], problem.code(), "{problem:?}");
-            assert!(!sent["message"].as_str().unwrap().is_empty());
+            let message = sent["message"].as_str().unwrap();
+            assert!(!message.is_empty());
+            // the product a person reads about is SRN
+            assert!(!message.contains("SpaceRing"), "{message}");
             keys.insert(key);
             codes.insert(problem.code());
         }

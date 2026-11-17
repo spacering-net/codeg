@@ -2519,11 +2519,8 @@
       },
       "quickActions": {
         "title": "Schnellaktionen",
-        "groups": {
-          "workspace": "Arbeitsbereich",
-          "navigation": "Navigation",
-          "more": "Mehr"
-        },
+        "openProject": "Projekt öffnen",
+        "more": "Mehr",
         "browserTab": "Browser-Tab öffnen",
         "showPet": "Pet anzeigen"
       },
@@ -5238,8 +5235,8 @@
   "RemoteWorkspace": {
     "openLocalWorkspace": "Lokalen Arbeitsbereich öffnen",
     "openLocalFailed": "Lokaler Arbeitsbereich konnte nicht geöffnet werden",
-    "openRemoteWorkspace": "Remote-Arbeitsbereich öffnen",
-    "manage": "Remote-Arbeitsbereich verwalten",
+    "openRemoteWorkspace": "Remote-Arbeitsbereich",
+    "manage": "Verbindungen verwalten",
     "manageTitle": "Verbindungen zu Remote-Arbeitsbereichen",
     "empty": "Keine Remote-Verbindungen",
     "noMatches": "Keine passenden Remote-Verbindungen",
@@ -7513,7 +7510,7 @@
   },
   "Harness": {
     "title": "Harness",
-    "description": "Verwalte die MCP-Server, Skills und Skill-Pakete deiner Agenten – unter „Entdecken“ findest du mehr aus SpaceRing Harness.",
+    "description": "Verwalte die MCP-Server, Skills und Skill-Pakete deiner Agenten – unter „Entdecken“ findest du mehr aus SRN Harness.",
     "descriptionNoDiscover": "Verwalte die MCP-Server, Skills und Skill-Pakete deiner Agenten.",
     "descriptionMore": "Mehr",
     "descriptionLess": "Weniger",
@@ -7535,7 +7532,7 @@
       "itemNotChecked": "Dieser Eintrag wurde noch nicht geprüft.",
       "itemUnavailable": "Harness führt diese Version nicht.",
       "reasons": {
-        "network": "SpaceRing Harness ist nicht erreichbar.",
+        "network": "SRN Harness ist nicht erreichbar.",
         "rateLimited": "Harness hat um eine Pause gebeten.",
         "server": "Harness hat mit einem Fehler geantwortet ({status}).",
         "other": "Harness hat eine Antwort gesendet, die dieses Codeg nicht lesen kann."
@@ -7865,7 +7862,7 @@
         "paste": "Konfiguration einfügen",
         "pasteHint": "Aus einer README oder der Datei eines anderen Agenten.",
         "harness": "In Harness finden",
-        "harnessHint": "Die MCP-Server in SpaceRing Harness durchsuchen."
+        "harnessHint": "Die MCP-Server in SRN Harness durchsuchen."
       },
       "list": {
         "serversLabel": "MCP-Server",
@@ -8674,7 +8671,7 @@
         "importTitle": "Skill-Ordner zum Importieren wählen",
         "importFailed": "Der Ordner wurde nicht importiert.",
         "harness": "In Harness finden",
-        "harnessHint": "Die Skills in SpaceRing Harness durchsuchen."
+        "harnessHint": "Die Skills in SRN Harness durchsuchen."
       },
       "list": {
         "label": "Von Codeg verwaltete Skills",
@@ -9461,13 +9458,13 @@
     },
     "errors": {
       "disabled": "„Entdecken“ ist in diesem Codeg ausgeschaltet.",
-      "network": "SpaceRing Harness ist nicht erreichbar. Prüfe die Verbindung und versuche es erneut.",
+      "network": "SRN Harness ist nicht erreichbar. Prüfe die Verbindung und versuche es erneut.",
       "rateLimited": "Zu viele Anfragen. Versuche es in {seconds, plural, one {# Sekunde} other {# Sekunden}} erneut.",
       "notFound": "Harness hat unter dieser Adresse keinen Eintrag. Er wurde möglicherweise umbenannt oder entfernt.",
       "invalidRef": "Das ist keine Harness-Adresse. Eine Adresse hat die Form Herausgeber/Name.",
-      "server": "SpaceRing Harness hat mit einem Fehler geantwortet ({status}). Versuche es gleich noch einmal.",
-      "tooLarge": "Die Antwort von SpaceRing Harness ist größer, als Codeg annimmt.",
-      "invalidResponse": "SpaceRing Harness hat eine Antwort gesendet, die dieses Codeg nicht lesen kann. Ein Update von Codeg kann helfen.",
+      "server": "SRN Harness hat mit einem Fehler geantwortet ({status}). Versuche es gleich noch einmal.",
+      "tooLarge": "Die Antwort von SRN Harness ist größer, als Codeg annimmt.",
+      "invalidResponse": "SRN Harness hat eine Antwort gesendet, die dieses Codeg nicht lesen kann. Ein Update von Codeg kann helfen.",
       "recordUnreadable": "Codegs Aufzeichnung darüber, was es aus Harness installiert hat, konnte nicht gelesen werden.",
       "resolveUnavailable": "Codeg kann den aktuellen Stand dieses Eintrags gerade nicht bei Harness bestätigen, daher wurde nichts installiert. Versuche es später erneut.",
       "unsupported": "Dieses Codeg ist zu alt für Harness. Aktualisiere es, um den Katalog zu durchsuchen.",
@@ -9783,7 +9780,6 @@
   },
   "SrnAccount": {
     "name": "SRN",
-    "account": "SpaceRing-Konto",
     "trigger": {
       "account": "SRN-Konto",
       "signedOut": "SRN-Konto: nicht angemeldet",
@@ -9794,7 +9790,7 @@
       "unavailable": "SRN-Konto: Server kann es gerade nicht sagen"
     },
     "loading": "Anmeldung wird gelesen…",
-    "notEnabled": "Auf diesem Server ist die Anmeldung bei SRN nicht aktiviert. Zum Durchsuchen und Installieren aus Harness ist keine Anmeldung nötig.",
+    "notEnabled": "Auf diesem Server nicht aktiviert",
     "thisComputer": "Das ist das Konto dieses Computers, nicht das des Remote-Arbeitsbereichs.",
     "details": "Details",
     "unknownError": "Etwas ist schiefgelaufen: {message}",
@@ -9802,91 +9798,76 @@
       "signIn": "Bei SRN anmelden",
       "signingIn": "Browser wird geöffnet…",
       "signInAgain": "Erneut anmelden",
-      "reopen": "Seite erneut öffnen",
-      "copyLink": "Link kopieren",
+      "copyLink": "Anmeldelink kopieren",
       "copied": "Kopiert",
-      "cancel": "Abbrechen",
+      "cancel": "Anmeldung abbrechen",
       "checkAgain": "Erneut prüfen",
       "checking": "Wird geprüft…",
       "tryAgain": "Erneut versuchen",
       "manageConnections": "Verbindungen verwalten",
+      "openConsole": "SRN-Konsole öffnen",
       "signOut": "Abmelden",
       "signingOut": "Wird abgemeldet…",
-      "goingToSpaceRing": "Weiter zu SpaceRing…",
+      "goingToSrn": "Weiter zu SRN…",
       "startOver": "Von vorn beginnen"
     },
     "signedOut": {
-      "badge": "Nicht angemeldet",
-      "intro": "SRN ist dein SpaceRing-Konto. Zum Durchsuchen und Installieren aus Harness ist keine Anmeldung nötig."
+      "badge": "Nicht angemeldet"
     },
     "pending": {
-      "badge": "Wartet",
-      "completingBadge": "Schließt ab",
-      "hint": "Bestätige die Verbindung auf der SpaceRing-Seite in deinem Browser. Codeg wartet bis {time}.",
-      "hintNoTime": "Bestätige die Verbindung auf der SpaceRing-Seite in deinem Browser.",
-      "webHint": "Die Anmeldung wartet bis {time} auf SpaceRing. Öffne die Seite erneut, um sie abzuschließen, oder beginne von vorn.",
-      "webHintNoTime": "Die Anmeldung wartet auf SpaceRing. Öffne die Seite erneut, um sie abzuschließen, oder beginne von vorn.",
-      "completing": "Der Browser ist zurück. Anmeldung wird abgeschlossen…",
-      "openBrowserFailed": "Der Browser konnte nicht geöffnet werden. Kopiere den Link und öffne ihn in deinem Browser."
+      "line": "Im Browser fortfahren",
+      "webLine": "Anmeldung nicht abgeschlossen",
+      "completingLine": "Anmeldung wird abgeschlossen…",
+      "openBrowserFailed": "Browser konnte nicht geöffnet werden."
     },
     "signedIn": {
       "srn": "SRN {srn}",
-      "online": {
-        "confirmed": "Online bestätigt",
-        "unconfirmed": "Nicht online bestätigt",
-        "unchecked": "Noch nicht geprüft"
-      },
-      "checkedAgo": "Geprüft {ago}",
-      "confirmedAgo": "Zuletzt bestätigt {ago}",
-      "keptSignedIn": "Auf diesem Computer bleibst du angemeldet. Codeg prüft später erneut.",
-      "keptSignedInWeb": "In diesem Browser bleibst du angemeldet. Codeg prüft später erneut."
+      "unconfirmed": "Unbestätigt; weiterhin angemeldet."
     },
     "unreadable": {
-      "badge": "Nicht lesbar",
-      "hint": "Du bist nicht abgemeldet – die Anmeldung ist weiter auf diesem Computer gespeichert. Versuche es erneut, melde dich neu an, um sie zu ersetzen, oder melde dich ab, um sie zu entfernen."
+      "badge": "Nicht lesbar"
     },
     "unavailable": {
-      "badge": "Nicht verfügbar",
-      "hint": "Dieser Server kann gerade nicht sagen, ob du angemeldet bist. Es wurde nichts abgemeldet."
+      "badge": "Nicht verfügbar"
     },
     "signOut": {
-      "accountChanged": "Das angemeldete Konto hat sich geändert, daher wurde nichts abgemeldet. Prüfe das angezeigte Konto und versuche es erneut.",
-      "webSignedOutLocally": "In diesem Browser abgemeldet. SpaceRing hat es nicht bestätigt – entferne die Verbindung unter {url}."
+      "accountChanged": "Das angemeldete Konto hat sich geändert; nichts wurde abgemeldet.",
+      "webSignedOutLocally": "In diesem Browser abgemeldet; SRN hat nicht bestätigt."
     },
     "errors": {
-      "network": "SpaceRing war nicht erreichbar.",
-      "rateLimited": "SpaceRing hat Codeg gebeten, {seconds} s zu warten, bevor es erneut versucht wird.",
-      "server": "SpaceRing hat mit einem Fehler geantwortet (HTTP {status}).",
-      "invalidResponse": "Die Antwort von SpaceRing war nicht verwendbar.",
-      "clientRejected": "SpaceRing akzeptiert keine Anmeldungen von diesem Codeg-Build.",
-      "exchangeFailed": "Die Anmeldung konnte nicht abgeschlossen werden. Starte sie erneut.",
+      "network": "SRN war nicht erreichbar.",
+      "rateLimited": "SRN bat Codeg, vor einem neuen Versuch {seconds} s zu warten.",
+      "server": "SRN hat mit einem Fehler geantwortet (HTTP {status}).",
+      "invalidResponse": "Die Antwort von SRN war nicht verwendbar.",
+      "clientRejected": "SRN kennt diesen Codeg-Client nicht oder hat ihn deaktiviert.",
+      "exchangeFailed": "Die Anmeldung wurde nicht abgeschlossen. Starte sie neu.",
       "accessDenied": "Die Verbindung wurde im Browser abgelehnt.",
-      "expired": "Die Anmeldung ist abgelaufen, bevor der Browser zurückkam. Starte sie erneut.",
-      "accountChanged": "SpaceRing hat ein anderes Konto bestätigt als das angemeldete, daher wurde nichts gespeichert. Melde dich erneut an.",
-      "keychainRead": "Die im Schlüsselbund gespeicherte Anmeldung konnte nicht gelesen werden.",
-      "keychainWrite": "Der Schlüsselbund hat die Anmeldung nicht gespeichert, daher wurde sie nicht abgeschlossen.",
-      "keychainDelete": "Der Schlüsselbund hat die Anmeldung nicht entfernt, daher wurde nichts abgemeldet.",
-      "keychainCleanup": "Eine beendete Anmeldung ist noch im Schlüsselbund gespeichert. Melde dich ab, um sie zu entfernen.",
-      "credentialInvalid": "Die im Schlüsselbund gespeicherte Anmeldung kann dieses Codeg nicht lesen.",
-      "revoked": "SpaceRing hat diese Anmeldung beendet. Melde dich erneut an.",
-      "signedOutLocally": "Auf diesem Computer abgemeldet. SpaceRing hat es nicht bestätigt – entferne die Verbindung unter {url}.",
+      "expired": "Die Anmeldung lief ab, bevor der Browser zurückkam. Starte sie neu.",
+      "accountChanged": "SRN hat ein anderes Konto bestätigt; nichts wurde gespeichert.",
+      "keychainRead": "Die Anmeldung im Schlüsselbund konnte nicht gelesen werden.",
+      "keychainWrite": "Der Schlüsselbund speicherte die Anmeldung nicht; sie ist nicht fertig.",
+      "keychainDelete": "Der Schlüsselbund entfernte die Anmeldung nicht; nichts abgemeldet.",
+      "keychainCleanup": "Im Schlüsselbund liegt noch eine alte Anmeldung. Abmelden entfernt sie.",
+      "credentialInvalid": "Dieses Codeg kann die Anmeldung im Schlüsselbund nicht lesen.",
+      "revoked": "SRN hat diese Anmeldung beendet. Melde dich erneut an.",
+      "signedOutLocally": "Auf diesem Computer abgemeldet; SRN hat nicht bestätigt.",
       "alreadySignedIn": "Du bist bereits angemeldet. Melde dich zuerst ab.",
       "noPendingSignIn": "Keine Anmeldung wartet auf den Browser.",
       "openBrowser": "Der Browser konnte nicht geöffnet werden.",
-      "loopback": "Codeg konnte auf diesem Computer nicht auf die Rückkehr des Browsers warten.",
+      "loopback": "Codeg konnte hier nicht auf die Rückkehr des Browsers warten.",
       "internal": "Die Anmeldung konnte nicht starten.",
       "notEnabled": "Auf diesem Server ist die Anmeldung bei SRN nicht aktiviert.",
-      "originRefused": "Die Anmeldung muss von der eigenen Adresse dieses Servers aus beginnen.",
+      "originRefused": "Die Anmeldung muss von der Adresse dieses Servers starten.",
       "invalidRequest": "Die Anfrage wurde nicht verstanden.",
-      "flowMissing": "Der Browser kam ohne das Cookie dieser Anmeldung zurück. Beginne in diesem Browser von vorn.",
+      "flowMissing": "Der Browser kam ohne Cookie zurück. Beginne hier neu.",
       "invalidCallback": "Die Anmeldung kam unvollständig zurück. Beginne von vorn.",
-      "sessionUnreadable": "Dieser Server konnte deine gespeicherte Anmeldung nicht lesen. Melde dich erneut an.",
+      "sessionUnreadable": "Der Server konnte deine Anmeldung nicht lesen. Melde dich neu an.",
       "keyUnavailable": "Der Server konnte seinen Anmeldeschlüssel nicht öffnen.",
       "storage": "Die Datenbank des Servers hat nicht geantwortet."
     },
     "errorsPlain": {
-      "rateLimited": "SpaceRing hat Codeg gebeten, vor einem neuen Versuch zu warten.",
-      "server": "SpaceRing hat mit einem Fehler geantwortet."
+      "rateLimited": "SRN hat Codeg gebeten, vor einem neuen Versuch zu warten.",
+      "server": "SRN hat mit einem Fehler geantwortet."
     }
   }
 }

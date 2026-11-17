@@ -357,7 +357,7 @@ describe("Discover — a prompt's text", () => {
 
     const section = within(detail).getByRole("region", { name: "Prompt" })
     const alert = await within(section).findByRole("alert")
-    expect(alert).toHaveTextContent("SpaceRing Harness could not be reached.")
+    expect(alert).toHaveTextContent("SRN Harness could not be reached.")
     expect(
       within(detail).getByRole("button", { name: "Copy prompt" })
     ).toBeDisabled()
@@ -1198,7 +1198,7 @@ describe("Discover — copying an assistant's definition", () => {
     [
       "network",
       backendError("network"),
-      "SpaceRing Harness could not be reached. Check the connection and try again.",
+      "SRN Harness could not be reached. Check the connection and try again.",
     ],
     [
       "rateLimited",

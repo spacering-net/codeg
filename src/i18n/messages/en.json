@@ -2519,11 +2519,8 @@
       },
       "quickActions": {
         "title": "Quick actions",
-        "groups": {
-          "workspace": "Workspace",
-          "navigation": "Navigation",
-          "more": "More"
-        },
+        "openProject": "Open project",
+        "more": "More",
         "browserTab": "Open browser tab",
         "showPet": "Show pet"
       },
@@ -7513,7 +7510,7 @@
   },
   "Harness": {
     "title": "Harness",
-    "description": "Manage your agents' MCP servers, skills and skill packs, and find more from SpaceRing Harness under Discover.",
+    "description": "Manage your agents' MCP servers, skills and skill packs, and find more from SRN Harness under Discover.",
     "descriptionNoDiscover": "Manage your agents' MCP servers, skills and skill packs.",
     "descriptionMore": "More",
     "descriptionLess": "Less",
@@ -7535,7 +7532,7 @@
       "itemNotChecked": "This item has not been checked yet.",
       "itemUnavailable": "Harness does not list this version.",
       "reasons": {
-        "network": "SpaceRing Harness could not be reached.",
+        "network": "SRN Harness could not be reached.",
         "rateLimited": "Harness asked for a pause.",
         "server": "Harness answered with an error ({status}).",
         "other": "Harness sent an answer this Codeg cannot read."
@@ -7865,7 +7862,7 @@
         "paste": "Paste configuration",
         "pasteHint": "From a README or another agent's file.",
         "harness": "Find on Harness",
-        "harnessHint": "Browse the MCP servers in SpaceRing Harness."
+        "harnessHint": "Browse the MCP servers in SRN Harness."
       },
       "list": {
         "serversLabel": "MCP servers",
@@ -8674,7 +8671,7 @@
         "importTitle": "Choose a skill folder to import",
         "importFailed": "The folder was not imported.",
         "harness": "Find on Harness",
-        "harnessHint": "Browse the skills in SpaceRing Harness."
+        "harnessHint": "Browse the skills in SRN Harness."
       },
       "list": {
         "label": "Codeg-managed skills",
@@ -9461,13 +9458,13 @@
     },
     "errors": {
       "disabled": "Discover is switched off on this Codeg.",
-      "network": "SpaceRing Harness could not be reached. Check the connection and try again.",
+      "network": "SRN Harness could not be reached. Check the connection and try again.",
       "rateLimited": "Too many requests. Try again in {seconds, plural, one {# second} other {# seconds}}.",
       "notFound": "Harness has no item at this address. It may have been renamed or removed.",
       "invalidRef": "That is not a Harness address. An address looks like publisher/name.",
-      "server": "SpaceRing Harness answered with an error ({status}). Try again in a moment.",
-      "tooLarge": "The answer from SpaceRing Harness is larger than Codeg accepts.",
-      "invalidResponse": "SpaceRing Harness sent an answer this Codeg cannot read. Updating Codeg may help.",
+      "server": "SRN Harness answered with an error ({status}). Try again in a moment.",
+      "tooLarge": "The answer from SRN Harness is larger than Codeg accepts.",
+      "invalidResponse": "SRN Harness sent an answer this Codeg cannot read. Updating Codeg may help.",
       "recordUnreadable": "Codeg's record of what it installed from Harness could not be read.",
       "resolveUnavailable": "Codeg cannot confirm this item's current state with Harness right now, so nothing was installed. Try again later.",
       "unsupported": "This Codeg is too old for Harness. Update it to browse the catalog.",
@@ -9783,7 +9780,6 @@
   },
   "SrnAccount": {
     "name": "SRN",
-    "account": "SpaceRing account",
     "trigger": {
       "account": "SRN account",
       "signedOut": "SRN account: not signed in",
@@ -9794,7 +9790,7 @@
       "unavailable": "SRN account: the server can't tell right now"
     },
     "loading": "Reading the sign-in…",
-    "notEnabled": "This server has not enabled SRN sign-in. Browsing and installing from Harness works without signing in.",
+    "notEnabled": "Not enabled on this server",
     "thisComputer": "This is this computer's account, not the remote workspace's.",
     "details": "Details",
     "unknownError": "Something went wrong: {message}",
@@ -9802,74 +9798,59 @@
       "signIn": "Sign in to SRN",
       "signingIn": "Opening the browser…",
       "signInAgain": "Sign in again",
-      "reopen": "Open page again",
-      "copyLink": "Copy link",
+      "copyLink": "Copy sign-in link",
       "copied": "Copied",
-      "cancel": "Cancel",
+      "cancel": "Cancel sign-in",
       "checkAgain": "Check again",
       "checking": "Checking…",
       "tryAgain": "Try again",
       "manageConnections": "Manage connections",
+      "openConsole": "Open SRN console",
       "signOut": "Sign out",
       "signingOut": "Signing out…",
-      "goingToSpaceRing": "Going to SpaceRing…",
+      "goingToSrn": "Going to SRN…",
       "startOver": "Start over"
     },
     "signedOut": {
-      "badge": "Not signed in",
-      "intro": "SRN is your SpaceRing account. Browsing and installing from Harness works without signing in."
+      "badge": "Not signed in"
     },
     "pending": {
-      "badge": "Waiting",
-      "completingBadge": "Finishing",
-      "hint": "Approve the connection on SpaceRing in your browser. Codeg waits until {time}.",
-      "hintNoTime": "Approve the connection on SpaceRing in your browser.",
-      "webHint": "The sign-in waits for SpaceRing until {time}. Open the page again to finish it, or start over.",
-      "webHintNoTime": "The sign-in waits for SpaceRing. Open the page again to finish it, or start over.",
-      "completing": "The browser came back. Finishing sign-in…",
-      "openBrowserFailed": "The browser could not be opened. Copy the link and open it in your browser."
+      "line": "Continue in your browser",
+      "webLine": "Sign-in not finished",
+      "completingLine": "Finishing sign-in…",
+      "openBrowserFailed": "Couldn't open the browser."
     },
     "signedIn": {
       "srn": "SRN {srn}",
-      "online": {
-        "confirmed": "Confirmed online",
-        "unconfirmed": "Not confirmed online",
-        "unchecked": "Not checked yet"
-      },
-      "checkedAgo": "Checked {ago}",
-      "confirmedAgo": "Last confirmed {ago}",
-      "keptSignedIn": "You stay signed in on this computer. Codeg checks again later.",
-      "keptSignedInWeb": "This browser stays signed in. Codeg checks again later."
+      "unconfirmed": "Not confirmed online; still signed in."
     },
     "unreadable": {
-      "badge": "Can't be read",
-      "hint": "Not signed out — the sign-in is still stored on this computer. Try again, sign in again to replace it, or sign out to remove it."
+      "badge": "Can't be read"
     },
     "unavailable": {
-      "badge": "Unavailable",
-      "hint": "This server can't tell right now whether you're signed in. Nothing was signed out."
+      "badge": "Unavailable"
     },
     "signOut": {
-      "accountChanged": "The signed-in account changed, so nothing was signed out. Check the account shown and try again.",
-      "webSignedOutLocally": "Signed out in this browser. SpaceRing did not confirm — remove the connection at {url}."
+      "accountChanged": "The signed-in account changed, so nothing was signed out.",
+      "webSignedOutLocally": "Signed out in this browser, but SRN did not confirm."
     },
     "errors": {
-      "network": "SpaceRing could not be reached.",
-      "rateLimited": "SpaceRing asked Codeg to wait {seconds} s before trying again.",
-      "server": "SpaceRing answered with an error (HTTP {status}).",
-      "invalidResponse": "SpaceRing's answer could not be used.",
-      "clientRejected": "SpaceRing does not accept sign-ins from this Codeg build.",
+      "network": "SRN could not be reached.",
+      "rateLimited": "SRN asked Codeg to wait {seconds} s before trying again.",
+      "server": "SRN answered with an error (HTTP {status}).",
+      "invalidResponse": "SRN's answer could not be used.",
+      "clientRejected": "SRN does not recognise this Codeg client, or has turned it off.",
       "exchangeFailed": "The sign-in could not be completed. Start it again.",
       "accessDenied": "The connection was declined in the browser.",
       "expired": "The sign-in expired before the browser came back. Start it again.",
-      "accountChanged": "SpaceRing confirmed a different account than the one that signed in, so nothing was kept. Sign in again.",
+      "accountChanged": "SRN confirmed a different account, so nothing was kept.",
       "keychainRead": "The sign-in stored in the keychain could not be read.",
       "keychainWrite": "The keychain did not keep the sign-in, so it did not complete.",
       "keychainDelete": "The keychain did not remove the sign-in, so nothing was signed out.",
-      "keychainCleanup": "A sign-in that has ended is still stored in the keychain. Sign out to remove it.",
+      "keychainCleanup": "A sign-in that has ended is still in the keychain. Sign out to remove it.",
       "credentialInvalid": "The sign-in stored in the keychain is not one this Codeg can read.",
-      "revoked": "SpaceRing ended this sign-in. Sign in again.",
-      "signedOutLocally": "Signed out on this computer. SpaceRing did not confirm — remove the connection at {url}.",
+      "revoked": "SRN ended this sign-in. Sign in again.",
+      "signedOutLocally": "Signed out on this computer, but SRN did not confirm.",
       "alreadySignedIn": "Already signed in. Sign out first.",
       "noPendingSignIn": "No sign-in is waiting for the browser.",
       "openBrowser": "The browser could not be opened.",
@@ -9878,15 +9859,15 @@
       "notEnabled": "This server has not enabled SRN sign-in.",
       "originRefused": "Sign-in must start from this server's own address.",
       "invalidRequest": "The request was not understood.",
-      "flowMissing": "The browser came back without this sign-in's cookie. Start again in this browser.",
+      "flowMissing": "The browser came back without the sign-in cookie. Start again here.",
       "invalidCallback": "The sign-in came back incomplete. Start again.",
       "sessionUnreadable": "This server could not read your saved sign-in. Sign in again.",
       "keyUnavailable": "The server could not open its sign-in key.",
       "storage": "The server's database did not answer."
     },
     "errorsPlain": {
-      "rateLimited": "SpaceRing asked Codeg to wait before trying again.",
-      "server": "SpaceRing answered with an error."
+      "rateLimited": "SRN asked Codeg to wait before trying again.",
+      "server": "SRN answered with an error."
     }
   }
 }

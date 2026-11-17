@@ -2519,11 +2519,8 @@
       },
       "quickActions": {
         "title": "快捷操作",
-        "groups": {
-          "workspace": "工作區",
-          "navigation": "選單導覽",
-          "more": "更多"
-        },
+        "openProject": "開啟專案",
+        "more": "更多",
         "browserTab": "開啟瀏覽器",
         "showPet": "顯示寵物"
       },
@@ -7513,7 +7510,7 @@
   },
   "Harness": {
     "title": "Harness",
-    "description": "管理智能體的 MCP 服務、技能和技能包，也可以在「探索」裡找到 SpaceRing Harness 上的更多內容。",
+    "description": "管理智能體的 MCP 服務、技能和技能包，也可以在「探索」裡找到 SRN Harness 上的更多內容。",
     "descriptionNoDiscover": "管理智能體的 MCP 服務、技能和技能包。",
     "descriptionMore": "展開",
     "descriptionLess": "收合",
@@ -7535,7 +7532,7 @@
       "itemNotChecked": "這一項還沒有檢查過。",
       "itemUnavailable": "Harness 上沒有這個版本。",
       "reasons": {
-        "network": "連不上 SpaceRing Harness。",
+        "network": "連不上 SRN Harness。",
         "rateLimited": "Harness 要求稍後再試。",
         "server": "Harness 傳回了錯誤（{status}）。",
         "other": "Harness 傳回的內容這個 Codeg 讀不了。"
@@ -7865,7 +7862,7 @@
         "paste": "貼上設定",
         "pasteHint": "來自 README 或其他智能體的設定檔。",
         "harness": "從 Harness 探索",
-        "harnessHint": "瀏覽 SpaceRing Harness 上的 MCP 服務。"
+        "harnessHint": "瀏覽 SRN Harness 上的 MCP 服務。"
       },
       "list": {
         "serversLabel": "MCP 服務",
@@ -8674,7 +8671,7 @@
         "importTitle": "選擇要匯入的技能資料夾",
         "importFailed": "資料夾沒有匯入。",
         "harness": "從 Harness 探索",
-        "harnessHint": "瀏覽 SpaceRing Harness 上的技能。"
+        "harnessHint": "瀏覽 SRN Harness 上的技能。"
       },
       "list": {
         "label": "Codeg 管理的技能",
@@ -9461,13 +9458,13 @@
     },
     "errors": {
       "disabled": "這個 Codeg 已關閉「探索」。",
-      "network": "無法連上 SpaceRing Harness。請檢查網路後再試一次。",
+      "network": "無法連上 SRN Harness。請檢查網路後再試一次。",
       "rateLimited": "請求太頻繁了，請在 {seconds, number} 秒後再試。",
       "notFound": "Harness 裡沒有這個位址的項目，它可能已改名或被移除。",
       "invalidRef": "這不是 Harness 的位址。位址的寫法是「發布者/名稱」。",
-      "server": "SpaceRing Harness 傳回了錯誤（{status}），請稍後再試。",
-      "tooLarge": "SpaceRing Harness 傳回的內容超過了 Codeg 接受的大小。",
-      "invalidResponse": "這個版本的 Codeg 讀不懂 SpaceRing Harness 傳回的內容，更新 Codeg 也許能解決。",
+      "server": "SRN Harness 傳回了錯誤（{status}），請稍後再試。",
+      "tooLarge": "SRN Harness 傳回的內容超過了 Codeg 接受的大小。",
+      "invalidResponse": "這個版本的 Codeg 讀不懂 SRN Harness 傳回的內容，更新 Codeg 也許能解決。",
       "recordUnreadable": "無法讀取 Codeg 從 Harness 安裝內容的紀錄。",
       "resolveUnavailable": "Codeg 暫時無法向 Harness 確認這個項目的目前狀態，因此沒有安裝任何內容。請稍後再試。",
       "unsupported": "這個 Codeg 的版本太舊，無法使用 Harness。請先更新，再瀏覽目錄。",
@@ -9783,7 +9780,6 @@
   },
   "SrnAccount": {
     "name": "SRN",
-    "account": "SpaceRing 帳號",
     "trigger": {
       "account": "SRN 帳號",
       "signedOut": "SRN 帳號：未登入",
@@ -9794,7 +9790,7 @@
       "unavailable": "SRN 帳號：服務暫時無法確認"
     },
     "loading": "正在讀取登入資訊…",
-    "notEnabled": "這個服務沒有開啟 SRN 登入。瀏覽和安裝 Harness 不需要登入。",
+    "notEnabled": "此服務未開啟 SRN 登入",
     "thisComputer": "這是本機的帳號，不是遠端工作區的。",
     "details": "詳細資訊",
     "unknownError": "發生錯誤：{message}",
@@ -9802,74 +9798,59 @@
       "signIn": "登入 SRN",
       "signingIn": "正在開啟瀏覽器…",
       "signInAgain": "重新登入",
-      "reopen": "重新開啟網頁",
-      "copyLink": "複製連結",
+      "copyLink": "複製登入連結",
       "copied": "已複製",
-      "cancel": "取消",
+      "cancel": "取消登入",
       "checkAgain": "重新確認",
       "checking": "正在確認…",
       "tryAgain": "重試",
       "manageConnections": "管理連線",
+      "openConsole": "開啟 SRN 主控台",
       "signOut": "登出",
       "signingOut": "正在登出…",
-      "goingToSpaceRing": "正在前往 SpaceRing…",
+      "goingToSrn": "正在前往 SRN…",
       "startOver": "重新開始"
     },
     "signedOut": {
-      "badge": "未登入",
-      "intro": "SRN 是你的 SpaceRing 帳號。瀏覽和安裝 Harness 不需要登入。"
+      "badge": "未登入"
     },
     "pending": {
-      "badge": "等待授權",
-      "completingBadge": "正在完成",
-      "hint": "請在瀏覽器的 SpaceRing 頁面確認連線。Codeg 會等到 {time}。",
-      "hintNoTime": "請在瀏覽器的 SpaceRing 頁面確認連線。",
-      "webHint": "登入會等待 SpaceRing 到 {time}。重新開啟網頁即可完成，或者重新開始。",
-      "webHintNoTime": "登入正在等待 SpaceRing。重新開啟網頁即可完成，或者重新開始。",
-      "completing": "瀏覽器已返回，正在完成登入…",
-      "openBrowserFailed": "無法開啟瀏覽器。請複製連結，在瀏覽器中開啟。"
+      "line": "請在瀏覽器中繼續",
+      "webLine": "登入尚未完成",
+      "completingLine": "正在完成登入…",
+      "openBrowserFailed": "無法開啟瀏覽器。"
     },
     "signedIn": {
       "srn": "SRN {srn}",
-      "online": {
-        "confirmed": "已線上確認",
-        "unconfirmed": "未能線上確認",
-        "unchecked": "尚未確認"
-      },
-      "checkedAgo": "上次檢查：{ago}",
-      "confirmedAgo": "上次確認：{ago}",
-      "keptSignedIn": "本機仍保持登入，Codeg 稍後會再確認。",
-      "keptSignedInWeb": "這個瀏覽器仍保持登入，Codeg 稍後會再確認。"
+      "unconfirmed": "未能線上確認，仍保持登入。"
     },
     "unreadable": {
-      "badge": "無法讀取",
-      "hint": "並沒有登出——登入仍儲存在本機。可以重試、重新登入來取代它，或登出來刪除它。"
+      "badge": "無法讀取"
     },
     "unavailable": {
-      "badge": "暫不可用",
-      "hint": "這個服務暫時無法確認你是否已登入。並沒有登出。"
+      "badge": "暫不可用"
     },
     "signOut": {
-      "accountChanged": "登入的帳號已經變了，所以沒有登出任何帳號。請核對顯示的帳號後重試。",
-      "webSignedOutLocally": "已在這個瀏覽器中登出。SpaceRing 沒有確認，請到 {url} 刪除這個連線。"
+      "accountChanged": "登入的帳號已經變了，所以沒有登出任何帳號。",
+      "webSignedOutLocally": "已在這個瀏覽器中登出，SRN 未確認。"
     },
     "errors": {
-      "network": "無法連線到 SpaceRing。",
-      "rateLimited": "SpaceRing 要求 Codeg 等 {seconds} 秒後再試。",
-      "server": "SpaceRing 回傳了錯誤（HTTP {status}）。",
-      "invalidResponse": "SpaceRing 的回應無法使用。",
-      "clientRejected": "SpaceRing 不接受這個 Codeg 版本的登入。",
+      "network": "無法連線到 SRN。",
+      "rateLimited": "SRN 要求 Codeg 等 {seconds} 秒後再試。",
+      "server": "SRN 回傳了錯誤（HTTP {status}）。",
+      "invalidResponse": "SRN 的回應無法使用。",
+      "clientRejected": "SRN 沒有登記這個 Codeg 用戶端，或已將它停用。",
       "exchangeFailed": "登入未能完成，請重新開始。",
       "accessDenied": "已在瀏覽器中拒絕連線。",
       "expired": "瀏覽器返回前登入已逾時，請重新開始。",
-      "accountChanged": "SpaceRing 確認的帳號與登入的不是同一個，所以沒有保存任何內容。請重新登入。",
+      "accountChanged": "SRN 確認的不是登入的帳號，所以沒有保存。",
       "keychainRead": "無法讀取鑰匙圈中儲存的登入。",
       "keychainWrite": "鑰匙圈未能儲存登入，所以登入沒有完成。",
       "keychainDelete": "鑰匙圈未能刪除登入，所以沒有登出任何帳號。",
       "keychainCleanup": "一個已結束的登入仍儲存在鑰匙圈中。登出即可刪除它。",
       "credentialInvalid": "鑰匙圈中儲存的登入不是這個 Codeg 能讀取的格式。",
-      "revoked": "SpaceRing 已結束這次登入，請重新登入。",
-      "signedOutLocally": "已在本機登出。SpaceRing 沒有確認，請到 {url} 刪除這個連線。",
+      "revoked": "SRN 已結束這次登入，請重新登入。",
+      "signedOutLocally": "已在本機登出，SRN 未確認。",
       "alreadySignedIn": "已經登入了，請先登出。",
       "noPendingSignIn": "沒有等待瀏覽器授權的登入。",
       "openBrowser": "無法開啟瀏覽器。",
@@ -9885,8 +9866,8 @@
       "storage": "服務的資料庫沒有回應。"
     },
     "errorsPlain": {
-      "rateLimited": "SpaceRing 要求 Codeg 稍後再試。",
-      "server": "SpaceRing 回傳了錯誤。"
+      "rateLimited": "SRN 要求 Codeg 稍後再試。",
+      "server": "SRN 回傳了錯誤。"
     }
   }
 }
