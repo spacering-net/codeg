@@ -10,6 +10,7 @@ import {
 import {
   ArrowUpCircle,
   CheckCircle2,
+  Info,
   Languages,
   Loader2,
   Power,
@@ -60,6 +61,13 @@ import { useAppUpdate } from "@/components/providers/update-provider"
 import { APP_LOCALES } from "@/lib/i18n"
 import { toErrorMessage } from "@/lib/app-error"
 import type { AppCommandError } from "@/lib/types"
+
+// Updates and the repo button follow this fork; the upstream is credited below.
+const FORK_REPO_URL = "https://github.com/Anfioo/codeg"
+const FORK_REPO_LABEL = "Anfioo/codeg"
+const FORK_RELEASES_URL = "https://github.com/Anfioo/codeg/releases/latest"
+const UPSTREAM_REPO_URL = "https://github.com/spacering-net/codeg"
+const UPSTREAM_REPO_LABEL = "spacering-net/codeg"
 
 function GithubMarkIcon({ className }: { className?: string }) {
   return (
@@ -456,7 +464,7 @@ export function SystemNetworkSettings() {
             <Button
               variant="ghost"
               className="size-5 rounded-full"
-              onClick={() => openUrl("https://github.com/spacering-net/codeg")}
+              onClick={() => openUrl(FORK_REPO_URL)}
             >
               <GithubMarkIcon className="size-5" />
             </Button>
@@ -532,14 +540,7 @@ export function SystemNetworkSettings() {
                     {t("upgradeTo", { version: availableUpdate.version })}
                   </Button>
                 ) : (
-                  <Button
-                    size="sm"
-                    onClick={() =>
-                      openUrl(
-                        "https://github.com/spacering-net/codeg/releases/latest"
-                      )
-                    }
-                  >
+                  <Button size="sm" onClick={() => openUrl(FORK_RELEASES_URL)}>
                     <ArrowUpCircle className="h-3.5 w-3.5" />
                     {t("viewRelease", { version: availableUpdate.version })}
                   </Button>
@@ -676,6 +677,44 @@ export function SystemNetworkSettings() {
               {t("updateError", { message: bannerError })}
             </div>
           )}
+        </section>
+
+        <section className="rounded-xl border bg-card p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Info className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">{t("aboutBuildTitle")}</h2>
+          </div>
+
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("aboutBuildForkedNotice")}
+          </p>
+
+          <div className="rounded-md border bg-muted/20 px-3 py-3 text-xs space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">
+                {t("aboutBuildUpstream")}
+              </span>
+              <Button
+                variant="link"
+                className="h-auto p-0 text-xs font-normal"
+                onClick={() => openUrl(UPSTREAM_REPO_URL)}
+              >
+                {UPSTREAM_REPO_LABEL}
+              </Button>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">
+                {t("aboutBuildFork")}
+              </span>
+              <Button
+                variant="link"
+                className="h-auto p-0 text-xs font-normal"
+                onClick={() => openUrl(FORK_REPO_URL)}
+              >
+                {FORK_REPO_LABEL}
+              </Button>
+            </div>
+          </div>
         </section>
 
         {/* Titled by the option itself: the section *is* the one switch, so a

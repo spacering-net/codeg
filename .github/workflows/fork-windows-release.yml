@@ -1,26 +1,47 @@
 name: Fork Windows Release
 
 # Fork-only workflow: builds the Windows NSIS installer and publishes it as a
-# release in this fork.
+# release in this fork, under this fork's own version numbering.
 #
-# Triggered by a `v*.*.*` tag push, or by hand via workflow_dispatch. The tag
-# must live on a commit that already carries this file, because GitHub reads
-# the workflow from the pushed ref. `release.yml` no longer has a tag trigger
-# in this fork, so a tag push runs this workflow only.
+# Manual only (`workflow_dispatch`), because a release carries two inputs that
+# no tag can express:
 #
-# Running this by hand is also fine: the tag input is used then, and the tag is
-# created by this workflow through GITHUB_TOKEN.
+#   version — the upstream base version the tree is built from, e.g. 0.45.0.
+#             It must equal `src-tauri/tauri.conf.json`'s version, so a typo
+#             cannot ship a build labelled with code it does not contain.
+#   prefix  — this fork's own revision counter for that base, e.g. 01.
+#
+# Output numbering:
+#
+#   release tag / release name  wh.<prefix>.<version>   e.g. wh.01.0.45.0
+#   app version (semver)        <version>-wh<prefix>    e.g. 0.45.0-wh01
+#
+# The tag is the human-facing name and only has to be unique per release. The
+# app version is what the updater actually compares, and it has to parse as
+# semver (`tauri-plugin-updater` deserializes both the manifest version and the
+# running version as `semver::Version`), which `wh.01.0.45.0` is not — hence
+# the two spellings. The version is injected at build time via `--config`
+# instead of being committed, so no version file in the tree has to change.
+#
+# Ordering notes:
+#   * `wh01` < `wh02` … < `wh99` — an alphanumeric prerelease identifier is
+#     compared byte-wise, so the prefix is zero-padded to two digits, or
+#     `wh9` would sort after `wh10`.
+#   * A prerelease sorts *below* its release: `0.45.0-wh01` < `0.45.0`. Moving
+#     an install from upstream 0.45.0 to this channel therefore needs one
+#     manual install; later wh bumps and base bumps update in place.
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Release tag; must equal v + tauri.conf.json version"
+      version:
+        description: "Base version; must equal tauri.conf.json version (e.g. 0.45.0)"
         required: true
-        default: "v0.45.0"
+        default: "0.45.0"
+      prefix:
+        description: "This fork's revision prefix for that base, 1-2 digits (e.g. 01)"
+        required: true
+        default: "01"
 
 env:
   RUST_BACKTRACE: short
@@ -37,6 +58,45 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Compute fork release version
+        id: version
+        shell: bash
+        env:
+          BASE_VERSION: ${{ inputs.version }}
+          PREFIX: ${{ inputs.prefix }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like 0.45.0, got '$BASE_VERSION'"
+            exit 1
+          fi
+          if [[ ! "$PREFIX" =~ ^[0-9]{1,2}$ ]]; then
+            echo "::error::prefix must be 1-2 digits, got '$PREFIX'"
+            exit 1
+          fi
+          # `10#` because a bare `01` would be read as octal, and `08`/`09`
+          # would then fail outright.
+          PADDED=$(printf "%02d" "$((10#$PREFIX))")
+          REPO_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [[ "$REPO_VERSION" != "$BASE_VERSION" ]]; then
+            echo "::error::version $BASE_VERSION does not match the tree's $REPO_VERSION"
+            exit 1
+          fi
+          echo "app_version=${BASE_VERSION}-wh${PADDED}" >> "$GITHUB_OUTPUT"
+          echo "tag=wh.${PADDED}.${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+
+      # tauri-action reads `version` from the merged config, so the build, the
+      # installer's filename, the app's own reported version and the `version`
+      # field of latest.json all carry the fork numbering.
+      - name: Write version override config
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          node -e 'const fs = require("fs"); fs.writeFileSync(process.argv[1], JSON.stringify({ version: process.env.APP_VERSION }, null, 2) + "\n")' src-tauri/tauri.release-version.json
+          cat src-tauri/tauri.release-version.json
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -63,17 +123,6 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify tag matches app version
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          APP_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          if [[ "v$APP_VERSION" != "$RELEASE_TAG" ]]; then
-            echo "::error::Tag $RELEASE_TAG does not match app version v$APP_VERSION"
-            exit 1
-          fi
-
       - name: Stage sidecars for Tauri bundle
         shell: bash
         run: pnpm tauri:prepare-sidecars --target x86_64-pc-windows-msvc
@@ -85,13 +134,21 @@ jobs:
           # beforeBuildCommand from rebuilding them for the host triple.
           CODEG_SKIP_SIDECAR: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater artifact and latest.json. The public half lives in
+          # `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`; without
+          # these secrets the bundle step fails, so a missing secret is loud
+          # rather than publishing an unsigned release the app would reject.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: codeg ${{ inputs.tag || github.ref_name }}
-          releaseBody: "Fork build. Windows x64 NSIS installer only."
+          tagName: ${{ steps.version.outputs.tag }}
+          releaseName: codeg ${{ steps.version.outputs.tag }}
+          releaseBody: "Fork build. Windows x64 NSIS installer only. Base ${{ inputs.version }}, fork revision ${{ inputs.prefix }}."
           releaseDraft: false
           prerelease: false
           tauriScript: pnpm tauri
-          args: --target x86_64-pc-windows-msvc --bundles nsis --config ${{ github.workspace }}/src-tauri/tauri-fork-windows.conf.json
-          includeUpdaterJson: false
+          # `updater` emits the signed .nsis.zip + .sig that latest.json points
+          # at, which is what the app's update check downloads.
+          args: --target x86_64-pc-windows-msvc --bundles nsis,updater --config ${{ github.workspace }}/src-tauri/tauri.release-version.json
+          includeUpdaterJson: true
           retryAttempts: 2
