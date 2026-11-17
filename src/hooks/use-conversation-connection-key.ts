@@ -1,6 +1,6 @@
 "use client"
 
-import { useTabStore } from "@/contexts/tab-context"
+import { useTabStore } from "@/stores/tab-store"
 import type { AgentType } from "@/lib/types"
 
 function conversationKey(agentType: AgentType, conversationId: number) {
@@ -35,10 +35,19 @@ function rememberConversationTabs(
   }
 }
 
-rememberConversationTabs(useTabStore.getState().tabs)
-useTabStore.subscribe((state, prev) => {
-  if (state.tabs !== prev.tabs) rememberConversationTabs(state.tabs)
-})
+let tracking = false
+
+/** Starts recording on first use rather than at import, so merely importing
+ *  this module never touches the store. Idempotent; never unsubscribes — the
+ *  map serves the whole app session. */
+function ensureTracking() {
+  if (tracking) return
+  tracking = true
+  rememberConversationTabs(useTabStore.getState().tabs)
+  useTabStore.subscribe((state, prev) => {
+    if (state.tabs !== prev.tabs) rememberConversationTabs(state.tabs)
+  })
+}
 
 /** The connection key for a conversation's live state: its open tab's id, else
  *  the id of the tab it was last open in, else the canonical tab id. */
@@ -47,6 +56,7 @@ export function useConversationConnectionKey(
   agentType: AgentType,
   conversationId: number
 ): string {
+  ensureTracking()
   const openTabId = useTabStore(
     (state) =>
       state.tabs.find(
