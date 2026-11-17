@@ -1,5 +1,4 @@
 import type { CallOptions, Transport, UnsubscribeFn } from "./types"
-import { beginTauriMemoryCall } from "@/lib/frontend-memory-activity"
 
 type TauriEventListenersWindow = {
   __TAURI_INTERNALS__?: {
@@ -23,6 +22,7 @@ export class TauriTransport implements Transport {
     const { invoke } = await import("@tauri-apps/api/core")
     if (process.env.NEXT_PUBLIC_CODEG_MEMORY_DIAGNOSTICS !== "1")
       return invoke(command, args)
+    const { beginTauriMemoryCall } = await import("../frontend-memory-activity")
     const finish = beginTauriMemoryCall(command)
     try {
       const value = await invoke<T>(command, args)
