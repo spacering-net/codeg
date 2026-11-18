@@ -119,7 +119,7 @@ describe("HarnessUpdateStatus", () => {
     show(answer({ error: { code: "server", status: 503 } }))
     expect(
       screen.getByText(
-        "The last check for updates failed: Harness answered with an error (503). What is shown is from 3 hours ago."
+        "The last check for updates failed: SRN Harness answered with an error (503). What is shown is from 3 hours ago."
       )
     ).toBeInTheDocument()
   })
@@ -127,7 +127,7 @@ describe("HarnessUpdateStatus", () => {
   it("says what is not known of the item itself", () => {
     const view = show(answer(), "item-b")
     expect(
-      screen.getByText(/Harness does not list this version\./)
+      screen.getByText(/SRN Harness does not list this version\./)
     ).toBeInTheDocument()
     view.unmount()
     show(answer({ checked_at: null, attempted_at: null }), "item-c")

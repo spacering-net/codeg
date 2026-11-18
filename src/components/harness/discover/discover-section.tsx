@@ -10,6 +10,7 @@ import {
 import { useHistoryBackDismiss } from "@/hooks/use-history-back-dismiss"
 import {
   closeDiscoverItem,
+  closeDiscoverToList,
   DISCOVER_DETAIL,
   DISCOVER_DETAIL_TRAIL,
   openDiscoverItem,
@@ -130,6 +131,7 @@ export function DiscoverSection() {
   }, [])
 
   const close = useCallback(() => closeDiscoverItem(slots), [slots])
+  const closeAll = useCallback(() => closeDiscoverToList(slots), [slots])
   // The detail is a screen, not a route: on a phone the back gesture should
   // return to the list, not leave the workspace. A detail opened from another
   // (an assistant's skill) holds one more entry, so that the gesture returns
@@ -151,6 +153,7 @@ export function DiscoverSection() {
         <DiscoverDetail
           detail={shown}
           onBack={close}
+          onBackToList={closeAll}
           backTo={backTo}
           installed={shown.item ? installed?.get(shown.item.id) : null}
         />

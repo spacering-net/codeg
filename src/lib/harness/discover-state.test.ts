@@ -18,6 +18,7 @@ import {
   DISCOVER_DETAIL_SCROLL,
   DISCOVER_DETAIL_TRAIL,
   DISCOVER_FILTERS,
+  DISCOVER_KIND_TOTALS,
   DISCOVER_LIST,
   DISCOVER_LIST_SCROLL,
   DISCOVER_QUICK_MESSAGE,
@@ -28,6 +29,7 @@ import {
   loadDiscoverList,
   loadMoreDiscover,
   openDiscoverItem,
+  refreshDiscover,
   reloadDiscoverList,
   retryDiscoverItem,
   retryDiscoverPart,
@@ -806,5 +808,62 @@ describe("the way back from an item opened from another", () => {
     })
     await openDiscoverItem(slots, "anthropics/silent-failure-hunter")
     expect(slots.get(DISCOVER_QUICK_MESSAGE)).toBeNull()
+  })
+})
+
+describe("Refresh, from the page's chrome", () => {
+  const commands = () => call.mock.calls.map(([command]) => command as string)
+  function answer() {
+    call.mockImplementation(async (command: string) => {
+      if (command === "harness_item") return rawDetail({ readme: null })
+      if (command === "harness_versions") return rawVersions()
+      throw new Error(`unexpected ${command}`)
+    })
+  }
+
+  it("asks for the list and the counts again, the configuration once loaded staying", async () => {
+    const slots = createHarnessSlotStore()
+    slots.set(DISCOVER_CONFIG, {
+      phase: "ready",
+      value: null,
+      error: null,
+      request: 1,
+    })
+    slots.set(DISCOVER_KIND_TOTALS, {
+      phase: "ready",
+      value: { all: 3 },
+      error: null,
+      request: 1,
+    })
+    call.mockResolvedValue(rawList(rawSummaries(2), null, 7))
+
+    refreshDiscover(slots)
+    await flush()
+    // The list once, and once per kind for the counts — even though they
+    // had been read.
+    expect(commands().every((command) => command === "harness_list")).toBe(true)
+    expect(commands().length).toBeGreaterThan(1)
+    expect(slots.get(DISCOVER_LIST).phase).toBe("ready")
+    expect(slots.get(DISCOVER_KIND_TOTALS).value?.all).toBe(7)
+  })
+
+  it("asks for the open item again, and leaves the list alone", async () => {
+    const slots = createHarnessSlotStore()
+    slots.set(DISCOVER_CONFIG, {
+      phase: "ready",
+      value: null,
+      error: null,
+      request: 1,
+    })
+    answer()
+    await openDiscoverItem(slots, "acme/pdf-tools")
+    await flush()
+    call.mockClear()
+
+    refreshDiscover(slots)
+    await flush()
+    expect(commands()).toContain("harness_item")
+    expect(commands()).not.toContain("harness_list")
+    expect(slots.get(DISCOVER_DETAIL)).toMatchObject({ phase: "ready" })
   })
 })

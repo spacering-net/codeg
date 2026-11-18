@@ -19,7 +19,6 @@ import {
 } from "@/lib/harness/mcp-install-state"
 import { isMcpAppType } from "@/lib/mcp/types"
 import { cn } from "@/lib/utils"
-import { HarnessHostLabel } from "../harness-host-label"
 import { MachineText } from "../machine-text"
 import { AgentGlyph } from "../mcp/mcp-bits"
 import { McpDialogFrame } from "../mcp/mcp-dialog-frame"
@@ -251,7 +250,6 @@ export function McpUninstallDialog({
             revision={item?.revision ?? 0}
             publishedAt=""
           />
-          <HarnessHostLabel />
         </div>
         {dialog.notice === "changedElsewhere" && (
           <Headline tone="neutral">{t("changedElsewhere")}</Headline>

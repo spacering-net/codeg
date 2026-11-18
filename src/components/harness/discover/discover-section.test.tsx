@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useLayoutEffect } from "react"
 import {
   act,
   fireEvent,
@@ -41,6 +41,7 @@ import {
   HarnessViewProvider,
   useHarnessView,
 } from "@/contexts/harness-view-context"
+import { DISCOVER_KIND_TOTALS } from "@/lib/harness/discover-state"
 import { __resetHarnessStatusForTests } from "@/lib/harness/status"
 import {
   backendError,
@@ -122,12 +123,36 @@ function Capture() {
   return null
 }
 
+/**
+ * The kind totals as already read. They are asked for with the very request
+ * the list's first page is (`harness_list` with the default filters), so a
+ * test that counts the list's requests would count them too: they are taken
+ * as known unless a test is about them.
+ */
+function SeedTotals() {
+  const { slots } = useHarnessView()
+  useLayoutEffect(() => {
+    if (slots.get(DISCOVER_KIND_TOTALS).phase === "idle") {
+      slots.set(DISCOVER_KIND_TOTALS, {
+        phase: "ready",
+        value: {},
+        error: null,
+        request: 0,
+      })
+    }
+  }, [slots])
+  return null
+}
+
 function Harness({
   show = true,
   locale = "en",
+  totals = false,
 }: {
   show?: boolean
   locale?: keyof typeof MESSAGES
+  /** Let the section ask for the kind totals itself. */
+  totals?: boolean
 }) {
   return (
     <NextIntlClientProvider
@@ -136,6 +161,7 @@ function Harness({
     >
       <HarnessViewProvider>
         <Capture />
+        {!totals && <SeedTotals />}
         {show && <DiscoverSection />}
       </HarnessViewProvider>
     </NextIntlClientProvider>
@@ -147,11 +173,13 @@ const cardTitles = () =>
     .getAllByRole("heading", { level: 3 })
     .map((heading) => heading.textContent)
 
-const searchBox = () => screen.getByRole("textbox", { name: "Search Harness" })
+const searchBox = () =>
+  screen.getByRole("textbox", { name: "Search SRN Harness" })
 
 /** The pane that scrolls: the one that holds the list, or the detail. */
+/** The element that scrolls: the viewport inside a `HarnessScroller`. */
 const scroller = (inside: HTMLElement) =>
-  inside.closest<HTMLElement>(".overflow-y-auto")!
+  inside.closest<HTMLElement>("[data-harness-scroller] > *")!
 
 /**
  * A link's name matcher for an address. In a browser the name is the address
@@ -310,9 +338,12 @@ describe("Discover — the list", () => {
   })
 
   it("loads the publisher's picture through the backend, never from the site", async () => {
+    const user = userEvent.setup()
     backend.harness_list = () => rawList([rawSummary()])
     const { container } = render(<Harness />)
-    await screen.findByText("PDF Tools")
+    // The cards show the kind's glyph; the publisher's picture is the
+    // detail's.
+    await user.click(await screen.findByRole("button", { name: "PDF Tools" }))
 
     await waitFor(() =>
       expect(callsOf("srn_asset")).toEqual([
@@ -445,7 +476,11 @@ describe("Discover — unknown values from a newer catalog", () => {
     await user.click(await screen.findByRole("button", { name: "PDF Tools" }))
     const detail = await screen.findByRole("article")
 
-    expect(within(detail).getByText("Unknown kind")).toBeInTheDocument()
+    expect(
+      within(
+        within(detail).getByRole("navigation", { name: "Breadcrumb" })
+      ).getByText("Unknown kind")
+    ).toBeInTheDocument()
     expect(within(detail).getAllByText("Unknown status").length).toBe(2)
     expect(within(detail).getAllByText("Risk unknown").length).toBeGreaterThan(
       0
@@ -761,6 +796,127 @@ describe("Discover — kinds, filters and sort", () => {
 
 // ─── Paging ───────────────────────────────────────────────────────────
 
+describe("Discover — the heading, the counts and the layout", () => {
+  const TOTALS: Record<string, number> = {
+    skill: 1360,
+    mcp: 26392,
+    prompt: 475,
+    assistant: 631,
+  }
+
+  it("asks how much there is of each kind, once, and says so", async () => {
+    backend.harness_list = (args) =>
+      rawList(rawSummaries(3), null, args?.kind ? TOTALS[args.kind] : 28858)
+    render(<Harness totals />)
+    await screen.findByText("Item 1")
+
+    const kinds = screen.getByRole("radiogroup", { name: "Kind" })
+    await waitFor(() =>
+      expect(
+        within(kinds)
+          .getAllByRole("radio")
+          .map((radio) => radio.textContent)
+      ).toEqual([
+        "All28,858",
+        "Skills1,360",
+        "MCP26,392",
+        "Prompts475",
+        "Assistants631",
+      ])
+    )
+    // As the list asks for a kind's first page — so the backend's cache
+    // answers the list when that kind is picked.
+    expect(callsOf("harness_list")).toEqual(
+      expect.arrayContaining([
+        { sort: "popular" },
+        { kind: "skill", sort: "popular" },
+        { kind: "mcp", sort: "popular" },
+        { kind: "prompt", sort: "popular" },
+        { kind: "assistant", sort: "popular" },
+      ])
+    )
+    expect(
+      screen.getByText(/^28,858 community skills, MCP servers/)
+    ).toBeInTheDocument()
+  })
+
+  it("leaves the counts out while a search narrows the list", async () => {
+    const user = userEvent.setup()
+    backend.harness_list = (args) =>
+      rawList(rawSummaries(3), null, args?.kind ? TOTALS[args.kind] : 28858)
+    render(<Harness totals />)
+    const kinds = screen.getByRole("radiogroup", { name: "Kind" })
+    await within(kinds).findByText("1,360")
+
+    await user.type(searchBox(), "pdf")
+
+    expect(within(kinds).queryByText("1,360")).toBeNull()
+    expect(
+      within(kinds)
+        .getAllByRole("radio")
+        .map((radio) => radio.textContent)
+    ).toEqual(["All", "Skills", "MCP", "Prompts", "Assistants"])
+  })
+
+  it("says nothing of the size when the counts cannot be had", async () => {
+    backend.harness_list = (args) => {
+      if (args?.kind) throw backendError("network")
+      return rawList(rawSummaries(3), null, null)
+    }
+    render(<Harness totals />)
+    await screen.findByText("Item 1")
+
+    expect(
+      screen.getByText(/^Community skills, MCP servers/)
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).toBeNull()
+  })
+
+  it("lays the results out as a grid or a list, and remembers which", async () => {
+    const user = userEvent.setup()
+    const first = render(<Harness />)
+    await screen.findByText("Item 1")
+    const layout = screen.getByRole("radiogroup", { name: "Layout" })
+    expect(within(layout).getByRole("radio", { name: "Grid" })).toBeChecked()
+
+    await user.click(within(layout).getByRole("radio", { name: "List" }))
+
+    expect(within(layout).getByRole("radio", { name: "List" })).toBeChecked()
+    expect(cardTitles()).toEqual(["Item 1", "Item 2", "Item 3"])
+    expect(localStorage.getItem("workspace:harness-discover-layout")).toBe(
+      "list"
+    )
+    first.unmount()
+
+    render(<Harness />)
+    await screen.findByText("Item 1")
+    expect(screen.getByRole("radio", { name: "List" })).toBeChecked()
+  })
+
+  it("takes the focus to the search box on /", async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await screen.findByText("Item 1")
+
+    await user.keyboard("/")
+
+    expect(searchBox()).toHaveFocus()
+    // Typed into the box, a slash is only a slash.
+    await user.keyboard("/")
+    expect(searchBox()).toHaveValue("/")
+  })
+
+  it("counts the results it shows", async () => {
+    backend.harness_list = () => rawList(rawSummaries(3), "next", 1234)
+    render(<Harness />)
+    await screen.findByText("Item 1")
+
+    expect(screen.getByText("1,234").closest("p")).toHaveTextContent(
+      "1,234 items"
+    )
+  })
+})
+
 describe("Discover — the next page", () => {
   beforeEach(() => {
     backend.harness_list = (args) => {
@@ -951,13 +1107,13 @@ describe("Discover — when the catalog cannot be shown", () => {
     [
       "an address the catalog does not have",
       backendError("notFound"),
-      "Harness has no item at this address. It may have been renamed or removed.",
+      "SRN Harness has no item at this address. It may have been renamed or removed.",
       false,
     ],
     [
       "a malformed address",
       backendError("invalidRef"),
-      "That is not a Harness address. An address looks like publisher/name.",
+      "That is not a SRN Harness address. An address looks like publisher/name.",
       false,
     ],
   ] as const)("says %s", async (_what, error, message, retryable) => {
@@ -980,7 +1136,7 @@ describe("Discover — when the catalog cannot be shown", () => {
     render(<Harness />)
 
     const alert = await screen.findByRole("alert")
-    expect(alert).toHaveTextContent("Harness could not be loaded.")
+    expect(alert).toHaveTextContent("SRN Harness could not be loaded.")
     expect(alert).toHaveTextContent("Request timed out")
     expect(within(alert).getByRole("button", { name: "Retry" })).toBeEnabled()
   })
@@ -1010,7 +1166,7 @@ describe("Discover — a backend too old to have the commands", () => {
     render(<Harness />)
     const alert = await screen.findByRole("alert")
     expect(alert).toHaveTextContent(
-      "This Codeg is too old for Harness. Update it to browse the catalog."
+      "This Codeg is too old for SRN Harness. Update it to browse the catalog."
     )
     // Asking again cannot help, and nothing else is drawn around it.
     expect(within(alert).queryByRole("button")).toBeNull()
@@ -1029,7 +1185,7 @@ describe("Discover — a backend too old to have the commands", () => {
     }
     render(<Harness />)
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The Codeg on the remote host is too old for Harness. Update it there to browse the catalog."
+      "The Codeg on the remote host is too old for SRN Harness. Update it there to browse the catalog."
     )
   })
 
@@ -1037,7 +1193,7 @@ describe("Discover — a backend too old to have the commands", () => {
     mocks.desktop = false
     render(<Harness />)
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The Codeg server is too old for Harness. Update the server to browse the catalog."
+      "The Codeg server is too old for SRN Harness. Update the server to browse the catalog."
     )
   })
 })
@@ -1060,7 +1216,9 @@ describe("Discover — an item's detail", () => {
     const detail = await openFirst(user)
 
     expect(screen.queryByRole("list", { name: "Results" })).toBeNull()
-    expect(screen.queryByRole("textbox", { name: "Search Harness" })).toBeNull()
+    expect(
+      screen.queryByRole("textbox", { name: "Search SRN Harness" })
+    ).toBeNull()
     const heading = within(detail).getByRole("heading", { level: 2 })
     expect(heading).toHaveTextContent("PDF Tools")
     expect(heading).toHaveFocus()
@@ -1083,11 +1241,17 @@ describe("Discover — an item's detail", () => {
     ).toBeInTheDocument()
     expect(within(detail).getByText("Acme")).toBeInTheDocument()
 
+    // The facts card holds its place until the facts are in.
+    expect(
+      within(detail).getByTestId("discover-facts-loading")
+    ).toBeInTheDocument()
+
     await act(async () => {
       item.resolve(rawDetail())
     })
     await within(detail).findByText("Apache-2.0")
     expect(detail).toHaveAttribute("aria-busy", "false")
+    expect(within(detail).queryByTestId("discover-facts-loading")).toBeNull()
   })
 
   it("shows a skill in full", async () => {
@@ -1115,10 +1279,13 @@ describe("Discover — an item's detail", () => {
     render(<Harness />)
     const detail = await openFirst(user)
 
-    // Heading: kind, risk, publisher, address, stars, date.
-    expect(within(detail).getByText("Skill")).toBeInTheDocument()
+    // Breadcrumb: the kind. Heading: risk, publisher, stars, date.
+    expect(
+      within(
+        within(detail).getByRole("navigation", { name: "Breadcrumb" })
+      ).getByText("Skill")
+    ).toBeInTheDocument()
     expect(within(detail).getAllByText("Medium risk").length).toBeGreaterThan(0)
-    expect(within(detail).getByText("acme/pdf-tools")).toBeInTheDocument()
     expect(within(detail).getByText("1.2K")).toBeInTheDocument()
 
     // Particulars.
@@ -1526,7 +1693,7 @@ describe("Discover — an item's detail", () => {
       name: "Description",
     })
     expect(description).toHaveTextContent(
-      "Its license does not let Harness keep a copy"
+      "Its license does not let SRN Harness keep a copy"
     )
     expect(
       within(description).getByRole("link", { name: "Open the source" })
@@ -1738,6 +1905,27 @@ describe("Discover — back to the list", () => {
 
 // ─── State that outlives the page ─────────────────────────────────────
 
+describe("Discover — the breadcrumb", () => {
+  it("goes back to the list from the detail", async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await user.click(await screen.findByRole("button", { name: "Item 2" }))
+    const detail = await screen.findByRole("article")
+    const crumbs = within(detail).getByRole("navigation", {
+      name: "Breadcrumb",
+    })
+
+    await user.click(
+      within(crumbs).getByRole("button", { name: "Back to the list" })
+    )
+
+    expect(screen.queryByRole("article")).toBeNull()
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Item 2" })).toHaveFocus()
+    )
+  })
+})
+
 describe("Discover — leaving the page and coming back", () => {
   it("is where it was left: text, filters, results and offset", async () => {
     const user = userEvent.setup()
@@ -1795,7 +1983,6 @@ describe("Discover — leaving the page and coming back", () => {
     page.rerender(<Harness />)
 
     const again = screen.getByRole("article")
-    expect(within(again).getByText("acme/item-2")).toBeInTheDocument()
     expect(within(again).getByText("Apache-2.0")).toBeInTheDocument()
     expect(within(again).getByText("About this item.")).toBeInTheDocument()
     expect(scroller(again).scrollTop).toBe(300)
@@ -1875,7 +2062,9 @@ describe("Discover — openHarness({ section: 'discover', itemRef })", () => {
     expect(within(detail).getByRole("heading", { level: 2 })).toHaveTextContent(
       "acme/pdf-tools"
     )
-    expect(screen.queryByRole("textbox", { name: "Search Harness" })).toBeNull()
+    expect(
+      screen.queryByRole("textbox", { name: "Search SRN Harness" })
+    ).toBeNull()
 
     expect(
       await within(detail).findByRole("heading", { name: "PDF Tools" })
@@ -1937,7 +2126,7 @@ describe("Discover — openHarness({ section: 'discover', itemRef })", () => {
 
       const alert = await screen.findByRole("alert")
       expect(alert).toHaveTextContent(
-        "That is not a Harness address. An address looks like publisher/name."
+        "That is not a SRN Harness address. An address looks like publisher/name."
       )
       expect(within(alert).queryByRole("button", { name: "Retry" })).toBeNull()
       expect(callsOf("harness_item")).toHaveLength(0)
@@ -1966,7 +2155,7 @@ describe("Discover — openHarness({ section: 'discover', itemRef })", () => {
 
     const alert = await screen.findByRole("alert")
     expect(alert).toHaveTextContent(
-      "Harness has no item at this address. It may have been renamed or removed."
+      "SRN Harness has no item at this address. It may have been renamed or removed."
     )
     expect(within(alert).queryByRole("button", { name: "Retry" })).toBeNull()
     expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
@@ -2112,11 +2301,11 @@ describe("Discover — on a phone", () => {
     expect(pane).toContainElement(searchBox())
   })
 
-  it("keeps the controls in place beside a wide list", async () => {
+  it("scrolls the heading and the controls away with a wide list too", async () => {
     render(<Harness />)
     await screen.findByText("Item 1")
 
     const pane = scroller(screen.getByRole("list", { name: "Results" }))
-    expect(pane).not.toContainElement(searchBox())
+    expect(pane).toContainElement(searchBox())
   })
 })

@@ -683,40 +683,27 @@ function useEditorTargetRows(
     const ticked = dialog.targets.includes(agent)
     const holder = server?.holders.find((entry) => entry.info === info)
     const entry = holder?.entry
-    let note: ReactNode = null
+    // A row speaks only of what is worth noticing: an entry replaced that
+    // this edit did not start from, one left off, comments lost. Adding,
+    // updating and keeping go without saying — the tick says it.
+    const notes: string[] = []
     let warn = false
     if (ticked && definition) {
-      if (!entry) note = t("willAdd")
-      else if (
-        entry.definition &&
-        sameDefinition(entry.definition, definition)
+      if (
+        entry &&
+        !(entry.definition && sameDefinition(entry.definition, definition)) &&
+        !(agent in origin)
       ) {
-        note = t("unchanged")
-      } else if (agent in origin) {
-        note = t("willUpdate")
-      } else {
-        note = t("willReplace")
+        notes.push(t("willReplace"))
         warn = true
       }
-      if (entry && !entry.enabled)
-        note = (
-          <>
-            {note} · {t("staysOff")}
-          </>
-        )
+      if (entry && !entry.enabled) notes.push(t("staysOff"))
       if (info.inventory.config.comments_lost_on_write) {
-        note = (
-          <>
-            {note} · {t("commentsLost")}
-          </>
-        )
+        notes.push(t("commentsLost"))
         warn = true
       }
-    } else if (entry) {
-      note = t("keeps")
-    } else {
-      note = t("notConfigured")
     }
+    const note: ReactNode = notes.length > 0 ? notes.join(" · ") : null
     return [
       {
         info,

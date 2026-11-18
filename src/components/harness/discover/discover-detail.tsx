@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useId, useLayoutEffect, useRef } from "react"
-import { ArrowLeft, ExternalLink, Star } from "lucide-react"
+import { ChevronRight, ExternalLink, Star } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { BrowserLink } from "@/components/ui/browser-link"
@@ -27,18 +27,50 @@ import { isItemRef } from "@/lib/harness/item-ref"
 import { useHarnessStatus } from "@/lib/harness/status"
 import type { HarnessInstalledMark } from "@/lib/harness/types"
 import { cn } from "@/lib/utils"
-import { MachineText } from "../machine-text"
+import { HarnessScroller } from "../harness-scroller"
 import { discoverKindView } from "./detail-kinds"
-import { FactsPanel, ListedNotice } from "./detail-sections"
-import { DiscoverMark, InstalledMarks, RiskMark } from "./discover-card"
+import {
+  FactsPanel,
+  FactsSkeleton,
+  ListedNotice,
+  RiskBanner,
+} from "./detail-sections"
+import {
+  DiscoverMark,
+  InstalledMarks,
+  KindTile,
+  RiskMark,
+} from "./discover-card"
 import { DiscoverFailure } from "./discover-failure"
 import { PublisherAvatar } from "./publisher-avatar"
 import { useDiscoverLabels } from "./use-discover-labels"
+
+/** A step of the breadcrumb that leads back. */
+const CRUMB_CLASS =
+  "shrink-0 rounded-md px-1 py-0.5 outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+
+/** The side card's actions: one under the other, as wide as the card. The
+ *  kinds' own buttons are drawn for a row (`detail-kinds.tsx`); here they
+ *  are made to fill it. */
+const ACTIONS_CLASS = cn(
+  "flex min-w-0 flex-col gap-2.5 p-4",
+  "[&>[data-slot=button]]:h-11 [&>[data-slot=button]]:w-full [&>[data-slot=button]]:rounded-full [&>[data-slot=button]]:text-sm"
+)
+
+function Dot() {
+  return (
+    <span aria-hidden="true" className="opacity-50">
+      ·
+    </span>
+  )
+}
 
 interface DiscoverDetailProps {
   detail: DiscoverDetailState
   /** Back: to the detail this one was opened from, or to the list. */
   onBack: () => void
+  /** Straight back to the list, however deep in details this one is. */
+  onBackToList?: () => void
   /** The detail Back returns to, when this one was opened from another (an
    *  assistant's skill); `null` when Back returns to the list. */
   backTo?: DiscoverDetailState | null
@@ -53,10 +85,11 @@ interface DiscoverDetailProps {
 /**
  * One item, in the place of the list.
  *
- * The frame is the same for every kind: a bar with the way back and the link
- * to the item's page on the website, then the heading — what it is called,
- * what it does, who publishes it — its particulars, and under those whatever
- * its kind supplies (`detail-kinds.tsx`).
+ * The frame is the same for every kind: a breadcrumb back to the list, the
+ * heading — what it is called, who publishes it, what it does — and beside
+ * it a column with what the checks made of it, what can be done with it
+ * (the kind's actions, the item's page on the website) and its particulars.
+ * Under the heading goes whatever its kind supplies (`detail-kinds.tsx`).
  *
  * The heading is drawn from what the list already knew while the item itself
  * is on its way, and takes the focus when the detail opens, so a keyboard or
@@ -65,10 +98,12 @@ interface DiscoverDetailProps {
 export function DiscoverDetail({
   detail,
   onBack,
+  onBackToList = onBack,
   backTo = null,
   installed = null,
 }: DiscoverDetailProps) {
   const t = useTranslations("Harness.discover")
+  const tHarness = useTranslations("Harness")
   const labels = useDiscoverLabels()
   const { slots } = useHarnessView()
   const status = useHarnessStatus()
@@ -130,184 +165,226 @@ export function DiscoverDetail({
     if (scroller) scroller.scrollTop = slots.get(DISCOVER_DETAIL_SCROLL)
   }, [slots, detail.request])
 
+  const kindLabel = known ? labels.kind(known.kind) : null
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-2 py-1.5 ws-chrome-border max-md:gap-1 md:px-3">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={onBack}
-          aria-label={
-            backTitle !== null
-              ? t.markup("detail.backTo", {
-                  name: backTitle,
-                  title: (chunks) => chunks,
-                })
-              : undefined
-          }
-          // A long title to go back to gives way, rather than pushing the
-          // link to the website off the bar. "Back to the list" is short
-          // and cannot be cut: there the link's own words give way instead.
-          className={cn("min-w-0 max-md:h-10", backTitle !== null && "shrink")}
-        >
-          <ArrowLeft aria-hidden="true" className="rtl:rotate-180" />
-          {backTitle !== null ? (
-            <>
-              <span className="min-w-0 truncate max-md:hidden">
-                {t.rich("detail.backTo", {
-                  name: backTitle,
-                  title: (chunks) => <bdi>{chunks}</bdi>,
-                })}
-              </span>
-              {/* On a phone there is room for the title alone, and the
-                  arrow says the rest. */}
-              <bdi className="min-w-0 truncate md:hidden">{backTitle}</bdi>
-            </>
-          ) : (
-            t("detail.back")
-          )}
-        </Button>
-        {websiteUrl && (
-          <Button
-            asChild
-            variant="ghost"
-            size="sm"
-            className={cn(
-              "ms-auto min-w-0 max-md:h-10",
-              backTitle === null && "shrink"
-            )}
-          >
-            <BrowserLink href={websiteUrl}>
-              <span className="truncate">{t("detail.viewOnWebsite")}</span>
-              <ExternalLink aria-hidden="true" />
-            </BrowserLink>
-          </Button>
-        )}
-      </div>
-
-      <div
+      <HarnessScroller
         ref={scrollerRef}
         onScroll={(event) =>
           slots.set(DISCOVER_DETAIL_SCROLL, event.currentTarget.scrollTop)
         }
-        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
+        className="flex-1"
       >
         <article
           aria-labelledby={headingId}
           aria-busy={detail.phase === "loading"}
-          className="mx-auto w-full max-w-6xl min-w-0 px-3 py-4 md:px-5"
+          className="mx-auto w-full max-w-6xl min-w-0 px-4 pb-12 @2xl/discover:px-8"
         >
-          <header className="min-w-0 space-y-2">
-            {known && (
-              <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                <DiscoverMark>{labels.kind(known.kind)}</DiscoverMark>
-                <RiskMark risk={known.risk} />
-                {known.status === "listed" ? (
-                  <DiscoverMark>{t("card.listed")}</DiscoverMark>
-                ) : known.status !== "public" ? (
-                  <DiscoverMark>{t("detail.statusUnknown")}</DiscoverMark>
-                ) : null}
-                <InstalledMarks installed={installed} />
-              </div>
-            )}
-            <h2
-              id={headingId}
-              ref={headingRef}
-              tabIndex={-1}
-              // The item's own language, or — before anything is known of
-              // it — its address: either way not the interface's direction.
-              dir="auto"
-              className="text-lg leading-snug font-semibold break-words outline-none"
+          <nav
+            aria-label={t("detail.breadcrumb")}
+            // A band of its own: as far from the top as from the header.
+            className="flex min-w-0 items-center gap-1 py-5 text-sm text-muted-foreground"
+          >
+            <button
+              type="button"
+              onClick={onBackToList}
+              aria-label={backTitle === null ? t("detail.back") : undefined}
+              className={CRUMB_CLASS}
             >
-              {title}
-            </h2>
-            {item && view?.Lead && <view.Lead item={item} />}
-            {summary && (
-              <p
-                dir="auto"
-                className="text-sm leading-relaxed text-muted-foreground"
-              >
-                {summary}
-              </p>
+              {tHarness("sections.discover")}
+            </button>
+            {backTitle !== null && (
+              <>
+                <ChevronRight
+                  aria-hidden="true"
+                  className="size-3.5 shrink-0 opacity-60 rtl:rotate-180"
+                />
+                <button
+                  type="button"
+                  onClick={onBack}
+                  aria-label={t.markup("detail.backTo", {
+                    name: backTitle,
+                    title: (chunks) => chunks,
+                  })}
+                  className={cn(CRUMB_CLASS, "min-w-0 truncate")}
+                >
+                  <bdi>{backTitle}</bdi>
+                </button>
+              </>
             )}
-            {known && (
-              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                <span className="inline-flex min-w-0 items-center gap-1.5">
-                  <PublisherAvatar
-                    handle={known.publisher.handle}
-                    avatar={known.publisher.avatar}
-                  />
-                  <bdi className="min-w-0 truncate text-foreground">
-                    {known.publisher.name}
-                  </bdi>
+            {kindLabel && (
+              <>
+                <ChevronRight
+                  aria-hidden="true"
+                  className="size-3.5 shrink-0 opacity-60 rtl:rotate-180"
+                />
+                <span aria-current="page" className="shrink-0 px-1">
+                  {kindLabel}
                 </span>
-                <bdi dir="ltr" className="min-w-0 font-mono">
-                  <MachineText>{known.ref}</MachineText>
-                </bdi>
-                {stars > 0 && (
-                  <span className="inline-flex shrink-0 items-center gap-1 tabular-nums">
-                    <Star aria-hidden="true" className="size-3" />
-                    <span className="sr-only">{t("card.stars")}</span>
-                    {formatCompact(stars, labels.locale)}
-                  </span>
-                )}
-                {updated && (
-                  <span className="shrink-0">
-                    {t("detail.updatedOn", { date: updated })}
-                  </span>
-                )}
-                {item && view?.Byline && <view.Byline item={item} />}
-              </div>
+              </>
             )}
-            {item && view?.Actions && (
-              <div className="flex min-w-0 flex-wrap items-center gap-2 pt-1">
-                <view.Actions item={item} installed={installed} />
-              </div>
-            )}
-          </header>
+          </nav>
 
-          {detail.phase === "error" && detail.error ? (
-            <DiscoverFailure
-              failure={detail.error}
-              onRetry={() => retryDiscoverItem(slots)}
-            />
-          ) : !item || !view ? (
-            <div
-              aria-hidden="true"
-              className="mt-6 space-y-3"
-              data-testid="discover-detail-loading"
-            >
-              <Skeleton className="h-4 w-1/3" />
-              <Skeleton className="h-3.5 w-full" />
-              <Skeleton className="h-3.5 w-full" />
-              <Skeleton className="h-3.5 w-2/3" />
-            </div>
-          ) : (
-            // The particulars come first in the document, so on a narrow
-            // pane they are read before a long description; beside a wide
-            // one they are a column at its end.
-            <div className="mt-5 grid min-w-0 gap-5 @4xl/discover:grid-cols-[minmax(0,1fr)_17rem] @4xl/discover:gap-6">
-              <aside className="min-w-0 @4xl/discover:col-start-2 @4xl/discover:row-start-1">
+          <div className="grid min-w-0 gap-8 @4xl/discover:grid-cols-[minmax(0,1fr)_20rem] @4xl/discover:gap-x-12">
+            <header className="min-w-0 @4xl/discover:col-start-1 @4xl/discover:row-start-1">
+              <div className="flex min-w-0 items-start gap-4">
+                {known && (
+                  <KindTile
+                    kind={known.kind}
+                    className="size-14 rounded-2xl @2xl/discover:size-16"
+                    iconClassName="size-7"
+                  />
+                )}
+                <div className="min-w-0 flex-1 space-y-2 pt-0.5">
+                  <h2
+                    id={headingId}
+                    ref={headingRef}
+                    tabIndex={-1}
+                    // The item's own language, or — before anything is known
+                    // of it — its address: either way not the interface's
+                    // direction.
+                    dir="auto"
+                    className="text-2xl leading-tight font-bold tracking-tight break-words outline-none @2xl/discover:text-[1.75rem]"
+                  >
+                    {title}
+                  </h2>
+                  {known && (
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 text-sm text-muted-foreground">
+                      <span className="inline-flex min-w-0 items-center gap-1.5">
+                        <PublisherAvatar
+                          handle={known.publisher.handle}
+                          avatar={known.publisher.avatar}
+                          className="size-5 rounded-full"
+                        />
+                        <bdi className="min-w-0 truncate font-medium text-foreground">
+                          {known.publisher.name}
+                        </bdi>
+                      </span>
+                      {stars > 0 && (
+                        <>
+                          <Dot />
+                          <span className="inline-flex shrink-0 items-center gap-1 tabular-nums">
+                            <Star aria-hidden="true" className="size-3.5" />
+                            <span className="sr-only">{t("card.stars")}</span>
+                            {formatCompact(stars, labels.locale)}
+                          </span>
+                        </>
+                      )}
+                      {updated && (
+                        <>
+                          <Dot />
+                          <span className="shrink-0">
+                            {t("detail.updatedOn", { date: updated })}
+                          </span>
+                        </>
+                      )}
+                      {item && view?.Byline && (
+                        <>
+                          <Dot />
+                          <view.Byline item={item} />
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+              {known && (
+                <div className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden">
+                  <RiskMark risk={known.risk} />
+                  {known.status === "listed" ? (
+                    <DiscoverMark>{t("card.listed")}</DiscoverMark>
+                  ) : known.status !== "public" ? (
+                    <DiscoverMark>{t("detail.statusUnknown")}</DiscoverMark>
+                  ) : null}
+                  <InstalledMarks installed={installed} />
+                </div>
+              )}
+              {item && view?.Lead && (
+                <div className="mt-4">
+                  <view.Lead item={item} />
+                </div>
+              )}
+              {summary && (
+                <p
+                  dir="auto"
+                  className="mt-4 text-[0.9375rem] leading-relaxed text-foreground/80"
+                >
+                  {summary}
+                </p>
+              )}
+              <div aria-hidden="true" className="mt-6 border-b" />
+            </header>
+
+            {/* Beside the body on a wide pane, staying in view down a long
+                description; on a narrow one, between the heading and the
+                body — what can be done comes before what there is to read. */}
+            <aside className="min-w-0 space-y-4 @4xl/discover:sticky @4xl/discover:top-5 @4xl/discover:col-start-2 @4xl/discover:row-span-2 @4xl/discover:row-start-1 @4xl/discover:self-start">
+              {(known || websiteUrl) && (
+                <div className="overflow-hidden rounded-2xl border bg-card">
+                  {known && <RiskBanner risk={known.risk} />}
+                  <div className={ACTIONS_CLASS}>
+                    {item && view?.Actions ? (
+                      <view.Actions item={item} installed={installed} />
+                    ) : detail.phase === "loading" ? (
+                      <Skeleton className="h-11 w-full rounded-full" />
+                    ) : null}
+                    {websiteUrl && (
+                      <Button asChild variant="secondary">
+                        <BrowserLink href={websiteUrl}>
+                          <span className="truncate">
+                            {t("detail.viewOnWebsite")}
+                          </span>
+                          <ExternalLink aria-hidden="true" />
+                        </BrowserLink>
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+              {item && view ? (
                 <FactsPanel
                   item={item}
                   head={view.Facts ? <view.Facts item={item} /> : null}
                   sayRights={view.factsSayRights === true}
                 />
-              </aside>
-              <div className="min-w-0 space-y-6 @4xl/discover:col-start-1 @4xl/discover:row-start-1">
-                <ListedNotice item={item} />
-                <view.Body
-                  item={item}
-                  versions={detail.versions}
-                  readme={detail.readme}
-                  onRetryPart={(part) => retryDiscoverPart(slots, part)}
+              ) : detail.phase === "loading" ? (
+                <FactsSkeleton />
+              ) : null}
+            </aside>
+
+            <div className="min-w-0 @4xl/discover:col-start-1 @4xl/discover:row-start-2">
+              {detail.phase === "error" && detail.error ? (
+                <DiscoverFailure
+                  failure={detail.error}
+                  onRetry={() => retryDiscoverItem(slots)}
                 />
-              </div>
+              ) : !item || !view ? (
+                <div
+                  aria-hidden="true"
+                  className="space-y-3"
+                  data-testid="discover-detail-loading"
+                >
+                  <Skeleton className="h-5 w-1/4" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-2/3" />
+                </div>
+              ) : (
+                <div className="min-w-0 space-y-10">
+                  <ListedNotice item={item} />
+                  <view.Body
+                    item={item}
+                    versions={detail.versions}
+                    readme={detail.readme}
+                    onRetryPart={(part) => retryDiscoverPart(slots, part)}
+                  />
+                </div>
+              )}
             </div>
-          )}
+          </div>
         </article>
-      </div>
+      </HarnessScroller>
       <p role="status" aria-live="polite" className="sr-only">
         {detail.phase === "loading" ? t("detail.loading") : ""}
       </p>

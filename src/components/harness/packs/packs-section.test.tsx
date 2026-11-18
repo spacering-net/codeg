@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useLayoutEffect, useState } from "react"
 import { act, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
@@ -59,6 +59,7 @@ import {
   type Engine,
   type EngineOptions,
 } from "@/lib/skills/test-fixtures"
+import { HarnessChromeActions } from "../harness-chrome-actions"
 import { PacksSection } from "./packs-section"
 
 const m = enMessages.Harness.packs
@@ -75,6 +76,13 @@ function Capture() {
   return null
 }
 
+/** The page is on Skill packs: what the chrome's Refresh acts on. */
+function OnPacks() {
+  const { setSection } = useHarnessView()
+  useLayoutEffect(() => setSection("packs"), [setSection])
+  return null
+}
+
 /** The page with the section — or, `shown` off, without it: to a
  *  conversation and back, or to another section. */
 function Page({ initial = true }: { initial?: boolean }) {
@@ -86,6 +94,9 @@ function Page({ initial = true }: { initial?: boolean }) {
       </button>
       <HarnessViewProvider>
         <Capture />
+        <OnPacks />
+        {/* Refresh is in the window's chrome, beside the page. */}
+        <HarnessChromeActions buttonClassName="" iconClassName="" />
         {shown && <PacksSection />}
       </HarnessViewProvider>
     </NextIntlClientProvider>

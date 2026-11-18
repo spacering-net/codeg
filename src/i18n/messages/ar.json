@@ -1814,7 +1814,7 @@
       "installBinary": "تثبيت pi",
       "installing": "جارٍ التثبيت…",
       "recheck": "إعادة التحقق",
-      "configDirSkillsNote": "عند تحديد دليل إعدادات مخصص، لن تنطبق المهارات والخبراء وأدوات المكتب المُدارة في Harness على pi هذا — أدِر مهاراته مباشرةً في ذلك المجلد.",
+      "configDirSkillsNote": "عند تحديد دليل إعدادات مخصص، لن تنطبق المهارات والخبراء وأدوات المكتب المُدارة في هندسة Harness على pi هذا — أدِر مهاراته مباشرةً في ذلك المجلد.",
       "dirHistoryNote": "هذان الدليلان يصلان إلى عملية pi فقط. يقرأ سجل محادثات codeg الموقع الافتراضي لـ pi، لذا لن تظهر الجلسات المكتوبة في دليل مخصص ضمن القائمة.",
       "projectTrustTitle": "ثقة المشروع",
       "projectTrustDescription": "المجلدات التي سمحت لـ pi بتحميل ملفات المشروع منها. المجلد الموثوق يتيح لملفات ‎.pi/extensions في ذلك المستودع تنفيذ التعليمات البرمجية عند بدء pi، ويسري على كل المجلدات داخله، ويُستخدم أيضًا عند تشغيل pi في الطرفية.",
@@ -2297,7 +2297,7 @@
       "loadingSubsessions": "جارٍ تحميل المحادثات الفرعية…",
       "forge": "لوحة المستودع",
       "canvas": "لوحة لا نهائية",
-      "harness": "Harness",
+      "harness": "هندسة Harness",
       "folderGroup": {
         "newGroup": "مجموعة جديدة",
         "newGroupTitle": "مجموعة مجلدات جديدة",
@@ -2778,8 +2778,8 @@
       "officeFullRender": "عرض كامل",
       "officeFullRenderHint": "يعرض حركات Morph والأبعاد الثلاثية والمعادلات (يشغّل سكربتات الشريحة نفسها)",
       "officeNotInstalled": "OfficeCLI غير مثبّت",
-      "officeNotInstalledHint": "ثبّت OfficeCLI من Harness › حزم المهارات › أدوات المكتب لمعاينة ملفات Word و Excel و PowerPoint.",
-      "officeOpenHarness": "فتح Harness",
+      "officeNotInstalledHint": "ثبّت OfficeCLI من هندسة Harness › حزم المهارات › أدوات المكتب لمعاينة ملفات Word و Excel و PowerPoint.",
+      "officeOpenHarness": "فتح هندسة Harness",
       "officeWatchFailed": "تعذّر بدء المعاينة المباشرة",
       "officeWatchRetry": "إعادة المحاولة",
       "officeServerInstallHint": "يجب تثبيت OfficeCLI على مضيف الخادم. شغّل هذا الأمر هناك ثم أعد المحاولة:",
@@ -3613,7 +3613,7 @@
           "importSessions": "هل شغّلت جلسات في الطرفية من قبل؟ تحتوي قائمة المجلد على «استيراد الجلسات المحلية» لجلب ذلك السجل إلى codeg.",
           "subSessions": "عندما يفوّض وكيل مهمة، تظهر الجلسة الفرعية متداخلة تحته في الشريط الجانبي — وسّع الصف لتتابع ما فعلته كل واحدة.",
           "liveFeedback": "تُدرج «ملاحظات مباشرة» في قائمة + ملاحظةً داخل الدور الذي ينفّذه الوكيل بالفعل، دون مقاطعته.",
-          "skillPacks": "تجمع Harness › حزم المهارات خبراء البرمجة والبحث العلمي ومهارات المكتب — فعّلها لكل وكيل على حدة.",
+          "skillPacks": "تجمع هندسة Harness › حزم المهارات خبراء البرمجة والبحث العلمي ومهارات المكتب — فعّلها لكل وكيل على حدة.",
           "modelProviders": "تقبل الإعدادات ← مزودو النماذج مفتاح API أو نقطة نهاية خاصة بك، ثم تختار النموذج مباشرة من حقل الإدخال.",
           "workspaceBackground": "تحدّد الإعدادات ← المظهر صورة خلفية لمساحة العمل، وشفافية اللوحات، وخطوط التطبيق."
         },
@@ -3686,7 +3686,7 @@
           },
           "notEnabled": {
             "title": "المهارة ”{skill}“ غير مُفعّلة بعد لـ {agent}",
-            "description": "فعّلها من Harness › حزم المهارات لاستخدامها هنا.",
+            "description": "فعّلها من هندسة Harness › حزم المهارات لاستخدامها هنا.",
             "action": "تفعيل",
             "hint": "المهارة غير مُفعّلة"
           },
@@ -7515,12 +7515,12 @@
     "deleteBoardConfirm": "حذف اللوحة"
   },
   "Harness": {
-    "title": "Harness",
-    "description": "أدِر خوادم MCP والمهارات وحزم المهارات لدى وكلائك، واعثر على المزيد من SRN Harness في «اكتشاف».",
-    "descriptionNoDiscover": "أدِر خوادم MCP والمهارات وحزم المهارات لدى وكلائك.",
-    "descriptionMore": "المزيد",
-    "descriptionLess": "أقل",
-    "sectionsLabel": "أقسام Harness",
+    "title": "هندسة Harness",
+    "sectionsLabel": "أقسام هندسة Harness",
+    "agentList": {
+      "selectAll": "تحديد الكل",
+      "selected": "تم تحديد {count, number} من {total, number}"
+    },
     "sections": {
       "discover": "اكتشاف",
       "mcp": "MCP",
@@ -7536,29 +7536,23 @@
       "shownFrom": "المعلومات المعروضة: {time}.",
       "checkNow": "تحقَّق الآن",
       "itemNotChecked": "لم يتم التحقق من هذا العنصر بعد.",
-      "itemUnavailable": "لا يُدرج Harness هذا الإصدار.",
+      "itemUnavailable": "لا يُدرج SRN Harness هذا الإصدار.",
       "reasons": {
         "network": "تعذَّر الوصول إلى SRN Harness.",
-        "rateLimited": "طلب Harness التوقف مؤقتًا.",
-        "server": "ردَّ Harness بخطأ ({status}).",
-        "other": "أرسل Harness ردًّا لا يستطيع Codeg هذا قراءته."
+        "rateLimited": "طلب SRN Harness التوقف مؤقتًا.",
+        "server": "ردَّ SRN Harness بخطأ ({status}).",
+        "other": "أرسل SRN Harness ردًّا لا يستطيع Codeg هذا قراءته."
       }
     },
     "link": {
       "discoverOff": "«اكتشاف» متوقف في هذا الـ Codeg، لذا لا يمكن فتح \u2066{ref}\u2069 هنا."
     },
-    "host": {
-      "label": "مكان حفظ الإعدادات:",
-      "local": "هذا الحاسوب",
-      "localHint": "تُحفظ التغييرات هنا على هذا الحاسوب.",
-      "remoteHint": "تُحفظ التغييرات هنا على المضيف البعيد، لا على هذا الحاسوب.",
-      "webHint": "تُحفظ التغييرات هنا على الخادم الذي يقدّم هذه الصفحة."
-    },
     "discover": {
       "search": {
-        "label": "البحث في Harness",
+        "label": "البحث في SRN Harness",
         "placeholder": "ابحث عن مهارات وخوادم MCP ومساعدين…",
-        "clear": "مسح البحث"
+        "clear": "مسح البحث",
+        "shortcut": "اضغط / للبحث"
       },
       "kinds": {
         "label": "النوع",
@@ -7606,7 +7600,8 @@
         "moreLoaded": "{count, plural, zero {لم يُحمَّل شيء} one {حُمِّل عنصر آخر} two {حُمِّل عنصران آخران} few {حُمِّلت # عناصر أخرى} many {حُمِّل # عنصرًا آخر} other {حُمِّل # عنصر آخر}}",
         "end": "هذا كل شيء.",
         "empty": "لا توجد نتائج مطابقة.",
-        "emptyHint": "جرِّب كلمات أقل أو لغة أخرى، أو أدخِل عنوانًا مثل \u2066anthropics/pdf\u2069."
+        "emptyHint": "جرِّب كلمات أقل أو لغة أخرى، أو أدخِل عنوانًا مثل ⁦anthropics/pdf⁩.",
+        "count": "{count, plural, zero {<num>#</num> عنصر} one {عنصر <num>#</num>} two {<num>#</num> عنصران} few {<num>#</num> عناصر} many {<num>#</num> عنصرًا} other {<num>#</num> عنصر}}"
       },
       "card": {
         "stars": "نجوم GitHub",
@@ -7644,7 +7639,7 @@
         "repository": "المستودع",
         "website": "الموقع",
         "description": "الوصف",
-        "readmeElsewhere": "ترخيصه لا يسمح لـ Harness بالاحتفاظ بنسخة، لذا يُقرأ وصفه من المصدر.",
+        "readmeElsewhere": "ترخيصه لا يسمح لـ SRN Harness بالاحتفاظ بنسخة، لذا يُقرأ وصفه من المصدر.",
         "openSource": "فتح المصدر",
         "expand": "عرض الكل",
         "collapse": "عرض أقل",
@@ -7738,7 +7733,8 @@
           "prompt_short": "أقصر من أن يُستخدم وحده",
           "needs_plugin": "لا يعمل إلا مع بقية الإضافة التي ينتمي إليها"
         },
-        "backTo": "العودة إلى <title>{name}</title>"
+        "backTo": "العودة إلى <title>{name}</title>",
+        "breadcrumb": "مسار التنقل"
       },
       "prompt": {
         "title": "الموجِّه",
@@ -7815,7 +7811,7 @@
         "model": "النموذج",
         "inherit": "يتبع الجلسة الرئيسية",
         "skills": "المهارات التي يحمِّلها",
-        "notInHarness": "ليست في Harness",
+        "notInHarness": "ليست في SRN Harness",
         "mcpServers": "خوادم MCP التي يستخدمها",
         "mcpServersNote": "بالأسماء التي تحملها في الوكيل الذي يعمل فيه.",
         "mcpLaunches": "خوادم MCP التي يشغِّلها",
@@ -7831,7 +7827,7 @@
         "copyFailed": "تعذَّر النسخ إلى الحافظة.",
         "installLater": "يستطيع Codeg عرض المساعدين، أما تثبيتهم فسيأتي لاحقًا.",
         "copyErrors": {
-          "notFound": "لا يحتفظ Harness بنسخة من هذا التعريف.",
+          "notFound": "لا يحتفظ SRN Harness بنسخة من هذا التعريف.",
           "tooLarge": "التعريف أكبر مما ينسخه Codeg (\u2066256 KB\u2069).",
           "invalidResponse": "التعريف ليس نصًّا يستطيع Codeg نسخه.",
           "invalidRef": "لا يستطيع Codeg طلب هذا التعريف: بصمة ملفه غير صالحة.",
@@ -7839,7 +7835,18 @@
           "unsupportedRemote": "إصدار Codeg على المضيف البعيد لا ينسخ التعريفات بعد. حدِّثه هناك لنسخها.",
           "unsupportedWeb": "خادم Codeg لا ينسخ التعريفات بعد. حدِّث الخادم لنسخها."
         }
-      }
+      },
+      "hero": {
+        "title": "اعثر على <accent>قدرات جديدة</accent> لوكلائك",
+        "subtitle": "{count, number} من المهارات وخوادم MCP والموجّهات والمساعدين من المجتمع — ثبّت مرة واحدة واستخدمها عبر وكلائك",
+        "subtitleNoCount": "مهارات وخوادم MCP وموجّهات ومساعدون من المجتمع — ثبّت مرة واحدة واستخدمها عبر وكلائك"
+      },
+      "layout": {
+        "label": "التخطيط",
+        "grid": "شبكة",
+        "list": "قائمة"
+      },
+      "refresh": "إعادة تحميل الدليل"
     },
     "mcp": {
       "listSeparator": "، ",
@@ -7857,7 +7864,7 @@
         "label": "إظهار",
         "all": "كل الخوادم",
         "problems": "التي بها مشكلات",
-        "harness": "من Harness",
+        "harness": "من SRN Harness",
         "updates": "يتوفر تحديث"
       },
       "refresh": "إعادة قراءة الإعدادات",
@@ -7867,7 +7874,7 @@
         "manualHint": "اكتب الأمر أو العنوان بنفسك.",
         "paste": "لصق إعدادات",
         "pasteHint": "من ملف README أو من ملف وكيل آخر.",
-        "harness": "البحث في Harness",
+        "harness": "البحث في SRN Harness",
         "harnessHint": "تصفَّح خوادم MCP في SRN Harness."
       },
       "list": {
@@ -7877,7 +7884,8 @@
         "noneHint": "تظهر هنا الخوادم الموجودة في إعدادات أي وكيل على هذا المضيف.",
         "noMatch": "لا يوجد خادم مطابق.",
         "noAgentMatch": "لا يملك أي وكيل خادمًا مطابقًا.",
-        "clearFilters": "مسح البحث والتصفية"
+        "clearFilters": "مسح البحث والتصفية",
+        "groupManual": "مضافة يدويًا"
       },
       "row": {
         "onIn": "مفعّل في {agents}.",
@@ -7885,7 +7893,8 @@
         "noDefinition": "غير مقروء",
         "definitions": "{count, plural, zero {لا تعريفات} one {تعريف واحد} two {تعريفان} few {# تعريفات} many {# تعريفًا} other {# تعريف}}",
         "problems": "مشكلة",
-        "reserved": "اسم محجوز"
+        "reserved": "اسم محجوز",
+        "off": "معطّل في الكل"
       },
       "transport": {
         "stdio": "stdio",
@@ -7904,7 +7913,6 @@
         "pickAgent": "اختر وكيلًا لترى إعداداته.",
         "notFound": "لا يملك أي وكيل هنا خادمًا باسم <code>{key}</code>.",
         "notFoundHint": "ربما أُعيدت تسميته أو أُزيل. تعرض القائمة ما لدى كل وكيل الآن.",
-        "inAgents": "{count, plural, zero {في لا وكيل} one {في وكيل واحد} two {في وكيلين} few {في # وكلاء} many {في # وكيلًا} other {في # وكيل}}",
         "rename": "إعادة التسمية",
         "remove": "إزالة…",
         "notEditable": "لا يستطيع Codeg تغيير هذا الخادم لدى أي من الوكلاء الذين يملكونه؛ ويذكر كل وكيل أدناه السبب.",
@@ -7912,19 +7920,18 @@
         "definition": "التعريف",
         "definitions": "التعريفات",
         "definitionLetter": "التعريف {letter}",
-        "heldBy": "يستخدمه {agents}",
         "edit": "تعديل",
         "editLetter": "تعديل {letter}",
         "noDefinition": "لا يملك أي وكيل تعريفًا يستطيع Codeg قراءته. ويذكر كل وكيل أدناه ما الخطأ في مدخله.",
         "agents": "الوكلاء",
         "extra": "حقوله الخاصة، تبقى كما هي:",
-        "saving": "جارٍ الحفظ…"
+        "saving": "جارٍ الحفظ…",
+        "enabledIn": "{count, plural, zero {غير مفعّل في أي وكيل} one {مفعّل في وكيل واحد} two {مفعّل في وكيلين} few {مفعّل في # وكلاء} many {مفعّل في # وكيلًا} other {مفعّل في # وكيل}}",
+        "source": "المصدر"
       },
       "agentState": {
         "on": "مفعّل",
         "off": "معطّل",
-        "withDefinition": "{state} · التعريف {letter}",
-        "undescribed": "{state} · لا يستطيع Codeg قراءة هذا المدخل",
         "notConfigured": "غير مُعَدّ",
         "cannotHold": "لا يمكنه استخدام خوادم {transports}",
         "keyNotNew": "يحتوي هذا الاسم على أحرف لا يجوز استخدامها في مدخل جديد، لذا لا يمكن إضافته هنا. أعد تسمية الخادم أولًا.",
@@ -7932,7 +7939,8 @@
         "unreadable": "تعذّرت قراءة ملفه.",
         "reserved": "اسم الخادم المدمج، يُعرض فقط",
         "readOnly": "للقراءة فقط",
-        "skipped": "يُتخطّى في جلساته"
+        "skipped": "يُتخطّى في جلساته",
+        "entryUnreadable": "لا يستطيع Codeg قراءة هذا الإدخال"
       },
       "agents": {
         "showAll": "إظهار كل الوكلاء ({count, number} غير مثبّت)",
@@ -7992,7 +8000,8 @@
         "env": "البيئة",
         "url": "العنوان",
         "headers": "الترويسات",
-        "secretArgs": "الوسائط السرية"
+        "secretArgs": "الوسائط السرية",
+        "copyCommand": "نسخ الأمر"
       },
       "rowResult": {
         "unsupported": "لم يُحفظ: هذا الإصدار من Codeg أقدم من أن يفعل ذلك. حدِّثه.",
@@ -8003,16 +8012,15 @@
         "dismiss": "إخفاء التنبيه"
       },
       "harness": {
-        "mark": "Harness",
-        "markVersion": "Harness · {version}",
-        "title": "من Harness",
-        "agents": "أين ثُبِّت",
-        "view": "عرض في Harness",
+        "mark": "SRN Harness",
+        "markVersion": "SRN Harness · {version}",
+        "title": "من SRN Harness",
+        "view": "عرض في SRN Harness",
         "update": "تحديث",
         "manage": "إدارة الوكلاء",
         "uninstall": "إلغاء التثبيت…",
         "changedNote": "المدخل المعدَّل هنا يُستبدل عند التحديث، ويُحتفظ به عند إلغاء التثبيت ما لم تحدّده هناك.",
-        "catalogOff": "يتطلّب تحديثه وإضافته إلى وكلاء آخرين سؤالَ Harness، وهو متوقف في هذا الإصدار من Codeg. أما إلغاء التثبيت فما زال يعمل.",
+        "catalogOff": "يتطلّب تحديثه وإضافته إلى وكلاء آخرين سؤالَ SRN Harness، وهو متوقف في هذا الإصدار من Codeg. أما إلغاء التثبيت فما زال يعمل.",
         "states": {
           "asInstalled": "كما ثُبِّت",
           "changedLocally": "عُدِّل هنا",
@@ -8022,8 +8030,11 @@
           "updateAvailable": "يتوفر تحديث",
           "yanked": "سُحب الإصدار",
           "disabledByAuthor": "عطّله مؤلفه",
-          "removedByHarness": "أُزيل من Harness"
-        }
+          "removedByHarness": "أُزيل من SRN Harness"
+        },
+        "editDefinition": "تعديل التعريف",
+        "editDefinitionLetter": "تعديل التعريف {letter}",
+        "state": "الحالة"
       },
       "plan": {
         "reviewTitle": "ما سيُكتب",
@@ -8073,14 +8084,9 @@
       "targets": {
         "cannotHold": "لا يمكنه استخدام خوادم {transport}",
         "keyNotNew": "لا يملكه، ولا يجوز استخدام هذا الاسم في مدخل جديد",
-        "willAdd": "سيُضاف",
-        "unchanged": "يملك هذا التعريف بالفعل",
-        "willUpdate": "سيُحدَّث",
         "willReplace": "لديه تعريف مختلف سيُستبدل",
         "staysOff": "يبقى معطّلًا",
         "commentsLost": "الحفظ يزيل التعليقات من ملفه",
-        "keeps": "يحتفظ بما لديه",
-        "notConfigured": "غير مُعَدّ",
         "entryReadOnly": "لديه مدخل بهذا الاسم لا يغيّره Codeg"
       },
       "dialog": {
@@ -8328,8 +8334,7 @@
           "update": "تحديث <name>{title}</name>",
           "manage": "وكلاء <name>{title}</name>"
         },
-        "description": "لن يُكتب شيء قبل أن تؤكّد. ويتحقّق Codeg من Harness مرة أخرى قُبيل الكتابة مباشرة.",
-        "loading": "جارٍ سؤال Harness عن هذا الإصدار…",
+        "loading": "جارٍ سؤال SRN Harness عن هذا الإصدار…",
         "updateFromTo": "من الإصدار <code>{from}</code> إلى <code>{to}</code>.",
         "alreadyNewest": "هذا هو أحدث إصدار بالفعل. ولا يزال بإمكانك إضافته إلى وكلاء آخرين.",
         "working": {
@@ -8362,21 +8367,21 @@
         "published": "نُشر في {date}"
       },
       "snapshot": {
-        "title": "ما يقوله Harness الآن",
+        "title": "ما يقوله SRN Harness الآن",
         "fresh": "سُئل للتو",
-        "none": "لم يذكر Harness وضع هذا الإصدار.",
+        "none": "لم يذكر SRN Harness وضع هذا الإصدار.",
         "riskNotStated": "مستوى الخطر غير مذكور",
-        "reviewNotStated": "لم يذكر Harness هل راجعه شخص.",
-        "checksNotStated": "لم يقدّم Harness نتائج فحوصه.",
+        "reviewNotStated": "لم يذكر SRN Harness هل راجعه شخص.",
+        "checksNotStated": "لم يقدّم SRN Harness نتائج فحوصه.",
         "noFindings": "لم تجد الفحوص شيئًا.",
         "findings": "النتائج: {high} مرتفعة، {medium} متوسطة، {low} منخفضة",
         "secrets": "{count, plural, zero {لم يُعثر على بيانات اعتماد في الحزمة} one {عُثر على بيان اعتماد واحد في الحزمة} two {عُثر على بيانَي اعتماد في الحزمة} few {عُثر على # بيانات اعتماد في الحزمة} many {عُثر على # بيان اعتماد في الحزمة} other {عُثر على # بيان اعتماد في الحزمة}}",
         "packages": "الحزم",
         "package": "الحزمة",
-        "packagesNotStated": "لم يذكر Harness كيف فُحصت حزمه.",
+        "packagesNotStated": "لم يذكر SRN Harness كيف فُحصت حزمه.",
         "installScript": "يشغّل سكربتات التثبيت",
         "permissions": "ما يطلبه",
-        "permissionsNotStated": "لم يذكر Harness ما يطلبه.",
+        "permissionsNotStated": "لم يذكر SRN Harness ما يطلبه.",
         "noPermissions": "لا شيء بعينه.",
         "undeclared": "مُكتشَف، غير مُصرَّح به",
         "declaredOnly": "مُصرَّح به، غير مُكتشَف"
@@ -8418,7 +8423,7 @@
           "json": "هذا ليس JSON صالحًا.",
           "choice": "اختر إحدى القيم المدرجة."
         },
-        "secretsPlain": "تُكتب القيم السرية نصًا صريحًا في ملف إعدادات كل وكيل تحدّده. ولا تُرسل إلى Harness.",
+        "secretsPlain": "تُكتب القيم السرية نصًا صريحًا في ملف إعدادات كل وكيل تحدّده. ولا تُرسل إلى SRN Harness.",
         "choose": "اختر…",
         "recovered": "مُلئ بما لدى {agents} الآن.",
         "recoveredAside": "مُلئت من المداخل المثبَّتة",
@@ -8438,21 +8443,19 @@
         "hint": "المحدّدون في البداية: الوكلاء المثبّتون القادرون على استخدام هذا الخادم.",
         "hintInstalled": "المحدّدون في البداية: الوكلاء المثبَّت لديهم.",
         "manageNote": "إلغاء تحديد وكيل يتركه كما هو. لإخراج الخادم من وكيل، استخدم إلغاء التثبيت.",
-        "willAdd": "سيُضاف",
         "willUpdate": "سيُستبدل مدخله الآتي من هذا العنصر",
         "ownNotTicked": "لديه هذا العنصر بالفعل: حدّده أدناه لاستبداله",
         "willReplace": "سيُستبدل خادمه المسمّى <code>{key}</code> ({owner})",
         "hasOther": "لديه خادم مسمّى <code>{key}</code> ({owner}): حدّده أدناه لاستبداله",
-        "newer": "لديه إصدار أحدث ({version}) من Harness",
-        "staysInstalled": "مثبَّت هنا؛ يبقى كما هو",
+        "newer": "لديه إصدار أحدث ({version}) من SRN Harness",
         "unreadable": "تعذّرت قراءة ملف إعداداته.",
         "readOnly": "لا يغيّر Codeg ملف هذا الوكيل.",
         "notWritten": "يكتفي Codeg بعرض خوادم هذا الوكيل.",
         "holdsName": "لديه خادم مسمّى <code>{key}</code> ({owner})",
         "owner": {
           "this_item": "من هذا العنصر",
-          "other_item": "من عنصر آخر في Harness",
-          "elsewhere": "ليس من Harness",
+          "other_item": "من عنصر آخر في SRN Harness",
+          "elsewhere": "ليس من SRN Harness",
           "unknown": "مصدر غير معروف"
         }
       },
@@ -8462,8 +8465,8 @@
         "agent": "استبداله في {agent}",
         "ownerThis": "مثبَّت من هذا العنصر",
         "ownerThisChanged": "مثبَّت من هذا العنصر ثم عُدِّل هنا: ستضيع تلك التعديلات",
-        "ownerOther": "مثبَّت من عنصر آخر في Harness: <code>{ref}</code>",
-        "ownerElsewhere": "ليس من Harness: أُضيف يدويًا أو بواسطة برنامج آخر",
+        "ownerOther": "مثبَّت من عنصر آخر في SRN Harness: <code>{ref}</code>",
+        "ownerElsewhere": "ليس من SRN Harness: أُضيف يدويًا أو بواسطة برنامج آخر",
         "ownerUnknown": "لا يستطيع Codeg معرفة مصدره",
         "off": "معطّل هناك",
         "overwrites": "ما سيُستبدل:",
@@ -8479,18 +8482,18 @@
         "targets": "حدّد وكيلًا واحدًا على الأقل.",
         "replace": "حدّد استبدال <code>{key}</code> في {agents}، أو ألغِ تحديد هؤلاء الوكلاء.",
         "yanked": "أكّد تثبيت الإصدار المسحوب.",
-        "state": "لم يقدّم Harness حالة لهذا الإصدار يمكن تأكيدها.",
+        "state": "لم يقدّم SRN Harness حالة لهذا الإصدار يمكن تأكيدها.",
         "disagree": "اختر قيمة <code>{name}</code>: الوكلاء لا يتّفقون عليها."
       },
       "notices": {
         "changedElsewhere": "تغيّرت إعدادات أحد الوكلاء بعد فتح هذا. هذا ما سيُكتب الآن؛ راجعه وأكّد مرة أخرى.",
         "refused": "لم يثبّته Codeg، ولم يكتب شيئًا:",
-        "unsupported": "هذا الإصدار من Codeg أقدم من أن يثبّت من Harness. حدِّثه.",
-        "unsupportedRemote": "إصدار Codeg على المضيف البعيد أقدم من أن يثبّت من Harness. حدِّثه هناك.",
-        "unsupportedWeb": "خادم Codeg أقدم من أن يثبّت من Harness. حدِّث الخادم."
+        "unsupported": "هذا الإصدار من Codeg أقدم من أن يثبّت من SRN Harness. حدِّثه.",
+        "unsupportedRemote": "إصدار Codeg على المضيف البعيد أقدم من أن يثبّت من SRN Harness. حدِّثه هناك.",
+        "unsupportedWeb": "خادم Codeg أقدم من أن يثبّت من SRN Harness. حدِّث الخادم."
       },
       "changes": {
-        "title": "تغيّر ما يذكره Harness عن هذا الإصدار بعد أن فتحت هذا",
+        "title": "تغيّر ما يذكره SRN Harness عن هذا الإصدار بعد أن فتحت هذا",
         "body": "لم يُكتب شيء. انظر ما الذي تغيّر، ثم أكّد مرة أخرى بالحالة الجديدة، أو ألغِ.",
         "status_changed": "الحالة: {from} → {to}",
         "risk_changed": "الخطر: {from} → {to}",
@@ -8515,7 +8518,7 @@
       "status": {
         "ok": "متاح",
         "yanked": "سحبه مؤلفه",
-        "blocked": "حظره Harness",
+        "blocked": "حظره SRN Harness",
         "unknown": "الحالة غير معروفة"
       },
       "riskLevel": {
@@ -8548,26 +8551,26 @@
       },
       "reasons": {
         "not_an_mcp_server": "هذا ليس خادم MCP (بل: {kind}).",
-        "item_unavailable": "لا يقدّم Harness هذا العنصر الآن.",
+        "item_unavailable": "لا يقدّم SRN Harness هذا العنصر الآن.",
         "item_unavailable_retired": "أوقف مؤلفه هذا العنصر.",
-        "item_unavailable_removed": "أزال Harness هذا العنصر.",
-        "revision_unavailable": "ليس لدى Harness المراجعة {revision} من هذا العنصر.",
-        "version_blocked": "حظر Harness هذا الإصدار.",
-        "version_status_unknown": "أعطى Harness هذا الإصدار حالة لا يعرفها هذا الإصدار من Codeg، لذا لن يُثبَّت. قد يساعد تحديث Codeg.",
-        "snapshot_incomplete": "نقصت من ردّ Harness معلومة عن هذا الإصدار يعتمد عليها التثبيت: {field}.",
+        "item_unavailable_removed": "أزال SRN Harness هذا العنصر.",
+        "revision_unavailable": "ليس لدى SRN Harness المراجعة {revision} من هذا العنصر.",
+        "version_blocked": "حظر SRN Harness هذا الإصدار.",
+        "version_status_unknown": "أعطى SRN Harness هذا الإصدار حالة لا يعرفها هذا الإصدار من Codeg، لذا لن يُثبَّت. قد يساعد تحديث Codeg.",
+        "snapshot_incomplete": "نقصت من ردّ SRN Harness معلومة عن هذا الإصدار يعتمد عليها التثبيت: {field}.",
         "nothing_to_install": "لا يحوي هذا العنصر شيئًا يستطيع Codeg تثبيته: لا حزمة لتشغيلها ولا عنوان للاتصال به.",
         "server_unreadable": "تعذّرت قراءة تعريف الخادم (server.json).",
-        "record_unreadable": "تتعذّر قراءة سجلّ Codeg لما ثبّته من Harness، لذا لن يُثبَّت شيء حفاظًا على سلامة ذلك السجلّ.",
+        "record_unreadable": "تتعذّر قراءة سجلّ Codeg لما ثبّته من SRN Harness، لذا لن يُثبَّت شيء حفاظًا على سلامة ذلك السجلّ.",
         "registry_unsupported": "لا تُشغَّل الحزم من <code>{registry}</code>: تُشغَّل حزم npm و PyPI فقط.",
         "runtime_unsupported": "تطلب الحزمة أن تُشغَّل بـ <code>{runtime}</code>، وهو ما لا يستخدمه Codeg لحزم <code>{registry}</code>.",
-        "identifier_has_version": "اسم الحزمة <code>{identifier}</code> يحمل إصداره الخاص، لذا يتعذّر تطبيق الإصدار الذي فحصه Harness.",
+        "identifier_has_version": "اسم الحزمة <code>{identifier}</code> يحمل إصداره الخاص، لذا يتعذّر تطبيق الإصدار الذي فحصه SRN Harness.",
         "runtime_arguments_unsupported": "تصرّح <code>{identifier}</code> بخيارات للبرنامج الذي يشغّلها (<code>{argument}</code>). وقد تجعله يشغّل شيئًا غير الحزمة المفحوصة، لذا لا تُعرض هذه الطريقة.",
         "runner_environment_unsupported": "تضبط الحزمة <code>{name}</code>، وهو ما يغيّر طريقة عمل البرنامج الذي يشغّلها، لذا لا تُعرض هذه الطريقة.",
-        "package_not_pinned": "لم يحدّد Harness إصدارًا ثابتًا لـ <code>{identifier}</code>.",
-        "package_version_inexact": "إصدار <code>{identifier}</code> لدى Harness ليس إصدارًا واحدًا محددًا ({version}).",
-        "package_version_inexact_none": "ليس لدى Harness إصدار محدد من <code>{identifier}</code>.",
+        "package_not_pinned": "لم يحدّد SRN Harness إصدارًا ثابتًا لـ <code>{identifier}</code>.",
+        "package_version_inexact": "إصدار <code>{identifier}</code> لدى SRN Harness ليس إصدارًا واحدًا محددًا ({version}).",
+        "package_version_inexact_none": "ليس لدى SRN Harness إصدار محدد من <code>{identifier}</code>.",
         "package_missing": "<code>{identifier}@{version}</code> غير موجود في سجل حزمه.",
-        "package_verification_unknown": "فحص Harness <code>{identifier}@{version}</code> بطريقة لا يعرفها هذا الإصدار من Codeg، لذا لن يُستخدم.",
+        "package_verification_unknown": "فحص SRN Harness <code>{identifier}@{version}</code> بطريقة لا يعرفها هذا الإصدار من Codeg، لذا لن يُستخدم.",
         "remote_not_public": "العنوان ليس عنوان HTTPS عامًّا.",
         "remote_not_public_host": "العنوان ليس عنوان HTTPS عامًّا (<code>{host}</code>).",
         "secret_in_query": "لا يمكن إرسال القيمة السرية <code>{name}</code> إلا داخل العنوان نفسه، لذا لا تُعرض هذه الطريقة.",
@@ -8602,7 +8605,7 @@
         "unknown": "لا يستطيع هذا الإصدار من Codeg معرفة كيف جرى التثبيت. يعرض قسم MCP ما لدى الوكلاء الآن."
       },
       "record": {
-        "failed": "كُتبت الخوادم، لكن Codeg لم يتمكن من تسجيلها على أنها من Harness، لذا لا تظهر بهذه العلامة.",
+        "failed": "كُتبت الخوادم، لكن Codeg لم يتمكن من تسجيلها على أنها من SRN Harness، لذا لا تظهر بهذه العلامة.",
         "uninstallFailed": "أُزيلت الخوادم، لكن Codeg لم يتمكن من تحديث سجلّه لها. وسيستدرك ذلك في المرة التالية التي يقرأ فيها ما هو مثبَّت.",
         "record_unreadable": "تعذّرت قراءة سجلّه.",
         "record_write_failed": "تعذّرت كتابة سجلّه.",
@@ -8659,7 +8662,7 @@
         "label": "إظهار",
         "all": "كل المهارات",
         "custom": "المخصّصة",
-        "harness": "من Harness",
+        "harness": "من SRN Harness",
         "problems": "التي فيها مشكلات",
         "updates": "التي لها تحديث"
       },
@@ -8676,7 +8679,7 @@
         "importHint": "مجلد فيه ملف SKILL.md، يُنسخ إلى مخزن Codeg كمهارة مخصّصة.",
         "importTitle": "اختر مجلد المهارة الذي تريد استيراده",
         "importFailed": "لم يُستورد المجلد.",
-        "harness": "البحث في Harness",
+        "harness": "البحث في SRN Harness",
         "harnessHint": "تصفَّح المهارات في SRN Harness."
       },
       "list": {
@@ -8690,7 +8693,7 @@
         "problems": "وجد Codeg في مخزن مهاراته ما يستحق النظر"
       },
       "marks": {
-        "harnessVersion": "Harness {version}",
+        "harnessVersion": "SRN Harness {version}",
         "problem": "يحتاج إلى انتباه"
       },
       "harnessStates": {
@@ -8698,7 +8701,7 @@
         "updateAvailable": "يتوفّر تحديث",
         "yanked": "سُحب الإصدار",
         "disabledByAuthor": "عطّلها مؤلّفها",
-        "removedByHarness": "أُزيلت من Harness",
+        "removedByHarness": "أُزيلت من SRN Harness",
         "changedLocally": "عُدّلت هنا",
         "filesMissing": "ملفات مفقودة"
       },
@@ -8707,13 +8710,13 @@
         "science": "البحث العلمي",
         "office": "المكتب",
         "ui": "الواجهة",
-        "harness": "Harness",
+        "harness": "SRN Harness",
         "custom": "مخصّصة",
         "unknown": "من {origin}"
       },
       "owners": {
         "pack": "حزمة مهارات · {pack}",
-        "harness": "من Harness",
+        "harness": "من SRN Harness",
         "custom": "مخصّصة",
         "agent": "خاصة بالوكيل",
         "linked_elsewhere": "مرتبطة بمكان آخر",
@@ -8758,7 +8761,7 @@
         "name_taken": "مهارة أخرى تستخدم هذا الاسم بالفعل.",
         "id_taken": "توجد مهارة بهذا الاسم بالفعل.",
         "id_reserved": "هذا الاسم يخصّ إحدى حزم المهارات في Codeg.",
-        "id_reserved_harness": "ثبّت Harness هذه المهارة، لذا يُبقيها Codeg كما جاءت. لتعديلها، انسخها كمهارة مخصّصة.",
+        "id_reserved_harness": "ثبّت SRN Harness هذه المهارة، لذا يُبقيها Codeg كما جاءت. لتعديلها، انسخها كمهارة مخصّصة.",
         "target_occupied": "مجلد أو ملف بالاسم نفسه يعترض الطريق.",
         "target_linked_elsewhere": "رابط بالاسم نفسه إلى مكان آخر يعترض الطريق.",
         "target_broken": "رابط معطّل بالاسم نفسه يعترض الطريق. أصلحه أو احذفه أولًا.",
@@ -8887,9 +8890,9 @@
         "duplicate": "تكرار…",
         "delete": "حذف…",
         "copyAsCustom": "نسخ كمهارة مخصّصة…",
-        "viewOnHarness": "العرض في Harness",
+        "viewOnHarness": "العرض في SRN Harness",
         "update": "تحديث",
-        "harnessReadOnly": "مثبّتة من Harness، وهي للقراءة فقط هنا: سيستبدل التحديث أي تعديل. لتعديلها، انسخها كمهارة مخصّصة.",
+        "harnessReadOnly": "مثبّتة من SRN Harness، وهي للقراءة فقط هنا: سيستبدل التحديث أي تعديل. لتعديلها، انسخها كمهارة مخصّصة.",
         "harnessSource": "العنصر:",
         "pickSkill": "اختر مهارة لترى وكلاءها."
       },
@@ -9124,7 +9127,7 @@
         "turnOff": "تعطيل هذه الروابط…"
       },
       "settingsWindow": {
-        "acknowledgementRequired": "سيصل هذا التغيير أيضًا إلى وكلاء آخرين يتشاركون مجلد مهارات. أجرِه من صفحة Harness في مساحة العمل (Harness › المهارات أو حزم المهارات)، فهي تعرض من يتأثّر وتسأل أولًا."
+        "acknowledgementRequired": "سيصل هذا التغيير أيضًا إلى وكلاء آخرين يتشاركون مجلد مهارات. أجرِه من صفحة هندسة Harness في مساحة العمل (هندسة Harness › المهارات أو حزم المهارات)، فهي تعرض من يتأثّر وتسأل أولًا."
       }
     },
     "packs": {
@@ -9191,8 +9194,7 @@
           "update": "تحديث <name>{title}</name>",
           "reinstall": "إعادة تثبيت <name>{title}</name>"
         },
-        "description": "لن يُكتب شيء قبل أن تؤكّد. ينزّل Codeg الملفات ويتحقّق من كل واحد منها، ثم يسأل Harness مرة أخرى قُبيل وضع المهارة في مكانها مباشرة.",
-        "loading": "جارٍ سؤال Harness عن هذا الإصدار…",
+        "loading": "جارٍ سؤال SRN Harness عن هذا الإصدار…",
         "updateFromTo": "من الإصدار <code>{from}</code> إلى <code>{to}</code>.",
         "reinstallNote": "هذا الإصدار مثبَّت بالفعل. تثبيته مرة أخرى يعيد ملفاته كما نُشرت؛ ويُحتفظ بالملفات التي عدّلتها في نسخ Codeg الاحتياطية.",
         "working": {
@@ -9214,7 +9216,7 @@
       },
       "notices": {
         "effectsChanged": "لم يعد الربط يفعل ما عُرض سابقًا. لم يُكتب شيء. هذا ما يفعله الآن؛ راجعه وأكّد مرة أخرى.",
-        "stateMoved": "تغيّر ما يقوله Harness عن هذا الإصدار بينما كانت هذه النافذة مفتوحة. ما يقوله الآن معروض أدناه.",
+        "stateMoved": "تغيّر ما يقوله SRN Harness عن هذا الإصدار بينما كانت هذه النافذة مفتوحة. ما يقوله الآن معروض أدناه.",
         "refused": "لم يثبّتها Codeg، ولم يكتب شيئًا:"
       },
       "warnings": {
@@ -9225,9 +9227,9 @@
         "size": "{count, plural, zero {لا ملفات} one {ملف واحد} two {ملفان} few {# ملفات} many {# ملفًا} other {# ملف}}، {size}",
         "license": "الترخيص: {license}",
         "compatibility": "يعمل مع: {compatibility}",
-        "archive": "يُنزَّل من نسخة Harness، ويُتحقَّق منه مقابل بصمة SHA-256 الخاصة به <code>{hash}</code>…، ثم ملفًا ملفًا.",
+        "archive": "يُنزَّل من نسخة SRN Harness، ويُتحقَّق منه مقابل بصمة SHA-256 الخاصة به <code>{hash}</code>…، ثم ملفًا ملفًا.",
         "source": "يُجلب من GitHub: <code>{repository}</code> عند الالتزام <code>{commit}</code>، المجلد <code>{path}</code>. ويُتحقَّق من كل ملف مقابل بصمة SHA-256 الخاصة به.",
-        "noSource": "لا يقدّم Harness نسخة من ملفاتها ولا مصدرًا لجلبها منه.",
+        "noSource": "لا يقدّم SRN Harness نسخة من ملفاتها ولا مصدرًا لجلبها منه.",
         "files": "عرض {count, plural, zero {الملفات} one {الملف} two {الملفين} few {# ملفات} many {# ملفًا} other {# ملف}}",
         "executable": "تنفيذي"
       },
@@ -9245,7 +9247,7 @@
         "reserved": "مهارة من حزمة {pack} في Codeg",
         "pack": "مهارة حزمة {pack} في مخزن Codeg",
         "custom": "مهارتك المخصّصة في مخزن Codeg",
-        "harness": "مهارة أخرى من Harness (<code>{ref}</code>)",
+        "harness": "مهارة أخرى من SRN Harness (<code>{ref}</code>)",
         "store": "مجلد في مخزن Codeg",
         "codeg_link": "رابط أنشأه Codeg في مجلد مهارات {agents}",
         "codeg_linkAt": "رابط أنشأه Codeg في <code>{path}</code>",
@@ -9269,15 +9271,12 @@
         "notInstalled": "غير مثبّت",
         "noFolder": "لا مجلد مهارات للربط فيه",
         "shared": "يُربط في مجلد يقرؤه وكلاء آخرون أيضًا",
-        "willLink": "سيُربط",
-        "alreadySees": "يراها بالفعل",
-        "needsAck": "يراها وكلاء آخرون أيضًا: انظر أدناه",
-        "cannotLink": "لا يمكن ربطه: انظر أدناه",
+        "needsAck": "يؤثر أيضًا في {agents}",
+        "cannotLink": "لا يمكن ربطه",
         "showAll": "إظهار كل الوكلاء ({count, number} غير مثبّت)",
         "hideNotInstalled": "إخفاء الوكلاء غير المثبّتين",
         "none": "لم يُحدَّد أي وكيل: تذهب إلى مخزن Codeg فقط. يمكنك تفعيلها للوكلاء في المهارات.",
         "checking": "جارٍ حساب ما يفعله الربط…",
-        "effects": "ما يفعله الربط",
         "blocked": "يتعذّر ربط بعض الوكلاء. تُثبَّت المهارة على أي حال، ويُتركون كما هم؛ ويذكر كل منهم السبب.",
         "others": "يغيّر الربط أيضًا ما يراه وكلاء آخرون. وتأكيدك يشمل ذلك أيضًا.",
         "otherName": "يُحسب ما يفعله الربط تحت الاسم <code>{name}</code> عند تأكيدك. وإن وصل إلى وكلاء آخرين، يعرضه Codeg عليك أولًا، ولا يكتب شيئًا حتى تؤكّد مرة أخرى."
@@ -9293,8 +9292,8 @@
         "grownChecking": "جارٍ المقارنة بالإصدار المثبَّت…",
         "grownTitle": "يطلب الإصدار الجديد أكثر مما يطلبه المثبَّت:",
         "grownNone": "لا يطلب الإصدار الجديد شيئًا لم يطلبه المثبَّت، وليس مستوى خطره أعلى.",
-        "grownPartial": "لم يذكر Harness ما يطلبه أحد الإصدارين، لذا تعذّرت مقارنة كل شيء.",
-        "grownUnknown": "تعذّرت قراءة ما يقوله Harness عن الإصدار المثبَّت، لذا يتعذّر سرد ما يضيفه الجديد."
+        "grownPartial": "لم يذكر SRN Harness ما يطلبه أحد الإصدارين، لذا تعذّرت مقارنة كل شيء.",
+        "grownUnknown": "تعذّرت قراءة ما يقوله SRN Harness عن الإصدار المثبَّت، لذا يتعذّر سرد ما يضيفه الجديد."
       },
       "missing": {
         "title": "قبل أن يمكن تثبيتها:",
@@ -9304,7 +9303,7 @@
         "nameFixed": "أبقِ الاسم المثبَّتة به.",
         "links": "انتظر حتى يحسب Codeg ما يفعله الربط.",
         "yanked": "أكّد تثبيت الإصدار المسحوب.",
-        "state": "لم يقدّم Harness حالة لهذا الإصدار يمكن تأكيدها."
+        "state": "لم يقدّم SRN Harness حالة لهذا الإصدار يمكن تأكيدها."
       },
       "sourceField": {
         "repository": "المستودع",
@@ -9314,8 +9313,8 @@
       },
       "reasons": {
         "not_a_skill": "هذه ليست مهارة (بل: {kind}).",
-        "manifest_unreadable": "تتعذّر قراءة سجلّ Codeg للمهارات التي ثبّتها من Harness (أو أن إصدارًا أحدث من Codeg كتبه)، لذا لن يُثبَّت شيء حفاظًا على سلامة ذلك السجلّ.",
-        "nothing_to_install": "لا يقدّم Harness نسخة من ملفات هذه المهارة ولا مصدرًا لجلبها منه.",
+        "manifest_unreadable": "تتعذّر قراءة سجلّ Codeg للمهارات التي ثبّتها من SRN Harness (أو أن إصدارًا أحدث من Codeg كتبه)، لذا لن يُثبَّت شيء حفاظًا على سلامة ذلك السجلّ.",
+        "nothing_to_install": "لا يقدّم SRN Harness نسخة من ملفات هذه المهارة ولا مصدرًا لجلبها منه.",
         "unsafe_path": "تُدرج الحزمة ملفًا في مسار لا يكتب فيه Codeg: <code>{path}</code>.",
         "duplicate_path": "تُدرج الحزمة <code>{path}</code> مرتين (بتجاهل حالة الأحرف)، أو كملف ومجلد معًا.",
         "too_many_files": "عدد ملفات الحزمة {count, number}؛ والحد الأقصى المسموح به {limit}.",
@@ -9327,15 +9326,15 @@
         "skill_md_missing": "لا يوجد SKILL.md في المستوى الأعلى من الحزمة.",
         "hash_invalid": "قيمة SHA-256 التي تذكرها الحزمة لـ <code>{path}</code> ليست قيمة SHA-256 صالحة.",
         "hash_invalid_archive": "قيمة SHA-256 للأرشيف ليست قيمة SHA-256 صالحة.",
-        "archive_address_invalid": "عنوان الأرشيف ليس على Harness.",
+        "archive_address_invalid": "عنوان الأرشيف ليس على SRN Harness.",
         "source_invalid": "يتعذّر استخدام مصدرها على GitHub: {field} غير صالح.",
-        "archive_size_mismatch": "حجم الأرشيف الذي نُزِّل {actual}، لا {expected} كما يذكر Harness.",
-        "archive_hash_mismatch": "الأرشيف الذي نُزِّل ليس الذي يدرجه Harness: قيمة SHA-256 مختلفة.",
+        "archive_size_mismatch": "حجم الأرشيف الذي نُزِّل {actual}، لا {expected} كما يذكر SRN Harness.",
+        "archive_hash_mismatch": "الأرشيف الذي نُزِّل ليس الذي يدرجه SRN Harness: قيمة SHA-256 مختلفة.",
         "archive_unreadable": "تعذّرت قراءة الأرشيف الذي نُزِّل.",
         "file_missing": "<code>{path}</code> مُدرَج لكنه غير موجود فيما نُزِّل.",
         "file_unexpected": "يحوي ما نُزِّل <code>{path}</code>، وهو غير مُدرَج.",
-        "file_size_mismatch": "حجم <code>{path}</code> ليس {expected} كما يذكر Harness.",
-        "file_hash_mismatch": "<code>{path}</code> ليس الملف الذي يدرجه Harness: قيمة SHA-256 مختلفة.",
+        "file_size_mismatch": "حجم <code>{path}</code> ليس {expected} كما يذكر SRN Harness.",
+        "file_hash_mismatch": "<code>{path}</code> ليس الملف الذي يدرجه SRN Harness: قيمة SHA-256 مختلفة.",
         "compression_ratio": "يُفكّ ضغط <code>{path}</code> إلى أكثر من {limit} ضعف حجمه المضغوط.",
         "link_in_archive": "يحوي الأرشيف رابطًا أو ملفًا خاصًا: <code>{path}</code>.",
         "source_file_unavailable": "لا يوجد <code>{path}</code> على GitHub عند ذلك الالتزام.",
@@ -9348,11 +9347,11 @@
         "acknowledgement_required": "ربطها لدى {agent} يغيّر ما يراه وكلاء آخرون، ويحتاج إلى تأكيدك.",
         "effects_changed": "لم يعد ربطها لدى {agent} يفعل ما عُرض.",
         "allowed_tools": "يسمح SKILL.md للوكلاء باستخدام أدوات دون سؤالك (<code>{tools}</code>). يزيل Codeg هذا ما لم تُبقِ عليه.",
-        "fetched_from_source": "ليس لدى Harness نسخة من ملفاتها: تُجلب من GitHub (<code>{repository}</code> عند <code>{commit}</code>)، ويُتحقَّق من كل منها مقابل بصمة SHA-256 الخاصة به.",
+        "fetched_from_source": "ليس لدى SRN Harness نسخة من ملفاتها: تُجلب من GitHub (<code>{repository}</code> عند <code>{commit}</code>)، ويُتحقَّق من كل منها مقابل بصمة SHA-256 الخاصة به.",
         "files_changed_locally": "{count, plural, zero {لا ملفات عُدِّلت أو أُضيفت} one {ملف واحد عُدِّل أو أُضيف} two {ملفان عُدِّلا أو أُضيفا} few {# ملفات عُدِّلت أو أُضيفت} many {# ملفًا عُدِّل أو أُضيف} other {# ملف عُدِّل أو أُضيف}} هنا؛ ويُحتفظ بالمجلد المثبَّت في نسخ Codeg الاحتياطية.",
         "files_unreadable": "تتعذّر مقارنة المجلد المثبَّت بما ثُبِّت؛ والتحديث يحتفظ به كاملًا في نسخ Codeg الاحتياطية.",
         "io_error": "تعذّرت قراءة ملف أو مجلد أو كتابته أو نقله.",
-        "manifest_write_failed": "تعذّرت كتابة سجلّ Codeg لمهاراته من Harness، فأُعيد كل شيء كما كان.",
+        "manifest_write_failed": "تعذّرت كتابة سجلّ Codeg لمهاراته من SRN Harness، فأُعيد كل شيء كما كان.",
         "rollback_failed": "فشلت إعادة الأمور إلى حالها. لم يُحذف شيء؛ وسيُكمل Codeg ذلك عند تشغيله التالي.",
         "unlink_failed": "تعذّرت إزالة رابط (<code>{path}</code>):",
         "lock_busy": "كان تغيير آخر في المهارات جاريًا.",
@@ -9362,7 +9361,7 @@
         "download": "التنزيل",
         "verify": "التحقق من الملفات",
         "stage": "التحضير",
-        "snapshot": "سؤال Harness مرة أخرى",
+        "snapshot": "سؤال SRN Harness مرة أخرى",
         "unlink": "فكّ الربط لدى الوكلاء",
         "swap": "الوضع في المكان",
         "commit": "التسجيل",
@@ -9386,7 +9385,7 @@
           "reinstall": "أُعيد تثبيتها."
         },
         "aborted": "لم يعد من الممكن تثبيت هذا. لم يُكتب شيء.",
-        "invalidPackage": "الحزمة ليست ما يدرجه Harness، لذا لم يُثبَّت شيء؛ ومخزن Codeg على حاله.",
+        "invalidPackage": "الحزمة ليست ما يدرجه SRN Harness، لذا لم يُثبَّت شيء؛ ومخزن Codeg على حاله.",
         "busy": "كان تغيير آخر في المهارات جاريًا، لذا لم يُكتب شيء. أعد المحاولة.",
         "writeFailed": "فشل التثبيت في منتصفه. أُعيد ما نُفّذ إلى حاله؛ وتذكر كل خطوة ما حدث.",
         "unknown": "لا يستطيع هذا الإصدار من Codeg معرفة كيف جرى التثبيت. يعرض قسم المهارات ما هو موجود الآن.",
@@ -9436,7 +9435,7 @@
         }
       },
       "detail": {
-        "mark": "Harness",
+        "mark": "SRN Harness",
         "installedAt": "ثُبِّتت في {date}",
         "state": {
           "asInstalled": "ملفاتها كما ثُبِّتت.",
@@ -9453,30 +9452,30 @@
         "folderGone": "اختفى مجلدها من مخزن Codeg. حدِّثها لإعادته، أو ألغِ تثبيتها.",
         "update": "تحديث…",
         "uninstall": "إلغاء التثبيت…",
-        "catalogOff": "Harness معطّل على هذا المضيف: يمكن إلغاء تثبيتها، لا تحديثها.",
-        "missingList": "من Harness، المجلد مفقود"
+        "catalogOff": "SRN Harness معطّل على هذا المضيف: يمكن إلغاء تثبيتها، لا تحديثها.",
+        "missingList": "من SRN Harness، المجلد مفقود"
       },
-      "ownershipUnresolved": "تعذّر على Codeg قراءة سجلّه للمهارات التي ثبّتها من Harness، لذا لا يستطيع معرفة ما إذا كانت هذه المهارة من Harness. تُترك كما هي تمامًا حتى تمكن قراءة السجلّ."
+      "ownershipUnresolved": "تعذّر على Codeg قراءة سجلّه للمهارات التي ثبّتها من SRN Harness، لذا لا يستطيع معرفة ما إذا كانت هذه المهارة من SRN Harness. تُترك كما هي تمامًا حتى تمكن قراءة السجلّ."
     },
     "record": {
-      "mcp": "تعذّر على Codeg قراءة سجلّه لخوادم MCP التي ثبّتها من Harness، لذا لا يظهر هنا أي خادم بعلامة Harness. وإلى أن تمكن قراءة السجلّ، لن يُثبَّت أي شيء من Harness ولن يُلغى تثبيته.",
-      "skills": "تعذّر على Codeg قراءة سجلّه للمهارات التي ثبّتها من Harness، لذا لا تظهر هنا أي مهارة بعلامة Harness. وإلى أن تمكن قراءة السجلّ، لن يُثبَّت أي شيء من Harness ولن يُلغى تثبيته، وتُترك المهارات التي قد تكون من Harness كما هي تمامًا."
+      "mcp": "تعذّر على Codeg قراءة سجلّه لخوادم MCP التي ثبّتها من SRN Harness، لذا لا يظهر هنا أي خادم بعلامة SRN Harness. وإلى أن تمكن قراءة السجلّ، لن يُثبَّت أي شيء من SRN Harness ولن يُلغى تثبيته.",
+      "skills": "تعذّر على Codeg قراءة سجلّه للمهارات التي ثبّتها من SRN Harness، لذا لا تظهر هنا أي مهارة بعلامة SRN Harness. وإلى أن تمكن قراءة السجلّ، لن يُثبَّت أي شيء من SRN Harness ولن يُلغى تثبيته، وتُترك المهارات التي قد تكون من SRN Harness كما هي تمامًا."
     },
     "errors": {
       "disabled": "«اكتشاف» متوقف في هذا الـ Codeg.",
       "network": "تعذَّر الوصول إلى SRN Harness. تحقَّق من الاتصال ثم أعد المحاولة.",
       "rateLimited": "طلبات كثيرة جدًا. أعد المحاولة بعد {seconds, plural, zero {لحظات} one {ثانية واحدة} two {ثانيتين} few {# ثوانٍ} many {# ثانية} other {# ثانية}}.",
-      "notFound": "لا يوجد في Harness عنصر بهذا العنوان. ربما أُعيدت تسميته أو أُزيل.",
-      "invalidRef": "هذا ليس عنوانًا في Harness. يُكتب العنوان بالصيغة \u2066publisher/name\u2069.",
+      "notFound": "لا يوجد في SRN Harness عنصر بهذا العنوان. ربما أُعيدت تسميته أو أُزيل.",
+      "invalidRef": "هذا ليس عنوانًا في SRN Harness. يُكتب العنوان بالصيغة ⁦publisher/name⁩.",
       "server": "ردَّ SRN Harness بخطأ ({status}). أعد المحاولة بعد قليل.",
       "tooLarge": "ردُّ SRN Harness أكبر مما يقبله Codeg.",
       "invalidResponse": "أرسل SRN Harness ردًّا لا يستطيع هذا الإصدار من Codeg قراءته. قد يحلّ تحديث Codeg المشكلة.",
-      "recordUnreadable": "تعذّرت قراءة سجلّ Codeg لما ثبّته من Harness.",
-      "resolveUnavailable": "لا يستطيع Codeg الآن التأكد من الحالة الحالية لهذا العنصر لدى Harness، لذا لم يُثبَّت أي شيء. أعد المحاولة لاحقًا.",
-      "unsupported": "هذا الإصدار من Codeg أقدم من أن يدعم Harness. حدِّثه لتصفُّح الفهرس.",
-      "unsupportedRemote": "إصدار Codeg على المضيف البعيد أقدم من أن يدعم Harness. حدِّثه هناك لتصفُّح الفهرس.",
-      "unsupportedWeb": "خادم Codeg أقدم من أن يدعم Harness. حدِّث الخادم لتصفُّح الفهرس.",
-      "unknown": "تعذَّر تحميل Harness.",
+      "recordUnreadable": "تعذّرت قراءة سجلّ Codeg لما ثبّته من SRN Harness.",
+      "resolveUnavailable": "لا يستطيع Codeg الآن التأكد من الحالة الحالية لهذا العنصر لدى SRN Harness، لذا لم يُثبَّت أي شيء. أعد المحاولة لاحقًا.",
+      "unsupported": "هذا الإصدار من Codeg أقدم من أن يدعم SRN Harness. حدِّثه لتصفُّح الفهرس.",
+      "unsupportedRemote": "إصدار Codeg على المضيف البعيد أقدم من أن يدعم SRN Harness. حدِّثه هناك لتصفُّح الفهرس.",
+      "unsupportedWeb": "خادم Codeg أقدم من أن يدعم SRN Harness. حدِّث الخادم لتصفُّح الفهرس.",
+      "unknown": "تعذَّر تحميل SRN Harness.",
       "retry": "إعادة المحاولة"
     }
   },

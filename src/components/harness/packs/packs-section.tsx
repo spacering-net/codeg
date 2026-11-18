@@ -23,7 +23,8 @@ import {
   Info,
   LayoutDashboard,
   Presentation,
-  RefreshCw,
+  ChevronDown,
+  ChevronUp,
   Rocket,
   SearchX,
   TrendingUp,
@@ -86,8 +87,17 @@ import { freeCopyId, freeId } from "@/lib/skills/ids"
 import type { SkillsFailure } from "@/lib/skills/errors"
 import type { SkillsModel } from "@/lib/skills/model"
 import { cn } from "@/lib/utils"
+import {
+  HARNESS_LIST_PAD_CLASS,
+  HARNESS_LIST_PANE_CLASS,
+  HARNESS_SEARCH_CLASS,
+  HARNESS_SEGMENT_CLASS,
+  HARNESS_SEGMENTS_CLASS,
+  HARNESS_TOOLBAR_CLASS,
+} from "../harness-styles"
+import { HarnessScroller } from "../harness-scroller"
+import { SHOW_ALL_AGENTS_CLASS } from "../mcp/mcp-server-detail"
 import { DiscoverMark } from "../discover/discover-card"
-import { HarnessHostLabel } from "../harness-host-label"
 import { SkillEffectsDialog } from "../skills/effects-dialog"
 import {
   EmptyState,
@@ -153,17 +163,6 @@ const ORDER: Record<HarnessPackTab, Record<string, number>> = {
   ui: { ui: 1 },
 }
 
-const SEGMENT_CLASS = cn(
-  "h-8 flex-1 rounded-full px-3 text-[0.8125rem] font-medium whitespace-nowrap @max-md/packs:px-2 @max-md/packs:text-xs",
-  "max-md:h-9 text-muted-foreground outline-none transition-colors hover:text-foreground",
-  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-  "data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
-  "@3xl/packs:h-7 @md/packs:flex-none"
-)
-
-/** A pack's skills as rows of the grid: its own names, categories and marks,
- *  with the cells of its own store skill — never another origin's of the
- *  same id. */
 function usePackRows(
   tab: HarnessPackTab,
   model: SkillsModel | null
@@ -384,6 +383,59 @@ function readPackContent(tab: HarnessPackTab, id: string): Promise<string> {
   }
 }
 
+/** A pack's search, in the section's toolbar: each pack keeps its own. */
+function PackSearch({ tab }: { tab: HarnessPackTab }) {
+  const t = useTranslations("Harness.packs")
+  const { slots } = useHarnessView()
+  const [views] = useHarnessSlot(PACKS_VIEW)
+  const viewState = views[tab]
+  if (tab === "ui") {
+    // One skill: nothing to search, and the row keeps its place.
+    return <div className="hidden flex-1 @3xl/packs:block" />
+  }
+  return (
+    <div
+      role="search"
+      className="relative order-last w-full min-w-0 @3xl/packs:order-none @3xl/packs:w-auto @3xl/packs:flex-1"
+    >
+      <Search
+        aria-hidden="true"
+        className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+      />
+      <Input
+        type="text"
+        inputMode="search"
+        autoComplete="off"
+        spellCheck={false}
+        value={viewState.text}
+        aria-label={t("search.label")}
+        placeholder={t("search.placeholder")}
+        className={cn(
+          "ps-9",
+          HARNESS_SEARCH_CLASS,
+          viewState.text ? "pe-10" : "pe-3"
+        )}
+        onChange={(event) =>
+          updatePackView(slots, tab, { text: event.target.value })
+        }
+      />
+      {viewState.text !== "" && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t("search.clear")}
+          title={t("search.clear")}
+          className="absolute end-1 top-1/2 size-7 -translate-y-1/2 rounded-full text-muted-foreground max-md:size-8"
+          onClick={() => updatePackView(slots, tab, { text: "" })}
+        >
+          <X aria-hidden="true" />
+        </Button>
+      )}
+    </div>
+  )
+}
+
 /** One pack: its own extra (Office's tool, UI's notes), its search, its
  *  skills against the agents, and the one open. */
 function PackBody({
@@ -428,7 +480,9 @@ function PackBody({
   const detailOpen = selected !== null
   const gridWidth = (GRID_SKILL_REM + agents.length * GRID_AGENT_REM + 2) * rem
   const paneWidth = width - (split && detailOpen ? DETAIL_REM * rem : 0)
-  const gridFits = split && (width === 0 || paneWidth >= gridWidth)
+  // The matrix is a column per agent: with no agent to show, the list.
+  const gridFits =
+    split && agents.length > 0 && (width === 0 || paneWidth >= gridWidth)
   const close = useCallback(
     () => updatePackView(slots, tab, { selected: null }),
     [slots, tab]
@@ -459,42 +513,6 @@ function PackBody({
             return own.has(key) ? own(key) : category
           },
         }
-
-  const search =
-    tab !== "ui" ? (
-      <div role="search" className="relative min-w-0">
-        <Search
-          aria-hidden="true"
-          className="pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-        />
-        <Input
-          type="text"
-          inputMode="search"
-          autoComplete="off"
-          spellCheck={false}
-          value={viewState.text}
-          aria-label={t("search.label")}
-          placeholder={t("search.placeholder")}
-          className={cn("h-10 ps-9 md:h-9", viewState.text ? "pe-10" : "pe-3")}
-          onChange={(event) =>
-            updatePackView(slots, tab, { text: event.target.value })
-          }
-        />
-        {viewState.text !== "" && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("search.clear")}
-            title={t("search.clear")}
-            className="absolute end-1 top-1/2 -translate-y-1/2 text-muted-foreground md:size-7"
-            onClick={() => updatePackView(slots, tab, { text: "" })}
-          >
-            <X aria-hidden="true" />
-          </Button>
-        )}
-      </div>
-    ) : null
 
   const extra =
     tab === "office" ? (
@@ -574,16 +592,16 @@ function PackBody({
   }
 
   const scroller = (
-    <div
+    <HarnessScroller
       ref={listRef}
       tabIndex={-1}
       onScroll={(event) =>
         updatePackView(slots, tab, { scroll: event.currentTarget.scrollTop })
       }
-      className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto outline-none"
+      className="flex-1"
     >
       {isMobile && header}
-      <div className="min-w-0 space-y-3 p-2">
+      <div className={cn("min-w-0 space-y-3", HARNESS_LIST_PAD_CLASS)}>
         {model && inventory.phase === "error" && inventory.error && (
           <LoadFailure
             failure={inventory.error}
@@ -592,23 +610,27 @@ function PackBody({
           />
         )}
         {extra}
-        {search}
         <WriteNotices links={PACKS_LINKS} />
         {list}
         {gridFits && (hidden > 0 || showAll) && (
           <Button
             type="button"
-            variant="ghost"
+            variant="link"
             size="sm"
             aria-expanded={showAll}
             onClick={() => setShowAll(!showAll)}
-            className="max-md:h-10"
+            className={cn(SHOW_ALL_AGENTS_CLASS, "px-1")}
           >
+            {showAll ? (
+              <ChevronUp aria-hidden="true" />
+            ) : (
+              <ChevronDown aria-hidden="true" />
+            )}
             {showAll ? t("hideNotInstalled") : t("showAll", { count: hidden })}
           </Button>
         )}
       </div>
-    </div>
+    </HarnessScroller>
   )
 
   const row = selected ? rows.find((item) => item.id === selected) : undefined
@@ -681,7 +703,7 @@ function PackBody({
 
   if (split) {
     return (
-      <div className="flex min-h-0 min-w-0 flex-1 border-t border-border/50 ws-chrome-border">
+      <div className="flex min-h-0 min-w-0 flex-1">
         {!detailOpen ? (
           <div className="flex min-w-0 flex-1 flex-col">{scroller}</div>
         ) : (
@@ -689,8 +711,8 @@ function PackBody({
             <div
               className={
                 gridFits
-                  ? "flex min-w-0 flex-1 flex-col border-e border-border/50 ws-chrome-border"
-                  : "flex w-[clamp(18rem,36%,26rem)] shrink-0 flex-col border-e border-border/50 ws-chrome-border"
+                  ? "flex min-w-0 flex-1 flex-col border-e border-border/60 ws-chrome-border"
+                  : HARNESS_LIST_PANE_CLASS
               }
             >
               {scroller}
@@ -772,55 +794,39 @@ export function PacksSection() {
       // Nothing to open: the store's path is in every skill's detail.
     }
   }
-  const loading = inventory.phase === "loading"
-  // The folder and refresh buttons sit beside the host chip, so the tabs
-  // have a line of their own: four of them fit a phone that way.
+  // The tabs lead the row, the pack's search fills it, the folder button
+  // closes it (Refresh is in the window's chrome, as on every section).
+  // Narrow, the search takes a second row.
   const header = (
-    <div className="flex shrink-0 flex-col gap-2 px-3 pt-3 pb-2 md:px-4">
-      <div className="flex min-w-0 items-center gap-2">
-        <HarnessHostLabel foldHint={isMobile} className="min-w-0 flex-1" />
-        <div className="flex shrink-0 items-center gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-label={t("openCentral")}
-            title={t("openCentral")}
-            onClick={() => void openCentral()}
-            className="max-md:h-10"
-          >
-            <FolderOpen aria-hidden="true" />
-            {/* On a narrow pane the folder says it; the button keeps its
-                name for whoever cannot see it. */}
-            <span className="hidden @lg/packs:inline">{t("openCentral")}</span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("refresh")}
-            title={t("refresh")}
-            aria-busy={loading}
-            onClick={() => void reloadPacks(slots, tab)}
-            className="text-muted-foreground max-md:size-10"
-          >
-            <RefreshCw
-              aria-hidden="true"
-              className={cn(loading && "animate-spin")}
-            />
-          </Button>
-        </div>
-      </div>
+    <div className={HARNESS_TOOLBAR_CLASS}>
       <TabsPrimitive.List
         aria-label={t("tabsLabel")}
-        className="no-scrollbar flex h-9 min-w-0 items-center gap-0.5 overflow-x-auto rounded-full bg-muted/70 p-0.5 ws-msg-chip max-md:h-10 @md/packs:self-start @3xl/packs:h-8"
+        className={HARNESS_SEGMENTS_CLASS}
       >
         {HARNESS_PACK_TABS.map((id) => (
-          <TabsPrimitive.Trigger key={id} value={id} className={SEGMENT_CLASS}>
+          <TabsPrimitive.Trigger
+            key={id}
+            value={id}
+            className={HARNESS_SEGMENT_CLASS}
+          >
             {t(`tabs.${id}`)}
           </TabsPrimitive.Trigger>
         ))}
       </TabsPrimitive.List>
+      <PackSearch tab={tab} />
+      <Button
+        type="button"
+        variant="secondary"
+        aria-label={t("openCentral")}
+        title={t("openCentral")}
+        onClick={() => void openCentral()}
+        className="ms-auto h-9 rounded-full px-3.5 max-md:h-10 @3xl/packs:ms-0"
+      >
+        <FolderOpen aria-hidden="true" />
+        {/* On a narrow pane the folder says it; the button keeps its name
+            for whoever cannot see it. */}
+        <span className="hidden @2xl/packs:inline">{t("openCentral")}</span>
+      </Button>
     </div>
   )
 

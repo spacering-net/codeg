@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
+import { HarnessScroller } from "../harness-scroller"
 
 interface McpDialogFrameProps {
   title: ReactNode
@@ -116,13 +117,9 @@ export function McpDialogFrame({
             <X aria-hidden="true" />
           </Button>
         </div>
-        <div
-          ref={bodyRef}
-          tabIndex={-1}
-          className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-5 py-4 outline-none max-md:px-4"
-        >
-          {children}
-        </div>
+        <HarnessScroller ref={bodyRef} tabIndex={-1} className="flex-1">
+          <div className="px-5 py-4 max-md:px-4">{children}</div>
+        </HarnessScroller>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t px-5 py-3 max-md:px-4 max-md:pb-[max(0.75rem,env(safe-area-inset-bottom))] [&_button]:max-md:h-10">
           {footer}
         </div>

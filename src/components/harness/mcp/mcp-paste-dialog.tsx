@@ -358,6 +358,9 @@ export function McpPasteDialog({
       </>
     )
   } else if (flow.step === "input") {
+    const chosen =
+      snippet?.servers.filter((_, index) => dialog.choices[index]?.chosen)
+        .length ?? 0
     const targetRows: McpTargetRow[] =
       model && snippet
         ? model.agents.flatMap((info): McpTargetRow[] => {
@@ -387,15 +390,18 @@ export function McpPasteDialog({
                 block: info.editBlock
                   ? { kind: "agent", block: info.editBlock }
                   : null,
-                // An agent left unticked gets none of them — said, so the
-                // row does not read as one still to be worked out.
-                note: commentsLost ? (
-                  <>
-                    {t("getsServers", { count })} · {tTargets("commentsLost")}
-                  </>
-                ) : (
-                  t("getsServers", { count: ticked ? count : 0 })
-                ),
+                // Said only where it is worth noticing: a ticked agent that
+                // gets fewer than the servers chosen, a file that loses its
+                // comments.
+                note:
+                  [
+                    ticked && count < chosen
+                      ? t("getsServers", { count })
+                      : null,
+                    commentsLost ? tTargets("commentsLost") : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || null,
                 warn: commentsLost,
               },
             ]

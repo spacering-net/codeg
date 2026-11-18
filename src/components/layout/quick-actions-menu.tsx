@@ -40,7 +40,7 @@
 
 import { useCallback, useState } from "react"
 import {
-  Blocks,
+  DraftingCompass,
   Ellipsis,
   FolderGit2,
   FolderOpen,
@@ -255,7 +255,7 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
         onSelect={() => setRoute("canvas")}
       />
       <MenuRow
-        icon={<Blocks />}
+        icon={<DraftingCompass />}
         label={tSidebar("harness")}
         trailing={
           harnessUpdates > 0 && <HarnessUpdatesBadge count={harnessUpdates} />

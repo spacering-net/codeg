@@ -257,7 +257,7 @@ describe("SkillsSection — Codeg-managed skills", () => {
     expect(screen.queryByRole("button", { name: "brainstorming" })).toBeNull()
     // Each marked with where it comes from; Harness with its version.
     expect(screen.getAllByText(m.origins.custom).length).toBeGreaterThan(0)
-    expect(screen.getAllByText("Harness 1.2.0").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("SRN Harness 1.2.0").length).toBeGreaterThan(0)
   })
 
   it("shows each agent's cell in words, a shared folder said as such", async () => {
@@ -287,6 +287,31 @@ describe("SkillsSection — Codeg-managed skills", () => {
         name: `PDF tools, Codex: On, through the shared folder ${SHARED_DIR}`,
       })
     ).toHaveAttribute("aria-checked", "true")
+  })
+
+  it("lists the skills instead of a matrix with no agent's column to draw", async () => {
+    wide()
+    setup({
+      agents: [{ agent: "codex", shared: true }],
+      skills: [{ id: "my-flow", origin: "custom", name: "My flow", cells: {} }],
+    })
+    // Codex is not installed and holds none of them: folded away.
+    engine.answer.acp_list_agents = () => [
+      {
+        agent_type: "codex",
+        name: "codex",
+        skills_capable: true,
+        sort_order: 0,
+        installed_version: null,
+        custom_source: null,
+        env: {},
+        enabled: true,
+      },
+    ]
+    render(<Harness />)
+    const row = await screen.findByRole("button", { name: /^My flow/ })
+    expect(row.textContent).toContain("No agents shown")
+    expect(screen.queryByRole("table")).toBeNull()
   })
 })
 
@@ -2259,21 +2284,6 @@ describe("SkillsSection — codes and states a newer Codeg may send", () => {
 // ─── On a phone ───────────────────────────────────────────────────────
 
 describe("SkillsSection — on a phone", () => {
-  it("names the host by its chip alone, its sentence in the tooltip", async () => {
-    mocks.mobile = true
-    setup(usualHost())
-    const { container } = render(<Harness />)
-    const HINT = "Changes here are saved on this computer."
-    await screen.findByRole("button", { name: /^My flow/ })
-    const host = container.querySelector("[data-harness-host]")!
-    expect(within(host as HTMLElement).getByText(HINT)).toHaveClass("sr-only")
-    expect(
-      within(host as HTMLElement)
-        .getByText("This computer")
-        .closest("[title]")
-    ).toHaveAttribute("title", HINT)
-  })
-
   it("lists the skills, each with the agents it is on for, and opens one as a screen", async () => {
     mocks.mobile = true
     setup(usualHost())

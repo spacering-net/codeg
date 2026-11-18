@@ -65,16 +65,21 @@ import {
   type McpServer,
 } from "@/lib/mcp/model"
 import type { McpEntry } from "@/lib/mcp/types"
+import {
+  HARNESS_GROUP_LABEL_CLASS,
+  HARNESS_LIST_PAD_CLASS,
+  HARNESS_LIST_PANE_CLASS,
+  HARNESS_ROW_GROUPS_CLASS,
+  HARNESS_ROWS_CLASS,
+  HARNESS_TOOLBAR_CLASS,
+} from "../harness-styles"
+import { HarnessScroller } from "../harness-scroller"
 import { getTransport } from "@/lib/transport"
-import { HarnessHostLabel, useHarnessHost } from "../harness-host-label"
+import { cn } from "@/lib/utils"
+import { useHarnessHost } from "../harness-host-label"
 import { HarnessRecordProblem } from "../install/install-parts"
 import { MachineText } from "../machine-text"
-import {
-  AgentListSkeleton,
-  McpAgentDetail,
-  McpAgentRow,
-  ServerListSkeleton,
-} from "./mcp-agent-view"
+import { McpAgentDetail, McpAgentRow, RowListSkeleton } from "./mcp-agent-view"
 import {
   McpConfirmSwitchDialog,
   McpRemoveDialog,
@@ -239,7 +244,7 @@ function LoadFailure({
     return (
       <div
         role="alert"
-        className="mx-2 mb-2 flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-tone-warning/10 px-3 py-2 text-xs"
+        className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-tone-warning/10 px-3 py-2 text-xs"
       >
         <TriangleAlert
           aria-hidden="true"
@@ -283,13 +288,17 @@ function EmptyState({
   children?: ReactNode
 }) {
   return (
-    <div className="flex min-h-48 items-center justify-center p-6">
+    // Top-aligned, not centred: the list's and the detail's stand side by
+    // side, and their icons line up whatever each says under them.
+    <div className="flex justify-center px-6 pt-10 pb-6">
       <div className="flex max-w-sm min-w-0 flex-col items-center gap-2 text-center">
         <span className="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground">
           {icon}
         </span>
         <p className="text-sm font-medium">{title}</p>
-        {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+        {hint && (
+          <p className="text-xs text-balance text-muted-foreground">{hint}</p>
+        )}
         {children}
       </div>
     </div>
@@ -335,6 +344,83 @@ function McpDialogs({ model }: { model: McpModel | null }) {
         <McpConfirmSwitchDialog key={dialog.id} dialog={dialog} model={model} />
       )
   }
+}
+
+/** The title over a list or one of its groups, with its count. The list is
+ *  named for itself, so the title is for the eye only. */
+function ListTitle({ label, count }: { label: string; count: number }) {
+  return (
+    <p aria-hidden="true" className={HARNESS_GROUP_LABEL_CLASS}>
+      {label}
+      <span className="tabular-nums opacity-70">{count}</span>
+    </p>
+  )
+}
+
+/**
+ * The servers, as cards. Where some came from Harness, they come first,
+ * under the catalog's name, and the rest under "Added by hand" — each group
+ * with its count; otherwise one plain list.
+ */
+function ServerList({
+  servers,
+  harness,
+  selected,
+  onOpen,
+}: {
+  servers: McpServer[]
+  harness: McpHarnessSeam | undefined
+  selected: string | null
+  onOpen: (key: string) => void
+}) {
+  const t = useTranslations("Harness.mcp")
+  const row = (server: McpServer) => (
+    <McpServerRow
+      key={server.key}
+      server={server}
+      selected={server.key === selected}
+      harness={harness?.marks.get(server.key)}
+      onOpen={onOpen}
+    />
+  )
+  const fromHarness = harness
+    ? servers.filter((server) => harness.marks.has(server.key))
+    : []
+  if (fromHarness.length === 0) {
+    return (
+      <div className="min-w-0">
+        <ListTitle label={t("list.serversLabel")} count={servers.length} />
+        <ul
+          aria-label={t("list.serversLabel")}
+          onKeyDown={moveRowFocus}
+          className={HARNESS_ROWS_CLASS}
+        >
+          {servers.map(row)}
+        </ul>
+      </div>
+    )
+  }
+  const others = servers.filter((server) => !harness?.marks.has(server.key))
+  const groups = [
+    { id: "harness", label: t("harness.title"), servers: fromHarness },
+    { id: "manual", label: t("list.groupManual"), servers: others },
+  ].filter((group) => group.servers.length > 0)
+  return (
+    <ul
+      aria-label={t("list.serversLabel")}
+      onKeyDown={moveRowFocus}
+      className={HARNESS_ROW_GROUPS_CLASS}
+    >
+      {groups.map((group) => (
+        <li key={group.id} className="min-w-0">
+          <ListTitle label={group.label} count={group.servers.length} />
+          <ul aria-label={group.label} className={HARNESS_ROWS_CLASS}>
+            {group.servers.map(row)}
+          </ul>
+        </li>
+      ))}
+    </ul>
+  )
 }
 
 // ─── The section ──────────────────────────────────────────────────────
@@ -454,8 +540,7 @@ export function McpSection() {
 
   const retry = () => void reloadMcpInventory(slots)
   const header = (
-    <div className="flex shrink-0 flex-col gap-2 px-3 pt-3 pb-2 md:px-4">
-      <HarnessHostLabel foldHint={isMobile} />
+    <div className={HARNESS_TOOLBAR_CLASS}>
       <McpToolbar harness={harness} />
     </div>
   )
@@ -467,10 +552,8 @@ export function McpSection() {
     list =
       state.phase === "error" && state.error ? (
         <LoadFailure failure={state.error} variant="pane" onRetry={retry} />
-      ) : view === "servers" ? (
-        <ServerListSkeleton />
       ) : (
-        <AgentListSkeleton />
+        <RowListSkeleton />
       )
   } else if (view === "servers") {
     const servers = model.servers.filter((server) =>
@@ -508,21 +591,12 @@ export function McpSection() {
           </Button>
         </EmptyState>
       ) : (
-        <ul
-          aria-label={t("list.serversLabel")}
-          onKeyDown={moveRowFocus}
-          className="flex min-w-0 flex-col gap-0.5 p-2"
-        >
-          {servers.map((server) => (
-            <McpServerRow
-              key={server.key}
-              server={server}
-              selected={server.key === shownServer}
-              harness={harness?.marks.get(server.key)}
-              onOpen={openServer}
-            />
-          ))}
-        </ul>
+        <ServerList
+          servers={servers}
+          harness={harness}
+          selected={shownServer}
+          onOpen={openServer}
+        />
       )
   } else {
     const { rows, folded } = agentRows(model, shownFilters, showAll, harness)
@@ -553,11 +627,12 @@ export function McpSection() {
           </Button>
         </EmptyState>
       ) : (
-        <div className="p-2">
+        <div className="min-w-0">
+          <ListTitle label={t("list.agentsLabel")} count={rows.length} />
           <ul
             aria-label={t("list.agentsLabel")}
             onKeyDown={moveRowFocus}
-            className="flex min-w-0 flex-col gap-0.5"
+            className={HARNESS_ROWS_CLASS}
           >
             {rows.map(({ info, entries }) => (
               <McpAgentRow
@@ -571,35 +646,37 @@ export function McpSection() {
               />
             ))}
           </ul>
-          {!filtering && <ShowAllAgentsToggle hidden={folded} />}
+          {!filtering && (
+            <ShowAllAgentsToggle hidden={folded} className="px-1" />
+          )}
         </div>
       )
   }
 
   const scroller = (
-    <div
+    <HarnessScroller
       ref={listRef}
       tabIndex={-1}
       onScroll={(event) => {
         const top = event.currentTarget.scrollTop
         slots.set(MCP_LIST_SCROLL, (prev) => ({ ...prev, [view]: top }))
       }}
-      className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto outline-none"
+      className="flex-1"
     >
       {/* On a phone the controls scroll away with the list: the page's own
           top — its line of description and the section switch — is already
           above them. */}
       {isMobile && header}
-      {model && state.phase === "error" && state.error && (
-        <LoadFailure failure={state.error} variant="banner" onRetry={retry} />
-      )}
-      {harness?.problem && (
-        <div className="px-2 pt-2">
+      <div className={cn("min-w-0 space-y-2", HARNESS_LIST_PAD_CLASS)}>
+        {model && state.phase === "error" && state.error && (
+          <LoadFailure failure={state.error} variant="banner" onRetry={retry} />
+        )}
+        {harness?.problem && (
           <HarnessRecordProblem part="mcp" problem={harness.problem} />
-        </div>
-      )}
-      {list}
-    </div>
+        )}
+        {list}
+      </div>
+    </HarnessScroller>
   )
 
   // ── The detail ──
@@ -630,10 +707,8 @@ export function McpSection() {
         // the detail beside it shows.
         <div className="flex h-full min-h-0 min-w-0 flex-col">
           {header}
-          <div className="flex min-h-0 min-w-0 flex-1 border-t border-border/50 ws-chrome-border">
-            <div className="flex w-[clamp(18rem,36%,26rem)] shrink-0 flex-col border-e border-border/50 ws-chrome-border">
-              {scroller}
-            </div>
+          <div className="flex min-h-0 min-w-0 flex-1">
+            <div className={HARNESS_LIST_PANE_CLASS}>{scroller}</div>
             <div className="min-h-0 min-w-0 flex-1">
               {detail ?? (
                 <EmptyState

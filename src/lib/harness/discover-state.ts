@@ -297,6 +297,46 @@ export const DISCOVER_CONFIG = defineHarnessSlot<Loadable<HarnessConfig>>(
   idle
 )
 
+/** How many items the catalog holds of each kind — and in all — whatever the
+ *  search and the filters say. Shown on the kind switch and in the heading. */
+export type DiscoverKindTotals = Partial<Record<DiscoverKindFilter, number>>
+
+export const DISCOVER_KIND_TOTALS = defineHarnessSlot<
+  Loadable<DiscoverKindTotals>
+>("discover", idle)
+
+/** How the results are laid out: cards in a grid, or rows in a list. */
+export type DiscoverLayout = "grid" | "list"
+
+const LAYOUT_KEY = "workspace:harness-discover-layout"
+
+function loadDiscoverLayout(): DiscoverLayout {
+  if (typeof window === "undefined") return "grid"
+  try {
+    return localStorage.getItem(LAYOUT_KEY) === "list" ? "list" : "grid"
+  } catch {
+    return "grid"
+  }
+}
+
+/** Remembered on this device, like the section the page was left on. */
+export const DISCOVER_LAYOUT = defineHarnessSlot<DiscoverLayout>(
+  "discover",
+  loadDiscoverLayout
+)
+
+export function setDiscoverLayout(
+  slots: HarnessSlotStore,
+  layout: DiscoverLayout
+): void {
+  slots.set(DISCOVER_LAYOUT, layout)
+  try {
+    localStorage.setItem(LAYOUT_KEY, layout)
+  } catch {
+    /* ignore */
+  }
+}
+
 // ─── Requests ─────────────────────────────────────────────────────────
 
 // One counter for every load and every store. Kept outside the slots on
@@ -697,6 +737,69 @@ export function closeDiscoverItem(slots: HarnessSlotStore): void {
   resumeDetail(slots, back.detail)
 }
 
+// ─── Totals ───────────────────────────────────────────────────────────
+
+/**
+ * Ask the catalog how much it holds of each kind: the first page of each, as
+ * the list itself asks for it — so the backend's cache answers the list when
+ * the user then picks that kind. Read once per window; one that failed is
+ * tried again on the next visit. Nothing is said when it fails: the counts
+ * are simply not shown.
+ */
+export function ensureDiscoverKindTotals(
+  slots: HarnessSlotStore,
+  options: { force?: boolean } = {}
+): void {
+  const { phase } = slots.get(DISCOVER_KIND_TOTALS)
+  if (!options.force && phase !== "idle" && phase !== "error") return
+  const request = newRequest()
+  slots.set(
+    DISCOVER_KIND_TOTALS,
+    (prev): Loadable<DiscoverKindTotals> => ({
+      ...prev,
+      phase: "loading",
+      request,
+    })
+  )
+  void (async () => {
+    const results = await Promise.allSettled(
+      DISCOVER_KIND_FILTERS.map((kind) =>
+        harnessList(
+          listArgs(discoverQueryOf({ ...DEFAULT_DISCOVER_FILTERS, kind }))
+        )
+      )
+    )
+    if (slots.get(DISCOVER_KIND_TOTALS).request !== request) return
+    const value: DiscoverKindTotals = {}
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled" && result.value.approxTotal !== null) {
+        value[DISCOVER_KIND_FILTERS[index]] = result.value.approxTotal
+      }
+    })
+    const any = Object.keys(value).length > 0
+    slots.set(DISCOVER_KIND_TOTALS, {
+      phase: any ? "ready" : "error",
+      value: any ? value : null,
+      error: null,
+      request,
+    })
+  })()
+}
+
+/**
+ * Straight back to the list, from however deep in the details the user is
+ * (an assistant's skill, opened from the assistant): the card the first of
+ * them was opened from gets the focus.
+ */
+export function closeDiscoverToList(slots: HarnessSlotStore): void {
+  const detail = slots.get(DISCOVER_DETAIL)
+  if (!detail) return
+  const first = slots.get(DISCOVER_DETAIL_TRAIL)[0]?.detail ?? detail
+  slots.set(DISCOVER_RETURN_FOCUS, first.item?.ref ?? first.ref)
+  slots.set(DISCOVER_DETAIL_TRAIL, [])
+  slots.set(DISCOVER_DETAIL, null)
+}
+
 // ─── Configuration ────────────────────────────────────────────────────
 
 async function loadConfig(
@@ -728,4 +831,19 @@ export function ensureDiscoverConfig(slots: HarnessSlotStore): void {
   if (phase === "idle" || phase === "error") {
     void loadConfig(slots, DISCOVER_CONFIG)
   }
+}
+
+/**
+ * Refresh, from the page's chrome: what the user is looking at is asked for
+ * again — the open item, or the list with the counts above it — and a
+ * configuration that failed is tried again.
+ */
+export function refreshDiscover(slots: HarnessSlotStore): void {
+  ensureDiscoverConfig(slots)
+  if (slots.get(DISCOVER_DETAIL)) {
+    retryDiscoverItem(slots)
+    return
+  }
+  ensureDiscoverKindTotals(slots, { force: true })
+  reloadDiscoverList(slots)
 }

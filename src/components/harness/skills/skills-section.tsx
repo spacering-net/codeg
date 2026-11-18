@@ -10,6 +10,8 @@ import {
   type ReactNode,
 } from "react"
 import {
+  ChevronDown,
+  ChevronUp,
   Copy,
   MousePointerClick,
   PackageCheck,
@@ -72,7 +74,19 @@ import {
   skillsInScope,
   type SkillsFilters,
 } from "@/lib/harness/skills-state"
+import {
+  HARNESS_GROUP_LABEL_CLASS,
+  HARNESS_LIST_PAD_CLASS,
+  HARNESS_LIST_PANE_CLASS,
+  HARNESS_ROWS_CLASS,
+  HARNESS_ROW_CLASS,
+  HARNESS_ROW_TILE_CLASS,
+  HARNESS_TOOLBAR_CLASS,
+} from "../harness-styles"
+import { HarnessScroller } from "../harness-scroller"
+import { SHOW_ALL_AGENTS_CLASS } from "../mcp/mcp-server-detail"
 import { listenSkillsChanged } from "@/lib/skills/changes"
+import { cn } from "@/lib/utils"
 import { freeCopyId, freeId } from "@/lib/skills/ids"
 import { cellView, isProblemKind, type SkillsModel } from "@/lib/skills/model"
 import type { SkillsIssue, StoreSkill } from "@/lib/skills/types"
@@ -502,7 +516,9 @@ export function SkillsSection() {
   const detailOpen = current !== null
   const gridWidth = (GRID_SKILL_REM + agents.length * GRID_AGENT_REM + 2) * rem
   const paneWidth = width - (split && detailOpen ? DETAIL_REM * rem : 0)
-  const gridFits = split && (width === 0 || paneWidth >= gridWidth)
+  // The matrix is a column per agent: with no agent to show, the list.
+  const gridFits =
+    split && agents.length > 0 && (width === 0 || paneWidth >= gridWidth)
 
   const close = useCallback(() => closeSkillsDetail(slots), [slots])
   useHistoryBackDismiss(!split && detailOpen, close)
@@ -539,13 +555,12 @@ export function SkillsSection() {
 
   const retry = () => void reloadSkills(slots)
   const header = (
-    <div className="flex shrink-0 flex-col gap-2 px-3 pt-3 pb-2 md:px-4">
+    <div className={HARNESS_TOOLBAR_CLASS}>
       <SkillsToolbar
         hasHarness={
           model?.managed.some((skill) => skill.origin === "harness") ?? false
         }
         harness={harness}
-        foldHint={isMobile}
       />
     </div>
   )
@@ -568,7 +583,7 @@ export function SkillsSection() {
       list = (
         <>
           {(model.looseProblems.length > 0 || harness?.problem) && (
-            <div className="space-y-3 p-2">
+            <div className="space-y-3">
               <HarnessSkillsProblem harness={harness} />
               <StoreProblems problems={model.looseProblems} />
             </div>
@@ -605,7 +620,7 @@ export function SkillsSection() {
             </Button>
           </EmptyState>
         ) : (
-          <div className="min-w-0 space-y-3 p-2">
+          <div className="min-w-0 space-y-3">
             <WriteNotices links={SKILLS_LINKS} />
             <HarnessSkillsProblem harness={harness} />
             <StoreProblems problems={model.looseProblems} />
@@ -646,13 +661,10 @@ export function SkillsSection() {
             )}
             {gone.length > 0 && (
               <section aria-label={tHarness("missingList")} className="min-w-0">
-                <p className="px-2.5 pt-1 pb-1 text-2xs leading-4 font-semibold tracking-wide text-muted-foreground uppercase">
+                <p className={HARNESS_GROUP_LABEL_CLASS}>
                   {tHarness("missingList")}
                 </p>
-                <ul
-                  onKeyDown={moveRowFocus}
-                  className="flex min-w-0 flex-col gap-0.5"
-                >
+                <ul onKeyDown={moveRowFocus} className={HARNESS_ROWS_CLASS}>
                   {gone.map((mark) => (
                     <li key={mark.name} className="min-w-0">
                       <button
@@ -662,12 +674,16 @@ export function SkillsSection() {
                           mark.name === selected ? "true" : undefined
                         }
                         onClick={() => setSelected(mark.name)}
-                        className="flex w-full min-w-0 items-start gap-2.5 rounded-lg px-2.5 py-2 text-start outline-none hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-[current=true]:bg-muted"
+                        className={HARNESS_ROW_CLASS}
                       >
-                        <PackageX
-                          aria-hidden="true"
-                          className="mt-0.5 size-4 shrink-0 text-tone-warning"
-                        />
+                        <span
+                          className={cn(
+                            HARNESS_ROW_TILE_CLASS,
+                            "text-tone-warning"
+                          )}
+                        >
+                          <PackageX aria-hidden="true" />
+                        </span>
                         <span className="min-w-0 flex-1">
                           <span
                             dir="ltr"
@@ -690,13 +706,8 @@ export function SkillsSection() {
             )}
             {orphans.length > 0 && (
               <section aria-label={t("list.orphans")} className="min-w-0">
-                <p className="px-2.5 pt-1 pb-1 text-2xs leading-4 font-semibold tracking-wide text-muted-foreground uppercase">
-                  {t("list.orphans")}
-                </p>
-                <ul
-                  onKeyDown={moveRowFocus}
-                  className="flex min-w-0 flex-col gap-0.5"
-                >
+                <p className={HARNESS_GROUP_LABEL_CLASS}>{t("list.orphans")}</p>
+                <ul onKeyDown={moveRowFocus} className={HARNESS_ROWS_CLASS}>
                   {orphans.map((link) => {
                     const id = brokenSelection(link.path)
                     return (
@@ -706,12 +717,16 @@ export function SkillsSection() {
                           data-mcp-row={id}
                           aria-current={id === selected ? "true" : undefined}
                           onClick={() => setSelected(id)}
-                          className="flex w-full min-w-0 items-start gap-2.5 rounded-lg px-2.5 py-2 text-start outline-none hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-[current=true]:bg-muted"
+                          className={HARNESS_ROW_CLASS}
                         >
-                          <Unlink
-                            aria-hidden="true"
-                            className="mt-0.5 size-4 shrink-0 text-tone-warning"
-                          />
+                          <span
+                            className={cn(
+                              HARNESS_ROW_TILE_CLASS,
+                              "text-tone-warning"
+                            )}
+                          >
+                            <Unlink aria-hidden="true" />
+                          </span>
                           <span className="min-w-0 flex-1">
                             <span
                               dir="ltr"
@@ -743,7 +758,7 @@ export function SkillsSection() {
     })
     const unsupported = agentList.result && !agentList.result.supported
     list = (
-      <div className="min-w-0 space-y-3 p-2">
+      <div className="min-w-0 space-y-3">
         <AgentScopePicker agents={allAgents} notInstalled={notInstalled} />
         <WriteNotices links={SKILLS_LINKS} />
         {agentList.phase === "error" && agentList.error ? (
@@ -768,7 +783,7 @@ export function SkillsSection() {
           <ul
             aria-label={t("byAgent.listLabel")}
             onKeyDown={moveRowFocus}
-            className="flex min-w-0 flex-col gap-0.5"
+            className={HARNESS_ROWS_CLASS}
           >
             {items.map((item) => (
               <AgentSkillRow
@@ -785,21 +800,21 @@ export function SkillsSection() {
   }
 
   const scroller = (
-    <div
+    <HarnessScroller
       ref={listRef}
       tabIndex={-1}
       onScroll={(event) => {
         const top = event.currentTarget.scrollTop
         slots.set(SKILLS_LIST_SCROLL, (prev) => ({ ...prev, [view]: top }))
       }}
-      className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto outline-none"
+      className="flex-1"
     >
       {isMobile && header}
-      {model && state.phase === "error" && state.error && (
-        <LoadFailure failure={state.error} variant="banner" onRetry={retry} />
-      )}
-      {importing.phase === "failed" && importing.failure && (
-        <div className="px-2 pb-2">
+      <div className={cn("min-w-0 space-y-3", HARNESS_LIST_PAD_CLASS)}>
+        {model && state.phase === "error" && state.error && (
+          <LoadFailure failure={state.error} variant="banner" onRetry={retry} />
+        )}
+        {importing.phase === "failed" && importing.failure && (
           <FailureNote>
             <p>{t("add.importFailed")}</p>
             <FailureText failure={importing.failure} />
@@ -813,10 +828,10 @@ export function SkillsSection() {
               {t("dismiss")}
             </Button>
           </FailureNote>
-        </div>
-      )}
-      {list}
-    </div>
+        )}
+        {list}
+      </div>
+    </HarnessScroller>
   )
 
   // ── The detail ──
@@ -864,7 +879,7 @@ export function SkillsSection() {
       {split ? (
         <div className="flex h-full min-h-0 min-w-0 flex-col">
           {header}
-          <div className="flex min-h-0 min-w-0 flex-1 border-t border-border/50 ws-chrome-border">
+          <div className="flex min-h-0 min-w-0 flex-1">
             {view === "managed" && !detailOpen ? (
               <div className="flex min-w-0 flex-1 flex-col">{scroller}</div>
             ) : (
@@ -872,8 +887,8 @@ export function SkillsSection() {
                 <div
                   className={
                     view === "managed" && gridFits
-                      ? "flex min-w-0 flex-1 flex-col border-e border-border/50 ws-chrome-border"
-                      : "flex w-[clamp(18rem,36%,26rem)] shrink-0 flex-col border-e border-border/50 ws-chrome-border"
+                      ? "flex min-w-0 flex-1 flex-col border-e border-border/60 ws-chrome-border"
+                      : HARNESS_LIST_PANE_CLASS
                   }
                 >
                   {scroller}
@@ -920,19 +935,25 @@ export function SkillsSection() {
   )
 }
 
-/** "Show all agents" under the matrix: the columns folded away. */
+/** "Show all agents" under the matrix: the columns folded away. The same
+ *  quiet link as under the MCP section's lists, on the rows' inset. */
 function ShowAllAgents({ hidden }: { hidden: number }) {
   const t = useTranslations("Harness.skills.detail")
   const [showAll, setShowAll] = useHarnessSlot(SKILLS_SHOW_ALL_AGENTS)
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="link"
       size="sm"
       aria-expanded={showAll}
       onClick={() => setShowAll(!showAll)}
-      className="max-md:h-10"
+      className={cn(SHOW_ALL_AGENTS_CLASS, "px-1")}
     >
+      {showAll ? (
+        <ChevronUp aria-hidden="true" />
+      ) : (
+        <ChevronDown aria-hidden="true" />
+      )}
       {showAll ? t("hideNotInstalled") : t("showAll", { count: hidden })}
     </Button>
   )

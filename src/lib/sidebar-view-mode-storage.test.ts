@@ -207,7 +207,7 @@ describe("sidebar nav items", () => {
     for (const id of SIDEBAR_NAV_ITEM_IDS) {
       expect(typeof labels[id]).toBe("string")
     }
-    expect(enMessages.Folder.sidebar.harness).toBe("Harness")
+    expect(enMessages.Folder.sidebar.harness).toBe("Harness Engineering")
   })
 
   it("shows a row unless it was explicitly hidden", () => {

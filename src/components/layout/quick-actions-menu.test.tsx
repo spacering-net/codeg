@@ -223,7 +223,7 @@ describe("Quick actions, in the status bar's account menu", () => {
       "To-dos",
       FORGE_ROW,
       "Infinite Canvas",
-      "Harness",
+      "Harness Engineering",
       "—",
       "Open project",
       "Open remote workspace",
@@ -424,7 +424,7 @@ describe("Quick actions, in the status bar's account menu", () => {
       "To-dos",
       FORGE_ROW,
       "Infinite Canvas",
-      "Harness",
+      "Harness Engineering",
       "—",
       "Open project",
       "—",
@@ -450,7 +450,7 @@ describe("Quick actions, in the status bar's account menu", () => {
       "To-dos",
       FORGE_ROW,
       "Infinite Canvas",
-      "Harness",
+      "Harness Engineering",
       "Open project",
       "Open remote workspace",
       "Open local workspace",
@@ -519,7 +519,7 @@ describe("Quick actions, in the status bar's account menu", () => {
     expect(mocks.setRoute).toHaveBeenCalledWith("forge")
 
     await reopen()
-    await clickItem("Harness")
+    await clickItem("Harness Engineering")
     expect(mocks.setRoute).toHaveBeenCalledWith("harness")
 
     await reopen()
@@ -530,7 +530,7 @@ describe("Quick actions, in the status bar's account menu", () => {
 
   it("lists every sidebar route, in the sidebar's own order", async () => {
     await mountAndOpen()
-    await screen.findByRole("menuitem", { name: "Harness" })
+    await screen.findByRole("menuitem", { name: "Harness Engineering" })
 
     // The same list the sidebar builds its rows from, so a route added there
     // cannot be left out of — or misplaced in — the one menu that still
@@ -543,7 +543,7 @@ describe("Quick actions, in the status bar's account menu", () => {
       .map((text) => labels.find((label) => text?.startsWith(label)))
       .filter((label) => label !== undefined)
     expect(rows).toEqual(labels)
-    expect(labels[labels.length - 1]).toBe("Harness")
+    expect(labels[labels.length - 1]).toBe("Harness Engineering")
   })
 
   it("keeps Harness reachable off the desktop", async () => {
@@ -552,21 +552,23 @@ describe("Quick actions, in the status bar's account menu", () => {
 
     // A route switch, not a desktop feature: it is how a web client — or
     // anyone who hid the sidebar row — gets to the page at all.
-    await clickItem("Harness")
+    await clickItem("Harness Engineering")
     expect(mocks.setRoute).toHaveBeenCalledWith("harness")
   })
 
   it("carries no Harness badge while nothing has an update", async () => {
     await mountAndOpen()
-    const row = await screen.findByRole("menuitem", { name: "Harness" })
-    expect(row.textContent).toBe("Harness")
+    const row = await screen.findByRole("menuitem", {
+      name: "Harness Engineering",
+    })
+    expect(row.textContent).toBe("Harness Engineering")
   })
 
   it("carries the sidebar's updates badge on the Harness row", async () => {
     await mountAndOpen({ harnessUpdates: 4 })
 
     const row = await screen.findByRole("menuitem", {
-      name: "Harness 4 updates available",
+      name: "Harness Engineering 4 updates available",
     })
     const badge = row.querySelector('[title="4 updates available"]')
     expect(badge).not.toBeNull()

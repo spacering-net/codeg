@@ -946,7 +946,7 @@ describe("Discover — what an assistant may use", () => {
     const skills = within(row(caps, "Skills it loads")).getAllByRole("listitem")
     expect(skills.map((skill) => skill.textContent)).toEqual([
       "pdf",
-      "house-style not in Harness",
+      "house-style not in SRN Harness",
     ])
     expect(row(caps, "MCP servers it uses")).toHaveTextContent("github")
     const launches = row(caps, "MCP servers it starts")
@@ -1183,7 +1183,7 @@ describe("Discover — copying an assistant's definition", () => {
     [
       "notFound",
       backendError("notFound"),
-      "Harness keeps no copy of this definition.",
+      "SRN Harness keeps no copy of this definition.",
     ],
     [
       "tooLarge",
@@ -1213,7 +1213,7 @@ describe("Discover — copying an assistant's definition", () => {
     [
       "unknown",
       new Error("socket hang up"),
-      "Harness could not be loaded.socket hang up",
+      "SRN Harness could not be loaded.socket hang up",
     ],
   ])("says why it could not be copied: %s", async (_kind, error, message) => {
     const user = userEvent.setup()

@@ -1,7 +1,7 @@
 "use client"
 
 import { useId } from "react"
-import { Loader2 } from "lucide-react"
+import { ChevronDown, ChevronUp, Loader2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
@@ -20,6 +20,7 @@ import {
 import type { HarnessSlot } from "@/lib/harness-slots"
 import type { SkillsAgent, SkillCell } from "@/lib/skills/types"
 import { AgentGlyph, McpDetailPart } from "../mcp/mcp-bits"
+import { SHOW_ALL_AGENTS_CLASS } from "../mcp/mcp-server-detail"
 import { rowCell, WriteNotices, type GridRow } from "./skill-grid"
 import { useSkillsLabels } from "./use-skills-labels"
 import { SkillPath } from "./skill-bits"
@@ -79,7 +80,7 @@ function AgentRow({
   )
 
   return (
-    <li className="flex min-w-0 items-start gap-3 px-3 py-2.5">
+    <li className="flex min-w-0 items-start gap-3 px-5 py-3.5">
       <AgentGlyph agent={agent.agent} className="mt-0.5 size-5" />
       <div className="min-w-0 flex-1 space-y-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -305,11 +306,11 @@ export function SkillAgentRows({
       <div className="space-y-2">
         <WriteNotices links={links} skills={new Set([row.id])} />
         {agents.length === 0 ? (
-          <p className="rounded-lg border px-3 py-2.5 text-xs text-muted-foreground">
+          <p className="rounded-xl border bg-card px-5 py-4 text-sm text-muted-foreground">
             {t("noAgents")}
           </p>
         ) : (
-          <ul className="divide-y rounded-lg border">
+          <ul className="divide-y rounded-xl border bg-card">
             {agents.map((agent) => (
               <AgentRow
                 key={agent.agent}
@@ -324,12 +325,17 @@ export function SkillAgentRows({
         {(hidden > 0 || showAll) && (
           <Button
             type="button"
-            variant="ghost"
+            variant="link"
             size="sm"
             aria-expanded={showAll}
             onClick={() => onShowAll(!showAll)}
-            className="max-md:h-10"
+            className={SHOW_ALL_AGENTS_CLASS}
           >
+            {showAll ? (
+              <ChevronUp aria-hidden="true" />
+            ) : (
+              <ChevronDown aria-hidden="true" />
+            )}
             {showAll ? t("hideNotInstalled") : t("showAll", { count: hidden })}
           </Button>
         )}

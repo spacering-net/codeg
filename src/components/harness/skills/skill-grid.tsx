@@ -45,6 +45,13 @@ import { cellView, type CellKind, type CellView } from "@/lib/skills/model"
 import type { CellTarget } from "@/lib/skills/ops"
 import type { SkillsAgent, StoreSkill } from "@/lib/skills/types"
 import { cn } from "@/lib/utils"
+import {
+  HARNESS_GROUP_LABEL_CLASS,
+  HARNESS_ROWS_CLASS,
+  HARNESS_ROW_CLASS,
+  HARNESS_ROW_GROUPS_CLASS,
+  HARNESS_ROW_TILE_CLASS,
+} from "../harness-styles"
 import { DiscoverMark } from "../discover/discover-card"
 import { AgentGlyph } from "../mcp/mcp-bits"
 import { moveRowFocus } from "../mcp/mcp-server-list"
@@ -382,16 +389,16 @@ export function SkillGrid({
         <ul
           aria-label={label}
           onKeyDown={moveRowFocus}
-          className="flex min-w-0 flex-col gap-0.5"
+          className={groups ? HARNESS_ROW_GROUPS_CLASS : HARNESS_ROWS_CLASS}
         >
           {sections.map((section) => (
             <li key={section.category} className="min-w-0">
               {groups && (
-                <p className="px-2.5 pt-2 pb-1 text-2xs leading-4 font-semibold tracking-wide text-muted-foreground uppercase">
+                <p className={HARNESS_GROUP_LABEL_CLASS}>
                   {groups.label(section.category)}
                 </p>
               )}
-              <ul className="flex min-w-0 flex-col gap-0.5">
+              <ul className={HARNESS_ROWS_CLASS}>
                 {section.rows.map((row) => {
                   const on = agents.filter(
                     (agent) => rowCell(row, agent).view.on
@@ -403,27 +410,28 @@ export function SkillGrid({
                         data-mcp-row={row.id}
                         aria-current={row.id === selected ? "true" : undefined}
                         onClick={() => onOpen(row.id)}
-                        className={cn(
-                          "flex w-full min-w-0 items-start gap-2.5 rounded-lg px-2.5 py-2.5 text-start transition-colors outline-none",
-                          "hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                          row.id === selected && "bg-muted hover:bg-muted"
-                        )}
+                        className={HARNESS_ROW_CLASS}
                       >
-                        <row.icon
-                          aria-hidden="true"
-                          className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-                        />
+                        <span className={HARNESS_ROW_TILE_CLASS}>
+                          <row.icon aria-hidden="true" />
+                        </span>
                         <span className="flex min-w-0 flex-1 flex-col gap-1">
-                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                          <span className="flex min-w-0 items-center gap-2">
                             <span
                               dir="auto"
-                              className="min-w-0 truncate text-sm font-medium text-foreground"
+                              className="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
                             >
                               {row.name}
                             </span>
-                            {row.marks}
+                            {/* The marks a detail shows full size, at the
+                                size of the row's own small text. */}
+                            {row.marks && (
+                              <span className="flex shrink-0 items-center gap-1 [&>span]:h-5 [&>span]:px-2 [&>span]:text-2xs [&>span>svg]:size-3">
+                                {row.marks}
+                              </span>
+                            )}
                           </span>
-                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-2xs leading-4 text-muted-foreground">
+                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                             <span>
                               {row.skill || row.ready
                                 ? t("onFor", {
@@ -466,7 +474,10 @@ export function SkillGrid({
 
   return (
     <div className="min-w-0 space-y-2">
-      <div ref={frameRef} className="min-w-0 overflow-x-auto rounded-lg border">
+      <div
+        ref={frameRef}
+        className="min-w-0 overflow-x-auto rounded-xl border bg-card"
+      >
         <table
           aria-label={label}
           className="w-full table-fixed border-collapse text-sm"

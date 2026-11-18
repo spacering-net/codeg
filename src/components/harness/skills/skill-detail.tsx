@@ -13,7 +13,6 @@ import {
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
 import { useHarnessSlot, useHarnessView } from "@/contexts/harness-view-context"
 import type { HarnessSlot } from "@/lib/harness-slots"
 import {
@@ -30,8 +29,16 @@ import type {
   SkillsAgent,
   SkillsIssue,
 } from "@/lib/skills/types"
+import { HarnessScroller } from "../harness-scroller"
+import {
+  HARNESS_DETAIL_CLASS,
+  HARNESS_DETAIL_HEADER_CLASS,
+  HARNESS_DETAIL_TILE_CLASS,
+  HARNESS_DETAIL_TITLE_CLASS,
+} from "../harness-styles"
 import { MachineText } from "../machine-text"
 import { McpDetailPart } from "../mcp/mcp-bits"
+import { DetailBodySkeleton } from "../mcp/mcp-server-detail"
 import {
   FailureText,
   IssueList,
@@ -47,7 +54,7 @@ import { useSkillsLabels } from "./use-skills-labels"
 export function BackBar({ onBack }: { onBack: () => void }) {
   const t = useTranslations("Harness.skills.detail")
   return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-2 py-1.5 ws-chrome-border md:px-3">
+    <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-1 py-1.5 ws-chrome-border @2xl/harness:px-2">
       <Button
         type="button"
         variant="ghost"
@@ -97,16 +104,80 @@ export function DetailFrame({
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
       {onBack && <BackBar onBack={onBack} />}
-      <div
-        ref={ref}
-        onScroll={onScroll}
-        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
-      >
+      <HarnessScroller ref={ref} onScroll={onScroll} className="flex-1">
         {children}
-      </div>
+      </HarnessScroller>
     </div>
   )
 }
+
+/** A skill detail's head, the same for every kind of skill and as MCP's
+ *  details have it: a tile and the heading with its marks under it, then
+ *  what the skill is for, where it is, notes, and what can be done. */
+export function SkillDetailHeader({
+  headingId,
+  headingRef,
+  icon,
+  title,
+  subtitle,
+  marks,
+  description,
+  children,
+  actions,
+}: {
+  headingId?: string
+  headingRef?: React.Ref<HTMLHeadingElement>
+  icon: ReactNode
+  title: ReactNode
+  /** The id, where the name is not it. */
+  subtitle?: ReactNode
+  marks?: ReactNode
+  description?: ReactNode
+  /** Paths and notes, between the description and the actions. */
+  children?: ReactNode
+  actions?: ReactNode
+}) {
+  return (
+    <header className={HARNESS_DETAIL_HEADER_CLASS}>
+      <div className="flex min-w-0 items-start gap-4">
+        <span className={HARNESS_DETAIL_TILE_CLASS}>{icon}</span>
+        <div className="min-w-0 flex-1 space-y-1.5 pt-1">
+          <h2
+            id={headingId}
+            ref={headingRef}
+            tabIndex={-1}
+            className={HARNESS_DETAIL_TITLE_CLASS}
+          >
+            {title}
+          </h2>
+          {subtitle && (
+            <p className="text-xs text-muted-foreground">{subtitle}</p>
+          )}
+          {marks && (
+            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+              {marks}
+            </div>
+          )}
+        </div>
+      </div>
+      {description && (
+        <p className="text-sm leading-relaxed text-foreground/80">
+          {description}
+        </p>
+      )}
+      {children}
+      {actions && (
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {actions}
+        </div>
+      )}
+    </header>
+  )
+}
+
+/** A note under a detail's head: why it is read only, whose it is. */
+export const DETAIL_NOTE_CLASS =
+  "rounded-xl border bg-muted/40 px-4 py-2.5 text-xs leading-relaxed text-muted-foreground"
 
 /** The message a detail shows for a skill that is not there (any more). */
 export function DetailNotFound({ id, hint }: { id: string; hint: string }) {
@@ -137,13 +208,7 @@ export function DetailNotFound({ id, hint }: { id: string; hint: string }) {
 }
 
 export function DetailSkeleton() {
-  return (
-    <div aria-hidden="true" className="space-y-3 px-3 py-4 md:px-5">
-      <Skeleton className="h-6 w-40" />
-      <Skeleton className="h-24 w-full" />
-      <Skeleton className="h-40 w-full" />
-    </div>
-  )
+  return <DetailBodySkeleton />
 }
 
 /** A SKILL.md, read when shown, with its preview. */
@@ -175,7 +240,7 @@ export function ContentPart({
   }, [slots, links, contentKey, unavailable, stale])
   return (
     <McpDetailPart title={t("content")}>
-      <div className="min-w-0 rounded-lg border px-3 py-3">
+      <div className="min-w-0 rounded-xl border bg-card px-5 py-4">
         {unavailable ? (
           <p className="text-xs text-muted-foreground">{unavailable}</p>
         ) : state?.content != null ? (
@@ -214,13 +279,13 @@ export function BrokenLinksPart({
   if (broken.length === 0) return null
   return (
     <McpDetailPart title={t("title")}>
-      <ul className="divide-y rounded-lg border">
+      <ul className="divide-y rounded-xl border bg-card">
         {broken.map((link) => {
           const repointable = model.skill(baseName(link.path)) !== undefined
           return (
             <li
               key={link.path}
-              className="min-w-0 space-y-1 px-3 py-2.5 text-xs"
+              className="min-w-0 space-y-1 px-5 py-3.5 text-xs"
             >
               <SkillPath path={link.path} className="text-xs text-foreground" />
               {link.target && (
@@ -301,11 +366,11 @@ export function BackupsPart({
   }
   return (
     <McpDetailPart title={t("title")} aside={String(backups.length)}>
-      <ul className="divide-y rounded-lg border">
+      <ul className="divide-y rounded-xl border bg-card">
         {backups.map((backup) => (
           <li
             key={backup.name}
-            className="min-w-0 space-y-1 px-3 py-2.5 text-xs"
+            className="min-w-0 space-y-1 px-5 py-3.5 text-xs"
           >
             <p className="font-medium text-foreground">
               {backup.created_at ? labels.date(backup.created_at) : backup.name}
@@ -412,53 +477,33 @@ export function StoreSkillDetail({
       scrollId={`skill:${row.id}`}
       onBack={onBack}
     >
-      <article
-        aria-labelledby={headingId}
-        className="mx-auto w-full max-w-4xl min-w-0 space-y-5 px-3 py-4 md:px-5"
-      >
-        <header className="min-w-0 space-y-2">
-          {row.marks && (
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              {row.marks}
-            </div>
-          )}
-          <h2
-            id={headingId}
-            ref={headingRef}
-            tabIndex={-1}
-            className="text-lg leading-snug font-semibold outline-none"
-          >
-            <bdi>{row.name}</bdi>
-          </h2>
-          {row.name !== row.id && (
-            <p className="text-xs text-muted-foreground">
+      <article aria-labelledby={headingId} className={HARNESS_DETAIL_CLASS}>
+        <SkillDetailHeader
+          headingId={headingId}
+          headingRef={headingRef}
+          icon={<row.icon aria-hidden="true" />}
+          title={<bdi>{row.name}</bdi>}
+          subtitle={
+            row.name !== row.id ? (
               <bdi dir="ltr" className="font-mono">
                 <MachineText>{row.id}</MachineText>
               </bdi>
-            </p>
-          )}
-          {row.description && (
-            <p className="text-sm text-muted-foreground">
-              <bdi>{row.description}</bdi>
-            </p>
-          )}
+            ) : undefined
+          }
+          marks={row.marks}
+          description={
+            row.description ? <bdi>{row.description}</bdi> : undefined
+          }
+          actions={actions}
+        >
           {row.skill && <SkillPath path={row.skill.path} />}
-          {note && (
-            <div className="rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              {note}
-            </div>
-          )}
+          {note && <div className={DETAIL_NOTE_CLASS}>{note}</div>}
           {problems && problems.length > 0 && (
-            <div className="rounded-lg bg-tone-warning/10 px-3 py-2">
+            <div className="rounded-xl bg-tone-warning/10 px-4 py-2.5">
               <IssueList issues={problems} />
             </div>
           )}
-          {actions && (
-            <div className="flex min-w-0 flex-wrap items-center gap-2 pt-1">
-              {actions}
-            </div>
-          )}
-        </header>
+        </SkillDetailHeader>
         <SkillAgentRows
           row={row}
           agents={agents}
@@ -511,20 +556,19 @@ export function OrphanLinkDetail({
       scrollId={`broken:${link.path}`}
       onBack={onBack}
     >
-      <article className="mx-auto w-full max-w-4xl min-w-0 space-y-5 px-3 py-4 md:px-5">
-        <header className="min-w-0 space-y-2">
-          <h2 className="text-lg leading-snug font-semibold">
-            {t.rich("orphanTitle", {
-              skill: link.skill || baseName(link.path),
-              code: (chunks) => (
-                <bdi dir="ltr" className="font-mono">
-                  <MachineText>{chunks}</MachineText>
-                </bdi>
-              ),
-            })}
-          </h2>
-          <p className="text-sm text-muted-foreground">{t("orphanBody")}</p>
-        </header>
+      <article className={HARNESS_DETAIL_CLASS}>
+        <SkillDetailHeader
+          icon={<Unlink aria-hidden="true" className="text-tone-warning" />}
+          title={t.rich("orphanTitle", {
+            skill: link.skill || baseName(link.path),
+            code: (chunks) => (
+              <bdi dir="ltr" className="font-mono">
+                <MachineText>{chunks}</MachineText>
+              </bdi>
+            ),
+          })}
+          description={t("orphanBody")}
+        />
         <BrokenLinksPart
           links={links}
           broken={[link]}

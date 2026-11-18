@@ -39,10 +39,22 @@ import {
 } from "@/lib/mcp/model"
 import type { McpEntry } from "@/lib/mcp/types"
 import { cn, copyTextToClipboard } from "@/lib/utils"
+import { HarnessScroller } from "../harness-scroller"
 import { DiscoverMark } from "../discover/discover-card"
+import {
+  HARNESS_CARD_CLASS,
+  HARNESS_DETAIL_CLASS,
+  HARNESS_DETAIL_HEADER_CLASS,
+  HARNESS_DETAIL_TILE_CLASS,
+  HARNESS_DETAIL_TITLE_CLASS,
+  HARNESS_ROW_CLASS,
+  HARNESS_ROW_TILE_CLASS,
+  HARNESS_ROWS_CLASS,
+} from "../harness-styles"
 import { MachineText } from "../machine-text"
 import { AgentGlyph, McpDetailPart, PathText } from "./mcp-bits"
 import {
+  DetailBodySkeleton,
   McpBackBar,
   RowWriteNotice,
   STATED_PROBLEMS,
@@ -86,37 +98,40 @@ export const McpAgentRow = memo(function McpAgentRow({
         data-mcp-row={info.id}
         aria-current={selected ? "true" : undefined}
         onClick={() => onOpen(info.id)}
-        className={cn(
-          "flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-start transition-colors outline-none",
-          "hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50",
-          "max-md:py-2.5",
-          selected && "bg-muted hover:bg-muted"
-        )}
+        className={HARNESS_ROW_CLASS}
       >
-        <AgentGlyph agent={info.id} className="size-5" />
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-foreground">
-            {labels.agent(info.id)}
+        <span className={HARNESS_ROW_TILE_CLASS}>
+          <AgentGlyph agent={info.id} className="size-4.5" />
+        </span>
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+              {labels.agent(info.id)}
+            </span>
+            {(problem || info.installed === false || !info.agent) && (
+              <span className="flex shrink-0 items-center gap-1">
+                {problem && (
+                  <DiscoverMark size="sm" tone="warning">
+                    <TriangleAlert aria-hidden="true" />
+                    <span className="sr-only">{t("problem")}</span>
+                  </DiscoverMark>
+                )}
+                {info.installed === false && (
+                  <DiscoverMark size="sm">{t("notInstalled")}</DiscoverMark>
+                )}
+                {!info.agent && (
+                  <DiscoverMark size="sm">{t("unknown")}</DiscoverMark>
+                )}
+              </span>
+            )}
           </span>
-          <span className="block truncate text-2xs text-muted-foreground">
+          <span className="truncate text-xs text-muted-foreground">
             {info.unreadable
               ? t("unreadable")
               : filtered
                 ? t("matching", { count, total })
                 : t("servers", { count: total })}
           </span>
-        </span>
-        <span className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-          {problem && (
-            <DiscoverMark tone="warning">
-              <TriangleAlert aria-hidden="true" />
-              <span className="sr-only">{t("problem")}</span>
-            </DiscoverMark>
-          )}
-          {info.installed === false && (
-            <DiscoverMark>{t("notInstalled")}</DiscoverMark>
-          )}
-          {!info.agent && <DiscoverMark>{t("unknown")}</DiscoverMark>}
         </span>
       </button>
     </li>
@@ -151,11 +166,11 @@ function FileFacts({ info }: { info: McpAgentInfo }) {
   const problem = agentHasFileProblem(info)
   return (
     <McpDetailPart title={t("file")}>
-      <div className="space-y-2 rounded-lg border px-3 py-2.5 text-xs">
+      <div className="space-y-2.5 rounded-xl border bg-card px-5 py-4 text-sm">
         <div className="flex min-w-0 items-start gap-1.5">
           <PathText
             path={config.path || "—"}
-            className="flex-1 text-xs text-foreground"
+            className="flex-1 text-[0.8125rem] text-foreground"
           />
           {config.path && (
             <Button
@@ -264,7 +279,7 @@ function SessionFacts({ info }: { info: McpAgentInfo }) {
   }
   return (
     <McpDetailPart title={t("sessions")}>
-      <div className="space-y-1.5 rounded-lg border px-3 py-2.5 text-xs text-muted-foreground">
+      <div className="space-y-1.5 rounded-xl border bg-card px-5 py-4 text-sm text-muted-foreground">
         <p className="text-foreground">
           {delivery === "agent_file"
             ? t("deliveryFile")
@@ -317,7 +332,7 @@ function EntryRow({
     : t("row.noDefinition")
 
   return (
-    <li className="flex min-w-0 items-start gap-3 px-3 py-2.5">
+    <li className="flex min-w-0 items-start gap-3 px-5 py-3.5">
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <Button
@@ -424,7 +439,7 @@ function EntryRow({
 function BuiltInRow() {
   const t = useTranslations("Harness.mcp.agent")
   return (
-    <li className="flex min-w-0 items-start gap-3 px-3 py-2.5">
+    <li className="flex min-w-0 items-start gap-3 px-5 py-3.5">
       <Bubbles
         aria-hidden="true"
         className="mt-0.5 size-4 shrink-0 text-muted-foreground"
@@ -496,12 +511,7 @@ export function McpAgentDetail({
 
   let body: ReactNode
   if (!model) {
-    body = (
-      <div aria-hidden="true" className="space-y-3 px-3 py-4 md:px-5">
-        <Skeleton className="h-6 w-40" />
-        <Skeleton className="h-24 w-full" />
-      </div>
-    )
+    body = <DetailBodySkeleton />
   } else if (!info) {
     body = (
       <p
@@ -514,23 +524,36 @@ export function McpAgentDetail({
   } else {
     const shown = entries ?? info.inventory.entries
     body = (
-      <article
-        aria-labelledby={headingId}
-        className="mx-auto w-full max-w-4xl min-w-0 space-y-5 px-3 py-4 md:px-5"
-      >
-        <header className="flex min-w-0 items-center gap-2.5">
-          <AgentGlyph agent={info.id} className="size-6" />
-          <h2
-            id={headingId}
-            ref={headingRef}
-            tabIndex={-1}
-            className="min-w-0 truncate text-lg font-semibold outline-none"
-          >
-            {labels.agent(info.id)}
-          </h2>
-          {info.installed === false && (
-            <DiscoverMark>{t("agents.notInstalled")}</DiscoverMark>
+      <article aria-labelledby={headingId} className={HARNESS_DETAIL_CLASS}>
+        <header
+          className={cn(
+            HARNESS_DETAIL_HEADER_CLASS,
+            "flex min-w-0 items-start gap-4 space-y-0"
           )}
+        >
+          <span className={HARNESS_DETAIL_TILE_CLASS}>
+            <AgentGlyph agent={info.id} className="size-7" />
+          </span>
+          <div className="min-w-0 flex-1 space-y-1.5 pt-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+              <h2
+                id={headingId}
+                ref={headingRef}
+                tabIndex={-1}
+                className={cn("min-w-0 truncate", HARNESS_DETAIL_TITLE_CLASS)}
+              >
+                {labels.agent(info.id)}
+              </h2>
+              {info.installed === false && (
+                <DiscoverMark>{t("agents.notInstalled")}</DiscoverMark>
+              )}
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {info.unreadable
+                ? t("agents.unreadable")
+                : t("agents.servers", { count: info.inventory.entries.length })}
+            </p>
+          </div>
         </header>
         <FileFacts info={info} />
         <SessionFacts info={info} />
@@ -546,11 +569,11 @@ export function McpAgentDetail({
           }
         >
           {info.unreadable ? (
-            <p className="rounded-lg border px-3 py-2.5 text-xs text-muted-foreground">
+            <p className="rounded-xl border bg-card px-5 py-4 text-sm text-muted-foreground">
               {t("agent.entriesUnknown")}
             </p>
           ) : (
-            <ul className="divide-y rounded-lg border">
+            <ul className={cn("divide-y", HARNESS_CARD_CLASS)}>
               {shown.map((entry, position) => (
                 <EntryRow
                   // Two entries can share a key (two YAML keys that read
@@ -562,7 +585,7 @@ export function McpAgentDetail({
                 />
               ))}
               {shown.length === 0 && (
-                <li className="px-3 py-2.5 text-xs text-muted-foreground">
+                <li className="px-5 py-3.5 text-sm text-muted-foreground">
                   {filtered ? t("agent.noneMatch") : t("agent.none")}
                 </li>
               )}
@@ -577,43 +600,26 @@ export function McpAgentDetail({
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
       {onBack && <McpBackBar onBack={onBack} />}
-      <div
-        ref={scrollerRef}
-        onScroll={onScroll}
-        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
-      >
+      <HarnessScroller ref={scrollerRef} onScroll={onScroll} className="flex-1">
         {body}
-      </div>
+      </HarnessScroller>
     </div>
   )
 }
 
-export function AgentListSkeleton() {
+/** A list's place while it is read: rows in the shape the list's rows have. */
+export function RowListSkeleton() {
   return (
-    <ul aria-hidden="true" className="space-y-1 p-2">
-      {Array.from({ length: 6 }, (_, index) => (
-        <li key={index} className="flex items-center gap-2.5 px-2.5 py-2">
-          <Skeleton className="size-5 rounded-full" />
-          <span className="flex-1 space-y-1.5">
-            <Skeleton className="h-3.5 w-28" />
+    <ul aria-hidden="true" className={HARNESS_ROWS_CLASS}>
+      {["w-28", "w-36", "w-24", "w-32", "w-28", "w-20"].map((width, index) => (
+        <li
+          key={index}
+          className="flex items-center gap-3 rounded-xl border border-border/70 bg-background px-3 py-3 dark:bg-card"
+        >
+          <Skeleton className="size-9 rounded-lg" />
+          <span className="flex-1 space-y-2">
+            <Skeleton className={cn("h-3.5", width)} />
             <Skeleton className="h-3 w-16" />
-          </span>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-export function ServerListSkeleton() {
-  return (
-    <ul aria-hidden="true" className="space-y-1 p-2">
-      {Array.from({ length: 6 }, (_, index) => (
-        <li key={index} className="space-y-2 px-2.5 py-2">
-          <Skeleton className="h-3.5 w-32" />
-          <span className="flex gap-1">
-            <Skeleton className="size-4 rounded-full" />
-            <Skeleton className="size-4 rounded-full" />
-            <Skeleton className="size-4 rounded-full" />
           </span>
         </li>
       ))}

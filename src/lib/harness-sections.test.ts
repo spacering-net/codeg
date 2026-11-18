@@ -16,7 +16,7 @@ import {
 
 const SECTION_KEY = "workspace:harness-section"
 
-describe("Harness sections", () => {
+describe("SRN Harness sections", () => {
   it("lists Discover, MCP, Skills, Skill packs — in that order", () => {
     expect(HARNESS_SECTION_IDS).toEqual(["discover", "mcp", "skills", "packs"])
   })

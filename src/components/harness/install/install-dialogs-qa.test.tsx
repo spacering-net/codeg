@@ -79,7 +79,7 @@ const button = (name: string | RegExp) => {
 }
 
 const RESOLVE_UNAVAILABLE =
-  "Codeg cannot confirm this item's current state with Harness right now, so nothing was installed. Try again later."
+  "Codeg cannot confirm this item's current state with SRN Harness right now, so nothing was installed. Try again later."
 
 beforeEach(() => {
   backend = {
@@ -108,7 +108,7 @@ describe("the install dialogs' title before the plan is in", () => {
     expect(
       await screen.findByRole("heading", { name: "Install Acme Notes" })
     ).toBeInTheDocument()
-    expect(dialog()).toHaveTextContent("Asking Harness about this version…")
+    expect(dialog()).toHaveTextContent("Asking SRN Harness about this version…")
   })
 
   it("skill: the item's title the page already had, not its address", async () => {

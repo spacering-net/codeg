@@ -1814,7 +1814,7 @@
       "installBinary": "安裝 pi",
       "installing": "安裝中…",
       "recheck": "重新偵測",
-      "configDirSkillsNote": "設定自訂組態目錄後，Harness 中管理的技能、專家與辦公工具將不會套用至該 pi；請直接在該目錄中管理其技能。",
+      "configDirSkillsNote": "設定自訂組態目錄後，駕馭工程中管理的技能、專家與辦公工具將不會套用至該 pi；請直接在該目錄中管理其技能。",
       "dirHistoryNote": "這兩個目錄只對 pi 行程生效。codeg 的歷史對話清單讀取的是 pi 的預設位置，寫入自訂目錄的工作階段不會出現在清單中。",
       "projectTrustTitle": "專案信任",
       "projectTrustDescription": "你允許 pi 從中載入專案檔案的目錄。被信任的目錄會讓該儲存庫的 .pi/extensions 在 pi 啟動時執行程式碼，且對其下所有子目錄同樣生效，你在終端機執行 pi 時也會沿用。",
@@ -2297,7 +2297,7 @@
       "loadingSubsessions": "正在載入子會話…",
       "forge": "儲存庫面板",
       "canvas": "無限畫布",
-      "harness": "Harness",
+      "harness": "駕馭工程",
       "folderGroup": {
         "newGroup": "新增分組",
         "newGroupTitle": "新增資料夾分組",
@@ -2778,8 +2778,8 @@
       "officeFullRender": "完整渲染",
       "officeFullRenderHint": "渲染 Morph 動畫、3D 與公式（會執行投影片自帶的指令碼）",
       "officeNotInstalled": "未安裝 OfficeCLI",
-      "officeNotInstalledHint": "在 Harness › 技能包 › 辦公工具 中安裝 OfficeCLI，即可預覽 Word、Excel 與 PowerPoint 檔案。",
-      "officeOpenHarness": "開啟 Harness",
+      "officeNotInstalledHint": "在駕馭工程 › 技能包 › 辦公工具 中安裝 OfficeCLI，即可預覽 Word、Excel 與 PowerPoint 檔案。",
+      "officeOpenHarness": "開啟駕馭工程",
       "officeWatchFailed": "無法啟動即時預覽",
       "officeWatchRetry": "重試",
       "officeServerInstallHint": "OfficeCLI 需安裝在伺服器主機上。請在伺服器上執行以下指令後重試：",
@@ -3613,7 +3613,7 @@
           "importSessions": "之前在終端機裡跑過的會話，用資料夾右鍵選單的「匯入本地會話」就能把那段歷史接進 codeg。",
           "subSessions": "智能體委派出去的子會話會巢狀顯示在側邊欄的父會話底下，展開就能追蹤每一個子會話做了什麼。",
           "liveFeedback": "「+」選單裡的「即時回饋」能把一則便條塞進智能體正在跑的這一輪，不用打斷它。",
-          "skillPacks": "Harness › 技能包 裡打包了程式專家、科研與辦公三類技能，可以按智能體分別開關。",
+          "skillPacks": "駕馭工程 › 技能包 裡打包了程式專家、科研與辦公三類技能，可以按智能體分別開關。",
           "modelProviders": "設定 → 模型供應商 支援填自己的 API key 或端點位址，之後直接在輸入框裡切換模型。",
           "workspaceBackground": "設定 → 外觀 裡可以換工作區背景圖、調面板不透明度，還能換應用程式字型。"
         },
@@ -3686,7 +3686,7 @@
           },
           "notEnabled": {
             "title": "「{skill}」技能尚未對 {agent} 啟用",
-            "description": "前往 Harness › 技能包 啟用後即可在此使用。",
+            "description": "前往駕馭工程 › 技能包 啟用後即可在此使用。",
             "action": "前往啟用",
             "hint": "技能未啟用"
           },
@@ -7515,12 +7515,12 @@
     "deleteBoardConfirm": "刪除畫布"
   },
   "Harness": {
-    "title": "Harness",
-    "description": "管理智能體的 MCP 服務、技能和技能包，也可以在「探索」裡找到 SRN Harness 上的更多內容。",
-    "descriptionNoDiscover": "管理智能體的 MCP 服務、技能和技能包。",
-    "descriptionMore": "展開",
-    "descriptionLess": "收合",
-    "sectionsLabel": "Harness 分區",
+    "title": "駕馭工程",
+    "sectionsLabel": "駕馭工程分區",
+    "agentList": {
+      "selectAll": "全選",
+      "selected": "已選 {count, number}/{total, number}"
+    },
     "sections": {
       "discover": "探索",
       "mcp": "MCP",
@@ -7536,29 +7536,23 @@
       "shownFrom": "顯示的是{time}的結果。",
       "checkNow": "立即檢查",
       "itemNotChecked": "這一項還沒有檢查過。",
-      "itemUnavailable": "Harness 上沒有這個版本。",
+      "itemUnavailable": "SRN Harness 上沒有這個版本。",
       "reasons": {
         "network": "連不上 SRN Harness。",
-        "rateLimited": "Harness 要求稍後再試。",
-        "server": "Harness 傳回了錯誤（{status}）。",
-        "other": "Harness 傳回的內容這個 Codeg 讀不了。"
+        "rateLimited": "SRN Harness 要求稍後再試。",
+        "server": "SRN Harness 傳回了錯誤（{status}）。",
+        "other": "SRN Harness 傳回的內容這個 Codeg 讀不了。"
       }
     },
     "link": {
       "discoverOff": "這個 Codeg 已關閉「探索」，所以無法在這裡開啟 {ref}。"
     },
-    "host": {
-      "label": "設定所在主機：",
-      "local": "本機",
-      "localHint": "這裡的變更會儲存在本機。",
-      "remoteHint": "這裡的變更會儲存在遠端主機上，而不是本機。",
-      "webHint": "這裡的變更會儲存在提供此頁面的伺服器上。"
-    },
     "discover": {
       "search": {
-        "label": "搜尋 Harness",
+        "label": "搜尋 SRN Harness",
         "placeholder": "搜尋技能、MCP 服務、助手…",
-        "clear": "清除搜尋"
+        "clear": "清除搜尋",
+        "shortcut": "按 / 開始搜尋"
       },
       "kinds": {
         "label": "類別",
@@ -7606,7 +7600,8 @@
         "moreLoaded": "又載入了 {count, number} 項",
         "end": "已全部列出。",
         "empty": "找不到符合的項目。",
-        "emptyHint": "試試少幾個詞、換一種語言，或直接輸入位址，例如 anthropics/pdf。"
+        "emptyHint": "試試少幾個詞、換一種語言，或直接輸入位址，例如 anthropics/pdf。",
+        "count": "<num>{count, number}</num> 項"
       },
       "card": {
         "stars": "GitHub 星標",
@@ -7644,7 +7639,7 @@
         "repository": "儲存庫",
         "website": "網站",
         "description": "說明",
-        "readmeElsewhere": "它的授權條款不允許 Harness 保存副本，說明請到來源檢視。",
+        "readmeElsewhere": "它的授權條款不允許 SRN Harness 保存副本，說明請到來源檢視。",
         "openSource": "開啟來源",
         "expand": "展開全部",
         "collapse": "收合",
@@ -7738,7 +7733,8 @@
           "prompt_short": "太短，無法單獨使用",
           "needs_plugin": "要和所屬外掛一起安裝才能用"
         },
-        "backTo": "返回<title>{name}</title>"
+        "backTo": "返回<title>{name}</title>",
+        "breadcrumb": "位置"
       },
       "prompt": {
         "title": "提示詞",
@@ -7815,7 +7811,7 @@
         "model": "模型",
         "inherit": "跟隨主工作階段",
         "skills": "預先載入的技能",
-        "notInHarness": "不在 Harness 中",
+        "notInHarness": "不在 SRN Harness 中",
         "mcpServers": "用到的 MCP 服務",
         "mcpServersNote": "依它所在智能體裡設定的名稱使用。",
         "mcpLaunches": "自行啟動的 MCP 服務",
@@ -7831,7 +7827,7 @@
         "copyFailed": "無法複製到剪貼簿。",
         "installLater": "在 Codeg 裡可以檢視助手，安裝稍後推出。",
         "copyErrors": {
-          "notFound": "Harness 沒有保存這份定義的副本。",
+          "notFound": "SRN Harness 沒有保存這份定義的副本。",
           "tooLarge": "定義檔超過了 Codeg 能複製的大小（256 KB）。",
           "invalidResponse": "定義檔不是 Codeg 能複製的文字。",
           "invalidRef": "Codeg 無法取得這份定義：它的檔案雜湊無效。",
@@ -7839,7 +7835,18 @@
           "unsupportedRemote": "遠端主機上的 Codeg 還不能複製定義，在那台主機上更新後即可複製。",
           "unsupportedWeb": "Codeg 伺服器還不能複製定義，更新伺服器後即可複製。"
         }
-      }
+      },
+      "hero": {
+        "title": "為你的智慧體找到<accent>新能力</accent>",
+        "subtitle": "{count, number} 個社群技能、MCP 服務、提示詞與助手，安裝一次，多個智慧體都能用",
+        "subtitleNoCount": "社群技能、MCP 服務、提示詞與助手，安裝一次，多個智慧體都能用"
+      },
+      "layout": {
+        "label": "版面",
+        "grid": "格狀",
+        "list": "清單"
+      },
+      "refresh": "重新讀取目錄"
     },
     "mcp": {
       "listSeparator": "、",
@@ -7857,7 +7864,7 @@
         "label": "顯示",
         "all": "全部服務",
         "problems": "有問題的",
-        "harness": "來自 Harness",
+        "harness": "來自 SRN Harness",
         "updates": "可更新"
       },
       "refresh": "重新讀取設定",
@@ -7867,7 +7874,7 @@
         "manualHint": "自行填寫指令或網址。",
         "paste": "貼上設定",
         "pasteHint": "來自 README 或其他智能體的設定檔。",
-        "harness": "從 Harness 探索",
+        "harness": "從 SRN Harness 探索",
         "harnessHint": "瀏覽 SRN Harness 上的 MCP 服務。"
       },
       "list": {
@@ -7877,7 +7884,8 @@
         "noneHint": "這台主機上任何智能體設定中的服務，都會列在這裡。",
         "noMatch": "沒有相符的服務。",
         "noAgentMatch": "沒有智能體有相符的服務。",
-        "clearFilters": "清除搜尋和篩選"
+        "clearFilters": "清除搜尋和篩選",
+        "groupManual": "手動新增"
       },
       "row": {
         "onIn": "在 {agents} 中已啟用。",
@@ -7885,7 +7893,8 @@
         "noDefinition": "無法讀取",
         "definitions": "{count, plural, other {# 份定義}}",
         "problems": "有問題",
-        "reserved": "保留名稱"
+        "reserved": "保留名稱",
+        "off": "未啟用"
       },
       "transport": {
         "stdio": "stdio",
@@ -7904,7 +7913,6 @@
         "pickAgent": "選擇一個智能體，查看它的設定。",
         "notFound": "這裡沒有智能體設定了名為 <code>{key}</code> 的服務。",
         "notFoundHint": "它可能已被重新命名或移除。清單顯示的是各智能體目前的設定。",
-        "inAgents": "{count, plural, other {在 # 個智能體中}}",
         "rename": "重新命名",
         "remove": "移除…",
         "notEditable": "在設定了這個服務的智能體中，Codeg 都無法修改它；下方每個智能體都寫明了原因。",
@@ -7912,19 +7920,18 @@
         "definition": "定義",
         "definitions": "定義",
         "definitionLetter": "定義 {letter}",
-        "heldBy": "使用者：{agents}",
         "edit": "編輯",
         "editLetter": "編輯 {letter}",
         "noDefinition": "沒有哪個智能體的定義是 Codeg 能讀取的。下方每個智能體都寫明了項目的問題。",
         "agents": "智能體",
         "extra": "它自己的欄位，保持原樣：",
-        "saving": "正在儲存…"
+        "saving": "正在儲存…",
+        "enabledIn": "{count, plural, =0 {未在任何智能體中啟用} other {已在 # 個智能體中啟用}}",
+        "source": "來源"
       },
       "agentState": {
         "on": "已啟用",
         "off": "已停用",
-        "withDefinition": "{state} · 定義 {letter}",
-        "undescribed": "{state} · Codeg 無法讀取這個項目",
         "notConfigured": "未設定",
         "cannotHold": "不支援 {transports} 服務",
         "keyNotNew": "這個名稱含有新項目不能使用的字元，所以無法加到這裡。請先為服務重新命名。",
@@ -7932,7 +7939,8 @@
         "unreadable": "它的設定檔無法讀取。",
         "reserved": "內建服務的名稱，僅列出",
         "readOnly": "唯讀",
-        "skipped": "在會話中會被略過"
+        "skipped": "在會話中會被略過",
+        "entryUnreadable": "Codeg 無法讀取這個條目"
       },
       "agents": {
         "showAll": "顯示全部智能體（{count, number} 個未安裝）",
@@ -7992,7 +8000,8 @@
         "env": "環境變數",
         "url": "網址",
         "headers": "請求標頭",
-        "secretArgs": "含金鑰的參數"
+        "secretArgs": "含金鑰的參數",
+        "copyCommand": "複製命令"
       },
       "rowResult": {
         "unsupported": "沒有儲存：這個 Codeg 版本太舊，請先更新。",
@@ -8003,16 +8012,15 @@
         "dismiss": "關閉提示"
       },
       "harness": {
-        "mark": "Harness",
-        "markVersion": "Harness · {version}",
-        "title": "來自 Harness",
-        "agents": "安裝位置",
-        "view": "在 Harness 中查看",
+        "mark": "SRN Harness",
+        "markVersion": "SRN Harness · {version}",
+        "title": "來自 SRN Harness",
+        "view": "在 SRN Harness 中查看",
         "update": "更新",
         "manage": "管理智能體",
         "uninstall": "解除安裝…",
         "changedNote": "在這裡改過的項目，更新時會被取代；解除安裝時會保留，除非你在解除安裝時勾選它。",
-        "catalogOff": "更新它、把它加到更多智能體，都要詢問 Harness，而這個 Codeg 已關閉 Harness。解除安裝仍然可用。",
+        "catalogOff": "更新它、把它加到更多智能體，都要詢問 SRN Harness，而這個 Codeg 已關閉 SRN Harness。解除安裝仍然可用。",
         "states": {
           "asInstalled": "與安裝時一致",
           "changedLocally": "本機改過",
@@ -8022,8 +8030,11 @@
           "updateAvailable": "可更新",
           "yanked": "版本已撤回",
           "disabledByAuthor": "已被作者停用",
-          "removedByHarness": "已被 Harness 下架"
-        }
+          "removedByHarness": "已被 SRN Harness 下架"
+        },
+        "editDefinition": "編輯定義",
+        "editDefinitionLetter": "編輯定義 {letter}",
+        "state": "狀態"
       },
       "plan": {
         "reviewTitle": "將要寫入的內容",
@@ -8073,14 +8084,9 @@
       "targets": {
         "cannotHold": "不支援 {transport} 服務",
         "keyNotNew": "還沒有這個服務，而這個名稱不能用於新項目",
-        "willAdd": "將新增",
-        "unchanged": "已經是這個定義",
-        "willUpdate": "將更新",
         "willReplace": "現有的定義不同，將被取代",
         "staysOff": "保持停用",
         "commentsLost": "儲存會移除檔案中的註解",
-        "keeps": "保留現有的",
-        "notConfigured": "未設定",
         "entryReadOnly": "已有同名項目，Codeg 不修改它"
       },
       "dialog": {
@@ -8328,8 +8334,7 @@
           "update": "更新 <name>{title}</name>",
           "manage": "<name>{title}</name> 的智能體"
         },
-        "description": "確認之前不會寫入任何內容。寫入前，Codeg 會再向 Harness 核實一次。",
-        "loading": "正在向 Harness 查詢這個版本…",
+        "loading": "正在向 SRN Harness 查詢這個版本…",
         "updateFromTo": "從版本 <code>{from}</code> 更新到 <code>{to}</code>。",
         "alreadyNewest": "這已經是最新版本。你仍然可以把它加到更多智能體。",
         "working": {
@@ -8362,21 +8367,21 @@
         "published": "發布於 {date}"
       },
       "snapshot": {
-        "title": "Harness 目前的說法",
+        "title": "SRN Harness 目前的說法",
         "fresh": "剛剛查詢",
-        "none": "Harness 沒有說明這個版本的情況。",
+        "none": "SRN Harness 沒有說明這個版本的情況。",
         "riskNotStated": "風險未說明",
-        "reviewNotStated": "Harness 沒有說明是否經過人工審核。",
-        "checksNotStated": "Harness 沒有提供檢查結果。",
+        "reviewNotStated": "SRN Harness 沒有說明是否經過人工審核。",
+        "checksNotStated": "SRN Harness 沒有提供檢查結果。",
         "noFindings": "檢查沒有發現任何問題。",
         "findings": "檢查發現：高 {high} 項、中 {medium} 項、低 {low} 項",
         "secrets": "{count, plural, other {套件裡發現 # 處憑證}}",
         "packages": "套件",
         "package": "套件",
-        "packagesNotStated": "Harness 沒有說明它的套件是怎麼檢查的。",
+        "packagesNotStated": "SRN Harness 沒有說明它的套件是怎麼檢查的。",
         "installScript": "安裝時執行指令碼",
         "permissions": "它要求的權限",
-        "permissionsNotStated": "Harness 沒有說明它要求哪些權限。",
+        "permissionsNotStated": "SRN Harness 沒有說明它要求哪些權限。",
         "noPermissions": "沒有特別的要求。",
         "undeclared": "偵測到，但未聲明",
         "declaredOnly": "已聲明，但未偵測到"
@@ -8418,7 +8423,7 @@
           "json": "這不是有效的 JSON。",
           "choice": "請從列出的值中選擇一個。"
         },
-        "secretsPlain": "金鑰會以明文寫入每個勾選的智能體的設定檔，不會傳送給 Harness。",
+        "secretsPlain": "金鑰會以明文寫入每個勾選的智能體的設定檔，不會傳送給 SRN Harness。",
         "choose": "請選擇…",
         "recovered": "已依 {agents} 目前的值填入。",
         "recoveredAside": "依已安裝的項目填入",
@@ -8438,21 +8443,19 @@
         "hint": "預設勾選：已安裝、並能使用這個服務的智能體。",
         "hintInstalled": "預設勾選：已安裝它的智能體。",
         "manageNote": "取消勾選的智能體會保持原樣。要從某個智能體中移除這個服務，請使用「解除安裝」。",
-        "willAdd": "將新增",
         "willUpdate": "之前從這個項目安裝的服務將被取代",
         "ownNotTicked": "已經裝有這個項目：在下方勾選即可取代",
         "willReplace": "名為 <code>{key}</code> 的服務（{owner}）將被取代",
         "hasOther": "已有名為 <code>{key}</code> 的服務（{owner}）：在下方勾選即可取代",
-        "newer": "已有來自 Harness 的較新版本（{version}）",
-        "staysInstalled": "已安裝在這裡，保持原樣",
+        "newer": "已有來自 SRN Harness 的較新版本（{version}）",
         "unreadable": "它的設定檔無法讀取。",
         "readOnly": "Codeg 不修改這個智能體的檔案。",
         "notWritten": "Codeg 只列出這個智能體的服務。",
         "holdsName": "已有名為 <code>{key}</code> 的服務（{owner}）",
         "owner": {
           "this_item": "來自這個項目",
-          "other_item": "來自另一個 Harness 項目",
-          "elsewhere": "不是來自 Harness",
+          "other_item": "來自另一個 SRN Harness 項目",
+          "elsewhere": "不是來自 SRN Harness",
           "unknown": "來源不明"
         }
       },
@@ -8462,8 +8465,8 @@
         "agent": "在 {agent} 中取代",
         "ownerThis": "從這個項目安裝",
         "ownerThisChanged": "從這個項目安裝，之後在這裡改過：這些變更會遺失",
-        "ownerOther": "從另一個 Harness 項目安裝：<code>{ref}</code>",
-        "ownerElsewhere": "不是來自 Harness：手動加入，或由其他程式加入",
+        "ownerOther": "從另一個 SRN Harness 項目安裝：<code>{ref}</code>",
+        "ownerElsewhere": "不是來自 SRN Harness：手動加入，或由其他程式加入",
         "ownerUnknown": "Codeg 無法判斷它的來源",
         "off": "在那裡已停用",
         "overwrites": "將被取代的內容：",
@@ -8479,18 +8482,18 @@
         "targets": "至少勾選一個智能體。",
         "replace": "勾選在 {agents} 中取代 <code>{key}</code>，或取消勾選這些智能體。",
         "yanked": "確認安裝已撤回的版本。",
-        "state": "Harness 沒有提供這個版本可供確認的狀態。",
+        "state": "SRN Harness 沒有提供這個版本可供確認的狀態。",
         "disagree": "選定 <code>{name}</code> 的值：各智能體在這一項上不一致。"
       },
       "notices": {
         "changedElsewhere": "開啟之後，有智能體的設定被修改過。以下是現在會寫入的內容；請檢查後再次確認。",
         "refused": "Codeg 沒有安裝它，也沒有寫入任何內容：",
-        "unsupported": "這個 Codeg 版本太舊，無法從 Harness 安裝。請先更新。",
-        "unsupportedRemote": "遠端主機上的 Codeg 版本太舊，無法從 Harness 安裝。請在那台主機上更新。",
-        "unsupportedWeb": "Codeg 伺服器的版本太舊，無法從 Harness 安裝。請先更新伺服器。"
+        "unsupported": "這個 Codeg 版本太舊，無法從 SRN Harness 安裝。請先更新。",
+        "unsupportedRemote": "遠端主機上的 Codeg 版本太舊，無法從 SRN Harness 安裝。請在那台主機上更新。",
+        "unsupportedWeb": "Codeg 伺服器的版本太舊，無法從 SRN Harness 安裝。請先更新伺服器。"
       },
       "changes": {
-        "title": "開啟之後，Harness 對這個版本的說法有了變化",
+        "title": "開啟之後，SRN Harness 對這個版本的說法有了變化",
         "body": "什麼都沒有寫入。請看看有哪些變化，然後按新的狀態再次確認，或者取消。",
         "status_changed": "狀態：{from} → {to}",
         "risk_changed": "風險：{from} → {to}",
@@ -8515,7 +8518,7 @@
       "status": {
         "ok": "可用",
         "yanked": "已被作者撤回",
-        "blocked": "已被 Harness 封鎖",
+        "blocked": "已被 SRN Harness 封鎖",
         "unknown": "狀態未知"
       },
       "riskLevel": {
@@ -8548,26 +8551,26 @@
       },
       "reasons": {
         "not_an_mcp_server": "這不是 MCP 服務（它是：{kind}）。",
-        "item_unavailable": "Harness 現在不提供這個項目。",
+        "item_unavailable": "SRN Harness 現在不提供這個項目。",
         "item_unavailable_retired": "作者已停用這個項目。",
-        "item_unavailable_removed": "Harness 已下架這個項目。",
-        "revision_unavailable": "Harness 上沒有這個項目的修訂版 {revision}。",
-        "version_blocked": "Harness 封鎖了這個版本。",
-        "version_status_unknown": "Harness 給這個版本的狀態是這個 Codeg 不認得的，所以沒有安裝。更新 Codeg 也許能解決。",
-        "snapshot_incomplete": "Harness 的回覆缺少這個版本的{field}，而安裝需要它。",
+        "item_unavailable_removed": "SRN Harness 已下架這個項目。",
+        "revision_unavailable": "SRN Harness 上沒有這個項目的修訂版 {revision}。",
+        "version_blocked": "SRN Harness 封鎖了這個版本。",
+        "version_status_unknown": "SRN Harness 給這個版本的狀態是這個 Codeg 不認得的，所以沒有安裝。更新 Codeg 也許能解決。",
+        "snapshot_incomplete": "SRN Harness 的回覆缺少這個版本的{field}，而安裝需要它。",
         "nothing_to_install": "這個項目裡沒有 Codeg 能安裝的內容：沒有可執行的套件，也沒有可連線的網址。",
         "server_unreadable": "無法讀取服務的定義（server.json）。",
-        "record_unreadable": "無法讀取 Codeg 從 Harness 安裝內容的紀錄。為了保持這份紀錄完整，什麼都沒有安裝。",
+        "record_unreadable": "無法讀取 Codeg 從 SRN Harness 安裝內容的紀錄。為了保持這份紀錄完整，什麼都沒有安裝。",
         "registry_unsupported": "不執行來自 <code>{registry}</code> 的套件：只執行 npm 和 PyPI 的套件。",
         "runtime_unsupported": "這個套件要求用 <code>{runtime}</code> 啟動，而 Codeg 執行 <code>{registry}</code> 的套件時不用它。",
-        "identifier_has_version": "套件名稱 <code>{identifier}</code> 自帶版本，所以無法套用 Harness 核對過的版本。",
+        "identifier_has_version": "套件名稱 <code>{identifier}</code> 自帶版本，所以無法套用 SRN Harness 核對過的版本。",
         "runtime_arguments_unsupported": "<code>{identifier}</code> 為執行它的程式聲明了選項（<code>{argument}</code>）。這些選項可能讓它執行的不是核對過的套件，所以不提供這種方式。",
         "runner_environment_unsupported": "這個套件設定了 <code>{name}</code>，會改變執行它的程式的行為，所以不提供這種方式。",
-        "package_not_pinned": "Harness 沒有鎖定 <code>{identifier}</code> 的版本。",
-        "package_version_inexact": "Harness 提供的 <code>{identifier}</code> 版本不是一個確切的版本（{version}）。",
-        "package_version_inexact_none": "Harness 沒有 <code>{identifier}</code> 的確切版本。",
+        "package_not_pinned": "SRN Harness 沒有鎖定 <code>{identifier}</code> 的版本。",
+        "package_version_inexact": "SRN Harness 提供的 <code>{identifier}</code> 版本不是一個確切的版本（{version}）。",
+        "package_version_inexact_none": "SRN Harness 沒有 <code>{identifier}</code> 的確切版本。",
         "package_missing": "<code>{identifier}@{version}</code> 不在它的登錄庫裡。",
-        "package_verification_unknown": "Harness 核對 <code>{identifier}@{version}</code> 的方式是這個 Codeg 不認得的，所以不使用它。",
+        "package_verification_unknown": "SRN Harness 核對 <code>{identifier}@{version}</code> 的方式是這個 Codeg 不認得的，所以不使用它。",
         "remote_not_public": "這個網址不是公開的 HTTPS 網址。",
         "remote_not_public_host": "這個網址不是公開的 HTTPS 網址（<code>{host}</code>）。",
         "secret_in_query": "金鑰 <code>{name}</code> 只能放在網址裡傳送，所以不提供這種方式。",
@@ -8602,7 +8605,7 @@
         "unknown": "這個 Codeg 無法判斷安裝結果。MCP 分區會顯示各智能體現在的設定。"
       },
       "record": {
-        "failed": "服務已經寫入，但 Codeg 無法把它們記錄為來自 Harness，所以它們沒有 Harness 標示。",
+        "failed": "服務已經寫入，但 Codeg 無法把它們記錄為來自 SRN Harness，所以它們沒有 SRN Harness 標示。",
         "uninstallFailed": "服務已經移除，但 Codeg 無法更新關於它們的紀錄。下次讀取安裝狀況時，它會補上。",
         "record_unreadable": "無法讀取這份紀錄。",
         "record_write_failed": "無法寫入這份紀錄。",
@@ -8659,7 +8662,7 @@
         "label": "顯示",
         "all": "全部技能",
         "custom": "自訂",
-        "harness": "來自 Harness",
+        "harness": "來自 SRN Harness",
         "problems": "有問題的",
         "updates": "有可用更新"
       },
@@ -8676,7 +8679,7 @@
         "importHint": "含 SKILL.md 的資料夾，複製進 Codeg 的儲存庫，成為自訂技能。",
         "importTitle": "選擇要匯入的技能資料夾",
         "importFailed": "資料夾沒有匯入。",
-        "harness": "從 Harness 探索",
+        "harness": "從 SRN Harness 探索",
         "harnessHint": "瀏覽 SRN Harness 上的技能。"
       },
       "list": {
@@ -8690,7 +8693,7 @@
         "problems": "Codeg 在技能存放區中發現了需要留意的地方"
       },
       "marks": {
-        "harnessVersion": "Harness {version}",
+        "harnessVersion": "SRN Harness {version}",
         "problem": "需要處理"
       },
       "harnessStates": {
@@ -8698,7 +8701,7 @@
         "updateAvailable": "有可用更新",
         "yanked": "版本已撤回",
         "disabledByAuthor": "已被作者停用",
-        "removedByHarness": "已從 Harness 下架",
+        "removedByHarness": "已從 SRN Harness 下架",
         "changedLocally": "本機改過",
         "filesMissing": "檔案遺失"
       },
@@ -8707,13 +8710,13 @@
         "science": "科學研究",
         "office": "辦公",
         "ui": "介面",
-        "harness": "Harness",
+        "harness": "SRN Harness",
         "custom": "自訂",
         "unknown": "來自 {origin}"
       },
       "owners": {
         "pack": "技能包 · {pack}",
-        "harness": "來自 Harness",
+        "harness": "來自 SRN Harness",
         "custom": "自訂",
         "agent": "智能體內建",
         "linked_elsewhere": "連結到別處",
@@ -8758,7 +8761,7 @@
         "name_taken": "已有別的技能在使用這個名稱。",
         "id_taken": "已經有一個同名的技能。",
         "id_reserved": "這個名稱屬於 Codeg 的某個技能包。",
-        "id_reserved_harness": "此技能由 Harness 安裝，Codeg 會保持其原樣。如需修改，請複製為自訂技能。",
+        "id_reserved_harness": "此技能由 SRN Harness 安裝，Codeg 會保持其原樣。如需修改，請複製為自訂技能。",
         "target_occupied": "有同名的資料夾或檔案擋著。",
         "target_linked_elsewhere": "有指向別處的同名連結擋著。",
         "target_broken": "有同名的失效連結擋著。請先修復或刪除它。",
@@ -8887,9 +8890,9 @@
         "duplicate": "複製一份…",
         "delete": "刪除…",
         "copyAsCustom": "複製為自訂技能…",
-        "viewOnHarness": "在 Harness 中檢視",
+        "viewOnHarness": "在 SRN Harness 中檢視",
         "update": "更新",
-        "harnessReadOnly": "從 Harness 安裝，在這裡唯讀：更新會覆蓋任何變更。要修改，請先複製為自訂技能。",
+        "harnessReadOnly": "從 SRN Harness 安裝，在這裡唯讀：更新會覆蓋任何變更。要修改，請先複製為自訂技能。",
         "harnessSource": "項目：",
         "pickSkill": "選擇一項技能，檢視它在哪些智能體裡啟用。"
       },
@@ -9124,7 +9127,7 @@
         "turnOff": "停用這些連結…"
       },
       "settingsWindow": {
-        "acknowledgementRequired": "這項變更也會波及共用同一個技能資料夾的其他智能體。請到工作區的 Harness 頁面（Harness › 技能或技能包）去做，那裡會列出受影響的智能體並先請你確認。"
+        "acknowledgementRequired": "這項變更也會波及共用同一個技能資料夾的其他智能體。請到工作區的駕馭工程頁面（駕馭工程 › 技能或技能包）去做，那裡會列出受影響的智能體並先請你確認。"
       }
     },
     "packs": {
@@ -9191,8 +9194,7 @@
           "update": "更新 <name>{title}</name>",
           "reinstall": "重新安裝 <name>{title}</name>"
         },
-        "description": "確認之前不會寫入任何內容。Codeg 會下載檔案並逐一檢查，在把技能放到位之前，還會再向 Harness 核實一次。",
-        "loading": "正在向 Harness 查詢這個版本…",
+        "loading": "正在向 SRN Harness 查詢這個版本…",
         "updateFromTo": "從版本 <code>{from}</code> 更新到 <code>{to}</code>。",
         "reinstallNote": "這個版本已經安裝。再次安裝會把它的檔案還原成發布時的樣子；你改過的檔案會保留在 Codeg 的備份裡。",
         "working": {
@@ -9214,7 +9216,7 @@
       },
       "notices": {
         "effectsChanged": "連結的影響已經和之前顯示的不同了。什麼都沒有寫入。以下是它現在的影響；請檢查後再次確認。",
-        "stateMoved": "開啟期間，Harness 對這個版本的說法有了變化。下方顯示的是它現在的說法。",
+        "stateMoved": "開啟期間，SRN Harness 對這個版本的說法有了變化。下方顯示的是它現在的說法。",
         "refused": "Codeg 沒有安裝它，也沒有寫入任何內容："
       },
       "warnings": {
@@ -9225,9 +9227,9 @@
         "size": "{count, plural, other {# 個檔案}}，{size}",
         "license": "授權條款：{license}",
         "compatibility": "適用於：{compatibility}",
-        "archive": "從 Harness 保存的副本下載，先按 SHA-256 <code>{hash}</code>… 核對整個壓縮檔，再逐一核對檔案。",
+        "archive": "從 SRN Harness 保存的副本下載，先按 SHA-256 <code>{hash}</code>… 核對整個壓縮檔，再逐一核對檔案。",
         "source": "從 GitHub 取得：儲存庫 <code>{repository}</code>，提交 <code>{commit}</code>，資料夾 <code>{path}</code>。每個檔案都按它的 SHA-256 核對。",
-        "noSource": "Harness 既沒有提供檔案的副本，也沒有提供取得檔案的來源。",
+        "noSource": "SRN Harness 既沒有提供檔案的副本，也沒有提供取得檔案的來源。",
         "files": "顯示 {count, plural, other {# 個檔案}}",
         "executable": "可執行"
       },
@@ -9245,7 +9247,7 @@
         "reserved": "Codeg「{pack}」技能包裡的技能",
         "pack": "Codeg 儲存庫裡「{pack}」技能包的技能",
         "custom": "Codeg 儲存庫裡你的自訂技能",
-        "harness": "來自 Harness 的另一項技能（<code>{ref}</code>）",
+        "harness": "來自 SRN Harness 的另一項技能（<code>{ref}</code>）",
         "store": "Codeg 儲存庫裡的一個資料夾",
         "codeg_link": "{agents} 技能資料夾裡 Codeg 建立的連結",
         "codeg_linkAt": "Codeg 在 <code>{path}</code> 建立的連結",
@@ -9269,15 +9271,12 @@
         "notInstalled": "未安裝",
         "noFolder": "沒有可以連結進去的技能資料夾",
         "shared": "連結會放進其他智能體也讀取的資料夾",
-        "willLink": "將連結",
-        "alreadySees": "已看得到",
-        "needsAck": "其他智能體也會看到：見下方",
-        "cannotLink": "無法連結：見下方",
+        "needsAck": "{agents} 也會受影響",
+        "cannotLink": "無法連結",
         "showAll": "顯示全部智能體（{count, number} 個未安裝）",
         "hideNotInstalled": "隱藏未安裝的智能體",
         "none": "沒有勾選任何智能體：它只會放進 Codeg 的儲存庫。之後可以在「技能」裡為智能體啟用。",
         "checking": "正在計算連結會變更什麼…",
-        "effects": "連結的影響",
         "blocked": "有些智能體無法連結。技能仍會安裝，這些智能體維持原樣；每個智能體都寫明了原因。",
         "others": "連結也會改變其他智能體看到的內容。確認時也一併確認這一點。",
         "otherName": "以 <code>{name}</code> 連結會有什麼影響，要到你確認時才計算。如果會波及其他智能體，Codeg 會先讓你看過，在你再次確認之前不會寫入任何內容。"
@@ -9293,8 +9292,8 @@
         "grownChecking": "正在與已安裝的版本比對…",
         "grownTitle": "新版本比已安裝的版本多要求了這些：",
         "grownNone": "新版本沒有提出已安裝版本之外的要求，風險也沒有更高。",
-        "grownPartial": "Harness 沒有說明其中一個版本要求什麼，所以無法全部比對。",
-        "grownUnknown": "無法讀取 Harness 對已安裝版本的說明，所以無法列出新版本多出的要求。"
+        "grownPartial": "SRN Harness 沒有說明其中一個版本要求什麼，所以無法全部比對。",
+        "grownUnknown": "無法讀取 SRN Harness 對已安裝版本的說明，所以無法列出新版本多出的要求。"
       },
       "missing": {
         "title": "安裝之前，還需要：",
@@ -9304,7 +9303,7 @@
         "nameFixed": "保留它目前安裝用的名稱。",
         "links": "等 Codeg 算出連結的影響。",
         "yanked": "確認安裝已撤回的版本。",
-        "state": "Harness 沒有提供這個版本可供確認的狀態。"
+        "state": "SRN Harness 沒有提供這個版本可供確認的狀態。"
       },
       "sourceField": {
         "repository": "儲存庫",
@@ -9314,8 +9313,8 @@
       },
       "reasons": {
         "not_a_skill": "這不是技能（它是：{kind}）。",
-        "manifest_unreadable": "無法讀取 Codeg 從 Harness 安裝技能的紀錄（或者它是較新版本的 Codeg 寫入的）。為了保持這份紀錄完整，什麼都沒有安裝。",
-        "nothing_to_install": "Harness 既沒有提供這項技能檔案的副本，也沒有提供取得它們的來源。",
+        "manifest_unreadable": "無法讀取 Codeg 從 SRN Harness 安裝技能的紀錄（或者它是較新版本的 Codeg 寫入的）。為了保持這份紀錄完整，什麼都沒有安裝。",
+        "nothing_to_install": "SRN Harness 既沒有提供這項技能檔案的副本，也沒有提供取得它們的來源。",
         "unsafe_path": "套件裡列出的檔案位於 Codeg 不會寫入的路徑：<code>{path}</code>。",
         "duplicate_path": "套件裡把 <code>{path}</code> 列了兩次（不區分大小寫），或者既列為檔案又列為資料夾。",
         "too_many_files": "套件裡有 {count, number} 個檔案，最多允許 {limit} 個。",
@@ -9327,15 +9326,15 @@
         "skill_md_missing": "套件的最上層沒有 SKILL.md。",
         "hash_invalid": "套件裡 <code>{path}</code> 的 SHA-256 無效。",
         "hash_invalid_archive": "壓縮檔的 SHA-256 無效。",
-        "archive_address_invalid": "壓縮檔的位址不在 Harness 上。",
+        "archive_address_invalid": "壓縮檔的位址不在 SRN Harness 上。",
         "source_invalid": "它在 GitHub 上的來源無法使用：{field}無效。",
-        "archive_size_mismatch": "下載的壓縮檔大小為 {actual}，不是 Harness 列出的 {expected}。",
-        "archive_hash_mismatch": "下載的壓縮檔不是 Harness 列出的那個：SHA-256 不一致。",
+        "archive_size_mismatch": "下載的壓縮檔大小為 {actual}，不是 SRN Harness 列出的 {expected}。",
+        "archive_hash_mismatch": "下載的壓縮檔不是 SRN Harness 列出的那個：SHA-256 不一致。",
         "archive_unreadable": "無法讀取下載的壓縮檔。",
         "file_missing": "<code>{path}</code> 在清單裡，但下載的內容裡沒有。",
         "file_unexpected": "下載的內容裡有 <code>{path}</code>，但它不在清單裡。",
-        "file_size_mismatch": "<code>{path}</code> 的大小不是 Harness 列出的 {expected}。",
-        "file_hash_mismatch": "<code>{path}</code> 不是 Harness 列出的那個檔案：SHA-256 不一致。",
+        "file_size_mismatch": "<code>{path}</code> 的大小不是 SRN Harness 列出的 {expected}。",
+        "file_hash_mismatch": "<code>{path}</code> 不是 SRN Harness 列出的那個檔案：SHA-256 不一致。",
         "compression_ratio": "<code>{path}</code> 解壓縮後超過壓縮大小的 {limit} 倍。",
         "link_in_archive": "壓縮檔裡有連結或特殊檔案：<code>{path}</code>。",
         "source_file_unavailable": "GitHub 上這個提交裡沒有 <code>{path}</code>。",
@@ -9348,11 +9347,11 @@
         "acknowledgement_required": "連結到 {agent} 會改變其他智能體看到的內容，需要你確認。",
         "effects_changed": "連結到 {agent} 的影響已經和顯示時不同了。",
         "allowed_tools": "SKILL.md 允許智能體不經詢問就使用工具（<code>{tools}</code>）。除非你選擇保留，Codeg 會刪除這一項。",
-        "fetched_from_source": "Harness 沒有它的檔案副本：檔案從 GitHub 取得（<code>{repository}</code>，提交 <code>{commit}</code>），每個都按它的 SHA-256 核對。",
+        "fetched_from_source": "SRN Harness 沒有它的檔案副本：檔案從 GitHub 取得（<code>{repository}</code>，提交 <code>{commit}</code>），每個都按它的 SHA-256 核對。",
         "files_changed_locally": "{count, plural, other {本機有 # 個檔案被改過或新增}}；已安裝的資料夾會保留在 Codeg 的備份裡。",
         "files_unreadable": "無法把已安裝的資料夾與安裝時的內容比對；更新時會把它完整保留在 Codeg 的備份裡。",
         "io_error": "有檔案或資料夾無法讀取、寫入或移動。",
-        "manifest_write_failed": "無法寫入 Codeg 的 Harness 技能紀錄，所以一切都已還原。",
+        "manifest_write_failed": "無法寫入 Codeg 的 SRN Harness 技能紀錄，所以一切都已還原。",
         "rollback_failed": "還原失敗。沒有刪除任何內容；Codeg 下次啟動時會完成還原。",
         "unlink_failed": "有一個連結無法刪除（<code>{path}</code>）：",
         "lock_busy": "另一項技能變更正在進行。",
@@ -9362,7 +9361,7 @@
         "download": "下載",
         "verify": "檢查檔案",
         "stage": "準備",
-        "snapshot": "再次詢問 Harness",
+        "snapshot": "再次詢問 SRN Harness",
         "unlink": "從智能體移除連結",
         "swap": "放到位",
         "commit": "記錄",
@@ -9386,7 +9385,7 @@
           "reinstall": "已重新安裝。"
         },
         "aborted": "現在已經無法安裝。什麼都沒有寫入。",
-        "invalidPackage": "套件與 Harness 列出的不符，所以什麼都沒有安裝；Codeg 的儲存庫維持原樣。",
+        "invalidPackage": "套件與 SRN Harness 列出的不符，所以什麼都沒有安裝；Codeg 的儲存庫維持原樣。",
         "busy": "另一項技能變更正在進行，所以什麼都沒有寫入。請重試。",
         "writeFailed": "安裝中途失敗。已做的部分已經還原；每一步都寫明了結果。",
         "unknown": "這個 Codeg 無法判斷安裝結果。技能分區會顯示現在的狀況。",
@@ -9436,7 +9435,7 @@
         }
       },
       "detail": {
-        "mark": "Harness",
+        "mark": "SRN Harness",
         "installedAt": "安裝於 {date}",
         "state": {
           "asInstalled": "它的檔案與安裝時一致。",
@@ -9453,30 +9452,30 @@
         "folderGone": "它的資料夾已不在 Codeg 的儲存庫裡。更新即可補回，也可以解除安裝。",
         "update": "更新…",
         "uninstall": "解除安裝…",
-        "catalogOff": "這台主機已關閉 Harness：可以解除安裝，但無法更新。",
-        "missingList": "來自 Harness，資料夾遺失"
+        "catalogOff": "這台主機已關閉 SRN Harness：可以解除安裝，但無法更新。",
+        "missingList": "來自 SRN Harness，資料夾遺失"
       },
-      "ownershipUnresolved": "Codeg 無法讀取它從 Harness 安裝技能的紀錄，因此無法判斷這項技能是否來自 Harness。在能讀取這份紀錄之前，會原樣保留它。"
+      "ownershipUnresolved": "Codeg 無法讀取它從 SRN Harness 安裝技能的紀錄，因此無法判斷這項技能是否來自 SRN Harness。在能讀取這份紀錄之前，會原樣保留它。"
     },
     "record": {
-      "mcp": "Codeg 無法讀取它從 Harness 安裝 MCP 服務的紀錄，所以這裡沒有任何服務標示為來自 Harness。在能讀取這份紀錄之前，不會從 Harness 安裝或解除安裝任何內容。",
-      "skills": "Codeg 無法讀取它從 Harness 安裝技能的紀錄，所以這裡沒有任何技能標示為來自 Harness。在能讀取這份紀錄之前，不會從 Harness 安裝或解除安裝任何內容，可能來自 Harness 的技能也會原樣保留。"
+      "mcp": "Codeg 無法讀取它從 SRN Harness 安裝 MCP 服務的紀錄，所以這裡沒有任何服務標示為來自 SRN Harness。在能讀取這份紀錄之前，不會從 SRN Harness 安裝或解除安裝任何內容。",
+      "skills": "Codeg 無法讀取它從 SRN Harness 安裝技能的紀錄，所以這裡沒有任何技能標示為來自 SRN Harness。在能讀取這份紀錄之前，不會從 SRN Harness 安裝或解除安裝任何內容，可能來自 SRN Harness 的技能也會原樣保留。"
     },
     "errors": {
       "disabled": "這個 Codeg 已關閉「探索」。",
       "network": "無法連上 SRN Harness。請檢查網路後再試一次。",
       "rateLimited": "請求太頻繁了，請在 {seconds, number} 秒後再試。",
-      "notFound": "Harness 裡沒有這個位址的項目，它可能已改名或被移除。",
-      "invalidRef": "這不是 Harness 的位址。位址的寫法是「發布者/名稱」。",
+      "notFound": "SRN Harness 裡沒有這個位址的項目，它可能已改名或被移除。",
+      "invalidRef": "這不是 SRN Harness 的位址。位址的寫法是「發布者/名稱」。",
       "server": "SRN Harness 傳回了錯誤（{status}），請稍後再試。",
       "tooLarge": "SRN Harness 傳回的內容超過了 Codeg 接受的大小。",
       "invalidResponse": "這個版本的 Codeg 讀不懂 SRN Harness 傳回的內容，更新 Codeg 也許能解決。",
-      "recordUnreadable": "無法讀取 Codeg 從 Harness 安裝內容的紀錄。",
-      "resolveUnavailable": "Codeg 暫時無法向 Harness 確認這個項目的目前狀態，因此沒有安裝任何內容。請稍後再試。",
-      "unsupported": "這個 Codeg 的版本太舊，無法使用 Harness。請先更新，再瀏覽目錄。",
-      "unsupportedRemote": "遠端主機上的 Codeg 版本太舊，無法使用 Harness。請先在那台主機上更新，再瀏覽目錄。",
-      "unsupportedWeb": "Codeg 伺服器的版本太舊，無法使用 Harness。請先更新伺服器，再瀏覽目錄。",
-      "unknown": "Harness 無法載入。",
+      "recordUnreadable": "無法讀取 Codeg 從 SRN Harness 安裝內容的紀錄。",
+      "resolveUnavailable": "Codeg 暫時無法向 SRN Harness 確認這個項目的目前狀態，因此沒有安裝任何內容。請稍後再試。",
+      "unsupported": "這個 Codeg 的版本太舊，無法使用 SRN Harness。請先更新，再瀏覽目錄。",
+      "unsupportedRemote": "遠端主機上的 Codeg 版本太舊，無法使用 SRN Harness。請先在那台主機上更新，再瀏覽目錄。",
+      "unsupportedWeb": "Codeg 伺服器的版本太舊，無法使用 SRN Harness。請先更新伺服器，再瀏覽目錄。",
+      "unknown": "SRN Harness 無法載入。",
       "retry": "重試"
     }
   },

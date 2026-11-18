@@ -1814,7 +1814,7 @@
       "installBinary": "Install pi",
       "installing": "Installing…",
       "recheck": "Recheck",
-      "configDirSkillsNote": "With a custom config directory, the Skills, Experts, and Office tools managed in Harness won't apply to this pi — manage its skills in that folder directly.",
+      "configDirSkillsNote": "With a custom config directory, the Skills, Experts, and Office tools managed in Harness Engineering won't apply to this pi — manage its skills in that folder directly.",
       "dirHistoryNote": "These directories reach the pi process only. codeg's conversation history reads pi's own default location, so sessions written to a custom directory here won't be listed.",
       "projectTrustTitle": "Project trust",
       "projectTrustDescription": "Folders you allowed pi to load project files from. A trusted folder lets that repository's .pi/extensions run code when pi starts, applies to every folder inside it, and is also used when you run pi in a terminal.",
@@ -2297,7 +2297,7 @@
       "loadingSubsessions": "Loading sub-conversations…",
       "forge": "Repository panel",
       "canvas": "Infinite Canvas",
-      "harness": "Harness",
+      "harness": "Harness Engineering",
       "folderGroup": {
         "newGroup": "New group",
         "newGroupTitle": "New folder group",
@@ -2778,8 +2778,8 @@
       "officeFullRender": "Full render",
       "officeFullRenderHint": "Render Morph animations, 3D and math (runs the slide's own scripts)",
       "officeNotInstalled": "OfficeCLI is not installed",
-      "officeNotInstalledHint": "Install OfficeCLI under Harness › Skill Packs › Office to preview Word, Excel, and PowerPoint files.",
-      "officeOpenHarness": "Open Harness",
+      "officeNotInstalledHint": "Install OfficeCLI under Harness Engineering › Skill Packs › Office to preview Word, Excel, and PowerPoint files.",
+      "officeOpenHarness": "Open Harness Engineering",
       "officeWatchFailed": "Couldn't start the live preview",
       "officeWatchRetry": "Retry",
       "officeServerInstallHint": "OfficeCLI must be installed on the server host. Run this command there, then retry:",
@@ -3613,7 +3613,7 @@
           "importSessions": "Already ran sessions in the terminal? A folder's menu has Import local sessions — bring that history into codeg.",
           "subSessions": "When an agent delegates, the sub-session appears nested under it in the sidebar — expand the row to follow what each one did.",
           "liveFeedback": "Live feedback in the + menu drops a note into the turn the agent is already running, without interrupting it.",
-          "skillPacks": "Harness › Skill Packs bundles coding experts, scientific research, and office skills — switch them on per agent.",
+          "skillPacks": "Harness Engineering › Skill Packs bundles coding experts, scientific research, and office skills — switch them on per agent.",
           "modelProviders": "Settings → Model Providers takes your own API key or endpoint, and you pick the model right in the composer.",
           "workspaceBackground": "Settings → Appearance sets a workspace background image, panel opacity, and the app's fonts."
         },
@@ -3686,7 +3686,7 @@
           },
           "notEnabled": {
             "title": "“{skill}” isn’t enabled for {agent} yet",
-            "description": "Enable it in Harness › Skill Packs to use it here.",
+            "description": "Enable it in Harness Engineering › Skill Packs to use it here.",
             "action": "Enable",
             "hint": "Skill not enabled"
           },
@@ -7515,12 +7515,12 @@
     "deleteBoardConfirm": "Delete canvas"
   },
   "Harness": {
-    "title": "Harness",
-    "description": "Manage your agents' MCP servers, skills and skill packs, and find more from SRN Harness under Discover.",
-    "descriptionNoDiscover": "Manage your agents' MCP servers, skills and skill packs.",
-    "descriptionMore": "More",
-    "descriptionLess": "Less",
-    "sectionsLabel": "Harness sections",
+    "title": "Harness Engineering",
+    "sectionsLabel": "Harness Engineering sections",
+    "agentList": {
+      "selectAll": "Select all",
+      "selected": "{count, number} of {total, number} selected"
+    },
     "sections": {
       "discover": "Discover",
       "mcp": "MCP",
@@ -7536,29 +7536,23 @@
       "shownFrom": "What is shown is from {time}.",
       "checkNow": "Check now",
       "itemNotChecked": "This item has not been checked yet.",
-      "itemUnavailable": "Harness does not list this version.",
+      "itemUnavailable": "SRN Harness does not list this version.",
       "reasons": {
         "network": "SRN Harness could not be reached.",
-        "rateLimited": "Harness asked for a pause.",
-        "server": "Harness answered with an error ({status}).",
-        "other": "Harness sent an answer this Codeg cannot read."
+        "rateLimited": "SRN Harness asked for a pause.",
+        "server": "SRN Harness answered with an error ({status}).",
+        "other": "SRN Harness sent an answer this Codeg cannot read."
       }
     },
     "link": {
       "discoverOff": "Discover is switched off on this Codeg, so {ref} cannot be opened here."
     },
-    "host": {
-      "label": "Configuration host:",
-      "local": "This computer",
-      "localHint": "Changes here are saved on this computer.",
-      "remoteHint": "Changes here are saved on the remote host, not on this computer.",
-      "webHint": "Changes here are saved on the server this page comes from."
-    },
     "discover": {
       "search": {
-        "label": "Search Harness",
+        "label": "Search SRN Harness",
         "placeholder": "Search skills, MCP servers, assistants…",
-        "clear": "Clear search"
+        "clear": "Clear search",
+        "shortcut": "Press / to search"
       },
       "kinds": {
         "label": "Kind",
@@ -7606,7 +7600,8 @@
         "moreLoaded": "{count, plural, one {# more loaded} other {# more loaded}}",
         "end": "That is everything.",
         "empty": "Nothing matches.",
-        "emptyHint": "Try fewer words, another language, or an address such as anthropics/pdf."
+        "emptyHint": "Try fewer words, another language, or an address such as anthropics/pdf.",
+        "count": "{count, plural, one {<num>#</num> item} other {<num>#</num> items}}"
       },
       "card": {
         "stars": "GitHub stars",
@@ -7644,7 +7639,7 @@
         "repository": "Repository",
         "website": "Website",
         "description": "Description",
-        "readmeElsewhere": "Its license does not let Harness keep a copy, so its description is read at the source.",
+        "readmeElsewhere": "Its license does not let SRN Harness keep a copy, so its description is read at the source.",
         "openSource": "Open the source",
         "expand": "Show all",
         "collapse": "Show less",
@@ -7738,7 +7733,8 @@
           "prompt_short": "too short to use on its own",
           "needs_plugin": "it works only together with the rest of its plugin"
         },
-        "backTo": "Back to <title>{name}</title>"
+        "backTo": "Back to <title>{name}</title>",
+        "breadcrumb": "Breadcrumb"
       },
       "prompt": {
         "title": "Prompt",
@@ -7815,7 +7811,7 @@
         "model": "Model",
         "inherit": "Follows the main session",
         "skills": "Skills it loads",
-        "notInHarness": "not in Harness",
+        "notInHarness": "not in SRN Harness",
         "mcpServers": "MCP servers it uses",
         "mcpServersNote": "By the names they have in the agent it runs in.",
         "mcpLaunches": "MCP servers it starts",
@@ -7831,7 +7827,7 @@
         "copyFailed": "Could not copy to the clipboard.",
         "installLater": "Codeg can show assistants. Installing them comes later.",
         "copyErrors": {
-          "notFound": "Harness keeps no copy of this definition.",
+          "notFound": "SRN Harness keeps no copy of this definition.",
           "tooLarge": "The definition is larger than Codeg copies (256 KB).",
           "invalidResponse": "The definition is not text Codeg can copy.",
           "invalidRef": "Codeg cannot ask for this definition: its file hash is not a valid one.",
@@ -7839,7 +7835,18 @@
           "unsupportedRemote": "The Codeg on the remote host cannot copy definitions yet. Update it there to copy them.",
           "unsupportedWeb": "The Codeg server cannot copy definitions yet. Update the server to copy them."
         }
-      }
+      },
+      "hero": {
+        "title": "Find <accent>new abilities</accent> for your agents",
+        "subtitle": "{count, number} community skills, MCP servers, prompts and assistants — install once, use them across your agents",
+        "subtitleNoCount": "Community skills, MCP servers, prompts and assistants — install once, use them across your agents"
+      },
+      "layout": {
+        "label": "Layout",
+        "grid": "Grid",
+        "list": "List"
+      },
+      "refresh": "Load the catalog again"
     },
     "mcp": {
       "listSeparator": ", ",
@@ -7857,7 +7864,7 @@
         "label": "Show",
         "all": "All servers",
         "problems": "With problems",
-        "harness": "From Harness",
+        "harness": "From SRN Harness",
         "updates": "Update available"
       },
       "refresh": "Read the configuration again",
@@ -7867,7 +7874,7 @@
         "manualHint": "Fill in a command or an address yourself.",
         "paste": "Paste configuration",
         "pasteHint": "From a README or another agent's file.",
-        "harness": "Find on Harness",
+        "harness": "Find on SRN Harness",
         "harnessHint": "Browse the MCP servers in SRN Harness."
       },
       "list": {
@@ -7877,7 +7884,8 @@
         "noneHint": "Servers set up in any agent's configuration on this host show up here.",
         "noMatch": "No server matches.",
         "noAgentMatch": "No agent has a server that matches.",
-        "clearFilters": "Clear search and filter"
+        "clearFilters": "Clear search and filter",
+        "groupManual": "Added by hand"
       },
       "row": {
         "onIn": "On in {agents}.",
@@ -7885,7 +7893,8 @@
         "noDefinition": "Unreadable",
         "definitions": "{count, plural, one {# definition} other {# definitions}}",
         "problems": "Problem",
-        "reserved": "Reserved name"
+        "reserved": "Reserved name",
+        "off": "Off everywhere"
       },
       "transport": {
         "stdio": "stdio",
@@ -7904,7 +7913,6 @@
         "pickAgent": "Pick an agent to see its configuration.",
         "notFound": "No agent here has a server named <code>{key}</code>.",
         "notFoundHint": "It may have been renamed or removed. The list shows what every agent has now.",
-        "inAgents": "{count, plural, one {in # agent} other {in # agents}}",
         "rename": "Rename",
         "remove": "Remove…",
         "notEditable": "Codeg cannot change this server in any of the agents that have it; each agent below says why.",
@@ -7912,19 +7920,18 @@
         "definition": "Definition",
         "definitions": "Definitions",
         "definitionLetter": "Definition {letter}",
-        "heldBy": "Used by {agents}",
         "edit": "Edit",
         "editLetter": "Edit {letter}",
         "noDefinition": "None of the agents has a definition Codeg can read. Each agent below says what is wrong with its entry.",
         "agents": "Agents",
         "extra": "Its own fields, kept as they are:",
-        "saving": "Saving…"
+        "saving": "Saving…",
+        "enabledIn": "{count, plural, =0 {On in no agent} one {On in # agent} other {On in # agents}}",
+        "source": "Source"
       },
       "agentState": {
         "on": "On",
         "off": "Off",
-        "withDefinition": "{state} · definition {letter}",
-        "undescribed": "{state} · Codeg cannot read this entry",
         "notConfigured": "Not set up",
         "cannotHold": "Cannot use {transports} servers",
         "keyNotNew": "This name has characters a new entry cannot use, so it cannot be added here. Rename the server first.",
@@ -7932,7 +7939,8 @@
         "unreadable": "Its file could not be read.",
         "reserved": "the built-in server's name, listed only",
         "readOnly": "read-only",
-        "skipped": "skipped in its sessions"
+        "skipped": "skipped in its sessions",
+        "entryUnreadable": "Codeg cannot read this entry"
       },
       "agents": {
         "showAll": "Show all agents ({count, number} not installed)",
@@ -7992,7 +8000,8 @@
         "env": "Environment",
         "url": "Address",
         "headers": "Headers",
-        "secretArgs": "the secret arguments"
+        "secretArgs": "the secret arguments",
+        "copyCommand": "Copy the command"
       },
       "rowResult": {
         "unsupported": "Not saved: this Codeg is too old for it. Update it.",
@@ -8003,16 +8012,15 @@
         "dismiss": "Dismiss"
       },
       "harness": {
-        "mark": "Harness",
-        "markVersion": "Harness · {version}",
-        "title": "From Harness",
-        "agents": "Where it is installed",
-        "view": "View on Harness",
+        "mark": "SRN Harness",
+        "markVersion": "SRN Harness · {version}",
+        "title": "From SRN Harness",
+        "view": "View on SRN Harness",
         "update": "Update",
         "manage": "Manage agents",
         "uninstall": "Uninstall…",
         "changedNote": "An entry changed here is replaced by an update, and kept by an uninstall unless you tick it there.",
-        "catalogOff": "Updating it and adding it to more agents ask Harness, which is switched off on this Codeg. Uninstalling still works.",
+        "catalogOff": "Updating it and adding it to more agents ask SRN Harness, which is switched off on this Codeg. Uninstalling still works.",
         "states": {
           "asInstalled": "As installed",
           "changedLocally": "Changed here",
@@ -8022,8 +8030,11 @@
           "updateAvailable": "Update available",
           "yanked": "Version withdrawn",
           "disabledByAuthor": "Disabled by its author",
-          "removedByHarness": "Removed from Harness"
-        }
+          "removedByHarness": "Removed from SRN Harness"
+        },
+        "editDefinition": "Edit definition",
+        "editDefinitionLetter": "Edit definition {letter}",
+        "state": "Status"
       },
       "plan": {
         "reviewTitle": "What will be written",
@@ -8073,14 +8084,9 @@
       "targets": {
         "cannotHold": "Cannot use {transport} servers",
         "keyNotNew": "Does not have it, and this name cannot be used for a new entry",
-        "willAdd": "Will be added",
-        "unchanged": "Already has this",
-        "willUpdate": "Will be updated",
         "willReplace": "Has a different definition, which will be replaced",
-        "staysOff": "stays off",
-        "commentsLost": "saving removes the comments in its file",
-        "keeps": "Keeps what it has",
-        "notConfigured": "Not set up",
+        "staysOff": "Stays off",
+        "commentsLost": "Saving removes the comments in its file",
         "entryReadOnly": "Has an entry with this name that Codeg does not change"
       },
       "dialog": {
@@ -8328,8 +8334,7 @@
           "update": "Update <name>{title}</name>",
           "manage": "Agents for <name>{title}</name>"
         },
-        "description": "Nothing is written until you confirm. Codeg checks with Harness again right before it writes.",
-        "loading": "Asking Harness about this version…",
+        "loading": "Asking SRN Harness about this version…",
         "updateFromTo": "From version <code>{from}</code> to <code>{to}</code>.",
         "alreadyNewest": "This is already the newest version. You can still add it to more agents.",
         "working": {
@@ -8362,21 +8367,21 @@
         "published": "published {date}"
       },
       "snapshot": {
-        "title": "What Harness says now",
+        "title": "What SRN Harness says now",
         "fresh": "Asked just now",
-        "none": "Harness did not say how this version stands.",
+        "none": "SRN Harness did not say how this version stands.",
         "riskNotStated": "Risk not stated",
-        "reviewNotStated": "Harness did not say whether a person reviewed it.",
-        "checksNotStated": "Harness did not give its check results.",
+        "reviewNotStated": "SRN Harness did not say whether a person reviewed it.",
+        "checksNotStated": "SRN Harness did not give its check results.",
         "noFindings": "The checks found nothing.",
         "findings": "Findings: {high} high, {medium} medium, {low} low",
         "secrets": "{count, plural, one {# credential found in the package} other {# credentials found in the package}}",
         "packages": "Packages",
         "package": "Package",
-        "packagesNotStated": "Harness did not say how its packages were checked.",
+        "packagesNotStated": "SRN Harness did not say how its packages were checked.",
         "installScript": "Runs install scripts",
         "permissions": "What it asks for",
-        "permissionsNotStated": "Harness did not say what it asks for.",
+        "permissionsNotStated": "SRN Harness did not say what it asks for.",
         "noPermissions": "Nothing in particular.",
         "undeclared": "found, not declared",
         "declaredOnly": "declared, not found"
@@ -8418,7 +8423,7 @@
           "json": "This is not valid JSON.",
           "choice": "Choose one of the listed values."
         },
-        "secretsPlain": "Secret values are written in plain text into the configuration file of each agent you tick. They are not sent to Harness.",
+        "secretsPlain": "Secret values are written in plain text into the configuration file of each agent you tick. They are not sent to SRN Harness.",
         "choose": "Choose…",
         "recovered": "Filled in from what {agents} have now.",
         "recoveredAside": "Filled in from the installed entries",
@@ -8438,21 +8443,19 @@
         "hint": "Ticked at first: the installed agents that can use this server.",
         "hintInstalled": "Ticked at first: the agents it is installed in.",
         "manageNote": "Unticking an agent leaves it as it is. To take the server out of an agent, use Uninstall.",
-        "willAdd": "Will be added",
         "willUpdate": "Its entry from this item will be replaced",
         "ownNotTicked": "Has this item already: tick it below to replace it",
         "willReplace": "Its server named <code>{key}</code> ({owner}) will be replaced",
         "hasOther": "Has a server named <code>{key}</code> ({owner}): tick it below to replace it",
-        "newer": "Has a newer version ({version}) from Harness",
-        "staysInstalled": "Installed here; stays as it is",
+        "newer": "Has a newer version ({version}) from SRN Harness",
         "unreadable": "Its configuration file could not be read.",
         "readOnly": "Codeg does not change this agent's file.",
         "notWritten": "Codeg only lists this agent's servers.",
         "holdsName": "Has a server named <code>{key}</code> ({owner})",
         "owner": {
           "this_item": "from this item",
-          "other_item": "from another Harness item",
-          "elsewhere": "not from Harness",
+          "other_item": "from another SRN Harness item",
+          "elsewhere": "not from SRN Harness",
           "unknown": "origin unknown"
         }
       },
@@ -8462,8 +8465,8 @@
         "agent": "Replace it in {agent}",
         "ownerThis": "Installed from this item",
         "ownerThisChanged": "Installed from this item, then changed here: those changes will be lost",
-        "ownerOther": "Installed from another Harness item: <code>{ref}</code>",
-        "ownerElsewhere": "Not from Harness: added by hand or by another program",
+        "ownerOther": "Installed from another SRN Harness item: <code>{ref}</code>",
+        "ownerElsewhere": "Not from SRN Harness: added by hand or by another program",
         "ownerUnknown": "Codeg cannot say where it came from",
         "off": "switched off there",
         "overwrites": "What will be replaced:",
@@ -8479,18 +8482,18 @@
         "targets": "Tick at least one agent.",
         "replace": "Tick replacing <code>{key}</code> in {agents}, or untick those agents.",
         "yanked": "Confirm installing the withdrawn version.",
-        "state": "Harness gave no state for this version to confirm.",
+        "state": "SRN Harness gave no state for this version to confirm.",
         "disagree": "Pick the value of <code>{name}</code>: the agents do not agree on it."
       },
       "notices": {
         "changedElsewhere": "An agent's configuration changed after this was opened. This is what would be written now; look it over and confirm again.",
         "refused": "Codeg did not install it, and wrote nothing:",
-        "unsupported": "This Codeg is too old to install from Harness. Update it.",
-        "unsupportedRemote": "The Codeg on the remote host is too old to install from Harness. Update it there.",
-        "unsupportedWeb": "The Codeg server is too old to install from Harness. Update the server."
+        "unsupported": "This Codeg is too old to install from SRN Harness. Update it.",
+        "unsupportedRemote": "The Codeg on the remote host is too old to install from SRN Harness. Update it there.",
+        "unsupportedWeb": "The Codeg server is too old to install from SRN Harness. Update the server."
       },
       "changes": {
-        "title": "Harness's account of this version changed after you opened this",
+        "title": "SRN Harness's account of this version changed after you opened this",
         "body": "Nothing was written. Look at what changed, then confirm again with the new state, or cancel.",
         "status_changed": "Status: {from} → {to}",
         "risk_changed": "Risk: {from} → {to}",
@@ -8515,7 +8518,7 @@
       "status": {
         "ok": "Available",
         "yanked": "Withdrawn by its author",
-        "blocked": "Blocked by Harness",
+        "blocked": "Blocked by SRN Harness",
         "unknown": "Status unknown"
       },
       "riskLevel": {
@@ -8548,26 +8551,26 @@
       },
       "reasons": {
         "not_an_mcp_server": "This is not an MCP server (it is: {kind}).",
-        "item_unavailable": "Harness does not offer this item now.",
+        "item_unavailable": "SRN Harness does not offer this item now.",
         "item_unavailable_retired": "Its author retired this item.",
-        "item_unavailable_removed": "Harness took this item down.",
-        "revision_unavailable": "Harness has no revision {revision} of this item.",
-        "version_blocked": "Harness blocked this version.",
-        "version_status_unknown": "Harness gave this version a status this Codeg does not know, so it is not installed. Updating Codeg may help.",
-        "snapshot_incomplete": "Harness's answer left out this version's {field}, which installing depends on.",
+        "item_unavailable_removed": "SRN Harness took this item down.",
+        "revision_unavailable": "SRN Harness has no revision {revision} of this item.",
+        "version_blocked": "SRN Harness blocked this version.",
+        "version_status_unknown": "SRN Harness gave this version a status this Codeg does not know, so it is not installed. Updating Codeg may help.",
+        "snapshot_incomplete": "SRN Harness's answer left out this version's {field}, which installing depends on.",
         "nothing_to_install": "This item has nothing Codeg can install: no package to run and no address to reach.",
         "server_unreadable": "The server's definition (server.json) could not be read.",
-        "record_unreadable": "Codeg's record of what it installed from Harness cannot be read, so nothing is installed, to keep that record intact.",
+        "record_unreadable": "Codeg's record of what it installed from SRN Harness cannot be read, so nothing is installed, to keep that record intact.",
         "registry_unsupported": "Packages from <code>{registry}</code> are not run: only npm and PyPI packages are.",
         "runtime_unsupported": "The package asks to be started with <code>{runtime}</code>, which Codeg does not use for <code>{registry}</code> packages.",
-        "identifier_has_version": "The package name <code>{identifier}</code> carries its own version, so the version Harness checked cannot be applied.",
+        "identifier_has_version": "The package name <code>{identifier}</code> carries its own version, so the version SRN Harness checked cannot be applied.",
         "runtime_arguments_unsupported": "<code>{identifier}</code> declares options for the program that runs it (<code>{argument}</code>). They could make it run something other than the checked package, so this way is not offered.",
         "runner_environment_unsupported": "The package sets <code>{name}</code>, which changes how the program that runs it works, so this way is not offered.",
-        "package_not_pinned": "Harness has not pinned a version of <code>{identifier}</code>.",
-        "package_version_inexact": "Harness's version of <code>{identifier}</code> is not one exact version ({version}).",
-        "package_version_inexact_none": "Harness has no exact version of <code>{identifier}</code>.",
+        "package_not_pinned": "SRN Harness has not pinned a version of <code>{identifier}</code>.",
+        "package_version_inexact": "SRN Harness's version of <code>{identifier}</code> is not one exact version ({version}).",
+        "package_version_inexact_none": "SRN Harness has no exact version of <code>{identifier}</code>.",
         "package_missing": "<code>{identifier}@{version}</code> is not at its registry.",
-        "package_verification_unknown": "Harness checked <code>{identifier}@{version}</code> in a way this Codeg does not know, so it is not used.",
+        "package_verification_unknown": "SRN Harness checked <code>{identifier}@{version}</code> in a way this Codeg does not know, so it is not used.",
         "remote_not_public": "The address is not a public HTTPS address.",
         "remote_not_public_host": "The address is not a public HTTPS address (<code>{host}</code>).",
         "secret_in_query": "The secret <code>{name}</code> could only be sent in the address itself, so this way is not offered.",
@@ -8602,7 +8605,7 @@
         "unknown": "This Codeg cannot tell how the install went. The MCP section shows what the agents have now."
       },
       "record": {
-        "failed": "The servers are written, but Codeg could not record them as from Harness, so they are not marked as such.",
+        "failed": "The servers are written, but Codeg could not record them as from SRN Harness, so they are not marked as such.",
         "uninstallFailed": "The servers are removed, but Codeg could not update its record of them. It catches up the next time it reads what is installed.",
         "record_unreadable": "Its record could not be read.",
         "record_write_failed": "Its record could not be written.",
@@ -8659,7 +8662,7 @@
         "label": "Show",
         "all": "All skills",
         "custom": "Custom",
-        "harness": "From Harness",
+        "harness": "From SRN Harness",
         "problems": "With problems",
         "updates": "Update available"
       },
@@ -8676,7 +8679,7 @@
         "importHint": "A folder with a SKILL.md, copied into Codeg's store as a custom skill.",
         "importTitle": "Choose a skill folder to import",
         "importFailed": "The folder was not imported.",
-        "harness": "Find on Harness",
+        "harness": "Find on SRN Harness",
         "harnessHint": "Browse the skills in SRN Harness."
       },
       "list": {
@@ -8690,7 +8693,7 @@
         "problems": "Codeg found something to look at in its skills store"
       },
       "marks": {
-        "harnessVersion": "Harness {version}",
+        "harnessVersion": "SRN Harness {version}",
         "problem": "Needs attention"
       },
       "harnessStates": {
@@ -8698,7 +8701,7 @@
         "updateAvailable": "Update available",
         "yanked": "Version withdrawn",
         "disabledByAuthor": "Disabled by its author",
-        "removedByHarness": "Removed from Harness",
+        "removedByHarness": "Removed from SRN Harness",
         "changedLocally": "Changed here",
         "filesMissing": "Files missing"
       },
@@ -8707,13 +8710,13 @@
         "science": "Science",
         "office": "Office",
         "ui": "UI",
-        "harness": "Harness",
+        "harness": "SRN Harness",
         "custom": "Custom",
         "unknown": "From {origin}"
       },
       "owners": {
         "pack": "Skill pack · {pack}",
-        "harness": "From Harness",
+        "harness": "From SRN Harness",
         "custom": "Custom",
         "agent": "The agent's own",
         "linked_elsewhere": "Linked elsewhere",
@@ -8758,7 +8761,7 @@
         "name_taken": "Another skill already uses this name.",
         "id_taken": "A skill of this name already exists.",
         "id_reserved": "This name belongs to one of Codeg's skill packs.",
-        "id_reserved_harness": "Harness installed this skill, so Codeg keeps it as it came. To change it, copy it as a custom skill.",
+        "id_reserved_harness": "SRN Harness installed this skill, so Codeg keeps it as it came. To change it, copy it as a custom skill.",
         "target_occupied": "A folder or file of the same name is in the way.",
         "target_linked_elsewhere": "A link of the same name to somewhere else is in the way.",
         "target_broken": "A broken link of the same name is in the way. Repair or remove it first.",
@@ -8887,9 +8890,9 @@
         "duplicate": "Duplicate…",
         "delete": "Delete…",
         "copyAsCustom": "Copy as custom skill…",
-        "viewOnHarness": "View on Harness",
+        "viewOnHarness": "View on SRN Harness",
         "update": "Update",
-        "harnessReadOnly": "Installed from Harness, and read only here: an update would replace any change. To change it, copy it as a custom skill.",
+        "harnessReadOnly": "Installed from SRN Harness, and read only here: an update would replace any change. To change it, copy it as a custom skill.",
         "harnessSource": "Item:",
         "pickSkill": "Pick a skill to see its agents."
       },
@@ -9124,7 +9127,7 @@
         "turnOff": "Turn off those links…"
       },
       "settingsWindow": {
-        "acknowledgementRequired": "This change would also reach other agents that share a skills folder. Make it on the Harness page in the workspace (Harness › Skills or Skill Packs), which shows who is affected and asks first."
+        "acknowledgementRequired": "This change would also reach other agents that share a skills folder. Make it on the Harness Engineering page in the workspace (Harness Engineering › Skills or Skill Packs), which shows who is affected and asks first."
       }
     },
     "packs": {
@@ -9191,8 +9194,7 @@
           "update": "Update <name>{title}</name>",
           "reinstall": "Reinstall <name>{title}</name>"
         },
-        "description": "Nothing is written until you confirm. Codeg downloads the files, checks every one of them, and asks Harness again right before it puts the skill in place.",
-        "loading": "Asking Harness about this version…",
+        "loading": "Asking SRN Harness about this version…",
         "updateFromTo": "From version <code>{from}</code> to <code>{to}</code>.",
         "reinstallNote": "This version is installed already. Installing it again puts its files back as published; files you changed are kept in Codeg's backups.",
         "working": {
@@ -9214,7 +9216,7 @@
       },
       "notices": {
         "effectsChanged": "Linking it does not do what was shown before. Nothing was written. This is what it does now; look it over and confirm again.",
-        "stateMoved": "Harness's account of this version changed while this was open. What it says now is shown below.",
+        "stateMoved": "SRN Harness's account of this version changed while this was open. What it says now is shown below.",
         "refused": "Codeg did not install it, and wrote nothing:"
       },
       "warnings": {
@@ -9225,9 +9227,9 @@
         "size": "{count, plural, one {# file} other {# files}}, {size}",
         "license": "License: {license}",
         "compatibility": "Works with: {compatibility}",
-        "archive": "Downloaded from Harness's copy, checked against its SHA-256 <code>{hash}</code>…, then file by file.",
+        "archive": "Downloaded from SRN Harness's copy, checked against its SHA-256 <code>{hash}</code>…, then file by file.",
         "source": "Fetched from GitHub, <code>{repository}</code> at commit <code>{commit}</code>, folder <code>{path}</code>. Each file is checked against its SHA-256.",
-        "noSource": "Harness gives neither a copy of its files nor a source to fetch them from.",
+        "noSource": "SRN Harness gives neither a copy of its files nor a source to fetch them from.",
         "files": "Show {count, plural, one {the file} other {the # files}}",
         "executable": "executable"
       },
@@ -9245,7 +9247,7 @@
         "reserved": "a skill of Codeg's {pack} pack",
         "pack": "the {pack} pack's skill in Codeg's store",
         "custom": "your custom skill in Codeg's store",
-        "harness": "another skill from Harness (<code>{ref}</code>)",
+        "harness": "another skill from SRN Harness (<code>{ref}</code>)",
         "store": "a folder in Codeg's store",
         "codeg_link": "a link of Codeg's in the skills folder of {agents}",
         "codeg_linkAt": "a link of Codeg's at <code>{path}</code>",
@@ -9269,15 +9271,12 @@
         "notInstalled": "not installed",
         "noFolder": "No skills folder to link into",
         "shared": "Links into a folder other agents read too",
-        "willLink": "Will be linked",
-        "alreadySees": "Sees it already",
-        "needsAck": "Other agents see it too: see below",
-        "cannotLink": "Cannot be linked: see below",
+        "needsAck": "Also affects {agents}",
+        "cannotLink": "Cannot be linked",
         "showAll": "Show all agents ({count, number} not installed)",
         "hideNotInstalled": "Hide agents that are not installed",
         "none": "No agent ticked: it goes into Codeg's store only. You can turn it on for agents in Skills.",
         "checking": "Working out what linking does…",
-        "effects": "What linking does",
         "blocked": "Some agents cannot be linked. The skill is installed anyway, and they are left as they are; each says why.",
         "others": "Linking also changes what other agents see. Confirming confirms this too.",
         "otherName": "What linking does under <code>{name}</code> is worked out when you confirm. If it reaches other agents, Codeg shows it to you first, and writes nothing until you confirm again."
@@ -9293,8 +9292,8 @@
         "grownChecking": "Comparing with the installed version…",
         "grownTitle": "The new version asks for more than the installed one:",
         "grownNone": "The new version asks for nothing the installed one did not, and its risk is not higher.",
-        "grownPartial": "Harness did not say what one of the versions asks for, so not everything could be compared.",
-        "grownUnknown": "What Harness says of the installed version could not be read, so what the new one adds cannot be listed."
+        "grownPartial": "SRN Harness did not say what one of the versions asks for, so not everything could be compared.",
+        "grownUnknown": "What SRN Harness says of the installed version could not be read, so what the new one adds cannot be listed."
       },
       "missing": {
         "title": "Before it can be installed:",
@@ -9304,7 +9303,7 @@
         "nameFixed": "Keep the name it is installed under.",
         "links": "Wait until Codeg has worked out what linking does.",
         "yanked": "Confirm installing the withdrawn version.",
-        "state": "Harness gave no state for this version to confirm."
+        "state": "SRN Harness gave no state for this version to confirm."
       },
       "sourceField": {
         "repository": "repository",
@@ -9314,8 +9313,8 @@
       },
       "reasons": {
         "not_a_skill": "This is not a skill (it is: {kind}).",
-        "manifest_unreadable": "Codeg's record of the skills it installed from Harness cannot be read (or a newer Codeg wrote it), so nothing is installed, to keep that record intact.",
-        "nothing_to_install": "Harness gives neither a copy of this skill's files nor a source to fetch them from.",
+        "manifest_unreadable": "Codeg's record of the skills it installed from SRN Harness cannot be read (or a newer Codeg wrote it), so nothing is installed, to keep that record intact.",
+        "nothing_to_install": "SRN Harness gives neither a copy of this skill's files nor a source to fetch them from.",
         "unsafe_path": "The package lists a file at a path Codeg does not write to: <code>{path}</code>.",
         "duplicate_path": "The package lists <code>{path}</code> twice (ignoring case), or as both a file and a folder.",
         "too_many_files": "The package has {count, number} files; at most {limit} are allowed.",
@@ -9327,15 +9326,15 @@
         "skill_md_missing": "The package has no SKILL.md at its top.",
         "hash_invalid": "The package's SHA-256 for <code>{path}</code> is not one.",
         "hash_invalid_archive": "The archive's SHA-256 is not one.",
-        "archive_address_invalid": "The archive's address is not on Harness.",
+        "archive_address_invalid": "The archive's address is not on SRN Harness.",
         "source_invalid": "Its source on GitHub cannot be used: the {field} is not valid.",
-        "archive_size_mismatch": "The archive downloaded is {actual}, not the {expected} Harness lists.",
-        "archive_hash_mismatch": "The archive downloaded is not the one Harness lists: its SHA-256 differs.",
+        "archive_size_mismatch": "The archive downloaded is {actual}, not the {expected} SRN Harness lists.",
+        "archive_hash_mismatch": "The archive downloaded is not the one SRN Harness lists: its SHA-256 differs.",
         "archive_unreadable": "The archive downloaded could not be read.",
         "file_missing": "<code>{path}</code> is listed but not in the download.",
         "file_unexpected": "The download holds <code>{path}</code>, which is not listed.",
-        "file_size_mismatch": "<code>{path}</code> is not the {expected} Harness lists.",
-        "file_hash_mismatch": "<code>{path}</code> is not the file Harness lists: its SHA-256 differs.",
+        "file_size_mismatch": "<code>{path}</code> is not the {expected} SRN Harness lists.",
+        "file_hash_mismatch": "<code>{path}</code> is not the file SRN Harness lists: its SHA-256 differs.",
         "compression_ratio": "<code>{path}</code> unpacks to more than {limit} times its packed size.",
         "link_in_archive": "The archive holds a link or a special file: <code>{path}</code>.",
         "source_file_unavailable": "GitHub has no <code>{path}</code> at that commit.",
@@ -9348,11 +9347,11 @@
         "acknowledgement_required": "Linking it to {agent} changes what other agents see, and needs your confirmation.",
         "effects_changed": "Linking it to {agent} does not do what was shown any more.",
         "allowed_tools": "SKILL.md lets agents use tools without asking (<code>{tools}</code>). Codeg removes this unless you keep it.",
-        "fetched_from_source": "Harness has no copy of its files: they are fetched from GitHub (<code>{repository}</code> at <code>{commit}</code>), each checked against its SHA-256.",
+        "fetched_from_source": "SRN Harness has no copy of its files: they are fetched from GitHub (<code>{repository}</code> at <code>{commit}</code>), each checked against its SHA-256.",
         "files_changed_locally": "{count, plural, one {# file was} other {# files were}} changed or added here; the installed folder is kept in Codeg's backups.",
         "files_unreadable": "The installed folder cannot be compared with what was installed; an update keeps it whole in Codeg's backups.",
         "io_error": "A file or folder could not be read, written or moved.",
-        "manifest_write_failed": "Codeg's record of its Harness skills could not be written, so everything was put back.",
+        "manifest_write_failed": "Codeg's record of its SRN Harness skills could not be written, so everything was put back.",
         "rollback_failed": "Putting things back failed. Nothing was deleted; Codeg finishes it on its next start.",
         "unlink_failed": "A link could not be removed (<code>{path}</code>):",
         "lock_busy": "Another change to skills was in progress.",
@@ -9362,7 +9361,7 @@
         "download": "Download",
         "verify": "Check the files",
         "stage": "Prepare",
-        "snapshot": "Ask Harness again",
+        "snapshot": "Ask SRN Harness again",
         "unlink": "Unlink from the agents",
         "swap": "Put in place",
         "commit": "Record",
@@ -9386,7 +9385,7 @@
           "reinstall": "Reinstalled."
         },
         "aborted": "This can no longer be installed. Nothing was written.",
-        "invalidPackage": "The package is not what Harness lists, so nothing was installed; Codeg's store is as it was.",
+        "invalidPackage": "The package is not what SRN Harness lists, so nothing was installed; Codeg's store is as it was.",
         "busy": "Another change to skills was in progress, so nothing was written. Try again.",
         "writeFailed": "Installing failed part-way. What was done was put back; each step says what happened.",
         "unknown": "This Codeg cannot tell how the install went. The Skills section shows what is there now.",
@@ -9436,7 +9435,7 @@
         }
       },
       "detail": {
-        "mark": "Harness",
+        "mark": "SRN Harness",
         "installedAt": "installed {date}",
         "state": {
           "asInstalled": "Its files are as installed.",
@@ -9453,30 +9452,30 @@
         "folderGone": "Its folder is gone from Codeg's store. Update it to put it back, or uninstall it.",
         "update": "Update…",
         "uninstall": "Uninstall…",
-        "catalogOff": "Harness is switched off on this host: it can be uninstalled, not updated.",
-        "missingList": "From Harness, folder missing"
+        "catalogOff": "SRN Harness is switched off on this host: it can be uninstalled, not updated.",
+        "missingList": "From SRN Harness, folder missing"
       },
-      "ownershipUnresolved": "Codeg could not read its record of the skills it installed from Harness, so it cannot tell whether this one is Harness's. It is left exactly as it is until the record can be read."
+      "ownershipUnresolved": "Codeg could not read its record of the skills it installed from SRN Harness, so it cannot tell whether this one is SRN Harness's. It is left exactly as it is until the record can be read."
     },
     "record": {
-      "mcp": "Codeg could not read its record of the MCP servers it installed from Harness, so none is marked as from Harness here. Until it can be read, nothing is installed or uninstalled from Harness.",
-      "skills": "Codeg could not read its record of the skills it installed from Harness, so none is marked as from Harness here. Until it can be read, nothing is installed or uninstalled from Harness, and skills that may be Harness's are left exactly as they are."
+      "mcp": "Codeg could not read its record of the MCP servers it installed from SRN Harness, so none is marked as from SRN Harness here. Until it can be read, nothing is installed or uninstalled from SRN Harness.",
+      "skills": "Codeg could not read its record of the skills it installed from SRN Harness, so none is marked as from SRN Harness here. Until it can be read, nothing is installed or uninstalled from SRN Harness, and skills that may be SRN Harness's are left exactly as they are."
     },
     "errors": {
       "disabled": "Discover is switched off on this Codeg.",
       "network": "SRN Harness could not be reached. Check the connection and try again.",
       "rateLimited": "Too many requests. Try again in {seconds, plural, one {# second} other {# seconds}}.",
-      "notFound": "Harness has no item at this address. It may have been renamed or removed.",
-      "invalidRef": "That is not a Harness address. An address looks like publisher/name.",
+      "notFound": "SRN Harness has no item at this address. It may have been renamed or removed.",
+      "invalidRef": "That is not a SRN Harness address. An address looks like publisher/name.",
       "server": "SRN Harness answered with an error ({status}). Try again in a moment.",
       "tooLarge": "The answer from SRN Harness is larger than Codeg accepts.",
       "invalidResponse": "SRN Harness sent an answer this Codeg cannot read. Updating Codeg may help.",
-      "recordUnreadable": "Codeg's record of what it installed from Harness could not be read.",
-      "resolveUnavailable": "Codeg cannot confirm this item's current state with Harness right now, so nothing was installed. Try again later.",
-      "unsupported": "This Codeg is too old for Harness. Update it to browse the catalog.",
-      "unsupportedRemote": "The Codeg on the remote host is too old for Harness. Update it there to browse the catalog.",
-      "unsupportedWeb": "The Codeg server is too old for Harness. Update the server to browse the catalog.",
-      "unknown": "Harness could not be loaded.",
+      "recordUnreadable": "Codeg's record of what it installed from SRN Harness could not be read.",
+      "resolveUnavailable": "Codeg cannot confirm this item's current state with SRN Harness right now, so nothing was installed. Try again later.",
+      "unsupported": "This Codeg is too old for SRN Harness. Update it to browse the catalog.",
+      "unsupportedRemote": "The Codeg on the remote host is too old for SRN Harness. Update it there to browse the catalog.",
+      "unsupportedWeb": "The Codeg server is too old for SRN Harness. Update the server to browse the catalog.",
+      "unknown": "SRN Harness could not be loaded.",
       "retry": "Retry"
     }
   },
