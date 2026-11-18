@@ -42,7 +42,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type ComponentProps,
+  type CSSProperties,
   type ReactNode,
 } from "react"
 import { useLocale, useTranslations } from "next-intl"
@@ -53,6 +53,7 @@ import {
   Ear,
   FileText,
   Forward,
+  Inbox,
   ListTodo,
   MessageCircleQuestionMark,
   MessagesSquare,
@@ -68,10 +69,15 @@ import { toast } from "sonner"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { AgentIcon } from "@/components/agent-icon"
 import {
+  PANEL_SURFACE,
   PanelCard,
+  PanelEmpty,
+  PanelFold,
+  PanelFolds,
   PanelGroup,
   PanelIcon,
   PanelItem,
+  PanelList,
   PanelSection,
   type PanelTone,
 } from "./panel-section"
@@ -131,6 +137,7 @@ import {
 import { toErrorMessage } from "@/lib/app-error"
 import { formatTokenCount } from "@/lib/token-format"
 import type {
+  BotColor,
   DispatchInfo,
   DispatchState,
   ItemInfo,
@@ -178,9 +185,9 @@ import { TodaySection } from "./today-section"
 
 /** Run-log lines the status tab lists. */
 const RUN_LOG_LINES = 50
-/** An executor's avatar on a work card, in px at 100% zoom: as a kind's
+/** An executor's avatar leading a row, in px at 100% zoom: as a kind's
  *  icon tile. */
-const CARD_AVATAR_SIZE = 20
+const ROW_AVATAR_SIZE = 24
 /** The assistant's face at the head of the panel, in px at 100% zoom. */
 const HEAD_AVATAR_SIZE = 64
 /** Its face on the workspace's empty screen, in px at 100% zoom. */
@@ -376,7 +383,7 @@ export function PersonalAgentAuxPanel({
       ref={asideRef}
       data-pa-aux
       aria-label={t("title")}
-      className="flex h-full min-h-0 flex-col overflow-hidden"
+      className="@container/aux flex h-full min-h-0 flex-col overflow-hidden"
     >
       <Tabs
         value={tab}
@@ -404,8 +411,10 @@ export function PersonalAgentAuxPanel({
                   aria-label={name}
                   data-pa-aux-tab={value}
                   // Each as wide as its word, the rest shared: a longer
-                  // word is not cut while the panel has room for it.
-                  className="min-w-0 flex-auto px-1.5"
+                  // word is not cut while the panel has room for it — on
+                  // a narrow panel a size down, so two characters are not
+                  // cut to one.
+                  className="min-w-0 flex-auto px-1.5 @max-[18rem]/aux:px-1 @max-[18rem]/aux:text-[0.8125rem]"
                 >
                   <span className="min-w-0 truncate">{label}</span>
                   {count > 0 ? (
@@ -560,10 +569,10 @@ function EmptyState({
   children?: ReactNode
 }) {
   return (
-    <Empty className="flex-none gap-3 rounded-2xl bg-muted/50 px-6 py-10">
+    <Empty className="flex-none gap-3 rounded-xl border border-dashed border-border px-6 py-10">
       <EmptyHeader className="gap-1.5">
         {children ?? (
-          <EmptyMedia variant="icon" className="mb-1 bg-background shadow-xs">
+          <EmptyMedia variant="icon" className="mb-1 bg-muted">
             <Icon className="size-5 text-muted-foreground" aria-hidden />
           </EmptyMedia>
         )}
@@ -577,18 +586,6 @@ function EmptyState({
         ) : null}
       </EmptyHeader>
     </Empty>
-  )
-}
-
-/** A line that says a list is empty, on the items' soft ground. */
-function NoneLine({ children, ...props }: ComponentProps<"p">) {
-  return (
-    <p
-      className="rounded-2xl bg-muted/50 px-3 py-2.5 text-xs leading-5 text-muted-foreground"
-      {...props}
-    >
-      {children}
-    </p>
   )
 }
 
@@ -628,6 +625,7 @@ function DispatchCard({
   d,
   notes,
   now,
+  time,
   actions,
 }: {
   d: DispatchInfo
@@ -635,6 +633,8 @@ function DispatchCard({
    *  what it will do once the work is done. */
   notes?: string[]
   now: number
+  /** When, as the list it is in says it: how long ago by default. */
+  time?: string
   /** Settling its entry, once the work no longer moves. */
   actions?: ReactNode
 }) {
@@ -649,21 +649,17 @@ function DispatchCard({
         <ExecutorAvatar
           id={d.executor.assistant_id}
           name={d.executor.name}
-          size={CARD_AVATAR_SIZE}
+          size={ROW_AVATAR_SIZE}
         />
       }
       title={d.title}
+      time={time ?? formatRelative(d.updated_at, now)}
       chip={<LadderChip ladder={d.ladder ?? null} />}
-      meta={[
-        meta({
-          executor: d.executor.name,
-          mode: d.mode,
-          folder: d.folder_name,
-        }),
-        formatRelative(d.updated_at, now),
-      ]
-        .filter(Boolean)
-        .join(" · ")}
+      meta={meta({
+        executor: d.executor.name,
+        mode: d.mode,
+        folder: d.folder_name,
+      })}
       notes={notes}
       onOpen={canOpen ? () => openWork(target) : null}
       openLabel={canOpen ? t("timeline.viewSession") : undefined}
@@ -676,7 +672,7 @@ function DispatchCard({
             {d.check_for != null ? (
               <CheckLabel round={d.check_round ?? null} via={null} />
             ) : null}
-            {d.task ? <TaskStrip d={d} /> : null}
+            {d.task ? <TaskStrip d={d} compact /> : null}
             {d.answered_for_you > 0 ? (
               <AnsweredForYou count={d.answered_for_you} className="mt-1.5" />
             ) : null}
@@ -863,9 +859,8 @@ function ItemCard({
           </span>
         ) : undefined
       }
-      meta={[t(`items.kind.${item.kind}`), formatRelative(item.updated_at, now)]
-        .filter(Boolean)
-        .join(" · ")}
+      time={formatRelative(item.updated_at, now)}
+      meta={t(`items.kind.${item.kind}`)}
       notes={[
         ...dueNotes(item, now),
         ...(item.on_done ? [t("items.onDone", { text: item.on_done })] : []),
@@ -941,17 +936,18 @@ function MatterCard({
   ) : null
 }
 
-/** First paint: two section headers over ghost cards, on the real ones'
+/** First paint: two group heads over ghost lists, on the real ones'
  *  insets. */
 function WorkSkeleton() {
   return (
     <div className="flex flex-col gap-4" aria-hidden>
-      {[2, 1].map((cards, section) => (
+      {[2, 1].map((rows, section) => (
         <div key={section} className="flex flex-col gap-1.5">
           <Skeleton className="h-4 w-24 rounded-md" />
-          {Array.from({ length: cards }, (_, i) => (
-            <Skeleton key={i} className="h-16 w-full rounded-2xl" />
-          ))}
+          <Skeleton
+            className="w-full rounded-xl"
+            style={{ height: `${rows * 3.75}rem` }}
+          />
         </div>
       ))}
     </div>
@@ -970,9 +966,11 @@ function WorkBody({
   const now = useNow()
   if (work == null) return <WorkSkeleton />
   const { open } = work
-  if (open.length === 0) return <NoneLine>{t("matters.noneOpen")}</NoneLine>
+  if (open.length === 0) {
+    return <PanelEmpty icon={Inbox}>{t("matters.noneOpen")}</PanelEmpty>
+  }
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       {GROUPS.map((g) => {
         const list = open.filter((m) => m.group === g)
         if (list.length === 0) return null
@@ -1284,7 +1282,8 @@ function ContextSection({
     <PanelCard
       fold="status.context"
       title={t("context")}
-      summary={percent == null ? "—" : `${Math.round(percent)}%`}
+      // No reading: nothing in the header, the card says why.
+      summary={percent == null ? null : `${Math.round(percent)}%`}
     >
       <div className="flex flex-col gap-1">
         <ContextMeter
@@ -1362,7 +1361,7 @@ function RunLogSection() {
     [rows]
   )
   return (
-    <PanelCard
+    <PanelFold
       fold="status.runLog"
       title={to("runLog")}
       summary={markers.length}
@@ -1383,7 +1382,7 @@ function RunLogSection() {
           ))}
         </ul>
       )}
-    </PanelCard>
+    </PanelFold>
   )
 }
 
@@ -1413,7 +1412,7 @@ function DetailsSection({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
   const seg = status.segment
   const check = status.last_check
   return (
-    <PanelCard fold="status.details" title={to("details")}>
+    <PanelFold fold="status.details" title={to("details")}>
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 text-xs">
         {seg?.handoff_size != null ? (
           <DetailRow label={t("handoff")}>
@@ -1473,7 +1472,7 @@ function DetailsSection({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
           </DetailRow>
         ) : null}
       </dl>
-    </PanelCard>
+    </PanelFold>
   )
 }
 
@@ -1491,13 +1490,16 @@ function Figure({
   sub?: string
 }) {
   return (
-    <div className="ws-msg-card min-w-0 rounded-2xl bg-muted/50 px-3 py-2.5">
+    <div className="min-w-0 px-3 py-2.5">
       <dt className="truncate text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 text-xl leading-7 font-semibold tracking-tight text-foreground tabular-nums">
+      <dd className="mt-1 text-[1.375rem] leading-7 font-semibold tracking-tight text-foreground tabular-nums">
         {value}
       </dd>
       {sub ? (
-        <dd className="truncate text-2xs leading-4 text-muted-foreground">
+        <dd
+          className="truncate text-[0.6875rem] leading-4 text-muted-foreground tabular-nums"
+          title={sub}
+        >
           {sub}
         </dd>
       ) : null}
@@ -1597,8 +1599,9 @@ function UsageCurve({ stats }: { stats: PersonalAgentStats }) {
  *  its header. */
 const ChartSection = PanelCard
 
-/** Its numbers: the stats tab's second part. */
-function StatsBody() {
+/** Its numbers: the stats tab's second part — its charts in the colour of
+ *  its face, where it has one. */
+function StatsBody({ face }: { face: BotColor | null }) {
   const t = useTranslations("PersonalAgent.data")
   const locale = useLocale()
   const tm = useTranslations("PersonalAgent.mode")
@@ -1617,13 +1620,7 @@ function StatsBody() {
   }, [dispatchVersion, botId])
   const stats = ofBot(statsOf, botId)
   if (!stats) {
-    return (
-      <div className="grid grid-cols-2 gap-2" aria-hidden>
-        {[0, 1, 2, 3].map((i) => (
-          <Skeleton key={i} className="h-[4.75rem] rounded-2xl" />
-        ))}
-      </div>
-    )
+    return <Skeleton className="h-[10.5rem] w-full rounded-xl" aria-hidden />
   }
   const sum = (pick: (d: PersonalAgentStats["days"][number]) => number) =>
     stats.days.reduce((n, d) => n + pick(d), 0)
@@ -1682,8 +1679,23 @@ function StatsBody() {
     hint: t("completedHint", { count: e.completed }),
   }))
   return (
-    <div className="tu-viz flex min-w-0 flex-col gap-2 text-sm">
-      <dl className="grid grid-cols-2 gap-2">
+    <div
+      className="tu-viz flex min-w-0 flex-col gap-2.5 text-sm"
+      data-pa-face={face ?? undefined}
+      // The token dashboard's accent, for these, the face's own colour.
+      style={
+        face
+          ? ({ "--tu-accent": "var(--pa-body)" } as CSSProperties)
+          : undefined
+      }
+    >
+      {/* The four on one card, a hairline between them. */}
+      <dl
+        className={cn(
+          PANEL_SURFACE,
+          "grid grid-cols-2 overflow-hidden [&>div]:border-border/60 [&>div:nth-child(-n+2)]:border-b [&>div:nth-child(odd)]:border-e"
+        )}
+      >
         <Figure
           label={t("figure.conversation")}
           value={String(owner + replies)}
@@ -1849,14 +1861,24 @@ function StatsTab({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
         ) : null}
         <StatusRows snapshot={snapshot} readOnly={readOnly} />
         <ContextSection snapshot={snapshot} readOnly={readOnly} />
-        <RunLogSection />
-        <DetailsSection snapshot={snapshot} />
+        {/* What happened to it and the rest of how it runs, folded, on
+            one card. */}
+        <PanelFolds>
+          <RunLogSection />
+          <DetailsSection snapshot={snapshot} />
+        </PanelFolds>
       </section>
       <PanelSection
         title={td("range", { days: STATS_DAYS })}
         data-pa-detail="data"
       >
-        <StatsBody />
+        <StatsBody
+          face={
+            snapshot.agent?.avatar?.kind === "face"
+              ? snapshot.agent.avatar.color
+              : null
+          }
+        />
       </PanelSection>
     </TabBody>
   )
@@ -1865,14 +1887,58 @@ function StatsTab({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
 type OutputKind = "all" | "tasks" | "reports" | "docs"
 const OUTPUT_KINDS: readonly OutputKind[] = ["all", "tasks", "reports", "docs"]
 
-/** What it made, newest first: the work that ended — a task's card, the
- *  report of the rest — and the documents it wrote in its working
- *  directory. */
+/** A day's key in the local calendar. */
+function dayKey(iso: string): string {
+  const d = new Date(iso)
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+}
+
+/** A day's name: today, yesterday — the language's own words — or its
+ *  date, with the weekday. */
+function useDayName(): (iso: string, now: number) => string {
+  const locale = useLocale()
+  return (iso, now) => {
+    const day = new Date(iso)
+    const start = (d: Date) =>
+      new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+    const ago = Math.round((start(new Date(now)) - start(day)) / 86_400_000)
+    if (ago === 0 || ago === 1) {
+      const words = new Intl.RelativeTimeFormat(locale, {
+        numeric: "auto",
+      }).format(-ago, "day")
+      return words.charAt(0).toLocaleUpperCase(locale) + words.slice(1)
+    }
+    return day.toLocaleDateString(locale, {
+      ...(new Date(now).getFullYear() === day.getFullYear()
+        ? {}
+        : { year: "numeric" }),
+      month: "short",
+      day: "numeric",
+      weekday: "short",
+    })
+  }
+}
+
+/** A time of day, short. */
+function useClock(): (iso: string) => string {
+  const locale = useLocale()
+  return (iso) =>
+    new Date(iso).toLocaleTimeString(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+}
+
+/** What it made, newest first, a list a day: the work that ended — a
+ *  task's card, the report of the rest — and the documents it wrote in its
+ *  working directory. */
 function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
   const t = useTranslations("PersonalAgent.detail.output")
   const tabs = useTranslations("PersonalAgent.detail.tabs")
   const { botId, dispatchVersion } = usePersonalAgent()
   const now = useNow()
+  const dayName = useDayName()
+  const clock = useClock()
   const [kind, setKind] = useState<OutputKind>("all")
   const [docsOf, setDocsOf] = useState<Of<PersonalAgentOutputDoc[]> | null>(
     null
@@ -1910,6 +1976,12 @@ function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
   const ended = work?.ended ?? []
   const tasks = ended.filter((d) => d.mode === "task")
   const reports = ended.filter((d) => d.mode !== "task")
+  const counts: Record<OutputKind, number> = {
+    all: ended.length + (docs?.length ?? 0),
+    tasks: tasks.length,
+    reports: reports.length,
+    docs: docs?.length ?? 0,
+  }
   type Shown =
     | { at: string; key: string; dispatch: DispatchInfo }
     | { at: string; key: string; doc: PersonalAgentOutputDoc }
@@ -1930,10 +2002,19 @@ function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
       doc,
     })),
   ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+  // A list a day, newest first.
+  const days: { key: string; name: string; items: Shown[] }[] = []
+  for (const x of shown) {
+    const key = dayKey(x.at)
+    const last = days[days.length - 1]
+    if (last?.key === key) last.items.push(x)
+    else days.push({ key, name: dayName(x.at, now), items: [x] })
+  }
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Which kind: shadcn's toggle group, a pill each. */}
-      <div className="shrink-0 px-4 pt-3 pb-2">
+      {/* Which kind: shadcn's toggle group, a pill each, how many it
+          holds after its name. */}
+      <div className="shrink-0 px-4 pt-4 pb-1">
         <ToggleGroup
           type="single"
           size="sm"
@@ -1949,36 +2030,60 @@ function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
             <ToggleGroupItem
               key={k}
               value={k}
+              aria-label={t(k)}
               data-pa-output-kind={k}
-              className="h-7 min-w-0 px-2.5 text-xs font-normal text-muted-foreground data-[state=on]:font-medium data-[state=on]:text-foreground"
+              className="h-7 min-w-0 gap-1 px-2.5 text-xs font-normal text-muted-foreground data-[state=on]:font-medium data-[state=on]:text-foreground"
             >
               <span className="truncate">{t(k)}</span>
+              {work != null && docs != null && counts[k] > 0 ? (
+                <span
+                  aria-hidden
+                  className="text-[0.6875rem] font-normal text-muted-foreground tabular-nums"
+                >
+                  {counts[k]}
+                </span>
+              ) : null}
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-1.5 px-4 pt-1 pb-6">
+        <div className="flex flex-col gap-4 px-4 pt-3 pb-6">
           {work == null || docs == null ? (
             <WorkSkeleton />
           ) : shown.length === 0 ? (
             <EmptyState icon={Package} title={t("empty")} />
           ) : (
-            shown.map((x) =>
-              "dispatch" in x ? (
-                <DispatchCard key={x.key} d={x.dispatch} now={now} />
-              ) : (
-                <PanelItem
-                  key={x.key}
-                  media={<PanelIcon icon={FileText} />}
-                  title={x.doc.path}
-                  meta={t("docEdited", {
-                    when: formatRelative(x.doc.modified_at, now),
-                  })}
-                  onOpen={() => open(x.doc.path)}
-                />
-              )
-            )
+            days.map((day) => (
+              <section
+                key={day.key}
+                className="flex min-w-0 flex-col gap-1.5"
+                data-pa-output-day={day.key}
+              >
+                <h4 className="px-0.5 text-xs font-medium text-muted-foreground">
+                  {day.name}
+                </h4>
+                <PanelList>
+                  {day.items.map((x) =>
+                    "dispatch" in x ? (
+                      <DispatchCard
+                        key={x.key}
+                        d={x.dispatch}
+                        now={now}
+                        time={clock(x.at)}
+                      />
+                    ) : (
+                      <DocRow
+                        key={x.key}
+                        doc={x.doc}
+                        time={clock(x.at)}
+                        onOpen={() => open(x.doc.path)}
+                      />
+                    )
+                  )}
+                </PanelList>
+              </section>
+            ))
           )}
         </div>
       </ScrollArea>
@@ -2007,6 +2112,32 @@ function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+/** A document it wrote: its name, the folder it is in. */
+function DocRow({
+  doc,
+  time,
+  onOpen,
+}: {
+  doc: PersonalAgentOutputDoc
+  time: string
+  onOpen: () => void
+}) {
+  const t = useTranslations("PersonalAgent.detail.output")
+  const cut = doc.path.search(/[^\\/]+$/)
+  const name = cut > 0 ? doc.path.slice(cut) : doc.path
+  const folder = cut > 0 ? doc.path.slice(0, cut).replace(/[\\/]+$/, "") : ""
+  return (
+    <PanelItem
+      media={<PanelIcon icon={FileText} />}
+      title={<span title={doc.path}>{name}</span>}
+      time={time}
+      meta={[t("doc"), folder].filter(Boolean).join(" · ")}
+      onOpen={onOpen}
+      data-pa-output-doc={doc.path}
+    />
   )
 }
 
@@ -2054,9 +2185,11 @@ function TaskPreview({ taskId }: { taskId: number }) {
   return <TaskTranscriptView task={task} />
 }
 
-/** The work running now, each as a small live view of its session; an
- *  empty screen when nothing runs. While the drawer shows one of them, the previews stand
- *  aside: one surface follows a connection at a time. */
+/** The work running now, each a window with a small live view of its
+ *  session — its head who runs it and where it stands, the way to open it,
+ *  the view itself opening it too; an empty window, its face asleep in it,
+ *  when nothing runs. While the drawer shows one of them, the previews
+ *  stand aside: one surface follows a connection at a time. */
 function WorkspaceTab({
   snapshot,
   work,
@@ -2067,6 +2200,8 @@ function WorkspaceTab({
   const t = useTranslations("PersonalAgent.detail.workspace")
   const tPage = useTranslations("PersonalAgent")
   const openWork = useOpenWork()
+  const meta = useWorkMeta()
+  const now = useNow()
   const agent = snapshot.agent
   const name = agent?.name?.trim() || tPage("title")
   const drawerOpen = usePersonalAgentUi((s) => s.workOpen)
@@ -2075,77 +2210,129 @@ function WorkspaceTab({
     .filter((d): d is DispatchInfo => d != null && STREAMING.has(d.state))
   if (work == null) {
     return (
-      <div className="px-4 pt-3">
-        <WorkSkeleton />
+      <div className="px-4 pt-4" aria-hidden>
+        <Skeleton className="h-64 w-full rounded-xl" />
       </div>
     )
   }
-  // A screen with nothing on it, its face asleep on it as over the tabs;
-  // whose screen it is under it.
+  // A window with nothing on it, its face asleep in it, as over the tabs;
+  // whose it is on its bar.
   if (running.length === 0) {
     return (
-      <div data-pa-workspace-empty className="flex flex-col gap-2 px-4 pt-3">
-        <EmptyState icon={Monitor} title={t("empty")} hint={t("emptyHint")}>
-          {agent ? (
-            <EmptyMedia className="mb-1">
-              <BotAvatar
-                avatar={agent.avatar}
-                name={name}
-                size={WORKSPACE_FACE}
-                look="sleeping"
-              />
-            </EmptyMedia>
-          ) : null}
-        </EmptyState>
-        <p className="text-center text-xs text-muted-foreground">
-          {t("whose", { name })}
-        </p>
+      <div data-pa-workspace-empty className="px-4 pt-4">
+        <div className={cn(PANEL_SURFACE, "overflow-hidden")}>
+          <WindowBar>
+            <Monitor
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-hidden
+            />
+            <span className="min-w-0 truncate text-xs font-medium text-muted-foreground">
+              {t("whose", { name })}
+            </span>
+          </WindowBar>
+          <Empty className="gap-3 rounded-none bg-[radial-gradient(var(--border)_1px,transparent_1px)] [background-size:14px_14px] px-6 py-12">
+            <EmptyHeader className="gap-1.5">
+              {agent ? (
+                <EmptyMedia className="mb-2">
+                  <BotAvatar
+                    avatar={agent.avatar}
+                    name={name}
+                    size={WORKSPACE_FACE}
+                    look="sleeping"
+                  />
+                </EmptyMedia>
+              ) : null}
+              <EmptyTitle className="text-sm font-medium tracking-normal">
+                {t("empty")}
+              </EmptyTitle>
+              <EmptyDescription className="text-xs/relaxed">
+                {t("emptyHint")}
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        </div>
       </div>
     )
   }
   return (
     <ScrollArea className="h-full">
-      <div className="flex flex-col gap-3 px-4 pt-3 pb-6">
+      <div className="flex flex-col gap-3 px-4 pt-4 pb-6">
         {running.map((d) => {
           const target = workTargetOf(d)
+          const canOpen = canOpenWork(target)
           return (
             <Card
               key={d.id}
               data-pa-workspace-item={d.id}
-              className="ws-msg-card min-w-0 gap-0 py-0"
+              className={cn(PANEL_SURFACE, "min-w-0 gap-0 py-0 ring-0")}
             >
-              <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+              <WindowBar className="h-auto items-start gap-2.5 py-2">
                 <ExecutorAvatar
                   id={d.executor.assistant_id}
                   name={d.executor.name}
-                  size={CARD_AVATAR_SIZE}
+                  size={ROW_AVATAR_SIZE}
                 />
-                <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-medium">
-                  #{d.id} {d.title}
-                </span>
-                <LadderChip ladder={d.ladder ?? null} />
-                {canOpenWork(target) ? (
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[0.8125rem] leading-5 font-medium">
+                    #{d.id} {d.title}
+                  </p>
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <LadderChip ladder={d.ladder ?? null} />
+                    <span className="min-w-0 truncate text-xs leading-5 text-muted-foreground">
+                      {[
+                        meta({
+                          executor: d.executor.name,
+                          mode: d.mode,
+                          folder: d.folder_name,
+                        }),
+                        formatRelative(d.updated_at, now),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  </div>
+                </div>
+                {canOpen ? (
                   <Button
                     size="xs"
-                    variant="ghost"
+                    variant="outline"
+                    className="shrink-0"
                     onClick={() => openWork(target)}
                   >
                     {t("open")}
                   </Button>
                 ) : null}
-              </div>
+              </WindowBar>
               {drawerOpen ? null : (
-                <div
-                  data-pa-workspace-preview={d.id}
-                  className="pointer-events-none h-56 overflow-hidden text-xs [&_*]:select-none"
-                >
-                  {d.mode === "task" ? (
-                    d.work_task_id != null ? (
-                      <TaskPreview taskId={d.work_task_id} />
-                    ) : null
-                  ) : (
-                    <ConversationPreview d={d} />
-                  )}
+                <div className="relative">
+                  <div
+                    data-pa-workspace-preview={d.id}
+                    className="pointer-events-none h-56 overflow-hidden text-xs [&_*]:select-none"
+                  >
+                    {d.mode === "task" ? (
+                      d.work_task_id != null ? (
+                        <TaskPreview taskId={d.work_task_id} />
+                      ) : null
+                    ) : (
+                      <ConversationPreview d={d} />
+                    )}
+                  </div>
+                  {/* The view fades out at its foot, and opens the work
+                      as its button does. */}
+                  <div
+                    aria-hidden
+                    className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-card to-transparent"
+                  />
+                  {canOpen ? (
+                    <button
+                      type="button"
+                      tabIndex={-1}
+                      aria-hidden
+                      data-pa-workspace-open={d.id}
+                      className="absolute inset-0 cursor-pointer outline-none"
+                      onClick={() => openWork(target)}
+                    />
+                  ) : null}
                 </div>
               )}
             </Card>
@@ -2153,5 +2340,25 @@ function WorkspaceTab({
         })}
       </div>
     </ScrollArea>
+  )
+}
+
+/** A window's bar: the strip over what it shows. */
+function WindowBar({
+  className,
+  children,
+}: {
+  className?: string
+  children: ReactNode
+}) {
+  return (
+    <div
+      className={cn(
+        "flex h-9 min-w-0 items-center gap-2 border-b border-border/60 bg-muted/40 px-3",
+        className
+      )}
+    >
+      {children}
+    </div>
   )
 }

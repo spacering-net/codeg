@@ -9574,7 +9574,7 @@
         "reports": "보고서",
         "docs": "문서",
         "empty": "아직 산출물 없음",
-        "docEdited": "{when} 수정"
+        "doc": "문서"
       },
       "workspace": {
         "empty": "지금 실행 중인 것 없음",

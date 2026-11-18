@@ -9574,7 +9574,7 @@
         "reports": "Reports",
         "docs": "Documents",
         "empty": "Nothing made yet",
-        "docEdited": "Edited {when}"
+        "doc": "Document"
       },
       "workspace": {
         "empty": "Nothing running right now",

@@ -9574,7 +9574,7 @@
         "reports": "報告",
         "docs": "文件",
         "empty": "還沒有產出",
-        "docEdited": "{when} 改過"
+        "doc": "文件"
       },
       "workspace": {
         "empty": "目前沒有在跑的工作",

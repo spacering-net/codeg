@@ -9574,7 +9574,7 @@
         "reports": "报告",
         "docs": "文档",
         "empty": "还没有产出",
-        "docEdited": "{when} 改过"
+        "doc": "文档"
       },
       "workspace": {
         "empty": "现在没有在跑的活",

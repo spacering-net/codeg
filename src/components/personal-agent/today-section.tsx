@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { ChevronDown, Folder } from "lucide-react"
+import { ChevronDown, Folder, Sun } from "lucide-react"
 import { toast } from "sonner"
 
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
@@ -46,17 +46,22 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { BotAvatar } from "./bot-avatar"
 import {
+  PanelEmpty,
   PanelGroup,
   PanelIcon,
   PanelItem,
+  PanelMoreRow,
   PanelSection,
+  useInPanelList,
   type PanelTone,
 } from "./panel-section"
 import { useSessionLinkOpener } from "./session-link"
 import { canOpenWork, useBotName, useOpenWork, workTargetOf } from "./shared"
 
-/** A row's lead, in px at 100% zoom: as a work card's avatar. */
-const LEAD_SIZE = 20
+/** A row's lead, in px at 100% zoom: in the panel's lists, and on a soft
+ *  card of its own (the morning brief's), as a work card's avatar. */
+const LEAD_SIZE = 24
+const CARD_LEAD_SIZE = 20
 /** Rows a group shows before "show all". */
 const GROUP_SHOWN = 8
 
@@ -268,7 +273,7 @@ export function TodaySection({
       {today == null ? (
         <div className="flex flex-col gap-1.5" aria-hidden>
           <Skeleton className="h-4 w-24 rounded-md" />
-          <Skeleton className="h-14 w-full rounded-2xl" />
+          <Skeleton className="h-16 w-full rounded-xl" />
         </div>
       ) : (
         <TodayBody
@@ -314,17 +319,14 @@ function TodayBody({
     return (
       <div className="flex flex-col gap-1.5">
         {preparing}
-        <p
-          className="rounded-2xl bg-muted/50 px-3 py-2.5 text-xs leading-5 text-muted-foreground"
-          data-pa-today-empty
-        >
+        <PanelEmpty icon={Sun} data-pa-today-empty>
           {t("empty")}
-        </p>
+        </PanelEmpty>
       </div>
     )
   }
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       {preparing}
       {shown.map((g) => (
         <TodayGroup key={g} group={g} count={today[g].length}>
@@ -366,20 +368,16 @@ function TodayGroup({
       label={t(`groups.${group}`)}
       count={count}
       strong={group === "needs"}
+      more={
+        !all && count > GROUP_SHOWN ? (
+          <PanelMoreRow onClick={() => setAll(true)} data-pa-today-more={group}>
+            {t("more", { count: count - GROUP_SHOWN })}
+          </PanelMoreRow>
+        ) : null
+      }
       data-pa-today-group={group}
     >
       {children(all)}
-      {!all && count > GROUP_SHOWN ? (
-        <Button
-          size="xs"
-          variant="ghost"
-          className="self-start text-muted-foreground"
-          onClick={() => setAll(true)}
-          data-pa-today-more={group}
-        >
-          {t("more", { count: count - GROUP_SHOWN })}
-        </Button>
-      ) : null}
     </PanelGroup>
   )
 }
@@ -389,6 +387,7 @@ function TodayGroup({
 function RowLead({ row }: { row: TodayRow }) {
   const entries = useRoster()
   const botName = useBotName()
+  const inList = useInPanelList()
   const t = useTranslations("PersonalAgent.today")
   const entry =
     row.bot_id != null ? entries?.find((e) => e.id === row.bot_id) : undefined
@@ -397,7 +396,7 @@ function RowLead({ row }: { row: TodayRow }) {
       <BotAvatar
         avatar={entry?.avatar}
         name={botName(entry ?? { id: row.bot_id, kind: "worker" })}
-        size={LEAD_SIZE}
+        size={inList ? LEAD_SIZE : CARD_LEAD_SIZE}
         star={entry?.kind === "primary"}
       />
     )
@@ -545,7 +544,20 @@ function TodayRowCard({
       ? botName(entry ?? { id: row.bot_id, kind: "worker" })
       : (row.project?.name ?? t("yours"))
   const when = row.kind === "item" ? null : formatRelative(row.at, now)
-  const meta = [what, who, when].filter(Boolean).join(" · ")
+  // What it is first — red when it failed, the word to look for — then
+  // whose; when, at the title's end.
+  const meta = (
+    <>
+      <span
+        className={
+          row.kind === "failed" ? "text-red-600 dark:text-red-400" : undefined
+        }
+      >
+        {what}
+      </span>
+      {who ? ` · ${who}` : null}
+    </>
+  )
   const title = row.title.trim() || what
   // A matter is settled on its row: one that came due, one still to come.
   const actions = readOnly ? null : row.kind === "reminder" ||
@@ -564,6 +576,7 @@ function TodayRowCard({
     <PanelItem
       media={<RowLead row={row} />}
       title={title}
+      time={when}
       meta={meta}
       notes={row.text ? [row.text] : []}
       onOpen={onOpen}

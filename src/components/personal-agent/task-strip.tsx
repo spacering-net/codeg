@@ -195,13 +195,18 @@ function PrLine({ d }: { d: DispatchInfo }) {
 }
 
 /** The task card's strip, under a task's row. `chip` draws the rung on its
- *  first line — left out where the row above says it already. */
+ *  first line — left out where the row above says it already. `compact`,
+ *  on the side panel's rows: the branch and what it changed on one line,
+ *  without the project (the row's line says it) or [Open session] (the
+ *  row itself opens it). */
 export function TaskStrip({
   d,
   chip = false,
+  compact = false,
 }: {
   d: DispatchInfo
   chip?: boolean
+  compact?: boolean
 }) {
   const t = useTranslations("PersonalAgent.taskCard")
   const botId = useBotId()
@@ -247,13 +252,18 @@ export function TaskStrip({
       .catch((e) => toast.error(toErrorMessage(e)))
       .finally(() => setStopping(false))
   }
-  const where = [task.branch, d.folder_name].filter(Boolean)
+  const folder = compact ? null : d.folder_name
+  const where = [task.branch, folder].filter(Boolean)
+  const openShown = canOpen && !compact
   return (
     <div
       data-pa-task-strip
-      className="mt-2 flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground"
+      className={cn(
+        "flex min-w-0 flex-col text-xs text-muted-foreground",
+        compact ? "mt-1 gap-1" : "mt-2 gap-1.5"
+      )}
     >
-      {chip || where.length > 0 ? (
+      {chip || where.length > 0 || (compact && diff) ? (
         <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
           {chip ? <LadderChip ladder={d.ladder} pr={task.pr} /> : null}
           {task.branch ? (
@@ -267,20 +277,28 @@ export function TaskStrip({
               </span>
             </span>
           ) : null}
-          {task.branch && d.folder_name ? <span aria-hidden>·</span> : null}
-          {d.folder_name ? (
-            <span className="min-w-0 truncate">{d.folder_name}</span>
+          {task.branch && folder ? <span aria-hidden>·</span> : null}
+          {folder ? <span className="min-w-0 truncate">{folder}</span> : null}
+          {compact && diff ? (
+            <>
+              {task.branch ? <span aria-hidden>·</span> : null}
+              <span data-pa-task-diff className="shrink-0 tabular-nums">
+                {diff}
+              </span>
+            </>
           ) : null}
         </div>
       ) : null}
-      {diff ? (
+      {diff && !compact ? (
         <div data-pa-task-diff className="tabular-nums">
           {diff}
         </div>
       ) : null}
       <PrLine d={d} />
-      {task.pr_url || canOpen || (live && !readOnly) ? (
-        <div className="flex flex-wrap gap-1">
+      {task.pr_url || openShown || (live && !readOnly) ? (
+        <div
+          className={cn("flex flex-wrap", compact ? "mt-1 gap-1.5" : "gap-1")}
+        >
           {task.pr_url ? (
             <Button
               size="xs"
@@ -297,7 +315,7 @@ export function TaskStrip({
               {t("viewPr")}
             </Button>
           ) : null}
-          {canOpen ? (
+          {openShown ? (
             <Button
               size="xs"
               variant="ghost"
@@ -310,7 +328,7 @@ export function TaskStrip({
           {live && !readOnly ? (
             <Button
               size="xs"
-              variant="ghost"
+              variant={compact ? "outline" : "ghost"}
               data-pa-task-act="stop"
               disabled={stopping}
               className="text-destructive hover:text-destructive"

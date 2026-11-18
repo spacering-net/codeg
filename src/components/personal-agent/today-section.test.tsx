@@ -269,6 +269,15 @@ describe("today", () => {
     ) as HTMLElement
     expect(within(needs).getByText("Needs you")).toBeTruthy()
     expect(within(needs).getByText("1")).toBeTruthy()
+    // Its head presses on its words only, the chevron right after the
+    // count; its rows on one list.
+    const head = within(needs).getByRole("button", { name: /Needs you/ })
+    expect(head.className).not.toMatch(/(^| )w-full( |$)/)
+    expect(head.lastElementChild!.getAttribute("class")).toContain(
+      "lucide-chevron-down"
+    )
+    const list = within(needs).getByRole("list")
+    expect(within(list).getAllByRole("listitem")).toHaveLength(1)
   })
 
   it("leads each row with its assistant, or the project of the owner's own", () => {

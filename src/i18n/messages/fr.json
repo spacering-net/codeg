@@ -9574,7 +9574,7 @@
         "reports": "Rapports",
         "docs": "Documents",
         "empty": "Rien de produit pour l’instant",
-        "docEdited": "Modifié {when}"
+        "doc": "Document"
       },
       "workspace": {
         "empty": "Rien en cours pour le moment",

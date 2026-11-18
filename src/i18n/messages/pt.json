@@ -9574,7 +9574,7 @@
         "reports": "Relatórios",
         "docs": "Documentos",
         "empty": "Nada produzido ainda",
-        "docEdited": "Editado {when}"
+        "doc": "Documento"
       },
       "workspace": {
         "empty": "Nada em execução agora",

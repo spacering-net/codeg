@@ -47,7 +47,13 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { Routine, RoutineAction } from "@/lib/types"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
-import { PanelIcon, PanelItem, PanelSection } from "./panel-section"
+import {
+  PanelEmpty,
+  PanelIcon,
+  PanelItem,
+  PanelList,
+  PanelSection,
+} from "./panel-section"
 import {
   OutcomeChip,
   precheckWords,
@@ -124,33 +130,28 @@ export function RoutinesSection({
       data-pa-detail="routines"
     >
       {list == null ? (
-        <Skeleton className="h-16 w-full rounded-2xl" aria-hidden />
+        <Skeleton className="h-16 w-full rounded-xl" aria-hidden />
       ) : list.length === 0 ? (
-        <div className="flex flex-col items-start gap-2.5 rounded-2xl bg-muted/50 px-3 py-2.5">
-          <p
-            className="text-xs leading-5 text-muted-foreground"
-            data-pa-routines-empty
-          >
-            {t("empty")}
-          </p>
-          {!readOnly ? (
-            <Button
-              size="xs"
-              variant="outline"
-              className="bg-background"
-              onClick={add}
-            >
-              <Plus aria-hidden />
-              {t("new")}
-            </Button>
-          ) : null}
-        </div>
+        <PanelEmpty
+          icon={CalendarClock}
+          className="flex-wrap"
+          action={
+            !readOnly ? (
+              <Button size="xs" variant="outline" onClick={add}>
+                <Plus aria-hidden />
+                {t("new")}
+              </Button>
+            ) : null
+          }
+        >
+          <span data-pa-routines-empty>{t("empty")}</span>
+        </PanelEmpty>
       ) : (
-        <div className="flex flex-col gap-1.5">
+        <PanelList>
           {list.map((r) => (
             <RoutineCard key={r.id} r={r} readOnly={readOnly} />
           ))}
-        </div>
+        </PanelList>
       )}
     </PanelSection>
   )
@@ -193,12 +194,9 @@ function RoutineCard({ r, readOnly }: { r: Routine; readOnly: boolean }) {
         title={r.title}
         onOpen={readOnly ? null : edit}
         openLabel={t("edit")}
-        chip={
-          readOnly ? (
-            last ? (
-              <OutcomeChip outcome={last.outcome} />
-            ) : null
-          ) : (
+        chip={readOnly && last ? <OutcomeChip outcome={last.outcome} /> : null}
+        aside={
+          readOnly ? null : (
             <span className="flex items-center gap-0.5">
               <Switch
                 checked={r.enabled}

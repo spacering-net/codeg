@@ -276,7 +276,10 @@ function marker(id: number, data: Record<string, unknown>): TimelineRow {
 
 const jumpTo = vi.fn()
 
-function draw({ inDrawer = false }: { inDrawer?: boolean } = {}) {
+function draw({
+  inDrawer = false,
+  snap = snapshot(),
+}: { inDrawer?: boolean; snap?: PersonalAgentSnapshot } = {}) {
   const scope: PageScope = {
     readOnly: false,
     agentName: "Nova",
@@ -290,7 +293,7 @@ function draw({ inDrawer = false }: { inDrawer?: boolean } = {}) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <PageScopeContext.Provider value={scope}>
-        <PersonalAgentAuxPanel snapshot={snapshot()} inDrawer={inDrawer} />
+        <PersonalAgentAuxPanel snapshot={snap} inDrawer={inDrawer} />
       </PageScopeContext.Provider>
     </NextIntlClientProvider>
   )
@@ -686,7 +689,7 @@ describe("the activity's matters", () => {
     // Waiting on time with a due time, it can still be put off.
     const card = screen
       .getByText("Stand-up notes")
-      .closest<HTMLElement>(".ws-msg-card")!
+      .closest<HTMLElement>("[data-slot='item']")!
     await userEvent.click(within(card).getByRole("button", { name: "Later" }))
     await userEvent.click(
       await screen.findByRole("menuitem", { name: "Tomorrow morning" })
@@ -761,19 +764,24 @@ describe("the activity's matters", () => {
     const { container } = draw()
     await screen.findByText("Fix the login")
     const card = (title: string) =>
-      screen.getByText(title).closest<HTMLElement>(".ws-msg-card")!
-    // In review: ready to merge, with its branch, project and diff, and the
-    // way to stop it — no way to close its entry by hand.
+      screen.getByText(title).closest<HTMLElement>("[data-slot='item']")!
+    // In review: ready to merge, with its branch and diff on one line (its
+    // project is the row's line), and the way to stop it — no way to close
+    // its entry by hand, nor [Open session]: the row opens it.
     const review = card("Fix the login")
     expect(review.querySelector("[data-pa-ladder]")?.textContent).toBe(
       "Ready to merge"
     )
+    expect(review.getAttribute("role")).toBe("listitem")
     const strip = review.querySelector("[data-pa-task-strip]")!
-    expect(strip.textContent).toContain("pa/fix-login")
-    expect(strip.textContent).toContain("my-app")
+    expect(strip.textContent).toBe("pa/fix-login·+214 −37, 6 filesStop")
     expect(strip.querySelector("[data-pa-task-diff]")?.textContent).toBe(
       "+214 −37, 6 files"
     )
+    expect(review.textContent).toContain("my-app")
+    expect(
+      within(review).queryByRole("button", { name: "Open session" })
+    ).toBeNull()
     expect(within(review).queryByRole("button", { name: "Done" })).toBeNull()
     fireEvent.click(within(review).getByRole("button", { name: "Stop" }))
     expect(api.personalAgentDispatchStop).toHaveBeenCalledWith(null, 1)
@@ -836,27 +844,58 @@ describe("the activity's matters", () => {
 describe("the output tab", () => {
   it("lists what it made, newest first, by kind, and opens a document", async () => {
     usePersonalAgentUi.setState({ auxTab: "output" })
+    // Times in the local calendar, whatever the zone the test runs in:
+    // today, yesterday, a day of another year.
+    const now = new Date()
+    const at = (daysAgo: number, hour: number) =>
+      new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() - daysAgo,
+        hour
+      ).toISOString()
     api.personalAgentDispatches.mockResolvedValue([
       dispatch({
         id: 3,
         title: "Ship the page",
         state: "completed",
-        finished_at: "2026-11-04T11:00:00Z",
+        finished_at: at(1, 11),
       }),
       dispatch({
         id: 4,
         mode: "chat",
         title: "Look into the logs",
         state: "completed",
-        finished_at: "2026-11-04T09:30:00Z",
+        finished_at: new Date(2025, 2, 3, 9, 30).toISOString(),
       }),
     ])
     api.personalAgentOutputs.mockResolvedValue([
-      { path: "notes/weekly.md", modified_at: "2026-11-04T12:00:00Z", size: 9 },
+      { path: "notes/weekly.md", modified_at: at(0, 12), size: 9 },
     ])
     api.personalAgentOutputRead.mockResolvedValue("# Weekly")
     draw()
-    await screen.findByText("notes/weekly.md")
+    await screen.findByText("weekly.md")
+    // A list a day, its name over it; a document named by its file, its
+    // folder on its line, the time of day at its end.
+    const days = [...document.querySelectorAll("[data-pa-output-day]")]
+    expect(days.map((d) => d.querySelector("h4")!.textContent)).toEqual([
+      "Today",
+      "Yesterday",
+      expect.stringContaining("2025"),
+    ])
+    expect(
+      days.map((d) => d.querySelectorAll("[role='listitem']").length)
+    ).toEqual([1, 1, 1])
+    expect(days[2].textContent).toContain("Look into the logs")
+    const doc = document.querySelector(
+      "[data-pa-output-doc='notes/weekly.md']"
+    )!
+    expect(doc.textContent).toContain("Document · notes")
+    // How many each kind holds, after its name.
+    expect(screen.getByRole("radio", { name: "All" }).textContent).toBe("All3")
+    expect(screen.getByRole("radio", { name: "Tasks" }).textContent).toBe(
+      "Tasks1"
+    )
     const titles = () =>
       [
         ...screen
@@ -866,7 +905,7 @@ describe("the output tab", () => {
         .map((el) => el.textContent)
         .filter(Boolean)
     expect(titles()).toEqual([
-      "notes/weekly.md",
+      "weekly.md",
       "Ship the page",
       "Look into the logs",
     ])
@@ -879,7 +918,7 @@ describe("the output tab", () => {
     fireEvent.click(screen.getByRole("radio", { name: "Reports" }))
     expect(titles()).toEqual(["Look into the logs"])
     fireEvent.click(screen.getByRole("radio", { name: "Documents" }))
-    fireEvent.click(screen.getByText("notes/weekly.md").closest("button")!)
+    fireEvent.click(screen.getByText("weekly.md").closest("button")!)
     expect(api.personalAgentOutputRead).toHaveBeenCalledWith(
       null,
       "notes/weekly.md"
@@ -936,7 +975,12 @@ describe("the workspace tab", () => {
         .querySelector("[data-slot='bot-avatar']")
         ?.getAttribute("data-bot-look")
     ).toBe("sleeping")
+    // Whose it is on the window's bar, over the face.
     expect(empty.textContent).toContain("Nova's workspace")
+    expect(
+      empty.textContent!.indexOf("Nova's workspace") <
+        empty.textContent!.indexOf("Nothing running right now")
+    ).toBe(true)
     unmount()
     api.personalAgentDispatches.mockResolvedValue([
       dispatch({
@@ -950,11 +994,14 @@ describe("the workspace tab", () => {
     ])
     draw()
     const card = await screen.findByText("#2 Run the build")
-    expect(
-      card
-        .closest("[data-pa-workspace-item]")!
-        .querySelector("[data-live-transcript='31']")
-    ).toBeTruthy()
+    const item = card.closest<HTMLElement>("[data-pa-workspace-item]")!
+    expect(item.querySelector("[data-live-transcript='31']")).toBeTruthy()
+    // Where it stands under its title; the view opens it, as [Open] does.
+    expect(item.querySelector("[data-pa-ladder]")).toBeTruthy()
+    fireEvent.click(item.querySelector("[data-pa-workspace-open='2']")!)
+    expect(usePersonalAgentUi.getState().work).toMatchObject({
+      dispatchId: 2,
+    })
   })
 })
 
@@ -1039,6 +1086,20 @@ describe("the stats tab's status", () => {
       "A new session started on Claude Code (first session)",
     ])
     for (const li of lines) expect(li.querySelector("svg")).toBeNull()
+    // The run log and the details folded on one card, a hairline between;
+    // the context a card of its own.
+    const runLog = screen.getByRole("button", { name: /Run log/ })
+    const shared = runLog.closest("[data-slot='card']")!
+    expect(
+      screen
+        .getByRole("button", { name: /Details/ })
+        .closest("[data-slot='card']")
+    ).toBe(shared)
+    expect(
+      screen
+        .getByRole("button", { name: /Context/ })
+        .closest("[data-slot='card']")
+    ).not.toBe(shared)
     // Each a folding card: its title first, its chevron at its head's end.
     for (const name of [/Context/, /Run log/, /Details/]) {
       const header = screen.getByRole("button", { name })
@@ -1086,7 +1147,16 @@ describe("the stats tab's data", () => {
       usage: [],
       tokens_synced_at: "2026-11-04T12:00:00Z",
     } satisfies PersonalAgentStats)
-    draw()
+    // A face: the charts in its colour.
+    const faced: PersonalAgentSnapshot = {
+      ...snapshot(),
+      agent: {
+        ...snapshot().agent!,
+        avatar: { kind: "face", shape: "blob", color: "orange" },
+      },
+    }
+    pa.snapshot = faced
+    draw({ snap: faced })
     // Under its heading, four figures before the charts.
     const card = (await screen.findByText("Last 14 days"))
       .closest("section")!
@@ -1105,9 +1175,31 @@ describe("the stats tab's data", () => {
     expect(
       document.querySelector("[data-chart='Daily conversation']")
     ).toBeTruthy()
+    const viz = document.querySelector<HTMLElement>(".tu-viz")!
+    expect(viz.getAttribute("data-pa-face")).toBe("orange")
+    expect(viz.style.getPropertyValue("--tu-accent")).toBe("var(--pa-body)")
     fireEvent.click(interactions)
     expect(
       document.querySelector("[data-chart='Daily conversation']")
     ).toBeNull()
+  })
+
+  it("keeps the dashboard's colours for an assistant with no face", async () => {
+    usePersonalAgentUi.setState({ auxTab: "stats" })
+    api.personalAgentStats.mockResolvedValue({
+      days: [],
+      executors: [],
+      usage: [],
+      tokens_synced_at: null,
+    } satisfies PersonalAgentStats)
+    draw()
+    await screen.findByText("Last 14 days")
+    const viz = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>(".tu-viz")
+      expect(el).toBeTruthy()
+      return el!
+    })
+    expect(viz.getAttribute("data-pa-face")).toBeNull()
+    expect(viz.style.getPropertyValue("--tu-accent")).toBe("")
   })
 })

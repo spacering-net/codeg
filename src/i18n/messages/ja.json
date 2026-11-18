@@ -9574,7 +9574,7 @@
         "reports": "レポート",
         "docs": "ドキュメント",
         "empty": "まだ成果物はありません",
-        "docEdited": "{when} に編集"
+        "doc": "ドキュメント"
       },
       "workspace": {
         "empty": "今は実行中のものはありません",

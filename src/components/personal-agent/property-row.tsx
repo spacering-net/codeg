@@ -17,7 +17,7 @@ export function PropertyRow({
   children: ReactNode
 }) {
   return (
-    <div className="group/prop col-span-2 grid grid-cols-subgrid items-center border-b border-border/50 py-1.5 last:border-b-0">
+    <div className="group/prop col-span-2 grid grid-cols-subgrid items-center border-b border-border/50 py-1 last:border-b-0">
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="flex h-6 min-w-0 items-center gap-1.5 text-foreground">
         {children}
