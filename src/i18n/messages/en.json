@@ -7926,7 +7926,7 @@
       "waitForUpload": "Wait for the image to finish uploading."
     },
     "aux": {
-      "workers": "{count, plural, one {# work assistant} other {# work assistants}}",
+      "rename": "Click to rename",
       "title": "Assistant panel",
       "waiting": "{count, plural, one {# thing waits for you} other {# things wait for you}}"
     },

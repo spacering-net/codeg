@@ -219,24 +219,26 @@ export function OutputTab({
   const outcomes = outcomeCounts(tasks)
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Which kind: picked from the title, as many as it holds after it. */}
-      <div className="shrink-0 px-4 pt-1 pb-1">
-        <ViewSelect
-          value={kind}
-          onChange={setKind}
-          menuLabel={tabs("output")}
-          clearLabel={t("clear")}
-          itemAttr="data-pa-output-kind"
-          choices={OUTPUT_KINDS.map((k) => ({
-            value: k,
-            label: t(k),
-            title: k === "all" ? t("allTitle") : t(k),
-            count: known ? counts[k] : null,
-          }))}
-        />
-      </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-3 px-4 pt-3 pb-6">
+        <div className="flex flex-col gap-3 px-4 pt-1 pb-6">
+          {/* Which kind: picked from the title, as many as it holds after it
+              — scrolled with the rest, as far from the cards under it as
+              from the tabs over it. */}
+          <div className="pb-1">
+            <ViewSelect
+              value={kind}
+              onChange={setKind}
+              menuLabel={tabs("output")}
+              clearLabel={t("clear")}
+              itemAttr="data-pa-output-kind"
+              choices={OUTPUT_KINDS.map((k) => ({
+                value: k,
+                label: t(k),
+                title: k === "all" ? t("allTitle") : t(k),
+                count: known ? counts[k] : null,
+              }))}
+            />
+          </div>
           {!known ? (
             <WorkSkeleton />
           ) : shown.length === 0 ? (

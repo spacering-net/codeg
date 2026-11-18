@@ -35,6 +35,7 @@ const api = vi.hoisted(() => ({
   personalAgentRoutines: vi.fn(async () => []),
   personalAgentRoutineAct: vi.fn(async () => ({})),
   personalAgentTemplates: vi.fn(async () => []),
+  personalAgentSave: vi.fn(async () => ({})),
   readWorkspaceFileBase64: vi.fn(),
 }))
 const pa = vi.hoisted(() => ({
@@ -412,48 +413,137 @@ describe("the panel", () => {
     })
   })
 
-  it("says under its name how it is: its state, the primary's work assistants, a work assistant's role", async () => {
-    const entry = (await api.personalAgentBots())[0]
-    const worker = (id: number, hidden = false) => ({
-      ...entry,
-      id,
-      kind: "worker",
-      name: `W${id}`,
-      template: "dev",
-      roster: { ...entry.roster, hidden },
-    })
-    api.personalAgentBots.mockResolvedValue([
-      entry,
-      worker(2),
-      worker(3),
-      worker(4, true),
-    ])
-    api.personalAgentTemplates.mockResolvedValue([
-      { id: "dev", name: "Developer" },
-    ] as never)
-    const { unmount } = draw()
-    const line = await screen.findByText("Idle · 2 work assistants")
-    expect(line.closest("[data-pa-aux-head-line]")).toBeTruthy()
-    expect(line.parentElement?.querySelector(".bg-emerald-500")).toBeTruthy()
+  it("renames the assistant in place: Enter or leaving the field saves it, Escape takes it back and goes no further", async () => {
+    api.personalAgentSave.mockClear()
+    draw()
+    // No line of how it is under the name: that is on the title.
+    expect(document.querySelector("[data-pa-aux-head-line]")).toBeNull()
+    const name = () =>
+      document.querySelector("[data-pa-aux-head-name]") as HTMLButtonElement
+    const field = () =>
+      document.querySelector(
+        "[data-pa-aux-head-name-input]"
+      ) as HTMLInputElement
+    expect(name().textContent).toBe("Nova")
+    // Pressed: a field with the name, taken whole.
+    fireEvent.click(name())
+    expect(field().value).toBe("Nova")
+    expect(document.activeElement).toBe(field())
+    // Enter while a word is composed picks the word, nothing more — and
+    // WebKit's, after the composition ended, says so by its key code alone;
+    // nor is Escape then the field's.
+    fireEvent.change(field(), { target: { value: "Nova 2" } })
+    fireEvent.keyDown(field(), { key: "Enter", isComposing: true })
+    fireEvent.compositionStart(field())
+    fireEvent.keyDown(field(), { key: "Escape" })
+    fireEvent.compositionEnd(field())
+    fireEvent.keyDown(field(), { key: "Enter", keyCode: 229 })
+    expect(api.personalAgentSave).not.toHaveBeenCalled()
+    expect(field()).not.toBeNull()
+    fireEvent.keyDown(field(), { key: "Enter" })
+    expect(api.personalAgentSave).toHaveBeenCalledTimes(1)
+    expect(api.personalAgentSave).toHaveBeenCalledWith(
+      { name: "Nova 2", locale: "en" },
+      null
+    )
+    // Shown at once, before it is read back.
+    expect(field()).toBeNull()
+    expect(name().textContent).toBe("Nova 2")
+    // Escape takes it back — and does not reach the drawer round it.
+    const outside = vi.fn()
+    document.addEventListener("keydown", outside)
+    fireEvent.click(name())
+    fireEvent.change(field(), { target: { value: "Other" } })
+    fireEvent.keyDown(field(), { key: "Escape" })
+    document.removeEventListener("keydown", outside)
+    expect(outside).not.toHaveBeenCalled()
+    expect(field()).toBeNull()
+    expect(name().textContent).toBe("Nova 2")
+    expect(api.personalAgentSave).toHaveBeenCalledTimes(1)
+    // Leaving the field saves it; unchanged, nothing is saved.
+    fireEvent.click(name())
+    fireEvent.change(field(), { target: { value: "  Atlas " } })
+    fireEvent.blur(field())
+    expect(api.personalAgentSave).toHaveBeenLastCalledWith(
+      { name: "Atlas", locale: "en" },
+      null
+    )
+    fireEvent.click(name())
+    fireEvent.blur(field())
+    expect(api.personalAgentSave).toHaveBeenCalledTimes(2)
+  })
+
+  it("shows a renamed name until it is read back, then what is read back — a later rename elsewhere too", async () => {
+    api.personalAgentSave.mockClear()
+    const { rerender } = draw()
+    const name = () =>
+      document.querySelector("[data-pa-aux-head-name]") as HTMLButtonElement
+    const field = () =>
+      document.querySelector(
+        "[data-pa-aux-head-name-input]"
+      ) as HTMLInputElement
+    const redraw = (n: string) => {
+      const snap = snapshot()
+      snap.agent!.name = n
+      pa.snapshot = snap
+      rerender(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <PageScopeContext.Provider
+            value={{
+              readOnly: false,
+              agentName: n,
+              liveRowId: null,
+              connectionId: null,
+              agentType: null,
+              onQuote: vi.fn(),
+              jumpTo,
+              rowsById: new Map(),
+            }}
+          >
+            <PersonalAgentAuxPanel snapshot={snap} inDrawer={false} />
+          </PageScopeContext.Provider>
+        </NextIntlClientProvider>
+      )
+    }
+    fireEvent.click(name())
+    fireEvent.change(field(), { target: { value: "Atlas" } })
+    fireEvent.keyDown(field(), { key: "Enter" })
+    expect(name().textContent).toBe("Atlas")
+    // Read back; then renamed back elsewhere: the panel follows.
+    redraw("Atlas")
+    expect(name().textContent).toBe("Atlas")
+    redraw("Nova")
+    expect(name().textContent).toBe("Nova")
+  })
+
+  it("keeps a work assistant's name from being left empty, and is not renamed where it runs elsewhere", async () => {
+    api.personalAgentSave.mockClear()
+    const worker = snapshot()
+    Object.assign(worker.agent!, { kind: "worker", template: "dev" })
+    pa.snapshot = worker
+    const { unmount } = draw({ snap: worker })
+    fireEvent.click(
+      document.querySelector("[data-pa-aux-head-name]") as HTMLElement
+    )
+    const field = document.querySelector(
+      "[data-pa-aux-head-name-input]"
+    ) as HTMLInputElement
+    fireEvent.change(field, { target: { value: "   " } })
+    fireEvent.keyDown(field, { key: "Enter" })
+    expect(api.personalAgentSave).not.toHaveBeenCalled()
+    expect(document.querySelector("[data-pa-aux-head-name]")?.textContent).toBe(
+      "Nova"
+    )
     unmount()
-    // A work assistant: its role, from the template it was made from.
-    const snap = snapshot()
-    Object.assign(snap.agent!, { kind: "worker", template: "dev" })
-    pa.snapshot = snap
-    const { unmount: unmountWorker } = draw({ snap })
-    expect(await screen.findByText("Idle · Developer")).toBeTruthy()
-    unmountWorker()
-    // A role that is its name says nothing more: its state alone.
-    const named = snapshot()
-    Object.assign(named.agent!, {
-      kind: "worker",
-      template: "dev",
-      name: "Developer",
-    })
-    pa.snapshot = named
-    draw({ snap: named })
-    const alone = await screen.findByText("Idle")
-    expect(alone.closest("[data-pa-aux-head-line]")?.textContent).toBe("Idle")
+    // Elsewhere: its name, nothing to press.
+    const elsewhere = snapshot()
+    elsewhere.status.engine = "elsewhere" as never
+    pa.snapshot = elsewhere
+    draw({ snap: elsewhere })
+    expect(document.querySelector("[data-pa-aux-head-name]")).toBeNull()
+    expect(document.querySelector("[data-pa-aux-head] h2")?.textContent).toBe(
+      "Nova"
+    )
   })
 
   it("is the same in the drawer, its count of what waits on the owner on its activity", async () => {

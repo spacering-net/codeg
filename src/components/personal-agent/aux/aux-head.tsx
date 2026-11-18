@@ -1,19 +1,19 @@
 "use client"
 
-/** The panel's head: who it is and, under its name, how it is — its state,
- *  and on the primary how many work assistants it has, on a work assistant
- *  its role — the bell that says whether it notifies the owner, and the "⋯"
- *  of what acts on it. */
+/** The panel's head: who it is — its name, renamed in place — the bell
+ *  that says whether it notifies the owner, and the "⋯" of what acts on
+ *  it. How it is (its state) is on the conversation's title. */
 
-import { type ReactNode } from "react"
-import { useTranslations } from "next-intl"
+import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useLocale, useTranslations } from "next-intl"
 import { Bell, BellOff } from "lucide-react"
 import { toast } from "sonner"
 import { Toggle } from "@/components/ui/toggle"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
-import { personalAgentRosterAct } from "@/lib/api"
+import { useImeGuard } from "@/hooks/use-ime-guard"
+import { personalAgentRosterAct, personalAgentSave } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import type { PersonalAgentSnapshot, PersonalAgentStatus } from "@/lib/types"
+import type { PersonalAgentSnapshot } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import {
   usePersonalAgentRoster,
@@ -21,27 +21,14 @@ import {
 } from "@/stores/personal-agent-roster-store"
 
 import { AgentMenu } from "../agent-menu"
-import { useBotLook, useStatusWord } from "../shared"
+import { useBotLook } from "../shared"
 import { BotAvatar } from "../bot-avatar"
-import { useBotTemplates } from "../use-templates"
 
 /** The assistant's face at the head of the panel, in px at 100% zoom. */
 const HEAD_AVATAR_SIZE = 64
 
-/** The dot before an assistant's state: at work, waiting on the owner, idle
- *  and connected, or neither. */
-export function stateDot(status: PersonalAgentStatus): string {
-  return status.engine !== "here" || !status.connected
-    ? "bg-muted-foreground/40"
-    : status.pending_permission || status.pending_question
-      ? "bg-amber-500"
-      : status.turn
-        ? "bg-primary motion-safe:animate-pulse"
-        : "bg-emerald-500"
-}
-
 /** Who the panel is about, over its tabs: its face — alive, as on the
- *  roster, its star on the primary's — its name and a line of how it is;
+ *  roster, its star on the primary's — and its name;
  *  in the top's corners,
  *  as far from either edge, whether it notifies the owner (the bell, at the
  *  start) and what acts on it (the "⋯", at the end — in the drawer left of
@@ -94,62 +81,145 @@ export function AuxHead({
           look={look}
         />
       ) : null}
-      <div className="flex max-w-full min-w-0 flex-col items-center gap-0.5">
-        <h2
-          title={name}
-          className="max-w-full truncate text-base leading-6 font-semibold"
-        >
-          {name}
-        </h2>
-        {agent ? <HeadLine snapshot={snapshot} /> : null}
-      </div>
+      <HeadName
+        // Another assistant's: its own, from what is saved.
+        key={agent?.id ?? "none"}
+        snapshot={snapshot}
+        name={name}
+      />
       {children}
     </header>
   )
 }
 
-/** Under the name: its state, with its dot — then, on the primary, how many
- *  work assistants it has; on a work assistant, its role. */
-function HeadLine({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
+/** The longest name saved (the backend's cap too). */
+const NAME_MAX = 40
+
+/** Its name: deeper under the pointer, and pressed, a field in its place —
+ *  Enter or leaving it saves it, Escape takes it back. A work assistant's
+ *  is not left empty (it goes back to what it was); the primary's may be
+ *  (it goes by the default one). Not renamed where it runs elsewhere. */
+function HeadName({
+  snapshot,
+  name,
+}: {
+  snapshot: PersonalAgentSnapshot
+  /** What it goes by now. */
+  name: string
+}) {
   const t = useTranslations("PersonalAgent.aux")
-  const word = useStatusWord()
-  const entries = useRoster()
-  const templates = useBotTemplates()
+  const tPage = useTranslations("PersonalAgent")
+  const tEdit = useTranslations("PersonalAgent.bots.edit")
+  const locale = useLocale()
+  const { botId } = usePersonalAgent()
   const agent = snapshot.agent
-  const worker = agent?.kind === "worker"
-  const workers =
-    entries?.filter((e) => e.kind === "worker" && !e.roster.hidden).length ?? 0
-  const role = worker
-    ? (templates?.find((x) => x.id === agent?.template)?.name ?? null)
-    : null
-  // A role that is its name says nothing more.
-  const extra = worker
-    ? role && role !== agent?.name?.trim()
-      ? role
-      : null
-    : workers > 0
-      ? t("workers", { count: workers })
-      : null
-  const parts = [word, extra].filter((p): p is string => !!p)
-  if (parts.length === 0) return null
-  const line = parts.join(" · ")
+  const saved = agent?.name?.trim() ?? ""
+  const editable = agent != null && snapshot.status.engine === "here"
+  const [draft, setDraft] = useState<string | null>(null)
+  // Saved, before the assistant read back says so: shown meanwhile — while
+  // what is read back is still what it was over.
+  const [saving, setSaving] = useState<{ name: string; over: string } | null>(
+    null
+  )
+  // Read back as something else (what was saved, or a rename from
+  // elsewhere): what is read back stands.
+  if (saving != null && saving.over !== saved) setSaving(null)
+  const pending = saving != null && saving.over === saved ? saving.name : null
+  const ime = useImeGuard()
+  const input = useRef<HTMLInputElement | null>(null)
+  // Ended once: Enter, then the field going away, is not a second save.
+  const ended = useRef(false)
+  const editing = draft != null
+
+  useEffect(() => {
+    if (!editing) return
+    const el = input.current
+    el?.focus()
+    el?.select()
+    // Escape takes the name back and goes no further — not to the drawer
+    // round the panel, which would close on it.
+    // While a word is being composed, Escape is the input method's.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.target !== el || ime.isComposing(e)) return
+      e.stopPropagation()
+      e.preventDefault()
+      ended.current = true
+      setDraft(null)
+    }
+    window.addEventListener("keydown", onKey, true)
+    return () => window.removeEventListener("keydown", onKey, true)
+  }, [editing, ime])
+
+  const commit = () => {
+    if (ended.current || draft == null) return
+    ended.current = true
+    const next = draft.trim()
+    setDraft(null)
+    // Unchanged from what it shows — saved or being saved — nothing to do.
+    if (next === (pending ?? saved) || (agent?.kind !== "primary" && !next))
+      return
+    const mine = { name: next, over: saved }
+    setSaving(mine)
+    personalAgentSave({ name: next, locale }, botId).catch((e) => {
+      setSaving((s) => (s === mine ? null : s))
+      toast.error(toErrorMessage(e))
+    })
+  }
+
+  // The primary's left empty goes by the default name.
+  const fallback = tPage("title")
+  const shown = pending != null ? pending || fallback : name
+  if (editing) {
+    return (
+      <input
+        ref={input}
+        dir="auto"
+        value={draft}
+        maxLength={NAME_MAX}
+        placeholder={agent?.kind === "primary" ? fallback : undefined}
+        aria-label={tEdit("name")}
+        data-pa-aux-head-name-input
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        {...ime.props}
+        onKeyDown={(e) => {
+          // Not while a word is being composed (an input method's Enter
+          // picks it — WebKit's says so only by its key code).
+          if (e.key === "Enter" && !ime.isComposing(e)) {
+            e.preventDefault()
+            commit()
+          }
+        }}
+        className="h-8 w-full max-w-60 min-w-0 rounded-lg border border-input bg-background px-2 text-center text-base leading-6 font-semibold outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+      />
+    )
+  }
+  if (!editable) {
+    return (
+      <h2
+        title={shown}
+        className="max-w-full truncate text-base leading-6 font-semibold"
+      >
+        {shown}
+      </h2>
+    )
+  }
   return (
-    <p
-      data-pa-aux-head-line
-      title={line}
-      className="flex max-w-full min-w-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground"
-    >
-      {word ? (
-        <span
-          aria-hidden
-          className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            stateDot(snapshot.status)
-          )}
-        />
-      ) : null}
-      <span className="min-w-0 truncate">{line}</span>
-    </p>
+    <h2 className="flex max-w-full min-w-0">
+      <button
+        type="button"
+        title={`${shown}\n${t("rename")}`}
+        aria-label={`${shown} · ${t("rename")}`}
+        data-pa-aux-head-name
+        onClick={() => {
+          ended.current = false
+          setDraft(pending ?? saved)
+        }}
+        className="h-8 max-w-full min-w-0 truncate rounded-lg px-2 text-base leading-6 font-semibold transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        {shown}
+      </button>
+    </h2>
   )
 }
 

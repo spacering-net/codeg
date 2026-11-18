@@ -7926,7 +7926,7 @@
       "waitForUpload": "Espera a que termine de subirse la imagen."
     },
     "aux": {
-      "workers": "{count, plural, one {# asistente de trabajo} other {# asistentes de trabajo}}",
+      "rename": "Haz clic para cambiar el nombre",
       "title": "Panel del asistente",
       "waiting": "{count, plural, one {# cosa te espera} other {# cosas te esperan}}"
     },

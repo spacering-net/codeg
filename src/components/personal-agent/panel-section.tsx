@@ -3,8 +3,9 @@
 /**
  * The pieces the personal agent's side panel is built of, the same in each
  * of its tabs:
- * - `PanelSection`: a part of a tab — its title centred, how many it holds
- *   after it, an action at the head's end — over its body.
+ * - `PanelSection`: a part of a tab — its title centred on a dashed pill,
+ *   how many it holds after it, an action at the head's end — over its
+ *   body.
  * - `PanelGroup`: a folding group inside a part (who a matter waits on, a
  *   group of today): one card, its head a bar across its top — its marker,
  *   its name and count in its tone, the chevron at the end — its things
@@ -96,10 +97,12 @@ export function PanelSection({
       className={cn("flex min-w-0 flex-col gap-4", className)}
       {...props}
     >
-      {/* The title and its count in the middle, the action at the end:
-          the title stays centred whether or not there is one. */}
-      <div className="grid h-7 min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,auto)_minmax(0,1fr)] items-center gap-1.5">
-        <div className="col-start-2 flex min-w-0 items-center gap-1.5">
+      {/* The title and its count in the middle, on a dashed pill the size
+          of a view's picker but with no fill — it picks nothing — the
+          action at the end: the title stays centred whether or not there
+          is one. */}
+      <div className="grid h-8 min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,auto)_minmax(0,1fr)] items-center gap-1.5">
+        <div className="col-start-2 flex h-8 min-w-0 items-center gap-1.5 rounded-full border border-dashed border-muted-foreground/35 px-3">
           <h3 className="min-w-0 truncate text-[0.9375rem] font-semibold text-foreground">
             {title}
           </h3>
