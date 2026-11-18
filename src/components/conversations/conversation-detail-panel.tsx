@@ -180,7 +180,10 @@ import {
   ExportTooLongError,
 } from "@/lib/export-conversation"
 import { useExportLabels } from "@/lib/use-export-labels"
-import { resolveActiveSessionDetails } from "./active-session-details"
+import {
+  projectRuntimeSessionDetails,
+  resolveActiveSessionDetailsFromSnapshot,
+} from "./active-session-details"
 import { ConversationDetailHeader } from "./conversation-detail-header"
 import { SessionDetailsDialog } from "./session-details-dialog"
 
@@ -2798,21 +2801,22 @@ export function ConversationDetailPanel() {
     activeConversationTab?.runtimeConversationId ??
     activeConversationTab?.conversationId ??
     null
-  const activeRuntimeSession = useConversationRuntimeStore((s) =>
-    activeRuntimeId != null
-      ? (s.byConversationId.get(activeRuntimeId) ?? null)
-      : null
+  // A persistent metadata consumer's previous hook snapshot can outlive a
+  // removed session. Select its display values before React keeps that snapshot.
+  const activeRuntimeDetails = useConversationRuntimeStore(
+    useShallow((s) =>
+      projectRuntimeSessionDetails(
+        activeRuntimeId != null ? s.byConversationId.get(activeRuntimeId) : null
+      )
+    )
   )
   const {
     summary: activeSessionSummary,
     stats: activeSessionStats,
     model: activeSessionModel,
-  } = resolveActiveSessionDetails(
+  } = resolveActiveSessionDetailsFromSnapshot(
     activeConversationTab,
-    // resolveActiveSessionDetails reads only `getSession(runtimeId)`, and its
-    // internal `runtimeId` equals `activeRuntimeId` (identical computation), so
-    // resolving that single pre-selected session is exact.
-    (id) => (id === activeRuntimeId ? activeRuntimeSession : null),
+    activeRuntimeDetails,
     conversations
   )
 
