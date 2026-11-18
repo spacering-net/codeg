@@ -575,7 +575,7 @@ pub async fn update_model_provider(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     update_model_provider_and_refresh(
         &db,
         &manager,

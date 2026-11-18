@@ -731,7 +731,7 @@ pub async fn set_chat_authoring_settings(
 ) -> Result<ChatAuthoringSettings, AppCommandError> {
     #[cfg(feature = "tauri-runtime")]
     {
-        let emitter = EventEmitter::Tauri(app);
+        let emitter = EventEmitter::from_app(&app);
         set_chat_authoring_settings_core(&db.conn, &config, &emitter, settings).await
     }
     #[cfg(not(feature = "tauri-runtime"))]

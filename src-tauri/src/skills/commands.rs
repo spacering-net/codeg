@@ -361,7 +361,7 @@ pub async fn skills_apply_links(
         ops,
         preflight: preflight.unwrap_or(false),
     };
-    skills_apply_links_core(&EventEmitter::Tauri(app), request).await
+    skills_apply_links_core(&EventEmitter::from_app(&app), request).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -372,7 +372,7 @@ pub async fn skills_adopt(
     dir: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<SkillsAdoptResult, AppCommandError> {
-    skills_adopt_core(&EventEmitter::Tauri(app), agent, skill, dir).await
+    skills_adopt_core(&EventEmitter::from_app(&app), agent, skill, dir).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -385,7 +385,7 @@ pub async fn skills_repair_link(
     app: tauri::AppHandle,
 ) -> Result<SkillsRepairResult, AppCommandError> {
     skills_repair_link_core(
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         path,
         action,
         preflight.unwrap_or(false),
@@ -408,7 +408,7 @@ pub async fn skills_backup_restore(
     id: String,
     app: tauri::AppHandle,
 ) -> Result<SkillsBackupResult, AppCommandError> {
-    skills_backup_restore_core(&EventEmitter::Tauri(app), skill, name, id).await
+    skills_backup_restore_core(&EventEmitter::from_app(&app), skill, name, id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -418,5 +418,5 @@ pub async fn skills_backup_delete(
     name: String,
     app: tauri::AppHandle,
 ) -> Result<SkillsBackupResult, AppCommandError> {
-    skills_backup_delete_core(&EventEmitter::Tauri(app), skill, name).await
+    skills_backup_delete_core(&EventEmitter::from_app(&app), skill, name).await
 }

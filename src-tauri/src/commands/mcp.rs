@@ -402,7 +402,7 @@ pub async fn mcp_install_from_marketplace(
     app: tauri::AppHandle,
 ) -> Result<LocalMcpServer, AppCommandError> {
     mcp_install_from_marketplace_core(
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         provider_id,
         server_id,
         apps,
@@ -514,7 +514,7 @@ pub async fn mcp_upsert_local_server(
     shown_spec: Option<Value>,
     app: tauri::AppHandle,
 ) -> Result<LocalMcpServer, AppCommandError> {
-    mcp_upsert_local_server_core(&EventEmitter::Tauri(app), server_id, spec, apps, shown_spec)
+    mcp_upsert_local_server_core(&EventEmitter::from_app(&app), server_id, spec, apps, shown_spec)
         .await
 }
 
@@ -606,7 +606,7 @@ pub async fn mcp_set_server_apps(
     apps: Vec<McpAppType>,
     app: tauri::AppHandle,
 ) -> Result<Option<LocalMcpServer>, AppCommandError> {
-    mcp_set_server_apps_core(&EventEmitter::Tauri(app), server_id, apps).await
+    mcp_set_server_apps_core(&EventEmitter::from_app(&app), server_id, apps).await
 }
 
 pub async fn mcp_set_server_apps_core(
@@ -678,7 +678,7 @@ pub async fn mcp_remove_server(
     apps: Option<Vec<McpAppType>>,
     app: tauri::AppHandle,
 ) -> Result<bool, AppCommandError> {
-    mcp_remove_server_core(&EventEmitter::Tauri(app), server_id, apps).await
+    mcp_remove_server_core(&EventEmitter::from_app(&app), server_id, apps).await
 }
 
 pub async fn mcp_remove_server_core(

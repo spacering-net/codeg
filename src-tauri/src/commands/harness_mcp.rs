@@ -153,7 +153,7 @@ mod tauri_commands {
             basis: basis.unwrap_or_default(),
             accept_yanked: accept_yanked.unwrap_or(false),
         };
-        let emitter = EventEmitter::Tauri(app.clone());
+        let emitter = EventEmitter::from_app(&app);
         harness_mcp_install_core(&db, &emitter, &harness(&app), request).await
     }
 
@@ -162,7 +162,7 @@ mod tauri_commands {
         app: tauri::AppHandle,
         db: tauri::State<'_, AppDatabase>,
     ) -> Result<HarnessInstalled, AppCommandError> {
-        harness_installed_core(&db, &EventEmitter::Tauri(app)).await
+        harness_installed_core(&db, &EventEmitter::from_app(&app)).await
     }
 
     #[tauri::command]
@@ -182,7 +182,7 @@ mod tauri_commands {
             basis: basis.unwrap_or_default(),
             preflight: preflight.unwrap_or(false),
         };
-        harness_mcp_uninstall_core(&db, &EventEmitter::Tauri(app), request).await
+        harness_mcp_uninstall_core(&db, &EventEmitter::from_app(&app), request).await
     }
 }
 

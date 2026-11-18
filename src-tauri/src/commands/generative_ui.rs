@@ -722,7 +722,7 @@ pub async fn generative_ui_apply_links(
     ops: Vec<LinkOp>,
     app: tauri::AppHandle,
 ) -> Result<Vec<LinkOpResult>, AppCommandError> {
-    generative_ui_apply_links_core(&EventEmitter::Tauri(app), ops).await
+    generative_ui_apply_links_core(&EventEmitter::from_app(&app), ops).await
 }
 
 /// The `SKILL.md` agents get, for the settings page's preview.

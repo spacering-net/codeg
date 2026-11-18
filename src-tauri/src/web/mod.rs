@@ -926,7 +926,7 @@ pub(crate) async fn do_start_web_server_tauri(
             .state::<Arc<crate::acp::InternalEventBus>>()
             .inner()
             .clone(),
-        emitter: crate::web::event_bridge::EventEmitter::Tauri(app.clone()),
+        emitter: crate::web::event_bridge::EventEmitter::from_app(&app),
         // Resolve through the effective data dir so a custom
         // `CODEG_DATA_DIR` reaches the credential helper and any HTTP
         // handler that reads `state.data_dir`.
@@ -1082,7 +1082,7 @@ pub(crate) async fn do_start_web_server_tauri(
 #[cfg(feature = "tauri-runtime")]
 fn emit_web_service_status_changed(app: &tauri::AppHandle, running: bool) {
     event_bridge::emit_event(
-        &event_bridge::EventEmitter::Tauri(app.clone()),
+        &event_bridge::EventEmitter::from_app(app),
         event_bridge::WEB_SERVICE_STATUS_CHANGED_EVENT,
         event_bridge::WebServiceStatusChanged { running },
     );
