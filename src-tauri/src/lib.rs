@@ -961,7 +961,7 @@ mod tauri_app {
                 // startup; failures are logged but non-fatal.
                 {
                     let emitter =
-                        crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                        crate::web::event_bridge::EventEmitter::from_app(app.handle());
                     tauri::async_runtime::spawn(crate::skills::startup::run(emitter));
                 }
 
@@ -1063,7 +1063,7 @@ mod tauri_app {
                 // `bin/codeg_server.rs`.
                 if let Some(checker) = crate::harness::updates::build(
                     &effective_data_dir,
-                    web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                    web::event_bridge::EventEmitter::from_app(app.handle()),
                 ) {
                     tauri::async_runtime::spawn(crate::harness::updates::run(checker));
                 }

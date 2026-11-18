@@ -506,7 +506,7 @@ pub async fn experts_apply_links(
     ops: Vec<LinkOp>,
     app: tauri::AppHandle,
 ) -> Result<Vec<LinkOpResult>, ExpertsError> {
-    experts_apply_links_core(&EventEmitter::Tauri(app), ops).await
+    experts_apply_links_core(&EventEmitter::from_app(&app), ops).await
 }
 
 // ─── Commands: read / open ──────────────────────────────────────────────

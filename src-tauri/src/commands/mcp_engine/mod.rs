@@ -285,7 +285,7 @@ pub async fn mcp_apply(
         ops,
         preflight: preflight.unwrap_or(false),
     };
-    mcp_apply_core(&db, &EventEmitter::Tauri(app), request).await
+    mcp_apply_core(&db, &EventEmitter::from_app(&app), request).await
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]

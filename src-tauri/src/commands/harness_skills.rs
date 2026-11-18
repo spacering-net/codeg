@@ -109,7 +109,7 @@ mod tauri_commands {
             acks: acks.unwrap_or_default(),
             accept_yanked: accept_yanked.unwrap_or(false),
         };
-        let emitter = EventEmitter::Tauri(app.clone());
+        let emitter = EventEmitter::from_app(&app);
         harness_skill_install_core(&emitter, &harness(&app), request).await
     }
 
@@ -125,7 +125,7 @@ mod tauri_commands {
             preflight: preflight.unwrap_or(false),
             ack,
         };
-        harness_skill_uninstall_core(&EventEmitter::Tauri(app), request).await
+        harness_skill_uninstall_core(&EventEmitter::from_app(&app), request).await
     }
 }
 

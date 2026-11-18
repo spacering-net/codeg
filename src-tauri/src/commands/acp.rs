@@ -15856,7 +15856,7 @@ pub mod skill_page {
         app: tauri::AppHandle,
     ) -> Result<AgentSkillItem, AppCommandError> {
         super::acp_save_agent_skill_core(
-            &EventEmitter::Tauri(app),
+            &EventEmitter::from_app(&app),
             agent_type,
             scope,
             skill_id,
@@ -15880,7 +15880,7 @@ pub mod skill_page {
         app: tauri::AppHandle,
     ) -> Result<SkillPageDeleteResult, AppCommandError> {
         super::acp_delete_agent_skill_core(
-            &EventEmitter::Tauri(app),
+            &EventEmitter::from_app(&app),
             agent_type,
             scope,
             skill_id,
