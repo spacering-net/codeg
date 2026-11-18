@@ -8737,6 +8737,15 @@
         "brokenOther": "Ein gleichnamiger defekter Link steht im Weg",
         "unknown": "Unbekannter Zustand ({state})"
       },
+      "cellChips": {
+        "taken": "Name belegt"
+      },
+      "cellNotes": {
+        "through": "Über den gemeinsamen Ordner <code>{dir}</code>",
+        "copy": "Als Kopie, die sich nicht selbst aktualisiert",
+        "copyOutdated": "Als alte Kopie: Der Skill hat sich seither geändert",
+        "copyChanged": "Als Kopie, die beim Agenten geändert wurde"
+      },
       "cellsText": {
         "through": "An, über den gemeinsamen Ordner {dir}"
       },

@@ -139,9 +139,9 @@ export function SkillDetailHeader({
 }) {
   return (
     <header className={HARNESS_DETAIL_HEADER_CLASS}>
-      <div className="flex min-w-0 items-start gap-4">
+      <div className="flex min-w-0 items-start gap-3">
         <span className={HARNESS_DETAIL_TILE_CLASS}>{icon}</span>
-        <div className="min-w-0 flex-1 space-y-1.5 pt-1">
+        <div className="min-w-0 flex-1 space-y-1 pt-1">
           <h2
             id={headingId}
             ref={headingRef}
@@ -240,7 +240,7 @@ export function ContentPart({
   }, [slots, links, contentKey, unavailable, stale])
   return (
     <McpDetailPart title={t("content")}>
-      <div className="min-w-0 rounded-xl border bg-card px-4 py-3.5">
+      <div className="min-w-0 rounded-xl border bg-card px-4 py-3">
         {unavailable ? (
           <p className="text-xs text-muted-foreground">{unavailable}</p>
         ) : state?.content != null ? (

@@ -8737,6 +8737,15 @@
         "brokenOther": "Um link quebrado com o mesmo nome está no caminho",
         "unknown": "Estado desconhecido ({state})"
       },
+      "cellChips": {
+        "taken": "Nome ocupado"
+      },
+      "cellNotes": {
+        "through": "Pela pasta compartilhada <code>{dir}</code>",
+        "copy": "Como cópia que não se atualiza sozinha",
+        "copyOutdated": "Como cópia antiga: a habilidade mudou desde então",
+        "copyChanged": "Como cópia alterada pelo agente"
+      },
       "cellsText": {
         "through": "Ativada, pela pasta compartilhada {dir}"
       },

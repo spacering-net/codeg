@@ -8737,6 +8737,15 @@
         "brokenOther": "同名の壊れたリンクが邪魔をしています",
         "unknown": "不明な状態（{state}）"
       },
+      "cellChips": {
+        "taken": "名前が使用中"
+      },
+      "cellNotes": {
+        "through": "共有フォルダー <code>{dir}</code> 経由",
+        "copy": "自動では更新されないコピー",
+        "copyOutdated": "古いコピー：スキルはその後変更されています",
+        "copyChanged": "エージェント側で変更されたコピー"
+      },
       "cellsText": {
         "through": "オン（共有フォルダー {dir} 経由）"
       },

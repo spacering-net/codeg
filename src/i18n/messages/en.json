@@ -8737,6 +8737,15 @@
         "brokenOther": "A broken link of the same name is in the way",
         "unknown": "Unknown state ({state})"
       },
+      "cellChips": {
+        "taken": "Name taken"
+      },
+      "cellNotes": {
+        "through": "Through the shared folder <code>{dir}</code>",
+        "copy": "A copy that is not updated by itself",
+        "copyOutdated": "An old copy: the skill has changed since",
+        "copyChanged": "A copy changed on the agent's side"
+      },
       "cellsText": {
         "through": "On, through the shared folder {dir}"
       },

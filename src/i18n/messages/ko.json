@@ -8737,6 +8737,15 @@
         "brokenOther": "같은 이름의 깨진 링크가 막고 있습니다",
         "unknown": "알 수 없는 상태({state})"
       },
+      "cellChips": {
+        "taken": "이름 사용 중"
+      },
+      "cellNotes": {
+        "through": "공유 폴더 <code>{dir}</code>를 통해",
+        "copy": "저절로 업데이트되지 않는 복사본",
+        "copyOutdated": "오래된 복사본: 그 뒤로 스킬이 바뀌었습니다",
+        "copyChanged": "에이전트 쪽에서 바뀐 복사본"
+      },
       "cellsText": {
         "through": "켜짐, 공유 폴더 {dir}를 통해"
       },

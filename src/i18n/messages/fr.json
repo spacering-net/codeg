@@ -8737,6 +8737,15 @@
         "brokenOther": "Un lien cassé du même nom bloque",
         "unknown": "État inconnu ({state})"
       },
+      "cellChips": {
+        "taken": "Nom occupé"
+      },
+      "cellNotes": {
+        "through": "Via le dossier partagé <code>{dir}</code>",
+        "copy": "En copie qui ne se met pas à jour seule",
+        "copyOutdated": "En copie ancienne : la compétence a changé depuis",
+        "copyChanged": "En copie modifiée côté agent"
+      },
       "cellsText": {
         "through": "Activée, via le dossier partagé {dir}"
       },

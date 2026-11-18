@@ -668,7 +668,7 @@ function DefinitionPart({
   if (server.groups.length === 0) {
     return (
       <McpDetailPart title={t("definition")}>
-        <p className="rounded-xl border bg-card px-4 py-3.5 text-sm text-muted-foreground">
+        <p className="rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground">
           {t("noDefinition")}
         </p>
       </McpDetailPart>

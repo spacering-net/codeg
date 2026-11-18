@@ -266,12 +266,19 @@ describe("SkillsSection — Codeg-managed skills", () => {
     const article = await openSkill("PDF tools")
     const rows = within(article).getAllByRole("listitem")
     const codex = rows.find((row) => row.textContent?.includes("Codex"))!
-    expect(codex.textContent).toContain("On, through the shared folder")
+    // A mark beside the name says on or off; the line under it, how.
+    expect(
+      within(codex).getByRole("switch", { name: "Codex" })
+    ).toHaveAccessibleDescription(
+      new RegExp(`^${m.cells.on} Through the shared folder`)
+    )
     expect(codex.textContent).toContain(SHARED_DIR)
     expect(codex.textContent).toContain("Also seen by")
-    // Claude Code has nothing of it.
+    // Claude Code has nothing of it: the mark alone says so.
     const claude = rows.find((row) => row.textContent?.includes("Claude Code"))!
-    expect(claude.textContent).toContain(m.cells.off)
+    expect(
+      within(claude).getByRole("switch", { name: "Claude Code" })
+    ).toHaveAccessibleDescription(m.cells.off)
   })
 
   it("draws the matrix on a wide pane, a cell per agent", async () => {
@@ -682,14 +689,14 @@ describe("SkillsSection — copies (where no link can be made)", () => {
     setup(copyHost("copy"))
     render(<Harness />)
     const article = await openSkill("My flow")
-    expect(article.textContent).toContain(m.cells.copy)
+    expect(article.textContent).toContain(m.cellNotes.copy)
   })
 
   it("updates an outdated copy nobody changed, without asking", async () => {
     setup(copyHost("copyOutdated"))
     render(<Harness />)
     const article = await openSkill("My flow")
-    expect(article.textContent).toContain(m.cells.copyOutdated)
+    expect(article.textContent).toContain(m.cellNotes.copyOutdated)
     await userEvent.click(
       within(article).getByRole("button", { name: m.agentRow.refresh })
     )
@@ -703,7 +710,7 @@ describe("SkillsSection — copies (where no link can be made)", () => {
     setup(copyHost("copyChanged"))
     render(<Harness />)
     const article = await openSkill("My flow")
-    expect(article.textContent).toContain(m.cells.copyChanged)
+    expect(article.textContent).toContain(m.cellNotes.copyChanged)
     // Its switch would not take it away: there is none to flip.
     expect(
       within(article).getByRole("switch", { name: "Claude Code" })

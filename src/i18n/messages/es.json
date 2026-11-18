@@ -8737,6 +8737,15 @@
         "brokenOther": "Un enlace roto con el mismo nombre lo impide",
         "unknown": "Estado desconocido ({state})"
       },
+      "cellChips": {
+        "taken": "Nombre ocupado"
+      },
+      "cellNotes": {
+        "through": "A través de la carpeta compartida <code>{dir}</code>",
+        "copy": "Como copia que no se actualiza sola",
+        "copyOutdated": "Como copia antigua: la habilidad ha cambiado desde entonces",
+        "copyChanged": "Como copia cambiada por el agente"
+      },
       "cellsText": {
         "through": "Activada, a través de la carpeta compartida {dir}"
       },

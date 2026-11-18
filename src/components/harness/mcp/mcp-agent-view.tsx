@@ -279,7 +279,7 @@ function SessionFacts({ info }: { info: McpAgentInfo }) {
   }
   return (
     <McpDetailPart title={t("sessions")}>
-      <div className="space-y-1.5 rounded-xl border bg-card px-4 py-3.5 text-sm text-muted-foreground">
+      <div className="space-y-1.5 rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground">
         <p className="text-foreground">
           {delivery === "agent_file"
             ? t("deliveryFile")
@@ -577,7 +577,7 @@ export function McpAgentDetail({
           }
         >
           {info.unreadable ? (
-            <p className="rounded-xl border bg-card px-4 py-3.5 text-sm text-muted-foreground">
+            <p className="rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground">
               {t("agent.entriesUnknown")}
             </p>
           ) : (

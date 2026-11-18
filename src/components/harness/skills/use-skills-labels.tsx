@@ -118,12 +118,25 @@ export interface SkillsLabels {
   origin: (origin: string) => string
   /** Whose an agent's listed skill is. */
   owner: (owner: string | null, pack?: string | null) => string
-  /** A cell in words; `dir` is the shared folder of a `through` cell. */
-  cell: (kind: CellKind, dir?: string | null, state?: string) => ReactNode
-  /** The same, as plain text — an accessible name, a tooltip. */
+  /** A cell in words, as plain text — an accessible name, a tooltip;
+   *  `dir` is the shared folder of a `through` cell. */
   cellText: (kind: CellKind, dir?: string | null, state?: string) => string
+  /** A cell in a word or two, for a mark beside the agent's name: on, off,
+   *  the name taken. */
+  cellChip: (kind: CellKind, state?: string) => string
+  /** What the mark leaves out — how an "on" cell is on, what holds the
+   *  name — or `null` where the mark says it all. */
+  cellNote: (kind: CellKind, dir?: string | null) => ReactNode | null
   date: (iso: string) => string
 }
+
+/** Cells whose name is held by something that is not Codeg's skill. */
+const CELL_TAKEN: ReadonlySet<CellKind> = new Set([
+  "blocked",
+  "elsewhere",
+  "broken",
+  "brokenOther",
+])
 
 /**
  * The skills sections' vocabulary: the engine's codes, statuses, origins and
@@ -223,14 +236,6 @@ export function useSkillsLabels(): SkillsLabels {
         }
         return t("owners.unknown")
       },
-      cell: (kind: CellKind, dir?: string | null, state?: string) => {
-        if (kind === "through") {
-          return t.rich("cells.through", { dir: dir ?? "?", code })
-        }
-        if (kind === "unknown")
-          return t("cells.unknown", { state: state ?? "?" })
-        return t(`cells.${kind}` as never)
-      },
       cellText: (kind: CellKind, dir?: string | null, state?: string) => {
         if (kind === "through") {
           return t("cellsText.through", { dir: dir ?? "?" })
@@ -238,6 +243,27 @@ export function useSkillsLabels(): SkillsLabels {
         if (kind === "unknown")
           return t("cells.unknown", { state: state ?? "?" })
         return t(`cells.${kind}` as never)
+      },
+      cellChip: (kind: CellKind, state?: string) => {
+        if (kind === "off") return t("cells.off")
+        if (kind === "unknown")
+          return t("cells.unknown", { state: state ?? "?" })
+        if (CELL_TAKEN.has(kind)) return t("cellChips.taken")
+        return t("cells.on")
+      },
+      cellNote: (kind: CellKind, dir?: string | null) => {
+        if (kind === "through") {
+          return t.rich("cellNotes.through", { dir: dir ?? "?", code })
+        }
+        if (
+          kind === "copy" ||
+          kind === "copyOutdated" ||
+          kind === "copyChanged"
+        ) {
+          return t(`cellNotes.${kind}`)
+        }
+        if (CELL_TAKEN.has(kind)) return t(`cells.${kind}` as never)
+        return null
       },
       date: (iso: string) => {
         const date = new Date(iso)

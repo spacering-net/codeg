@@ -8737,6 +8737,15 @@
         "brokenOther": "被同名的失效链接占用",
         "unknown": "未知状态（{state}）"
       },
+      "cellChips": {
+        "taken": "名称被占用"
+      },
+      "cellNotes": {
+        "through": "经共享目录 <code>{dir}</code> 可见",
+        "copy": "是一份副本，不会自动同步",
+        "copyOutdated": "是一份旧副本：技能之后有过更新",
+        "copyChanged": "是一份在智能体那边改过的副本"
+      },
       "cellsText": {
         "through": "已启用，经共享目录 {dir} 可见"
       },

@@ -34,9 +34,11 @@ export const HARNESS_SEGMENT_CLASS = cn(
 export const HARNESS_SEARCH_CLASS =
   "h-8 bg-background shadow-xs max-md:h-10 md:text-[0.8125rem] dark:bg-background ws-msg-chip"
 
-/** A toolbar's filter: a filled pill, so it reads as a control at rest. */
+/** A toolbar's filter: a filled pill, so it reads as a control at rest. The
+ *  heights name the select's own size too, which outranks a bare `h-*`. */
 export const HARNESS_FILTER_CLASS = cn(
   "h-8 gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none max-md:h-10",
+  "data-[size=default]:h-8 max-md:data-[size=default]:h-10",
   "hover:bg-muted dark:bg-muted/70 dark:hover:bg-muted data-[state=open]:bg-muted"
 )
 

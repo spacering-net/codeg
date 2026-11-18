@@ -1,6 +1,6 @@
 "use client"
 
-import { useId } from "react"
+import { useId, type ReactNode } from "react"
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 
@@ -19,6 +19,8 @@ import {
 } from "@/lib/harness/skill-links"
 import type { HarnessSlot } from "@/lib/harness-slots"
 import type { SkillsAgent, SkillCell } from "@/lib/skills/types"
+import type { CellKind } from "@/lib/skills/model"
+import { DiscoverMark } from "../discover/discover-card"
 import { AgentGlyph, McpDetailPart } from "../mcp/mcp-bits"
 import { SHOW_ALL_AGENTS_CLASS } from "../mcp/mcp-server-detail"
 import { rowCell, WriteNotices, type GridRow } from "./skill-grid"
@@ -35,6 +37,13 @@ const ENTRY_KINDS = [
   "file",
   "unreadable",
 ] as const
+
+/** The mark's colour: on, on but needing a look, off, the name taken. */
+function cellTone(kind: CellKind): "success" | "warning" | "neutral" {
+  if (kind === "on" || kind === "through" || kind === "copy") return "success"
+  if (kind === "off" || kind === "unknown") return "neutral"
+  return "warning"
+}
 
 /** One agent, for one skill: what it sees, why it cannot change where it
  *  cannot, what else holds the name, and the switch. */
@@ -57,6 +66,7 @@ function AgentRow({
   const [writes] = useHarnessSlot(links.writes)
   const [kept, setKept] = useHarnessSlot(keptSlot)
   const stateId = useId()
+  const chipId = useId()
   const cell: SkillCell | undefined = row.skill?.cells.find(
     (item) => item.agent === agent.agent
   )
@@ -79,18 +89,34 @@ function AgentRow({
     (entry) => entry.path !== cell?.path
   )
 
+  // Under the mark: what it leaves out, and why an off cell cannot be
+  // switched on.
+  const notes: ReactNode[] = []
+  const note = labels.cellNote(view.kind, dir)
+  if (note !== null) notes.push(note)
+  if (view.why === "notReady" && row.notReady) notes.push(row.notReady)
+  if (view.why === "noDirectory") notes.push(tGrid("noDirectory"))
+
   return (
-    <li className="flex min-w-0 items-start gap-3 px-4 py-3">
+    <li className="flex min-w-0 items-start gap-3 px-4 py-2.5">
       <AgentGlyph agent={agent.agent} className="mt-0.5 size-5" />
       <div className="min-w-0 flex-1 space-y-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span className="text-sm font-medium">{name}</span>
+          <DiscoverMark size="sm" tone={cellTone(view.kind)}>
+            <span id={chipId}>{labels.cellChip(view.kind, state)}</span>
+          </DiscoverMark>
         </div>
-        <p id={stateId} className="text-xs text-muted-foreground">
-          {labels.cell(view.kind, dir, state)}
-          {view.why === "notReady" && row.notReady && <> · {row.notReady}</>}
-          {view.why === "noDirectory" && <> · {tGrid("noDirectory")}</>}
-        </p>
+        {notes.length > 0 && (
+          <p id={stateId} className="text-xs text-muted-foreground">
+            {notes.map((note, index) => (
+              <span key={index}>
+                {index > 0 && " · "}
+                {note}
+              </span>
+            ))}
+          </p>
+        )}
         {cell?.path && <SkillPath path={cell.path} />}
         {cell?.target && view.kind !== "on" && view.kind !== "through" && (
           <p className="text-2xs leading-4 text-muted-foreground">
@@ -235,7 +261,7 @@ function AgentRow({
             requestToggle(slots, links, row.id, agent.agent, row.ready)
           }
           aria-label={name}
-          aria-describedby={stateId}
+          aria-describedby={notes.length > 0 ? `${chipId} ${stateId}` : chipId}
           className="relative after:absolute after:-inset-2.5"
         />
       </div>
@@ -306,7 +332,7 @@ export function SkillAgentRows({
       <div className="space-y-2">
         <WriteNotices links={links} skills={new Set([row.id])} />
         {agents.length === 0 ? (
-          <p className="rounded-xl border bg-card px-4 py-3.5 text-sm text-muted-foreground">
+          <p className="rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground">
             {t("noAgents")}
           </p>
         ) : (
