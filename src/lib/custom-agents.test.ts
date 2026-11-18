@@ -171,4 +171,29 @@ describe("isMonochromeSvgDataUrl", () => {
     expect(spy.mock.calls.length).toBe(callsAfterFirst)
     spy.mockRestore()
   })
+
+  it.each([
+    { icons: 192, padding: 0, reason: "many small icons" },
+    { icons: 4, padding: 160 * 1024, reason: "a few large icons" },
+  ])("evicts old classifications after $reason", ({ icons, padding }) => {
+    const icon = (index: number) =>
+      encode(`<svg><!--${padding}:${index}:${"x".repeat(padding)}--></svg>`)
+    const oldest = icon(0)
+    expect(isMonochromeSvgDataUrl(oldest)).toBe(true)
+    let newest = oldest
+    for (let index = 1; index < icons; index++) {
+      newest = icon(index)
+      expect(isMonochromeSvgDataUrl(newest)).toBe(true)
+    }
+
+    const decode = vi.spyOn(globalThis, "atob")
+    try {
+      expect(isMonochromeSvgDataUrl(newest)).toBe(true)
+      expect(decode).not.toHaveBeenCalled()
+      expect(isMonochromeSvgDataUrl(oldest)).toBe(true)
+      expect(decode).toHaveBeenCalledTimes(1)
+    } finally {
+      decode.mockRestore()
+    }
+  })
 })

@@ -188,16 +188,29 @@ export function isMonochromeSvgDataUrl(url: string | null): boolean {
   if (!url || !url.startsWith(SVG_BASE64_PREFIX)) return false
   const cached = monoSvgCache.get(url)
   if (cached !== undefined) return cached
-  // Decoded once per distinct URL for the whole session; AgentIcon renders in
-  // hot lists (sidebar rows, selectors), so the classification must never be
-  // re-derived per render.
   const result = classifyMonoSvg(url.slice(SVG_BASE64_PREFIX.length))
+  // Keep reused icons cheap without retaining every previous upload.
+  if (url.length > MONO_SVG_CACHE_MAX_UNITS) return result
+  for (const oldest of monoSvgCache.keys()) {
+    if (
+      monoSvgCache.size < MONO_SVG_CACHE_MAX_ENTRIES &&
+      monoSvgCacheUnits + url.length <= MONO_SVG_CACHE_MAX_UNITS
+    ) {
+      break
+    }
+    monoSvgCache.delete(oldest)
+    monoSvgCacheUnits -= oldest.length
+  }
   monoSvgCache.set(url, result)
+  monoSvgCacheUnits += url.length
   return result
 }
 
 const SVG_BASE64_PREFIX = "data:image/svg+xml;base64,"
+const MONO_SVG_CACHE_MAX_ENTRIES = 128
+const MONO_SVG_CACHE_MAX_UNITS = 512 * 1024
 const monoSvgCache = new Map<string, boolean>()
+let monoSvgCacheUnits = 0
 
 /** Explicit paints in attribute (`fill="#000"`) or CSS (`fill:#000`) form. */
 const PAINT_RE =
