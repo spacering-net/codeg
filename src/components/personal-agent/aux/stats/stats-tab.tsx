@@ -48,7 +48,7 @@ export function StatsTab({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
   return (
     <TabBody>
       <section
-        className="flex min-w-0 flex-col gap-2.5 text-sm"
+        className="flex min-w-0 flex-col gap-4 text-sm"
         data-pa-detail="status"
       >
         <RuntimeCard snapshot={snapshot} readOnly={readOnly} />

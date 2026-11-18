@@ -220,7 +220,7 @@ export function OutputTab({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-3 px-4 pt-1 pb-6">
+        <div className="flex flex-col gap-4 px-4 pt-1 pb-6">
           {/* Which kind: picked from the title, as many as it holds after it
               — scrolled with the rest, as far from the cards under it as
               from the tabs over it. */}

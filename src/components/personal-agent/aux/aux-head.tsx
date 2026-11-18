@@ -190,7 +190,7 @@ function HeadName({
             commit()
           }
         }}
-        className="h-8 w-full max-w-60 min-w-0 rounded-lg border border-input bg-background px-2 text-center text-base leading-6 font-semibold outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="h-8 w-full max-w-60 min-w-0 rounded-full border border-input bg-background px-3 text-center text-base leading-6 font-semibold outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
       />
     )
   }
@@ -215,7 +215,7 @@ function HeadName({
           ended.current = false
           setDraft(pending ?? saved)
         }}
-        className="h-8 max-w-full min-w-0 truncate rounded-lg px-2 text-base leading-6 font-semibold transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="h-8 max-w-full min-w-0 truncate rounded-full px-3 text-base leading-6 font-semibold transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         {shown}
       </button>

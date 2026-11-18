@@ -262,7 +262,7 @@ export function StatsBody({
   const rate = handed > 0 ? Math.round((completed / handed) * 100) : null
   return (
     <div
-      className="tu-viz flex min-w-0 flex-col gap-2.5 text-sm"
+      className="tu-viz flex min-w-0 flex-col gap-4 text-sm"
       data-pa-face={face ?? undefined}
       // The token dashboard's accent, for these, the face's own colour.
       style={
@@ -273,7 +273,7 @@ export function StatsBody({
     >
       <dl
         data-pa-figures
-        className="grid grid-cols-2 gap-2.5 @max-[18rem]/aux:grid-cols-1"
+        className="grid grid-cols-2 gap-4 @max-[18rem]/aux:grid-cols-1"
       >
         <KpiTile
           label={t("figure.conversation")}

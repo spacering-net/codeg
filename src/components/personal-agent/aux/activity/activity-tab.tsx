@@ -39,7 +39,7 @@ function WorkBody({
   if (work == null) return <WorkSkeleton />
   const { open } = work
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       {GROUPS.map((g) => {
         const list = open.filter((m) => m.group === g)
         if (list.length === 0) return null

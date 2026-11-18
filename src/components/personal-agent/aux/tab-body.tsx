@@ -54,7 +54,7 @@ export function EmptyState({
  *  apart as the real ones. */
 export function WorkSkeleton() {
   return (
-    <div className="flex flex-col gap-3" aria-hidden>
+    <div className="flex flex-col gap-4" aria-hidden>
       {[2, 1].map((rows, section) => (
         <Skeleton
           key={section}

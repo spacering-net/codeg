@@ -262,7 +262,7 @@ export function PanelStack({
     <SurfaceContext value={flush ? "flush" : "stack"}>
       <div
         role="list"
-        className={cn("flex min-w-0 flex-col", !flush && "gap-2", className)}
+        className={cn("flex min-w-0 flex-col", !flush && "gap-4", className)}
         {...props}
       >
         {children}
@@ -380,7 +380,7 @@ const STACK_TITLE =
  *  between them closed, the corners and the edge where they meet gone, a
  *  hairline under the one above. */
 const JOINED_ROW =
-  "[[data-pa-shape=row]+&]:-mt-2 [[data-pa-shape=row]+&]:rounded-t-none [[data-pa-shape=row]+&]:border-t-0 has-[+[data-pa-shape=row]]:rounded-b-none has-[+[data-pa-shape=row]]:border-b-border/50"
+  "[[data-pa-shape=row]+&]:-mt-4 [[data-pa-shape=row]+&]:rounded-t-none [[data-pa-shape=row]+&]:border-t-0 has-[+[data-pa-shape=row]]:rounded-b-none has-[+[data-pa-shape=row]]:border-b-border/50"
 
 export interface PanelItemProps extends Omit<ComponentProps<"div">, "title"> {
   /** What leads it: an avatar, a kind's icon. */

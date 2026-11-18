@@ -161,7 +161,7 @@ export function WorkspaceTab({
   }
   return (
     <ScrollArea className="h-full">
-      <div className="flex flex-col gap-3 px-4 pt-1 pb-6">
+      <div className="flex flex-col gap-4 px-4 pt-1 pb-6">
         {running.map((d) => {
           const target = workTargetOf(d)
           const canOpen = canOpenWork(target)
