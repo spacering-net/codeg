@@ -122,6 +122,12 @@ export function DiscoverSection() {
     [target]
   )
   const shown = pending ?? detail
+  // From the list's card while the item is on its way — the same id — so the
+  // placeholders can take the shape of the actions to come.
+  const shownKnown = shown ? (shown.item ?? shown.preview) : null
+  const shownInstalled = shownKnown
+    ? (installed?.get(shownKnown.id) ?? null)
+    : null
 
   // Asked again on every visit: it costs one local call, and it is how a
   // catalog switched off (or a backend updated) since the window opened is
@@ -155,7 +161,7 @@ export function DiscoverSection() {
           onBack={close}
           onBackToList={closeAll}
           backTo={backTo}
-          installed={shown.item ? installed?.get(shown.item.id) : null}
+          installed={shownInstalled}
         />
       ) : (
         <DiscoverBrowse installed={installed} />
