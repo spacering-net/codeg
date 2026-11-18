@@ -766,7 +766,7 @@ mod tauri_app {
                 // `Rc<EventLoopRunner>`, so letting the ACP connection threads
                 // do it races the event loop and aborts the process with
                 // `0xC0000374`. See `web::event_bridge::EventEmitter`.
-                let _retained = web::event_bridge::install_tauri_app_handle(app.handle());
+                web::event_bridge::install_tauri_app_handle(app.handle());
 
                 let app_data_dir = app.path().app_data_dir()?;
 

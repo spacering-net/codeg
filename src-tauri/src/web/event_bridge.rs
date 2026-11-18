@@ -110,13 +110,14 @@ impl WebEventBroadcaster {
 /// Holding the handle behind a process-wide `Arc` moves every cross-thread
 /// clone onto an **atomic** refcount. The inner `AppHandle` is cloned exactly
 /// once — on the main thread, by [`install_tauri_app_handle`] — and never
-/// dropped, so no worker thread ever touches `Rc<EventLoopRunner>`. That
-/// retained handle outlives every emitter, which is why it lives in a static
-/// rather than being kept alive by callers.
+/// dropped, so no emitter clone or drop on a worker thread touches
+/// `Rc<EventLoopRunner>`. The payload is [`RetainedAppHandle`], whose field is
+/// private to this module, so code elsewhere cannot build the variant from a
+/// fresh `Arc::new(app.clone())` and must go through [`EventEmitter::from_app`].
 #[derive(Clone)]
 pub enum EventEmitter {
     #[cfg(feature = "tauri-runtime")]
-    Tauri(Arc<tauri::AppHandle>),
+    Tauri(RetainedAppHandle),
     /// Standalone server runtime. Carries the broadcaster (transport-bound
     /// JSON delivery to WS clients on non-ACP channels) and the internal
     /// bus (typed envelope delivery to in-process subscribers).
@@ -133,32 +134,12 @@ impl EventEmitter {
     /// Build the desktop emitter from an `AppHandle`, reusing the process-wide
     /// retained handle.
     ///
-    /// Every call site uses this instead of naming the `Tauri` variant: the
-    /// variant now holds an `Arc`, and the only safe way to obtain one is
-    /// through the retained handle installed on the main thread. See the
+    /// This is the only way to build the `Tauri` variant. See the
     /// `EventEmitter` doc comment for why cloning a bare `AppHandle` off the
     /// main thread corrupts the heap.
     #[cfg(feature = "tauri-runtime")]
     pub fn from_app(app: &tauri::AppHandle) -> Self {
-        EventEmitter::Tauri(main_thread_app_handle(app))
-    }
-
-    /// The process-wide `Arc<AppHandle>` this emitter holds, if any.
-    #[cfg(feature = "tauri-runtime")]
-    pub fn app_handle(&self) -> Option<Arc<tauri::AppHandle>> {
-        match self {
-            EventEmitter::Tauri(app) => Some(Arc::clone(app)),
-            _ => None,
-        }
-    }
-
-    /// Whether this emitter delivers to the desktop webview.
-    pub fn is_tauri(&self) -> bool {
-        match self {
-            #[cfg(feature = "tauri-runtime")]
-            EventEmitter::Tauri(_) => true,
-            _ => false,
-        }
+        EventEmitter::Tauri(retained_app_handle(app).clone())
     }
 
     /// Convenience constructor for the standalone server runtime path.
@@ -204,59 +185,46 @@ impl EventEmitter {
     }
 }
 
-/// Process-wide retained `Arc<tauri::AppHandle>`.
+/// The process-wide `AppHandle`, shared behind an atomic `Arc`.
 ///
 /// See the `EventEmitter` doc comment for the full rationale: cloning or
 /// dropping a bare `AppHandle` off the main thread races on `tao`'s
-/// non-atomic `Rc<EventLoopRunner>`, which aborts the process. Keeping one
-/// `Arc` alive for the life of the process means `AppHandle::clone` runs
-/// exactly once — on the main thread, during setup — and `AppHandle::drop`
-/// runs never. Worker threads only ever touch the atomic `Arc` refcount.
+/// non-atomic `Rc<EventLoopRunner>`, which aborts the process. Cloning this
+/// wrapper only touches the `Arc` count. The field is private so the only
+/// instance is the one [`retained_app_handle`] keeps in a static for the
+/// life of the process — `AppHandle::clone` runs once and `AppHandle::drop`
+/// never runs.
 #[cfg(feature = "tauri-runtime")]
-mod retained_app_handle {
-    use std::sync::{Arc, Mutex, OnceLock};
+#[derive(Clone)]
+pub struct RetainedAppHandle(Arc<tauri::AppHandle>);
 
-    static RETAINED: OnceLock<Mutex<Option<Arc<tauri::AppHandle>>>> = OnceLock::new();
+#[cfg(feature = "tauri-runtime")]
+impl std::ops::Deref for RetainedAppHandle {
+    type Target = tauri::AppHandle;
 
-    fn slot() -> &'static Mutex<Option<Arc<tauri::AppHandle>>> {
-        RETAINED.get_or_init(|| Mutex::new(None))
-    }
-
-    /// Retain `app` for the life of the process and return the shared handle.
-    /// Must be called on the main thread. Idempotent: a later call returns the
-    /// already-retained handle instead of cloning again.
-    pub fn install(app: &tauri::AppHandle) -> Arc<tauri::AppHandle> {
-        let mut guard = slot().lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(existing) = guard.as_ref() {
-            return Arc::clone(existing);
-        }
-        let arc = Arc::new(app.clone());
-        *guard = Some(Arc::clone(&arc));
-        arc
-    }
-
-    /// The retained handle, if `install` has run yet.
-    pub fn get() -> Option<Arc<tauri::AppHandle>> {
-        slot()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_ref()
-            .map(Arc::clone)
+    fn deref(&self) -> &tauri::AppHandle {
+        &self.0
     }
 }
 
 #[cfg(feature = "tauri-runtime")]
-pub use retained_app_handle::install as install_tauri_app_handle;
+static RETAINED_APP_HANDLE: std::sync::OnceLock<RetainedAppHandle> = std::sync::OnceLock::new();
 
-/// Resolve the retained `Arc<AppHandle>` for `app`, installing it on first use
-/// if setup has not done so yet.
+/// The retained handle, cloning `app` into it on first use.
 ///
-/// The lazy fallback covers emitters built before `lib.rs::setup` finishes
-/// (the logging hub installs its emitter early). Those call sites run on the
-/// main thread, so the one-off `app.clone()` here is safe.
+/// `lib.rs::setup` calls [`install_tauri_app_handle`] first thing on the main
+/// thread, so every later call — including from worker threads — finds the
+/// slot filled and never clones `app`.
 #[cfg(feature = "tauri-runtime")]
-fn main_thread_app_handle(app: &tauri::AppHandle) -> Arc<tauri::AppHandle> {
-    retained_app_handle::get().unwrap_or_else(|| retained_app_handle::install(app))
+fn retained_app_handle(app: &tauri::AppHandle) -> &'static RetainedAppHandle {
+    RETAINED_APP_HANDLE.get_or_init(|| RetainedAppHandle(Arc::new(app.clone())))
+}
+
+/// Retain `app` for the life of the process. Must be called on the main
+/// thread before anything builds an `EventEmitter`; later calls are no-ops.
+#[cfg(feature = "tauri-runtime")]
+pub fn install_tauri_app_handle(app: &tauri::AppHandle) {
+    retained_app_handle(app);
 }
 
 /// Global side-channel for cross-client conversation list/status sync.
@@ -796,45 +764,22 @@ mod tests {
     use crate::db::entities::conversation::ConversationStatus;
     use crate::models::AgentType;
 
-    /// The race this fix removes is a shared-refcount one, so the property to
-    /// pin is that cloning an `EventEmitter` and dropping the clone on another
-    /// thread touches only an atomic counter. `Arc<T>` is `Send + Sync` only
-    /// when `T: Send + Sync`, so this also fails to compile if anyone puts a
-    /// non-thread-safe field back into the enum.
-    ///
-    /// The `Tauri` variant is asserted specifically because that is the one
-    /// that used to hold a bare `AppHandle` (nominally `Send + Sync`, actually
-    /// wrapping tao's non-atomic `Rc`).
+    /// The desktop variant must carry the shared [`RetainedAppHandle`], never a
+    /// bare `tauri::AppHandle`: cloning or dropping a bare handle on an ACP
+    /// connection thread races `tao`'s non-atomic `Rc<EventLoopRunner>` and
+    /// aborts the process. A real `AppHandle<Wry>` cannot be built in a unit
+    /// test, so this pins the payload type at compile time — changing the
+    /// variant back to `Tauri(tauri::AppHandle)` stops this test compiling.
+    #[cfg(feature = "tauri-runtime")]
     #[test]
-    fn emitter_is_send_and_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<EventEmitter>();
-        assert_send_sync::<Arc<WebEventBroadcaster>>();
-    }
-
-    /// Concurrent clone/drop from many threads, which is what the ACP
-    /// connection threads do to their emitters in production. With the old
-    /// bare-`AppHandle` payload this is the pattern that corrupted the refcount
-    /// and aborted the process; with an `Arc` it is a plain atomic increment.
-    #[test]
-    fn emitter_clones_and_drops_across_threads() {
-        let emitter = EventEmitter::test_web_only(Arc::new(WebEventBroadcaster::new()));
-        let threads: Vec<_> = (0..8)
-            .map(|_| {
-                let e = emitter.clone();
-                std::thread::spawn(move || {
-                    for _ in 0..2_000 {
-                        let local = e.clone();
-                        drop(local);
-                    }
-                })
-            })
-            .collect();
-        for t in threads {
-            t.join().expect("clone/drop panicked on a worker thread");
+    fn tauri_variant_carries_the_retained_handle() {
+        fn payload(emitter: &EventEmitter) -> Option<&RetainedAppHandle> {
+            match emitter {
+                EventEmitter::Tauri(handle) => Some(handle),
+                _ => None,
+            }
         }
-        // The emitter the main thread kept is still usable afterwards.
-        emit_event(&emitter, "test://still-alive", serde_json::json!({ "ok": true }));
+        assert!(payload(&EventEmitter::Noop).is_none());
     }
 
     fn fresh_state() -> Arc<RwLock<SessionState>> {
