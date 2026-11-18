@@ -2353,6 +2353,29 @@ describe("TabProvider tab groups", () => {
     expect(store().activeTabId).toBe(opened[2])
   })
 
+  it("reuses a blank draft for a navigation open instead of adding one", async () => {
+    await renderWithTabs([tabItem(1, 1, true)])
+
+    let first = ""
+    act(() => {
+      first = store().openNewConversationTab(1, "/repo").tabId
+    })
+    // Switching branch / opening a folder re-runs the open as a side effect:
+    // with `reuseBlankDraft` it lands on the existing blank draft.
+    let second = ""
+    act(() => {
+      second = store().openNewConversationTab(1, "/repo", {
+        reuseBlankDraft: true,
+      }).tabId
+    })
+
+    expect(second).toBe(first)
+    expect(
+      store().rawTabs.filter((t) => t.conversationId == null)
+    ).toHaveLength(1)
+    expect(store().activeTabId).toBe(first)
+  })
+
   it("persists the split layout and restores it across a restart", async () => {
     const first = await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
 

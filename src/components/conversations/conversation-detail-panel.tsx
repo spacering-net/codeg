@@ -1870,13 +1870,10 @@ const ConversationTabView = memo(function ConversationTabView({
     }
     refetchDetail(dbConversationId)
   }, [acpActions, acpLoadError, dbConversationId, refetchDetail, tabId])
-  // Open (or re-activate) the singleton draft tab BEFORE closing the failing
-  // tab. closeTab auto-creates a replacement draft when it removes the last
-  // tab, and `openNewConversationTab` reads `rawTabsRef.current` which
-  // wouldn't yet reflect either pending update if we closed first — the
-  // singleton check would miss the replacement and we'd end up with two
-  // drafts. Doing it in this order means the second `setTabs` (closeTab)
-  // runs against the result of the first.
+  // Open the new draft tab BEFORE closing the failing tab: closeTab
+  // auto-creates a replacement draft when it removes the last tab, so closing
+  // first would spawn a replacement only for the open to land beside (or
+  // adopt) it. Opening first means the close never removes the last tab.
   const handleOpenNewSession = useCallback(() => {
     if (!folder) return
     // Retry-from-error: user wants a fresh draft in the same conversation

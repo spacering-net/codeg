@@ -121,6 +121,7 @@ export function useSwitchToBranch(): (
             openNewConversationTab(target.id, target.path, {
               inheritFromActive: true,
               folderDefaultAgent: target.default_agent_type,
+              reuseBlankDraft: true,
             })
             toast.success(t("toasts.switchedToFolder", { name: target.name }))
           } catch (err) {
@@ -138,6 +139,7 @@ export function useSwitchToBranch(): (
             openNewConversationTab(detail.id, detail.path, {
               inheritFromActive: true,
               folderDefaultAgent: detail.default_agent_type,
+              reuseBlankDraft: true,
             })
             toast.success(t("toasts.switchedToFolder", { name: detail.name }))
           } catch (err) {
@@ -159,6 +161,7 @@ export function useSwitchToBranch(): (
               openNewConversationTab(root.id, root.path, {
                 inheritFromActive: true,
                 folderDefaultAgent: root.default_agent_type,
+                reuseBlankDraft: true,
               })
             } catch (err) {
               toast.error(t("toasts.switchFailed"), {

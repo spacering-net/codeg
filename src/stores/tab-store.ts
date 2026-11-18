@@ -291,12 +291,16 @@ export interface TabStoreState {
        *  text came from), not merely suggest one. */
       forceAgent?: AgentType
       /** rawTabs slot for the draft (clamped); omitted = append / leave put.
-       *  Reopening a closed draft passes the slot it was closed from. An
-       *  ordinary open always adds a tab; only a reopen reuses the group's
-       *  blank draft, moving it to the slot so a close-all walk-back restores
-       *  the strip's shape instead of stacking a second draft beside the
-       *  replacement one. */
+       *  Reopening a closed draft passes the slot it was closed from. When the
+       *  open adopts a draft instead of adding one (an auto-seeded blank — the
+       *  replacement a close-all spawned), that draft is moved to the slot so
+       *  a close-all walk-back restores the strip's shape. */
       index?: number
+      /** Adopt ANY blank draft in the target group instead of adding a tab.
+       *  For opens that are a side effect of navigating (switching branch,
+       *  opening a worktree or folder) rather than an explicit "new
+       *  conversation": repeating them must not pile up blank tabs. */
+      reuseBlankDraft?: boolean
       /** Move THIS unbound draft to the folder (the composer's folder picker)
        *  rather than resolving the target group's draft. Matters while tabs
        *  follow the folder, where the target folder may have a draft of its
@@ -521,9 +525,9 @@ function insertTab(
 
 /** `tabs` with the tab already at `tabId` moved to `index` (clamped) — the same
  *  array back when it is absent or already there, so callers can skip the write.
- *  Reopening a closed DRAFT lands here: the per-group draft singleton hands the
- *  reopen an existing draft instead of a new tab, and that draft still has to
- *  take the closed one's slot. */
+ *  Reopening a closed DRAFT can land here: when the reopen adopts the group's
+ *  auto-seeded replacement draft instead of adding a tab, that draft still has
+ *  to take the closed one's slot. */
 function moveTabToSlot(
   tabs: TabItemInternal[],
   tabId: string,
@@ -2149,32 +2153,37 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
     const tabId = makeNewConversationTabId()
     const prevState = get()
-    // A draft explicitly moved here (`retargetTabId`) is the only kind this
-    // open must reuse. Every other "new conversation" open ADDS a tab: several
-    // blank conversations may be prepared at once, in the same group included.
+    // A draft explicitly moved here (`retargetTabId`) is always reused. Every
+    // other explicit "new conversation" open ADDS a tab: several blank
+    // conversations may be prepared at once, in the same group included.
     //
-    // The one exception is a REOPEN (`index`): close-all spawns a replacement
-    // draft, so reopening the closed draft it stands in for has to move that
-    // draft back to its slot rather than leave the strip with an extra tab.
+    // Two kinds of blank draft are adopted instead:
+    //  - one the store synthesized on its own (recovery, a split's seed, or the
+    //    replacement a close-all spawns) — so recovery never leaves a second
+    //    blank behind, and a REOPEN (`index`) moves the replacement back to the
+    //    closed draft's slot rather than leaving the strip with an extra tab.
+    //    A draft the user asked for is never auto-seeded, so neither repeated
+    //    clicks nor a reopen take over a draft the user opened;
+    //  - with `reuseBlankDraft` (navigation side effects), any blank draft, so
+    //    switching branches back and forth does not pile up blank tabs.
     const targetGroup = movingDraft
       ? groupOfTab(prevState.groupOf, prevState.groupLayout, movingDraft.id)
       : resolveTargetGroup(prevState, options?.targetGroup)
-    const draftInTargetGroup = (t: TabItemInternal) =>
+    const adoptable = (t: TabItemInternal) =>
       t.conversationId == null &&
       isTabInScope(t) &&
-      groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) === targetGroup
+      groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
+        targetGroup &&
+      (options?.reuseBlankDraft === true || t.autoSeeded === true) &&
+      isBlankDraft(t)
+    const focusedTab = prevState.rawTabs.find(
+      (t) => t.id === prevState.activeTabId
+    )
     const existingTab =
       movingDraft ??
-      (options?.index == null
-        ? // A blank draft the store synthesized on its own (recovery, or the
-          // replacement a close-all spawns) is adopted rather than left beside
-          // a second blank. A draft the user asked for is never auto-seeded, so
-          // repeated "new conversation" clicks keep adding tabs.
-          prevState.rawTabs.find(
-            (t) =>
-              draftInTargetGroup(t) && t.autoSeeded === true && isBlankDraft(t)
-          )
-        : prevState.rawTabs.find(draftInTargetGroup))
+      (focusedTab && adoptable(focusedTab)
+        ? focusedTab
+        : prevState.rawTabs.find(adoptable))
 
     if (!existingTab) {
       const newTab: TabItemInternal = {
@@ -2204,10 +2213,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const provisionalChanged =
       (existingTab.agentTypeProvisional ?? false) !== provisional
 
-    // The reopen path means a reopened draft resolves to THIS draft rather than
-    // a tab of its own, so the slot it was closed from has to move this one — a
-    // close-all walked back would otherwise leave the draft shunted to the end
-    // of the strip it is meant to rebuild. Only the reopen path passes an
+    // A reopen that adopted the close-all replacement resolves to THIS draft
+    // rather than a tab of its own, so the slot it was closed from has to move
+    // this one — a close-all walked back would otherwise leave the draft
+    // shunted to the end of the strip it is meant to rebuild. Only the reopen path passes an
     // index, and drafts never reach `buildPersistItems`, so no save fires.
     //
     // `adoptedTabs` clears the synthesized-draft mark as part of any branch
