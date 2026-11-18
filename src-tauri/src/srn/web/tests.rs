@@ -921,7 +921,17 @@ async fn spacering_s_401_ends_the_session_here() {
 
 #[tokio::test]
 async fn an_unanswered_or_busy_spacering_keeps_the_session() {
-    let rig = rig().await;
+    // A read waits out the whole check: on Windows a refused connection
+    // takes about two seconds (its connect retries), as long as a read's
+    // own wait.
+    let rig = rig_waiting(
+        Access::Token,
+        Waits {
+            check: super::service::CHECK_DEADLINE,
+            ..Waits::default()
+        },
+    )
+    .await;
     let mut browser = Browser::default();
     rig.sign_in(&mut browser).await;
     let cases: Vec<(Reply, &str, Duration)> = vec![

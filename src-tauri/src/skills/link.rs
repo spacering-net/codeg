@@ -100,7 +100,7 @@ pub fn read_target(path: &Path) -> Option<PathBuf> {
     #[cfg(not(windows))]
     let raw = fs::read_link(path).ok();
     let raw = raw?;
-    let raw = strip_verbatim(&raw);
+    let raw = super::fsio::strip_verbatim(&raw);
     Some(if raw.is_relative() {
         match path.parent() {
             Some(parent) => super::fsio::lexical(&parent.join(&raw)),
@@ -109,15 +109,6 @@ pub fn read_target(path: &Path) -> Option<PathBuf> {
     } else {
         super::fsio::lexical(&raw)
     })
-}
-
-/// `\\?\C:\x` → `C:\x`: how Windows hands back some targets.
-fn strip_verbatim(path: &Path) -> PathBuf {
-    let text = path.to_string_lossy();
-    match text.strip_prefix(r"\\?\") {
-        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
-        _ => path.to_path_buf(),
-    }
 }
 
 /// What is at a path, before anyone's ownership is considered.
