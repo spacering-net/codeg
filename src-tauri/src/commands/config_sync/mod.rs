@@ -118,7 +118,7 @@ mod tauri_commands {
     ) -> Result<ConfigImportResult, AppCommandError> {
         import_from_file_core(
             &db.conn,
-            &EventEmitter::Tauri(app),
+            &EventEmitter::from_app(&app),
             Path::new(&src_path),
             &rollback_dir(),
         )
@@ -207,7 +207,7 @@ mod tauri_commands {
         app: tauri::AppHandle,
         db: State<'_, AppDatabase>,
     ) -> Result<DownloadOutcome, AppCommandError> {
-        download_and_apply_core(&db.conn, &EventEmitter::Tauri(app)).await
+        download_and_apply_core(&db.conn, &EventEmitter::from_app(&app)).await
     }
 
     // ── By-content variants ──
@@ -238,7 +238,7 @@ mod tauri_commands {
     ) -> Result<ConfigImportResult, AppCommandError> {
         import_bytes_core(
             &db.conn,
-            &EventEmitter::Tauri(app),
+            &EventEmitter::from_app(&app),
             content.as_bytes(),
             &rollback_dir(),
         )
@@ -262,7 +262,7 @@ mod tauri_commands {
         id: String,
         db: State<'_, AppDatabase>,
     ) -> Result<ConfigImportResult, AppCommandError> {
-        apply_rollback_core(&db.conn, &EventEmitter::Tauri(app), &rollback_dir(), &id).await
+        apply_rollback_core(&db.conn, &EventEmitter::from_app(&app), &rollback_dir(), &id).await
     }
 }
 

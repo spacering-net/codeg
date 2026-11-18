@@ -543,7 +543,7 @@ pub async fn officecli_install(
     task_id: String,
     app: tauri::AppHandle,
 ) -> Result<OfficecliInfo, OfficeToolsError> {
-    officecli_install_core(task_id, &EventEmitter::Tauri(app)).await
+    officecli_install_core(task_id, &EventEmitter::from_app(&app)).await
 }
 
 /// Run the vendor's official installer script (mirror-first, GitHub fallback),
@@ -971,7 +971,7 @@ pub async fn officecli_uninstall_core(
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn officecli_uninstall(app: tauri::AppHandle) -> Result<OfficecliInfo, OfficeToolsError> {
-    officecli_uninstall_core(&EventEmitter::Tauri(app)).await
+    officecli_uninstall_core(&EventEmitter::from_app(&app)).await
 }
 
 // ─── Commands: skill listing ───────────────────────────────────────────
@@ -1144,7 +1144,7 @@ pub async fn officecli_sync_skills_core(
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn officecli_sync_skills(app: tauri::AppHandle) -> Result<SkillSyncReport, OfficeToolsError> {
-    officecli_sync_skills_core(&EventEmitter::Tauri(app)).await
+    officecli_sync_skills_core(&EventEmitter::from_app(&app)).await
 }
 
 // ─── Commands: skill link / unlink ─────────────────────────────────────
@@ -1222,7 +1222,7 @@ pub async fn officecli_skill_apply_links(
     ops: Vec<LinkOp>,
     app: tauri::AppHandle,
 ) -> Result<Vec<LinkOpResult>, OfficeToolsError> {
-    officecli_skill_apply_links_core(&EventEmitter::Tauri(app), ops).await
+    officecli_skill_apply_links_core(&EventEmitter::from_app(&app), ops).await
 }
 
 /// One-shot snapshot of every (skill, agent) link state for the matrix UI.

@@ -1257,7 +1257,7 @@ pub async fn token_usage_sync(
     db: tauri::State<'_, crate::db::AppDatabase>,
     mode: Option<TokenUsageSyncMode>,
 ) -> Result<TokenUsageSyncResult, AppCommandError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     token_usage_sync_core(&db.conn, &emitter, mode.unwrap_or_default()).await
 }
 

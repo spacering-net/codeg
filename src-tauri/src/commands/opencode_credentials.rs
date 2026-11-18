@@ -166,7 +166,7 @@ pub async fn opencode_connect_key(
     app: tauri::AppHandle,
 ) -> Result<OpenCodeCredentialChange, AcpError> {
     let data_dir = app_data_dir(&app);
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     opencode_connect_key_core(request, &db, &manager, &data_dir, &emitter).await
 }
 
@@ -179,6 +179,6 @@ pub async fn opencode_disconnect_provider(
     app: tauri::AppHandle,
 ) -> Result<OpenCodeCredentialChange, AcpError> {
     let data_dir = app_data_dir(&app);
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     opencode_disconnect_provider_core(&integration_id, &db, &manager, &data_dir, &emitter).await
 }

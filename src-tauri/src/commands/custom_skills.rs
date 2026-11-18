@@ -460,7 +460,7 @@ pub async fn custom_apply_links(
     ops: Vec<LinkOp>,
     app: tauri::AppHandle,
 ) -> Result<Vec<LinkOpResult>, CustomSkillsError> {
-    custom_apply_links_core(&EventEmitter::Tauri(app), ops).await
+    custom_apply_links_core(&EventEmitter::from_app(&app), ops).await
 }
 
 // ─── Commands: authoring (create / save / duplicate / import / delete) ───
@@ -503,7 +503,7 @@ pub async fn custom_create_skill(
     content: String,
     app: tauri::AppHandle,
 ) -> Result<CustomSkillItem, CustomSkillsError> {
-    custom_create_skill_core(&EventEmitter::Tauri(app), id, content).await
+    custom_create_skill_core(&EventEmitter::from_app(&app), id, content).await
 }
 
 pub async fn custom_save_skill_core(
@@ -554,7 +554,7 @@ pub async fn custom_save_skill(
     content: String,
     app: tauri::AppHandle,
 ) -> Result<CustomSkillItem, CustomSkillsError> {
-    custom_save_skill_core(&EventEmitter::Tauri(app), id, content).await
+    custom_save_skill_core(&EventEmitter::from_app(&app), id, content).await
 }
 
 pub async fn custom_duplicate_skill_core(
@@ -605,7 +605,7 @@ pub async fn custom_duplicate_skill(
     new_id: String,
     app: tauri::AppHandle,
 ) -> Result<CustomSkillItem, CustomSkillsError> {
-    custom_duplicate_skill_core(&EventEmitter::Tauri(app), source_id, new_id).await
+    custom_duplicate_skill_core(&EventEmitter::from_app(&app), source_id, new_id).await
 }
 
 /// Import a skill from disk into the central store. `source_path` may be a
@@ -674,7 +674,7 @@ pub async fn custom_import_skill(
     id: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<CustomSkillItem, CustomSkillsError> {
-    custom_import_skill_core(&EventEmitter::Tauri(app), source_path, id).await
+    custom_import_skill_core(&EventEmitter::from_app(&app), source_path, id).await
 }
 
 /// Copy one or more of an agent's **own** (global-scope) skills into the shared
@@ -729,7 +729,7 @@ pub async fn custom_import_from_agent(
     ids: Vec<String>,
     app: tauri::AppHandle,
 ) -> Result<Vec<CustomImportResult>, CustomSkillsError> {
-    custom_import_from_agent_core(&EventEmitter::Tauri(app), agent_type, ids).await
+    custom_import_from_agent_core(&EventEmitter::from_app(&app), agent_type, ids).await
 }
 
 /// Copy one of an agent's global skills into the central store. Never bubbles —
@@ -863,7 +863,7 @@ pub async fn custom_delete_skills(
     ids: Vec<String>,
     app: tauri::AppHandle,
 ) -> Result<Vec<CustomDeleteResult>, CustomSkillsError> {
-    custom_delete_skills_core(&EventEmitter::Tauri(app), ids).await
+    custom_delete_skills_core(&EventEmitter::from_app(&app), ids).await
 }
 
 fn delete_one_locked(ctx: &SkillsCtx, id: &str) -> Result<Vec<AgentType>, CustomSkillsError> {
