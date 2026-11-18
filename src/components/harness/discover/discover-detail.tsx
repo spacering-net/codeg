@@ -22,13 +22,17 @@ import {
   itemSummary,
   itemTitle,
   pickLocalized,
+  showsRuntime,
 } from "@/lib/harness/display"
 import { isItemRef } from "@/lib/harness/item-ref"
 import { useHarnessStatus } from "@/lib/harness/status"
-import type { HarnessInstalledMark } from "@/lib/harness/types"
+import type {
+  HarnessInstalledMark,
+  HarnessItemSummary,
+} from "@/lib/harness/types"
 import { cn } from "@/lib/utils"
 import { HarnessScroller } from "../harness-scroller"
-import { discoverKindView } from "./detail-kinds"
+import { discoverKindView, type DiscoverKindView } from "./detail-kinds"
 import {
   FactsPanel,
   FactsSkeleton,
@@ -56,6 +60,24 @@ const ACTIONS_CLASS = cn(
   "flex min-w-0 flex-col gap-2 p-3.5",
   "[&>[data-slot=button]]:h-9 [&>[data-slot=button]]:w-full [&>[data-slot=button]]:rounded-full [&>[data-slot=button]]:text-sm"
 )
+
+/** How many rows the facts card will have, from what the list knew: the
+ *  version when there is one, the revision, the license (unless the kind
+ *  says whose it is), the source, a repository for what comes from GitHub,
+ *  and the kind's own rows. */
+function factRowsGuess(
+  item: HarnessItemSummary,
+  view: DiscoverKindView
+): number {
+  return (
+    (item.latest.version ? 1 : 0) +
+    1 +
+    (view.factsSayRights ? 0 : 1) +
+    1 +
+    (item.source === "github" ? 1 : 0) +
+    (view.loadingFacts?.(item) ?? 0)
+  )
+}
 
 function Dot() {
   return (
@@ -139,6 +161,12 @@ export function DiscoverDetail({
       ? harnessItemUrl(status.origin, ref, labels.lang)
       : null
   const view = item ? discoverKindView(item.kind) : null
+  // While the item is on its way, its placeholders take the shape its kind
+  // will have — as far as the list's card already tells it.
+  const knownView = known ? discoverKindView(known.kind) : null
+  const loadingActions = knownView
+    ? (knownView.loadingActions?.(installed) ?? 0)
+    : 1
 
   useEffect(() => {
     // Back from an item that was opened from here: its link takes the focus
@@ -327,7 +355,13 @@ export function DiscoverDetail({
                     {item && view?.Actions ? (
                       <view.Actions item={item} installed={installed} />
                     ) : detail.phase === "loading" ? (
-                      <Skeleton className="h-9 w-full rounded-full" />
+                      Array.from({ length: loadingActions }, (_, index) => (
+                        <Skeleton
+                          key={index}
+                          data-testid="discover-action-loading"
+                          className="h-9 w-full rounded-full"
+                        />
+                      ))
                     ) : null}
                     {websiteUrl && (
                       <Button asChild variant="secondary">
@@ -349,7 +383,14 @@ export function DiscoverDetail({
                   sayRights={view.factsSayRights === true}
                 />
               ) : detail.phase === "loading" ? (
-                <FactsSkeleton />
+                known && knownView ? (
+                  <FactsSkeleton
+                    rows={factRowsGuess(known, knownView)}
+                    runtime={showsRuntime(known)}
+                  />
+                ) : (
+                  <FactsSkeleton />
+                )
               ) : null}
             </aside>
 

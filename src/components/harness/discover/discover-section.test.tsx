@@ -1241,10 +1241,13 @@ describe("Discover — an item's detail", () => {
     ).toBeInTheDocument()
     expect(within(detail).getByText("Acme")).toBeInTheDocument()
 
-    // The facts card holds its place until the facts are in.
+    // The facts card holds its place until the facts are in, with as many
+    // rows as it will have; the actions hold theirs, as many as will come.
+    const facts = within(detail).getByTestId("discover-facts-loading")
+    const placeholderRows = facts.querySelectorAll(".divide-y > div").length
     expect(
-      within(detail).getByTestId("discover-facts-loading")
-    ).toBeInTheDocument()
+      within(detail).getAllByTestId("discover-action-loading")
+    ).toHaveLength(1)
 
     await act(async () => {
       item.resolve(rawDetail())
@@ -1252,6 +1255,11 @@ describe("Discover — an item's detail", () => {
     await within(detail).findByText("Apache-2.0")
     expect(detail).toHaveAttribute("aria-busy", "false")
     expect(within(detail).queryByTestId("discover-facts-loading")).toBeNull()
+    expect(within(detail).queryByTestId("discover-action-loading")).toBeNull()
+    // All but the website's row, which the list's card does not tell.
+    expect(detail.querySelectorAll("dl > div")).toHaveLength(
+      placeholderRows + 1
+    )
   })
 
   it("shows a skill in full", async () => {

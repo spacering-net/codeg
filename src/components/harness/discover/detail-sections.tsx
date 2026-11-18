@@ -1036,9 +1036,18 @@ export function FactsPanel({ item, head, sayRights = false }: FactsPanelProps) {
   )
 }
 
+const FACT_SKELETON_WIDTHS = ["w-10", "w-12", "w-16", "w-28", "w-14", "w-20"]
+
 /** The facts card's place while the item is read: its heading and chips,
- *  then rows of a label and a value, as the card will have them. */
-export function FactsSkeleton() {
+ *  then rows of a label and a value, as the card will have them — `rows` of
+ *  them, and a second chip when the runtime will have one. */
+export function FactsSkeleton({
+  rows = 4,
+  runtime = true,
+}: {
+  rows?: number
+  runtime?: boolean
+}) {
   return (
     <div
       aria-hidden="true"
@@ -1049,14 +1058,19 @@ export function FactsSkeleton() {
         <Skeleton className="h-4 w-12" />
         <div className="flex gap-1.5">
           <Skeleton className="h-6 w-12 rounded-full" />
-          <Skeleton className="h-6 w-14 rounded-full" />
+          {runtime && <Skeleton className="h-6 w-14 rounded-full" />}
         </div>
       </div>
       <div className="divide-y">
-        {["w-10", "w-12", "w-16", "w-28"].map((width, index) => (
+        {Array.from({ length: rows }, (_, index) => (
           <div key={index} className="flex items-center justify-between py-2.5">
             <Skeleton className="h-3.5 w-12" />
-            <Skeleton className={cn("h-3.5", width)} />
+            <Skeleton
+              className={cn(
+                "h-3.5",
+                FACT_SKELETON_WIDTHS[index % FACT_SKELETON_WIDTHS.length]
+              )}
+            />
           </div>
         ))}
       </div>
