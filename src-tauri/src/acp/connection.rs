@@ -1517,6 +1517,87 @@ async fn unless_cancelled<T>(
         .ok_or_else(|| agent_client_protocol::util::internal_error(HANDSHAKE_CANCELLED_SENTINEL))
 }
 
+/// Total extra time `retry_session_establishment` may spend waiting for an
+/// agent that is still bringing its services up.
+const AGENT_STARTUP_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+/// First pause between two attempts; doubles up to
+/// [`AGENT_STARTUP_RETRY_MAX_DELAY`].
+const AGENT_STARTUP_RETRY_FIRST_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+const AGENT_STARTUP_RETRY_MAX_DELAY: std::time::Duration = std::time::Duration::from_millis(4_000);
+
+/// Whether `e` is an agent reporting that the session request arrived before
+/// it finished starting.
+///
+/// OpenCode 2.x is the case this exists for: its ACP bridge answers
+/// `session/resume` (and `session/new`) with HTTP-503-equivalent
+/// `ServiceUnavailableError` — "Location plugins did not finish activating"
+/// — for the first seconds after `initialize`, then maps that to
+/// `Internal error: Internal service failure: {"errorName":
+/// "ServiceUnavailableError"}`, dropping the sentence that explains it. The
+/// bridge has used "OpenCode service failure" for the same condition in older
+/// releases, so both wordings count. The error name is also checked in `data`:
+/// ACP renders `data` into `Display`, but not every adapter puts it there.
+fn session_establishment_is_retryable(e: &agent_client_protocol::Error) -> bool {
+    let mut text = e.to_string().to_ascii_lowercase();
+    if let Some(data) = e.data.as_ref() {
+        text.push(' ');
+        text.push_str(&data.to_string().to_ascii_lowercase());
+    }
+    text.contains("serviceunavailableerror")
+        || text.contains("service unavailable")
+        || text.contains("opencode service failure")
+}
+
+/// Run a session-establishing RPC, retrying while the agent says it is still
+/// starting. Session establishment is safe to repeat: a request the agent
+/// rejected as unavailable did not create or mutate a session.
+///
+/// The delay doubles from [`AGENT_STARTUP_RETRY_FIRST_DELAY`] to
+/// [`AGENT_STARTUP_RETRY_MAX_DELAY`], and no attempt is made once `deadline`
+/// would be exceeded. The outer `Result` is the handshake cancellation
+/// ([`HANDSHAKE_CANCELLED_SENTINEL`]), the inner one is the agent's answer —
+/// the same split `unless_cancelled(...).await?` produces. One `deadline`
+/// shared by resume, load and new bounds the extra wait for the whole
+/// establishment instead of granting each step its own budget.
+async fn retry_session_establishment<F, Fut, T>(
+    handshake: &CancellationToken,
+    deadline: tokio::time::Instant,
+    mut call: F,
+) -> Result<Result<T, agent_client_protocol::Error>, agent_client_protocol::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, agent_client_protocol::Error>>,
+{
+    let mut delay = AGENT_STARTUP_RETRY_FIRST_DELAY;
+    let mut attempt = 1u32;
+    loop {
+        match unless_cancelled(handshake, call()).await? {
+            Ok(value) => return Ok(Ok(value)),
+            Err(e)
+                if session_establishment_is_retryable(&e)
+                    && tokio::time::Instant::now() + delay <= deadline =>
+            {
+                tracing::info!(
+                    "[ACP] agent still starting; retrying session request in {delay:?} \
+                     (attempt {attempt}): {e}"
+                );
+                attempt += 1;
+                if handshake
+                    .run_until_cancelled(tokio::time::sleep(delay))
+                    .await
+                    .is_none()
+                {
+                    return Err(agent_client_protocol::util::internal_error(
+                        HANDSHAKE_CANCELLED_SENTINEL,
+                    ));
+                }
+                delay = (delay * 2).min(AGENT_STARTUP_RETRY_MAX_DELAY);
+            }
+            Err(e) => return Ok(Err(e)),
+        }
+    }
+}
+
 /// Sentinel appended to a `session/new` failure when codeg had just forwarded
 /// MCP servers to a *custom* agent, so the outer `.map_err(...)` can raise
 /// `AcpError::McpRejectedByAgent` and point the user at the `supports_mcp`
@@ -9515,6 +9596,11 @@ async fn run_connection(
             // the same Claude settings (see `claude_raw_sdk_session_meta`).
             let claude = state.read().await.claude_session_options();
 
+            // One startup-retry budget for the whole resume → load → new
+            // chain below (see `retry_session_establishment`).
+            let startup_deadline =
+                tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+
             if let Some(sid) = session_id {
                 // Prefer session/resume when the agent advertises the
                 // capability: it restores session context WITHOUT replaying
@@ -9531,7 +9617,12 @@ async fn run_connection(
                         mcp_servers.clone(),
                         &claude,
                     );
-                    match unless_cancelled(&handshake, send_resume_session(&cx, resume_req)).await? {
+                    let resume_result =
+                        retry_session_establishment(&handshake, startup_deadline, || {
+                            send_resume_session(&cx, resume_req.clone())
+                        })
+                        .await?;
+                    match resume_result {
                         Ok((resume_resp, models_raw)) => {
                             let initial_config_options = resume_resp.config_options.clone();
                             let new_resp = NewSessionResponse::new(SessionId::new(sid.clone()))
@@ -9677,22 +9768,23 @@ async fn run_connection(
                         &claude,
                     );
                     if matches!(agent_type, AgentType::Kiro | AgentType::Hermes) {
-                        unless_cancelled(
-                            &handshake,
+                        retry_session_establishment(&handshake, startup_deadline, || {
                             send_capturing_models::<LoadSessionResponse>(
                                 &cx,
                                 AGENT_METHOD_NAMES.session_load,
-                                load_req,
-                            ),
-                        )
+                                load_req.clone(),
+                            )
+                        })
                         .await?
                         .map(|(resp, models)| {
                             load_models_raw = models;
                             resp
                         })
                     } else {
-                        unless_cancelled(&handshake, cx.send_request_to(Agent, load_req).block_task())
-                            .await?
+                        retry_session_establishment(&handshake, startup_deadline, || {
+                            cx.send_request_to(Agent, load_req.clone()).block_task()
+                        })
+                        .await?
                     }
                 } else {
                     Err(agent_client_protocol::Error::method_not_found()
@@ -10048,18 +10140,21 @@ async fn run_connection(
                             )
                             .await;
                         }
-                        let (new_resp, models_raw) = unless_cancelled(
+                        let (new_resp, models_raw) = retry_session_establishment(
                             &handshake,
-                            send_new_session_capturing_models(
-                                &cx,
-                                new_session_request_for(
-                                    agent_type,
-                                    &cwd,
-                                    mcp_servers.clone(),
-                                    &claude,
-                                    one_shot,
-                                ),
-                            ),
+                            startup_deadline,
+                            || {
+                                send_new_session_capturing_models(
+                                    &cx,
+                                    new_session_request_for(
+                                        agent_type,
+                                        &cwd,
+                                        mcp_servers.clone(),
+                                        &claude,
+                                        one_shot,
+                                    ),
+                                )
+                            },
                         )
                         .await?
                         .map_err(|e| tag_new_session_failure(e, agent_type, &mcp_servers))?;
@@ -10173,18 +10268,21 @@ async fn run_connection(
                 }
             } else {
                 // Create new session
-                let (new_resp, models_raw) = unless_cancelled(
+                let (new_resp, models_raw) = retry_session_establishment(
                     &handshake,
-                    send_new_session_capturing_models(
-                        &cx,
-                        new_session_request_for(
-                            agent_type,
-                            &cwd,
-                            mcp_servers.clone(),
-                            &claude,
-                            one_shot,
-                        ),
-                    ),
+                    startup_deadline,
+                    || {
+                        send_new_session_capturing_models(
+                            &cx,
+                            new_session_request_for(
+                                agent_type,
+                                &cwd,
+                                mcp_servers.clone(),
+                                &claude,
+                                one_shot,
+                            ),
+                        )
+                    },
                 )
                 .await?
                 .map_err(|e| tag_new_session_failure(e, agent_type, &mcp_servers))?;
@@ -27127,6 +27225,125 @@ mod tests {
             SessionConfigKindInfo::Select(sel) => sel,
             other => panic!("expected a select config option, got {other:?}"),
         }
+    }
+
+    // ── Session-establishment startup retry ─────────────────────────────────
+
+    /// OpenCode's ACP bridge as codeg sees it on the wire: the 503's sentence
+    /// is dropped, only the error name survives.
+    fn opencode_starting_error() -> agent_client_protocol::Error {
+        agent_client_protocol::util::internal_error(
+            "Internal error: Internal service failure",
+        )
+        .data(serde_json::json!({ "errorName": "ServiceUnavailableError" }))
+    }
+
+    #[test]
+    fn recognizes_an_agent_still_starting() {
+        assert!(session_establishment_is_retryable(&opencode_starting_error()));
+
+        // The same condition in the wording OpenCode 1.x used.
+        let legacy = agent_client_protocol::util::internal_error("OpenCode service failure");
+        assert!(session_establishment_is_retryable(&legacy));
+
+        // Ordinary session failures stay terminal, or every typo would wait
+        // out the whole budget.
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::Error::method_not_found()
+        ));
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::Error::auth_required()
+        ));
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::util::internal_error("session_busy")
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retries_session_establishment_until_the_agent_answers() {
+        let handshake = CancellationToken::new();
+        let deadline = tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let result = retry_session_establishment(&handshake, deadline, || {
+            let calls = Arc::clone(&calls);
+            async move {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if attempt < 3 {
+                    Err(opencode_starting_error())
+                } else {
+                    Ok(attempt)
+                }
+            }
+        })
+        .await
+        .expect("no cancellation");
+
+        assert_eq!(result.expect("third attempt succeeds"), 3);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_non_startup_failure_is_not_retried() {
+        let handshake = CancellationToken::new();
+        let deadline = tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let result = retry_session_establishment(&handshake, deadline, || {
+            let calls = Arc::clone(&calls);
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err::<(), _>(agent_client_protocol::Error::method_not_found())
+            }
+        })
+        .await
+        .expect("no cancellation");
+
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_retries_stop_at_the_deadline() {
+        let handshake = CancellationToken::new();
+        let deadline = tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let result = retry_session_establishment(&handshake, deadline, || {
+            let calls = Arc::clone(&calls);
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err::<(), _>(opencode_starting_error())
+            }
+        })
+        .await
+        .expect("no cancellation");
+
+        assert!(result.is_err());
+        let attempts = calls.load(Ordering::SeqCst);
+        assert!(
+            attempts > 1,
+            "a still-starting agent must be retried at least once"
+        );
+        assert!(
+            tokio::time::Instant::now() <= deadline,
+            "the budget must bound the extra wait"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancelled_handshake_stops_the_retry_wait() {
+        let handshake = CancellationToken::new();
+        handshake.cancel();
+        let deadline = tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+
+        let result = retry_session_establishment(&handshake, deadline, || async {
+            Err::<(), _>(opencode_starting_error())
+        })
+        .await;
+
+        let err = result.expect_err("cancellation is the outer error");
+        assert!(err.to_string().contains(HANDSHAKE_CANCELLED_SENTINEL));
     }
 
     // ── ConnectionCleanupGuard ──────────────────────────────────────────────
