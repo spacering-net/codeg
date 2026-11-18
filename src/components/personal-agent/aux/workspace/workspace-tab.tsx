@@ -115,7 +115,7 @@ export function WorkspaceTab({
     .filter((d): d is DispatchInfo => d != null && STREAMING.has(d.state))
   if (work == null) {
     return (
-      <div className="px-4 pt-4" aria-hidden>
+      <div className="px-4 pt-1" aria-hidden>
         <Skeleton className="h-64 w-full rounded-xl" />
       </div>
     )
@@ -124,7 +124,7 @@ export function WorkspaceTab({
   // whose it is on its bar.
   if (running.length === 0) {
     return (
-      <div data-pa-workspace-empty className="px-4 pt-4">
+      <div data-pa-workspace-empty className="px-4 pt-1">
         <div className={cn(PANEL_SURFACE, "overflow-hidden")}>
           <WindowBar>
             <Monitor
@@ -161,7 +161,7 @@ export function WorkspaceTab({
   }
   return (
     <ScrollArea className="h-full">
-      <div className="flex flex-col gap-3 px-4 pt-4 pb-6">
+      <div className="flex flex-col gap-3 px-4 pt-1 pb-6">
         {running.map((d) => {
           const target = workTargetOf(d)
           const canOpen = canOpenWork(target)

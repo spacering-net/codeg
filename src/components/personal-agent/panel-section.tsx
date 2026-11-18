@@ -168,12 +168,13 @@ export function PanelGroup({
   return (
     <Collapsible open={open} onOpenChange={setOpen} asChild>
       <section className={cn("flex min-w-0 flex-col", className)} {...props}>
-        {/* Only its words and chevron press it, as on the roster: the row's
-            blank beyond them is not a button. */}
-        <div className="flex h-6 min-w-0 items-center">
+        {/* Centred over its list, a soft pill — deeper when hovered: only
+            its words and chevron press it, the blank either side is not a
+            button. */}
+        <div className="flex h-7 min-w-0 items-center justify-center">
           <CollapsibleTrigger
             className={cn(
-              "group/fold -mx-1.5 flex h-6 max-w-[calc(100%+0.75rem)] min-w-0 items-center gap-1.5 rounded-md px-1.5 text-start text-[0.8125rem] font-medium transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
+              "group/fold flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-muted/60 px-3 text-start text-[0.8125rem] font-medium transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
               TONE[tone].text
             )}
           >

@@ -220,7 +220,7 @@ export function OutputTab({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Which kind: picked from the title, as many as it holds after it. */}
-      <div className="shrink-0 px-4 pt-3 pb-1">
+      <div className="shrink-0 px-4 pt-1 pb-1">
         <ViewSelect
           value={kind}
           onChange={setKind}

@@ -1,7 +1,7 @@
 "use client"
 
-/** A view's title that picks what it shows: its name, how many it holds and
- *  a chevron — a menu of the choices, each with its count — and, while one
+/** A view's title that picks what it shows, centred on a soft pill — deeper
+ *  when hovered or open: its name, how many it holds and a chevron — a menu of the choices, each with its count — and, while one
  *  other than the first is picked, a round × that goes back to it (unless
  *  there is no first to go back to). */
 
@@ -51,13 +51,15 @@ export function ViewSelect<V extends string>({
   const first = choices[0]
   const title = picked.title ?? picked.label
   return (
-    <div className="flex h-8 min-w-0 items-center gap-1">
+    // The pill in the middle, the × after it: the pill stays centred
+    // whether or not the × shows.
+    <div className="grid h-8 min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,auto)_minmax(0,1fr)] items-center gap-1">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
             aria-label={`${menuLabel}: ${title}`}
-            className="-ms-1.5 flex h-8 min-w-0 items-center gap-1.5 rounded-lg px-1.5 text-start transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=open]:bg-muted"
+            className="col-start-2 flex h-8 min-w-0 items-center gap-1.5 rounded-full bg-muted/60 px-3 text-start transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=open]:bg-muted"
           >
             <span className="min-w-0 truncate text-[0.9375rem] font-semibold text-foreground">
               {title}
@@ -99,7 +101,7 @@ export function ViewSelect<V extends string>({
         <Button
           size="icon-xs"
           variant="secondary"
-          className="shrink-0 rounded-full text-muted-foreground"
+          className="col-start-3 shrink-0 justify-self-start rounded-full text-muted-foreground"
           aria-label={clearLabel}
           title={clearLabel}
           onClick={() => onChange(first.value)}
