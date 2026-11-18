@@ -16,6 +16,7 @@ import {
   acpUpdateAgentConfig,
   acpUpdateAgentEnv,
   acpUpdateClaudeModelPicker,
+  getModelCatalog,
   listModelProviders,
   listProviderModels,
 } from "@/lib/api"
@@ -191,6 +192,61 @@ describe("AcpAgentSettings — a Claude gateway's models", () => {
     await openPanel(claudeAgent({ claude_model_picker: ["mine"] }))
     await save(user)
     expect(acpUpdateClaudeModelPicker).not.toHaveBeenCalled()
+  })
+
+  it("fills the custom model name and description from a catalog pick", async () => {
+    vi.mocked(getModelCatalog).mockResolvedValue({
+      status: {
+        url: "https://catalog.test/models.json",
+        autoUpdate: true,
+        entryCount: 1,
+        updatedAt: null,
+        source: "bundled",
+        error: null,
+      },
+      entries: [
+        {
+          id: "openai/gpt-5",
+          model: "gpt-5",
+          provider: "openai",
+          maxInputTokens: 272000,
+          maxOutputTokens: 128000,
+          supportsReasoning: true,
+          reasoningEffortLevels: ["low", "high"],
+          defaultReasoningEffort: "low",
+          supportsVision: true,
+          supportsFunctionCalling: true,
+        },
+      ],
+    })
+    const user = userEvent.setup()
+    await openPanel(claudeAgent())
+
+    const idLabel = screen.getByText("Custom Model ID", { selector: "label" })
+    const idInput = within(idLabel.parentElement as HTMLElement).getByRole(
+      "textbox"
+    )
+    await user.type(idInput, "gp")
+    await user.click(await screen.findByRole("option", { name: /gpt-5/ }))
+
+    const field = (label: string) =>
+      within(
+        screen.getByText(label, { selector: "label" })
+          .parentElement as HTMLElement
+      ).getByRole("textbox")
+    expect(idInput).toHaveValue("gpt-5")
+    expect(field("Custom Model Name")).toHaveValue("Gpt 5")
+    expect(
+      (field("Custom Model Description") as HTMLInputElement).value
+    ).toContain("openai/gpt-5")
+
+    // The same values reach the native config (what a save actually sends).
+    const env = nativeConfigEnv()
+    expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION).toBe("gpt-5")
+    expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME).toBe("Gpt 5")
+    expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION).toContain(
+      "openai/gpt-5"
+    )
   })
 
   it("sets the discovery switch to 1 and removes it again", async () => {

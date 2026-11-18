@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -19,14 +20,44 @@ import {
   validateKimiDraft,
   type KimiDraft,
 } from "./kimi-code-config-panel"
-import { acpUpdateKimiCodeConfig, listProviderModels } from "@/lib/api"
+import {
+  acpUpdateKimiCodeConfig,
+  getModelCatalog,
+  listProviderModels,
+} from "@/lib/api"
 import enMessages from "@/i18n/messages/en.json"
 import type { AcpAgentInfo } from "@/lib/types"
 
 vi.mock("@/lib/api", () => ({
   acpUpdateKimiCodeConfig: vi.fn(),
   listProviderModels: vi.fn(),
+  getModelCatalog: vi.fn(),
 }))
+
+const CATALOG_VIEW = {
+  status: {
+    url: "https://catalog.test/models.json",
+    autoUpdate: true,
+    entryCount: 1,
+    updatedAt: null,
+    source: "bundled" as const,
+    error: null,
+  },
+  entries: [
+    {
+      id: "openai/gpt-5",
+      model: "gpt-5",
+      provider: "openai",
+      maxInputTokens: 272000,
+      maxOutputTokens: 128000,
+      supportsReasoning: true,
+      reasoningEffortLevels: ["none", "low", "high"],
+      defaultReasoningEffort: "low",
+      supportsVision: true,
+      supportsFunctionCalling: true,
+    },
+  ],
+}
 
 /** What `listProviderModels` answers for these ids. */
 function listed(...ids: string[]) {
@@ -490,6 +521,7 @@ describe("KimiCodeConfigPanel", () => {
   beforeEach(() => {
     vi.mocked(acpUpdateKimiCodeConfig).mockReset().mockResolvedValue(0)
     vi.mocked(listProviderModels).mockReset().mockResolvedValue(listed())
+    vi.mocked(getModelCatalog).mockReset().mockResolvedValue(CATALOG_VIEW)
     vi.mocked(toast.success).mockReset()
     vi.mocked(toast.error).mockReset()
   })
@@ -919,5 +951,32 @@ describe("KimiCodeConfigPanel", () => {
         expect.stringContaining("kimi native config requires a model id")
       )
     })
+  })
+
+  it("adopts a catalog pick's context window and reasoning levels", async () => {
+    const user = userEvent.setup()
+    renderPanel(makeAgent(null))
+
+    const model = screen.getByLabelText(label(kimi.modelLabel))
+    await user.type(model, "gp")
+    await user.click(await screen.findByRole("option", { name: /gpt-5/ }))
+
+    expect(model).toHaveValue("gpt-5")
+    expect(screen.getByLabelText(label(kimi.maxContextLabel))).toHaveValue(
+      "272000"
+    )
+    expect(screen.getByRole("switch", { name: "Enable" })).toBeChecked()
+    expect(screen.getByRole("button", { name: "low" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    )
+    expect(screen.getByRole("button", { name: "high" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    )
+    expect(screen.getByRole("button", { name: "medium" })).toHaveAttribute(
+      "aria-pressed",
+      "false"
+    )
   })
 })

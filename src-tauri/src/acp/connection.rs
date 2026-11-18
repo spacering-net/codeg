@@ -2677,8 +2677,29 @@ async fn build_agent(
                             meta.name
                         ))
                     })?;
-            let binary_str = binary_path.to_string_lossy().to_string();
-            let mut cmd_args: Vec<String> = args.iter().map(|a| (*a).to_string()).collect();
+            // CodeArts has no native ACP server ("The 'acp' command is not
+            // supported."). Launch codeg's OWN in-process bridge instead of the
+            // vendor CLI. The vendor CLI still has to be installed -- the bridge
+            // spawns `codearts run` / `codearts models` -- so the resolution
+            // above is kept and still gates the launch.
+            let (binary_str, mut cmd_args): (String, Vec<String>) =
+                if agent_type == AgentType::CodeArts {
+                    (
+                        std::env::current_exe()
+                            .unwrap_or_else(|_| std::path::PathBuf::from(cmd))
+                            .to_string_lossy()
+                            .to_string(),
+                        crate::acp::codearts_bridge::BRIDGE_ARGS
+                            .iter()
+                            .map(|a| (*a).to_string())
+                            .collect(),
+                    )
+                } else {
+                    (
+                        binary_path.to_string_lossy().to_string(),
+                        args.iter().map(|a| (*a).to_string()).collect(),
+                    )
+                };
             // Kiro's permission mode: `acp --trust-all-tools` auto-approves
             // every tool call instead of sending each one to the permission
             // card. Sourced from the Kiro panel's permission-mode control

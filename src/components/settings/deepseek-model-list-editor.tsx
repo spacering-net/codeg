@@ -26,13 +26,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { FetchedModelPicker } from "@/components/settings/provider-models"
+import {
+  FetchedModelPicker,
+  ModelIdInputWithCatalog,
+  catalogDescription,
+  catalogDisplayName,
+} from "@/components/settings/provider-models"
 import { useProviderModels } from "@/hooks/use-provider-models"
 import { loadDeepSeekModelCatalog, updateDeepSeekModelCatalog } from "@/lib/api"
 import type {
   DeepSeekCatalogModel,
   DeepSeekModelCatalog,
   ListedProviderModel,
+  ModelCatalogEntry,
 } from "@/lib/types"
 
 /** Launch default the agent starts every new session on when the raw env
@@ -148,6 +154,23 @@ export function setDeepSeekImageSupport(
   delete next.imagePixelBudget
   delete next.imageMaxBytes
   return next
+}
+
+/** Overwrite a row from a catalog entry: picking a model means adopting the
+ *  capabilities that model declares, including turning capabilities off. A
+ *  value typed before the pick is replaced by the catalog's own. */
+export function applyDeepSeekCatalogPick(
+  model: DeepSeekCatalogModel,
+  entry: ModelCatalogEntry
+): DeepSeekCatalogModel {
+  return {
+    ...setDeepSeekImageSupport(model, entry.supportsVision),
+    id: entry.model,
+    name: catalogDisplayName(entry),
+    description: catalogDescription(entry),
+    contextWindow: entry.maxInputTokens ?? undefined,
+    maxTokens: entry.maxOutputTokens ?? undefined,
+  }
 }
 
 /** Drop the keys whose value is "inherit the agent's default", so an untouched
@@ -513,13 +536,16 @@ export function DeepSeekModelListEditor({
                 <div key={index} className="rounded-md border p-2">
                   <div className="flex items-start gap-2">
                     <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_8rem]">
-                      <Input
+                      <ModelIdInputWithCatalog
                         value={model.id}
                         placeholder={t("placeholderId")}
                         aria-label={t("fieldId")}
                         disabled={saving}
-                        onChange={(event) =>
-                          patch(index, { ...model, id: event.target.value })
+                        onChange={(value) =>
+                          patch(index, { ...model, id: value })
+                        }
+                        onPick={(entry) =>
+                          patch(index, applyDeepSeekCatalogPick(model, entry))
                         }
                         aria-invalid={
                           issue?.index === index &&

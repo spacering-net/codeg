@@ -21,5 +21,14 @@ fn main() {
         return;
     }
 
+    // CodeArts has no native ACP server; codeg ships its own stdio ACP bridge
+    // as a self-invocation of this same binary (see `acp::codearts_bridge`).
+    // stdout MUST stay a clean JSON-RPC channel, so logging is stderr-only.
+    if std::env::args().any(|a| a == "--codearts-bridge") {
+        let _log_guard = codeg_lib::logging::init::init_stderr_only();
+        codeg_lib::acp::codearts_bridge::run_stdio_bridge();
+        return;
+    }
+
     codeg_lib::run()
 }

@@ -16,12 +16,15 @@ import {
   codexEndpointCatalogPublished,
   codexEndpointCatalogStatus,
   codexFetchEndpointCatalog,
+  getModelCatalog,
 } from "@/lib/api"
 import type {
   CodexCatalogStatus,
   CodexEndpointCatalogView,
   CodexModelConfig,
   CodexModelInfo,
+  ModelCatalogEntry,
+  ModelCatalogView,
 } from "@/lib/types"
 
 import type { CodexCatalogEndpoint } from "./codex-catalog-source"
@@ -34,6 +37,7 @@ vi.mock("@/lib/api", () => ({
   codexEndpointCatalogStatus: vi.fn(() => new Promise(() => {})),
   codexFetchEndpointCatalog: vi.fn(),
   codexRefreshEndpointCatalog: vi.fn(),
+  getModelCatalog: vi.fn(),
 }))
 
 const OFFICIALS: CodexModelInfo[] = [
@@ -517,5 +521,73 @@ describe("CodexModelListEditor — a provider's dialog and what Codex runs", () 
     await waitFor(() => expect(codexEndpointCatalogStatus).toHaveBeenCalled())
     await new Promise((r) => setTimeout(r, 0))
     expect(screen.queryByText("In use by Codex")).toBeNull()
+  })
+})
+
+describe("CodexModelListEditor — custom model slug", () => {
+  const catalogEntry: ModelCatalogEntry = {
+    id: "openai/gpt-5",
+    model: "gpt-5",
+    provider: "openai",
+    maxInputTokens: 272000,
+    maxOutputTokens: 128000,
+    supportsReasoning: true,
+    reasoningEffortLevels: ["low", "high"],
+    defaultReasoningEffort: "low",
+    supportsVision: true,
+    supportsFunctionCalling: true,
+  }
+
+  const catalogView: ModelCatalogView = {
+    status: {
+      url: "https://catalog.test/models.json",
+      autoUpdate: true,
+      entryCount: 1,
+      updatedAt: null,
+      source: "bundled",
+      error: null,
+    },
+    entries: [catalogEntry],
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(codexBundledCatalog).mockResolvedValue(OFFICIALS)
+    vi.mocked(codexEndpointCatalogPublished).mockResolvedValue({
+      catalog: null,
+      mismatch: "none",
+    })
+    vi.mocked(codexEndpointCatalogCached).mockResolvedValue({
+      catalog: null,
+      mismatch: "none",
+    })
+    vi.mocked(codexFetchEndpointCatalog).mockResolvedValue(view())
+    vi.mocked(getModelCatalog).mockResolvedValue(catalogView)
+  })
+
+  it("suggests catalog models from two characters and applies the picked capabilities", async () => {
+    const user = userEvent.setup()
+    renderEditor({
+      customs: [
+        {
+          slug: "",
+          displayName: "Hand written",
+          base: "gpt-5.5",
+          contextWindow: 8000,
+        },
+      ],
+    })
+
+    const slug = await screen.findByPlaceholderText("Model id (slug)")
+    await user.type(slug, "gp")
+    const option = await screen.findByRole("option", { name: /gpt-5/ })
+    expect(slug).toHaveFocus()
+
+    await user.click(option)
+    expect(slug).toHaveValue("gpt-5")
+    // A pick overwrites the row's previously typed context window and names
+    // the model from its id (litellm has no display names of its own).
+    expect(latest.customs[0].contextWindow).toBe(272000)
+    expect(latest.customs[0].displayName).toBe("Gpt 5")
   })
 })

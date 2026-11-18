@@ -983,6 +983,23 @@ pub fn build_router_with_proxy_auth(
             "/delete_account_token",
             post(handlers::version_control::delete_account_token),
         )
+        // ─── Model catalog ───
+        .route(
+            "/get_model_catalog",
+            post(handlers::model_catalog::get_model_catalog),
+        )
+        .route(
+            "/refresh_model_catalog",
+            post(handlers::model_catalog::refresh_model_catalog),
+        )
+        .route(
+            "/get_model_catalog_settings",
+            post(handlers::model_catalog::get_model_catalog_settings),
+        )
+        .route(
+            "/update_model_catalog_settings",
+            post(handlers::model_catalog::update_model_catalog_settings),
+        )
         // ─── System settings ───
         .route(
             "/get_system_proxy_settings",

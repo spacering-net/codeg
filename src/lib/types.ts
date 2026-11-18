@@ -20,6 +20,7 @@ export type BuiltinAgentType =
   | "zcode"
   | "trae"
   | "command_code"
+  | "code_arts"
 
 /**
  * Which agent backs a conversation.
@@ -1146,6 +1147,7 @@ export const AGENT_DISPLAY_ORDER: BuiltinAgentType[] = [
   "zcode",
   "trae",
   "command_code",
+  "code_arts",
 ]
 
 const AGENT_DISPLAY_ORDER_INDEX = new Map<AgentType, number>(
@@ -1185,6 +1187,7 @@ export const ALL_AGENT_TYPES: BuiltinAgentType[] = [
   "zcode",
   "trae",
   "command_code",
+  "code_arts",
 ]
 
 export const MODEL_PROVIDER_AGENT_TYPES: BuiltinAgentType[] = [
@@ -1501,6 +1504,7 @@ export const AGENT_LABELS: Record<BuiltinAgentType, string> = {
   zcode: "ZCode",
   trae: "TRAE CLI",
   command_code: "Command Code",
+  code_arts: "Huawei CodeArts",
 }
 
 export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
@@ -1524,6 +1528,7 @@ export const AGENT_COLORS: Record<BuiltinAgentType, string> = {
   zcode: "bg-[#111827]",
   trae: "bg-[#32F08C]",
   command_code: "bg-black",
+  code_arts: "bg-[#FF4D4F]",
 }
 
 // ACP connection status (matches Rust ConnectionStatus)
@@ -6374,4 +6379,44 @@ export interface DeepSeekModelCatalog {
    *  document was understood, so the rows stay editable — but until they are
    *  fixed, sessions run on the agent's built-in catalog instead. */
   invalid: string | null
+}
+/** One model the model catalog knows, in the shape a custom-model form fills
+ *  from. Derived from litellm's `model_prices_and_context_window.json`. */
+export interface ModelCatalogEntry {
+  /** The litellm key, provider prefix included (`anthropic/claude-sonnet-4-5`). */
+  id: string
+  /** The id a provider expects, prefix removed. */
+  model: string
+  provider: string
+  maxInputTokens: number | null
+  maxOutputTokens: number | null
+  supportsReasoning: boolean
+  /** Effort levels the model declares, `none` … `max`. */
+  reasoningEffortLevels: string[]
+  defaultReasoningEffort: string | null
+  supportsVision: boolean
+  supportsFunctionCalling: boolean
+}
+
+export type ModelCatalogSource = "live" | "cache" | "bundled"
+
+export interface ModelCatalogStatus {
+  url: string
+  autoUpdate: boolean
+  entryCount: number
+  /** Unix seconds; `null` when the bundled snapshot is being served. */
+  updatedAt: number | null
+  source: ModelCatalogSource
+  /** Why a fetch failed while older entries are being served. */
+  error: string | null
+}
+
+export interface ModelCatalogView {
+  status: ModelCatalogStatus
+  entries: ModelCatalogEntry[]
+}
+
+export interface ModelCatalogSettings {
+  url: string
+  autoUpdate: boolean
 }

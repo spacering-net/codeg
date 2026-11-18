@@ -57,6 +57,7 @@ pub mod local_command;
 pub mod logging;
 pub mod mcp;
 pub mod mcp_service;
+pub mod model_catalog;
 pub mod model_provider;
 pub mod office_tools;
 /// OpenCode 2's provider credentials, through OpenCode's own API (both

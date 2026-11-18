@@ -941,7 +941,8 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
         | AgentType::ZCode
         | AgentType::Trae
         | AgentType::CommandCode
-        | AgentType::MiniMaxCode => &[],
+        | AgentType::MiniMaxCode
+        | AgentType::CodeArts => &[],
     }
 }
 

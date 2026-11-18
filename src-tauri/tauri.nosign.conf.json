@@ -1,0 +1,8 @@
+{
+  "build": {
+    "beforeBuildCommand": "echo skip-frontend-build-reusing-out"
+  },
+  "bundle": {
+    "createUpdaterArtifacts": false
+  }
+}

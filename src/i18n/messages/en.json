@@ -349,7 +349,21 @@
       "downloadFailed": "Failed to download update package. Please try again later.",
       "installFailed": "Failed to install update. Please close the app and try again.",
       "unknown": "Update failed. Please try again later."
-    }
+    },
+    "modelCatalogTitle": "Model catalog",
+    "modelCatalogDescription": "The model list that autofills context window, max output and reasoning levels for custom model ids. Downloaded from the URL below and cached on this machine.",
+    "modelCatalogUrlLabel": "Catalog URL",
+    "modelCatalogUrlHint": "A litellm-compatible model_prices_and_context_window.json. Downloads go through the proxy above.",
+    "modelCatalogAutoUpdate": "Update automatically",
+    "modelCatalogAutoUpdateHint": "Refresh once a day in the background.",
+    "modelCatalogRefresh": "Refresh now",
+    "modelCatalogRefreshing": "Refreshing…",
+    "modelCatalogRefreshed": "Model catalog updated: {count} models",
+    "modelCatalogRefreshFailed": "Refresh failed: {message}",
+    "modelCatalogSaveFailed": "Could not save the model catalog settings: {message}",
+    "modelCatalogRestoreDefault": "Restore default",
+    "modelCatalogSummary": "{count} models · updated {time}",
+    "modelCatalogSummaryNever": "{count} models · bundled snapshot"
   },
   "VersionControlSettings": {
     "loading": "Loading...",
@@ -939,6 +953,7 @@
       "saveClineConfig": "Save Cline Config",
       "saveHermesConfig": "Save Hermes Config",
       "saveCodeBuddyConfig": "Save CodeBuddy Config",
+      "saveCodeArtsConfig": "Save CodeArts Config",
       "saveKimiCodeConfig": "Save Kimi Code Config",
       "customInstall": "Custom install",
       "upgradeToLatest": "Upgrade to unreviewed latest {version}",
@@ -1466,6 +1481,15 @@
       "rawConfigHint": "Edit ~/.hermes/config.yaml directly. Saving here overwrites the file verbatim.",
       "saveRawConfig": "Save config.yaml"
     },
+    "codearts": {
+      "configManagement": "CodeArts Configuration",
+      "configDescription": "CodeArts CLI needs an AK/SK pair to run tasks. codeg bridges the CLI over ACP because the vendor CLI has no --acp command.",
+      "akLabel": "Access Key ID (AK)",
+      "akPlaceholder": "CODEARTS_CLI_AK",
+      "skLabel": "Secret Access Key (SK)",
+      "skPlaceholder": "CODEARTS_CLI_SK",
+      "envHint": "Saved as this agent's environment variables. Leave both empty to use the AK/SK from your operating system's user or system environment instead."
+    },
     "codebuddy": {
       "configManagement": "CodeBuddy Configuration",
       "configDescription": "CodeBuddy authenticates with an API key. Mainland China builds also require the environment set to “China (internal)”; iOA builds use “iOA”. The overseas build leaves it unset.",
@@ -1664,6 +1688,8 @@
       "hermesSaved": "Hermes config saved",
       "saveHermesFailed": "Failed to save Hermes config",
       "codeBuddySaved": "CodeBuddy config saved",
+      "codeArtsSaved": "CodeArts config saved",
+      "saveCodeArtsFailed": "Failed to save CodeArts config",
       "saveCodeBuddyFailed": "Failed to save CodeBuddy config",
       "kimiCodeSaved": "Kimi Code config saved",
       "saveKimiCodeFailed": "Failed to save Kimi Code config",
@@ -7821,5 +7847,12 @@
         "probeFailed": "The built-in browser couldn't confirm that it reaches the remote host through the tunnel. Try again in a moment."
       }
     }
+  },
+  "ModelCatalog": {
+    "summary": "{count} models · updated {time}",
+    "neverUpdated": "never",
+    "loading": "Loading the model catalog…",
+    "noMatch": "No model in the catalog matches",
+    "refresh": "Refresh model catalog"
   }
 }

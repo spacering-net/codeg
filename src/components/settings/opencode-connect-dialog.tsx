@@ -22,10 +22,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import { FetchedModelPicker } from "@/components/settings/provider-models"
+import {
+  FetchedModelPicker,
+  ModelIdLinesTextarea,
+} from "@/components/settings/provider-models"
 import { useProviderModels } from "@/hooks/use-provider-models"
 import {
   DEFAULT_OPENAI_COMPATIBLE_NPM,
@@ -673,11 +675,12 @@ export function OpenCodeCustomProviderDialog({
                 />
               )}
             </div>
-            <Textarea
+            <ModelIdLinesTextarea
               value={customModels}
-              onChange={(e) => setCustomModels(e.target.value)}
+              onChange={setCustomModels}
               placeholder={"gpt-6-astra\nclaude-sonnet-5-5"}
               className="min-h-20 font-mono text-xs"
+              aria-label={t("openCode.connect.modelsList")}
             />
             <p className="text-3xs text-muted-foreground">
               {t("openCode.connect.modelsHint")}

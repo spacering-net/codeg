@@ -349,7 +349,21 @@
       "downloadFailed": "업데이트 패키지 다운로드에 실패했습니다. 잠시 후 다시 시도하세요.",
       "installFailed": "업데이트 설치에 실패했습니다. 앱을 종료한 뒤 다시 시도하세요.",
       "unknown": "업데이트에 실패했습니다. 잠시 후 다시 시도하세요."
-    }
+    },
+    "modelCatalogTitle": "모델 카탈로그",
+    "modelCatalogDescription": "사용자 지정 모델 ID의 컨텍스트 창, 최대 출력, 추론 수준을 자동으로 채우는 모델 목록입니다. 아래 URL에서 내려받아 로컬에 캐시합니다.",
+    "modelCatalogUrlLabel": "카탈로그 URL",
+    "modelCatalogUrlHint": "litellm 호환 model_prices_and_context_window.json을 지정하세요. 다운로드는 위의 프록시를 사용합니다.",
+    "modelCatalogAutoUpdate": "자동 업데이트",
+    "modelCatalogAutoUpdateHint": "백그라운드에서 하루에 한 번 새로 고칩니다.",
+    "modelCatalogRefresh": "지금 새로 고침",
+    "modelCatalogRefreshing": "새로 고치는 중…",
+    "modelCatalogRefreshed": "모델 카탈로그가 업데이트되었습니다: 모델 {count}개",
+    "modelCatalogRefreshFailed": "새로 고침 실패: {message}",
+    "modelCatalogSaveFailed": "모델 카탈로그 설정을 저장할 수 없습니다: {message}",
+    "modelCatalogRestoreDefault": "기본값 복원",
+    "modelCatalogSummary": "모델 {count}개 · {time} 업데이트",
+    "modelCatalogSummaryNever": "모델 {count}개 · 내장 스냅샷"
   },
   "VersionControlSettings": {
     "loading": "로딩 중...",
@@ -939,6 +953,7 @@
       "saveClineConfig": "Cline 설정 저장",
       "saveHermesConfig": "Hermes 설정 저장",
       "saveCodeBuddyConfig": "CodeBuddy 구성 저장",
+      "saveCodeArtsConfig": "Save CodeArts Config",
       "saveKimiCodeConfig": "Kimi Code 구성 저장",
       "customInstall": "사용자 지정 설치",
       "upgradeToLatest": "검토되지 않은 최신 버전 {version}(으)로 업그레이드",
@@ -1466,6 +1481,15 @@
       "rawConfigHint": "~/.hermes/config.yaml을 직접 편집합니다. 여기서 저장하면 파일이 그대로 덮어쓰여집니다.",
       "saveRawConfig": "config.yaml 저장"
     },
+    "codearts": {
+      "configManagement": "CodeArts Configuration",
+      "configDescription": "CodeArts CLI needs an AK/SK pair to run tasks. codeg bridges the CLI over ACP because the vendor CLI has no --acp command.",
+      "akLabel": "Access Key ID (AK)",
+      "akPlaceholder": "CODEARTS_CLI_AK",
+      "skLabel": "Secret Access Key (SK)",
+      "skPlaceholder": "CODEARTS_CLI_SK",
+      "envHint": "Saved as this agent's environment variables. Leave both empty to use the AK/SK from your operating system's user or system environment instead."
+    },
     "codebuddy": {
       "configManagement": "CodeBuddy 구성",
       "configDescription": "CodeBuddy는 API 키로 인증합니다. 중국 버전은 환경을 ‘중국(internal)’으로 설정해야 하며, iOA 버전은 ‘iOA’를 사용하고, 해외 버전은 설정하지 않습니다.",
@@ -1664,6 +1688,8 @@
       "hermesSaved": "Hermes 설정 저장됨",
       "saveHermesFailed": "Hermes 설정 저장 실패",
       "codeBuddySaved": "CodeBuddy 구성이 저장되었습니다",
+      "codeArtsSaved": "CodeArts config saved",
+      "saveCodeArtsFailed": "Failed to save CodeArts config",
       "saveCodeBuddyFailed": "CodeBuddy 구성 저장에 실패했습니다",
       "kimiCodeSaved": "Kimi Code 구성이 저장되었습니다",
       "saveKimiCodeFailed": "Kimi Code 구성 저장 실패",
@@ -7821,5 +7847,12 @@
         "probeFailed": "내장 브라우저가 터널을 통해 원격 호스트에 도달하는지 확인할 수 없습니다. 잠시 후 다시 시도하세요."
       }
     }
+  },
+  "ModelCatalog": {
+    "summary": "모델 {count}개 · {time} 업데이트",
+    "neverUpdated": "업데이트 없음",
+    "loading": "모델 카탈로그를 불러오는 중…",
+    "noMatch": "모델 카탈로그에 일치하는 모델이 없습니다",
+    "refresh": "모델 카탈로그 새로 고침"
   }
 }

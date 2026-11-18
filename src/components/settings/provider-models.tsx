@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   AlertCircle,
@@ -32,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Popover,
   PopoverAnchor,
@@ -44,7 +45,14 @@ import {
   type ProviderModelsInput,
   type ProviderModelsState,
 } from "@/hooks/use-provider-models"
-import { normalizeModelIds } from "@/lib/types"
+import { getModelCatalog } from "@/lib/api"
+import { toErrorMessage } from "@/lib/app-error"
+import {
+  normalizeModelIds,
+  type ModelCatalogEntry,
+  type ModelCatalogStatus,
+  type ModelCatalogView,
+} from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 /** A translator scoped to `ProviderModels`, as next-intl hands it out. */
@@ -293,6 +301,207 @@ function ProviderModelsMenu({
   )
 }
 
+/** The model catalog as the fields see it: entries to suggest, where they came
+ *  from, and a way to download them again. */
+export interface ModelCatalogState {
+  entries: ModelCatalogEntry[]
+  status: ModelCatalogStatus | null
+  loading: boolean
+  error: string | null
+  refresh: () => void
+}
+
+/** Shared process-wide: the first field that opens the catalog downloads it,
+ *  every other field reuses that copy until someone refreshes. */
+let catalogCache: ModelCatalogView | null = null
+
+/** Test seam: the module-level cache otherwise survives across tests in a
+ *  file, so a test that mocks a different catalog must clear it first. */
+export function resetModelCatalogCacheForTests(): void {
+  catalogCache = null
+}
+
+export function useModelCatalog(): ModelCatalogState {
+  const [view, setView] = useState<ModelCatalogView | null>(catalogCache)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async (force: boolean) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const next = await getModelCatalog(force)
+      catalogCache = next
+      setView(next)
+      setError(next.status.error)
+    } catch (err) {
+      setError(toErrorMessage(err))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!catalogCache) void load(false)
+  }, [load])
+
+  const refresh = useCallback(() => {
+    void load(true)
+  }, [load])
+
+  return {
+    entries: view?.entries ?? catalogCache?.entries ?? [],
+    status: view?.status ?? catalogCache?.status ?? null,
+    loading,
+    error,
+    refresh,
+  }
+}
+
+/** How many rows a catalog menu renders: litellm lists thousands of chat
+ *  models, and typing narrows them well before this cap. */
+const CATALOG_ROW_LIMIT = 50
+
+export function catalogMatches(
+  entries: ModelCatalogEntry[],
+  query: string
+): ModelCatalogEntry[] {
+  const q = query.trim().toLowerCase()
+  // Below two characters the field is still an id being typed, not a search:
+  // only the chevron's full list browses from here.
+  if (q.length < 2) return entries.slice(0, CATALOG_ROW_LIMIT)
+  return entries
+    .filter(
+      (entry) =>
+        entry.model.toLowerCase().includes(q) ||
+        entry.id.toLowerCase().includes(q)
+    )
+    .slice(0, CATALOG_ROW_LIMIT)
+}
+
+/** litellm keys are ids, not labels, so the catalog carries no display name.
+ *  Derive one from the model id: split on `-` (also treating `_` and a remaining
+ *  `/` as separators), capitalize each part's first letter, join with spaces —
+ *  `gpt-5` → `Gpt 5`, `claude-sonnet-4-5` → `Claude Sonnet 4 5`. Used by every
+ *  form with a name / label field next to a model id. */
+export function catalogDisplayName(entry: ModelCatalogEntry): string {
+  const parts = entry.model.split(/[-_/]+/).filter(Boolean)
+  if (parts.length === 0) return entry.model
+  return parts
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ")
+}
+
+/** A description built from what the catalog actually declares: its key,
+ *  capacities and capability flags. Forms use it where a picked model needs a
+ *  short human-readable note and the catalog has no description of its own. */
+export function catalogDescription(entry: ModelCatalogEntry): string {
+  const bits: string[] = [entry.id]
+  const capacity = [
+    entry.maxInputTokens ? `${formatContext(entry.maxInputTokens)} input` : "",
+    entry.maxOutputTokens
+      ? `${formatContext(entry.maxOutputTokens)} output`
+      : "",
+  ].filter(Boolean)
+  if (capacity.length) bits.push(capacity.join(" / "))
+  const flags = [
+    entry.supportsReasoning ? "reasoning" : "",
+    entry.supportsVision ? "vision" : "",
+    entry.supportsFunctionCalling ? "tools" : "",
+  ].filter(Boolean)
+  if (flags.length) bits.push(flags.join(", "))
+  return bits.join(" · ")
+}
+
+export function ModelCatalogMenu({
+  catalog,
+  query,
+  current,
+  onSelect,
+}: {
+  catalog: ModelCatalogState
+  query: string
+  /** The id in the field: only the row it matches is marked as picked. */
+  current: string
+  onSelect: (entry: ModelCatalogEntry) => void
+}) {
+  const t = useTranslations("ModelCatalog")
+  const matches = useMemo(
+    () => catalogMatches(catalog.entries, query),
+    [catalog.entries, query]
+  )
+  const summary = catalog.status
+    ? t("summary", {
+        count: catalog.status.entryCount,
+        time: catalog.status.updatedAt
+          ? new Intl.DateTimeFormat(undefined, {
+              dateStyle: "medium",
+              timeStyle: "short",
+            }).format(new Date(catalog.status.updatedAt * 1000))
+          : t("neverUpdated"),
+      })
+    : t("loading")
+  return (
+    <Command className="rounded-none bg-transparent">
+      <CommandList className="max-h-64 p-1">
+        <CommandEmpty className="py-6 text-center text-xs text-muted-foreground">
+          {catalog.error ? catalog.error : t("noMatch")}
+        </CommandEmpty>
+        {matches.map((entry) => {
+          // A check on every row reads as "already selected". Only the model
+          // actually in the field carries one; the rest keep a blank spacer so
+          // the columns stay aligned.
+          const picked =
+            current.length > 0 &&
+            (entry.model === current || entry.id === current)
+          return (
+            <CommandItem
+              key={entry.id}
+              value={entry.id}
+              onSelect={() => onSelect(entry)}
+              className="gap-2 rounded-lg px-2 py-1.5 text-xs"
+            >
+              {picked ? (
+                <Check className="size-3.5 shrink-0 text-primary" />
+              ) : (
+                <span className="size-3.5 shrink-0" />
+              )}
+              <span className="min-w-0 flex-1 truncate font-mono">
+                {entry.model}
+              </span>
+              <span className="max-w-[35%] shrink-0 truncate text-2xs text-muted-foreground">
+                {entry.provider}
+              </span>
+              {entry.maxInputTokens ? (
+                <span className="shrink-0 text-3xs tabular-nums text-muted-foreground">
+                  {formatContext(entry.maxInputTokens)}
+                </span>
+              ) : null}
+            </CommandItem>
+          )
+        })}
+      </CommandList>
+      <div className="flex items-center gap-2 border-t ps-3 pe-1.5 py-1">
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate text-2xs",
+            catalog.error ? "text-destructive" : "text-muted-foreground"
+          )}
+          role="status"
+          title={catalog.error ?? summary}
+        >
+          {catalog.error ?? summary}
+        </span>
+        <ProviderModelsRefreshButton
+          fetching={catalog.loading}
+          onRefresh={catalog.refresh}
+          label={t("refresh")}
+        />
+      </div>
+    </Command>
+  )
+}
+
 /**
  * A model id field: typed freely, or chosen from the provider's models from
  * the chevron at its end. The first time the list opens it asks the provider;
@@ -306,10 +515,13 @@ export function ModelIdInputWithFetch({
   value,
   onChange,
   state,
+  catalog = null,
+  onCatalogPick,
   placeholder,
   disabled = false,
   readOnly = false,
   className,
+  inputClassName,
   "aria-label": ariaLabel,
   "aria-invalid": ariaInvalid,
 }: {
@@ -318,37 +530,88 @@ export function ModelIdInputWithFetch({
   onChange: (value: string) => void
   /** The provider's models; `null` where they cannot be fetched. */
   state: ProviderModelsState | null
+  /** The model catalog to suggest from as the id is typed. */
+  catalog?: ModelCatalogState | null
+  /** Called with the catalog entry a pick filled the field from, after the
+   *  id is written. Its patch is applied last, so the form can overwrite the
+   *  row's capability fields with the picked model's values. */
+  onCatalogPick?: (entry: ModelCatalogEntry) => void
   placeholder?: string
   disabled?: boolean
   readOnly?: boolean
   className?: string
+  inputClassName?: string
   "aria-label"?: string
   "aria-invalid"?: boolean
 }) {
   const t = useTranslations("ProviderModels") as ProviderModelsTranslator
   const [open, setOpen] = useState(false)
-  // The list it offers, when it offers one.
+  // `null` = the provider's list (or nothing); a string = the catalog shown
+  // with that query, where "" browses the whole catalog.
+  const [catalogQuery, setCatalogQuery] = useState<string | null>(null)
+  // Opening the list from typing must not move focus out of the field: Radix
+  // focuses PopoverContent on mount, which would swallow the rest of an id
+  // being typed after the second character.
+  const openedByTyping = useRef(false)
+  // Only an actual pick is marked with a check — never an id that merely
+  // happens to match a catalog row while it is being typed.
+  const [pickedId, setPickedId] = useState<string | null>(null)
+
+  // The provider's list it offers, when it offers one.
   const menu = !disabled && !readOnly && canList(state) ? state : null
-  const offer = menu != null
+  const catalogMenu = !disabled && !readOnly ? catalog : null
+  const offer = menu != null || catalogMenu != null
+
+  const closeMenu = () => {
+    setOpen(false)
+    setCatalogQuery(null)
+    openedByTyping.current = false
+  }
+  const openFromChevron = () => {
+    openedByTyping.current = false
+    // The chevron browses: the provider's own list when it has one, else the
+    // entire catalog. It never inherits the filter from typing.
+    setCatalogQuery(menu ? null : "")
+    setOpen(true)
+    if (menu) fetchUnlessListed(menu)
+  }
+  const openFromTyping = (query: string) => {
+    openedByTyping.current = true
+    setCatalogQuery(query)
+    setOpen(true)
+  }
   const setMenuOpen = (next: boolean) => {
-    setOpen(next)
-    if (next && menu) fetchUnlessListed(menu)
+    if (next) openFromChevron()
+    else closeMenu()
   }
 
   const input = (
     <Input
       id={id}
       value={value}
-      onChange={(event) => onChange(event.target.value)}
+      onChange={(event) => {
+        const next = event.target.value
+        onChange(next)
+        setPickedId(null)
+        // Only open while there is something to suggest: a catalog still
+        // loading (or empty) must not put a popover over a field being typed.
+        if (
+          catalogMenu &&
+          catalogMenu.entries.length > 0 &&
+          next.trim().length >= 2
+        )
+          openFromTyping(next)
+      }}
       onKeyDown={(event) => {
         // The list opens from the field too, as a combobox's does.
         if (
           offer &&
           event.key === "ArrowDown" &&
-          !event.nativeEvent.isComposing
+          !event.nativeEvent.isComposing &&
+          !open
         ) {
           event.preventDefault()
-          setMenuOpen(true)
+          openFromChevron()
         }
       }}
       placeholder={placeholder}
@@ -358,14 +621,20 @@ export function ModelIdInputWithFetch({
       spellCheck={false}
       aria-label={ariaLabel}
       aria-invalid={ariaInvalid}
-      className={cn(offer && "pe-9")}
+      className={cn(offer && "pe-9", inputClassName)}
     />
   )
-  if (!menu) return <div className={className}>{input}</div>
+  if (!menu && !catalogMenu) return <div className={className}>{input}</div>
 
   // A failed fetch shows on the chevron too, once the list is closed: the
   // field says it has a list it could not get, and why.
-  const failed = !!menu.error && !menu.list && !menu.fetching
+  const failed =
+    (!!menu?.error && !menu.list && !menu.fetching) ||
+    (menu == null && !!catalogMenu?.error)
+  const busy = menu?.fetching || catalogMenu?.loading
+  const errorText = menu?.error
+    ? providerModelsErrorText(menu.error, t)
+    : (catalogMenu?.error ?? null)
   return (
     <Popover open={open} onOpenChange={setMenuOpen}>
       <PopoverAnchor asChild>
@@ -374,6 +643,14 @@ export function ModelIdInputWithFetch({
           <PopoverTrigger asChild>
             <button
               type="button"
+              onClick={(event) => {
+                // The chevron always opens the browse list, even when typing
+                // already opened the catalog below. Radix's trigger would only
+                // toggle (closing that menu), so handle the click ourselves
+                // and stop its composed toggle with preventDefault.
+                event.preventDefault()
+                openFromChevron()
+              }}
               className={cn(
                 "absolute inset-y-0 end-0 flex w-9 items-center justify-center rounded-e-4xl outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                 failed
@@ -381,13 +658,9 @@ export function ModelIdInputWithFetch({
                   : "text-muted-foreground hover:text-foreground"
               )}
               aria-label={t("choose")}
-              title={
-                failed && menu.error
-                  ? providerModelsErrorText(menu.error, t)
-                  : t("choose")
-              }
+              title={failed && errorText ? errorText : t("choose")}
             >
-              {menu.fetching ? (
+              {busy ? (
                 <Loader2 className="size-3.5 animate-spin" />
               ) : failed ? (
                 <AlertCircle className="size-3.5" />
@@ -401,16 +674,197 @@ export function ModelIdInputWithFetch({
       <PopoverContent
         align="start"
         sideOffset={6}
+        onOpenAutoFocus={(event) => {
+          if (openedByTyping.current) event.preventDefault()
+        }}
         className="w-(--radix-popover-trigger-width) min-w-72 max-w-[min(36rem,var(--radix-popover-content-available-width))] gap-0 overflow-hidden p-0"
       >
-        <ProviderModelsMenu
-          state={menu}
-          current={value.trim()}
-          onSelect={(next) => {
-            onChange(next)
-            setOpen(false)
+        {catalogMenu && catalogQuery !== null ? (
+          <ModelCatalogMenu
+            catalog={catalogMenu}
+            query={catalogQuery}
+            current={pickedId ?? ""}
+            onSelect={(entry) => {
+              // The id patch runs first; the form's capability patch runs
+              // last so it wins over the id-only patch (both are computed
+              // from the same render's state).
+              onChange(entry.model)
+              onCatalogPick?.(entry)
+              setPickedId(entry.id)
+              closeMenu()
+            }}
+          />
+        ) : menu ? (
+          <ProviderModelsMenu
+            state={menu}
+            current={value.trim()}
+            onSelect={(next) => {
+              onChange(next)
+              closeMenu()
+            }}
+          />
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/**
+ * A model id field backed only by the model catalog: the same combobox, for a
+ * form with no provider endpoint to list from (the DeepSeek catalog editor).
+ */
+export function ModelIdInputWithCatalog({
+  id,
+  value,
+  onChange,
+  onPick,
+  placeholder,
+  disabled = false,
+  readOnly = false,
+  className,
+  inputClassName,
+  "aria-label": ariaLabel,
+  "aria-invalid": ariaInvalid,
+}: {
+  id?: string
+  value: string
+  onChange: (value: string) => void
+  onPick?: (entry: ModelCatalogEntry) => void
+  placeholder?: string
+  disabled?: boolean
+  readOnly?: boolean
+  className?: string
+  inputClassName?: string
+  "aria-label"?: string
+  "aria-invalid"?: boolean
+}) {
+  const catalog = useModelCatalog()
+  return (
+    <ModelIdInputWithFetch
+      id={id}
+      value={value}
+      onChange={onChange}
+      state={null}
+      catalog={catalog}
+      onCatalogPick={onPick}
+      placeholder={placeholder}
+      disabled={disabled}
+      readOnly={readOnly}
+      className={className}
+      inputClassName={inputClassName}
+      aria-label={ariaLabel}
+      aria-invalid={ariaInvalid}
+    />
+  )
+}
+
+/**
+ * Model ids one per line (OpenCode's custom provider editor). Two or more
+ * characters on the line the caret is on offers matching catalog models for
+ * THAT line; picking one replaces only that line, leaving the other lines —
+ * and the caret inside the textarea — alone.
+ */
+export function ModelIdLinesTextarea({
+  value,
+  onChange,
+  placeholder,
+  className,
+  disabled = false,
+  "aria-label": ariaLabel,
+}: {
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  className?: string
+  disabled?: boolean
+  "aria-label"?: string
+}) {
+  const catalog = useModelCatalog()
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [open, setOpen] = useState(false)
+  // The caret's line: its text used as the search query, and its offsets in
+  // `value` so a pick replaces exactly that line.
+  const [line, setLine] = useState<{
+    query: string
+    start: number
+    end: number
+  } | null>(null)
+
+  const syncFromCaret = (el: HTMLTextAreaElement, text: string) => {
+    if (disabled || el.selectionStart == null) return
+    const caret = el.selectionStart
+    const start = text.slice(0, caret).lastIndexOf("\n") + 1
+    const breakAt = text.indexOf("\n", caret)
+    const end = breakAt === -1 ? text.length : breakAt
+    const query = text.slice(start, end).trim()
+    if (query.length >= 2) {
+      setLine({ query, start, end })
+      setOpen(true)
+    } else {
+      setOpen(false)
+    }
+  }
+
+  const pick = (entry: ModelCatalogEntry) => {
+    if (!line) return
+    const next =
+      value.slice(0, line.start) + entry.model + value.slice(line.end)
+    onChange(next)
+    setOpen(false)
+    // The menu never took focus, so put the caret just after the inserted id.
+    const caret = line.start + entry.model.length
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (el) {
+        el.focus()
+        el.setSelectionRange(caret, caret)
+      }
+    })
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
+        <Textarea
+          ref={textareaRef}
+          value={value}
+          onChange={(event) => {
+            onChange(event.target.value)
+            syncFromCaret(event.target, event.target.value)
           }}
+          onClick={(event) =>
+            syncFromCaret(event.currentTarget, event.currentTarget.value)
+          }
+          onKeyUp={(event) => {
+            // Escape closes the menu; don't immediately reopen it for the
+            // same line on that key's keyup.
+            if (event.key === "Escape") return
+            syncFromCaret(event.currentTarget, event.currentTarget.value)
+          }}
+          placeholder={placeholder}
+          className={className}
+          disabled={disabled}
+          aria-label={ariaLabel}
+          autoComplete="off"
+          spellCheck={false}
         />
+      </PopoverAnchor>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        // Typing must continue in the textarea while the suggestions are up.
+        onOpenAutoFocus={(event) => event.preventDefault()}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        className="w-80 max-w-[min(36rem,var(--radix-popover-content-available-width))] gap-0 overflow-hidden p-0"
+      >
+        {line && (
+          <ModelCatalogMenu
+            catalog={catalog}
+            query={line.query}
+            current=""
+            onSelect={pick}
+          />
+        )}
       </PopoverContent>
     </Popover>
   )
@@ -762,6 +1216,7 @@ export function FetchedModelPicker({
 export function ModelIdListField({
   ids,
   onChange,
+  onPick,
   state,
   readOnly = false,
   title,
@@ -769,6 +1224,9 @@ export function ModelIdListField({
 }: {
   ids: string[]
   onChange: (ids: string[]) => void
+  /** A catalog pick in the add field: lets the form adopt the model's declared
+   *  capabilities, not just its id. */
+  onPick?: (entry: ModelCatalogEntry) => void
   /** The provider's models; `null` where they cannot be fetched. */
   state: ProviderModelsState | null
   readOnly?: boolean
@@ -819,19 +1277,22 @@ export function ModelIdListField({
         <p className="text-2xs text-muted-foreground">{t("empty")}</p>
       )}
       {!readOnly && (
-        <div className="flex items-center gap-1">
-          <Input
+        <div
+          className="flex items-center gap-1"
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+              event.preventDefault()
+              add()
+            }
+          }}
+        >
+          <ModelIdInputWithCatalog
             value={typed}
-            onChange={(event) => setTyped(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-                event.preventDefault()
-                add()
-              }
-            }}
+            onChange={setTyped}
+            onPick={onPick}
             placeholder={t("addPlaceholder")}
             aria-label={t("addPlaceholder")}
-            className="h-7 text-xs"
+            className="h-7 flex-1 text-xs"
           />
           <Button
             type="button"

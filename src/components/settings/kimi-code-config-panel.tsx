@@ -31,6 +31,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import {
   ModelIdInputWithFetch,
+  useModelCatalog,
   useProviderModelsErrorText,
 } from "@/components/settings/provider-models"
 import { acpUpdateKimiCodeConfig } from "@/lib/api"
@@ -549,6 +550,7 @@ export function KimiCodeConfigPanel({
       : null
   )
   const modelsErrorText = useProviderModelsErrorText()
+  const modelCatalog = useModelCatalog()
 
   const errors = useMemo(() => validateKimiDraft(draft), [draft])
   const hasErrors = Object.keys(errors).length > 0
@@ -1075,6 +1077,30 @@ export function KimiCodeConfigPanel({
                   value={draft.model}
                   onChange={handleModelChange}
                   state={providerModels}
+                  catalog={modelCatalog}
+                  onCatalogPick={(entry) => {
+                    // The picked model's declared capabilities replace the
+                    // ones the form had: context window, reasoning gate and
+                    // the levels the composer may offer.
+                    const levels = entry.reasoningEffortLevels.filter(
+                      (level) => level !== "none" && level.trim().length > 0
+                    )
+                    const defaultEffort =
+                      entry.defaultReasoningEffort &&
+                      levels.includes(entry.defaultReasoningEffort)
+                        ? entry.defaultReasoningEffort
+                        : ""
+                    patch({
+                      model: entry.model,
+                      ...(entry.maxInputTokens
+                        ? { maxContext: String(entry.maxInputTokens) }
+                        : {}),
+                      reasoningEnabled:
+                        entry.supportsReasoning || levels.length > 0,
+                      supportEfforts: levels,
+                      defaultEffort,
+                    })
+                  }}
                   placeholder={KIMI_MODEL_PLACEHOLDER}
                   disabled={saving}
                   aria-invalid={errors.model != null}

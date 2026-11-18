@@ -130,6 +130,7 @@ import type {
   FixAction,
   GrokStructuredConfig,
   HermesLocalConfig,
+  ModelCatalogEntry,
   ModelProviderInfo,
   OpenCodeCatalogProvider,
   OpenCodeCredentialChange,
@@ -192,9 +193,13 @@ import { useAgentInstallStream } from "@/hooks/use-agent-install-stream"
 import { useProviderModels } from "@/hooks/use-provider-models"
 import { ClaudePickerModelsField } from "@/components/settings/claude-model-fields"
 import {
+  ModelIdInputWithCatalog,
   ModelIdInputWithFetch,
   ModelIdListField,
   ProviderModelsPicker,
+  catalogDescription,
+  catalogDisplayName,
+  useModelCatalog,
 } from "@/components/settings/provider-models"
 import { OpencodePluginsModal } from "./opencode-plugins-modal"
 import {
@@ -212,6 +217,7 @@ import {
   CommandCodeConfigPanel,
 } from "./command-code-config-panel"
 import { CodeBuddyConfigPanel } from "./codebuddy-config-panel"
+import { CodeArtsConfigPanel } from "./codearts-config-panel"
 import { CursorConfigPanel } from "./cursor-config-panel"
 import {
   DEEPSEEK_LEGACY_BASE_URL,
@@ -925,6 +931,19 @@ export function grokReasoningEffortChoices(levels: string[]): string[] {
       levels.indexOf(level) === index
   )
   return [...GROK_REASONING_EFFORT_LEVELS, ...extra]
+}
+
+/** The capabilities a model catalog pick contributes to Grok's custom model
+ *  config: its context window and the reasoning effort levels it declares.
+ *  Both the model-id field and the "other models" add field adopt the same
+ *  values, so a pick fills them wherever it was made. */
+function grokCatalogCapabilities(entry: ModelCatalogEntry) {
+  return {
+    grokCustomContextWindow: entry.maxInputTokens
+      ? String(entry.maxInputTokens)
+      : "",
+    grokCustomReasoningEfforts: entry.reasoningEffortLevels,
+  }
 }
 
 /** Whether two level lists are the same, entry for entry. */
@@ -5066,6 +5085,11 @@ export function AcpAgentSettings() {
   const [openCodeNewModelIds, setOpenCodeNewModelIds] = useState<
     Record<string, string>
   >({})
+  // A catalog pick in the "add model" field also supplies a display name for
+  // the model that gets added; the id alone would otherwise become the label.
+  const [openCodePickedNames, setOpenCodePickedNames] = useState<
+    Record<string, string>
+  >({})
   const [openCodeModelIdDrafts, setOpenCodeModelIdDrafts] = useState<
     Record<string, string>
   >({})
@@ -6526,6 +6550,11 @@ export function AcpAgentSettings() {
         }
       : null
   )
+
+  // One shared litellm catalog for every model-id field in the panel (Grok,
+  // Claude, Gemini, Cline, Hermes, OpenCode). `useModelCatalog` keeps a
+  // module-level cache, so mounting it once is enough for all of them.
+  const modelCatalog = useModelCatalog()
   // A custom Grok endpoint's models, asked the way its backend talks: the
   // Anthropic Messages list for `messages`, the OpenAI one otherwise; xAI's
   // own API when the URL is left blank.
@@ -6934,6 +6963,51 @@ export function AcpAgentSettings() {
           ),
           configText: nextJson.configText,
         }
+      })
+    },
+    [selectedAgent, selectedDraft, t, updateSelectedDraft]
+  )
+
+  /** Several "important" fields at once (a model catalog pick fills the id,
+   *  name and description together). Patching one at a time would recompute the
+   *  native config from the same stale draft each time and lose the earlier
+   *  fields, so build the whole patch once and apply it as one edit. */
+  const handleImportantConfigPatch = useCallback(
+    (patch: ImportantDraftPatch) => {
+      if (!selectedAgent || !selectedDraft) return
+      const entries = Object.entries(patch).filter(
+        (entry): entry is [ImportantConfigKey, string] =>
+          typeof entry[1] === "string"
+      )
+      let nextDraft = selectedDraft
+      for (const [key, value] of entries) {
+        nextDraft = applyImportantFieldToDraft(nextDraft, key, value)
+      }
+      const nextJson = patchImportantConfigText(
+        selectedAgent.agent_type,
+        selectedDraft.configText,
+        buildImportantPatchFromDraft(nextDraft)
+      )
+      if (nextJson.recoveredFromInvalid) {
+        toast.warning(t("warnings.nativeJsonRecoveredStructured"))
+      }
+      setConfigErrors((prev) => ({
+        ...prev,
+        [selectedAgent.agent_type]: null,
+      }))
+      updateSelectedDraft((current) => {
+        let nextCurrent = current
+        let envText = current.envText
+        for (const [key, value] of entries) {
+          nextCurrent = applyImportantFieldToDraft(nextCurrent, key, value)
+          envText = patchEnvByImportantKey(
+            selectedAgent.agent_type,
+            envText,
+            key,
+            value
+          )
+        }
+        return { ...nextCurrent, envText, configText: nextJson.configText }
       })
     },
     [selectedAgent, selectedDraft, t, updateSelectedDraft]
@@ -8045,16 +8119,28 @@ export function AcpAgentSettings() {
         toast.error(t("errors.modelExists", { modelId: nextModelId }))
         return
       }
+      const displayName = openCodePickedNames[targetProviderId] || nextModelId
       handleOpenCodeConfigPatch((config) => {
         const { block } = providerBlockForEdit(config, targetProviderId)
-        providerBlockModels(block)[nextModelId] = { name: nextModelId }
+        providerBlockModels(block)[nextModelId] = { name: displayName }
       })
       setOpenCodeNewModelIds((prev) => ({
         ...prev,
         [targetProviderId]: "",
       }))
+      setOpenCodePickedNames((prev) => {
+        const next = { ...prev }
+        delete next[targetProviderId]
+        return next
+      })
     },
-    [handleOpenCodeConfigPatch, openCodeNewModelIds, selectedOpenCodeConfig, t]
+    [
+      handleOpenCodeConfigPatch,
+      openCodeNewModelIds,
+      openCodePickedNames,
+      selectedOpenCodeConfig,
+      t,
+    ]
   )
 
   // The provider's models as picked from its own list: a model that stays
@@ -10055,6 +10141,7 @@ base_url = "https://api.openai.com/v1"`}
                           handleGeminiFieldChange("model", value)
                         }}
                         state={geminiProviderModels}
+                        catalog={modelCatalog}
                         placeholder="gemini-3-pro-preview"
                       />
                       <p className="text-2xs text-muted-foreground">
@@ -10834,18 +10921,34 @@ base_url = "https://api.openai.com/v1"`}
                                           </p>
 
                                           <div className="mt-2 flex flex-wrap items-center gap-2">
-                                            <Input
+                                            <ModelIdInputWithCatalog
                                               value={
                                                 openCodeNewModelIds[
                                                   providerId
                                                 ] ?? ""
                                               }
-                                              onChange={(event) => {
+                                              onChange={(value) => {
                                                 handleOpenCodeModelDraftChange(
                                                   providerId,
-                                                  event.target.value
+                                                  value
+                                                )
+                                                setOpenCodePickedNames(
+                                                  (prev) => {
+                                                    const next = { ...prev }
+                                                    delete next[providerId]
+                                                    return next
+                                                  }
                                                 )
                                               }}
+                                              onPick={(entry) =>
+                                                setOpenCodePickedNames(
+                                                  (prev) => ({
+                                                    ...prev,
+                                                    [providerId]:
+                                                      catalogDisplayName(entry),
+                                                  })
+                                                )
+                                              }
                                               className="w-[15rem]"
                                               placeholder="new-model-id"
                                             />
@@ -11338,6 +11441,7 @@ base_url = "https://api.openai.com/v1"`}
                           handleClineFieldChange("clineModel", value)
                         }}
                         state={clineProviderModels}
+                        catalog={modelCatalog}
                         placeholder="claude-sonnet-5-5"
                       />
                     </div>
@@ -11739,6 +11843,7 @@ base_url = "https://api.openai.com/v1"`}
                           handleHermesFieldChange("model", value)
                         }
                         state={hermesProviderModels}
+                        catalog={modelCatalog}
                         placeholder="moonshotai/kimi-k2"
                         disabled={selectedIsSavingConfig}
                       />
@@ -11900,6 +12005,19 @@ base_url = "https://api.openai.com/v1"`}
                   </div>
                 ) : selectedAgent.agent_type === "code_buddy" ? (
                   <CodeBuddyConfigPanel
+                    agent={selectedAgent}
+                    saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                    onSave={(env, enabled) =>
+                      persistEnv(
+                        selectedAgent.agent_type,
+                        enabled,
+                        envMapToText(env),
+                        selectedAgent.model_provider_id
+                      )
+                    }
+                  />
+                ) : selectedAgent.agent_type === "code_arts" ? (
+                  <CodeArtsConfigPanel
                     agent={selectedAgent}
                     saving={Boolean(savingEnv[selectedAgent.agent_type])}
                     onSave={(env, enabled) =>
@@ -12380,6 +12498,17 @@ base_url = "https://api.openai.com/v1"`}
                               }))
                             }
                             state={grokProviderModels}
+                            catalog={modelCatalog}
+                            onCatalogPick={(entry) =>
+                              updateSelectedDraft((current) => ({
+                                ...current,
+                                grokCustomModelId: entry.model,
+                                // Picking a model adopts the capabilities it
+                                // declares, replacing anything typed before
+                                // the pick.
+                                ...grokCatalogCapabilities(entry),
+                              }))
+                            }
                             placeholder={t("grok.customModelIdPlaceholder")}
                             aria-label={t("grok.customModelIdLabel")}
                             disabled={grokSaving}
@@ -12528,6 +12657,14 @@ base_url = "https://api.openai.com/v1"`}
                             updateSelectedDraft((current) => ({
                               ...current,
                               grokCustomExtraModels: ids,
+                            }))
+                          }
+                          onPick={(entry) =>
+                            updateSelectedDraft((current) => ({
+                              ...current,
+                              // A pick in the "add model id" field adopts the
+                              // same capabilities as the model-id field above.
+                              ...grokCatalogCapabilities(entry),
                             }))
                           }
                           state={grokProviderModels}
@@ -13049,6 +13186,7 @@ base_url = "https://api.openai.com/v1"`}
                                 )
                               }}
                               state={claudeProviderModels}
+                              catalog={modelCatalog}
                               placeholder="claude-sonnet-5-5"
                             />
                           </div>
@@ -13069,6 +13207,7 @@ base_url = "https://api.openai.com/v1"`}
                                 )
                               }}
                               state={claudeProviderModels}
+                              catalog={modelCatalog}
                               placeholder="claude-opus-5-5"
                             />
                           </div>
@@ -13089,6 +13228,7 @@ base_url = "https://api.openai.com/v1"`}
                                 )
                               }}
                               state={claudeProviderModels}
+                              catalog={modelCatalog}
                               placeholder="claude-haiku-5-5"
                             />
                           </div>
@@ -13109,6 +13249,7 @@ base_url = "https://api.openai.com/v1"`}
                                 )
                               }}
                               state={claudeProviderModels}
+                              catalog={modelCatalog}
                               placeholder="claude-sonnet-5-5"
                             />
                           </div>
@@ -13129,6 +13270,7 @@ base_url = "https://api.openai.com/v1"`}
                                 )
                               }}
                               state={claudeProviderModels}
+                              catalog={modelCatalog}
                               placeholder="claude-opus-5-5"
                             />
                           </div>
@@ -13149,6 +13291,7 @@ base_url = "https://api.openai.com/v1"`}
                                 )
                               }}
                               state={claudeProviderModels}
+                              catalog={modelCatalog}
                               placeholder="claude-fable-5-2"
                             />
                           </div>
@@ -13175,6 +13318,16 @@ base_url = "https://api.openai.com/v1"`}
                                   )
                                 }}
                                 state={claudeProviderModels}
+                                catalog={modelCatalog}
+                                onCatalogPick={(entry) =>
+                                  handleImportantConfigPatch({
+                                    claudeCustomModelOption: entry.model,
+                                    claudeCustomModelOptionName:
+                                      catalogDisplayName(entry),
+                                    claudeCustomModelOptionDescription:
+                                      catalogDescription(entry),
+                                  })
+                                }
                                 placeholder="my-gateway/claude-opus-5-5"
                               />
                             </div>
