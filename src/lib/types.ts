@@ -2904,7 +2904,7 @@ export interface WorkTaskUncommittedFile {
 
 // --- Token usage dashboard (mirror of src-tauri/src/models/token_usage.rs) ---
 
-export type TokenUsageBucket = "day" | "week" | "month"
+export type TokenUsageBucket = "hour" | "day" | "week" | "month"
 
 export interface TokenUsageFilter {
   /** Inclusive lower bound, ISO-8601. Omit for "since the first recorded turn". */
