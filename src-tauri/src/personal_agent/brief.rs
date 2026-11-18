@@ -1393,6 +1393,19 @@ fn ask_text(m: &Material, cards: CardUse) -> String {
         CardUse::Never => "Write it as short plain text (the owner takes no cards), in those parts",
         _ => "Write a sentence or two to open, then one card (ui-render) in parts",
     };
+    // On the card: nothing comes after it.
+    let end = match cards {
+        CardUse::Never => "",
+        _ => ", the card's last",
+    };
+    // A part whose things each have a button, as codeg draws it: a card each.
+    let list = match cards {
+        CardUse::Never => "",
+        _ => {
+            " A part whose things each have a button is a list: a state array repeated, each item \
+              its line and its button — codeg draws each item as a card."
+        }
+    };
     let week = week_ask(m, cards);
     if m.kind == WRAP {
         let tonight = if m.candidates.is_empty() {
@@ -1421,9 +1434,9 @@ fn ask_text(m: &Material, cards: CardUse) -> String {
             "Write the owner's morning brief now. {card}: needs you (each with a button: \
              `pa.open` with the open it has — open it, go approve it — or `pa.reply` \"Hand it to \
              you\" for one you can take), watching, done, today's schedule, suggestions, and a \
-             last line \"That's all.\". Leave out a part with nothing in it.{week} {suggest} Work \
-             you are sure the owner wants done, dispatch; one that is only your idea, with \
-             `suggest: true`."
+             last line that says that is all, in the owner's language (\"That's all.\"){end}. \
+             Leave out a part with nothing in it.{list}{week} {suggest} Work you are sure the \
+             owner wants done, dispatch; one that is only your idea, with `suggest: true`."
         )
     }
 }
@@ -2644,14 +2657,29 @@ mod tests {
             ask.contains("at most 3") && ask.contains("\"That's all.\""),
             "{ask}"
         );
-        assert!(ask_text(
+        // Its last line in the owner's language, on the card — nothing comes
+        // after one; a part of things with a button each, a list of cards.
+        assert!(
+            ask.contains("in the owner's language (\"That's all.\"), the card's last."),
+            "{ask}"
+        );
+        assert!(ask.contains("a state array repeated"), "{ask}");
+        let plain = ask_text(
             &Material {
                 suggestions: 0,
                 ..m.clone()
             },
-            CardUse::Never
-        )
-        .contains("plain text"));
+            CardUse::Never,
+        );
+        assert!(plain.contains("plain text"), "{plain}");
+        assert!(
+            plain.contains("in the owner's language (\"That's all.\")."),
+            "{plain}"
+        );
+        assert!(
+            !plain.contains("card's last") && !plain.contains("state array"),
+            "{plain}"
+        );
         // Nothing waiting, nothing done, nothing on the schedule: nothing to say.
         let empty = Material {
             bots: m.bots.clone(),

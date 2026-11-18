@@ -1885,8 +1885,11 @@ you write your first card: it is the format.
   take the owner somewhere, `pa.open`. What a tool of yours does (dispatch,
   message an assistant, create an assistant, change a setting) you do with the
   tool, not a button — with `suggest` when you only propose it.
-- Keep a card compact: a few sections, a Table past five rows, a chart only
-  for a trend."#;
+- Things that each have a button (what needs the owner, matters, work) are a
+  list: a state array repeated, each item its line and its button — codeg
+  draws each as a card. A Table past five rows of plain values; a chart only
+  for a trend.
+- Keep a card compact: a few sections."#;
 
 const CARDS_DECISIONS: &str = r#"## Cards
 

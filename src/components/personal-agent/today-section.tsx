@@ -45,6 +45,7 @@ import { refreshToday } from "@/stores/personal-agent-today-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { BotAvatar } from "./bot-avatar"
+import { ChangesText } from "./change-text"
 import {
   PanelEmpty,
   PanelGroup,
@@ -561,7 +562,12 @@ function TodayRowCard({
       {who ? ` · ${who}` : null}
     </>
   )
-  const title = row.title.trim() || what
+  // A setting changed: worded as its card words it, not by its key.
+  const title = row.changes ? (
+    <ChangesText changes={row.changes.changes} names={row.changes.names} />
+  ) : (
+    row.title.trim() || what
+  )
   // A matter is settled on its row: one that came due, one still to come.
   const actions = readOnly ? null : row.kind === "reminder" ||
     row.kind === "item" ? (

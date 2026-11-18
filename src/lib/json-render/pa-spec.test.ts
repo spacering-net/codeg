@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest"
 import {
   cardIdOf,
   elementIdOf,
+  itemizeRepeats,
+  PA_ITEM_CARD,
   parseElementId,
   sanitizeAssistantSpec,
 } from "./pa-spec"
@@ -217,5 +219,105 @@ describe("card and element ids", () => {
       repeat: null,
     })
     expect(parseElementId("nonsense")).toBeNull()
+  })
+})
+
+describe("itemizeRepeats", () => {
+  const text = (t: string) => ({
+    type: "Text",
+    props: { text: t },
+    children: [],
+  })
+  const press = (label: string) => ({
+    type: "Button",
+    props: { label },
+    on: { press: REPLY },
+    children: [],
+  })
+  const list = (children: string[]) => ({
+    type: "Stack",
+    props: {},
+    repeat: { statePath: "/needs", key: "key" },
+    children,
+  })
+
+  it("puts a repeated line and its button on a card of their own, keys and marks kept", () => {
+    const { spec: marked } = sanitizeAssistantSpec(
+      spec({
+        main: { type: "Card", props: {}, children: ["list"] },
+        list: list(["line", "go"]),
+        line: text("x"),
+        go: press("Open it"),
+      })
+    )
+    const out = itemizeRepeats(marked)
+    expect(out.elements.list).toMatchObject({
+      repeat: { statePath: "/needs", key: "key" },
+      children: ["list~item"],
+    })
+    expect(out.elements["list~item"]).toEqual({
+      type: PA_ITEM_CARD,
+      props: { actions: ["go"] },
+      children: ["line", "go"],
+    })
+    // The button as it was: its key, and the container it was written in.
+    expect(out.elements.go).toBe(marked.elements.go)
+    expect(out.elements.go.props).toMatchObject({
+      __paKey: "go",
+      __paParent: "list",
+    })
+    // Once is enough: the list now repeats one card.
+    expect(itemizeRepeats(out)).toBe(out)
+  })
+
+  it("takes a row of buttons for the item's actions, and never a key in use", () => {
+    const out = itemizeRepeats(
+      spec({
+        main: { type: "Stack", props: {}, children: ["list"] },
+        list: list(["line", "row"]),
+        "list~item": text("the spec's own"),
+        line: text("x"),
+        row: {
+          type: "Stack",
+          props: { direction: "horizontal" },
+          children: ["a", "b"],
+        },
+        a: press("Yes"),
+        b: { type: "Link", props: { label: "See" }, children: [] },
+      })
+    )
+    expect(out.elements.list.children).toEqual(["list~item~"])
+    expect(out.elements["list~item~"].props).toEqual({ actions: ["row"] })
+    expect(out.elements["list~item"]).toEqual(text("the spec's own"))
+  })
+
+  it("leaves a list that only reads, one that only acts, and one still arriving", () => {
+    const reads = spec({
+      main: { type: "Stack", props: {}, children: ["list"] },
+      list: list(["line", "more"]),
+      line: text("x"),
+      more: text("y"),
+    })
+    expect(itemizeRepeats(reads)).toBe(reads)
+    const acts = spec({
+      main: { type: "Stack", props: {}, children: ["list"] },
+      list: list(["a", "b"]),
+      a: press("Plan A"),
+      b: press("Plan B"),
+    })
+    expect(itemizeRepeats(acts)).toBe(acts)
+    const arriving = spec({
+      main: { type: "Stack", props: {}, children: ["list"] },
+      list: list(["line", "go"]),
+      line: text("x"),
+    })
+    expect(itemizeRepeats(arriving)).toBe(arriving)
+    // Not repeated: a card's own lines and buttons stay where they are.
+    const plain = spec({
+      main: { type: "Stack", props: {}, children: ["line", "go"] },
+      line: text("x"),
+      go: press("Go"),
+    })
+    expect(itemizeRepeats(plain)).toBe(plain)
   })
 })

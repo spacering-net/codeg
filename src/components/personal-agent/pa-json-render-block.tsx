@@ -34,6 +34,7 @@
 
 import {
   createContext,
+  isValidElement,
   useContext,
   useEffect,
   useMemo,
@@ -54,6 +55,7 @@ import {
   useActions,
   useRepeatScope,
   type BaseComponentProps,
+  type ComponentRegistry,
 } from "@json-render/react"
 import type { Spec } from "@json-render/core"
 import type { ShadcnProps } from "@json-render/shadcn"
@@ -105,11 +107,15 @@ import { jsonRenderCatalog } from "@/lib/json-render/catalog"
 import {
   cardIdOf,
   elementIdOf,
+  itemizeRepeats,
+  PA_ITEM_CARD,
   parseElementId,
   sanitizeAssistantSpec,
+  type PaItemCardProps,
   type PaMarks,
 } from "@/lib/json-render/pa-spec"
 import type { CardAct, ItemInfo, TimelineRow } from "@/lib/types"
+import { cn } from "@/lib/utils"
 import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
@@ -222,10 +228,15 @@ function useMarked(props: Record<string, unknown>) {
 
 const PlainButton = jsonRenderComponents.Button
 const PlainLink = jsonRenderComponents.Link
+const PlainCard = jsonRenderComponents.Card
+
+/** Inside a list item's card (`PaItemCard`): its buttons are smaller. */
+const InItemCard = createContext(false)
 
 function PaButton(ctx: BaseComponentProps<ShadcnProps<"Button">>) {
   const { props, emit } = ctx
   const marked = useMarked(props as Record<string, unknown>)
+  const inItem = useContext(InItemCard)
   if (!marked) return <PlainButton {...ctx} />
   const variant =
     props.variant === "danger"
@@ -237,6 +248,15 @@ function PaButton(ctx: BaseComponentProps<ShadcnProps<"Button">>) {
     <Button
       type="button"
       variant={variant}
+      size={inItem ? "sm" : "default"}
+      // As wide as its words, alone in a column too; on an item's card, a
+      // grey one is raised off the card's grey as on a bubble.
+      className={cn(
+        "self-start",
+        inItem &&
+          variant === "secondary" &&
+          "bg-background shadow-[0_0_0_1px_color-mix(in_oklab,var(--foreground)_10%,transparent),0_1px_2px_color-mix(in_oklab,var(--foreground)_6%,transparent)] hover:bg-[color-mix(in_oklab,var(--foreground)_3%,var(--background))]"
+      )}
       disabled={marked.disabled}
       data-pa-card-button={marked.done ? "done" : ""}
       aria-pressed={marked.done || undefined}
@@ -270,9 +290,84 @@ function PaLink(ctx: BaseComponentProps<ShadcnProps<"Link">>) {
   )
 }
 
-const { registry } = defineRegistry(jsonRenderCatalog, {
-  components: { ...jsonRenderComponents, Button: PaButton, Link: PaLink },
-})
+/** A card's depth: the reply's own card is 1, a card inside it 2. */
+const CardDepth = createContext(0)
+
+/** The reply's card, as the bubble's other surfaces are spaced: its title,
+ *  then its parts — a part's heading set apart from the part before, none
+ *  over the first. A card inside it is one thing on it: the list items'
+ *  wash, tighter, with a smaller title. */
+const OUTER_CARD = cn(
+  "gap-4 py-4",
+  "[&>[data-slot=card-header]]:px-4 [&>[data-slot=card-content]]:px-4",
+  "[&_[data-slot=card-content]_:is(h1,h2,h3,h4)]:mt-0",
+  "[&>[data-slot=card-content]>:is(h1,h2,h3,h4):not(:first-child)]:mt-2"
+)
+const INNER_CARD = cn(
+  "gap-2 rounded-xl border-transparent bg-(--pa-inset) py-3",
+  "[&>[data-slot=card-header]]:px-3 [&>[data-slot=card-content]]:px-3",
+  "[&>[data-slot=card-header]>[data-slot=card-title]]:text-sm"
+)
+
+function PaCardBox(ctx: BaseComponentProps<ShadcnProps<"Card">>) {
+  const depth = useContext(CardDepth)
+  const { props } = ctx
+  return (
+    <CardDepth.Provider value={depth + 1}>
+      <PlainCard
+        {...ctx}
+        props={{
+          ...props,
+          className: cn(depth === 0 ? OUTER_CARD : INNER_CARD, props.className),
+        }}
+      />
+    </CardDepth.Provider>
+  )
+}
+
+/** One item of a list on a card of its own (`itemizeRepeats`): what to
+ *  read, and what to do about it at its end — under it when the card is
+ *  too narrow for both on a line. */
+const PaItemCard: ComponentRegistry[string] = ({ element, children }) => {
+  const props = element.props as Partial<PaItemCardProps> | undefined
+  const acting = new Set(Array.isArray(props?.actions) ? props.actions : [])
+  const body: React.ReactNode[] = []
+  const actions: React.ReactNode[] = []
+  for (const child of Array.isArray(children) ? children : [children]) {
+    const key = isValidElement(child) ? child.key : null
+    if (key != null && acting.has(key)) actions.push(child)
+    else body.push(child)
+  }
+  return (
+    <div
+      data-pa-card-item
+      className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-(--pa-inset) px-3 py-2.5"
+    >
+      <div className="flex min-w-0 flex-[1_1_12rem] flex-col gap-1 break-words">
+        {body}
+      </div>
+      {actions.length > 0 ? (
+        <InItemCard.Provider value>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {actions}
+          </div>
+        </InItemCard.Provider>
+      ) : null}
+    </div>
+  )
+}
+
+const registry: ComponentRegistry = {
+  ...defineRegistry(jsonRenderCatalog, {
+    components: {
+      ...jsonRenderComponents,
+      Button: PaButton,
+      Card: PaCardBox,
+      Link: PaLink,
+    },
+  }).registry,
+  [PA_ITEM_CARD]: PaItemCard,
+}
 
 /** json-render's own confirmation (an action bound with `confirm`), drawn
  *  as codeg draws one: the library's dialog has no theme. */
@@ -346,7 +441,10 @@ export default function PaJsonRenderBlock({
   const { mode } = useContext(StreamdownContext)
   const compiled = useMemo(() => {
     const spec = renderableSpec(source)
-    return spec ? sanitizeAssistantSpec(spec) : null
+    if (!spec) return null
+    // Marked first: a button's container is the one it was written in.
+    const sanitized = sanitizeAssistantSpec(spec)
+    return { ...sanitized, spec: itemizeRepeats(sanitized.spec) }
   }, [source])
   if (!compiled || !scope) return <>{fallback}</>
   return (

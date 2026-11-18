@@ -3235,6 +3235,10 @@ export interface TodayRow {
   agent_type: string | null
   /** The owner can take it back here. */
   undo: boolean
+  /** A setting `changed` for the owner: its card's `changes` and the
+   *  `names` they use, to word it as the card does (its `title` names a
+   *  setting by its key). */
+  changes?: { changes: unknown; names: unknown } | null
 }
 
 /** "Today": every assistant's, in four groups. */

@@ -209,6 +209,79 @@ export function sanitizeAssistantSpec(spec: Spec): SanitizedSpec {
   return { spec: { ...spec, elements }, stripped: out.stripped }
 }
 
+/** The type of the card codeg draws round a list's item (`itemizeRepeats`):
+ *  no component of the catalog's, and none a spec is taught. */
+export const PA_ITEM_CARD = "__paItemCard"
+
+/** What `PA_ITEM_CARD` takes: its children's keys that act — buttons,
+ *  links, a row of them — drawn at its end. */
+export type PaItemCardProps = {
+  actions: string[]
+}
+
+/** A child that acts: a button or link, or a container of nothing else. */
+function acts(
+  elements: Record<string, UIElement>,
+  key: string,
+  seen: Set<string>
+): boolean | null {
+  const el = elements[key]
+  if (!el || typeof el !== "object") return null
+  if (PRESSABLE.has(String(el.type))) return true
+  const kids = Array.isArray(el.children) ? el.children : []
+  if (kids.length === 0 || seen.has(key)) return false
+  seen.add(key)
+  let all = true
+  for (const kid of kids) {
+    const a = typeof kid === "string" ? acts(elements, kid, seen) : false
+    if (a == null) return null
+    if (!a) all = false
+  }
+  return all
+}
+
+/**
+ * An assistant's list drawn as cards: an element that repeats over a state
+ * array, whose item is something to read and something to do about it —
+ * its line and its button, as a morning brief lists what needs the owner —
+ * gets each item on a card of its own, the button at its end. Its children
+ * move under one `PA_ITEM_CARD` element, still repeated: their keys, the
+ * repeat's scope and so every button's id (`elementIdOf`) and container
+ * (`__paParent`, read before this) stay as they were. An item that only
+ * reads, or only acts (a row of choices), stays as written; so does one
+ * whose children have not all arrived yet.
+ */
+export function itemizeRepeats(spec: Spec): Spec {
+  const source = spec.elements ?? {}
+  let elements: Record<string, UIElement> | null = null
+  for (const [key, el] of Object.entries(source)) {
+    if (!el || typeof el !== "object" || !el.repeat) continue
+    const kids = Array.isArray(el.children) ? el.children : []
+    if (kids.length < 2) continue
+    const actions: string[] = []
+    let known = true
+    for (const kid of kids) {
+      const a =
+        typeof kid === "string" ? acts(source, kid, new Set([key])) : null
+      if (a == null) {
+        known = false
+        break
+      }
+      if (a) actions.push(kid)
+    }
+    if (!known || actions.length === 0 || actions.length === kids.length) {
+      continue
+    }
+    elements ??= { ...source }
+    let wrap = `${key}~item`
+    while (wrap in elements) wrap += "~"
+    const props: PaItemCardProps = { actions }
+    elements[wrap] = { type: PA_ITEM_CARD, props, children: [...kids] }
+    elements[key] = { ...el, children: [wrap] }
+  }
+  return elements ? { ...spec, elements } : spec
+}
+
 /** A card's id among its reply's cards: the FNV-1a hash of its source, as
  *  eight hex digits. */
 export function cardIdOf(source: string): string {

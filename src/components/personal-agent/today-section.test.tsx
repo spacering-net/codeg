@@ -29,6 +29,9 @@ const api = vi.hoisted(() => ({
   personalAgentNoticeAct: vi.fn(async () => ({})),
   personalAgentBots: vi.fn(),
   personalAgentToday: vi.fn(),
+  personalAgentTemplates: vi.fn(async () => [
+    { id: "research", name: "Researcher" },
+  ]),
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
@@ -531,6 +534,53 @@ describe("today", () => {
       expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(6, "undo", 2)
     )
     await waitFor(() => expect(feed.refresh).toHaveBeenCalled())
+  })
+
+  it("words a changed setting as its card does, not by its key", async () => {
+    draw(
+      today({
+        done: [
+          row({
+            key: "changed:7",
+            kind: "changed",
+            bot_id: 2,
+            notice_id: 7,
+            title: "prefs.reply_length medium → short",
+            state: "acted",
+            changes: {
+              changes: [
+                { key: "prefs.reply_length", from: "medium", to: "short" },
+              ],
+              names: {},
+            },
+          }),
+          row({
+            key: "changed:8",
+            kind: "changed",
+            bot_id: 2,
+            notice_id: 8,
+            title: "bot.ab12.template blank → research",
+            state: "acted",
+            changes: {
+              changes: [
+                { key: "bot.ab12.template", from: "blank", to: "research" },
+              ],
+              names: { "bot:ab12": "Goose" },
+            },
+          }),
+        ],
+      })
+    )
+    const prefs = document.querySelector(
+      '[data-key="changed:7"]'
+    ) as HTMLElement
+    expect(prefs.textContent).toContain("Reply length: Medium → Short")
+    expect(prefs.textContent).not.toContain("prefs.reply_length")
+    const role = document.querySelector('[data-key="changed:8"]') as HTMLElement
+    // A role by its name in the owner's language, once the templates are read.
+    await waitFor(() => expect(role.textContent).toContain("→ Researcher"))
+    expect(role.textContent).toContain("Goose")
+    expect(role.textContent).not.toContain("bot.ab12")
   })
 
   it("lists what an assistant remembered, and takes it back (7.7)", async () => {

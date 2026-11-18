@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import type { ContextType } from "react"
 import { StreamdownContext } from "streamdown"
@@ -462,5 +469,112 @@ describe("an assistant's card: pa.open", () => {
       expect(api.personalAgentConversationTarget).toHaveBeenCalledWith(44)
     )
     expect(api.personalAgentSend).not.toHaveBeenCalled()
+  })
+})
+
+describe("an assistant's card: a list", () => {
+  const needs = [
+    { key: "t1", text: "Task 1 failed", label: "Open task 1" },
+    { key: "t2", text: "Task 2 waits", label: "Open task 2" },
+  ]
+  /** A brief's list: a line and its buttons, repeated over the state. */
+  function listCard(buttons: Record<string, object>): string {
+    return [
+      line({ op: "add", path: "/root", value: "main" }),
+      el("main", {
+        type: "Card",
+        props: { title: "Brief" },
+        children: ["head", "list", "after"],
+      }),
+      el("head", {
+        type: "Heading",
+        props: { text: "Needs you" },
+        children: [],
+      }),
+      el("list", {
+        type: "Stack",
+        props: { gap: "md" },
+        repeat: { statePath: "/needs", key: "key" },
+        children: ["line", ...Object.keys(buttons)],
+      }),
+      el("line", {
+        type: "Text",
+        props: { text: { $item: "text" } },
+        children: [],
+      }),
+      ...Object.entries(buttons).map(([k, v]) => el(k, v)),
+      el(
+        "after",
+        button("See the matter", {
+          press: { action: "pa.open", params: { target: "item", id: 3 } },
+        })
+      ),
+      line({ op: "add", path: "/state/needs", value: needs }),
+    ].join("\n")
+  }
+
+  it("draws each item on a card of its own, its button at its end, acting for that item", async () => {
+    const src = listCard({
+      go: {
+        type: "Button",
+        props: { label: { $item: "label" } },
+        on: reply(),
+        children: [],
+      },
+    })
+    const { container } = draw(src)
+    const items = container.querySelectorAll("[data-pa-card-item]")
+    expect(items).toHaveLength(2)
+    expect(items[0]).toHaveTextContent("Task 1 failed")
+    expect(
+      within(items[0] as HTMLElement).getByRole("button")
+    ).toHaveAccessibleName("Open task 1")
+    const second = within(items[1] as HTMLElement).getByRole("button", {
+      name: "Open task 2",
+    })
+    // Its button sits after its line, smaller than one alone on the card.
+    expect(second.parentElement?.previousElementSibling).toHaveTextContent(
+      "Task 2 waits"
+    )
+    expect(second).toHaveAttribute("data-size", "sm")
+    const alone = screen.getByRole("button", { name: "See the matter" })
+    expect(alone.closest("[data-pa-card-item]")).toBeNull()
+    expect(alone).toHaveAttribute("data-size", "default")
+    fireEvent.click(second)
+    await waitFor(() => expect(api.personalAgentSend).toHaveBeenCalledTimes(1))
+    expect(api.personalAgentSend).toHaveBeenCalledWith(
+      "Open task 2",
+      null,
+      120,
+      7,
+      { element: `${cardIdOf(src)}/go#/needs/1`, label: "Open task 2" }
+    )
+  })
+
+  it("keeps a pick to its own item: the other choice of that item greyed, the other items' open", () => {
+    const choice = (label: string) => ({
+      type: "Button",
+      props: { label },
+      on: reply(),
+      children: [],
+    })
+    const src = listCard({ yes: choice("Yes"), no: choice("No") })
+    const id = cardIdOf(src)
+    const { container } = draw(src, {
+      row: replyRow({
+        card_acts: {
+          [`${id}/yes#/needs/0`]: { action: "pa.reply", label: "Yes", at: "x" },
+        },
+      }),
+    })
+    const [first, second] = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-pa-card-item]")
+    )
+    const yes = within(first).getByRole("button", { name: "Yes" })
+    expect(yes).toBeDisabled()
+    expect(yes).toHaveAttribute("aria-pressed", "true")
+    expect(within(first).getByRole("button", { name: "No" })).toBeDisabled()
+    expect(within(second).getByRole("button", { name: "Yes" })).toBeEnabled()
+    expect(within(second).getByRole("button", { name: "No" })).toBeEnabled()
   })
 })

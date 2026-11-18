@@ -120,6 +120,11 @@ pub struct TodayRow {
     pub agent_type: Option<String>,
     /// The owner can take it back here ([Undo]).
     pub undo: bool,
+    /// A setting `changed` for the owner: its card's `changes` and the
+    /// `names` they use, for the page to word it as the card does — its
+    /// title is codeg's plain line, a setting by its key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changes: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -149,8 +154,23 @@ impl TodayRow {
             routine_id: None,
             agent_type: None,
             undo: false,
+            changes: None,
         }
     }
+}
+
+/// A changed card's changes and the names they use, from its row's data;
+/// `None` when it lists none.
+fn changes_of(data: Option<&str>) -> Option<Value> {
+    let data: Value = serde_json::from_str(data?).ok()?;
+    let changes = data.get("changes")?;
+    if changes.as_array().is_none_or(|a| a.is_empty()) {
+        return None;
+    }
+    Some(serde_json::json!({
+        "changes": changes,
+        "names": data.get("names").cloned().unwrap_or(Value::Null),
+    }))
 }
 
 /// The first line of `text` with something in it, at most [`TEXT_MAX`].
@@ -875,16 +895,13 @@ pub async fn today_from(
         if at < done_from && n.state != NoticeState::Undone {
             continue;
         }
-        let title = match n.timeline_id {
-            Some(id) => svc::get_row(&db.conn, id)
-                .await
-                .ok()
-                .flatten()
-                .map(|r| one_line(&r.body))
-                .unwrap_or_default(),
-            None => String::new(),
+        let card = match n.timeline_id {
+            Some(id) => svc::get_row(&db.conn, id).await.ok().flatten(),
+            None => None,
         };
+        let title = card.as_ref().map(|r| one_line(&r.body)).unwrap_or_default();
         let mut row = TodayRow::new(format!("changed:{}", n.id), "changed", title, at);
+        row.changes = card.as_ref().and_then(|r| changes_of(r.data.as_deref()));
         row.bot_id = Some(bot);
         row.state = Some(if n.state == NoticeState::Undone {
             "undone".into()

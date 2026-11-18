@@ -8,7 +8,9 @@
  * loose ends, the owner's yesterday — each row opening what it is about, as
  * "today"'s rows do — and, once a week, the week's figures (6.6). Nothing is
  * settled from it but last night's tidy-ups, a line each with its own
- * buttons (7.7).
+ * buttons (7.7). Drawn as an assistant's brief is: its parts on one card
+ * under the bubble's head, a part's title over it, each thing on it a card
+ * of its own.
  */
 
 import { useTranslations } from "next-intl"
@@ -37,6 +39,11 @@ type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 /** Rows a part shows before "…and N more". */
 const PART_SHOWN = 8
 
+/** A line of a part on a card of its own, as an assistant's list item is
+ *  (`PaItemCard`): the bubble's inset wash. */
+const LINE_CARD =
+  "rounded-xl bg-(--pa-inset) px-3 py-2 text-xs leading-5 break-words"
+
 function materialOf(v: unknown): BriefMaterial | null {
   return v && typeof v === "object" && (v as { kind?: unknown }).kind
     ? (v as BriefMaterial)
@@ -64,8 +71,8 @@ function Part({
   children: React.ReactNode
 }) {
   return (
-    <section data-pa-brief-part={name} className="flex flex-col gap-1.5">
-      <h4 className="text-xs font-semibold text-muted-foreground">{title}</h4>
+    <section data-pa-brief-part={name} className="flex flex-col gap-2">
+      <h4 className="text-sm leading-5 font-semibold">{title}</h4>
       {children}
     </section>
   )
@@ -96,11 +103,11 @@ function RowsPart({
         </p>
       ) : null}
       {messages.length > 0 ? (
-        <ul className="flex flex-col gap-0.5">
+        <ul className="flex flex-col gap-1.5">
           {messages.map((msg) => (
             <li
               key={msg.id}
-              className="text-xs leading-5 break-words"
+              className={LINE_CARD}
               data-pa-brief-message={msg.id}
             >
               <span className="font-medium">
@@ -131,10 +138,7 @@ function BotLine({ line }: { line: BriefBotLine }) {
     line.stuck > 0 ? t("stuck", { count: line.stuck }) : null,
   ].filter(Boolean)
   return (
-    <li
-      className="text-xs leading-5 break-words"
-      data-pa-brief-bot={line.bot_id}
-    >
+    <li className={LINE_CARD} data-pa-brief-bot={line.bot_id}>
       <span className="font-medium">{line.name}</span>
       <span className="text-muted-foreground"> — {parts.join(" · ")}</span>
     </li>
@@ -154,10 +158,7 @@ function LooseLine({ loose, at }: { loose: BriefLoose; at: string }) {
         ? t("worktree", { days })
         : t("session")
   return (
-    <li
-      className="text-xs leading-5 break-words"
-      data-pa-brief-loose={loose.kind}
-    >
+    <li className={LINE_CARD} data-pa-brief-loose={loose.kind}>
       <span className="font-medium">{loose.title}</span>
       {loose.project ? (
         <span className="text-muted-foreground"> · {loose.project}</span>
@@ -397,6 +398,7 @@ export function BriefCard({ item }: { item: NoticeItem }) {
     loose.length === 0 &&
     tidied.length === 0 &&
     week == null
+  const shown = !nothing || (y != null && y.total > 0)
   return (
     <MessageRow
       rowId={row.id}
@@ -424,47 +426,55 @@ export function BriefCard({ item }: { item: NoticeItem }) {
             {t("byCodeg")}
           </p>
         </div>
-        {parts.map((p) => (
-          <RowsPart
-            key={p.name}
-            name={p.name}
-            rows={p.rows}
-            dispatches={dispatches}
-            messages={p.name === "tonight" ? messages : undefined}
-          />
-        ))}
-        <TidyLines rows={tidied} />
-        {bots.length > 0 ? (
-          <Part name="bots" title={t("part.bots")}>
-            <ul className="flex flex-col gap-0.5">
-              {bots.map((b) => (
-                <BotLine key={b.bot_id} line={b} />
-              ))}
-            </ul>
-          </Part>
+        {shown ? (
+          // Its parts on one card, as an assistant's brief is drawn.
+          <div
+            data-pa-brief-body
+            className="flex min-w-0 flex-col gap-5 rounded-xl border bg-card p-4 text-card-foreground"
+          >
+            {parts.map((p) => (
+              <RowsPart
+                key={p.name}
+                name={p.name}
+                rows={p.rows}
+                dispatches={dispatches}
+                messages={p.name === "tonight" ? messages : undefined}
+              />
+            ))}
+            <TidyLines rows={tidied} />
+            {bots.length > 0 ? (
+              <Part name="bots" title={t("part.bots")}>
+                <ul className="flex flex-col gap-1.5">
+                  {bots.map((b) => (
+                    <BotLine key={b.bot_id} line={b} />
+                  ))}
+                </ul>
+              </Part>
+            ) : null}
+            {loose.length > 0 && m ? (
+              <Part name="loose" title={t("part.loose")}>
+                <ul className="flex flex-col gap-1.5">
+                  {loose.map((l) => (
+                    <LooseLine key={`${l.kind}:${l.id}`} loose={l} at={m.at} />
+                  ))}
+                </ul>
+              </Part>
+            ) : null}
+            {y && y.total > 0 ? (
+              <Part name="yesterday" title={t("part.yesterday")}>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  {[
+                    t("sessions", { count: y.total }),
+                    y.by_project.map(([p, n]) => `${p} ${n}`).join(", "),
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </p>
+              </Part>
+            ) : null}
+            {week ? <WeekPart week={week} /> : null}
+          </div>
         ) : null}
-        {loose.length > 0 && m ? (
-          <Part name="loose" title={t("part.loose")}>
-            <ul className="flex flex-col gap-0.5">
-              {loose.map((l) => (
-                <LooseLine key={`${l.kind}:${l.id}`} loose={l} at={m.at} />
-              ))}
-            </ul>
-          </Part>
-        ) : null}
-        {y && y.total > 0 ? (
-          <Part name="yesterday" title={t("part.yesterday")}>
-            <p className="text-xs leading-5 text-muted-foreground">
-              {[
-                t("sessions", { count: y.total }),
-                y.by_project.map(([p, n]) => `${p} ${n}`).join(", "),
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
-          </Part>
-        ) : null}
-        {week ? <WeekPart week={week} /> : null}
         {nothing ? (
           <p className="text-xs text-muted-foreground">{t("nothing")}</p>
         ) : null}

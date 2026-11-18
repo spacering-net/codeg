@@ -9499,6 +9499,13 @@ async fn what_was_done_today_is_listed_and_a_change_made_for_the_owner_can_be_ta
     assert!(view.dispatches.iter().any(|d| d.id == finished), "the work comes with its row");
     let changed = view.done.iter().find(|r| r.kind == "changed").expect("the change");
     assert_eq!((changed.undo, changed.state.as_deref()), (true, Some("acted")));
+    // What it changed comes with it, for the page to word as its card does:
+    // its title is codeg's plain line, a setting by its key.
+    let changes = changed.changes.as_ref().expect("its changes");
+    assert_eq!(changes["changes"][0]["key"], "prefs.reply_length", "{changes}");
+    assert_eq!(changes["changes"][0]["to"], "short", "{changes}");
+    assert!(changes.get("names").is_some(), "{changes}");
+    assert!(answered.changes.is_none() && done.changes.is_none());
     assert_eq!(engine.prefs().await.reply_length, crate::models::personal_agent_prefs::ReplyLength::Short);
 
     engine.act_on_notice(changed.notice_id.unwrap(), "undo").await.unwrap();
