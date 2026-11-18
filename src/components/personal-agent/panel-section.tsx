@@ -3,15 +3,20 @@
 /**
  * The pieces the personal agent's side panel is built of, the same in each
  * of its tabs:
- * - `PanelSection`: a part of a tab — its title, how many it holds, an
- *   action at its end — over its body.
+ * - `PanelSection`: a part of a tab — its title centred, how many it holds
+ *   after it, an action at the head's end — over its body.
  * - `PanelGroup`: a folding group inside a part (who a matter waits on, a
- *   group of today): a head only as wide as its marker, its name and count
- *   in its tone and the chevron after them — as the roster's heads are —
- *   over its rows, one list, and under it the way to show the rest.
- * - `PanelStack`: what a group holds — a card for each thing with buttons,
- *   a box or a task's strip; the plain ones rows, those next to one another
- *   one card with hairlines between them.
+ *   group of today): one card, its head a bar across its top — its marker,
+ *   its name and count in its tone, the chevron at the end — its things
+ *   under it, a hairline between them, and at its foot the way to show the
+ *   rest.
+ * - `PanelBar`: the bar across a card's top (a group's, a day's of output,
+ *   a window's on the workspace).
+ * - `PanelStack`: things one under another — a card for each thing with
+ *   buttons, a box or a task's strip; the plain ones rows, those next to
+ *   one another one card with hairlines between them. `flush`: inside a
+ *   card of its own (a group's, a day's), each flat on it, a hairline
+ *   between them.
  * - `PanelList`: rows on one surface, a hairline between them (an inset
  *   grouped list): what a day of output or the routines hold.
  * - `PanelItem`: one thing (shadcn's `Item`): what leads it, its title and
@@ -88,26 +93,44 @@ export function PanelSection({
 } & Omit<ComponentProps<"section">, "title">) {
   return (
     <section
-      className={cn("flex min-w-0 flex-col gap-2.5", className)}
+      className={cn("flex min-w-0 flex-col gap-4", className)}
       {...props}
     >
-      <div className="flex h-7 min-w-0 items-center gap-1.5">
-        <h3 className="min-w-0 truncate text-[0.9375rem] font-semibold text-foreground">
-          {title}
-        </h3>
-        {count != null && count > 0 ? (
-          <span className="shrink-0 text-[0.8125rem] text-muted-foreground tabular-nums">
-            {count}
-          </span>
-        ) : null}
+      {/* The title and its count in the middle, the action at the end:
+          the title stays centred whether or not there is one. */}
+      <div className="grid h-7 min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,auto)_minmax(0,1fr)] items-center gap-1.5">
+        <div className="col-start-2 flex min-w-0 items-center gap-1.5">
+          <h3 className="min-w-0 truncate text-[0.9375rem] font-semibold text-foreground">
+            {title}
+          </h3>
+          {count != null && count > 0 ? (
+            <span className="shrink-0 text-[0.8125rem] text-muted-foreground tabular-nums">
+              {count}
+            </span>
+          ) : null}
+        </div>
         {action ? (
-          <div className="-me-1 ms-auto flex shrink-0 items-center">
+          <div className="col-start-3 -me-1 flex shrink-0 items-center justify-self-end">
             {action}
           </div>
         ) : null}
       </div>
       {children}
     </section>
+  )
+}
+
+/** The bar across a card's top: what the card is, on a tint, a hairline
+ *  under it. */
+export const PANEL_BAR =
+  "flex h-9 min-w-0 items-center gap-2 bg-muted/40 px-3 text-xs font-medium"
+
+export function PanelBar({ className, ...props }: ComponentProps<"div">) {
+  return (
+    <div
+      className={cn(PANEL_BAR, "border-b border-border/60", className)}
+      {...props}
+    />
   )
 }
 
@@ -167,36 +190,45 @@ export function PanelGroup({
   const [open, setOpen] = useFold(fold)
   return (
     <Collapsible open={open} onOpenChange={setOpen} asChild>
-      <section className={cn("flex min-w-0 flex-col", className)} {...props}>
-        {/* Centred over its list, a soft pill — deeper when hovered: only
-            its words and chevron press it, the blank either side is not a
-            button. */}
-        <div className="flex h-7 min-w-0 items-center justify-center">
-          <CollapsibleTrigger
-            className={cn(
-              "group/fold flex h-7 max-w-full min-w-0 items-center gap-1.5 rounded-full bg-muted/60 px-3 text-start text-[0.8125rem] font-medium transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
-              TONE[tone].text
-            )}
-          >
-            {Icon ? (
-              <Icon aria-hidden className="size-3.5 shrink-0" />
-            ) : (
-              <span
-                aria-hidden
-                className={cn("size-1.5 shrink-0 rounded-full", TONE[tone].dot)}
-              />
-            )}
-            <span className="min-w-0 truncate">{label}</span>
-            <span className="shrink-0 tabular-nums">{count}</span>
-            <ChevronDown
+      <section
+        className={cn(
+          PANEL_SURFACE,
+          "flex min-w-0 flex-col overflow-hidden",
+          className
+        )}
+        {...props}
+      >
+        {/* Its head the bar across its top, the whole of it the button that
+            folds it — deeper when hovered. */}
+        <CollapsibleTrigger
+          className={cn(
+            PANEL_BAR,
+            "group/fold w-full text-start transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset",
+            TONE[tone].text
+          )}
+        >
+          {Icon ? (
+            <Icon aria-hidden className="size-3.5 shrink-0" />
+          ) : (
+            <span
               aria-hidden
-              className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=closed]/fold:-rotate-90 rtl:group-data-[state=closed]/fold:rotate-90"
+              className={cn("size-1.5 shrink-0 rounded-full", TONE[tone].dot)}
             />
-          </CollapsibleTrigger>
-        </div>
-        <CollapsibleContent className="flex min-w-0 flex-col items-start gap-1 pt-1.5">
-          <PanelStack className="w-full">{children}</PanelStack>
-          {more}
+          )}
+          <span className="min-w-0 truncate">{label}</span>
+          <span className="shrink-0 tabular-nums">{count}</span>
+          <ChevronDown
+            aria-hidden
+            className="ms-auto size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=closed]/fold:-rotate-90 rtl:group-data-[state=closed]/fold:rotate-90"
+          />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="flex min-w-0 flex-col border-t border-border/60">
+          <PanelStack flush>{children}</PanelStack>
+          {more ? (
+            <div className="flex min-w-0 border-t border-border/50 px-4 py-1">
+              {more}
+            </div>
+          ) : null}
         </CollapsibleContent>
       </section>
     </Collapsible>
@@ -205,7 +237,7 @@ export function PanelGroup({
 
 /** What an item sits on: a `PanelList`'s row, a `PanelStack`'s card or
  *  row, or nothing — a soft card of its own (the morning brief's). */
-type Surface = "list" | "stack" | null
+type Surface = "list" | "stack" | "flush" | null
 const SurfaceContext = createContext<Surface>(null)
 
 /** Whether the item being drawn is on the panel's lists or stacks: its lead
@@ -218,15 +250,16 @@ export function useInPanelList(): boolean {
  *  task's strip a card of its own; the plain ones in a row each, the rows
  *  next to one another drawn as one card with a hairline between them. */
 export function PanelStack({
+  flush = false,
   className,
   children,
   ...props
-}: ComponentProps<"div">) {
+}: { flush?: boolean } & ComponentProps<"div">) {
   return (
-    <SurfaceContext value="stack">
+    <SurfaceContext value={flush ? "flush" : "stack"}>
       <div
         role="list"
-        className={cn("flex min-w-0 flex-col gap-2", className)}
+        className={cn("flex min-w-0 flex-col", !flush && "gap-2", className)}
         {...props}
       >
         {children}
@@ -377,7 +410,8 @@ export interface PanelItemProps extends Omit<ComponentProps<"div">, "title"> {
 
 export function PanelItem(props: PanelItemProps) {
   const surface = useContext(SurfaceContext)
-  if (surface === "stack") return <StackItem {...props} />
+  if (surface === "stack" || surface === "flush")
+    return <StackItem {...props} flush={surface === "flush"} />
   return <ListItem {...props} inList={surface === "list"} />
 }
 
@@ -437,9 +471,10 @@ function StackItem({
   extra,
   actions,
   action,
+  flush,
   className,
   ...props
-}: PanelItemProps) {
+}: PanelItemProps & { flush: boolean }) {
   const card = actions != null || extra != null || callout != null
   // Its quiet line: what it is, then when.
   const line =
@@ -468,10 +503,14 @@ function StackItem({
       variant="outline"
       size="sm"
       className={cn(
-        "ws-msg-card relative flex-nowrap rounded-2xl border-border/70 bg-card",
+        "relative flex-nowrap",
+        flush
+          ? // Flat on its card, a hairline under each but the last.
+            "rounded-none border-x-0 border-t-0 border-b-border/50 bg-transparent last:border-b-0"
+          : "ws-msg-card rounded-2xl border-border/70 bg-card",
         card
           ? "flex-col items-stretch gap-3 p-4"
-          : cn("items-center px-4 py-3", JOINED_ROW),
+          : cn("items-center px-4 py-3", !flush && JOINED_ROW),
         onOpen && "has-[[data-pa-item-open]:hover]:bg-muted/40",
         className
       )}
@@ -494,7 +533,10 @@ function StackItem({
               openLabel={openLabel}
               expanded={expanded}
               className={STACK_TITLE}
-              ring="focus-visible:after:rounded-2xl focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset"
+              ring={cn(
+                "focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset",
+                !flush && "focus-visible:after:rounded-2xl"
+              )}
             />
             {/* Where it stands: at a card's top end. */}
             {card ? chipEl : null}

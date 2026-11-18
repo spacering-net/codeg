@@ -50,19 +50,17 @@ export function EmptyState({
   )
 }
 
-/** First paint: two group heads over ghost lists, on the real ones'
- *  insets. */
+/** First paint: two ghost group cards — a bar over their rows — as far
+ *  apart as the real ones. */
 export function WorkSkeleton() {
   return (
-    <div className="flex flex-col gap-4" aria-hidden>
+    <div className="flex flex-col gap-3" aria-hidden>
       {[2, 1].map((rows, section) => (
-        <div key={section} className="flex flex-col gap-1.5">
-          <Skeleton className="h-4 w-24 rounded-md" />
-          <Skeleton
-            className="w-full rounded-xl"
-            style={{ height: `${rows * 3.75}rem` }}
-          />
-        </div>
+        <Skeleton
+          key={section}
+          className="w-full rounded-2xl"
+          style={{ height: `${2.25 + rows * 3.75}rem` }}
+        />
       ))}
     </div>
   )
@@ -72,7 +70,7 @@ export function WorkSkeleton() {
 export function TabBody({ children }: { children: ReactNode }) {
   return (
     <ScrollArea className="h-full">
-      <div className="flex min-w-0 flex-col gap-5 px-4 pt-1 pb-6">
+      <div className="flex min-w-0 flex-col gap-4 px-4 pt-1 pb-6">
         {children}
       </div>
     </ScrollArea>

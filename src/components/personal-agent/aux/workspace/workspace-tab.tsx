@@ -3,7 +3,7 @@
 /** The workspace tab: the work running now, each a window with its live
  *  view. */
 
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import { Monitor } from "lucide-react"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
@@ -30,7 +30,7 @@ import type {
 import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
-import { PANEL_SURFACE } from "../../panel-section"
+import { PANEL_SURFACE, PanelBar } from "../../panel-section"
 import {
   canOpenWork,
   ExecutorAvatar,
@@ -248,22 +248,5 @@ export function WorkspaceTab({
   )
 }
 
-/** A window's bar: the strip over what it shows. */
-function WindowBar({
-  className,
-  children,
-}: {
-  className?: string
-  children: ReactNode
-}) {
-  return (
-    <div
-      className={cn(
-        "flex h-9 min-w-0 items-center gap-2 border-b border-border/60 bg-muted/40 px-3",
-        className
-      )}
-    >
-      {children}
-    </div>
-  )
-}
+/** A window's bar: the strip over what it shows — the panel's card bar. */
+const WindowBar = PanelBar

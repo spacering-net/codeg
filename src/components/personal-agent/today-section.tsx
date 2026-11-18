@@ -326,7 +326,7 @@ function TodayBody({
     )
   }
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       {preparing}
       {shown.map((g) => (
         <TodayGroup key={g} group={g} count={today[g].length}>

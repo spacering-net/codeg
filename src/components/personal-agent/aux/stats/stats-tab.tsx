@@ -54,7 +54,9 @@ export function StatsTab({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
         <RuntimeCard snapshot={snapshot} readOnly={readOnly} />
         <ContextSection snapshot={snapshot} readOnly={readOnly} />
       </section>
-      <section className="flex min-w-0 flex-col gap-2.5" data-pa-detail="data">
+      {/* The range in the middle, as far from the cards above it as from
+          those under it. */}
+      <section className="flex min-w-0 flex-col gap-4" data-pa-detail="data">
         <ViewSelect
           value={String(days)}
           onChange={(v) => pick(Number(v) as StatsRange)}

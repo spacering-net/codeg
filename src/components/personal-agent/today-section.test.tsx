@@ -269,15 +269,18 @@ describe("today", () => {
     ) as HTMLElement
     expect(within(needs).getByText("Needs you")).toBeTruthy()
     expect(within(needs).getByText("1")).toBeTruthy()
-    // Its head presses on its words only, the chevron right after the
-    // count; its rows on one list.
+    // One card: its head the bar across its top, the chevron at its end;
+    // its rows on one list, flat on the card.
+    expect(needs.className).toContain("rounded-2xl")
     const head = within(needs).getByRole("button", { name: /Needs you/ })
-    expect(head.className).not.toMatch(/(^| )w-full( |$)/)
+    expect(head.className).toMatch(/(^| )w-full( |$)/)
     expect(head.lastElementChild!.getAttribute("class")).toContain(
       "lucide-chevron-down"
     )
     const list = within(needs).getByRole("list")
-    expect(within(list).getAllByRole("listitem")).toHaveLength(1)
+    const items = within(list).getAllByRole("listitem")
+    expect(items).toHaveLength(1)
+    expect(items[0].className).toContain("rounded-none")
   })
 
   it("draws a row with something to say or settle as a card, a plain one as a row", () => {

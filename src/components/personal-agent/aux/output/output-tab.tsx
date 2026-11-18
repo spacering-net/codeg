@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { Package } from "lucide-react"
+import { CalendarDays, Package } from "lucide-react"
 import { toast } from "sonner"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { MessageResponse } from "@/components/ai-elements/message"
@@ -28,7 +28,7 @@ import { imageDataUrl } from "@/lib/image-diff"
 import type { DispatchInfo, PersonalAgentOutputDoc } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-import { PANEL_SURFACE, PanelStack } from "../../panel-section"
+import { PANEL_SURFACE, PanelBar, PanelStack } from "../../panel-section"
 import { SegmentBar, type SegmentTone } from "../kit/segment-bar"
 import { ViewSelect } from "../kit/view-select"
 import { EmptyState, WorkSkeleton } from "../tab-body"
@@ -236,7 +236,7 @@ export function OutputTab({
         />
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-5 px-4 pt-3 pb-6">
+        <div className="flex flex-col gap-3 px-4 pt-3 pb-6">
           {!known ? (
             <WorkSkeleton />
           ) : shown.length === 0 ? (
@@ -263,15 +263,20 @@ export function OutputTab({
                 </section>
               ) : null}
               {days.map((day) => (
+                // A day one card: its name on the bar across its top.
                 <section
                   key={day.key}
-                  className="flex min-w-0 flex-col gap-2"
+                  className={cn(
+                    PANEL_SURFACE,
+                    "flex min-w-0 flex-col overflow-hidden"
+                  )}
                   data-pa-output-day={day.key}
                 >
-                  <h4 className="px-0.5 text-xs font-medium text-muted-foreground">
-                    {day.name}
-                  </h4>
-                  <PanelStack>
+                  <PanelBar className="text-muted-foreground">
+                    <CalendarDays aria-hidden className="size-3.5 shrink-0" />
+                    <h4 className="min-w-0 truncate">{day.name}</h4>
+                  </PanelBar>
+                  <PanelStack flush>
                     {gatherDay(day.items).map((x) =>
                       x.kind === "folder" ? (
                         <FolderItem
