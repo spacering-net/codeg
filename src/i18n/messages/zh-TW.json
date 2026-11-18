@@ -9570,6 +9570,15 @@
         "act": "到點去做"
       },
       "output": {
+        "allTitle": "全部產出",
+        "clear": "顯示全部",
+        "tasksSummary": "最近 {count} 個任務",
+        "outcomeDone": "已完成",
+        "outcomeFailed": "失敗",
+        "outcomeClosed": "已關閉",
+        "outcomeOpen": "待處理",
+        "files": "{count} 個檔案",
+        "moreFiles": "另有 {count} 個檔案",
         "all": "全部",
         "tasks": "任務",
         "reports": "報告",

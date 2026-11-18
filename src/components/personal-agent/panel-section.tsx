@@ -362,6 +362,9 @@ export interface PanelItemProps extends Omit<ComponentProps<"div">, "title"> {
   notes?: ReactNode[]
   onOpen?: (() => void) | null
   openLabel?: string
+  /** Opening it opens it in place: whether it is (its button's
+   *  `aria-expanded`). */
+  expanded?: boolean
   /** More under it, before the buttons: a task's card (8.5). */
   extra?: ReactNode
   /** Buttons under it, apart from what opening it does: a card's row. */
@@ -382,12 +385,14 @@ function ItemTitle({
   title,
   onOpen,
   openLabel,
+  expanded,
   className,
   ring,
 }: {
   title: ReactNode
   onOpen?: (() => void) | null
   openLabel?: string
+  expanded?: boolean
   className: string
   ring: string
 }) {
@@ -400,6 +405,7 @@ function ItemTitle({
       data-pa-item-open
       onClick={onOpen}
       title={openLabel}
+      aria-expanded={expanded}
       className={cn(
         "flex min-w-0 flex-1 text-start outline-none after:absolute after:inset-0",
         ring
@@ -411,7 +417,9 @@ function ItemTitle({
 }
 
 /** A stack's thing: a card with what it says, its strip and its buttons
- *  under its head; a row when it has none of them. */
+ *  under its head; a row when it has none of them. One tree for both, its
+ *  head where it is in either: a row that opens into a card in place keeps
+ *  its button, and the focus on it. */
 function StackItem({
   media,
   title,
@@ -423,6 +431,7 @@ function StackItem({
   notes = [],
   onOpen,
   openLabel,
+  expanded,
   extra,
   actions,
   action,
@@ -439,124 +448,93 @@ function StackItem({
         {time != null ? <span className="tabular-nums">{time}</span> : null}
       </>
     ) : null
-  const titleEl = (
-    <ItemTitle
-      title={title}
-      onOpen={onOpen}
-      openLabel={openLabel}
-      className={STACK_TITLE}
-      ring="focus-visible:after:rounded-2xl focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset"
-    />
-  )
-  if (!card) {
-    return (
-      <Item
-        role="listitem"
-        data-pa-shape="row"
-        variant="outline"
-        size="sm"
+  const chipEl = chip ? (
+    <span className="relative z-10 flex shrink-0 items-center">{chip}</span>
+  ) : null
+  const noteEls = notes.map((note, i) => (
+    <ItemDescription
+      key={i}
+      className="text-start text-xs leading-[1.125rem] break-words"
+    >
+      {note}
+    </ItemDescription>
+  ))
+  return (
+    <Item
+      role="listitem"
+      data-pa-shape={card ? "card" : "row"}
+      variant="outline"
+      size="sm"
+      className={cn(
+        "ws-msg-card relative flex-nowrap rounded-2xl border-border/70 bg-card",
+        card
+          ? "flex-col items-stretch gap-3 p-4"
+          : cn("items-center px-4 py-3", JOINED_ROW),
+        onOpen && "has-[[data-pa-item-open]:hover]:bg-muted/40",
+        className
+      )}
+      {...props}
+    >
+      <div
         className={cn(
-          "ws-msg-card relative flex-nowrap items-center gap-3 rounded-2xl border-border/70 bg-card px-4 py-3",
-          JOINED_ROW,
-          onOpen && "has-[[data-pa-item-open]:hover]:bg-muted/40",
-          className
+          "flex w-full min-w-0",
+          card ? "items-start gap-2.5" : "items-center gap-3"
         )}
-        {...props}
       >
         {media ? (
           <span className="flex shrink-0 self-start">{media}</span>
         ) : null}
         <ItemContent className="min-w-0 gap-0.5">
           <div className="flex min-w-0 items-start gap-2">
-            {titleEl}
+            <ItemTitle
+              title={title}
+              onOpen={onOpen}
+              openLabel={openLabel}
+              expanded={expanded}
+              className={STACK_TITLE}
+              ring="focus-visible:after:rounded-2xl focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset"
+            />
+            {/* Where it stands: at a card's top end. */}
+            {card ? chipEl : null}
             {aside ? (
               <span className="relative z-10 -my-0.5 -me-1 flex shrink-0 items-center">
                 {aside}
               </span>
             ) : null}
           </div>
-          {chip || line ? (
+          {(!card && chipEl) || line ? (
             <div className="flex min-w-0 items-center gap-1.5">
-              {chip ? (
-                <span className="relative z-10 flex shrink-0 items-center">
-                  {chip}
-                </span>
-              ) : null}
+              {card ? null : chipEl}
               {line ? (
-                <ItemDescription className="line-clamp-2 min-w-0 text-start text-xs leading-5">
+                <ItemDescription
+                  className={cn(
+                    "min-w-0 text-start text-xs leading-5",
+                    card ? "truncate" : "line-clamp-2"
+                  )}
+                >
                   {line}
                 </ItemDescription>
               ) : null}
             </div>
           ) : null}
-          {notes.map((note, i) => (
-            <ItemDescription
-              key={i}
-              className="text-start text-xs leading-[1.125rem] break-words"
-            >
-              {note}
-            </ItemDescription>
-          ))}
+          {card ? null : noteEls}
         </ItemContent>
-        {action ? (
+        {!card && action ? (
           <span className="relative z-10 flex shrink-0 items-center">
             {action}
           </span>
         ) : null}
-      </Item>
-    )
-  }
-  return (
-    <Item
-      role="listitem"
-      data-pa-shape="card"
-      variant="outline"
-      size="sm"
-      className={cn(
-        "ws-msg-card relative flex-col flex-nowrap items-stretch gap-3 rounded-2xl border-border/70 bg-card p-4",
-        onOpen && "has-[[data-pa-item-open]:hover]:bg-muted/40",
-        className
-      )}
-      {...props}
-    >
-      <div className="flex min-w-0 items-start gap-2.5">
-        {media ? <span className="flex shrink-0">{media}</span> : null}
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <div className="flex min-w-0 items-start gap-2">
-            {titleEl}
-            {chip ? (
-              <span className="relative z-10 flex shrink-0 items-center">
-                {chip}
-              </span>
-            ) : null}
-            {aside ? (
-              <span className="relative z-10 -my-0.5 -me-1 flex shrink-0 items-center">
-                {aside}
-              </span>
-            ) : null}
-          </div>
-          {line ? (
-            <ItemDescription className="min-w-0 truncate text-start text-xs leading-5">
-              {line}
-            </ItemDescription>
-          ) : null}
-        </div>
       </div>
-      {callout ? (
+      {card && callout ? (
         <Callout tone={callout.tone} mono={callout.mono}>
           {callout.text}
         </Callout>
       ) : null}
-      {notes.map((note, i) => (
-        <ItemDescription
-          key={i}
-          className="text-start text-xs leading-[1.125rem] break-words"
-        >
-          {note}
-        </ItemDescription>
-      ))}
-      {extra ? <div className="relative z-10 min-w-0">{extra}</div> : null}
-      {actions || action ? (
+      {card ? noteEls : null}
+      {card && extra ? (
+        <div className="relative z-10 min-w-0">{extra}</div>
+      ) : null}
+      {card && (actions || action) ? (
         <div className="relative z-10 flex flex-wrap items-center gap-2">
           {actions}
           {action}
@@ -578,6 +556,7 @@ function ListItem({
   notes = [],
   onOpen,
   openLabel,
+  expanded,
   extra,
   actions,
   action,
@@ -625,6 +604,7 @@ function ListItem({
             title={title}
             onOpen={onOpen}
             openLabel={openLabel}
+            expanded={expanded}
             className={TITLE}
             ring={
               inList

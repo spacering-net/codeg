@@ -9570,6 +9570,15 @@
         "act": "Erledigt es zur Zeit"
       },
       "output": {
+        "allTitle": "Alle Ergebnisse",
+        "clear": "Alle anzeigen",
+        "tasksSummary": "{count, plural, one {Die letzte Aufgabe} other {Die letzten # Aufgaben}}",
+        "outcomeDone": "Erledigt",
+        "outcomeFailed": "Fehlgeschlagen",
+        "outcomeClosed": "Geschlossen",
+        "outcomeOpen": "Offen",
+        "files": "{count, plural, one {# Datei} other {# Dateien}}",
+        "moreFiles": "{count, plural, one {# weitere Datei} other {# weitere Dateien}}",
         "all": "Alle",
         "tasks": "Aufgaben",
         "reports": "Berichte",

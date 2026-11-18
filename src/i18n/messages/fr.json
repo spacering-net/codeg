@@ -9570,6 +9570,15 @@
         "act": "S’en charge à l’heure"
       },
       "output": {
+        "allTitle": "Toutes les productions",
+        "clear": "Tout afficher",
+        "tasksSummary": "{count, plural, one {La dernière tâche} other {Les # dernières tâches}}",
+        "outcomeDone": "Terminé",
+        "outcomeFailed": "Échoué",
+        "outcomeClosed": "Fermé",
+        "outcomeOpen": "En attente",
+        "files": "{count, plural, one {# fichier} other {# fichiers}}",
+        "moreFiles": "{count, plural, one {# autre fichier} other {# autres fichiers}}",
         "all": "Tout",
         "tasks": "Tâches",
         "reports": "Rapports",

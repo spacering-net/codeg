@@ -9570,6 +9570,15 @@
         "act": "時間になったら実行"
       },
       "output": {
+        "allTitle": "すべての成果物",
+        "clear": "すべて表示",
+        "tasksSummary": "直近のタスク {count} 件",
+        "outcomeDone": "完了",
+        "outcomeFailed": "失敗",
+        "outcomeClosed": "クローズ",
+        "outcomeOpen": "対応待ち",
+        "files": "{count} 個のファイル",
+        "moreFiles": "ほか {count} 個のファイル",
         "all": "すべて",
         "tasks": "タスク",
         "reports": "レポート",

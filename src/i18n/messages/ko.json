@@ -9570,6 +9570,15 @@
         "act": "때가 되면 처리"
       },
       "output": {
+        "allTitle": "전체 산출물",
+        "clear": "모두 보기",
+        "tasksSummary": "최근 작업 {count}개",
+        "outcomeDone": "완료",
+        "outcomeFailed": "실패",
+        "outcomeClosed": "닫힘",
+        "outcomeOpen": "처리 대기",
+        "files": "파일 {count}개",
+        "moreFiles": "파일 {count}개 더 보기",
         "all": "전체",
         "tasks": "작업",
         "reports": "보고서",

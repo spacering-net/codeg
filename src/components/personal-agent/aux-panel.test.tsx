@@ -35,6 +35,7 @@ const api = vi.hoisted(() => ({
   personalAgentRoutines: vi.fn(async () => []),
   personalAgentRoutineAct: vi.fn(async () => ({})),
   personalAgentTemplates: vi.fn(async () => []),
+  readWorkspaceFileBase64: vi.fn(),
 }))
 const pa = vi.hoisted(() => ({
   snapshot: null as unknown,
@@ -119,6 +120,7 @@ vi.mock("@/components/token-usage/charts", () => ({
 
 import { __resetRosterForTests } from "@/stores/personal-agent-roster-store"
 import { __resetTemplatesForTests } from "./use-templates"
+import { __resetThumbsForTests } from "./aux/output/use-thumb"
 
 import { PersonalAgentAuxPanel } from "./aux-panel"
 import { PageScopeContext, type PageScope } from "./shared"
@@ -308,6 +310,7 @@ beforeEach(() => {
   pa.rows = []
   __resetRosterForTests()
   __resetTemplatesForTests()
+  __resetThumbsForTests()
   usePersonalAgentUi.setState({
     auxOpen: true,
     auxTab: "activity",
@@ -1025,39 +1028,196 @@ describe("the output tab", () => {
       "[data-pa-output-doc='notes/weekly.md']"
     )!
     expect(doc.textContent).toContain("Document · notes")
-    // How many each kind holds, after its name.
-    expect(screen.getByRole("radio", { name: "All" }).textContent).toBe("All3")
-    expect(screen.getByRole("radio", { name: "Tasks" }).textContent).toBe(
-      "Tasks1"
-    )
+    // The kind picked from the title, as many as it holds after it.
+    const title = () =>
+      screen.getByRole("button", { name: /^Output: / }) as HTMLElement
+    expect(title().textContent).toBe("All output3")
     const titles = () =>
       [
         ...screen
           .getByRole("tabpanel")
-          .querySelectorAll(".text-\\[0\\.8125rem\\]"),
-      ]
-        .map((el) => el.textContent)
-        .filter(Boolean)
+          .querySelectorAll("[role='listitem'] [data-pa-item-open]"),
+      ].map((el) => el.textContent)
     expect(titles()).toEqual([
       "weekly.md",
       "Ship the page",
       "Look into the logs",
     ])
-    // The kinds, shadcn's toggle group: one picked at a time.
+    const pick = async (name: RegExp) => {
+      await userEvent.click(title())
+      await userEvent.click(await screen.findByRole("menuitemradio", { name }))
+    }
+    // The menu: each kind with how many it holds, the one shown checked.
+    await userEvent.click(title())
+    const choices = await screen.findAllByRole("menuitemradio")
+    expect(choices.map((c) => c.textContent)).toEqual([
+      "All3",
+      "Tasks1",
+      "Reports1",
+      "Documents1",
+    ])
+    expect(choices[0].getAttribute("aria-checked")).toBe("true")
+    await userEvent.keyboard("{Escape}")
+    await pick(/^Tasks/)
+    expect(title().textContent).toBe("Tasks1")
+    // Over the tasks, how they came out.
     expect(
-      screen.getByRole("radio", { name: "All" }).getAttribute("aria-checked")
-    ).toBe("true")
-    fireEvent.click(screen.getByRole("radio", { name: "Tasks" }))
+      document.querySelector("[data-pa-output-summary]")?.textContent
+    ).toContain("The last task")
     expect(titles()).toEqual(["Ship the page"])
-    fireEvent.click(screen.getByRole("radio", { name: "Reports" }))
+    // The round × goes back to them all.
+    await userEvent.click(screen.getByRole("button", { name: "Show all" }))
+    expect(title().textContent).toBe("All output3")
+    expect(screen.queryByRole("button", { name: "Show all" })).toBeNull()
+    expect(document.querySelector("[data-pa-output-summary]")).toBeNull()
+    await pick(/^Reports/)
     expect(titles()).toEqual(["Look into the logs"])
-    fireEvent.click(screen.getByRole("radio", { name: "Documents" }))
+    await pick(/^Documents/)
     fireEvent.click(screen.getByText("weekly.md").closest("button")!)
     expect(api.personalAgentOutputRead).toHaveBeenCalledWith(
       null,
       "notes/weekly.md"
     )
     expect(await screen.findByRole("heading", { name: "Weekly" })).toBeTruthy()
+  })
+
+  it("opens a report in place, one at a time, with the way to its session", async () => {
+    usePersonalAgentUi.setState({ auxTab: "output" })
+    api.personalAgentDispatches.mockResolvedValue([
+      dispatch({
+        id: 4,
+        mode: "chat",
+        title: "Look into the logs",
+        state: "completed",
+        ladder: "done",
+        conversation_id: 40,
+        conversation_folder_id: 2,
+        result_excerpt: "The logs rotate hourly.",
+        finished_at: "2026-11-04T10:00:00Z",
+      }),
+      dispatch({
+        id: 5,
+        mode: "chat",
+        title: "Check the build",
+        state: "failed",
+        ladder: "failed",
+        error: "cargo: exit 101",
+        finished_at: "2026-11-04T09:00:00Z",
+      }),
+    ])
+    draw()
+    const logs = await screen.findByText("Look into the logs")
+    const button = logs.closest("button")!
+    button.focus()
+    const card = (title: string) =>
+      screen.getByText(title).closest<HTMLElement>("[data-slot='item']")!
+    // Folded: a row, what it found not shown.
+    expect(button.getAttribute("aria-expanded")).toBe("false")
+    expect(card("Look into the logs").getAttribute("data-pa-shape")).toBe("row")
+    expect(screen.queryByText("The logs rotate hourly.")).toBeNull()
+    fireEvent.click(button)
+    // Opened in place: the same button, the focus still on it.
+    expect(button.isConnected).toBe(true)
+    expect(document.activeElement).toBe(button)
+    expect(button.getAttribute("aria-expanded")).toBe("true")
+    expect(card("Look into the logs").getAttribute("data-pa-shape")).toBe(
+      "card"
+    )
+    expect(
+      screen
+        .getByText("The logs rotate hourly.")
+        .closest("[data-pa-callout]")
+        ?.getAttribute("data-pa-callout")
+    ).toBe("neutral")
+    expect(
+      within(card("Look into the logs")).getByRole("button", {
+        name: "View session",
+      })
+    ).toBeTruthy()
+    // Another opened: the first folds; a failed one says why in red.
+    fireEvent.click(screen.getByText("Check the build").closest("button")!)
+    expect(button.getAttribute("aria-expanded")).toBe("false")
+    expect(
+      screen
+        .getByText("cargo: exit 101")
+        .closest("[data-pa-callout]")
+        ?.getAttribute("data-pa-callout")
+    ).toBe("error")
+  })
+
+  it("gathers a folder's documents of a day on one card, its pictures as thumbnails", async () => {
+    usePersonalAgentUi.setState({ auxTab: "output" })
+    const at = new Date().toISOString()
+    api.personalAgentOutputs.mockResolvedValue([
+      ...Array.from({ length: 10 }, (_, i) => ({
+        path: `avatars/${i + 1}.png`,
+        modified_at: at,
+        size: 2048,
+      })),
+      { path: "avatars/readme.md", modified_at: at, size: 10 },
+      { path: "avatars/huge.png", modified_at: at, size: 5 * 1024 * 1024 },
+    ])
+    api.readWorkspaceFileBase64.mockResolvedValue("iVBORw0KGgo=")
+    draw()
+    const folder = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>(
+        "[data-pa-output-folder='avatars']"
+      )
+      expect(el).toBeTruthy()
+      return el!
+    })
+    expect(folder.textContent).toContain("avatars/")
+    expect(folder.textContent).toContain("12 files")
+    // Two rows of pictures, the other document a line; the rest behind
+    // "N more files".
+    const pictures = () =>
+      [...folder.querySelectorAll("[data-pa-output-doc]")].filter((el) =>
+        el.getAttribute("data-pa-output-doc")!.endsWith(".png")
+      )
+    expect(pictures()).toHaveLength(8)
+    // In the order of their names, 2 before 10.
+    expect(
+      pictures()
+        .slice(0, 3)
+        .map((el) => el.getAttribute("data-pa-output-doc"))
+    ).toEqual(["avatars/1.png", "avatars/2.png", "avatars/3.png"])
+    expect(
+      folder.querySelector("[data-pa-output-doc='avatars/readme.md']")
+    ).toBeTruthy()
+    await waitFor(() =>
+      expect(folder.querySelectorAll("img").length).toBeGreaterThan(0)
+    )
+    expect(folder.querySelector("img")!.getAttribute("src")).toBe(
+      "data:image/png;base64,iVBORw0KGgo="
+    )
+    expect(api.readWorkspaceFileBase64).toHaveBeenCalledWith(
+      "/data/personal-agent",
+      "avatars/1.png",
+      1024 * 1024
+    )
+    fireEvent.click(
+      within(folder).getByRole("button", { name: "3 more files" })
+    )
+    expect(pictures()).toHaveLength(11)
+    // One too large is not read: its kind's icon stands for it.
+    expect(api.readWorkspaceFileBase64).not.toHaveBeenCalledWith(
+      "/data/personal-agent",
+      "avatars/huge.png",
+      expect.anything()
+    )
+    // A picture opens as itself, read as bytes.
+    fireEvent.click(
+      folder.querySelector<HTMLElement>("[data-pa-output-doc='avatars/2.png']")!
+    )
+    const picture = await waitFor(() => {
+      const img = document.querySelector("[data-pa-output-picture]")
+      expect(img).toBeTruthy()
+      return img!
+    })
+    expect(picture.getAttribute("src")).toBe(
+      "data:image/png;base64,iVBORw0KGgo="
+    )
+    expect(api.personalAgentOutputRead).not.toHaveBeenCalled()
   })
 })
 

@@ -141,7 +141,7 @@ export function PersonalAgentAuxPanel({
           <ActivityTab snapshot={snapshot} work={work} inDrawer={inDrawer} />
         </TabsContent>
         <TabsContent value="output" className="mt-0 min-h-0 flex-1">
-          <OutputTab work={work} />
+          <OutputTab work={work} workdir={snapshot.status.workdir ?? null} />
         </TabsContent>
         <TabsContent value="workspace" className="mt-0 min-h-0 flex-1">
           <WorkspaceTab snapshot={snapshot} work={work} />

@@ -9570,6 +9570,15 @@
         "act": "Lo hace a su hora"
       },
       "output": {
+        "allTitle": "Todo lo producido",
+        "clear": "Mostrar todo",
+        "tasksSummary": "{count, plural, one {La última tarea} other {Las últimas # tareas}}",
+        "outcomeDone": "Hecho",
+        "outcomeFailed": "Fallido",
+        "outcomeClosed": "Cerrado",
+        "outcomeOpen": "Pendiente",
+        "files": "{count, plural, one {# archivo} other {# archivos}}",
+        "moreFiles": "{count, plural, one {# archivo más} other {# archivos más}}",
         "all": "Todo",
         "tasks": "Tareas",
         "reports": "Informes",

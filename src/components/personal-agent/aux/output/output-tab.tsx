@@ -1,10 +1,12 @@
 "use client"
 
-/** The output tab: what it made, a list a day, filtered by kind. */
+/** The output tab: what it made, a list a day, filtered by kind — the kind
+ *  picked from its title, its count after it. On the tasks, a card summing
+ *  up how they came out over them. */
 
 import { useEffect, useState } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { FileText, Package } from "lucide-react"
+import { Package } from "lucide-react"
 import { toast } from "sonner"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { MessageResponse } from "@/components/ai-elements/message"
@@ -15,20 +17,52 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
-import { personalAgentOutputRead, personalAgentOutputs } from "@/lib/api"
+import {
+  personalAgentOutputRead,
+  personalAgentOutputs,
+  readWorkspaceFileBase64,
+} from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import { imageDataUrl } from "@/lib/image-diff"
 import type { DispatchInfo, PersonalAgentOutputDoc } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
-import { PanelIcon, PanelItem, PanelList } from "../../panel-section"
-import { DispatchCard } from "../activity/work-cards"
+import { PANEL_SURFACE, PanelStack } from "../../panel-section"
+import { SegmentBar, type SegmentTone } from "../kit/segment-bar"
+import { ViewSelect } from "../kit/view-select"
 import { EmptyState, WorkSkeleton } from "../tab-body"
 import { type Of, ofBot, useWork, useNow } from "../use-work"
+import { DocItem, FolderItem, ReportItem, TaskItem } from "./output-items"
+import {
+  gatherDay,
+  isImage,
+  outcomeCounts,
+  OUTCOMES,
+  type Outcome,
+} from "./outcome"
 
 type OutputKind = "all" | "tasks" | "reports" | "docs"
 
 const OUTPUT_KINDS: readonly OutputKind[] = ["all", "tasks", "reports", "docs"]
+
+/** The largest picture opened from the tab. */
+const PICTURE_MAX_BYTES = 8 * 1024 * 1024
+
+/** How each way the tasks came out is drawn on their summary. */
+const OUTCOME_TONE: Record<Outcome, SegmentTone> = {
+  done: "green",
+  failed: "red",
+  closed: "muted",
+  open: "amber",
+}
+
+const OUTCOME_LABEL = {
+  done: "outcomeDone",
+  failed: "outcomeFailed",
+  closed: "outcomeClosed",
+  open: "outcomeOpen",
+} as const
 
 /** A day's key in the local calendar. */
 function dayKey(iso: string): string {
@@ -73,9 +107,15 @@ function useClock(): (iso: string) => string {
 }
 
 /** What it made, newest first, a list a day: the work that ended — a
- *  task's card, the report of the rest — and the documents it wrote in its
- *  working directory. */
-export function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
+ *  task, the report of the rest — and the documents it wrote in its working
+ *  directory (`workdir`, where its pictures are read from). */
+export function OutputTab({
+  work,
+  workdir,
+}: {
+  work: ReturnType<typeof useWork>
+  workdir: string | null
+}) {
   const t = useTranslations("PersonalAgent.detail.output")
   const tabs = useTranslations("PersonalAgent.detail.tabs")
   const { botId, dispatchVersion } = usePersonalAgent()
@@ -83,6 +123,9 @@ export function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
   const dayName = useDayName()
   const clock = useClock()
   const [kind, setKind] = useState<OutputKind>("all")
+  // The report open in place, of the assistant shown.
+  const [openOf, setOpen] = useState<Of<number> | null>(null)
+  const openReport = ofBot(openOf, botId)
   const [docsOf, setDocsOf] = useState<Of<PersonalAgentOutputDoc[]> | null>(
     null
   )
@@ -90,6 +133,7 @@ export function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
     bot: number | null
     path: string
     text: string | null
+    image: string | null
   } | null>(null)
   useEffect(() => {
     let live = true
@@ -108,17 +152,33 @@ export function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
   // A document of the assistant shown, not of the last one.
   const reading = readingOf?.bot === botId ? readingOf : null
   const open = (path: string) => {
-    setReading({ bot: botId, path, text: null })
+    setReading({ bot: botId, path, text: null, image: null })
+    const fail = (e: unknown) => {
+      setReading(null)
+      toast.error(toErrorMessage(e))
+    }
+    // A picture is read as bytes; the reader for text refuses them.
+    if (isImage(path) && workdir) {
+      readWorkspaceFileBase64(workdir, path, PICTURE_MAX_BYTES)
+        .then((b64) =>
+          setReading({
+            bot: botId,
+            path,
+            text: null,
+            image: imageDataUrl(path, b64),
+          })
+        )
+        .catch(fail)
+      return
+    }
     personalAgentOutputRead(botId, path)
-      .then((text) => setReading({ bot: botId, path, text }))
-      .catch((e) => {
-        setReading(null)
-        toast.error(toErrorMessage(e))
-      })
+      .then((text) => setReading({ bot: botId, path, text, image: null }))
+      .catch(fail)
   }
   const ended = work?.ended ?? []
   const tasks = ended.filter((d) => d.mode === "task")
   const reports = ended.filter((d) => d.mode !== "task")
+  const known = work != null && docs != null
   const counts: Record<OutputKind, number> = {
     all: ended.length + (docs?.length ?? 0),
     tasks: tasks.length,
@@ -126,20 +186,23 @@ export function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
     docs: docs?.length ?? 0,
   }
   type Shown =
-    | { at: string; key: string; dispatch: DispatchInfo }
-    | { at: string; key: string; doc: PersonalAgentOutputDoc }
+    | { kind: "dispatch"; at: string; key: string; dispatch: DispatchInfo }
+    | { kind: "doc"; at: string; key: string; doc: PersonalAgentOutputDoc }
   const shown: Shown[] = [
     ...(kind === "all" || kind === "tasks" ? tasks : []).map((d) => ({
+      kind: "dispatch" as const,
       at: d.finished_at ?? d.updated_at,
       key: `d${d.id}`,
       dispatch: d,
     })),
     ...(kind === "all" || kind === "reports" ? reports : []).map((d) => ({
+      kind: "dispatch" as const,
       at: d.finished_at ?? d.updated_at,
       key: `d${d.id}`,
       dispatch: d,
     })),
     ...(kind === "all" || kind === "docs" ? (docs ?? []) : []).map((doc) => ({
+      kind: "doc" as const,
       at: doc.modified_at,
       key: `f${doc.path}`,
       doc,
@@ -153,80 +216,106 @@ export function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
     if (last?.key === key) last.items.push(x)
     else days.push({ key, name: dayName(x.at, now), items: [x] })
   }
+  const outcomes = outcomeCounts(tasks)
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Which kind: shadcn's toggle group, a pill each, how many it
-          holds after its name. */}
-      <div className="shrink-0 px-4 pt-4 pb-1">
-        <ToggleGroup
-          type="single"
-          size="sm"
-          spacing={1}
+      {/* Which kind: picked from the title, as many as it holds after it. */}
+      <div className="shrink-0 px-4 pt-3 pb-1">
+        <ViewSelect
           value={kind}
-          onValueChange={(v) => {
-            if (v) setKind(v as OutputKind)
-          }}
-          aria-label={tabs("output")}
-          className="flex-wrap"
-        >
-          {OUTPUT_KINDS.map((k) => (
-            <ToggleGroupItem
-              key={k}
-              value={k}
-              aria-label={t(k)}
-              data-pa-output-kind={k}
-              className="h-7 min-w-0 gap-1 px-2.5 text-xs font-normal text-muted-foreground data-[state=on]:font-medium data-[state=on]:text-foreground"
-            >
-              <span className="truncate">{t(k)}</span>
-              {work != null && docs != null && counts[k] > 0 ? (
-                <span
-                  aria-hidden
-                  className="text-[0.6875rem] font-normal text-muted-foreground tabular-nums"
-                >
-                  {counts[k]}
-                </span>
-              ) : null}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+          onChange={setKind}
+          menuLabel={tabs("output")}
+          clearLabel={t("clear")}
+          itemAttr="data-pa-output-kind"
+          choices={OUTPUT_KINDS.map((k) => ({
+            value: k,
+            label: t(k),
+            title: k === "all" ? t("allTitle") : t(k),
+            count: known ? counts[k] : null,
+          }))}
+        />
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col gap-4 px-4 pt-3 pb-6">
-          {work == null || docs == null ? (
+        <div className="flex flex-col gap-5 px-4 pt-3 pb-6">
+          {!known ? (
             <WorkSkeleton />
           ) : shown.length === 0 ? (
             <EmptyState icon={Package} title={t("empty")} />
           ) : (
-            days.map((day) => (
-              <section
-                key={day.key}
-                className="flex min-w-0 flex-col gap-1.5"
-                data-pa-output-day={day.key}
-              >
-                <h4 className="px-0.5 text-xs font-medium text-muted-foreground">
-                  {day.name}
-                </h4>
-                <PanelList>
-                  {day.items.map((x) =>
-                    "dispatch" in x ? (
-                      <DispatchCard
-                        key={x.key}
-                        d={x.dispatch}
-                        now={now}
-                        time={clock(x.at)}
-                      />
-                    ) : (
-                      <DocRow
-                        key={x.key}
-                        doc={x.doc}
-                        time={clock(x.at)}
-                        onOpen={() => open(x.doc.path)}
-                      />
-                    )
-                  )}
-                </PanelList>
-              </section>
-            ))
+            <>
+              {kind === "tasks" ? (
+                // How the tasks came out, over them.
+                <section
+                  data-pa-output-summary
+                  className={cn(PANEL_SURFACE, "flex flex-col gap-3 p-4")}
+                >
+                  <h4 className="text-sm leading-5 font-semibold">
+                    {t("tasksSummary", { count: tasks.length })}
+                  </h4>
+                  <SegmentBar
+                    segments={OUTCOMES.map((o) => ({
+                      key: o,
+                      label: t(OUTCOME_LABEL[o]),
+                      value: outcomes[o],
+                      tone: OUTCOME_TONE[o],
+                    }))}
+                  />
+                </section>
+              ) : null}
+              {days.map((day) => (
+                <section
+                  key={day.key}
+                  className="flex min-w-0 flex-col gap-2"
+                  data-pa-output-day={day.key}
+                >
+                  <h4 className="px-0.5 text-xs font-medium text-muted-foreground">
+                    {day.name}
+                  </h4>
+                  <PanelStack>
+                    {gatherDay(day.items).map((x) =>
+                      x.kind === "folder" ? (
+                        <FolderItem
+                          key={x.key}
+                          folder={x.folder}
+                          docs={x.docs}
+                          time={clock(x.at)}
+                          workdir={workdir}
+                          clock={clock}
+                          onOpen={open}
+                        />
+                      ) : x.kind === "doc" ? (
+                        <DocItem
+                          key={x.key}
+                          doc={x.doc}
+                          time={clock(x.at)}
+                          onOpen={() => open(x.doc.path)}
+                        />
+                      ) : x.dispatch.mode === "task" ? (
+                        <TaskItem
+                          key={x.key}
+                          d={x.dispatch}
+                          time={clock(x.at)}
+                        />
+                      ) : (
+                        <ReportItem
+                          key={x.key}
+                          d={x.dispatch}
+                          time={clock(x.at)}
+                          open={openReport === x.dispatch.id}
+                          onToggle={() =>
+                            setOpen(
+                              openReport === x.dispatch.id
+                                ? null
+                                : { bot: botId, value: x.dispatch.id }
+                            )
+                          }
+                        />
+                      )
+                    )}
+                  </PanelStack>
+                </section>
+              ))}
+            </>
           )}
         </div>
       </ScrollArea>
@@ -241,7 +330,15 @@ export function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
             </DialogTitle>
           </DialogHeader>
           <div className="min-h-0 overflow-y-auto">
-            {reading?.text == null ? (
+            {reading?.image ? (
+              // eslint-disable-next-line @next/next/no-img-element -- a data URL, nothing to optimise
+              <img
+                src={reading.image}
+                alt={reading.path}
+                data-pa-output-picture
+                className="mx-auto max-h-[65vh] max-w-full rounded-lg object-contain"
+              />
+            ) : reading?.text == null ? (
               <SyncedSpinner
                 small
                 className="mx-auto my-6 size-4 text-muted-foreground"
@@ -255,31 +352,5 @@ export function OutputTab({ work }: { work: ReturnType<typeof useWork> }) {
         </DialogContent>
       </Dialog>
     </div>
-  )
-}
-
-/** A document it wrote: its name, the folder it is in. */
-function DocRow({
-  doc,
-  time,
-  onOpen,
-}: {
-  doc: PersonalAgentOutputDoc
-  time: string
-  onOpen: () => void
-}) {
-  const t = useTranslations("PersonalAgent.detail.output")
-  const cut = doc.path.search(/[^\\/]+$/)
-  const name = cut > 0 ? doc.path.slice(cut) : doc.path
-  const folder = cut > 0 ? doc.path.slice(0, cut).replace(/[\\/]+$/, "") : ""
-  return (
-    <PanelItem
-      media={<PanelIcon icon={FileText} />}
-      title={<span title={doc.path}>{name}</span>}
-      time={time}
-      meta={[t("doc"), folder].filter(Boolean).join(" · ")}
-      onOpen={onOpen}
-      data-pa-output-doc={doc.path}
-    />
   )
 }

@@ -9570,6 +9570,15 @@
         "act": "ينفّذه في موعده"
       },
       "output": {
+        "allTitle": "كل المخرجات",
+        "clear": "عرض الكل",
+        "tasksSummary": "{count, plural, zero {لا مهام} one {آخر مهمة} two {آخر مهمتين} few {آخر # مهام} many {آخر # مهمة} other {آخر # مهمة}}",
+        "outcomeDone": "مكتمل",
+        "outcomeFailed": "فشل",
+        "outcomeClosed": "مغلق",
+        "outcomeOpen": "قيد الانتظار",
+        "files": "{count, plural, zero {لا ملفات} one {ملف واحد} two {ملفان} few {# ملفات} many {# ملفًا} other {# ملف}}",
+        "moreFiles": "{count, plural, zero {لا ملفات أخرى} one {ملف آخر} two {ملفان آخران} few {# ملفات أخرى} many {# ملفًا آخر} other {# ملف آخر}}",
         "all": "الكل",
         "tasks": "المهام",
         "reports": "التقارير",

@@ -9570,6 +9570,15 @@
         "act": "Does it when due"
       },
       "output": {
+        "allTitle": "All output",
+        "clear": "Show all",
+        "tasksSummary": "{count, plural, one {The last task} other {The last # tasks}}",
+        "outcomeDone": "Done",
+        "outcomeFailed": "Failed",
+        "outcomeClosed": "Closed",
+        "outcomeOpen": "Still open",
+        "files": "{count, plural, one {# file} other {# files}}",
+        "moreFiles": "{count, plural, one {# more file} other {# more files}}",
         "all": "All",
         "tasks": "Tasks",
         "reports": "Reports",
