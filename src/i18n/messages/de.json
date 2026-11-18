@@ -7926,6 +7926,7 @@
       "waitForUpload": "Warte, bis das Bild hochgeladen ist."
     },
     "aux": {
+      "workers": "{count, plural, one {# Arbeitsassistent} other {# Arbeitsassistenten}}",
       "title": "Assistentenbereich",
       "waiting": "{count, plural, one {# Sache wartet auf dich} other {# Sachen warten auf dich}}"
     },

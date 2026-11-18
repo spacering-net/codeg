@@ -7926,6 +7926,7 @@
       "waitForUpload": "請等圖片上傳完成。"
     },
     "aux": {
+      "workers": "{count} 個工作助手",
       "title": "助理面板",
       "waiting": "{count} 件等你處理"
     },

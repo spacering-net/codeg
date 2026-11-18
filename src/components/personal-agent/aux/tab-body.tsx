@@ -72,7 +72,7 @@ export function WorkSkeleton() {
 export function TabBody({ children }: { children: ReactNode }) {
   return (
     <ScrollArea className="h-full">
-      <div className="flex min-w-0 flex-col gap-6 px-4 pt-3 pb-6">
+      <div className="flex min-w-0 flex-col gap-5 px-4 pt-3 pb-6">
         {children}
       </div>
     </ScrollArea>

@@ -7926,6 +7926,7 @@
       "waitForUpload": "Aguarde o envio da imagem terminar."
     },
     "aux": {
+      "workers": "{count, plural, one {# assistente de trabalho} other {# assistentes de trabalho}}",
       "title": "Painel do assistente",
       "waiting": "{count, plural, one {# item aguardando você} other {# itens aguardando você}}"
     },

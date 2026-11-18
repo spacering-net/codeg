@@ -15,6 +15,7 @@ import {
 } from "@/stores/personal-agent-ui-store"
 
 import { CopyPropertyButton, PropertyRow } from "../../property-row"
+import { stateDot } from "../aux-head"
 import { useStatusWord } from "../../shared"
 
 /** A path in one line that, when it does not fit, gives way in its middle:
@@ -69,16 +70,7 @@ export function StatusRows({
     (o) => o.id === "model"
   )?.value_label
   const mode = agent?.label_snapshot.mode
-  // The dot beside its state: at work, waiting on the owner, idle and
-  // connected, or neither.
-  const dot =
-    status.engine !== "here" || !status.connected
-      ? "bg-muted-foreground/40"
-      : status.pending_permission || status.pending_question
-        ? "bg-amber-500"
-        : status.turn
-          ? "bg-primary motion-safe:animate-pulse"
-          : "bg-emerald-500"
+  const dot = stateDot(status)
   return (
     <div data-pa-status className="min-w-0">
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 text-xs">

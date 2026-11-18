@@ -34,6 +34,7 @@ const api = vi.hoisted(() => ({
   personalAgentBots: vi.fn(),
   personalAgentRoutines: vi.fn(async () => []),
   personalAgentRoutineAct: vi.fn(async () => ({})),
+  personalAgentTemplates: vi.fn(async () => []),
 }))
 const pa = vi.hoisted(() => ({
   snapshot: null as unknown,
@@ -117,6 +118,7 @@ vi.mock("@/components/token-usage/charts", () => ({
 }))
 
 import { __resetRosterForTests } from "@/stores/personal-agent-roster-store"
+import { __resetTemplatesForTests } from "./use-templates"
 
 import { PersonalAgentAuxPanel } from "./aux-panel"
 import { PageScopeContext, type PageScope } from "./shared"
@@ -305,6 +307,7 @@ beforeEach(() => {
   pa.snapshot = snapshot()
   pa.rows = []
   __resetRosterForTests()
+  __resetTemplatesForTests()
   usePersonalAgentUi.setState({
     auxOpen: true,
     auxTab: "activity",
@@ -400,6 +403,38 @@ describe("the panel", () => {
       auxTab: "stats",
       auxOpen: true,
     })
+  })
+
+  it("says under its name how it is: its state, the primary's work assistants, a work assistant's role", async () => {
+    const entry = (await api.personalAgentBots())[0]
+    const worker = (id: number, hidden = false) => ({
+      ...entry,
+      id,
+      kind: "worker",
+      name: `W${id}`,
+      template: "dev",
+      roster: { ...entry.roster, hidden },
+    })
+    api.personalAgentBots.mockResolvedValue([
+      entry,
+      worker(2),
+      worker(3),
+      worker(4, true),
+    ])
+    api.personalAgentTemplates.mockResolvedValue([
+      { id: "dev", name: "Developer" },
+    ] as never)
+    const { unmount } = draw()
+    const line = await screen.findByText("Idle · 2 work assistants")
+    expect(line.closest("[data-pa-aux-head-line]")).toBeTruthy()
+    expect(line.parentElement?.querySelector(".bg-emerald-500")).toBeTruthy()
+    unmount()
+    // A work assistant: its role, from the template it was made from.
+    const snap = snapshot()
+    Object.assign(snap.agent!, { kind: "worker", template: "dev" })
+    pa.snapshot = snap
+    draw({ snap })
+    expect(await screen.findByText("Idle · Developer")).toBeTruthy()
   })
 
   it("is the same in the drawer, its count of what waits on the owner on its activity", async () => {
@@ -765,16 +800,25 @@ describe("the activity's matters", () => {
     await screen.findByText("Fix the login")
     const card = (title: string) =>
       screen.getByText(title).closest<HTMLElement>("[data-slot='item']")!
-    // In review: ready to merge, with its branch and diff on one line (its
-    // project is the row's line), and the way to stop it — no way to close
-    // its entry by hand, nor [Open session]: the row opens it.
+    // In review: ready to merge, with its branch a chip and its diff after
+    // it on one line (its project is the row's line), and the way to stop
+    // it, red at the line's end — no way to close its entry by hand, nor
+    // [Open session]: the row opens it.
     const review = card("Fix the login")
     expect(review.querySelector("[data-pa-ladder]")?.textContent).toBe(
       "Ready to merge"
     )
     expect(review.getAttribute("role")).toBe("listitem")
     const strip = review.querySelector("[data-pa-task-strip]")!
-    expect(strip.textContent).toBe("pa/fix-login·+214 −37, 6 filesStop")
+    expect(strip.textContent).toBe("pa/fix-login+214 −37, 6 filesStop")
+    expect(
+      strip.querySelector("[data-pa-task-branch]")?.getAttribute("title")
+    ).toBe("pa/fix-login")
+    expect(
+      within(review)
+        .getByRole("button", { name: "Stop" })
+        .getAttribute("data-variant")
+    ).toBe("destructive")
     expect(strip.querySelector("[data-pa-task-diff]")?.textContent).toBe(
       "+214 −37, 6 files"
     )

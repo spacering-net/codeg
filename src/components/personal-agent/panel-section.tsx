@@ -6,9 +6,9 @@
  * - `PanelSection`: a part of a tab — its title, how many it holds, an
  *   action at its end — over its body.
  * - `PanelGroup`: a folding group inside a part (who a matter waits on, a
- *   group of today): a head only as wide as its marker, its name, its
- *   count and the chevron after them — as the roster's heads are — over
- *   its rows, one list.
+ *   group of today): a head only as wide as its marker, its name and count
+ *   in its tone and the chevron after them — as the roster's heads are —
+ *   over its rows, one list, and under it the way to show the rest.
  * - `PanelList`: rows on one surface, a hairline between them (an inset
  *   grouped list): what a group, a day of output or the routines hold.
  * - `PanelItem`: one thing in a list (shadcn's `Item`): what leads it, its
@@ -31,7 +31,6 @@ import {
 } from "react"
 import { ChevronDown, type LucideIcon } from "lucide-react"
 
-import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import {
   Collapsible,
@@ -63,7 +62,7 @@ export function useFold(key: string): [boolean, (open: boolean) => void] {
 /** The surface the panel's lists and cards sit on: the card's colour — a
  *  step above the panel in the dark — and a hairline round it. */
 export const PANEL_SURFACE =
-  "ws-msg-card rounded-xl border border-border/70 bg-card"
+  "ws-msg-card rounded-2xl border border-border/70 bg-card"
 const SURFACE = PANEL_SURFACE
 
 export function PanelSection({
@@ -86,12 +85,12 @@ export function PanelSection({
       className={cn("flex min-w-0 flex-col gap-2.5", className)}
       {...props}
     >
-      <div className="flex h-6 min-w-0 items-center gap-1.5">
-        <h3 className="min-w-0 truncate text-[0.8125rem] font-semibold text-foreground">
+      <div className="flex h-7 min-w-0 items-center gap-1.5">
+        <h3 className="min-w-0 truncate text-[0.9375rem] font-semibold text-foreground">
           {title}
         </h3>
         {count != null && count > 0 ? (
-          <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+          <span className="shrink-0 text-[0.8125rem] text-muted-foreground tabular-nums">
             {count}
           </span>
         ) : null}
@@ -114,22 +113,34 @@ export type PanelTone =
   | "muted"
   | "faint"
   | "green"
+  | "red"
 
-const TONE: Record<PanelTone, string> = {
-  amber: "bg-amber-500",
-  primary: "bg-primary",
-  violet: "bg-violet-500",
-  muted: "bg-muted-foreground/50",
-  faint: "bg-muted-foreground/30",
-  green: "bg-emerald-500",
+/** A tone's marker (its dot) and its words (the group's name and count). */
+const TONE: Record<PanelTone, { dot: string; text: string }> = {
+  amber: {
+    dot: "bg-amber-500",
+    text: "text-amber-700 dark:text-amber-300",
+  },
+  primary: { dot: "bg-primary", text: "text-primary" },
+  violet: {
+    dot: "bg-violet-500",
+    text: "text-violet-700 dark:text-violet-300",
+  },
+  muted: { dot: "bg-muted-foreground/50", text: "text-muted-foreground" },
+  faint: { dot: "bg-muted-foreground/30", text: "text-muted-foreground" },
+  green: {
+    dot: "bg-emerald-500",
+    text: "text-emerald-700 dark:text-emerald-400",
+  },
+  red: { dot: "bg-red-500", text: "text-red-700 dark:text-red-400" },
 }
 
 export function PanelGroup({
   fold,
   tone,
+  icon: Icon,
   label,
   count,
-  strong = false,
   more,
   className,
   children,
@@ -138,11 +149,11 @@ export function PanelGroup({
   /** Its key in the page's store. */
   fold: string
   tone: PanelTone
+  /** Its marker, in place of the dot. */
+  icon?: LucideIcon
   label: string
   count: number
-  /** What waits on the owner: its count amber. */
-  strong?: boolean
-  /** The list's last row: the way to show the rest of it. */
+  /** Under the list: the way to show the rest of it (`PanelMoreRow`). */
   more?: ReactNode
   /** Its rows: `PanelItem`s. */
   children: ReactNode
@@ -154,35 +165,31 @@ export function PanelGroup({
         {/* Only its words and chevron press it, as on the roster: the row's
             blank beyond them is not a button. */}
         <div className="flex h-6 min-w-0 items-center">
-          <CollapsibleTrigger className="group/fold -mx-1.5 flex h-6 max-w-[calc(100%+0.75rem)] min-w-0 items-center gap-1.5 rounded-md px-1.5 text-start transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50">
-            <span
-              aria-hidden
-              className={cn("size-1.5 shrink-0 rounded-full", TONE[tone])}
-            />
-            <span className="min-w-0 truncate text-xs font-medium text-muted-foreground group-hover/fold:text-foreground">
-              {label}
-            </span>
-            <Badge
-              variant="secondary"
-              className={cn(
-                "h-4 min-w-4 px-1 text-[0.625rem] tabular-nums",
-                strong &&
-                  "bg-amber-500/15 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300"
-              )}
-            >
-              {count}
-            </Badge>
+          <CollapsibleTrigger
+            className={cn(
+              "group/fold -mx-1.5 flex h-6 max-w-[calc(100%+0.75rem)] min-w-0 items-center gap-1.5 rounded-md px-1.5 text-start text-[0.8125rem] font-medium transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
+              TONE[tone].text
+            )}
+          >
+            {Icon ? (
+              <Icon aria-hidden className="size-3.5 shrink-0" />
+            ) : (
+              <span
+                aria-hidden
+                className={cn("size-1.5 shrink-0 rounded-full", TONE[tone].dot)}
+              />
+            )}
+            <span className="min-w-0 truncate">{label}</span>
+            <span className="shrink-0 tabular-nums">{count}</span>
             <ChevronDown
               aria-hidden
               className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=closed]/fold:-rotate-90 rtl:group-data-[state=closed]/fold:rotate-90"
             />
           </CollapsibleTrigger>
         </div>
-        <CollapsibleContent className="min-w-0 pt-1.5">
-          <PanelList>
-            {children}
-            {more}
-          </PanelList>
+        <CollapsibleContent className="flex min-w-0 flex-col items-start gap-1 pt-1.5">
+          <PanelList className="w-full">{children}</PanelList>
+          {more}
         </CollapsibleContent>
       </section>
     </Collapsible>
@@ -220,16 +227,17 @@ export function PanelList({
   )
 }
 
-/** A list's last row that shows the rest of it, its words under the rows'
- *  titles. */
+/** Under a list, the way to show the rest of it: its words and a chevron,
+ *  quiet until hovered. */
 export function PanelMoreRow({ children, ...props }: ComponentProps<"button">) {
   return (
     <button
       type="button"
-      className="flex h-9 w-full items-center ps-12 pe-3 text-start text-xs text-muted-foreground transition-colors outline-none hover:bg-muted/50 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
+      className="-mx-1.5 inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-start text-xs font-medium text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
       {...props}
     >
       {children}
+      <ChevronDown className="size-3.5 shrink-0" aria-hidden />
     </button>
   )
 }
@@ -250,7 +258,7 @@ export function PanelEmpty({
   return (
     <div
       className={cn(
-        "flex min-w-0 items-center gap-2.5 rounded-xl border border-dashed border-border px-3 py-2.5",
+        "flex min-w-0 items-center gap-2.5 rounded-2xl border border-dashed border-border px-3.5 py-3",
         className
       )}
       {...props}

@@ -367,7 +367,6 @@ function TodayGroup({
       tone={GROUP_TONE[group]}
       label={t(`groups.${group}`)}
       count={count}
-      strong={group === "needs"}
       more={
         !all && count > GROUP_SHOWN ? (
           <PanelMoreRow onClick={() => setAll(true)} data-pa-today-more={group}>

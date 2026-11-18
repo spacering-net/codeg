@@ -94,7 +94,6 @@ export function WorkSection({
       tone={GROUP_TONE[group]}
       label={label}
       count={count}
-      strong={group === "owner"}
       data-pa-group={group}
     >
       {children}

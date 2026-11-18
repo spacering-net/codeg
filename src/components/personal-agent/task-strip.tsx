@@ -26,8 +26,9 @@ import { personalAgentDispatchStop } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { openInSystemBrowser } from "@/lib/link-open"
 import type { DispatchInfo, Ladder, PrFacts } from "@/lib/types"
-import { cn } from "@/lib/utils"
 
+import { BranchChip } from "./aux/kit/branch-chip"
+import { StatusPill, type PillTone } from "./aux/kit/status-pill"
 import { canOpenWork, useOpenWork, usePageScope, workTargetOf } from "./shared"
 
 const LADDERS: readonly Ladder[] = [
@@ -64,33 +65,41 @@ export function asLadder(v: unknown): Ladder | null {
     : null
 }
 
-/** A rung as a tone, as the state chips have theirs: moving sky, waiting
- *  on the owner amber, ready to merge teal, a pull request violet, finished
- *  green, failed red, the rest quiet. */
-export function ladderTone(ladder: Ladder): string {
+/** A rung as a pill's tone: moving sky, waiting on the owner amber, ready
+ *  to merge teal, a pull request violet, finished green, failed red, the
+ *  rest quiet. */
+export function ladderPillTone(ladder: Ladder): PillTone {
   switch (ladder) {
     case "working":
     case "checking":
     case "merging":
     case "waiting_checks":
-      return "bg-sky-500/15 text-sky-700 dark:text-sky-300"
+      return "sky"
     case "waiting_you":
     case "stuck":
-      return "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+      return "amber"
     case "mergeable":
-      return "bg-teal-500/15 text-teal-700 dark:text-teal-300"
+      return "teal"
     case "pr_open":
-      return "bg-violet-500/15 text-violet-700 dark:text-violet-300"
+      return "violet"
     case "merged":
     case "done":
-      return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+      return "green"
     case "failed":
     case "checks_failed":
-      return "bg-red-500/15 text-red-700 dark:text-red-300"
+      return "red"
     default:
-      return "bg-muted text-muted-foreground"
+      return "muted"
   }
 }
+
+/** The rungs still moving: their pill pulses. */
+const MOVING_LADDERS: ReadonlySet<Ladder> = new Set<Ladder>([
+  "working",
+  "checking",
+  "merging",
+  "waiting_checks",
+])
 
 export function LadderChip({
   ladder,
@@ -101,29 +110,16 @@ export function LadderChip({
 }) {
   const t = useTranslations("PersonalAgent.ladder")
   if (!ladder) return null
-  const moving =
-    ladder === "working" ||
-    ladder === "checking" ||
-    ladder === "merging" ||
-    ladder === "waiting_checks"
   return (
-    <span
+    <StatusPill
       data-pa-ladder={ladder}
-      className={cn(
-        "inline-flex h-5 shrink-0 items-center gap-1 rounded-full px-2 text-[0.6875rem] font-medium whitespace-nowrap",
-        ladderTone(ladder)
-      )}
+      tone={ladderPillTone(ladder)}
+      pulse={MOVING_LADDERS.has(ladder)}
     >
-      {moving ? (
-        <span
-          aria-hidden
-          className="size-1.5 rounded-full bg-current motion-safe:animate-pulse"
-        />
-      ) : null}
       {ladder === "waiting_checks" && pr && pr.checks_known && pr.total > 0
         ? t("waiting_checks_n", { passed: pr.passed, total: pr.total })
         : t(ladder)}
-    </span>
+    </StatusPill>
   )
 }
 
@@ -196,9 +192,10 @@ function PrLine({ d }: { d: DispatchInfo }) {
 
 /** The task card's strip, under a task's row. `chip` draws the rung on its
  *  first line — left out where the row above says it already. `compact`,
- *  on the side panel's rows: the branch and what it changed on one line,
- *  without the project (the row's line says it) or [Open session] (the
- *  row itself opens it). */
+ *  on the side panel's cards: the branch a chip and what it changed after
+ *  it on one line, without the project (the card's line says it) or [Open
+ *  session] (the card itself opens it); its buttons a size up, [Stop] red
+ *  at the row's end. */
 export function TaskStrip({
   d,
   chip = false,
@@ -252,18 +249,70 @@ export function TaskStrip({
       .catch((e) => toast.error(toErrorMessage(e)))
       .finally(() => setStopping(false))
   }
-  const folder = compact ? null : d.folder_name
+  const prButton = task.pr_url ? (
+    <Button
+      size={compact ? "sm" : "xs"}
+      variant="outline"
+      data-pa-task-act="pr"
+      onClick={() => {
+        const url = task.pr_url
+        if (url)
+          openInSystemBrowser(url).catch((e) => toast.error(toErrorMessage(e)))
+      }}
+    >
+      {t("viewPr")}
+    </Button>
+  ) : null
+  if (compact) {
+    // The side panel's: the branch a chip and what it changed after it on
+    // one line, [View PR] on the left and [Stop] — red — at the right.
+    return (
+      <div
+        data-pa-task-strip
+        className="flex min-w-0 flex-col gap-2 text-xs text-muted-foreground"
+      >
+        {task.branch || diff ? (
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            {task.branch ? <BranchChip branch={task.branch} /> : null}
+            {diff ? (
+              <span
+                data-pa-task-diff
+                className="shrink-0 font-mono tabular-nums"
+              >
+                {diff}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        <PrLine d={d} />
+        {prButton || (live && !readOnly) ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {prButton}
+            {live && !readOnly ? (
+              <Button
+                size="sm"
+                variant="destructive"
+                data-pa-task-act="stop"
+                disabled={stopping}
+                className="ms-auto"
+                onClick={stop}
+              >
+                {t("stop")}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+  const folder = d.folder_name
   const where = [task.branch, folder].filter(Boolean)
-  const openShown = canOpen && !compact
   return (
     <div
       data-pa-task-strip
-      className={cn(
-        "flex min-w-0 flex-col text-xs text-muted-foreground",
-        compact ? "mt-1 gap-1" : "mt-2 gap-1.5"
-      )}
+      className="mt-2 flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground"
     >
-      {chip || where.length > 0 || (compact && diff) ? (
+      {chip || where.length > 0 ? (
         <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
           {chip ? <LadderChip ladder={d.ladder} pr={task.pr} /> : null}
           {task.branch ? (
@@ -279,43 +328,18 @@ export function TaskStrip({
           ) : null}
           {task.branch && folder ? <span aria-hidden>·</span> : null}
           {folder ? <span className="min-w-0 truncate">{folder}</span> : null}
-          {compact && diff ? (
-            <>
-              {task.branch ? <span aria-hidden>·</span> : null}
-              <span data-pa-task-diff className="shrink-0 tabular-nums">
-                {diff}
-              </span>
-            </>
-          ) : null}
         </div>
       ) : null}
-      {diff && !compact ? (
+      {diff ? (
         <div data-pa-task-diff className="tabular-nums">
           {diff}
         </div>
       ) : null}
       <PrLine d={d} />
-      {task.pr_url || openShown || (live && !readOnly) ? (
-        <div
-          className={cn("flex flex-wrap", compact ? "mt-1 gap-1.5" : "gap-1")}
-        >
-          {task.pr_url ? (
-            <Button
-              size="xs"
-              variant="outline"
-              data-pa-task-act="pr"
-              onClick={() => {
-                const url = task.pr_url
-                if (url)
-                  openInSystemBrowser(url).catch((e) =>
-                    toast.error(toErrorMessage(e))
-                  )
-              }}
-            >
-              {t("viewPr")}
-            </Button>
-          ) : null}
-          {openShown ? (
+      {prButton || canOpen || (live && !readOnly) ? (
+        <div className="flex flex-wrap gap-1">
+          {prButton}
+          {canOpen ? (
             <Button
               size="xs"
               variant="ghost"
@@ -328,7 +352,7 @@ export function TaskStrip({
           {live && !readOnly ? (
             <Button
               size="xs"
-              variant={compact ? "outline" : "ghost"}
+              variant="ghost"
               data-pa-task-act="stop"
               disabled={stopping}
               className="text-destructive hover:text-destructive"

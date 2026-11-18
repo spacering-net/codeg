@@ -1,7 +1,9 @@
 "use client"
 
-/** The panel's head: who it is, the bell that says whether it notifies the
- *  owner, and the "⋯" of what acts on it. */
+/** The panel's head: who it is and, under its name, how it is — its state,
+ *  and on the primary how many work assistants it has, on a work assistant
+ *  its role — the bell that says whether it notifies the owner, and the "⋯"
+ *  of what acts on it. */
 
 import { type ReactNode } from "react"
 import { useTranslations } from "next-intl"
@@ -11,7 +13,7 @@ import { Toggle } from "@/components/ui/toggle"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentRosterAct } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import type { PersonalAgentSnapshot } from "@/lib/types"
+import type { PersonalAgentSnapshot, PersonalAgentStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import {
   usePersonalAgentRoster,
@@ -19,14 +21,28 @@ import {
 } from "@/stores/personal-agent-roster-store"
 
 import { AgentMenu } from "../agent-menu"
-import { useBotLook } from "../shared"
+import { useBotLook, useStatusWord } from "../shared"
 import { BotAvatar } from "../bot-avatar"
+import { useBotTemplates } from "../use-templates"
 
 /** The assistant's face at the head of the panel, in px at 100% zoom. */
 const HEAD_AVATAR_SIZE = 64
 
+/** The dot before an assistant's state: at work, waiting on the owner, idle
+ *  and connected, or neither. */
+export function stateDot(status: PersonalAgentStatus): string {
+  return status.engine !== "here" || !status.connected
+    ? "bg-muted-foreground/40"
+    : status.pending_permission || status.pending_question
+      ? "bg-amber-500"
+      : status.turn
+        ? "bg-primary motion-safe:animate-pulse"
+        : "bg-emerald-500"
+}
+
 /** Who the panel is about, over its tabs: its face — alive, as on the
- *  roster, its star on the primary's — and its name; in the top's corners,
+ *  roster, its star on the primary's — its name and a line of how it is;
+ *  in the top's corners,
  *  as far from either edge, whether it notifies the owner (the bell, at the
  *  start) and what acts on it (the "⋯", at the end — in the drawer left of
  *  its close button, which has the right). */
@@ -78,14 +94,56 @@ export function AuxHead({
           look={look}
         />
       ) : null}
-      <h2
-        title={name}
-        className="max-w-full truncate text-base leading-6 font-semibold"
-      >
-        {name}
-      </h2>
+      <div className="flex max-w-full min-w-0 flex-col items-center gap-0.5">
+        <h2
+          title={name}
+          className="max-w-full truncate text-base leading-6 font-semibold"
+        >
+          {name}
+        </h2>
+        {agent ? <HeadLine snapshot={snapshot} /> : null}
+      </div>
       {children}
     </header>
+  )
+}
+
+/** Under the name: its state, with its dot — then, on the primary, how many
+ *  work assistants it has; on a work assistant, its role. */
+function HeadLine({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
+  const t = useTranslations("PersonalAgent.aux")
+  const word = useStatusWord()
+  const entries = useRoster()
+  const templates = useBotTemplates()
+  const agent = snapshot.agent
+  const worker = agent?.kind === "worker"
+  const workers =
+    entries?.filter((e) => e.kind === "worker" && !e.roster.hidden).length ?? 0
+  const extra = worker
+    ? (templates?.find((x) => x.id === agent?.template)?.name ?? null)
+    : workers > 0
+      ? t("workers", { count: workers })
+      : null
+  const parts = [word, extra].filter((p): p is string => !!p)
+  if (parts.length === 0) return null
+  const line = parts.join(" · ")
+  return (
+    <p
+      data-pa-aux-head-line
+      title={line}
+      className="flex max-w-full min-w-0 items-center gap-1.5 text-xs leading-5 text-muted-foreground"
+    >
+      {word ? (
+        <span
+          aria-hidden
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            stateDot(snapshot.status)
+          )}
+        />
+      ) : null}
+      <span className="min-w-0 truncate">{line}</span>
+    </p>
   )
 }
 

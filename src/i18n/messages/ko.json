@@ -7926,6 +7926,7 @@
       "waitForUpload": "이미지 업로드가 끝날 때까지 기다려 주세요."
     },
     "aux": {
+      "workers": "작업 어시스턴트 {count}명",
       "title": "어시스턴트 패널",
       "waiting": "{count}건이 내 응답 대기 중"
     },

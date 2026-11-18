@@ -127,7 +127,7 @@ export function PersonalAgentAuxPanel({
                   {count > 0 ? (
                     <Badge
                       aria-hidden
-                      className="h-4 min-w-4 bg-amber-500/15 px-1 text-[0.625rem] text-amber-700 tabular-nums dark:bg-amber-400/15 dark:text-amber-300"
+                      className="h-4 min-w-4 bg-orange-500/15 px-1 text-[0.625rem] text-orange-700 tabular-nums dark:bg-orange-400/15 dark:text-orange-300"
                     >
                       {count}
                     </Badge>
