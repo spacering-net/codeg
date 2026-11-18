@@ -796,6 +796,47 @@ mod tests {
     use crate::db::entities::conversation::ConversationStatus;
     use crate::models::AgentType;
 
+    /// The race this fix removes is a shared-refcount one, so the property to
+    /// pin is that cloning an `EventEmitter` and dropping the clone on another
+    /// thread touches only an atomic counter. `Arc<T>` is `Send + Sync` only
+    /// when `T: Send + Sync`, so this also fails to compile if anyone puts a
+    /// non-thread-safe field back into the enum.
+    ///
+    /// The `Tauri` variant is asserted specifically because that is the one
+    /// that used to hold a bare `AppHandle` (nominally `Send + Sync`, actually
+    /// wrapping tao's non-atomic `Rc`).
+    #[test]
+    fn emitter_is_send_and_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<EventEmitter>();
+        assert_send_sync::<Arc<WebEventBroadcaster>>();
+    }
+
+    /// Concurrent clone/drop from many threads, which is what the ACP
+    /// connection threads do to their emitters in production. With the old
+    /// bare-`AppHandle` payload this is the pattern that corrupted the refcount
+    /// and aborted the process; with an `Arc` it is a plain atomic increment.
+    #[test]
+    fn emitter_clones_and_drops_across_threads() {
+        let emitter = EventEmitter::test_web_only(Arc::new(WebEventBroadcaster::new()));
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let e = emitter.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..2_000 {
+                        let local = e.clone();
+                        drop(local);
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().expect("clone/drop panicked on a worker thread");
+        }
+        // The emitter the main thread kept is still usable afterwards.
+        emit_event(&emitter, "test://still-alive", serde_json::json!({ "ok": true }));
+    }
+
     fn fresh_state() -> Arc<RwLock<SessionState>> {
         Arc::new(RwLock::new(SessionState::new(
             "conn-test".to_string(),
