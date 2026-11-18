@@ -632,21 +632,21 @@ describe("Quick actions, in the status bar's account menu", () => {
   function layOutMenu() {
     const root = screen.getByRole("menu")
     const rect = HTMLElement.prototype.getBoundingClientRect
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-      function (this: HTMLElement) {
+    return vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
         return this === root
           ? DOMRect.fromRect({ x: 8, y: 300, width: 304, height: 420 })
           : rect.call(this)
-      }
-    )
-    return root
+      })
   }
 
   it("on a phone, a submenu opens over its menu, above its own row, and the menu fades behind it", async () => {
     // A 390px window: no room beside the menu.
     window.innerWidth = 390
     await mountAndOpen()
-    const root = layOutMenu()
+    layOutMenu()
+    const root = screen.getByRole("menu")
     for (const name of ["Open project", "Open remote workspace"]) {
       await openSub(name)
       const row = screen.getByRole("menuitem", { name })
@@ -665,15 +665,19 @@ describe("Quick actions, in the status bar's account menu", () => {
     // Over the menu, a submenu is 288px wide; beside it, it starts 4px out
     // and keeps 8px from the window's edge. So it needs 300px past the
     // menu's end (312px): a window of 612px. Narrower, beside would squeeze
-    // it and cut its labels short, so it opens over the menu.
+    // it and cut its labels short, so it opens over the menu. Each case opens
+    // from a fresh menu: where a submenu goes is measured as it opens, so one
+    // left open by the case before would keep that case's answer.
     await mountAndOpen()
-    layOutMenu()
+    await userEvent.keyboard("{Escape}")
     for (const [width, name, over] of [
       [530, "Open project", true],
       [611, "Open remote workspace", true],
       [612, "Open project", false],
     ] as const) {
       window.innerWidth = width
+      await reopen()
+      const spy = layOutMenu()
       await openSub(name)
       const row = screen.getByRole("menuitem", { name })
       const sub = screen.getByRole("menu", { name })
@@ -684,6 +688,9 @@ describe("Quick actions, in the status bar's account menu", () => {
         expect(row).not.toHaveAttribute("data-over")
         expect(sub.style.width).toBe("")
       }
+      spy.mockRestore()
+      await userEvent.keyboard("{Escape}")
+      expect(screen.queryByRole("menu")).toBeNull()
     }
   })
 })
