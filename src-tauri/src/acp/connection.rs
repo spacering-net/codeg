@@ -2152,9 +2152,9 @@ fn agent_debug_callback(
 /// codeg's own question and result tools ([`codeg_tool_auto_allow_option`]),
 /// and the history parser. So codeg turns lazy loading off, as it was through
 /// 1.1.83 (which takes the flag too). An option `qoder --acp` does not know
-/// makes it exit, but each release tried from 1.1.0 to 1.1.89 (1.1.0, 1.1.30,
+/// makes it exit, but each release tried from 1.1.0 to 1.1.91 (1.1.0, 1.1.30,
 /// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86, 1.1.87, 1.1.88,
-/// 1.1.89) takes `--settings`, and 1.1.30 and 1.1.64 open sessions with this
+/// 1.1.89, 1.1.91) takes `--settings`, and 1.1.30 and 1.1.64 open sessions with this
 /// one as without it.
 pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
@@ -5059,9 +5059,18 @@ fn kept_select_row(
 /// that list into the same `SessionConfigOptionInfo` shape every other agent's
 /// selectors flow through, so Grok reaches selector parity with zero new
 /// frontend code. Returns `None` when there is no usable sessionConfig.
+///
+/// `reported_model` is the answer's `models.currentModelId`. It decides the
+/// current model when no row is `selected`: since 1.0.88 a loaded or resumed
+/// session keeps its saved model even when that model is no longer listed
+/// (renamed or removed `[model.<id>]`, or a failed first catalog fetch), and
+/// the answer then marks no row and sends no effort rows, where 1.0.77
+/// switched the session to the default model. The first row would show a model
+/// the session is not using, so the saved one is listed and shown instead.
 fn synthesize_grok_config_options(
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
     specs: &HashMap<String, GrokModelSpec>,
+    reported_model: Option<&str>,
 ) -> Option<Vec<SessionConfigOptionInfo>> {
     let options = meta?
         .get("x.ai/sessionConfig")?
@@ -5107,8 +5116,22 @@ fn synthesize_grok_config_options(
         });
     }
 
+    if model_current.is_none() {
+        if let Some(id) = reported_model.filter(|id| !id.is_empty()) {
+            if !model_opts.iter().any(|o| o.value == id) {
+                model_opts.push(SessionConfigSelectOptionInfo {
+                    value: id.to_string(),
+                    name: id.to_string(),
+                    description: None,
+                });
+            }
+            model_current = Some(id.to_string());
+        }
+    }
+
     let mut result: Vec<SessionConfigOptionInfo> = Vec::new();
-    // Current model id (the `selected` one, else the first) — needed both for
+    // Current model id (the `selected` one, else the reported one, else the
+    // first) — needed both for
     // the model selector's `current_value` and to pick the per-model effort spec.
     let current_model = model_current
         .clone()
@@ -6795,7 +6818,10 @@ async fn apply_and_emit_session_config_options(
     state.write().await.asserted_config_values.clear();
     if agent_type == AgentType::Grok {
         let specs = grok_model_specs.cloned().unwrap_or_default();
-        if let Some(mut opts) = synthesize_grok_config_options(grok_meta, &specs) {
+        let reported_model = session_models
+            .and_then(|models| models.get("currentModelId"))
+            .and_then(|id| id.as_str());
+        if let Some(mut opts) = synthesize_grok_config_options(grok_meta, &specs, reported_model) {
             // Cache the per-model effort map so a later model switch can rebuild
             // the effort selector for the target model (grok ships it only at
             // session birth, and on a catalog broadcast). `None` when empty
@@ -13856,7 +13882,7 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// How long after the answer to a prompt that a Stop cancelled codeg holds
 /// CodeBuddy's next prompt.
 ///
-/// CodeBuddy (2.171.0 through 2.184.0) answers a `session/prompt` that starts
+/// CodeBuddy (2.171.0 through 2.185.0) answers a `session/prompt` that starts
 /// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
 /// does not run the prompt or keep it in its history (`isCancelBarrierActive`
 /// in its ACP view). It arms that barrier while it handles the cancel, before
@@ -13942,7 +13968,7 @@ async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
 /// CodeBuddy's stop reason for a prompt codeg did not cancel.
 ///
 /// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
-/// 2.184.0) answers the next prompt it runs `cancelled` even though that
+/// 2.185.0) answers the next prompt it runs `cancelled` even though that
 /// prompt ran to the end: its forwarding keeps the session's aborted signal
 /// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
 /// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
@@ -38102,7 +38128,7 @@ mod tests {
         // Empty specs → the effort selector comes from the flat `x.ai/sessionConfig`
         // "mode" list (the no-`models` fallback path).
         let opts =
-            synthesize_grok_config_options(Some(&meta), &HashMap::new()).expect("should synthesize");
+            synthesize_grok_config_options(Some(&meta), &HashMap::new(), None).expect("should synthesize");
         assert_eq!(opts.len(), 2, "model + effort selectors");
 
         let model = &opts[0];
@@ -38141,7 +38167,7 @@ mod tests {
         // Empty specs → the effort selector comes from the flat `x.ai/sessionConfig`
         // "mode" list (the no-`models` fallback path).
         let opts =
-            synthesize_grok_config_options(Some(&meta), &HashMap::new()).expect("should synthesize");
+            synthesize_grok_config_options(Some(&meta), &HashMap::new(), None).expect("should synthesize");
         assert_eq!(opts.len(), 1);
         assert_eq!(opts[0].id, GROK_MODEL_OPTION_ID);
     }
@@ -39169,8 +39195,8 @@ mod tests {
     #[test]
     fn synthesize_grok_config_options_none_without_sessionconfig() {
         let empty: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-        assert!(synthesize_grok_config_options(Some(&empty), &HashMap::new()).is_none());
-        assert!(synthesize_grok_config_options(None, &HashMap::new()).is_none());
+        assert!(synthesize_grok_config_options(Some(&empty), &HashMap::new(), None).is_none());
+        assert!(synthesize_grok_config_options(None, &HashMap::new(), None).is_none());
     }
 
     /// Raw top-level `models` mirroring grok 0.2.99's `session/new`: grok-4.5
@@ -39272,6 +39298,67 @@ mod tests {
     }
 
     #[test]
+    fn grok_resumed_session_shows_its_unlisted_saved_model() {
+        // Grok 1.0.89 resuming a session whose saved `[model.fake]` is gone
+        // (captured live): `currentModelId` keeps "fake", no sessionConfig row
+        // is `selected` and no effort rows come with it.
+        let meta: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"x.ai/sessionConfig": {"options": [
+                {"id": "grok-4.6", "category": "model", "label": "Grok 4.6", "selected": false},
+                {"id": "grok-4.5", "category": "model", "label": "Grok 4.5", "selected": false}
+            ]}}),
+        )
+        .unwrap();
+        let models = serde_json::json!({
+            "currentModelId": "fake",
+            "availableModels": [{
+                "modelId": "grok-4.6",
+                "name": "Grok 4.6",
+                "_meta": {
+                    "supportsReasoningEffort": true,
+                    "reasoningEffort": "high",
+                    "reasoningEfforts": [{"id": "high", "value": "high", "label": "High"}]
+                }
+            }]
+        });
+        let specs = parse_grok_model_specs(Some(&models));
+        let opts = synthesize_grok_config_options(Some(&meta), &specs, Some("fake"))
+            .expect("synthesize");
+        let model = opts
+            .iter()
+            .find(|o| o.id == GROK_MODEL_OPTION_ID)
+            .expect("model selector");
+        let model_sel = expect_select(&model.kind);
+        assert_eq!(model_sel.current_value, "fake", "not the first row");
+        assert_eq!(
+            model_sel.options.iter().map(|o| o.value.as_str()).collect::<Vec<_>>(),
+            ["grok-4.6", "grok-4.5", "fake"],
+            "the saved model is listed after Grok's own"
+        );
+        assert!(
+            opts.iter().all(|o| o.id != GROK_EFFORT_OPTION_ID),
+            "no effort selector borrowed from grok-4.6"
+        );
+
+        // A `selected` row still wins over the reported id, and a listed
+        // reported id is not added twice.
+        let selected: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"x.ai/sessionConfig": {"options": [
+                {"id": "grok-4.6", "category": "model", "label": "Grok 4.6", "selected": true},
+                {"id": "grok-4.5", "category": "model", "label": "Grok 4.5", "selected": false}
+            ]}}),
+        )
+        .unwrap();
+        for reported in [Some("fake"), Some("grok-4.5"), None] {
+            let opts = synthesize_grok_config_options(Some(&selected), &HashMap::new(), reported)
+                .expect("synthesize");
+            let sel = expect_select(&opts[0].kind);
+            assert_eq!(sel.current_value, "grok-4.6", "{reported:?}");
+            assert_eq!(sel.options.len(), 2, "{reported:?}");
+        }
+    }
+
+    #[test]
     fn grok_custom_model_effort_selector_follows_its_declared_levels() {
         // #993, both `session/new` replies captured from grok 1.0.62 for a
         // custom `[model."grok-4.7"]` whose endpoint lists no levels: before and
@@ -39295,7 +39382,7 @@ mod tests {
                     "_meta": custom_meta
                 }]
             });
-            synthesize_grok_config_options(Some(&meta), &parse_grok_model_specs(Some(&models)))
+            synthesize_grok_config_options(Some(&meta), &parse_grok_model_specs(Some(&models)), None)
                 .expect("synthesize")
         };
 
@@ -39371,7 +39458,7 @@ mod tests {
         )
         .unwrap();
         let specs = parse_grok_model_specs(Some(&grok_models_fixture()));
-        let opts = synthesize_grok_config_options(Some(&meta), &specs).expect("synthesize");
+        let opts = synthesize_grok_config_options(Some(&meta), &specs, None).expect("synthesize");
         assert_eq!(opts.len(), 2, "model + effort");
         let effort = opts
             .iter()
@@ -39397,7 +39484,7 @@ mod tests {
         )
         .unwrap();
         let specs = parse_grok_model_specs(Some(&grok_models_fixture()));
-        let opts = synthesize_grok_config_options(Some(&meta), &specs).expect("synthesize");
+        let opts = synthesize_grok_config_options(Some(&meta), &specs, None).expect("synthesize");
         assert_eq!(opts.len(), 1);
         assert_eq!(opts[0].id, GROK_MODEL_OPTION_ID);
     }
@@ -48216,7 +48303,7 @@ mod tests {
     ) -> (Vec<SessionConfigOptionInfo>, HashMap<String, GrokModelSpec>) {
         let (meta, models) = grok_bundled_handshake();
         let specs = parse_grok_model_specs(Some(&models));
-        let mut opts = synthesize_grok_config_options(Some(&meta), &specs).expect("a picker");
+        let mut opts = synthesize_grok_config_options(Some(&meta), &specs, None).expect("a picker");
         let effort_selector = opts
             .iter_mut()
             .find(|o| o.id == GROK_EFFORT_OPTION_ID)

@@ -1398,7 +1398,7 @@
         "description": "세션 기본값, 컨텍스트 압축, 실험적 도구, 도구 출력 한도입니다. OpenCode 설정에 기록되며 아래에서 저장하면 적용됩니다.",
         "docsLink": "설정 문서",
         "unset": "설정 안 함",
-        "ignoredLegacyKeys": "파일의 다음 OpenCode 1 설정은 OpenCode 2에서 무시됩니다: {keys}.",
+        "ignoredLegacyKeys": "파일의 다음 설정은 OpenCode가 더 이상 읽지 않습니다: {keys}.",
         "removeIgnoredLegacyKeys": "제거",
         "defaultAgent": "기본 에이전트",
         "defaultAgentHint": "새 세션이 시작할 기본 에이전트. 비어 있거나 알 수 없으면 build로 되돌아갑니다.",
@@ -1412,7 +1412,7 @@
         "compactionAuto": "자동 압축",
         "compactionAutoHint": "컨텍스트 창이 차면 대화를 자동으로 요약합니다.",
         "backgroundCompaction": "백그라운드 압축",
-        "backgroundCompactionHint": "실험적 기능: 컨텍스트가 한도에 가까워지면 백그라운드에서 요약해 자동 압축이 기다리지 않게 합니다. 사용되지 않은 요약도 토큰을 소비합니다.",
+        "backgroundCompactionHint": "기본값 켜짐: 컨텍스트가 한도에 가까워지면 백그라운드에서 요약해 자동 압축이 기다리지 않게 합니다. 사용되지 않은 요약도 토큰을 소비합니다.",
         "todo": "할 일 목록 도구",
         "todoHint": "실험적 기능: 에이전트에 todowrite 도구를 제공해 Codeg가 계획을 할 일 목록으로 보여 줄 수 있게 합니다.",
         "fields": {

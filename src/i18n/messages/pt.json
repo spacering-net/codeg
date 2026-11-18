@@ -1398,7 +1398,7 @@
         "description": "Padrões da sessão, compactação do contexto, ferramentas experimentais e limites de saída das ferramentas. Gravado na configuração do OpenCode e aplicado ao salvar abaixo.",
         "docsLink": "Documentação de configuração",
         "unset": "Não configurado",
-        "ignoredLegacyKeys": "O OpenCode 2 ignora estas configurações do OpenCode 1 no arquivo: {keys}.",
+        "ignoredLegacyKeys": "O OpenCode não lê mais estas configurações no arquivo: {keys}.",
         "removeIgnoredLegacyKeys": "Remover",
         "defaultAgent": "Agente padrão",
         "defaultAgentHint": "Com qual agente principal uma nova sessão abre. Vazio ou desconhecido volta para build.",
@@ -1412,7 +1412,7 @@
         "compactionAuto": "Compactação automática",
         "compactionAutoHint": "Resume a conversa automaticamente quando a janela de contexto enche.",
         "backgroundCompaction": "Compactação em segundo plano",
-        "backgroundCompactionHint": "Experimental: resume em segundo plano quando o contexto se aproxima do limite, para que a compactação automática não espere. Resumos não usados também consomem tokens.",
+        "backgroundCompactionHint": "Ativado por padrão: resume em segundo plano quando o contexto se aproxima do limite, para que a compactação automática não espere. Resumos não usados também consomem tokens.",
         "todo": "Ferramenta de lista de tarefas",
         "todoHint": "Experimental: dá ao agente a ferramenta todowrite, para que o Codeg mostre o plano dele como lista de tarefas.",
         "fields": {

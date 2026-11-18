@@ -1398,7 +1398,7 @@
         "description": "Sitzungsstandards, Kontextverdichtung, experimentelle Werkzeuge und Grenzen der Werkzeugausgabe. Wird in die OpenCode-Konfiguration geschrieben und gilt, sobald du unten speicherst.",
         "docsLink": "Konfigurationsdoku",
         "unset": "Nicht konfiguriert",
-        "ignoredLegacyKeys": "OpenCode 2 ignoriert diese OpenCode-1-Einstellungen in der Datei: {keys}.",
+        "ignoredLegacyKeys": "OpenCode liest diese Einstellungen in der Datei nicht mehr: {keys}.",
         "removeIgnoredLegacyKeys": "Entfernen",
         "defaultAgent": "Standard-Agent",
         "defaultAgentHint": "Mit welchem Primär-Agenten eine neue Sitzung startet. Leer oder unbekannt fällt auf build zurück.",
@@ -1412,7 +1412,7 @@
         "compactionAuto": "Automatische Verdichtung",
         "compactionAutoHint": "Fasst das Gespräch automatisch zusammen, wenn das Kontextfenster voll wird.",
         "backgroundCompaction": "Verdichtung im Hintergrund",
-        "backgroundCompactionHint": "Experimentell: fasst im Hintergrund zusammen, wenn sich der Kontext seiner Grenze nähert, damit die automatische Verdichtung nicht warten muss. Ungenutzte Zusammenfassungen kosten trotzdem Tokens.",
+        "backgroundCompactionHint": "Standardmäßig an: fasst im Hintergrund zusammen, wenn sich der Kontext seiner Grenze nähert, damit die automatische Verdichtung nicht warten muss. Ungenutzte Zusammenfassungen kosten trotzdem Tokens.",
         "todo": "To-do-Listen-Werkzeug",
         "todoHint": "Experimentell: gibt dem Agenten das Werkzeug todowrite, damit Codeg seinen Plan als To-do-Liste anzeigen kann.",
         "fields": {

@@ -1398,7 +1398,7 @@
         "description": "セッションの既定値、コンテキストのコンパクション、実験的ツール、ツール出力の上限。OpenCode の設定に書き込まれ、下の保存で反映されます。",
         "docsLink": "設定ドキュメント",
         "unset": "未設定",
-        "ignoredLegacyKeys": "ファイル内の次の OpenCode 1 の設定は OpenCode 2 では無視されます：{keys}。",
+        "ignoredLegacyKeys": "ファイル内の次の設定は OpenCode で読み込まれなくなりました：{keys}。",
         "removeIgnoredLegacyKeys": "削除",
         "defaultAgent": "既定エージェント",
         "defaultAgentHint": "新しいセッションで使うプライマリエージェント。空または不明な場合は build に戻ります。",
@@ -1412,7 +1412,7 @@
         "compactionAuto": "自動コンパクション",
         "compactionAutoHint": "コンテキストウィンドウが埋まったら会話を自動的に要約します。",
         "backgroundCompaction": "バックグラウンドコンパクション",
-        "backgroundCompactionHint": "実験的機能：コンテキストが上限に近づくとバックグラウンドで要約を作成し、自動コンパクションの待ち時間をなくします。使われなかった要約もトークンを消費します。",
+        "backgroundCompactionHint": "既定でオン：コンテキストが上限に近づくとバックグラウンドで要約を作成し、自動コンパクションの待ち時間をなくします。使われなかった要約もトークンを消費します。",
         "todo": "ToDo リストツール",
         "todoHint": "実験的機能：エージェントに todowrite ツールを与え、Codeg がその計画を ToDo リストとして表示できるようにします。",
         "fields": {

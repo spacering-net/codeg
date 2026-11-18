@@ -1398,7 +1398,7 @@
         "description": "Session defaults, context compaction, experimental tools and tool-output limits. Written to OpenCode's config and applied once you save below.",
         "docsLink": "Config docs",
         "unset": "Not configured",
-        "ignoredLegacyKeys": "OpenCode 2 ignores these OpenCode 1 settings in the file: {keys}.",
+        "ignoredLegacyKeys": "OpenCode no longer reads these settings in the file: {keys}.",
         "removeIgnoredLegacyKeys": "Remove",
         "defaultAgent": "Default agent",
         "defaultAgentHint": "Which primary agent a new session opens in. Falls back to build when empty or unknown.",
@@ -1412,7 +1412,7 @@
         "compactionAuto": "Auto-compaction",
         "compactionAutoHint": "Summarize the conversation automatically when the context window fills up.",
         "backgroundCompaction": "Background compaction",
-        "backgroundCompactionHint": "Experimental: summarize in the background as the context nears its limit, so auto-compaction does not wait. Unused summaries still cost tokens.",
+        "backgroundCompactionHint": "On by default: summarize in the background as the context nears its limit, so auto-compaction does not wait. Unused summaries still cost tokens.",
         "todo": "Todo list tool",
         "todoHint": "Experimental: gives the agent the todowrite tool, so Codeg can show its plan as a todo list.",
         "fields": {

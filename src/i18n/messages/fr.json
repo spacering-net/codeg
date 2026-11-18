@@ -1398,7 +1398,7 @@
         "description": "Valeurs par défaut des sessions, compaction du contexte, outils expérimentaux et limites de sortie des outils. Écrit dans la configuration d’OpenCode et appliqué une fois enregistré ci-dessous.",
         "docsLink": "Docs de configuration",
         "unset": "Non configuré",
-        "ignoredLegacyKeys": "OpenCode 2 ignore ces réglages d’OpenCode 1 présents dans le fichier : {keys}.",
+        "ignoredLegacyKeys": "OpenCode ne lit plus ces réglages présents dans le fichier : {keys}.",
         "removeIgnoredLegacyKeys": "Supprimer",
         "defaultAgent": "Agent par défaut",
         "defaultAgentHint": "Agent principal utilisé par une nouvelle session. Vide ou inconnu retombe sur build.",
@@ -1412,7 +1412,7 @@
         "compactionAuto": "Compactage automatique",
         "compactionAutoHint": "Résume automatiquement la conversation quand la fenêtre de contexte se remplit.",
         "backgroundCompaction": "Compaction en arrière-plan",
-        "backgroundCompactionHint": "Expérimental : résume en arrière-plan quand le contexte approche de sa limite, pour que la compaction automatique n’attende pas. Les résumés inutilisés consomment quand même des jetons.",
+        "backgroundCompactionHint": "Activé par défaut : résume en arrière-plan quand le contexte approche de sa limite, pour que la compaction automatique n’attende pas. Les résumés inutilisés consomment quand même des jetons.",
         "todo": "Outil de liste de tâches",
         "todoHint": "Expérimental : donne à l’agent l’outil todowrite, pour que Codeg affiche son plan sous forme de liste de tâches.",
         "fields": {

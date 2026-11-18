@@ -1398,7 +1398,7 @@
         "description": "会话默认值、上下文压缩、实验性工具与工具输出上限。写入 OpenCode 配置，点击下方保存后生效。",
         "docsLink": "配置文档",
         "unset": "未配置",
-        "ignoredLegacyKeys": "文件中的这些 OpenCode 1 设置已被 OpenCode 2 忽略：{keys}。",
+        "ignoredLegacyKeys": "文件中的这些设置 OpenCode 已不再读取：{keys}。",
         "removeIgnoredLegacyKeys": "移除",
         "defaultAgent": "默认智能体",
         "defaultAgentHint": "新会话使用哪个主智能体。留空或填了无效名称时回落到 build。",
@@ -1412,7 +1412,7 @@
         "compactionAuto": "自动压缩",
         "compactionAutoHint": "上下文窗口快满时自动总结会话。",
         "backgroundCompaction": "后台压缩",
-        "backgroundCompactionHint": "实验性：上下文接近上限时在后台预先生成摘要，自动压缩无需等待。未用上的摘要同样消耗 token。",
+        "backgroundCompactionHint": "默认开启：上下文接近上限时在后台预先生成摘要，自动压缩无需等待。未用上的摘要同样消耗 token。",
         "todo": "待办列表工具",
         "todoHint": "实验性：为智能体提供 todowrite 工具，Codeg 即可把它的计划显示为待办列表。",
         "fields": {

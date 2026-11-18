@@ -1398,7 +1398,7 @@
         "description": "工作階段預設值、上下文壓縮、實驗性工具與工具輸出上限。寫入 OpenCode 設定，點擊下方儲存後生效。",
         "docsLink": "設定文件",
         "unset": "未設定",
-        "ignoredLegacyKeys": "檔案中的這些 OpenCode 1 設定已被 OpenCode 2 忽略：{keys}。",
+        "ignoredLegacyKeys": "檔案中的這些設定 OpenCode 已不再讀取：{keys}。",
         "removeIgnoredLegacyKeys": "移除",
         "defaultAgent": "預設智慧體",
         "defaultAgentHint": "新工作階段使用哪個主要智慧體。留空或名稱無效時回落到 build。",
@@ -1412,7 +1412,7 @@
         "compactionAuto": "自動壓縮",
         "compactionAutoHint": "上下文視窗快滿時自動總結對話。",
         "backgroundCompaction": "背景壓縮",
-        "backgroundCompactionHint": "實驗性：上下文接近上限時在背景預先產生摘要，自動壓縮無需等待。未用上的摘要同樣消耗 token。",
+        "backgroundCompactionHint": "預設開啟：上下文接近上限時在背景預先產生摘要，自動壓縮無需等待。未用上的摘要同樣消耗 token。",
         "todo": "待辦清單工具",
         "todoHint": "實驗性：為智慧體提供 todowrite 工具，Codeg 即可把它的計畫顯示為待辦清單。",
         "fields": {
