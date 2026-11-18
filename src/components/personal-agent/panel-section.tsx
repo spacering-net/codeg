@@ -9,13 +9,16 @@
  *   group of today): a head only as wide as its marker, its name and count
  *   in its tone and the chevron after them — as the roster's heads are —
  *   over its rows, one list, and under it the way to show the rest.
+ * - `PanelStack`: what a group holds — a card for each thing with buttons,
+ *   a box or a task's strip; the plain ones rows, those next to one another
+ *   one card with hairlines between them.
  * - `PanelList`: rows on one surface, a hairline between them (an inset
- *   grouped list): what a group, a day of output or the routines hold.
- * - `PanelItem`: one thing in a list (shadcn's `Item`): what leads it, its
- *   title and when, where it stands and a quiet line under it, notes, its
- *   buttons; the whole row opens what it is about when it opens anything.
- *   Outside a list — the morning brief's rows in its bubble — a soft card
- *   of its own.
+ *   grouped list): what a day of output or the routines hold.
+ * - `PanelItem`: one thing (shadcn's `Item`): what leads it, its title and
+ *   when, where it stands and a quiet line under it, a box, notes, its
+ *   buttons; the whole of it opens what it is about when it opens anything.
+ *   In a stack a card or a row, in a list a row; outside both — the
+ *   morning brief's rows in its bubble — a soft card of its own.
  * - `PanelEmpty`: a list with nothing in it, a dashed line saying so.
  * - `PanelCard`: a folding card (the stats' context, run log, charts): its
  *   title and a summary in its header.
@@ -45,6 +48,8 @@ import {
 } from "@/components/ui/item"
 import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+
+import { Callout, type CalloutTone } from "./aux/kit/callout"
 
 /** The folding parts that start folded; every other one starts open. */
 const FOLDED_AT_FIRST: ReadonlySet<string> = new Set([
@@ -188,7 +193,7 @@ export function PanelGroup({
           </CollapsibleTrigger>
         </div>
         <CollapsibleContent className="flex min-w-0 flex-col items-start gap-1 pt-1.5">
-          <PanelList className="w-full">{children}</PanelList>
+          <PanelStack className="w-full">{children}</PanelStack>
           {more}
         </CollapsibleContent>
       </section>
@@ -196,12 +201,36 @@ export function PanelGroup({
   )
 }
 
-/** Whether an item sits in a `PanelList` (a row) or on its own (a card). */
-const InListContext = createContext(false)
+/** What an item sits on: a `PanelList`'s row, a `PanelStack`'s card or
+ *  row, or nothing — a soft card of its own (the morning brief's). */
+type Surface = "list" | "stack" | null
+const SurfaceContext = createContext<Surface>(null)
 
-/** Whether the item being drawn is a list's row: its lead a size up. */
+/** Whether the item being drawn is on the panel's lists or stacks: its lead
+ *  a size up. */
 export function useInPanelList(): boolean {
-  return useContext(InListContext)
+  return useContext(SurfaceContext) != null
+}
+
+/** A group's things one under another: each one with buttons, a box or a
+ *  task's strip a card of its own; the plain ones in a row each, the rows
+ *  next to one another drawn as one card with a hairline between them. */
+export function PanelStack({
+  className,
+  children,
+  ...props
+}: ComponentProps<"div">) {
+  return (
+    <SurfaceContext value="stack">
+      <div
+        role="list"
+        className={cn("flex min-w-0 flex-col gap-2", className)}
+        {...props}
+      >
+        {children}
+      </div>
+    </SurfaceContext>
+  )
 }
 
 /** Rows on one surface, a hairline between them. */
@@ -211,7 +240,7 @@ export function PanelList({
   ...props
 }: ComponentProps<"div">) {
   return (
-    <InListContext value>
+    <SurfaceContext value="list">
       <div
         role="list"
         className={cn(
@@ -223,7 +252,7 @@ export function PanelList({
       >
         {children}
       </div>
-    </InListContext>
+    </SurfaceContext>
   )
 }
 
@@ -305,42 +334,259 @@ export function PanelIcon({
 /** The classes of an item's title, in the button that opens it or not. */
 const TITLE =
   "line-clamp-2 min-w-0 flex-1 text-[0.8125rem] leading-5 font-medium break-words text-foreground"
+/** A stack's title: a weight up. */
+const STACK_TITLE =
+  "line-clamp-2 min-w-0 flex-1 text-sm leading-5 font-semibold break-words text-foreground"
 
-export function PanelItem({
+/** In a stack, a row joins the row before it into one card: the gap
+ *  between them closed, the corners and the edge where they meet gone, a
+ *  hairline under the one above. */
+const JOINED_ROW =
+  "[[data-pa-shape=row]+&]:-mt-2 [[data-pa-shape=row]+&]:rounded-t-none [[data-pa-shape=row]+&]:border-t-0 has-[+[data-pa-shape=row]]:rounded-b-none has-[+[data-pa-shape=row]]:border-b-border/50"
+
+export interface PanelItemProps extends Omit<ComponentProps<"div">, "title"> {
+  /** What leads it: an avatar, a kind's icon. */
+  media?: ReactNode
+  title: ReactNode
+  /** When, short: at the title's end on a list's row, after the quiet line
+   *  on a stack's. */
+  time?: ReactNode
+  /** Its own controls at the title's end (a switch, a menu). */
+  aside?: ReactNode
+  /** Where it stands: leading the quiet line — at a card's top end. */
+  chip?: ReactNode
+  /** A quiet line under the title. */
+  meta?: ReactNode
+  /** What it says, in a box of its tone (a stack's card); elsewhere a note. */
+  callout?: { tone: CalloutTone; mono?: boolean; text: ReactNode } | null
+  notes?: ReactNode[]
+  onOpen?: (() => void) | null
+  openLabel?: string
+  /** More under it, before the buttons: a task's card (8.5). */
+  extra?: ReactNode
+  /** Buttons under it, apart from what opening it does: a card's row. */
+  actions?: ReactNode
+  /** One button at its end: a row keeps it there. */
+  action?: ReactNode
+}
+
+export function PanelItem(props: PanelItemProps) {
+  const surface = useContext(SurfaceContext)
+  if (surface === "stack") return <StackItem {...props} />
+  return <ListItem {...props} inList={surface === "list"} />
+}
+
+/** The button over the whole of an item that opens it — its title — or the
+ *  title alone. */
+function ItemTitle({
+  title,
+  onOpen,
+  openLabel,
+  className,
+  ring,
+}: {
+  title: ReactNode
+  onOpen?: (() => void) | null
+  openLabel?: string
+  className: string
+  ring: string
+}) {
+  if (!onOpen) return <span className={className}>{title}</span>
+  return (
+    // Its ::after covers the item: a click anywhere on it opens it, but on
+    // its buttons, which sit over it.
+    <button
+      type="button"
+      data-pa-item-open
+      onClick={onOpen}
+      title={openLabel}
+      className={cn(
+        "flex min-w-0 flex-1 text-start outline-none after:absolute after:inset-0",
+        ring
+      )}
+    >
+      <span className={className}>{title}</span>
+    </button>
+  )
+}
+
+/** A stack's thing: a card with what it says, its strip and its buttons
+ *  under its head; a row when it has none of them. */
+function StackItem({
   media,
   title,
   time,
   aside,
   chip,
   meta,
+  callout,
   notes = [],
   onOpen,
   openLabel,
   extra,
   actions,
+  action,
   className,
   ...props
-}: {
-  /** What leads it: an avatar, a kind's icon. */
-  media?: ReactNode
-  title: ReactNode
-  /** When, short, at the title's end. */
-  time?: ReactNode
-  /** Its own controls at the title's end (a switch, a menu). */
-  aside?: ReactNode
-  /** Where it stands, leading the quiet line under the title. */
-  chip?: ReactNode
-  /** A quiet line under the title. */
-  meta?: ReactNode
-  notes?: ReactNode[]
-  onOpen?: (() => void) | null
-  openLabel?: string
-  /** More under it, before the buttons: a task's card (8.5). */
-  extra?: ReactNode
-  /** Buttons under it, apart from what opening it does. */
-  actions?: ReactNode
-} & Omit<ComponentProps<"div">, "title">) {
-  const inList = useInPanelList()
+}: PanelItemProps) {
+  const card = actions != null || extra != null || callout != null
+  // Its quiet line: what it is, then when.
+  const line =
+    meta != null || time != null ? (
+      <>
+        {meta}
+        {meta != null && time != null ? " · " : null}
+        {time != null ? <span className="tabular-nums">{time}</span> : null}
+      </>
+    ) : null
+  const titleEl = (
+    <ItemTitle
+      title={title}
+      onOpen={onOpen}
+      openLabel={openLabel}
+      className={STACK_TITLE}
+      ring="focus-visible:after:rounded-2xl focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset"
+    />
+  )
+  if (!card) {
+    return (
+      <Item
+        role="listitem"
+        data-pa-shape="row"
+        variant="outline"
+        size="sm"
+        className={cn(
+          "ws-msg-card relative flex-nowrap items-center gap-3 rounded-2xl border-border/70 bg-card px-4 py-3",
+          JOINED_ROW,
+          onOpen && "has-[[data-pa-item-open]:hover]:bg-muted/40",
+          className
+        )}
+        {...props}
+      >
+        {media ? (
+          <span className="flex shrink-0 self-start">{media}</span>
+        ) : null}
+        <ItemContent className="min-w-0 gap-0.5">
+          <div className="flex min-w-0 items-start gap-2">
+            {titleEl}
+            {aside ? (
+              <span className="relative z-10 -my-0.5 -me-1 flex shrink-0 items-center">
+                {aside}
+              </span>
+            ) : null}
+          </div>
+          {chip || line ? (
+            <div className="flex min-w-0 items-center gap-1.5">
+              {chip ? (
+                <span className="relative z-10 flex shrink-0 items-center">
+                  {chip}
+                </span>
+              ) : null}
+              {line ? (
+                <ItemDescription className="line-clamp-2 min-w-0 text-start text-xs leading-5">
+                  {line}
+                </ItemDescription>
+              ) : null}
+            </div>
+          ) : null}
+          {notes.map((note, i) => (
+            <ItemDescription
+              key={i}
+              className="text-start text-xs leading-[1.125rem] break-words"
+            >
+              {note}
+            </ItemDescription>
+          ))}
+        </ItemContent>
+        {action ? (
+          <span className="relative z-10 flex shrink-0 items-center">
+            {action}
+          </span>
+        ) : null}
+      </Item>
+    )
+  }
+  return (
+    <Item
+      role="listitem"
+      data-pa-shape="card"
+      variant="outline"
+      size="sm"
+      className={cn(
+        "ws-msg-card relative flex-col flex-nowrap items-stretch gap-3 rounded-2xl border-border/70 bg-card p-4",
+        onOpen && "has-[[data-pa-item-open]:hover]:bg-muted/40",
+        className
+      )}
+      {...props}
+    >
+      <div className="flex min-w-0 items-start gap-2.5">
+        {media ? <span className="flex shrink-0">{media}</span> : null}
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex min-w-0 items-start gap-2">
+            {titleEl}
+            {chip ? (
+              <span className="relative z-10 flex shrink-0 items-center">
+                {chip}
+              </span>
+            ) : null}
+            {aside ? (
+              <span className="relative z-10 -my-0.5 -me-1 flex shrink-0 items-center">
+                {aside}
+              </span>
+            ) : null}
+          </div>
+          {line ? (
+            <ItemDescription className="min-w-0 truncate text-start text-xs leading-5">
+              {line}
+            </ItemDescription>
+          ) : null}
+        </div>
+      </div>
+      {callout ? (
+        <Callout tone={callout.tone} mono={callout.mono}>
+          {callout.text}
+        </Callout>
+      ) : null}
+      {notes.map((note, i) => (
+        <ItemDescription
+          key={i}
+          className="text-start text-xs leading-[1.125rem] break-words"
+        >
+          {note}
+        </ItemDescription>
+      ))}
+      {extra ? <div className="relative z-10 min-w-0">{extra}</div> : null}
+      {actions || action ? (
+        <div className="relative z-10 flex flex-wrap items-center gap-2">
+          {actions}
+          {action}
+        </div>
+      ) : null}
+    </Item>
+  )
+}
+
+/** A list's row, or — outside any list — a soft card of its own. */
+function ListItem({
+  media,
+  title,
+  time,
+  aside,
+  chip,
+  meta,
+  callout,
+  notes = [],
+  onOpen,
+  openLabel,
+  extra,
+  actions,
+  action,
+  inList,
+  className,
+  ...props
+}: PanelItemProps & { inList: boolean }) {
+  // No boxes here: what one says is a note.
+  const allNotes = callout ? [callout.text, ...notes] : notes
   return (
     <Item
       role={inList ? "listitem" : undefined}
@@ -375,26 +621,17 @@ export function PanelItem({
       ) : null}
       <ItemContent className="min-w-0 gap-0.5">
         <div className="flex min-w-0 items-start gap-2">
-          {onOpen ? (
-            // Its ::after covers the item: a click anywhere on it opens it,
-            // but on its buttons, which sit over it.
-            <button
-              type="button"
-              data-pa-item-open
-              onClick={onOpen}
-              title={openLabel}
-              className={cn(
-                "flex min-w-0 flex-1 text-start outline-none after:absolute after:inset-0",
-                inList
-                  ? "focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset"
-                  : "after:rounded-2xl focus-visible:after:ring-[3px] focus-visible:after:ring-ring/50"
-              )}
-            >
-              <span className={TITLE}>{title}</span>
-            </button>
-          ) : (
-            <span className={TITLE}>{title}</span>
-          )}
+          <ItemTitle
+            title={title}
+            onOpen={onOpen}
+            openLabel={openLabel}
+            className={TITLE}
+            ring={
+              inList
+                ? "focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset"
+                : "after:rounded-2xl focus-visible:after:ring-[3px] focus-visible:after:ring-ring/50"
+            }
+          />
           {time ? (
             <span className="shrink-0 text-[0.6875rem] leading-5 text-muted-foreground tabular-nums">
               {time}
@@ -420,7 +657,7 @@ export function PanelItem({
             ) : null}
           </div>
         ) : null}
-        {notes.map((note, i) => (
+        {allNotes.map((note, i) => (
           <ItemDescription
             key={i}
             className="text-start text-xs leading-[1.125rem] break-words"
@@ -429,9 +666,10 @@ export function PanelItem({
           </ItemDescription>
         ))}
         {extra ? <div className="relative z-10 min-w-0">{extra}</div> : null}
-        {actions ? (
+        {actions || action ? (
           <div className="relative z-10 mt-2 flex flex-wrap gap-1.5">
             {actions}
+            {action}
           </div>
         ) : null}
       </ItemContent>

@@ -433,8 +433,20 @@ describe("the panel", () => {
     const snap = snapshot()
     Object.assign(snap.agent!, { kind: "worker", template: "dev" })
     pa.snapshot = snap
-    draw({ snap })
+    const { unmount: unmountWorker } = draw({ snap })
     expect(await screen.findByText("Idle · Developer")).toBeTruthy()
+    unmountWorker()
+    // A role that is its name says nothing more: its state alone.
+    const named = snapshot()
+    Object.assign(named.agent!, {
+      kind: "worker",
+      template: "dev",
+      name: "Developer",
+    })
+    pa.snapshot = named
+    draw({ snap: named })
+    const alone = await screen.findByText("Idle")
+    expect(alone.closest("[data-pa-aux-head-line]")?.textContent).toBe("Idle")
   })
 
   it("is the same in the drawer, its count of what waits on the owner on its activity", async () => {
@@ -590,6 +602,84 @@ describe("the activity's matters", () => {
     expect(
       screen.getByRole("tab", { name: /Activity/ }).getAttribute("aria-label")
     ).toBe("Activity")
+  })
+
+  it("puts no open matters and no routines on one card, a row each with no head over it", async () => {
+    draw()
+    await screen.findByText("Nothing open right now.")
+    await screen.findByText(
+      "No routines yet. Ask it in the conversation to set one up."
+    )
+    const matters = document.querySelector<HTMLElement>(
+      '[data-pa-detail="matters"]'
+    )!
+    const routines = document.querySelector<HTMLElement>(
+      '[data-pa-detail="routines"]'
+    )!
+    // Rows, next to one another in one stack: drawn as one card.
+    expect(matters.getAttribute("data-pa-shape")).toBe("row")
+    expect(routines.getAttribute("data-pa-shape")).toBe("row")
+    expect(matters.parentElement).toBe(routines.parentElement)
+    expect(matters.nextElementSibling).toBe(routines)
+    // No heads over them, the names on the rows.
+    expect(screen.queryByRole("heading", { name: "Matters" })).toBeNull()
+    expect(within(matters).getByText("Matters")).toBeTruthy()
+    fireEvent.click(
+      within(routines).getByRole("button", { name: "New routine" })
+    )
+    expect(usePersonalAgentUi.getState().routineEditor?.routineId).toBeNull()
+  })
+
+  it("keeps routines in their own part while matters are open, the head over them", async () => {
+    api.personalAgentRoutines.mockResolvedValue([])
+    api.personalAgentItems.mockResolvedValue([
+      item({
+        id: 11,
+        kind: "reminder",
+        summary: "Call back",
+        waits_for: "time",
+      }),
+    ])
+    draw()
+    expect(await screen.findByText("Call back")).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Matters" })).toBeTruthy()
+    const routines = await waitFor(() => {
+      const el = document.querySelector('[data-pa-detail="routines"]')
+      expect(el).toBeTruthy()
+      return el as HTMLElement
+    })
+    expect(routines.getAttribute("data-pa-shape")).toBe("row")
+  })
+
+  it("says why a piece of work failed in a red box, and folds what done looks like", async () => {
+    api.personalAgentItems.mockResolvedValue([
+      item({ id: 12, dispatch_id: 1, waits_for: "owner" }),
+    ])
+    api.personalAgentDispatches.mockResolvedValue([
+      dispatch({
+        id: 1,
+        title: "Fix the login",
+        state: "failed",
+        ladder: "failed",
+        error: "worktree add failed: Branch already exists",
+        done_when: "The login works on Safari",
+      }),
+    ])
+    draw()
+    const error = await screen.findByText(
+      "worktree add failed: Branch already exists"
+    )
+    const box = error.closest("[data-pa-callout]")!
+    expect(box.getAttribute("data-pa-callout")).toBe("error")
+    // An error's own text: in the code face.
+    expect(box.className).toContain("font-mono")
+    const card = error.closest<HTMLElement>("[data-slot='item']")!
+    expect(card.getAttribute("data-pa-shape")).toBe("card")
+    // Done when: folded under its label, open on asking.
+    const fold = card.querySelector<HTMLElement>("[data-pa-done-when]")!
+    expect(within(fold).queryByText("The login works on Safari")).toBeNull()
+    fireEvent.click(within(fold).getByRole("button", { name: "Done when" }))
+    expect(within(fold).getByText("The login works on Safari")).toBeTruthy()
   })
 
   it("settles a matter from its card: done, put off, later, dropped", async () => {

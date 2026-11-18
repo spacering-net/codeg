@@ -335,6 +335,7 @@ function TodayBody({
               <TodayRowCard
                 key={row.key}
                 row={row}
+                group={g}
                 now={now}
                 onOpen={opener(row)}
                 readOnly={readOnly}
@@ -422,7 +423,7 @@ function MatterActions({ row }: { row: TodayRow }) {
   return (
     <>
       <Button
-        size="xs"
+        size="sm"
         variant="outline"
         disabled={acting}
         onClick={() => act("done")}
@@ -433,7 +434,7 @@ function MatterActions({ row }: { row: TodayRow }) {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
-            size="xs"
+            size="sm"
             variant="ghost"
             disabled={acting}
             data-pa-today-act="later"
@@ -466,7 +467,7 @@ function UndoAction({ row }: { row: TodayRow }) {
   const [acting, setActing] = useState(false)
   return (
     <Button
-      size="xs"
+      size="sm"
       variant="outline"
       disabled={acting || row.notice_id == null}
       onClick={() => {
@@ -500,7 +501,7 @@ function DraftActions({ row }: { row: TodayRow }) {
   return (
     <>
       <Button
-        size="xs"
+        size="sm"
         disabled={acting || row.notice_id == null}
         onClick={() => act("apply")}
         data-pa-today-act="apply"
@@ -508,7 +509,7 @@ function DraftActions({ row }: { row: TodayRow }) {
         {row.kind === "skill" ? t("install") : t("apply")}
       </Button>
       <Button
-        size="xs"
+        size="sm"
         variant="ghost"
         disabled={acting || row.notice_id == null}
         onClick={() => act("dismiss")}
@@ -522,11 +523,14 @@ function DraftActions({ row }: { row: TodayRow }) {
 
 function TodayRowCard({
   row,
+  group,
   now,
   onOpen,
   readOnly,
 }: {
   row: TodayRow
+  /** The group of today it is in; none in a morning brief. */
+  group?: GroupKey
   now: number
   onOpen: (() => void) | null
   readOnly: boolean
@@ -564,23 +568,41 @@ function TodayRowCard({
     <MatterActions row={row} />
   ) : (row.kind === "tidy" || row.kind === "skill") && row.state === "draft" ? (
     <DraftActions row={row} />
-  ) : (row.kind === "changed" ||
+  ) : null
+  // Taking a change back: one button, at a row's end.
+  const action =
+    !readOnly &&
+    (row.kind === "changed" ||
       row.kind === "memory" ||
       row.kind === "tidy" ||
       row.kind === "skill") &&
-    row.undo ? (
-    <UndoAction row={row} />
-  ) : null
+    row.undo &&
+    row.state !== "draft" ? (
+      <UndoAction row={row} />
+    ) : null
+  // What waits on the owner says it in a box, what failed red; elsewhere —
+  // and in a morning brief — a quiet note. The words are the assistant's
+  // summing up, not an error's own text: not in the code face.
+  const failed = row.kind === "failed" || row.state === "failed"
+  const callout =
+    group === "needs" && row.text
+      ? {
+          tone: failed ? ("error" as const) : ("wait" as const),
+          text: row.text,
+        }
+      : null
   return (
     <PanelItem
       media={<RowLead row={row} />}
       title={title}
       time={when}
       meta={meta}
-      notes={row.text ? [row.text] : []}
+      callout={callout}
+      notes={row.text && !callout ? [row.text] : []}
       onOpen={onOpen}
       openLabel={t("open")}
       actions={actions}
+      action={action}
       data-pa-today-row={row.kind}
       data-key={row.key}
     />

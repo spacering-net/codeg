@@ -265,13 +265,27 @@ export function TaskStrip({
   ) : null
   if (compact) {
     // The side panel's: the branch a chip and what it changed after it on
-    // one line, [View PR] on the left and [Stop] — red — at the right.
+    // one line, [Stop] — red — at its end; with a pull request, [View PR]
+    // and [Stop] a line of their own under it.
+    const stopButton =
+      live && !readOnly ? (
+        <Button
+          size="sm"
+          variant="destructive"
+          data-pa-task-act="stop"
+          disabled={stopping}
+          className="ms-auto"
+          onClick={stop}
+        >
+          {t("stop")}
+        </Button>
+      ) : null
     return (
       <div
         data-pa-task-strip
         className="flex min-w-0 flex-col gap-2 text-xs text-muted-foreground"
       >
-        {task.branch || diff ? (
+        {task.branch || diff || (stopButton && !prButton) ? (
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             {task.branch ? <BranchChip branch={task.branch} /> : null}
             {diff ? (
@@ -282,24 +296,14 @@ export function TaskStrip({
                 {diff}
               </span>
             ) : null}
+            {prButton ? null : stopButton}
           </div>
         ) : null}
         <PrLine d={d} />
-        {prButton || (live && !readOnly) ? (
+        {prButton ? (
           <div className="flex flex-wrap items-center gap-2">
             {prButton}
-            {live && !readOnly ? (
-              <Button
-                size="sm"
-                variant="destructive"
-                data-pa-task-act="stop"
-                disabled={stopping}
-                className="ms-auto"
-                onClick={stop}
-              >
-                {t("stop")}
-              </Button>
-            ) : null}
+            {stopButton}
           </div>
         ) : null}
       </div>

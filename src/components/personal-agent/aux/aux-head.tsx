@@ -119,8 +119,14 @@ function HeadLine({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
   const worker = agent?.kind === "worker"
   const workers =
     entries?.filter((e) => e.kind === "worker" && !e.roster.hidden).length ?? 0
-  const extra = worker
+  const role = worker
     ? (templates?.find((x) => x.id === agent?.template)?.name ?? null)
+    : null
+  // A role that is its name says nothing more.
+  const extra = worker
+    ? role && role !== agent?.name?.trim()
+      ? role
+      : null
     : workers > 0
       ? t("workers", { count: workers })
       : null

@@ -4,11 +4,12 @@
  * The activity tab's "Routines" (6.9, 10.1): this assistant's routines, each with
  * when it runs, its next run and how its last went; a switch that pauses and
  * resumes it, and [Run now] [Edit] [Delete] in its menu — its title opens
- * it to edit. Empty: a line saying to ask for one in the conversation, and
- * [New routine]; with some, [+] at the section's head.
+ * it to edit. Empty: one row — its name, a line saying to ask for one in
+ * the conversation, and [New routine] at its end — with no head over it;
+ * with some, [+] at the section's head.
  */
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type RefObject } from "react"
 import { useTranslations } from "next-intl"
 import {
   CalendarClock,
@@ -48,11 +49,11 @@ import type { Routine, RoutineAction } from "@/lib/types"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import {
-  PanelEmpty,
   PanelIcon,
   PanelItem,
   PanelList,
   PanelSection,
+  PanelStack,
 } from "./panel-section"
 import {
   OutcomeChip,
@@ -61,8 +62,9 @@ import {
   useWhen,
 } from "./routine-bits"
 
-/** An assistant's routines, kept fresh as they change. */
-export function useRoutines(): Routine[] | null {
+/** An assistant's routines, kept fresh as they change — read only while
+ *  `active` (the page above may have read them already). */
+export function useRoutines(active = true): Routine[] | null {
   const { botId, routineVersion } = usePersonalAgent()
   // Kept with the assistant they are of: another one shown waits for its
   // own, never listing the last one's.
@@ -71,6 +73,7 @@ export function useRoutines(): Routine[] | null {
     list: Routine[]
   } | null>(null)
   useEffect(() => {
+    if (!active) return
     let alive = true
     personalAgentRoutines(botId)
       .then((l) => {
@@ -82,30 +85,92 @@ export function useRoutines(): Routine[] | null {
     return () => {
       alive = false
     }
-  }, [botId, routineVersion])
+  }, [botId, routineVersion, active])
   return read?.bot === botId ? read.list : null
+}
+
+/** `pa.open` on a routine, or "open its routines", brings them into view —
+ *  the section, or the row that says there are none. */
+function useRoutinesAsked(ref: RefObject<HTMLElement | null>) {
+  const asked = usePersonalAgentUi((s) => s.routinesAsked)
+  useEffect(() => {
+    if (asked > 0) ref.current?.scrollIntoView({ block: "start" })
+  }, [asked, ref])
+}
+
+/** No routines yet: one row — its name, how to get one, [New routine] at
+ *  its end — to sit in a stack, alone or under the matters' own. */
+export function RoutinesEmptyRow({
+  title,
+  readOnly,
+}: {
+  title: string
+  readOnly: boolean
+}) {
+  const t = useTranslations("PersonalAgent.routines")
+  const { botId } = usePersonalAgent()
+  const openEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
+  const ref = useRef<HTMLDivElement | null>(null)
+  useRoutinesAsked(ref)
+  return (
+    <PanelItem
+      ref={ref}
+      media={<PanelIcon icon={CalendarClock} />}
+      title={title}
+      meta={<span data-pa-routines-empty>{t("empty")}</span>}
+      action={
+        readOnly ? null : (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              openEditor({
+                botId,
+                routineId: null,
+                draft: null,
+                noticeId: null,
+              })
+            }
+          >
+            <Plus aria-hidden />
+            {t("new")}
+          </Button>
+        )
+      }
+      className="scroll-mt-3"
+      data-pa-detail="routines"
+    />
+  )
 }
 
 export function RoutinesSection({
   title,
   readOnly,
+  list: given,
 }: {
   title: string
   /** The assistants run in another process: nothing is acted on here. */
   readOnly: boolean
+  /** Its routines, when the page above has read them; read here if not. */
+  list?: Routine[] | null
 }) {
   const t = useTranslations("PersonalAgent.routines")
   const { botId } = usePersonalAgent()
-  const list = useRoutines()
+  const read = useRoutines(given === undefined)
+  const list = given === undefined ? read : given
   const openEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
-  // `pa.open` on a routine brings them into view.
-  const asked = usePersonalAgentUi((s) => s.routinesAsked)
   const ref = useRef<HTMLElement | null>(null)
-  useEffect(() => {
-    if (asked > 0) ref.current?.scrollIntoView({ block: "start" })
-  }, [asked])
+  useRoutinesAsked(ref)
   const add = () =>
     openEditor({ botId, routineId: null, draft: null, noticeId: null })
+  // None: the row that says so, no head over it.
+  if (list != null && list.length === 0) {
+    return (
+      <PanelStack>
+        <RoutinesEmptyRow title={title} readOnly={readOnly} />
+      </PanelStack>
+    )
+  }
   return (
     <PanelSection
       ref={ref}
@@ -130,22 +195,7 @@ export function RoutinesSection({
       data-pa-detail="routines"
     >
       {list == null ? (
-        <Skeleton className="h-16 w-full rounded-xl" aria-hidden />
-      ) : list.length === 0 ? (
-        <PanelEmpty
-          icon={CalendarClock}
-          className="flex-wrap"
-          action={
-            !readOnly ? (
-              <Button size="xs" variant="outline" onClick={add}>
-                <Plus aria-hidden />
-                {t("new")}
-              </Button>
-            ) : null
-          }
-        >
-          <span data-pa-routines-empty>{t("empty")}</span>
-        </PanelEmpty>
+        <Skeleton className="h-16 w-full rounded-2xl" aria-hidden />
       ) : (
         <PanelList>
           {list.map((r) => (

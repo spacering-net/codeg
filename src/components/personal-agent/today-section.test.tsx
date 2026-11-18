@@ -280,6 +280,80 @@ describe("today", () => {
     expect(within(list).getAllByRole("listitem")).toHaveLength(1)
   })
 
+  it("draws a row with something to say or settle as a card, a plain one as a row", () => {
+    draw(
+      today({
+        needs: [
+          row({
+            key: "session:5",
+            kind: "session",
+            title: "Explore auth",
+            text: "Keep the old API?",
+            state: "question",
+            conversation_id: 5,
+          }),
+          row({
+            key: "failed:3",
+            kind: "failed",
+            title: "Fix CI",
+            text: "worktree add failed: Branch already exists",
+            bot_id: 2,
+            dispatch_id: 3,
+          }),
+        ],
+        watching: [
+          row({
+            key: "dispatch:4",
+            kind: "dispatch",
+            title: "Docs",
+            bot_id: 2,
+          }),
+          row({
+            key: "dispatch:5",
+            kind: "dispatch",
+            title: "Notes",
+            bot_id: 2,
+          }),
+        ],
+        done: [
+          row({
+            key: "changed:1",
+            kind: "changed",
+            title: "Muted Dev",
+            bot_id: 2,
+            notice_id: 8,
+            undo: true,
+          }),
+        ],
+      })
+    )
+    const shape = (title: string) =>
+      screen
+        .getByText(title)
+        .closest("[data-slot='item']")
+        ?.getAttribute("data-pa-shape")
+    // What waits on the owner says it in a box — red and in the code face
+    // when it failed.
+    expect(shape("Explore auth")).toBe("card")
+    const asked = screen.getByText("Keep the old API?")
+    expect(
+      asked.closest("[data-pa-callout]")?.getAttribute("data-pa-callout")
+    ).toBe("wait")
+    const failed = screen.getByText(
+      "worktree add failed: Branch already exists"
+    )
+    const box = failed.closest("[data-pa-callout]")!
+    expect(box.getAttribute("data-pa-callout")).toBe("error")
+    // The assistant's own words, not an error's text: not in the code face.
+    expect(box.className).not.toContain("font-mono")
+    // Plain ones are rows, one after another; one to take back keeps its
+    // one button at its end, a row still.
+    expect(shape("Docs")).toBe("row")
+    expect(shape("Notes")).toBe("row")
+    expect(shape("Muted Dev")).toBe("row")
+    expect(screen.getByRole("button", { name: "Undo" })).toBeTruthy()
+  })
+
   it("leads each row with its assistant, or the project of the owner's own", () => {
     draw(
       today({
@@ -742,5 +816,29 @@ describe("the morning brief (6.4)", () => {
     expect(dialogs.openDetail).toHaveBeenCalledWith(7)
     // Nothing is settled from a brief.
     expect(screen.queryByRole("button", { name: "Done" })).toBe(null)
+  })
+
+  it("keeps a brief's rows soft cards of their own, what they say a note", () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <BriefRows
+          rows={[
+            row({
+              key: "failed:3",
+              kind: "failed",
+              title: "Fix CI",
+              text: "it broke",
+              bot_id: 2,
+            }),
+          ]}
+          dispatches={[]}
+        />
+      </NextIntlClientProvider>
+    )
+    const item = screen.getByText("Fix CI").closest("[data-slot='item']")!
+    expect(item.hasAttribute("data-pa-shape")).toBe(false)
+    expect(item.getAttribute("data-variant")).toBe("muted")
+    expect(document.querySelector("[data-pa-callout]")).toBeNull()
+    expect(screen.getByText("it broke")).toBeTruthy()
   })
 })

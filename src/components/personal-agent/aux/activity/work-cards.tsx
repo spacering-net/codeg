@@ -8,6 +8,7 @@ import { useLocale, useTranslations } from "next-intl"
 import {
   Bell,
   ChevronDown,
+  ChevronRight,
   Ear,
   Forward,
   ListTodo,
@@ -18,6 +19,11 @@ import {
 import { toast } from "sonner"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import { Button } from "@/components/ui/button"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,7 +50,7 @@ import {
   useWorkMeta,
   workTargetOf,
 } from "../../shared"
-import { CheckLabel, DoneWhen } from "../../acceptance-bits"
+import { CheckLabel } from "../../acceptance-bits"
 import { useActivityTranslate } from "../../activity-text"
 import { dueWhen, repeatText } from "../../due-text"
 import { AnsweredForYou } from "../../event-card"
@@ -142,28 +148,56 @@ export function DispatchCard({
         mode: d.mode,
         folder: d.folder_name,
       })}
+      // Why it failed, in a red box.
+      callout={
+        d.state === "failed" && d.error?.trim()
+          ? { tone: "error", mono: true, text: d.error.trim() }
+          : null
+      }
       notes={notes}
       onOpen={canOpen ? () => openWork(target) : null}
       openLabel={canOpen ? t("timeline.viewSession") : undefined}
       extra={
         d.task ||
         d.answered_for_you > 0 ||
-        d.done_when ||
+        d.done_when?.trim() ||
         d.check_for != null ? (
-          <>
+          <div className="flex min-w-0 flex-col gap-2">
             {d.check_for != null ? (
               <CheckLabel round={d.check_round ?? null} via={null} />
             ) : null}
+            <DoneWhenFold text={d.done_when} />
             {d.task ? <TaskStrip d={d} compact /> : null}
             {d.answered_for_you > 0 ? (
-              <AnsweredForYou count={d.answered_for_you} className="mt-1.5" />
+              <AnsweredForYou count={d.answered_for_you} />
             ) : null}
-            <DoneWhen text={d.done_when} className="mt-1.5" />
-          </>
+          </div>
         ) : undefined
       }
       actions={actions}
     />
+  )
+}
+
+/** What done looks like (7.5), folded under its label: a quiet bar that
+ *  opens to the words the assistant wrote. */
+function DoneWhenFold({ text }: { text: string | null | undefined }) {
+  const t = useTranslations("PersonalAgent.dispatchCard")
+  const body = text?.trim()
+  if (!body) return null
+  return (
+    <Collapsible data-pa-done-when className="min-w-0">
+      <CollapsibleTrigger className="group/done relative z-10 flex h-8 w-full min-w-0 items-center gap-1.5 rounded-lg bg-muted px-2.5 text-start text-xs font-medium text-foreground/80 transition-colors outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/50 data-[state=open]:rounded-b-none">
+        <ChevronRight
+          aria-hidden
+          className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]/done:rotate-90 rtl:-scale-x-100 rtl:group-data-[state=open]/done:rotate-90"
+        />
+        <span className="min-w-0 truncate">{t("doneWhen")}</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="rounded-b-lg bg-muted px-2.5 pb-2.5 text-xs leading-5 break-words whitespace-pre-line text-muted-foreground">
+        {body}
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 
@@ -248,7 +282,7 @@ function LaterMenu({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
-          size="xs"
+          size="sm"
           variant="ghost"
           disabled={disabled}
           data-pa-item-act="later-menu"
@@ -299,7 +333,7 @@ function ItemCard({
     readOnly || item.kind === "dispatch" ? null : (
       <>
         <Button
-          size="xs"
+          size="sm"
           variant="outline"
           disabled={acting}
           onClick={() => settle("done")}
@@ -316,7 +350,7 @@ function ItemCard({
           />
         ) : null}
         <Button
-          size="xs"
+          size="sm"
           variant="ghost"
           disabled={acting}
           className="text-muted-foreground"
@@ -389,7 +423,7 @@ export function MatterCard({
       settled && !readOnly ? (
         <>
           <Button
-            size="xs"
+            size="sm"
             variant="outline"
             disabled={acting}
             onClick={() => settle("done")}
@@ -398,7 +432,7 @@ export function MatterCard({
             {td("done")}
           </Button>
           <Button
-            size="xs"
+            size="sm"
             variant="ghost"
             disabled={acting}
             className="text-muted-foreground"
