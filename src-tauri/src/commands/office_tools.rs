@@ -510,7 +510,7 @@ pub async fn officecli_install(
     task_id: String,
     app: tauri::AppHandle,
 ) -> Result<OfficecliInfo, OfficeToolsError> {
-    officecli_install_core(task_id, &EventEmitter::Tauri(app)).await
+    officecli_install_core(task_id, &EventEmitter::from_app(&app)).await
 }
 
 /// Run the vendor's official installer script (mirror-first, GitHub fallback),
