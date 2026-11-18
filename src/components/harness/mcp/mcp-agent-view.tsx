@@ -332,7 +332,7 @@ function EntryRow({
     : t("row.noDefinition")
 
   return (
-    <li className="flex min-w-0 items-start gap-3 px-4 py-3">
+    <li className="flex min-w-0 items-start gap-3 px-4 py-2.5">
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <Button
@@ -348,11 +348,17 @@ function EntryRow({
             </bdi>
           </Button>
           {differs && (
-            <DiscoverMark tone="info">{t("agent.differs")}</DiscoverMark>
+            <DiscoverMark size="sm" tone="info">
+              {t("agent.differs")}
+            </DiscoverMark>
           )}
-          {entry.legacy && <DiscoverMark>{t("agent.legacy")}</DiscoverMark>}
+          {entry.legacy && (
+            <DiscoverMark size="sm">{t("agent.legacy")}</DiscoverMark>
+          )}
           {skipped && (
-            <DiscoverMark tone="warning">{t("agent.skipped")}</DiscoverMark>
+            <DiscoverMark size="sm" tone="warning">
+              {t("agent.skipped")}
+            </DiscoverMark>
           )}
         </div>
         <p id={stateId} className="mt-0.5 text-xs text-muted-foreground">
@@ -439,7 +445,7 @@ function EntryRow({
 function BuiltInRow() {
   const t = useTranslations("Harness.mcp.agent")
   return (
-    <li className="flex min-w-0 items-start gap-3 px-4 py-3">
+    <li className="flex min-w-0 items-start gap-3 px-4 py-2.5">
       <Bubbles
         aria-hidden="true"
         className="mt-0.5 size-4 shrink-0 text-muted-foreground"
@@ -545,7 +551,9 @@ export function McpAgentDetail({
                 {labels.agent(info.id)}
               </h2>
               {info.installed === false && (
-                <DiscoverMark>{t("agents.notInstalled")}</DiscoverMark>
+                <DiscoverMark size="sm">
+                  {t("agents.notInstalled")}
+                </DiscoverMark>
               )}
             </div>
             <p className="text-sm text-muted-foreground">
@@ -585,7 +593,7 @@ export function McpAgentDetail({
                 />
               ))}
               {shown.length === 0 && (
-                <li className="px-4 py-3 text-sm text-muted-foreground">
+                <li className="px-4 py-2.5 text-sm text-muted-foreground">
                   {filtered ? t("agent.noneMatch") : t("agent.none")}
                 </li>
               )}

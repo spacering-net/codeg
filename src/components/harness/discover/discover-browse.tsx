@@ -53,7 +53,7 @@ const LOAD_MORE_MARGIN = "320px"
 const GRID_CLASS =
   "grid grid-cols-1 gap-4 @2xl/discover:grid-cols-2 @5xl/discover:grid-cols-3"
 
-const LIST_CLASS = "flex flex-col gap-0.5"
+const LIST_CLASS = "flex flex-col gap-4"
 
 function CardSkeletons() {
   return (

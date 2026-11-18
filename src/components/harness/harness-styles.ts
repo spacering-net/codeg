@@ -71,12 +71,12 @@ export const HARNESS_ROW_TILE_CLASS = cn(
 
 /** A detail's own box: the page's inset on every side. */
 export const HARNESS_DETAIL_CLASS =
-  "w-full max-w-5xl min-w-0 space-y-6 px-4 pt-4 pb-8"
+  "w-full max-w-5xl min-w-0 space-y-5 px-4 pt-4 pb-8"
 
 /** A detail's header: the tile, the heading with a line under it, actions
  *  at its end; a rule closes it. */
 export const HARNESS_DETAIL_HEADER_CLASS =
-  "min-w-0 space-y-3 border-b border-border/70 pb-5"
+  "min-w-0 space-y-3 border-b border-border/70 pb-4"
 
 /** The tile a detail's header leads with. */
 export const HARNESS_DETAIL_TILE_CLASS =

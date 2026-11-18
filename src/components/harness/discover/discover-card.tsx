@@ -257,7 +257,7 @@ export const DiscoverCard = memo(function DiscoverCard({
     return (
       <li
         className={cn(
-          "relative flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-muted/50",
+          "relative flex min-w-0 items-center gap-3 rounded-xl border bg-card p-4 hover:border-foreground/15 hover:shadow-sm",
           hover
         )}
       >

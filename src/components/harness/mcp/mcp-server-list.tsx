@@ -117,12 +117,12 @@ function HolderFaces({ holders, max }: { holders: McpHolder[]; max: number }) {
       {shown.map((holder, position) => (
         // An agent can hold a key twice (two YAML keys that read as one
         // name): its mark is then drawn twice, as it is listed.
-        <Avatar key={`${holder.info.id}:${position}`} className="size-6">
+        <Avatar key={`${holder.info.id}:${position}`} className="size-5">
           <AvatarFallback className="bg-muted">
             <AgentIcon
               agentType={holder.info.id}
               className={cn(
-                "size-3.5",
+                "size-3",
                 !holder.entry.enabled && "opacity-35 grayscale"
               )}
             />
@@ -130,7 +130,7 @@ function HolderFaces({ holders, max }: { holders: McpHolder[]; max: number }) {
         </Avatar>
       ))}
       {rest > 0 && (
-        <AvatarGroupCount className="h-6 w-auto min-w-6 border border-border px-1 text-[0.625rem] font-medium tabular-nums">
+        <AvatarGroupCount className="h-5 w-auto min-w-5 border border-border px-1 text-[0.625rem] font-medium tabular-nums">
           +{rest}
         </AvatarGroupCount>
       )}
@@ -261,7 +261,7 @@ export const McpServerRow = memo(function McpServerRow({
         <span className={HARNESS_ROW_TILE_CLASS}>
           <ServerGlyph transports={server.transports} />
         </span>
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex min-w-0 items-center gap-2">
             <bdi
               dir="ltr"

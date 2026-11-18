@@ -132,7 +132,7 @@ export function DetailBodySkeleton() {
           "flex items-start gap-4 space-y-0"
         )}
       >
-        <Skeleton className="size-14 rounded-2xl" />
+        <Skeleton className="size-12 rounded-xl" />
         <div className="flex-1 space-y-2.5 pt-1">
           <Skeleton className="h-7 w-48" />
           <Skeleton className="h-4 w-72 max-w-full" />
@@ -454,7 +454,7 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
   if (skipped) reasons.push(t("agentState.skipped"))
 
   return (
-    <li className="flex min-w-0 items-start gap-3 px-4 py-3">
+    <li className="flex min-w-0 items-start gap-3 px-4 py-2.5">
       <AgentGlyph agent={info.id} className="mt-0.5 size-5" />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -465,7 +465,7 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
               className="inline-flex flex-wrap items-center gap-x-2 gap-y-1"
             >
               {chips.map((chip) => (
-                <DiscoverMark key={chip.label} tone={chip.tone}>
+                <DiscoverMark size="sm" key={chip.label} tone={chip.tone}>
                   {chip.icon}
                   {chip.label}
                 </DiscoverMark>
@@ -473,12 +473,15 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
             </span>
           )}
           {info.installed === false && (
-            <DiscoverMark>{t("agents.notInstalled")}</DiscoverMark>
+            <DiscoverMark size="sm">{t("agents.notInstalled")}</DiscoverMark>
           )}
-          {!info.agent && <DiscoverMark>{t("agents.unknown")}</DiscoverMark>}
+          {!info.agent && (
+            <DiscoverMark size="sm">{t("agents.unknown")}</DiscoverMark>
+          )}
           {installed &&
             (installed.local !== "asInstalled" || otherVersion !== null) && (
               <DiscoverMark
+                size="sm"
                 tone={installed.local === "asInstalled" ? "neutral" : "warning"}
               >
                 <Package aria-hidden="true" />
@@ -624,7 +627,7 @@ function EditDefinitionButton({
       disabled={!editable}
       aria-describedby={describedBy}
       onClick={() => openEditEditor(slots, server.key, group.fingerprint)}
-      className="rounded-full text-foreground max-md:h-10"
+      className="h-7 rounded-full text-foreground max-md:h-10"
     >
       <PencilLine aria-hidden="true" />
       {server.groups.length > 1
@@ -697,13 +700,13 @@ function DefinitionPart({
 
   return (
     <McpDetailPart title={t("definitions")}>
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         {server.groups.map((group) => {
           const editable = editableGroup(group)
           const id = `${noteId}-${group.letter}`
           return (
             <div key={group.fingerprint} className={HARNESS_CARD_CLASS}>
-              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 py-2 ps-4 pe-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 py-1.5 ps-4 pe-2">
                 {/* Which agents hold it, each agent's row says. */}
                 <span className="min-w-0 flex-1 text-sm font-semibold text-foreground">
                   {t("definitionLetter", { letter: group.letter })}
@@ -971,8 +974,8 @@ function HarnessPart({
   return (
     <McpDetailPart title={tDetail("source")}>
       <div className={cn(HARNESS_CARD_CLASS, "divide-y")}>
-        <div className="flex min-w-0 items-start gap-4 p-4">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary [&_svg]:size-5">
+        <div className="flex min-w-0 items-start gap-3 p-4">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary [&_svg]:size-5">
             <Package aria-hidden="true" />
           </span>
           <div className="min-w-0 flex-1 space-y-1">
@@ -1049,7 +1052,7 @@ function HarnessPart({
             noteId={noteId}
           />
         </McpDefinitionRows>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 bg-muted/40 px-4 py-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 bg-muted/40 px-4 py-2">
           {harness.catalog && (
             <HarnessUpdateStatus
               itemId={mark.itemId}
@@ -1183,11 +1186,11 @@ export function McpServerDetail({
     body = (
       <article aria-labelledby={headingId} className={HARNESS_DETAIL_CLASS}>
         <header className={HARNESS_DETAIL_HEADER_CLASS}>
-          <div className="flex min-w-0 flex-wrap items-start gap-x-4 gap-y-3">
+          <div className="flex min-w-0 flex-wrap items-start gap-x-3 gap-y-3">
             <span className={HARNESS_DETAIL_TILE_CLASS}>
               <ServerGlyph transports={server.transports} />
             </span>
-            <div className="min-w-0 flex-1 basis-56 space-y-1.5 pt-1">
+            <div className="min-w-0 flex-1 basis-56 space-y-1 pt-1">
               <h2
                 id={headingId}
                 ref={headingRef}

@@ -79,7 +79,7 @@ export function McpDetailPart({
   const headingId = useId()
   return (
     <section aria-labelledby={headingId} className={cn("min-w-0", className)}>
-      <div className="flex min-h-8 min-w-0 items-center justify-between gap-3 pb-3">
+      <div className="flex min-h-8 min-w-0 items-center justify-between gap-3 pb-2">
         <h3 id={headingId} className={DETAIL_PART_TITLE_CLASS}>
           {title}
         </h3>
