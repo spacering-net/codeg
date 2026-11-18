@@ -580,6 +580,55 @@ function retireCoveredBackgroundTurns(
   return retained.length === backgroundTurns.length ? backgroundTurns : retained
 }
 
+/**
+ * Local turns `keepAllLiveBuffers` preserved that a settled detail response
+ * PROVABLY covers — the promoted round whose persisted twin arrived under a
+ * parser id `dedupeTimeline` cannot match (see FETCH_DETAIL_SUCCESS). A local
+ * turn is covered only when the response's window holds a STRICTLY NEWER turn
+ * (the parse walked the transcript past this round, so its persisted twin is
+ * inside the parse — the write race `completeTurn` documents can only affect
+ * the newest round, which nothing newer has yet walked past) and the windowed
+ * response's uncovered prefix cannot be holding that twin
+ * (`uncovered_prefix_max_ts`, the same guard `retireCoveredBackgroundTurns`
+ * applies to overlay turns). Unparseable timestamps keep the turn: the
+ * failure direction is a recoverable transient duplicate, never a vanished
+ * message.
+ */
+function retireDetailCoveredLocalTurns(
+  localTurns: MessageTurn[],
+  detail: DbConversationDetail
+): MessageTurn[] {
+  if (localTurns.length === 0) return localTurns
+  let detailMaxMs: number | null = null
+  for (const turn of detail.turns) {
+    const ms = Date.parse(turn.timestamp)
+    if (Number.isFinite(ms) && (detailMaxMs === null || ms > detailMaxMs)) {
+      detailMaxMs = ms
+    }
+  }
+  // Nothing parseable to order against — the detail cannot prove coverage.
+  if (detailMaxMs === null) return localTurns
+  // A windowed response may hold the local turn's twin in its uncovered
+  // prefix; an unparseable bound cannot prove otherwise, so keep everything.
+  const uncoveredMaxMs =
+    detail.uncovered_prefix_max_ts != null
+      ? Date.parse(detail.uncovered_prefix_max_ts)
+      : null
+  if (uncoveredMaxMs !== null && !Number.isFinite(uncoveredMaxMs)) {
+    return localTurns
+  }
+  const retained = localTurns.filter((turn) => {
+    const ms = Date.parse(turn.timestamp)
+    // Unparseable, or possibly the newest round with its transcript write
+    // still in flight — either way the detail proves nothing about it.
+    if (!Number.isFinite(ms) || ms >= detailMaxMs) return true
+    // Inside the uncovered prefix's range: its twin may not be in the window.
+    if (uncoveredMaxMs !== null && ms <= uncoveredMaxMs) return true
+    return false
+  })
+  return retained.length === localTurns.length ? localTurns : retained
+}
+
 function batchStartCapture(
   current: ConversationRuntimeSession,
   promptId: string
@@ -2002,6 +2051,28 @@ function reducer(
         action.detail.uncovered_prefix_max_ts ?? null
       )
 
+      // Local turns `keepAllLiveBuffers` preserves may be rounds this response
+      // now covers. The out-of-turn pill ("Load background activity") is the
+      // canonical case: the foreground round completed and promoted long
+      // before the background round ran, so its persisted twin is in this
+      // parse — under a parser id (`msg_…`) that `dedupeTimeline` can never
+      // match against the promoted `live-<cid>-…` id. Keeping it renders the
+      // whole old round a SECOND time below the newer persisted tail, which
+      // reads as "the newest messages jumped to the top". Retire a kept local
+      // turn only when the response PROVABLY moved past it (see
+      // `retireDetailCoveredLocalTurns`). Mid-flight responses, the sub-agent
+      // dialog (`liveOwnsActiveTurn`), and an attached live message keep every
+      // local turn: a reply's transcript write can still be in flight there
+      // (`completeTurn`'s write race), and the dialog owns its own
+      // promotion/dedup path.
+      const nextLocalTurns = !keepAllLiveBuffers
+        ? []
+        : detailIsInFlight ||
+            current.liveOwnsActiveTurn ||
+            current.liveMessage !== null
+          ? current.localTurns
+          : retireDetailCoveredLocalTurns(current.localTurns, action.detail)
+
       const nextSession: ConversationRuntimeSession = {
         ...current,
         detail: action.detail,
@@ -2018,7 +2089,7 @@ function reducer(
         backgroundTurns: nextBackgroundTurns,
         ...(isActivelyInteracting
           ? keepAllLiveBuffers
-            ? {}
+            ? { localTurns: nextLocalTurns }
             : { localTurns: [] }
           : { localTurns: [], optimisticTurns: [], liveMessage: null }),
         // Applied AFTER the blanket rules above so a fork's targeted removal
@@ -2026,7 +2097,7 @@ function reducer(
         // everything except the turns it just invalidated).
         ...(dropIds
           ? {
-              localTurns: current.localTurns.filter((t) => !dropIds.has(t.id)),
+              localTurns: nextLocalTurns.filter((t) => !dropIds.has(t.id)),
               optimisticTurns: current.optimisticTurns.filter(
                 (t) => !dropIds.has(t.id)
               ),
