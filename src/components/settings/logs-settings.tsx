@@ -385,6 +385,7 @@ export function LogsSettings() {
   }, [desktop])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial settings and log fetch
     loadInitial().catch((err) => {
       console.error("[LogsSettings] initial load failed:", err)
     })

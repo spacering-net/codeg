@@ -1,8 +1,8 @@
 diff --git a/event.cjs b/event.cjs
-index b53f3497d826d26e6182e28781b519e6e14f39c8..c926acf081427b7c79bcf170c0028a18fceda786 100644
+index b53f3497d826d26e6182e28781b519e6e14f39c8..fefce6eda61d4ae7ddad3a5e6c6f17801845cfe1 100644
 --- a/event.cjs
 +++ b/event.cjs
-@@ -99,7 +99,13 @@ exports.TauriEvent = void 0;
+@@ -99,7 +99,13 @@
   * @returns
   */
  async function _unlisten(event, eventId) {
@@ -17,12 +17,13 @@ index b53f3497d826d26e6182e28781b519e6e14f39c8..c926acf081427b7c79bcf170c0028a18
      await core.invoke('plugin:event|unlisten', {
          event,
          eventId
-@@ -134,17 +140,44 @@ async function _unlisten(event, eventId) {
+@@ -134,17 +140,47 @@
   * @since 1.0.0
   */
  async function listen(event, handler, options) {
 +    return _listen(event, handler, options, false);
 +}
++function _ignoreEvent() { }
 +async function _listen(event, handler, options, onlyOnce) {
      var _a;
      const target = typeof (options === null || options === void 0 ? void 0 : options.target) === 'string'
@@ -34,8 +35,10 @@ index b53f3497d826d26e6182e28781b519e6e14f39c8..c926acf081427b7c79bcf170c0028a18
 -        handler: core.transformCallback(handler)
 -    }).then((eventId) => {
 -        return async () => _unlisten(event, eventId);
+-    });
 +    let disposed = false;
 +    const releaseCallback = () => {
++        handler = _ignoreEvent;
 +        window.__TAURI_INTERNALS__.unregisterCallback?.(handlerId);
 +    };
 +    const cleanup = async (eventId) => {
@@ -48,10 +51,11 @@ index b53f3497d826d26e6182e28781b519e6e14f39c8..c926acf081427b7c79bcf170c0028a18
 +    const handlerId = core.transformCallback((eventData) => {
 +        if (disposed)
 +            return;
++        const currentHandler = handler;
 +        if (onlyOnce)
 +            void cleanup(eventData.id).catch(() => { });
-+        handler(eventData);
-     });
++        currentHandler(eventData);
++    });
 +    try {
 +        const eventId = await core.invoke('plugin:event|listen', {
 +            event,
@@ -68,7 +72,7 @@ index b53f3497d826d26e6182e28781b519e6e14f39c8..c926acf081427b7c79bcf170c0028a18
  }
  /**
   * Listens once to an emitted event to any {@link EventTarget|target}.
-@@ -177,10 +210,7 @@ async function listen(event, handler, options) {
+@@ -177,10 +213,7 @@
   * @since 1.0.0
   */
  async function once(event, handler, options) {
@@ -81,10 +85,10 @@ index b53f3497d826d26e6182e28781b519e6e14f39c8..c926acf081427b7c79bcf170c0028a18
  /**
   * Emits an event to all {@link EventTarget|targets}.
 diff --git a/event.js b/event.js
-index 1e03752962d8cb5edad90d59732e486e187bee5b..3a3ebc94e4d5a58a95f1529a031615d162946f03 100644
+index 1e03752962d8cb5edad90d59732e486e187bee5b..160ff2e1541c1bf66d1216a25abce0d8d020f53b 100644
 --- a/event.js
 +++ b/event.js
-@@ -97,7 +97,13 @@ var TauriEvent;
+@@ -97,7 +97,13 @@
   * @returns
   */
  async function _unlisten(event, eventId) {
@@ -99,12 +103,13 @@ index 1e03752962d8cb5edad90d59732e486e187bee5b..3a3ebc94e4d5a58a95f1529a031615d1
      await invoke('plugin:event|unlisten', {
          event,
          eventId
-@@ -132,17 +138,44 @@ async function _unlisten(event, eventId) {
+@@ -132,17 +138,47 @@
   * @since 1.0.0
   */
  async function listen(event, handler, options) {
 +    return _listen(event, handler, options, false);
 +}
++function _ignoreEvent() { }
 +async function _listen(event, handler, options, onlyOnce) {
      var _a;
      const target = typeof (options === null || options === void 0 ? void 0 : options.target) === 'string'
@@ -116,8 +121,10 @@ index 1e03752962d8cb5edad90d59732e486e187bee5b..3a3ebc94e4d5a58a95f1529a031615d1
 -        handler: transformCallback(handler)
 -    }).then((eventId) => {
 -        return async () => _unlisten(event, eventId);
+-    });
 +    let disposed = false;
 +    const releaseCallback = () => {
++        handler = _ignoreEvent;
 +        window.__TAURI_INTERNALS__.unregisterCallback?.(handlerId);
 +    };
 +    const cleanup = async (eventId) => {
@@ -130,10 +137,11 @@ index 1e03752962d8cb5edad90d59732e486e187bee5b..3a3ebc94e4d5a58a95f1529a031615d1
 +    const handlerId = transformCallback((eventData) => {
 +        if (disposed)
 +            return;
++        const currentHandler = handler;
 +        if (onlyOnce)
 +            void cleanup(eventData.id).catch(() => { });
-+        handler(eventData);
-     });
++        currentHandler(eventData);
++    });
 +    try {
 +        const eventId = await invoke('plugin:event|listen', {
 +            event,
@@ -150,7 +158,7 @@ index 1e03752962d8cb5edad90d59732e486e187bee5b..3a3ebc94e4d5a58a95f1529a031615d1
  }
  /**
   * Listens once to an emitted event to any {@link EventTarget|target}.
-@@ -175,10 +208,7 @@ async function listen(event, handler, options) {
+@@ -175,10 +211,7 @@
   * @since 1.0.0
   */
  async function once(event, handler, options) {

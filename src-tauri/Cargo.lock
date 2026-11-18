@@ -1179,6 +1179,7 @@ dependencies = [
  "hmac",
  "http",
  "http-body",
+ "hyper",
  "hyper-util",
  "iana-time-zone",
  "if-addrs",

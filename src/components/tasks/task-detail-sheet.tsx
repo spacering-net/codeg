@@ -295,6 +295,7 @@ export function TaskDetailSheet({
   const [convAgentType, setConvAgentType] = useState<AgentType | null>(null)
   useEffect(() => {
     if (!open || conversationId == null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the chip owned by the transcript fetch below
       setTokenTotal(null)
       setConvAgentType(null)
       return
@@ -344,6 +345,7 @@ export function TaskDetailSheet({
   useEffect(() => {
     if (!open || taskId == null) return
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- per-open reset paired with the fetch + subscription below
     setEvents([])
     setFiles([])
     setComposerOpen(false)
@@ -387,9 +389,19 @@ export function TaskDetailSheet({
   // anyway" and waive a guard the user never saw refuse anything. (The label
   // and the waiver read the same state, so the two can never disagree; this is
   // about not carrying a decision across the moment it was made.)
-  useEffect(() => {
+  // Adjusted during render rather than in an effect, so no commit ever pairs a
+  // stale refusal with the new box/status; the initial null covers mount.
+  const [dupScope, setDupScope] = useState({
+    composerOpen,
+    status: taskStatus,
+  })
+  if (
+    dupScope.composerOpen !== composerOpen ||
+    dupScope.status !== taskStatus
+  ) {
+    setDupScope({ composerOpen, status: taskStatus })
     setRestartDuplicate(null)
-  }, [composerOpen, task?.status])
+  }
 
   /// A restart that consumed the note closes the box with it, so the text
   /// cannot be silently attached to a second restart the user did not mean.

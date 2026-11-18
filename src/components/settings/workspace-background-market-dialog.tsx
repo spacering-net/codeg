@@ -247,6 +247,7 @@ export function WorkspaceBackgroundMarketDialog({
 
   useEffect(() => {
     if (!open) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- marketplace fetch on open and on every query change
     void load(query, category, page)
   }, [open, query, category, page, load])
 

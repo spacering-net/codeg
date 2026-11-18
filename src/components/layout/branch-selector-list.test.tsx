@@ -49,7 +49,7 @@ vi.mock("@/components/ui/scroll-area", () => ({
   },
 }))
 
-import { BranchSelectorList } from "./branch-selector-list"
+import { BranchSelectorList, splitBranchLabel } from "./branch-selector-list"
 import enMessages from "@/i18n/messages/en.json"
 import {
   buildBranchTree,
@@ -208,6 +208,61 @@ describe("BranchSelectorList — worktree section", () => {
       "mainCurrent",
       "task/132",
       "Remote branches (0)",
+    ])
+  })
+})
+
+describe("BranchSelectorList — long branch names in the action bubble", () => {
+  afterEach(() => cleanup())
+
+  // No "/" so it stays a top-level leaf instead of folding into a collapsed group.
+  const LONG = "browser-remote-egress-with-a-very-long-branch-name"
+
+  it("truncates each branch name on its own and keeps the full label as a tooltip", async () => {
+    const user = userEvent.setup()
+    renderList({
+      localNodes: buildBranchTree(localBranchItems(["main", LONG]), "local"),
+      worktreeNodes: [],
+      worktreeBranchSet: new Set(),
+      localCount: 2,
+    })
+    await user.click(screen.getByRole("option", { name: LONG }))
+    const bubble = screen.getByRole("menu", { name: LONG })
+    // Sizes to its content (capped), instead of a fixed narrow width.
+    expect(bubble.className).toContain("w-max")
+    expect(bubble.style.maxWidth).toBe("416px")
+
+    const merge = within(bubble).getByRole("menuitem", { name: /^Merge/ })
+    expect(merge).toHaveAttribute("title", `Merge ${LONG} into main`)
+    const parts = Array.from(merge.querySelectorAll("span > span")).map(
+      (el) => [el.textContent, el.className]
+    )
+    expect(parts).toEqual([
+      ["Merge ", "shrink-0 whitespace-pre"],
+      [LONG, "min-w-0 truncate"],
+      [" into ", "shrink-0 whitespace-pre"],
+      ["main", "min-w-0 truncate"],
+    ])
+
+    // Plain single-string actions keep the old single truncated span.
+    const sw = within(bubble).getByRole("menuitem", { name: /Switch/ })
+    expect(sw).not.toHaveAttribute("title")
+  })
+})
+
+describe("splitBranchLabel", () => {
+  it("follows the translation's own word order", () => {
+    // ja puts the target first for rebase: "{currentBranch} を {branchName} にリベース"
+    expect(
+      splitBranchLabel("\u00001\u0000 を \u00000\u0000 にリベース", [
+        "feat/x",
+        "main",
+      ])
+    ).toEqual([
+      { text: "main", isBranch: true },
+      { text: " を ", isBranch: false },
+      { text: "feat/x", isBranch: true },
+      { text: " にリベース", isBranch: false },
     ])
   })
 })

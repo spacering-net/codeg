@@ -1255,6 +1255,33 @@
   );
 }
 
+/* Where machine text (a path, a package, an address — see `MachineText`) may
+   break between lines, and where the browser may not break it by itself: an
+   empty mark between two characters, whose generated zero-width space allows
+   a break and whose word joiner forbids one. Generated text is not copied,
+   and its empty alternative text (after the "/") keeps it out of what is read
+   out, of a link's name and of find-in-page.
+
+   That syntax is the only declaration, with no fallback: an engine without
+   it drops the rule and generates nothing, rather than slip a character into
+   names. Chrome 77+ (Windows' WebView2, browsers) has it; so does WebKit from
+   Safari 17.4 — the macOS webview is the system WebKit, which Safari updates:
+   macOS 14.4+, and macOS 12–13 with Safari 17.4+ installed. Codeg declares
+   macOS 10.13 as its minimum (Tauri's default; the config sets none), so on
+   10.13–11, or 12–13 without that update, the marks are inert and machine
+   text simply breaks where its line runs out (`overflow-wrap: anywhere`,
+   which `MachineText` always sets). */
+@utility wrap-point {
+  &::after {
+    content: "\200B" / "";
+  }
+}
+@utility wrap-hold {
+  &::after {
+    content: "\2060" / "";
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

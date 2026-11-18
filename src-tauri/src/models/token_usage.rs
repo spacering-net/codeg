@@ -18,7 +18,7 @@
 //!
 //! ## Time
 //!
-//! Facts are stored in UTC. Every bucket boundary (day / week / month / hour of
+//! Facts are stored in UTC. Every bucket boundary (hour / day / week / month / hour of
 //! day / weekday) is computed in the *viewer's* local time, using the
 //! `tz_offset_minutes` the client sends. A fixed offset is used for the whole
 //! range rather than a real tz database: a DST transition inside the range
@@ -32,6 +32,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenUsageBucket {
+    /// Local clock hours — for the sub-day presets ("today", "last 24
+    /// hours"), where a day bucket would draw a single bar.
+    Hour,
     #[default]
     Day,
     /// ISO weeks — Monday-start. Not configurable: every locale codeg ships
@@ -104,7 +107,7 @@ pub struct TokenUsageTotals {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenUsagePoint {
     /// `YYYY-MM-DD` for day and week buckets (the bucket's first local day),
-    /// `YYYY-MM` for month buckets.
+    /// `YYYY-MM` for month buckets, `YYYY-MM-DDTHH` (local) for hour buckets.
     pub bucket_key: String,
     pub start: DateTime<Utc>,
     pub end: DateTime<Utc>,

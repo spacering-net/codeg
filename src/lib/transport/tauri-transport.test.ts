@@ -75,6 +75,30 @@ describe("Tauri event subscription lifetime", () => {
     expect(mocks.invoke).toHaveBeenCalledTimes(1)
   })
 
+  it("makes a queued payload wrapper inert when its subscription is disposed", async () => {
+    const listener = vi.fn()
+    const stop = await new TauriTransport().subscribe("acp://event", listener)
+    const queued = callbacks.get(1)!
+    queued({ payload: "before disposal" })
+    expect(listener).toHaveBeenCalledExactlyOnceWith("before disposal")
+    stop()
+    queued({ payload: "after disposal" })
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(callbacks.size).toBe(0)
+  })
+
+  it("makes a queued payload wrapper inert when native listen rejects", async () => {
+    const listener = vi.fn()
+    const error = new Error("native listen failed")
+    mocks.invoke.mockRejectedValueOnce(error)
+    const pending = new TauriTransport().subscribe("acp://event", listener)
+    await expect(pending).rejects.toBe(error)
+    const queued = mocks.transformCallback.mock.calls[0][0]
+    queued({ payload: "after rejection" })
+    expect(listener).not.toHaveBeenCalled()
+    expect(callbacks.size).toBe(0)
+  })
+
   it("does not accumulate callbacks across repeated mount and cleanup races", async () => {
     mocks.invoke.mockImplementation(async (command) =>
       command === "plugin:event|listen" ? 101 : undefined

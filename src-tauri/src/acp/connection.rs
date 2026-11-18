@@ -2152,9 +2152,9 @@ fn agent_debug_callback(
 /// codeg's own question and result tools ([`codeg_tool_auto_allow_option`]),
 /// and the history parser. So codeg turns lazy loading off, as it was through
 /// 1.1.83 (which takes the flag too). An option `qoder --acp` does not know
-/// makes it exit, but each release tried from 1.1.0 to 1.1.89 (1.1.0, 1.1.30,
+/// makes it exit, but each release tried from 1.1.0 to 1.1.91 (1.1.0, 1.1.30,
 /// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86, 1.1.87, 1.1.88,
-/// 1.1.89) takes `--settings`, and 1.1.30 and 1.1.64 open sessions with this
+/// 1.1.89, 1.1.91) takes `--settings`, and 1.1.30 and 1.1.64 open sessions with this
 /// one as without it.
 pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
@@ -2953,6 +2953,9 @@ pub async fn spawn_agent_connection(
     let claude_projects_dir = crate::parsers::claude::resolve_claude_projects_dir_for_env(
         &crate::parsers::AgentEnv::from_overrides(runtime_env.clone()),
     );
+    // Where this launch's agent keeps its MCP servers, for the same reason: a
+    // `CODEX_HOME` or `CLAUDE_CONFIG_DIR` in the per-agent env moves the file.
+    let mcp_env = crate::parsers::AgentEnv::from_overrides(runtime_env.clone());
 
     let mut terminal_base_env = terminal_env_from_runtime(&runtime_env);
     // Also surface a codeg-installed OfficeCLI on the terminal's PATH: agents run
@@ -3041,6 +3044,7 @@ pub async fn spawn_agent_connection(
             fs_policy,
             host_tools,
             claude_projects_dir,
+            mcp_env,
             stderr_tail,
         )
         .await;
@@ -5055,9 +5059,18 @@ fn kept_select_row(
 /// that list into the same `SessionConfigOptionInfo` shape every other agent's
 /// selectors flow through, so Grok reaches selector parity with zero new
 /// frontend code. Returns `None` when there is no usable sessionConfig.
+///
+/// `reported_model` is the answer's `models.currentModelId`. It decides the
+/// current model when no row is `selected`: since 1.0.88 a loaded or resumed
+/// session keeps its saved model even when that model is no longer listed
+/// (renamed or removed `[model.<id>]`, or a failed first catalog fetch), and
+/// the answer then marks no row and sends no effort rows, where 1.0.77
+/// switched the session to the default model. The first row would show a model
+/// the session is not using, so the saved one is listed and shown instead.
 fn synthesize_grok_config_options(
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
     specs: &HashMap<String, GrokModelSpec>,
+    reported_model: Option<&str>,
 ) -> Option<Vec<SessionConfigOptionInfo>> {
     let options = meta?
         .get("x.ai/sessionConfig")?
@@ -5103,8 +5116,22 @@ fn synthesize_grok_config_options(
         });
     }
 
+    if model_current.is_none() {
+        if let Some(id) = reported_model.filter(|id| !id.is_empty()) {
+            if !model_opts.iter().any(|o| o.value == id) {
+                model_opts.push(SessionConfigSelectOptionInfo {
+                    value: id.to_string(),
+                    name: id.to_string(),
+                    description: None,
+                });
+            }
+            model_current = Some(id.to_string());
+        }
+    }
+
     let mut result: Vec<SessionConfigOptionInfo> = Vec::new();
-    // Current model id (the `selected` one, else the first) — needed both for
+    // Current model id (the `selected` one, else the reported one, else the
+    // first) — needed both for
     // the model selector's `current_value` and to pick the per-model effort spec.
     let current_model = model_current
         .clone()
@@ -6791,7 +6818,10 @@ async fn apply_and_emit_session_config_options(
     state.write().await.asserted_config_values.clear();
     if agent_type == AgentType::Grok {
         let specs = grok_model_specs.cloned().unwrap_or_default();
-        if let Some(mut opts) = synthesize_grok_config_options(grok_meta, &specs) {
+        let reported_model = session_models
+            .and_then(|models| models.get("currentModelId"))
+            .and_then(|id| id.as_str());
+        if let Some(mut opts) = synthesize_grok_config_options(grok_meta, &specs, reported_model) {
             // Cache the per-model effort map so a later model switch can rebuild
             // the effort selector for the target model (grok ships it only at
             // session birth, and on a catalog broadcast). `None` when empty
@@ -7768,10 +7798,24 @@ fn agent_delivers_wire_mcp(agent_type: AgentType) -> bool {
     !matches!(agent_type, AgentType::Pi | AgentType::Cline)
 }
 
-/// Agents that load the MCP servers codeg's MCP settings manage from their OWN
+/// Whether the built-in `codeg-mcp` companion can reach `agent_type`'s
+/// sessions at all: the agent takes MCP servers on `session/new`
+/// (`supports_mcp`) and hands them to its model
+/// ([`agent_delivers_wire_mcp`]). Whether it is injected into a given launch
+/// still depends on the tool groups switched on in Settings. The MCP
+/// inventory shows the companion as a read-only row for these agents.
+pub(crate) fn agent_takes_codeg_mcp(agent_type: AgentType) -> bool {
+    registry::get_agent_meta(agent_type).supports_mcp && agent_delivers_wire_mcp(agent_type)
+}
+
+/// Agents that load the MCP servers codeg's MCP page manages from their OWN
 /// config file, so [`load_mcp_servers_for_agent`] forwards none of them over
 /// the wire; see the notes there for each one.
-fn agent_reads_own_mcp_config(agent_type: AgentType) -> bool {
+///
+/// The MCP engine tells the page the same thing per agent
+/// (`commands::mcp_engine::agents::spec`'s `delivery`); a test there keeps the
+/// two lists in step.
+pub(crate) fn agent_reads_own_mcp_config(agent_type: AgentType) -> bool {
     matches!(
         agent_type,
         AgentType::Hermes
@@ -7859,10 +7903,25 @@ async fn sign_in_trae_with_pat(
     Ok(())
 }
 
+/// [`load_mcp_servers_for_agent_with_env`] with codeg's own environment.
+#[cfg(test)]
+fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
+    load_mcp_servers_for_agent_with_env(agent_type, &crate::parsers::AgentEnv::inherited())
+}
+
 /// Load MCP servers configured for `agent_type` and convert them into the
 /// ACP wire format. Errors and unsupported entries are logged and skipped so
 /// a single malformed entry never blocks a session from starting.
-fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
+///
+/// `env` is the environment the agent is launched with: a `CODEX_HOME` or
+/// `CLAUDE_CONFIG_DIR` set in the agent's own settings moves the file its
+/// servers are read from, the same way it moves the file the MCP page shows
+/// and edits. An entry the agent's own flag turns off (Codex's
+/// `enabled = false`) is not sent.
+fn load_mcp_servers_for_agent_with_env(
+    agent_type: AgentType,
+    env: &crate::parsers::AgentEnv,
+) -> Vec<McpServer> {
     // Hermes, Kimi Code, Grok, and Cursor each read their own native MCP
     // config at launch — Hermes from `~/.hermes/config.yaml` (`mcp_servers`,
     // registered as `mcp-<name>` toolsets), Kimi Code from
@@ -7925,7 +7984,8 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
     if agent_reads_own_mcp_config(agent_type) {
         return Vec::new();
     }
-    let entries = match crate::commands::mcp::read_servers_for_agent_type(agent_type) {
+    let entries = match crate::commands::mcp_engine::session::servers_for_session(agent_type, env)
+    {
         Ok(map) => map,
         Err(err) => {
             tracing::error!(
@@ -8574,6 +8634,9 @@ async fn run_connection(
     host_tools: HostToolsPolicy,
     // Where a Claude launch writes its transcripts (see `spawn_if_claude`).
     claude_projects_dir: PathBuf,
+    // The environment the agent was launched with, for finding the config
+    // file its MCP servers are read from (`load_mcp_servers_for_agent_with_env`).
+    mcp_env: crate::parsers::AgentEnv,
     // Connection-scoped agent stderr buffer, shared with the `with_debug`
     // callback installed by `build_agent`. Read only when a turn ends without
     // agent output, to attach evidence to the synthesized error.
@@ -9308,7 +9371,14 @@ async fn run_connection(
             // ACP spec; HTTP/SSE are gated on `mcp_capabilities.{http,sse}`.
             let mut mcp_servers: Vec<McpServer> = if offer_mcp {
                 let mcp_caps = &init_resp.agent_capabilities.mcp_capabilities;
-                load_mcp_servers_for_agent(agent_type)
+                // What this agent just declared, kept for the MCP page: it
+                // marks the HTTP and SSE servers a session would leave out.
+                crate::commands::mcp_engine::session::record_declared_capabilities(
+                    agent_type,
+                    mcp_caps.http,
+                    mcp_caps.sse,
+                );
+                load_mcp_servers_for_agent_with_env(agent_type, &mcp_env)
                     .into_iter()
                     .filter(|s| match s {
                         McpServer::Stdio(_) => true,
@@ -11857,6 +11927,15 @@ fn config_option_already_holds(option: &SessionConfigOption, value: &str) -> boo
 /// says nothing about which release is actually running, and pruning on that
 /// assumption would silently discard a still-valid pick on an older adapter.
 ///
+/// One selector no longer makes the error certain: since claude-agent-acp
+/// 0.107.3 (#1630), Claude Code's model selector passes an id it does not list
+/// to the CLI, which checks it with a one-token API request and runs it if the
+/// account or gateway serves it. The screen still applies there. A saved pick
+/// that the selector stopped listing moves to the row that replaced it when
+/// codeg recognizes the rename ([`heal_retired_model_pick`]); any other is
+/// skipped as before, since replaying a stale pick would cost that request on
+/// every connect.
+///
 /// Deliberately narrow, in three ways:
 ///
 /// * Only a `select`. A boolean takes both values by construction.
@@ -13803,7 +13882,7 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// How long after the answer to a prompt that a Stop cancelled codeg holds
 /// CodeBuddy's next prompt.
 ///
-/// CodeBuddy (2.171.0 through 2.184.0) answers a `session/prompt` that starts
+/// CodeBuddy (2.171.0 through 2.185.0) answers a `session/prompt` that starts
 /// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
 /// does not run the prompt or keep it in its history (`isCancelBarrierActive`
 /// in its ACP view). It arms that barrier while it handles the cancel, before
@@ -13889,7 +13968,7 @@ async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
 /// CodeBuddy's stop reason for a prompt codeg did not cancel.
 ///
 /// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
-/// 2.184.0) answers the next prompt it runs `cancelled` even though that
+/// 2.185.0) answers the next prompt it runs `cancelled` even though that
 /// prompt ran to the end: its forwarding keeps the session's aborted signal
 /// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
 /// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
@@ -14563,6 +14642,10 @@ struct TurnOutputProbe {
     /// `StderrTail` write position at turn start, so the diagnosis can scope
     /// stderr to this turn.
     stderr_mark: u64,
+    /// The last notice this turn in which the agent said a hook blocked or
+    /// stopped it, as the text an empty turn is then explained by (see
+    /// [`EmptyTurnCause::HookStopped`] and [`hook_stop_notice_text`]).
+    hook_stop: Option<String>,
 }
 
 impl TurnOutputProbe {
@@ -14587,11 +14670,54 @@ impl TurnOutputProbe {
             self.first_drop = Some(summarize_parser_error(&error.to_string()));
         }
     }
+
+    /// Keep a notice the agent raised during the turn if it says a hook
+    /// blocked or stopped it. Still not agent output (see the in-turn seam):
+    /// it only explains an empty turn.
+    fn note_notice(&mut self, agent_type: AgentType, notice: &SessionNotice) {
+        if let Some(text) = hook_stop_notice_text(agent_type, notice) {
+            self.hook_stop = Some(text);
+        }
+    }
+}
+
+/// The text of a notice in which the agent says one of the user's hooks
+/// blocked or stopped it, or `None` for any other notice.
+///
+/// Only codex-acp's are recognised (2.7.0, #767 `createHookCompletedEvent`):
+/// a `hook/completed` with status `blocked` or `stopped` becomes a `warning`
+/// titled "<Event> hook blocked <the prompt | the tool call | the tool result
+/// | the model request | the compaction | the subagent | the request>" or
+/// "<Event> hook stopped the turn", with the hook's reason as the
+/// description. Any other notice the turn raised (claude-agent-acp's "MCP
+/// server … failed to start" in a first turn, a config warning) says nothing
+/// about why the turn ended, so it must not stand as its explanation.
+fn hook_stop_notice_text(agent_type: AgentType, notice: &SessionNotice) -> Option<String> {
+    if agent_type != AgentType::Codex || notice.severity != "warning" {
+        return None;
+    }
+    let title = notice.title.trim();
+    let (event, outcome) = title.split_once(" hook ")?;
+    let is_event = !event.is_empty() && event.chars().all(|c| c.is_ascii_alphabetic());
+    if !is_event || !(outcome.starts_with("blocked ") || outcome == "stopped the turn") {
+        return None;
+    }
+    Some(match notice.description.as_deref().map(str::trim) {
+        Some(description) if !description.is_empty() => format!("{title}: {description}"),
+        _ => title.to_string(),
+    })
 }
 
 /// Why a turn ended with `EndTurn` but no agent output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EmptyTurnCause {
+    /// One of the user's hooks blocked or stopped the turn, as the agent said
+    /// in a notice during it ([`hook_stop_notice_text`]): codex-acp 2.7.0
+    /// (#767) tells a blocked prompt as "UserPromptSubmit hook blocked the
+    /// prompt" with the hook's reason, and the turn then ends with no reply.
+    /// Its words replace codeg's guess, which would blame the agent ("sent
+    /// only status updates") for a turn the user's own hook ended.
+    HookStopped,
     /// codeg dropped updates it could not parse — the agent may well have
     /// replied; we just couldn't read it.
     ProtocolMismatch,
@@ -14610,6 +14736,7 @@ impl EmptyTurnCause {
             EmptyTurnCause::NoOutput => "turn_failed_empty",
             EmptyTurnCause::ProtocolMismatch => "turn_failed_empty_protocol",
             EmptyTurnCause::MetadataOnly => "turn_failed_empty_metadata",
+            EmptyTurnCause::HookStopped => "turn_failed_empty_hook",
         }
     }
 
@@ -14625,6 +14752,11 @@ impl EmptyTurnCause {
             EmptyTurnCause::MetadataOnly => format!(
                 "{agent_type} sent only status updates this turn and no reply."
             ),
+            // The report's `hook_stop` is the message; this is only the
+            // fallback for a report that lost it.
+            EmptyTurnCause::HookStopped => {
+                format!("A hook stopped {agent_type} before it replied.")
+            }
         }
     }
 }
@@ -14634,13 +14766,20 @@ impl EmptyTurnCause {
 struct EmptyTurnReport {
     cause: EmptyTurnCause,
     details: Option<String>,
+    /// The agent's account of the hook, for [`EmptyTurnCause::HookStopped`].
+    hook_stop: Option<String>,
 }
 
-/// Classify an empty turn. `ProtocolMismatch` wins over `MetadataOnly`:
-/// "we couldn't read the output" is a stronger signal than "we only saw
-/// metadata", and it changes where the user should look.
+/// Classify an empty turn. A hook the agent said stopped it wins over every
+/// guess.
+/// Then `ProtocolMismatch` wins over `MetadataOnly`: "we couldn't read the
+/// output" is a stronger signal than "we only saw metadata", and it changes
+/// where the user should look. Dropped updates still reach the report's
+/// `details` when a hook explains the turn.
 fn diagnose_empty_turn(probe: &TurnOutputProbe) -> EmptyTurnCause {
-    if probe.dropped > 0 {
+    if probe.hook_stop.is_some() {
+        EmptyTurnCause::HookStopped
+    } else if probe.dropped > 0 {
         EmptyTurnCause::ProtocolMismatch
     } else if probe.saw_metadata_update {
         EmptyTurnCause::MetadataOnly
@@ -14722,7 +14861,15 @@ fn finish_turn_reason<'a>(
     }
     let cause = diagnose_empty_turn(probe);
     let details = build_empty_turn_details(probe, stderr_tail);
-    ("empty", Some(EmptyTurnReport { cause, details }))
+    let hook_stop = probe.hook_stop.clone();
+    (
+        "empty",
+        Some(EmptyTurnReport {
+            cause,
+            details,
+            hook_stop,
+        }),
+    )
 }
 
 /// Build an `AcpEvent::Error` for a non-success stop reason so the user gets a
@@ -14774,11 +14921,11 @@ fn turn_failure_error_event(
             // diagnosis; fall back to the pre-split behavior rather than
             // dropping the error entirely.
             let cause = empty.map(|r| r.cause).unwrap_or(EmptyTurnCause::NoOutput);
-            (
-                cause.code(),
-                cause.message(agent_type),
-                empty.and_then(|r| r.details.clone()),
-            )
+            let message = match (cause, empty.and_then(|r| r.hook_stop.clone())) {
+                (EmptyTurnCause::HookStopped, Some(hook_stop)) => hook_stop,
+                _ => cause.message(agent_type),
+            };
+            (cause.code(), message, empty.and_then(|r| r.details.clone()))
         }
         _ => return None,
     };
@@ -15394,7 +15541,10 @@ async fn run_conversation_loop(
                                 // its own result-text fallback can skip
                                 // a result that merely repeats one. A
                                 // turn whose only output was "a hook
-                                // blocked this" IS an empty turn.
+                                // blocked this" IS an empty turn — one
+                                // the notice explains, so the probe
+                                // keeps it for the verdict.
+                                probe.note_notice(agent_type, &notice);
                                 emit_with_state(
                                     &st,
                                     &h,
@@ -36031,6 +36181,157 @@ mod tests {
         // is the stronger signal and points somewhere else entirely.
         none.note_dropped(&drop_err("boom"));
         assert_eq!(diagnose_empty_turn(&none), EmptyTurnCause::ProtocolMismatch);
+
+        // A hook the agent said stopped the turn outranks every guess.
+        none.note_notice(
+            AgentType::Codex,
+            &notice("warning", "PreToolUse hook blocked the tool call", None),
+        );
+        assert_eq!(diagnose_empty_turn(&none), EmptyTurnCause::HookStopped);
+    }
+
+    fn notice(severity: &str, title: &str, description: Option<&str>) -> SessionNotice {
+        SessionNotice {
+            severity: severity.into(),
+            title: title.into(),
+            description: description.map(Into::into),
+        }
+    }
+
+    /// Every title codex-acp 2.7.0 gives a blocking or stopping hook
+    /// (`createHookCompletedEvent` / `hookBlockTarget`) is recognised, and
+    /// nothing else: not another notice, not another agent's.
+    #[test]
+    fn hook_stop_notice_text_reads_codex_hook_notices_only() {
+        for title in [
+            "UserPromptSubmit hook blocked the prompt",
+            "PreToolUse hook blocked the tool call",
+            "PermissionRequest hook blocked the tool call",
+            "PostToolUse hook blocked the tool result",
+            "PreModelRequest hook blocked the model request",
+            "PreCompact hook blocked the compaction",
+            "SubagentStart hook blocked the subagent",
+            "Stop hook blocked the request",
+            "SessionStart hook stopped the turn",
+        ] {
+            assert_eq!(
+                hook_stop_notice_text(AgentType::Codex, &notice("warning", title, None)).as_deref(),
+                Some(title),
+            );
+        }
+        assert_eq!(
+            hook_stop_notice_text(
+                AgentType::Codex,
+                &notice(
+                    "warning",
+                    "UserPromptSubmit hook blocked the prompt",
+                    Some(" why \n")
+                ),
+            )
+            .as_deref(),
+            Some("UserPromptSubmit hook blocked the prompt: why"),
+        );
+        for (agent, n) in [
+            (
+                AgentType::Codex,
+                notice("warning", "MCP server \"x\" failed to start", None),
+            ),
+            (AgentType::Codex, notice("warning", "Model rerouted", None)),
+            (
+                AgentType::Codex,
+                notice("warning", "Pre Tool hook blocked the prompt", None),
+            ),
+            (
+                AgentType::Codex,
+                notice("warning", "Stop hook stopped the session", None),
+            ),
+            (
+                AgentType::Codex,
+                notice("info", "Stop hook stopped the turn", None),
+            ),
+            (
+                AgentType::ClaudeCode,
+                notice("warning", "Stop hook stopped the turn", None),
+            ),
+        ] {
+            assert!(hook_stop_notice_text(agent, &n).is_none(), "{agent} {n:?}");
+        }
+    }
+
+    /// Only a hook notice is kept, and the latest one wins: it is the one
+    /// closest to the turn's end.
+    #[test]
+    fn note_notice_keeps_the_last_hook_stop() {
+        let mut probe = TurnOutputProbe::new(0);
+        probe.note_notice(AgentType::Codex, &notice("warning", "Config warning", None));
+        assert!(
+            probe.hook_stop.is_none(),
+            "an unrelated warning explains nothing"
+        );
+
+        probe.note_notice(
+            AgentType::Codex,
+            &notice("warning", "PreToolUse hook blocked the tool call", None),
+        );
+        probe.note_notice(
+            AgentType::Codex,
+            &notice("warning", "Stop hook stopped the turn", Some("why")),
+        );
+        probe.note_notice(AgentType::Codex, &notice("warning", "Later warning", None));
+        assert_eq!(
+            probe.hook_stop.as_deref(),
+            Some("Stop hook stopped the turn: why")
+        );
+        assert!(!probe.saw_agent_output, "a notice is never agent output");
+    }
+
+    /// codex-acp 2.7.0's notice for a prompt its `UserPromptSubmit` hook
+    /// blocked, as recorded live: the turn ends `end_turn` with no output, and
+    /// codeg's verdict is the agent's account instead of "only status
+    /// updates", with the turn's evidence kept.
+    #[test]
+    fn an_empty_turn_a_hook_stopped_reports_the_agents_words() {
+        let tail = StderrTail::new();
+        let mut probe = TurnOutputProbe::new(0);
+        probe.saw_metadata_update = true;
+        probe.note_dropped(&drop_err("boom"));
+        probe.note_notice(
+            AgentType::Codex,
+            &notice(
+                "warning",
+                "UserPromptSubmit hook blocked the prompt",
+                Some("blocked by probe policy"),
+            ),
+        );
+
+        let (reason, report) = finish_turn_reason(&probe, "end_turn", &tail);
+        assert_eq!(reason, "empty");
+        let report = report.expect("an empty turn is diagnosed");
+        assert_eq!(report.cause, EmptyTurnCause::HookStopped);
+        let Some(AcpEvent::Error {
+            message,
+            code,
+            details,
+            terminal,
+            ..
+        }) = turn_failure_error_event(reason, AgentType::Codex, Some(&report))
+        else {
+            panic!("an empty turn raises its verdict");
+        };
+        assert_eq!(code.as_deref(), Some("turn_failed_empty_hook"));
+        assert_eq!(
+            message,
+            "UserPromptSubmit hook blocked the prompt: blocked by probe policy"
+        );
+        assert!(
+            details.as_deref().is_some_and(|d| d.contains("dropped 1")),
+            "the dropped-update evidence is kept: {details:?}"
+        );
+        assert!(!terminal, "an empty turn never kills the connection");
+
+        // A turn that did reply is not empty, whatever it warned about.
+        probe.saw_agent_output = true;
+        assert!(finish_turn_reason(&probe, "end_turn", &tail).1.is_none());
     }
 
     #[test]
@@ -36222,6 +36523,7 @@ mod tests {
             let report = EmptyTurnReport {
                 cause,
                 details: Some("evidence".into()),
+                hook_stop: None,
             };
             let Some(AcpEvent::Error {
                 code,
@@ -36868,6 +37170,7 @@ mod tests {
                         HostToolsPolicy::from_env(&BTreeMap::new()),
                         // Watched only for a Claude launch.
                         cwd.join("claude-projects"),
+                        crate::parsers::AgentEnv::inherited(),
                         Arc::new(StderrTail::new()),
                     ));
                     let _ = ended_tx.send(ended);
@@ -37825,7 +38128,7 @@ mod tests {
         // Empty specs → the effort selector comes from the flat `x.ai/sessionConfig`
         // "mode" list (the no-`models` fallback path).
         let opts =
-            synthesize_grok_config_options(Some(&meta), &HashMap::new()).expect("should synthesize");
+            synthesize_grok_config_options(Some(&meta), &HashMap::new(), None).expect("should synthesize");
         assert_eq!(opts.len(), 2, "model + effort selectors");
 
         let model = &opts[0];
@@ -37864,7 +38167,7 @@ mod tests {
         // Empty specs → the effort selector comes from the flat `x.ai/sessionConfig`
         // "mode" list (the no-`models` fallback path).
         let opts =
-            synthesize_grok_config_options(Some(&meta), &HashMap::new()).expect("should synthesize");
+            synthesize_grok_config_options(Some(&meta), &HashMap::new(), None).expect("should synthesize");
         assert_eq!(opts.len(), 1);
         assert_eq!(opts[0].id, GROK_MODEL_OPTION_ID);
     }
@@ -38892,8 +39195,8 @@ mod tests {
     #[test]
     fn synthesize_grok_config_options_none_without_sessionconfig() {
         let empty: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-        assert!(synthesize_grok_config_options(Some(&empty), &HashMap::new()).is_none());
-        assert!(synthesize_grok_config_options(None, &HashMap::new()).is_none());
+        assert!(synthesize_grok_config_options(Some(&empty), &HashMap::new(), None).is_none());
+        assert!(synthesize_grok_config_options(None, &HashMap::new(), None).is_none());
     }
 
     /// Raw top-level `models` mirroring grok 0.2.99's `session/new`: grok-4.5
@@ -38995,6 +39298,67 @@ mod tests {
     }
 
     #[test]
+    fn grok_resumed_session_shows_its_unlisted_saved_model() {
+        // Grok 1.0.89 resuming a session whose saved `[model.fake]` is gone
+        // (captured live): `currentModelId` keeps "fake", no sessionConfig row
+        // is `selected` and no effort rows come with it.
+        let meta: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"x.ai/sessionConfig": {"options": [
+                {"id": "grok-4.6", "category": "model", "label": "Grok 4.6", "selected": false},
+                {"id": "grok-4.5", "category": "model", "label": "Grok 4.5", "selected": false}
+            ]}}),
+        )
+        .unwrap();
+        let models = serde_json::json!({
+            "currentModelId": "fake",
+            "availableModels": [{
+                "modelId": "grok-4.6",
+                "name": "Grok 4.6",
+                "_meta": {
+                    "supportsReasoningEffort": true,
+                    "reasoningEffort": "high",
+                    "reasoningEfforts": [{"id": "high", "value": "high", "label": "High"}]
+                }
+            }]
+        });
+        let specs = parse_grok_model_specs(Some(&models));
+        let opts = synthesize_grok_config_options(Some(&meta), &specs, Some("fake"))
+            .expect("synthesize");
+        let model = opts
+            .iter()
+            .find(|o| o.id == GROK_MODEL_OPTION_ID)
+            .expect("model selector");
+        let model_sel = expect_select(&model.kind);
+        assert_eq!(model_sel.current_value, "fake", "not the first row");
+        assert_eq!(
+            model_sel.options.iter().map(|o| o.value.as_str()).collect::<Vec<_>>(),
+            ["grok-4.6", "grok-4.5", "fake"],
+            "the saved model is listed after Grok's own"
+        );
+        assert!(
+            opts.iter().all(|o| o.id != GROK_EFFORT_OPTION_ID),
+            "no effort selector borrowed from grok-4.6"
+        );
+
+        // A `selected` row still wins over the reported id, and a listed
+        // reported id is not added twice.
+        let selected: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"x.ai/sessionConfig": {"options": [
+                {"id": "grok-4.6", "category": "model", "label": "Grok 4.6", "selected": true},
+                {"id": "grok-4.5", "category": "model", "label": "Grok 4.5", "selected": false}
+            ]}}),
+        )
+        .unwrap();
+        for reported in [Some("fake"), Some("grok-4.5"), None] {
+            let opts = synthesize_grok_config_options(Some(&selected), &HashMap::new(), reported)
+                .expect("synthesize");
+            let sel = expect_select(&opts[0].kind);
+            assert_eq!(sel.current_value, "grok-4.6", "{reported:?}");
+            assert_eq!(sel.options.len(), 2, "{reported:?}");
+        }
+    }
+
+    #[test]
     fn grok_custom_model_effort_selector_follows_its_declared_levels() {
         // #993, both `session/new` replies captured from grok 1.0.62 for a
         // custom `[model."grok-4.7"]` whose endpoint lists no levels: before and
@@ -39018,7 +39382,7 @@ mod tests {
                     "_meta": custom_meta
                 }]
             });
-            synthesize_grok_config_options(Some(&meta), &parse_grok_model_specs(Some(&models)))
+            synthesize_grok_config_options(Some(&meta), &parse_grok_model_specs(Some(&models)), None)
                 .expect("synthesize")
         };
 
@@ -39094,7 +39458,7 @@ mod tests {
         )
         .unwrap();
         let specs = parse_grok_model_specs(Some(&grok_models_fixture()));
-        let opts = synthesize_grok_config_options(Some(&meta), &specs).expect("synthesize");
+        let opts = synthesize_grok_config_options(Some(&meta), &specs, None).expect("synthesize");
         assert_eq!(opts.len(), 2, "model + effort");
         let effort = opts
             .iter()
@@ -39120,7 +39484,7 @@ mod tests {
         )
         .unwrap();
         let specs = parse_grok_model_specs(Some(&grok_models_fixture()));
-        let opts = synthesize_grok_config_options(Some(&meta), &specs).expect("synthesize");
+        let opts = synthesize_grok_config_options(Some(&meta), &specs, None).expect("synthesize");
         assert_eq!(opts.len(), 1);
         assert_eq!(opts[0].id, GROK_MODEL_OPTION_ID);
     }
@@ -47939,7 +48303,7 @@ mod tests {
     ) -> (Vec<SessionConfigOptionInfo>, HashMap<String, GrokModelSpec>) {
         let (meta, models) = grok_bundled_handshake();
         let specs = parse_grok_model_specs(Some(&models));
-        let mut opts = synthesize_grok_config_options(Some(&meta), &specs).expect("a picker");
+        let mut opts = synthesize_grok_config_options(Some(&meta), &specs, None).expect("a picker");
         let effort_selector = opts
             .iter_mut()
             .find(|o| o.id == GROK_EFFORT_OPTION_ID)

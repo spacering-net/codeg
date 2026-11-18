@@ -13,8 +13,10 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from "react"
 import { useTranslations } from "next-intl"
@@ -3870,9 +3872,18 @@ type TurnFailurePart =
   | {
       kind: "verdict"
       title: string
+      /** The agent's own account behind the verdict, as the second line. */
+      description?: string
       evidence?: string
       /** Buttons of the verdict's own, for a failure no typed record explains. */
       actions?: NotifyAction[]
+      /**
+       * The verdict restates the warning the agent raised during the turn
+       * (`turn_failed_empty_hook`, whose message is that warning's text):
+       * it takes over that notice's notification instead of raising a second
+       * one, when this text is the one the notice told.
+       */
+      explainedBy?: string
     }
 
 /** A connect failure's notification key: one per surface. */
@@ -3895,6 +3906,9 @@ interface TurnFailureState {
   }
   /** codeg's verdict; `paired` once a typed account carries it. */
   verdict?: { key: string; evidence?: string; paired: boolean }
+  /** The last warning or error notice of the turn: its notification's key and
+   *  its headline, for a verdict that restates it (see `explainedBy`). */
+  lastNotice?: { key: string; title: string }
 }
 
 // ── Provider ──
@@ -4211,8 +4225,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // Set of refs (not callbacks) so unmount cleanup matches the original
   // registration even when caller-side handler identity changes per render.
   // Populated by the `useAcpEvent` hook; read by the primary `acp://event`
-  // listener and the buffered-events replay loop.
-  const eventSubscribersRef = useRef<Set<EventSubscriberRef>>(new Set())
+  // listener and the buffered-events replay loop. The set is created once as
+  // part of the context value (`eventSubscriberApi`), so the provider can hand
+  // it out without reading the ref during render.
+  const [eventSubscriberApi] = useState<AcpEventSubscriberApi>(() => ({
+    subscribers: new Set(),
+  }))
+  const eventSubscribersRef = useRef<Set<EventSubscriberRef>>(
+    eventSubscriberApi.subscribers
+  )
 
   // ── Notify helpers ──
 
@@ -4832,13 +4853,21 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           })
           return
         }
-        const key = state.verdict?.key ?? newKey()
+        const notice = state.lastNotice
+        const key =
+          state.verdict?.key ??
+          (notice &&
+          part.explainedBy !== undefined &&
+          part.explainedBy.trimStart().startsWith(notice.title)
+            ? notice.key
+            : newKey())
         state.verdict = { key, evidence: part.evidence, paired: false }
         state.keys.add(key)
         notify({
           level: "error",
           key,
           title: part.title,
+          description: part.description,
           evidence: part.evidence,
           actions: part.actions,
         })
@@ -4886,6 +4915,21 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           state.verdict?.key === key ? state.verdict.evidence : undefined,
         actions,
       })
+    },
+    []
+  )
+
+  /** A warning or error notice told during the turn: remembered, so a verdict
+   *  that only restates it takes its notification over (see `explainedBy`). */
+  const noteTurnNotice = useCallback(
+    (connectionId: string, key: string, title: string) => {
+      const states = turnFailuresRef.current
+      let state = states.get(connectionId)
+      if (!state) {
+        state = { keys: new Set(), typedKeys: new Map() }
+        states.set(connectionId, state)
+      }
+      state.lastNotice = { key, title }
     },
     []
   )
@@ -5213,6 +5257,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // follow a plan or usage update.
         case "turn_failed_empty_metadata":
           return t("backendErrors.turnFailedEmptyMetadata", {
+            agent: agentLabel,
+          })
+        // One of the user's hooks blocked or stopped the turn, as the agent
+        // said in a notice (codex's "UserPromptSubmit hook blocked the
+        // prompt", …). This line leaves the agent's words out — it also goes
+        // to the OS notification, which never carries agent output — and they
+        // ride as the notification's second line (`rawAsDetail`).
+        case "turn_failed_empty_hook":
+          return t("backendErrors.turnFailedEmptyHook", {
             agent: agentLabel,
           })
         case "grok_model_switch_incompatible_agent":
@@ -5995,6 +6048,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               : notice.title,
             description: notice.description,
           })
+          // An empty turn this notice accounts for ends on a verdict that
+          // restates it (`turn_failed_empty_hook`); that one takes this
+          // notification over rather than telling it twice.
+          if (notice.level !== "info") {
+            noteTurnNotice(
+              nc?.connectionId ?? contextKey,
+              notice.id,
+              notice.title
+            )
+          }
           break
         }
         case "plugin_load_failures": {
@@ -6198,7 +6261,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // code: the message is the agent's own), closes the turn with the
           // failure line (see `TURN_FAILED`). Store state, so even when
           // `quiet`; outside a turn the reducer ignores it.
-          if (isFailedTurnVerdict(e.code)) {
+          if (e.code === "turn_failed_empty_hook") {
+            // A hook stopped the turn before any reply, as the agent said:
+            // its words (the hook's reason included) close the turn, as a
+            // typed record's do.
+            dispatch({
+              type: "TURN_FAILED",
+              contextKey,
+              message: e.message,
+              fromAgent: true,
+            })
+          } else if (isFailedTurnVerdict(e.code)) {
             dispatch({
               type: "TURN_FAILED",
               contextKey,
@@ -6265,6 +6338,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             notifyTurnFailure(connKey, {
               kind: "verdict",
               title: text,
+              description: reason,
+              explainedBy:
+                e.code === "turn_failed_empty_hook" ? e.message : undefined,
               evidence,
               actions:
                 e.code === "turn_failed_auth_required" && signInAgentType
@@ -6457,6 +6533,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       enqueueStreamingAction,
       flushPendingToolCallUpdates,
       flushStreamingQueue,
+      noteTurnNotice,
       notifyTurnFailure,
       rememberResolvedIdentity,
       reportConfigOptionVerdict,
@@ -7899,7 +7976,6 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       waitForListenerReady,
     ]
   )
-  connectRef.current = connect
 
   const disconnect = useCallback(
     async (contextKey: string): Promise<boolean> => {
@@ -8156,7 +8232,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     [connect, disconnect, resolveReconnectRequest, waitForConnectSettled]
   )
 
-  reconnectRef.current = reconnect
+  // Synced in a layout effect rather than during render. Every reader runs
+  // after the commit: `connectRef` from a connect() `finally` (async, so past
+  // any awaiting), `reconnectRef` from a toast's Retry click.
+  useLayoutEffect(() => {
+    connectRef.current = connect
+    reconnectRef.current = reconnect
+  })
 
   const dismissConfigStale = useCallback(
     (contextKey: string) => {
@@ -8613,11 +8695,6 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       dismissSessionFailuresAction,
       registerSessionFailureActions,
     ]
-  )
-
-  const eventSubscriberApi = useMemo<AcpEventSubscriberApi>(
-    () => ({ subscribers: eventSubscribersRef.current }),
-    []
   )
 
   return (

@@ -171,7 +171,9 @@ export function TerminalView({
   const t = useTranslations("Folder.terminal")
   // Locale changes affect future status text, not ownership of the live PTY.
   const tRef = useRef(t)
-  tRef.current = t
+  useEffect(() => {
+    tRef.current = t
+  }, [t])
 
   // ---- 移动端虚拟键栏（CTRL/ALT 闩锁 + 软键盘跟随）----
   // modsRef 是编码真值（xterm.onData 闭包里读它不会过期）；modsUi 只驱动按钮
@@ -216,6 +218,7 @@ export function TerminalView({
   // tab、收起面板、折叠键栏）后闩锁仍然生效的话，下一个软键盘字符会被无声地
   // 包装成控制码，而屏幕上没有任何东西提示它 armed 过。
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- setMods also writes modsRef (the encoding truth), which can't happen during render
     if (!showKeybar) setMods({ ctrl: false, alt: false })
   }, [showKeybar])
 
@@ -227,6 +230,7 @@ export function TerminalView({
   const [kbdLift, setKbdLift] = useState(0)
   useEffect(() => {
     if (!keybarVisible) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- drops the lift when the visualViewport subscription below is torn down
       setKbdLift(0)
       return
     }
