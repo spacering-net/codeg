@@ -7931,6 +7931,7 @@
       "waiting": "{count} 件等你處理"
     },
     "status": {
+      "thresholdMark": "{percent}% 自動壓縮",
       "elsewhere": "個人助手在另一個 codeg 處理程序中執行，這裡顯示的是資料庫裡的狀態。",
       "model": "模型",
       "mode": "模式",
@@ -8012,6 +8013,9 @@
       "mention": "你提到 {words} 時提醒 · 已提醒 {times}/{max} 次 · 到 {until}"
     },
     "data": {
+      "inDays": "{days} 天內 {count} 次",
+      "smallSample": "樣本僅 {count} 次，參考有限",
+      "rangeMenu": "時間範圍",
       "interactions": "每日互動",
       "messages": "你的訊息",
       "replies": "回覆",

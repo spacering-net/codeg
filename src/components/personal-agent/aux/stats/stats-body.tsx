@@ -1,6 +1,11 @@
 "use client"
 
-/** Its numbers over the last days: four figures, then the charts. */
+/** Its numbers over the last days: a tile each for the conversation and the
+ *  tokens, a bar of what each is made of under its figure; the work handed
+ *  out on a tile across, its rate of completion at its end; the daily
+ *  conversation as a chart, the daily work handed out as a row of days;
+ *  then, folded on one card, who it handed work to, the daily tokens and the
+ *  context's curve. All in the colour of its face, where it has one. */
 
 import { useEffect, useState, type CSSProperties } from "react"
 import { useLocale, useTranslations } from "next-intl"
@@ -17,43 +22,22 @@ import { formatTokenCount } from "@/lib/token-format"
 import type { BotColor, PersonalAgentStats } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-import { PANEL_SURFACE, PanelCard } from "../../panel-section"
+import { PANEL_SURFACE, PanelFold, PanelFolds } from "../../panel-section"
+import { DotStrip } from "../kit/dot-strip"
+import { KpiTile } from "../kit/kpi-tile"
 import { type Of, ofBot } from "../use-work"
 
-/** Days the stats tab covers. */
-export const STATS_DAYS = 14
+/** The ranges the stats tab covers, in days, and where it starts. */
+export const STATS_RANGES = [7, 14, 30] as const
+export type StatsRange = (typeof STATS_RANGES)[number]
+export const DEFAULT_RANGE: StatsRange = 14
 
 /** The panel's charts, in px: shorter than the token dashboard's. */
 const CHART_HEIGHT = 148
 
-/** One figure of the last two weeks: what it counts, how many, what it is
- *  made of. */
-function Figure({
-  label,
-  value,
-  sub,
-}: {
-  label: string
-  value: string
-  sub?: string
-}) {
-  return (
-    <div className="min-w-0 px-3 py-2.5">
-      <dt className="truncate text-xs text-muted-foreground">{label}</dt>
-      <dd className="mt-1 text-[1.375rem] leading-7 font-semibold tracking-tight text-foreground tabular-nums">
-        {value}
-      </dd>
-      {sub ? (
-        <dd
-          className="truncate text-[0.6875rem] leading-4 text-muted-foreground tabular-nums"
-          title={sub}
-        >
-          {sub}
-        </dd>
-      ) : null}
-    </div>
-  )
-}
+/** Below this many pieces of work handed out, the rate says it is a small
+ *  sample. */
+const SMALL_SAMPLE = 5
 
 /** The context-usage curve: the reading before each delivery and the two
  *  ends of each compaction, with each new session as a break. */
@@ -143,32 +127,85 @@ function UsageCurve({ stats }: { stats: PersonalAgentStats }) {
   )
 }
 
-/** A chart of the stats tab, as a folding card: its title and total in
- *  its header. */
-const ChartSection = PanelCard
+/** A chart's card: its title, what it adds up to, and what its colours
+ *  are, over it. */
+function ChartCard({
+  title,
+  summary,
+  legend,
+  children,
+  ...props
+}: {
+  title: string
+  summary?: string | number | null
+  legend?: { label: string; color: string }[]
+  children: React.ReactNode
+} & Omit<React.ComponentProps<"section">, "title">) {
+  return (
+    <section
+      className={cn(PANEL_SURFACE, "flex min-w-0 flex-col gap-3 p-4")}
+      {...props}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <h3 className="min-w-0 truncate text-sm font-semibold">{title}</h3>
+        {legend ? (
+          <ul
+            aria-hidden
+            className="flex shrink-0 items-center gap-2.5 text-[0.6875rem] text-muted-foreground"
+          >
+            {legend.map((l) => (
+              <li key={l.label} className="flex items-center gap-1">
+                <span
+                  className="size-2 rounded-[0.1875rem]"
+                  style={{ background: l.color }}
+                />
+                {l.label}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {summary != null ? (
+          <span className="ms-auto shrink-0 text-xs text-muted-foreground tabular-nums">
+            {summary}
+          </span>
+        ) : null}
+      </div>
+      {children}
+    </section>
+  )
+}
 
-/** Its numbers: the stats tab's second part — its charts in the colour of
- *  its face, where it has one. */
-export function StatsBody({ face }: { face: BotColor | null }) {
+export function StatsBody({
+  face,
+  days,
+}: {
+  face: BotColor | null
+  days: StatsRange
+}) {
   const t = useTranslations("PersonalAgent.data")
   const locale = useLocale()
   const tm = useTranslations("PersonalAgent.mode")
   const { botId, dispatchVersion } = usePersonalAgent()
-  const [statsOf, setStatsOf] = useState<Of<PersonalAgentStats> | null>(null)
+  // Kept with the assistant and the range it is of.
+  const [statsOf, setStatsOf] = useState<Of<{
+    days: number
+    stats: PersonalAgentStats
+  }> | null>(null)
   useEffect(() => {
     let cancelled = false
-    personalAgentStats(STATS_DAYS, botId)
+    personalAgentStats(days, botId)
       .then((s) => {
-        if (!cancelled) setStatsOf({ bot: botId, value: s })
+        if (!cancelled) setStatsOf({ bot: botId, value: { days, stats: s } })
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [dispatchVersion, botId])
-  const stats = ofBot(statsOf, botId)
+  }, [dispatchVersion, botId, days])
+  const read = ofBot(statsOf, botId)
+  const stats = read?.days === days ? read.stats : null
   if (!stats) {
-    return <Skeleton className="h-[10.5rem] w-full rounded-xl" aria-hidden />
+    return <Skeleton className="h-[10.5rem] w-full rounded-2xl" aria-hidden />
   }
   const sum = (pick: (d: PersonalAgentStats["days"][number]) => number) =>
     stats.days.reduce((n, d) => n + pick(d), 0)
@@ -191,25 +228,6 @@ export function StatsBody({ face }: { face: BotColor | null }) {
     fresh: d.owner_messages,
     detail: [],
   }))
-  const dispatches: TrendDatum[] = stats.days.map((d) => ({
-    key: d.date,
-    label: label(d.date),
-    tooltipLabel: d.date,
-    cache: d.dispatches_completed,
-    fresh: Math.max(
-      0,
-      d.dispatches_task +
-        d.dispatches_chat +
-        d.dispatches_session -
-        d.dispatches_completed
-    ),
-    detail: [
-      { label: tm("task"), value: String(d.dispatches_task) },
-      { label: tm("chat"), value: String(d.dispatches_chat) },
-      { label: tm("session"), value: String(d.dispatches_session) },
-      { label: t("failed"), value: String(d.dispatches_failed) },
-    ],
-  }))
   const tokens: TrendDatum[] = stats.days.map((d) => ({
     key: d.date,
     label: label(d.date),
@@ -218,6 +236,21 @@ export function StatsBody({ face }: { face: BotColor | null }) {
     fresh: d.agent_tokens,
     detail: [],
   }))
+  const dispatchDays = stats.days.map((d) => {
+    const count = d.dispatches_task + d.dispatches_chat + d.dispatches_session
+    return {
+      key: d.date,
+      count,
+      failed: d.dispatches_failed > 0,
+      title: [
+        label(d.date),
+        `${tm("task")} ${d.dispatches_task}`,
+        `${tm("chat")} ${d.dispatches_chat}`,
+        `${tm("session")} ${d.dispatches_session}`,
+        `${t("failed")} ${d.dispatches_failed}`,
+      ].join(" · "),
+    }
+  })
   const totalDispatches = stats.executors.reduce((n, e) => n + e.dispatches, 0)
   const executors: RankedDatum[] = stats.executors.map((e) => ({
     key: String(e.assistant_id),
@@ -226,6 +259,7 @@ export function StatsBody({ face }: { face: BotColor | null }) {
     share: totalDispatches > 0 ? e.dispatches / totalDispatches : null,
     hint: t("completedHint", { count: e.completed }),
   }))
+  const rate = handed > 0 ? Math.round((completed / handed) * 100) : null
   return (
     <div
       className="tu-viz flex min-w-0 flex-col gap-2.5 text-sm"
@@ -237,33 +271,20 @@ export function StatsBody({ face }: { face: BotColor | null }) {
           : undefined
       }
     >
-      {/* The four on one card, a hairline between them. */}
       <dl
-        className={cn(
-          PANEL_SURFACE,
-          "grid grid-cols-2 overflow-hidden [&>div]:border-border/60 [&>div:nth-child(-n+2)]:border-b [&>div:nth-child(odd)]:border-e"
-        )}
+        data-pa-figures
+        className="grid grid-cols-2 gap-2.5 @max-[18rem]/aux:grid-cols-1"
       >
-        <Figure
+        <KpiTile
           label={t("figure.conversation")}
           value={String(owner + replies)}
+          split={[owner, replies]}
           sub={t("figure.conversationSub", { owner, replies })}
         />
-        <Figure
-          label={t("figure.dispatches")}
-          value={String(handed)}
-          sub={t("figure.dispatchesSub", { completed, failed })}
-        />
-        <Figure
-          label={t("figure.completion")}
-          value={
-            handed > 0 ? `${Math.round((completed / handed) * 100)}%` : "—"
-          }
-          sub={t("figure.completionSub")}
-        />
-        <Figure
+        <KpiTile
           label={t("figure.tokens")}
           value={synced ? formatTokenCount(agentTokens + dispatchTokens) : "—"}
+          split={synced ? [agentTokens, dispatchTokens] : null}
           sub={
             synced
               ? t("figure.tokensSub", {
@@ -273,11 +294,42 @@ export function StatsBody({ face }: { face: BotColor | null }) {
               : t("figure.tokensUnsynced")
           }
         />
+        <KpiTile
+          className="col-span-2 @max-[18rem]/aux:col-span-1"
+          label={t("figure.dispatches")}
+          value={String(handed)}
+          sub={t("figure.dispatchesSub", { completed, failed })}
+          aside={
+            <div className="flex flex-col items-end gap-1 text-end">
+              <span className="text-xs text-muted-foreground">
+                {t("figure.completion")}
+              </span>
+              <span
+                data-pa-completion
+                className={cn(
+                  "text-lg leading-6 font-semibold tabular-nums",
+                  rate != null && "text-emerald-600 dark:text-emerald-400"
+                )}
+              >
+                {rate != null ? `${rate}%` : "—"}
+              </span>
+              {handed > 0 && handed < SMALL_SAMPLE ? (
+                <span className="max-w-32 text-[0.6875rem] leading-4 text-muted-foreground">
+                  {t("smallSample", { count: handed })}
+                </span>
+              ) : null}
+            </div>
+          }
+        />
       </dl>
-      <ChartSection
-        fold="stats.interactions"
+      <ChartCard
         title={t("interactions")}
         summary={owner + replies}
+        legend={[
+          { label: t("replies"), color: "var(--tu-accent)" },
+          { label: t("messages"), color: "var(--tu-ink)" },
+        ]}
+        data-pa-chart-card="interactions"
       >
         <TrendChart
           data={interactions}
@@ -287,52 +339,55 @@ export function StatsBody({ face }: { face: BotColor | null }) {
           emptyLabel={t("empty")}
           height={CHART_HEIGHT}
         />
-      </ChartSection>
-      <ChartSection
-        fold="stats.dispatches"
+      </ChartCard>
+      <ChartCard
         title={t("dispatches")}
-        summary={handed}
+        summary={t("inDays", { days, count: handed })}
+        data-pa-chart-card="dispatches"
       >
-        <TrendChart
-          data={dispatches}
-          label={t("dispatches")}
-          cacheLabel={t("completed")}
-          freshLabel={t("other")}
-          emptyLabel={t("empty")}
-          height={CHART_HEIGHT}
+        <DotStrip
+          days={dispatchDays}
+          label={t("inDays", { days, count: handed })}
         />
-      </ChartSection>
-      <ChartSection
-        fold="stats.executors"
-        title={t("executors")}
-        summary={stats.executors.length}
-      >
-        <RankedBars data={executors} emptyLabel={t("empty")} />
-      </ChartSection>
-      <ChartSection
-        fold="stats.tokens"
-        title={t("tokens")}
-        summary={synced ? formatTokenCount(agentTokens + dispatchTokens) : "—"}
-      >
-        <TrendChart
-          data={tokens}
-          label={t("tokens")}
-          cacheLabel={t("dispatchTokens")}
-          freshLabel={t("agentTokens")}
-          emptyLabel={t("empty")}
-          height={CHART_HEIGHT}
-        />
-        <p className="pt-1 text-[0.6875rem] leading-4 text-muted-foreground">
-          {synced
-            ? t("syncedAt", {
-                when: new Date(stats.tokens_synced_at!).toLocaleString(locale),
-              })
-            : t("notSynced")}
-        </p>
-      </ChartSection>
-      <ChartSection fold="stats.usage" title={t("usageCurve")} summary={null}>
-        <UsageCurve stats={stats} />
-      </ChartSection>
+      </ChartCard>
+      {/* The rest, folded on one card. */}
+      <PanelFolds>
+        <PanelFold
+          fold="stats.executors"
+          title={t("executors")}
+          summary={stats.executors.length}
+        >
+          <RankedBars data={executors} emptyLabel={t("empty")} />
+        </PanelFold>
+        <PanelFold
+          fold="stats.tokens"
+          title={t("tokens")}
+          summary={
+            synced ? formatTokenCount(agentTokens + dispatchTokens) : "—"
+          }
+        >
+          <TrendChart
+            data={tokens}
+            label={t("tokens")}
+            cacheLabel={t("dispatchTokens")}
+            freshLabel={t("agentTokens")}
+            emptyLabel={t("empty")}
+            height={CHART_HEIGHT}
+          />
+          <p className="pt-1 text-[0.6875rem] leading-4 text-muted-foreground">
+            {synced
+              ? t("syncedAt", {
+                  when: new Date(stats.tokens_synced_at!).toLocaleString(
+                    locale
+                  ),
+                })
+              : t("notSynced")}
+          </p>
+        </PanelFold>
+        <PanelFold fold="stats.usage" title={t("usageCurve")}>
+          <UsageCurve stats={stats} />
+        </PanelFold>
+      </PanelFolds>
     </div>
   )
 }

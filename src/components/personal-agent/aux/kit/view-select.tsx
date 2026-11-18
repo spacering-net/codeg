@@ -2,7 +2,8 @@
 
 /** A view's title that picks what it shows: its name, how many it holds and
  *  a chevron — a menu of the choices, each with its count — and, while one
- *  other than the first is picked, a round × that goes back to it. */
+ *  other than the first is picked, a round × that goes back to it (unless
+ *  there is no first to go back to). */
 
 import { ChevronDown, X } from "lucide-react"
 
@@ -31,6 +32,7 @@ export function ViewSelect<V extends string>({
   onChange,
   menuLabel,
   clearLabel,
+  clearable = true,
   itemAttr,
 }: {
   value: V
@@ -40,6 +42,8 @@ export function ViewSelect<V extends string>({
   /** The menu's name, for a screen reader. */
   menuLabel: string
   clearLabel: string
+  /** Whether the round × shows (a range has no "all" to go back to). */
+  clearable?: boolean
   /** A data attribute each choice carries, for the page's tests. */
   itemAttr?: string
 }) {
@@ -91,7 +95,7 @@ export function ViewSelect<V extends string>({
           </DropdownMenuRadioGroup>
         </DropdownMenuContent>
       </DropdownMenu>
-      {value !== first.value ? (
+      {clearable && value !== first.value ? (
         <Button
           size="icon-xs"
           variant="secondary"

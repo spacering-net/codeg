@@ -1,15 +1,15 @@
 "use client"
 
-/** The run log, and the details of how it runs. */
+/** The run log, and the details of how it runs: what the runtime card's
+ *  foot opens, each in a dialog. */
 
 import { useMemo, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import type { PersonalAgentSnapshot, TimelineRow } from "@/lib/types"
 
-import { PanelFold } from "../../panel-section"
 import { num, str } from "../../shared"
-import { useWhen } from "./status-rows"
+import { useWhen } from "./runtime-card"
 
 /** Run-log lines the status tab lists. */
 const RUN_LOG_LINES = 50
@@ -75,15 +75,10 @@ function useRunLogLine(): (row: TimelineRow) => string {
   }
 }
 
-/** The run log: what happened to the agent's sessions, newest first, a line
- *  each and when. */
-export function RunLogSection() {
-  const t = useTranslations("PersonalAgent.runLog")
-  const to = useTranslations("PersonalAgent.overview")
-  const when = useWhen()
+/** The run log's lines: the marker rows, newest first, the last few. */
+export function useRunLogMarkers(): TimelineRow[] {
   const { rows } = usePersonalAgent()
-  const line = useRunLogLine()
-  const markers = useMemo(
+  return useMemo(
     () =>
       rows
         .filter((r) => r.kind === "marker")
@@ -91,29 +86,29 @@ export function RunLogSection() {
         .reverse(),
     [rows]
   )
-  return (
-    <PanelFold
-      fold="status.runLog"
-      title={to("runLog")}
-      summary={markers.length}
-    >
-      {markers.length === 0 ? (
-        <p className="text-xs leading-5 text-muted-foreground">{t("empty")}</p>
-      ) : (
-        <ul className="flex flex-col divide-y divide-border/50">
-          {markers.map((m) => (
-            <li key={m.id} className="flex min-w-0 items-start gap-3 py-1.5">
-              <span className="min-w-0 flex-1 text-xs leading-5 break-words text-foreground/85">
-                {line(m)}
-              </span>
-              <span className="shrink-0 text-2xs leading-5 text-muted-foreground tabular-nums">
-                {when(m.created_at)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </PanelFold>
+}
+
+/** The run log: what happened to the agent's sessions, a line each and
+ *  when. */
+export function RunLogList({ markers }: { markers: TimelineRow[] }) {
+  const t = useTranslations("PersonalAgent.runLog")
+  const when = useWhen()
+  const line = useRunLogLine()
+  return markers.length === 0 ? (
+    <p className="text-xs leading-5 text-muted-foreground">{t("empty")}</p>
+  ) : (
+    <ul className="flex flex-col divide-y divide-border/50">
+      {markers.map((m) => (
+        <li key={m.id} className="flex min-w-0 items-start gap-3 py-1.5">
+          <span className="min-w-0 flex-1 text-xs leading-5 break-words text-foreground/85">
+            {line(m)}
+          </span>
+          <span className="shrink-0 text-2xs leading-5 text-muted-foreground tabular-nums">
+            {when(m.created_at)}
+          </span>
+        </li>
+      ))}
+    </ul>
   )
 }
 
@@ -136,77 +131,79 @@ function DetailRow({
   )
 }
 
-export function DetailsSection({
-  snapshot,
-}: {
-  snapshot: PersonalAgentSnapshot
-}) {
+/** The rest of how it runs: its mode and connection, its handoff, its
+ *  compactions, the command, its last check, what waits, its slots for
+ *  handed-out work, where its engine runs, its last error. */
+export function DetailsList({ snapshot }: { snapshot: PersonalAgentSnapshot }) {
   const t = useTranslations("PersonalAgent.status")
   const to = useTranslations("PersonalAgent.overview")
-  const { status } = snapshot
+  const { agent, status } = snapshot
   const seg = status.segment
   const check = status.last_check
+  const mode = agent?.label_snapshot.mode
   return (
-    <PanelFold fold="status.details" title={to("details")}>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 text-xs">
-        {seg?.handoff_size != null ? (
-          <DetailRow label={t("handoff")}>
-            {t("handoffSize", { size: seg.handoff_size })}
-            {seg.handoff_trimmed ? ` · ${t("handoffTrimmed")}` : ""}
-          </DetailRow>
-        ) : null}
-        {seg ? (
-          <DetailRow label={t("compactions")}>
-            {t("compactionCounts", {
-              auto: seg.compactions_auto,
-              manual: seg.compactions_manual,
-              agent: seg.compactions_agent,
-            })}
-          </DetailRow>
-        ) : null}
-        <DetailRow label={to("command")}>
-          {status.compact_command ? (
-            <span dir="ltr" className="font-mono">
-              {status.compact_command}
-            </span>
-          ) : (
-            t("noCommand")
-          )}
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 text-xs">
+      {mode ? <DetailRow label={t("mode")}>{mode}</DetailRow> : null}
+      <DetailRow label={t("connection")}>
+        {status.connected ? t("connected") : t("disconnected")}
+      </DetailRow>
+      {seg?.handoff_size != null ? (
+        <DetailRow label={t("handoff")}>
+          {t("handoffSize", { size: seg.handoff_size })}
+          {seg.handoff_trimmed ? ` · ${t("handoffTrimmed")}` : ""}
         </DetailRow>
-        {check ? (
-          <DetailRow label={t("lastCheck")}>
-            {t(`check.${check.outcome}`)}
-          </DetailRow>
-        ) : null}
-        <DetailRow label={t("queued")}>
-          {t("queuedValue", {
-            messages: status.queued_messages,
-            events: status.pending_events,
+      ) : null}
+      {seg ? (
+        <DetailRow label={t("compactions")}>
+          {t("compactionCounts", {
+            auto: seg.compactions_auto,
+            manual: seg.compactions_manual,
+            agent: seg.compactions_agent,
           })}
         </DetailRow>
-        <DetailRow label={t("dispatchSlots")}>
-          {status.dispatch_limit > 0
-            ? t("slotsValue", {
-                running: status.dispatch_running,
-                limit: status.dispatch_limit,
-                queued: status.dispatch_queued,
-              })
-            : t("slotsUnlimited", {
-                running: status.dispatch_running,
-                queued: status.dispatch_queued,
-              })}
+      ) : null}
+      <DetailRow label={to("command")}>
+        {status.compact_command ? (
+          <span dir="ltr" className="font-mono">
+            {status.compact_command}
+          </span>
+        ) : (
+          t("noCommand")
+        )}
+      </DetailRow>
+      {check ? (
+        <DetailRow label={t("lastCheck")}>
+          {t(`check.${check.outcome}`)}
         </DetailRow>
-        <DetailRow label={t("engine")}>
-          {status.engine === "here" ? t("engineHere") : t("engineElsewhere")}
+      ) : null}
+      <DetailRow label={t("queued")}>
+        {t("queuedValue", {
+          messages: status.queued_messages,
+          events: status.pending_events,
+        })}
+      </DetailRow>
+      <DetailRow label={t("dispatchSlots")}>
+        {status.dispatch_limit > 0
+          ? t("slotsValue", {
+              running: status.dispatch_running,
+              limit: status.dispatch_limit,
+              queued: status.dispatch_queued,
+            })
+          : t("slotsUnlimited", {
+              running: status.dispatch_running,
+              queued: status.dispatch_queued,
+            })}
+      </DetailRow>
+      <DetailRow label={t("engine")}>
+        {status.engine === "here" ? t("engineHere") : t("engineElsewhere")}
+      </DetailRow>
+      {status.last_error ? (
+        <DetailRow label={t("lastError")}>
+          <span className="text-red-700 dark:text-red-300">
+            {status.last_error}
+          </span>
         </DetailRow>
-        {status.last_error ? (
-          <DetailRow label={t("lastError")}>
-            <span className="text-red-700 dark:text-red-300">
-              {status.last_error}
-            </span>
-          </DetailRow>
-        ) : null}
-      </dl>
-    </PanelFold>
+      ) : null}
+    </dl>
   )
 }

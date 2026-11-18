@@ -7931,6 +7931,7 @@
       "waiting": "{count, plural, one {# Sache wartet auf dich} other {# Sachen warten auf dich}}"
     },
     "status": {
+      "thresholdMark": "{percent}% Auto-Kompaktierung",
       "elsewhere": "Der Agent läuft in einem anderen codeg-Prozess; was du hier siehst, stammt aus der Datenbank.",
       "model": "Modell",
       "mode": "Modus",
@@ -8012,6 +8013,9 @@
       "mention": "Wenn du {words} erwähnst · {times} von {max} Mal · bis {until}"
     },
     "data": {
+      "inDays": "{count, plural, =0 {Keiner in {days} Tagen} one {# in {days} Tagen} other {# in {days} Tagen}}",
+      "smallSample": "{count, plural, one {Erst # bisher – nur ein Richtwert} other {Erst # bisher – nur ein Richtwert}}",
+      "rangeMenu": "Zeitraum",
       "interactions": "Unterhaltung pro Tag",
       "messages": "Deine Nachrichten",
       "replies": "Antworten",

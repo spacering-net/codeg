@@ -7931,6 +7931,7 @@
       "waiting": "{count} 件があなたの対応待ち"
     },
     "status": {
+      "thresholdMark": "{percent}% で自動圧縮",
       "elsewhere": "エージェントは別の codeg プロセスで動作しています。ここに表示される内容はデータベースから読み取ったものです。",
       "model": "モデル",
       "mode": "モード",
@@ -8012,6 +8013,9 @@
       "mention": "{words} と言ったときに知らせる · {times}/{max} 回 · {until} まで"
     },
     "data": {
+      "inDays": "{days} 日間で {count} 回",
+      "smallSample": "サンプルは {count} 件のみ。参考程度に",
+      "rangeMenu": "期間",
       "interactions": "日別の会話",
       "messages": "あなたのメッセージ",
       "replies": "返信",

@@ -7931,6 +7931,7 @@
       "waiting": "{count} 件等你处理"
     },
     "status": {
+      "thresholdMark": "{percent}% 自动压缩",
       "elsewhere": "个人助手在另一个 codeg 进程里运行，这里显示的是数据库里的状态。",
       "model": "模型",
       "mode": "模式",
@@ -8012,6 +8013,9 @@
       "mention": "你提到 {words} 时提醒 · 已提醒 {times}/{max} 次 · 到 {until}"
     },
     "data": {
+      "inDays": "{days} 天内 {count} 次",
+      "smallSample": "样本仅 {count} 次，参考有限",
+      "rangeMenu": "时间范围",
       "interactions": "每日交互",
       "messages": "你的消息",
       "replies": "回复",

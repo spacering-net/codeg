@@ -7931,6 +7931,7 @@
       "waiting": "{count, plural, zero {لا شيء بانتظارك} one {عنصر واحد بانتظارك} two {عنصران بانتظارك} few {# عناصر بانتظارك} many {# عنصرًا بانتظارك} other {# عنصر بانتظارك}}"
     },
     "status": {
+      "thresholdMark": "{percent}% ضغط تلقائي",
       "elsewhere": "يعمل الوكيل في عملية codeg أخرى؛ ما تراه هنا مقروء من قاعدة البيانات.",
       "model": "النموذج",
       "mode": "الوضع",
@@ -8012,6 +8013,9 @@
       "mention": "عندما تذكر {words} · {times} من {max} مرات · حتى {until}"
     },
     "data": {
+      "inDays": "{count, plural, zero {لا شيء خلال {days} يومًا} one {مرة واحدة خلال {days} يومًا} two {مرتان خلال {days} يومًا} few {# مرات خلال {days} يومًا} many {# مرة خلال {days} يومًا} other {# مرة خلال {days} يومًا}}",
+      "smallSample": "{count, plural, zero {لا عينات بعد} one {عينة واحدة فقط — للاستئناس} two {عينتان فقط — للاستئناس} few {# عينات فقط — للاستئناس} many {# عينة فقط — للاستئناس} other {# عينة فقط — للاستئناس}}",
+      "rangeMenu": "المدة",
       "interactions": "المحادثة اليومية",
       "messages": "رسائلك",
       "replies": "الردود",

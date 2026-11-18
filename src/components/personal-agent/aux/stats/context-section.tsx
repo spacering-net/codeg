@@ -15,8 +15,8 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { PersonalAgentSnapshot } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-import { PanelCard } from "../../panel-section"
-import { useWhen } from "./status-rows"
+import { PANEL_SURFACE } from "../../panel-section"
+import { useWhen } from "./runtime-card"
 
 /** How full the context is: shadcn's progress bar, amber past the
  *  auto-compaction threshold, which is a tick across it. */
@@ -52,9 +52,10 @@ function ContextMeter({
   )
 }
 
-/** The context: how full it is, against the threshold where codeg compacts
- *  it, what the reading comes from, the last compaction — and, when
- *  compaction stopped working for this session, the way to resume it. */
+/** The context, a card of its own: how full it is in its head, the meter
+ *  under it with its scale — 0, where codeg compacts it, 100% — then what
+ *  the reading comes from, the last compaction and, when compaction stopped
+ *  working for this session, the way to resume it. */
 export function ContextSection({
   snapshot,
   readOnly,
@@ -71,21 +72,59 @@ export function ContextSection({
   const seg = status.segment
   const last = status.last_compaction
   const percent = status.usage?.percent ?? null
+  const threshold = status.auto_compact_percent
+  const marked = threshold > 0 && threshold < 100
   return (
-    <PanelCard
-      fold="status.context"
-      title={t("context")}
-      // No reading: nothing in the header, the card says why.
-      summary={percent == null ? null : `${Math.round(percent)}%`}
+    <section
+      data-pa-context
+      className={cn(PANEL_SURFACE, "flex min-w-0 flex-col gap-3 p-4")}
     >
-      <div className="flex flex-col gap-1">
-        <ContextMeter
-          percent={percent}
-          threshold={status.auto_compact_percent}
-        />
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">
-          {status.auto_compact_percent > 0
-            ? t("threshold", { percent: status.auto_compact_percent })
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <h3 className="min-w-0 truncate text-sm font-semibold">
+          {t("context")}
+        </h3>
+        {/* No reading: a dash, the card says why. */}
+        <span
+          data-pa-context-reading
+          className="shrink-0 text-sm font-medium tabular-nums"
+        >
+          {percent == null ? "—" : `${Math.round(percent)}%`}
+        </span>
+      </div>
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <ContextMeter percent={percent} threshold={threshold} />
+        {/* Its scale: the ends, and where codeg compacts it — an end left
+            out where the mark's words would run into it. */}
+        <div
+          aria-hidden
+          className="relative h-4 text-[0.6875rem] leading-4 text-muted-foreground tabular-nums"
+        >
+          {!marked || threshold >= 15 ? (
+            <span className="absolute start-0">0</span>
+          ) : null}
+          {marked ? (
+            <span
+              className="absolute -translate-x-1/2 whitespace-nowrap rtl:translate-x-1/2"
+              style={{ insetInlineStart: `${threshold}%` }}
+            >
+              {t("thresholdMark", { percent: threshold })}
+            </span>
+          ) : null}
+          {!marked || threshold <= 85 ? (
+            <span className="absolute end-0">100%</span>
+          ) : null}
+        </div>
+      </div>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        {/* Where it compacts, in words: for a screen reader where the scale
+            marks it; for everyone where it does not. */}
+        <p
+          className={
+            marked ? "sr-only" : "text-xs leading-5 text-muted-foreground"
+          }
+        >
+          {threshold > 0
+            ? t("threshold", { percent: threshold })
             : t("thresholdOff")}
         </p>
         <p className="text-xs leading-5 text-muted-foreground">
@@ -111,7 +150,7 @@ export function ContextSection({
           </p>
         ) : null}
         {seg?.auto_compact_paused ? (
-          <div className="mt-1.5 flex items-center justify-between gap-2 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs">
+          <div className="mt-1.5 flex items-center justify-between gap-2 rounded-xl bg-amber-500/10 px-3 py-2 text-xs">
             <span className="text-amber-800 dark:text-amber-200">
               {t("paused")}
             </span>
@@ -133,6 +172,6 @@ export function ContextSection({
           </div>
         ) : null}
       </div>
-    </PanelCard>
+    </section>
   )
 }

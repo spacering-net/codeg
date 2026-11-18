@@ -7931,6 +7931,7 @@
       "waiting": "{count, plural, one {# élément vous attend} other {# éléments vous attendent}}"
     },
     "status": {
+      "thresholdMark": "{percent} % compactage auto",
       "elsewhere": "L'agent s'exécute dans un autre processus codeg ; ce que vous voyez ici est lu dans la base de données.",
       "model": "Modèle",
       "mode": "Mode",
@@ -8012,6 +8013,9 @@
       "mention": "Quand vous mentionnez {words} · {times} sur {max} fois · jusqu’au {until}"
     },
     "data": {
+      "inDays": "{count, plural, =0 {Aucun en {days} jours} one {# en {days} jours} other {# en {days} jours}}",
+      "smallSample": "{count, plural, one {Seulement # pour l’instant — à prendre avec prudence} other {Seulement # pour l’instant — à prendre avec prudence}}",
+      "rangeMenu": "Période",
       "interactions": "Conversation par jour",
       "messages": "Vos messages",
       "replies": "Réponses",

@@ -395,7 +395,11 @@ describe("the panel", () => {
     // Another tab: its body under the same head.
     openTab("Stats")
     expect(usePersonalAgentUi.getState().auxTab).toBe("stats")
-    expect(await screen.findByText("Opus")).toBeTruthy()
+    await waitFor(() =>
+      expect(
+        document.querySelector("[data-pa-runtime-agent]")?.textContent
+      ).toContain("Opus")
+    )
     expect(head.isConnected).toBe(true)
     // A click on the tab already open leaves the panel be: the chrome's
     // button hides it.
@@ -1304,60 +1308,99 @@ describe("the stats tab's status", () => {
     usePersonalAgentUi.setState({ auxTab: "stats" })
   })
 
-  it("shows what it runs on row by row, no card, then how full its context is", async () => {
+  it("shows what it runs on, on one card, then how full its context is", async () => {
     draw()
-    // A row per property, as Session Details has them — who it is is the
-    // panel's head, not a card of its own here.
-    expect(document.querySelector("[data-pa-status] section")).toBeNull()
+    const card = document.querySelector<HTMLElement>("[data-pa-status]")!
+    // What it runs on and its model, its session and when that started —
+    // its state is the head's, under its name; who it is is the head.
+    expect(card.querySelector("[data-pa-runtime-agent]")!.textContent).toBe(
+      "Claude Code · Opus"
+    )
+    expect(
+      card.querySelector("[data-pa-runtime-session]")!.textContent
+    ).toContain("#3")
     expect(
       document.querySelectorAll("[data-pa-aux] [data-slot='bot-avatar']")
     ).toHaveLength(1)
-    const row = (label: string) =>
-      screen.getByText(label, { selector: "dt" }).parentElement!
-    // (Its icon carries the agent's name for a screen reader too.)
-    expect(row("Agent").textContent).toContain("Claude Code")
-    expect(row("State").textContent).toBe("StateIdle")
-    // The way to change what it runs on, at its row's end.
+    // Connected, here, nothing pending: nothing to know now.
+    expect(card.querySelector("[data-pa-runtime-notice]")).toBeNull()
+    // The way to change what it runs on.
     fireEvent.click(
-      within(row("Agent")).getByRole("button", {
-        name: "Change what it runs on",
-      })
+      within(card).getByRole("button", { name: "Change what it runs on" })
     )
     expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "identity" })
     usePersonalAgentUi.setState({ settings: null, botPage: null })
-    expect(row("Model").textContent).toBe("ModelOpus")
-    expect(row("Mode").textContent).toBe("ModeDefault")
-    expect(row("Session").textContent).toContain("#3")
-    expect(row("Working directory").textContent).toContain(
-      "/data/personal-agent"
-    )
-    // Its context, open, its reading in the header.
-    expect(
-      screen.getByRole("button", { name: /Context/ }).textContent
-    ).toContain("45%")
-    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe(
-      "45"
-    )
-    // The run log and the details stay folded, and open.
-    expect(screen.queryByText("Dispatched conversations")).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: /Details/ }))
-    expect(screen.getByText("Dispatched conversations")).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: /Run log/ }))
-    expect(screen.getByText("Nothing yet.")).toBeTruthy()
     // The session it runs in, and the way to it.
     const opened = vi.fn()
     window.addEventListener("codeg:open-personal-agent-session", opened)
-    fireEvent.click(screen.getByRole("button", { name: "View session" }))
+    fireEvent.click(within(card).getByRole("button", { name: "View session" }))
     expect(opened).toHaveBeenCalledTimes(1)
     window.removeEventListener("codeg:open-personal-agent-session", opened)
+    // Its working directory, copyable.
+    expect(
+      card.querySelector("[data-pa-runtime-workdir]")!.textContent
+    ).toContain("/data/personal-agent")
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
-    fireEvent.click(screen.getByRole("button", { name: "Copy path" }))
+    fireEvent.click(within(card).getByRole("button", { name: "Copy path" }))
     expect(writeText).toHaveBeenCalledWith("/data/personal-agent")
     expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy()
+    // Its context, a card of its own: the reading in its head, the meter
+    // marked where codeg compacts it.
+    const context = document.querySelector<HTMLElement>("[data-pa-context]")!
+    expect(context).not.toBe(card)
+    expect(
+      context.querySelector("[data-pa-context-reading]")!.textContent
+    ).toBe("45%")
+    expect(
+      within(context).getByRole("progressbar").getAttribute("aria-valuenow")
+    ).toBe("45")
+    expect(context.textContent).toContain("70% auto-compact")
+    // The run log and the rest of how it runs, a dialog each.
+    expect(screen.queryByText("Dispatched conversations")).toBeNull()
+    const detailsButton = within(card).getByRole("button", { name: /Details/ })
+    await userEvent.click(detailsButton)
+    const details = await screen.findByRole("dialog")
+    expect(
+      within(details).getByRole("heading", { name: "Details" })
+    ).toBeTruthy()
+    expect(within(details).getByText("Dispatched conversations")).toBeTruthy()
+    expect(within(details).getByText("Default")).toBeTruthy()
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    // Closed: the focus back on the button that opened it.
+    await waitFor(() => expect(document.activeElement).toBe(detailsButton))
+    fireEvent.click(within(card).getByRole("button", { name: /Run log/ }))
+    expect(
+      within(await screen.findByRole("dialog")).getByText("Nothing yet.")
+    ).toBeTruthy()
   })
 
-  it("lines its sections up with the rows, the run log in words and times", () => {
+  it("says the one thing to know now: not connected, a new session coming, running elsewhere", () => {
+    const snap = snapshot()
+    snap.status.connected = false
+    pa.snapshot = snap
+    const { unmount } = draw({ snap })
+    expect(
+      document.querySelector("[data-pa-runtime-notice]")!.textContent
+    ).toBe("Not connected (reconnects with the next message)")
+    unmount()
+    // Running elsewhere comes first, and nothing is changed from here.
+    const elsewhere = snapshot()
+    elsewhere.status.connected = false
+    elsewhere.status.engine = "elsewhere" as never
+    pa.snapshot = elsewhere
+    draw({ snap: elsewhere })
+    const card = document.querySelector<HTMLElement>("[data-pa-status]")!
+    expect(
+      card.querySelector("[data-pa-runtime-notice]")!.textContent
+    ).not.toContain("Not connected")
+    expect(
+      within(card).queryByRole("button", { name: "Change what it runs on" })
+    ).toBeNull()
+  })
+
+  it("lists the run log in words and times, newest first, its count on its button", async () => {
     pa.rows = [
       marker(1, {
         marker: "segment_start",
@@ -1369,10 +1412,12 @@ describe("the stats tab's status", () => {
       marker(4, { marker: "turn_interrupted", why: "restart" }),
     ]
     draw()
-    fireEvent.click(screen.getByRole("button", { name: /Run log/ }))
-    fireEvent.click(screen.getByRole("button", { name: /Details/ }))
+    const button = screen.getByRole("button", { name: /Run log/ })
+    expect(button.textContent).toBe("Run log4")
+    fireEvent.click(button)
+    const dialog = await screen.findByRole("dialog")
     // Newest first, a line each and when — no icon before it.
-    const lines = screen.getAllByRole("listitem")
+    const lines = within(dialog).getAllByRole("listitem")
     expect(lines.map((li) => li.firstElementChild!.textContent)).toEqual([
       "A reply did not finish",
       "A reply made way for your message",
@@ -1380,43 +1425,6 @@ describe("the stats tab's status", () => {
       "A new session started on Claude Code (first session)",
     ])
     for (const li of lines) expect(li.querySelector("svg")).toBeNull()
-    // The run log and the details folded on one card, a hairline between;
-    // the context a card of its own.
-    const runLog = screen.getByRole("button", { name: /Run log/ })
-    const shared = runLog.closest("[data-slot='card']")!
-    expect(
-      screen
-        .getByRole("button", { name: /Details/ })
-        .closest("[data-slot='card']")
-    ).toBe(shared)
-    expect(
-      screen
-        .getByRole("button", { name: /Context/ })
-        .closest("[data-slot='card']")
-    ).not.toBe(shared)
-    // Each a folding card: its title first, its chevron at its head's end.
-    for (const name of [/Context/, /Run log/, /Details/]) {
-      const header = screen.getByRole("button", { name })
-      expect(header.closest("[data-slot='collapsible']")).toBeTruthy()
-      expect(header.firstElementChild!.textContent).toMatch(name)
-      expect(header.lastElementChild!.getAttribute("class")).toContain(
-        "lucide-chevron-down"
-      )
-    }
-  })
-
-  it("keeps a section folded or open across a switch of tabs", async () => {
-    draw()
-    fireEvent.click(screen.getByRole("button", { name: /Context/ }))
-    expect(screen.queryByRole("progressbar")).toBeNull()
-    act(() => usePersonalAgentUi.setState({ auxTab: "output" }))
-    act(() => usePersonalAgentUi.setState({ auxTab: "stats" }))
-    expect(
-      screen
-        .getByRole("button", { name: /Context/ })
-        .getAttribute("aria-expanded")
-    ).toBe("false")
-    expect(screen.queryByRole("progressbar")).toBeNull()
   })
 })
 
@@ -1436,7 +1444,16 @@ describe("the stats tab's data", () => {
       dispatch_tokens: 2000 * n,
     })
     api.personalAgentStats.mockResolvedValue({
-      days: [day("2026-11-03", 2), day("2026-11-04", 4)],
+      days: [
+        day("2026-11-03", 2),
+        day("2026-11-04", 4),
+        // A quiet day: nothing at all.
+        {
+          ...day("2026-11-05", 0),
+          dispatches_completed: 0,
+          dispatches_failed: 0,
+        },
+      ],
       executors: [],
       usage: [],
       tokens_synced_at: "2026-11-04T12:00:00Z",
@@ -1451,31 +1468,103 @@ describe("the stats tab's data", () => {
     }
     pa.snapshot = faced
     draw({ snap: faced })
-    // Under its heading, four figures before the charts.
-    const card = (await screen.findByText("Last 14 days"))
-      .closest("section")!
-      .querySelector("dl")!
-    // 6 messages and 6 replies; 6 handed out, 4 done, 2 failed.
-    expect(within(card).getByText("12")).toBeTruthy()
-    expect(within(card).getByText("You 6 · replies 6")).toBeTruthy()
-    expect(within(card).getByText("Done 4 · failed 2")).toBeTruthy()
-    expect(within(card).getByText("67%")).toBeTruthy()
-    expect(within(card).getByText("18K")).toBeTruthy()
-    // Then each chart, a folding section with its total.
-    const interactions = screen.getByRole("button", {
-      name: /Daily conversation/,
+    // The range, picked from its title; then the figures, a tile each.
+    expect(
+      await screen.findByRole("button", { name: /Last 14 days/ })
+    ).toBeTruthy()
+    const figures = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>("[data-pa-figures]")
+      expect(el).toBeTruthy()
+      return el!
     })
-    expect(interactions.textContent).toContain("12")
+    // 6 messages and 6 replies; 6 handed out, 4 done, 2 failed.
+    expect(within(figures).getByText("12")).toBeTruthy()
+    expect(within(figures).getByText("You 6 · replies 6")).toBeTruthy()
+    expect(within(figures).getByText("Done 4 · failed 2")).toBeTruthy()
+    expect(figures.querySelector("[data-pa-completion]")!.textContent).toBe(
+      "67%"
+    )
+    expect(within(figures).getByText("18K")).toBeTruthy()
+    // Enough handed out: no word about a small sample.
+    expect(figures.textContent).not.toContain("read it loosely")
+    // The daily conversation a chart; the daily work a row of days, red
+    // where something failed, quiet where nothing happened.
     expect(
       document.querySelector("[data-chart='Daily conversation']")
     ).toBeTruthy()
+    const dots = [...document.querySelectorAll("[data-pa-dot]")].map((d) =>
+      d.getAttribute("data-pa-dot")
+    )
+    expect(dots).toEqual(["failed", "failed", "none"])
+    expect(
+      document.querySelector("[data-pa-chart-card='dispatches']")!.textContent
+    ).toContain("6 in 14 days")
     const viz = document.querySelector<HTMLElement>(".tu-viz")!
     expect(viz.getAttribute("data-pa-face")).toBe("orange")
     expect(viz.style.getPropertyValue("--tu-accent")).toBe("var(--pa-body)")
-    fireEvent.click(interactions)
+    // The rest folded at first, on one card; open on asking, and kept so
+    // across a switch of tabs.
+    expect(document.querySelector("[data-chart='ranked']")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: /By assistant/ }))
+    expect(document.querySelector("[data-chart='ranked']")).toBeTruthy()
+    act(() => usePersonalAgentUi.setState({ auxTab: "output" }))
+    act(() => usePersonalAgentUi.setState({ auxTab: "stats" }))
     expect(
-      document.querySelector("[data-chart='Daily conversation']")
-    ).toBeNull()
+      await waitFor(() => {
+        const el = document.querySelector("[data-chart='ranked']")
+        expect(el).toBeTruthy()
+        return el
+      })
+    ).toBeTruthy()
+  })
+
+  it("reads another range when picked, and keeps it on this device", async () => {
+    usePersonalAgentUi.setState({ auxTab: "stats" })
+    window.localStorage.removeItem("codeg:personal-agent:stats-days")
+    api.personalAgentStats.mockResolvedValue({
+      days: [
+        {
+          date: "2026-11-04",
+          owner_messages: 1,
+          replies: 1,
+          dispatches_task: 1,
+          dispatches_chat: 0,
+          dispatches_session: 0,
+          dispatches_completed: 1,
+          dispatches_failed: 0,
+          agent_tokens: 0,
+          dispatch_tokens: 0,
+        },
+      ],
+      executors: [],
+      usage: [],
+      tokens_synced_at: null,
+    } satisfies PersonalAgentStats)
+    draw()
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Last 14 days/ })
+    )
+    const choices = await screen.findAllByRole("menuitemradio")
+    expect(choices.map((c) => c.textContent)).toEqual([
+      "Last 7 days",
+      "Last 14 days",
+      "Last 30 days",
+    ])
+    await userEvent.click(choices[0])
+    await waitFor(() =>
+      expect(api.personalAgentStats).toHaveBeenLastCalledWith(7, null)
+    )
+    expect(screen.getByRole("button", { name: /Last 7 days/ })).toBeTruthy()
+    // No × back: a range has no "all".
+    expect(screen.queryByRole("button", { name: "Last 14 days" })).toBeNull()
+    expect(window.localStorage.getItem("codeg:personal-agent:stats-days")).toBe(
+      "7"
+    )
+    // One handed out: the rate says it is a small sample.
+    expect((await screen.findByText(/read it loosely/)).textContent).toContain(
+      "Only 1"
+    )
+    window.localStorage.removeItem("codeg:personal-agent:stats-days")
   })
 
   it("keeps the dashboard's colours for an assistant with no face", async () => {

@@ -7931,6 +7931,7 @@
       "waiting": "{count}건이 내 응답 대기 중"
     },
     "status": {
+      "thresholdMark": "{percent}% 자동 압축",
       "elsewhere": "에이전트가 다른 codeg 프로세스에서 실행 중입니다. 여기 표시되는 내용은 데이터베이스에서 읽어 온 것입니다.",
       "model": "모델",
       "mode": "모드",
@@ -8012,6 +8013,9 @@
       "mention": "{words}을(를) 언급하면 알림 · {times}/{max}회 · {until}까지"
     },
     "data": {
+      "inDays": "{days}일 동안 {count}회",
+      "smallSample": "표본이 {count}건뿐이라 참고만 하세요",
+      "rangeMenu": "기간",
       "interactions": "일별 대화",
       "messages": "내 메시지",
       "replies": "응답",

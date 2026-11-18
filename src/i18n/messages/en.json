@@ -7931,6 +7931,7 @@
       "waiting": "{count, plural, one {# thing waits for you} other {# things wait for you}}"
     },
     "status": {
+      "thresholdMark": "{percent}% auto-compact",
       "elsewhere": "The agent runs in another codeg process; what you see here is read from the database.",
       "model": "Model",
       "mode": "Mode",
@@ -8012,6 +8013,9 @@
       "mention": "When you mention {words} · {times} of {max} times · until {until}"
     },
     "data": {
+      "inDays": "{count, plural, =0 {None in {days} days} one {# in {days} days} other {# in {days} days}}",
+      "smallSample": "{count, plural, one {Only # so far — read it loosely} other {Only # so far — read it loosely}}",
+      "rangeMenu": "Time range",
       "interactions": "Daily conversation",
       "messages": "Your messages",
       "replies": "Replies",

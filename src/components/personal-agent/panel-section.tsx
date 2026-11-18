@@ -53,8 +53,9 @@ import { Callout, type CalloutTone } from "./aux/kit/callout"
 
 /** The folding parts that start folded; every other one starts open. */
 const FOLDED_AT_FIRST: ReadonlySet<string> = new Set([
-  "status.runLog",
-  "status.details",
+  "stats.executors",
+  "stats.tokens",
+  "stats.usage",
 ])
 
 /** Whether a folding part is open, and the way to fold it. */
