@@ -2520,7 +2520,6 @@
       "quickActions": {
         "title": "Schnellaktionen",
         "openProject": "Projekt öffnen",
-        "more": "Mehr",
         "browserTab": "Browser-Tab öffnen",
         "showPet": "Pet anzeigen"
       },

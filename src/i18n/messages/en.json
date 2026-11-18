@@ -2520,7 +2520,6 @@
       "quickActions": {
         "title": "Quick actions",
         "openProject": "Open project",
-        "more": "More",
         "browserTab": "Open browser tab",
         "showPet": "Show pet"
       },

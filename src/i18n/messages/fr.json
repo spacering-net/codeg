@@ -2520,7 +2520,6 @@
       "quickActions": {
         "title": "Actions rapides",
         "openProject": "Ouvrir un projet",
-        "more": "Plus",
         "browserTab": "Nouvel onglet de navigateur",
         "showPet": "Afficher la mascotte"
       },

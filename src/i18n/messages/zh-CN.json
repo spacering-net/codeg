@@ -2520,7 +2520,6 @@
       "quickActions": {
         "title": "快捷操作",
         "openProject": "打开项目",
-        "more": "更多",
         "browserTab": "打开浏览器",
         "showPet": "显示宠物"
       },

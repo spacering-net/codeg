@@ -2520,7 +2520,6 @@
       "quickActions": {
         "title": "クイック操作",
         "openProject": "プロジェクトを開く",
-        "more": "その他",
         "browserTab": "ブラウザータブを開く",
         "showPet": "ペットを表示"
       },

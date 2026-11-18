@@ -8,8 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 // between the SRN account's head and its sign-in row (`status-bar-srn.tsx`),
 // opened from the account's trigger — the routes, then, after a divider, the
 // launch group: "Open project", "Open remote workspace" (desktop), "Open
-// local workspace" (a remote workspace window) and "More" (desktop). The menu is a thin router over existing entry points, so
-// every one of them is stubbed: the test's job is to prove each row reaches
+// local workspace" (a remote workspace window), then "Open browser tab" and
+// "Show pet" (desktop). The menu is a thin router over existing entry points,
+// so every one of them is stubbed: the test's job is to prove each row reaches
 // the right door (and that the desktop-only rows disappear off the desktop),
 // not to re-test the doors. The account itself is stubbed too — signed out —
 // and is `status-bar-srn.test.tsx`'s.
@@ -227,15 +228,23 @@ describe("Quick actions, in the status bar's account menu", () => {
       "—",
       "Open project",
       "Open remote workspace",
-      "More",
+      "Open browser tab",
+      "Show pet",
       "—",
       "Sign in to SRN",
     ])
-    for (const name of ["Open project", "Open remote workspace", "More"]) {
+    for (const name of ["Open project", "Open remote workspace"]) {
       const row = screen.getByRole("menuitem", { name })
       expect(row).toHaveAttribute("aria-haspopup", "menu")
       expect(row).toHaveAttribute("aria-expanded", "false")
     }
+    // The window-level extras are plain rows: the old "More" submenu is gone.
+    for (const name of ["Open browser tab", "Show pet"]) {
+      expect(screen.getByRole("menuitem", { name })).not.toHaveAttribute(
+        "aria-haspopup"
+      )
+    }
+    expect(screen.queryByRole("menuitem", { name: "More" })).toBeNull()
     // Their rows are not in the top level until opened; the old "Workspace"
     // submenu is gone.
     for (const name of [
@@ -245,8 +254,6 @@ describe("Quick actions, in the status bar's account menu", () => {
       "Project Boot",
       "Open local workspace",
       "Manage remote workspace",
-      "Open browser tab",
-      "Show pet",
     ]) {
       expect(screen.queryByRole("menuitem", { name })).toBeNull()
     }
@@ -324,17 +331,6 @@ describe("Quick actions, in the status bar's account menu", () => {
     expect(mocks.listRemoteWorkspaceConnections).toHaveBeenCalledTimes(2)
   })
 
-  it("More opens on click, with the window-level extras", async () => {
-    await mountAndOpen()
-    await openSub("More")
-    const sub = screen.getByRole("menu", { name: "More" })
-    expect(
-      within(sub)
-        .getAllByRole("menuitem")
-        .map((el) => el.textContent)
-    ).toEqual(["Open browser tab", "Show pet"])
-  })
-
   it.each(["{ArrowRight}", "{Enter}"])(
     "a submenu opens from the keyboard (%s), on its first row, and ← goes back",
     async (key) => {
@@ -358,7 +354,6 @@ describe("Quick actions, in the status bar's account menu", () => {
 
   it("opens a blank browser tab, returning to the conversations route first", async () => {
     await mountAndOpen()
-    await openSub("More")
     await clickItem("Open browser tab")
 
     // The file column that holds browser tabs only exists on the conversations
@@ -373,13 +368,12 @@ describe("Quick actions, in the status bar's account menu", () => {
   it("drops the browser row when there is no built-in browser", async () => {
     browserAvailable = false
     await mountAndOpen()
-    await openSub("More")
 
     expect(
       screen.queryByRole("menuitem", { name: "Open browser tab" })
     ).toBeNull()
-    // The rest of the submenu survives, so this is the gate and not the
-    // submenu failing to render.
+    // The pet row survives, so this is the gate and not the extras failing
+    // to render.
     expect(
       await screen.findByRole("menuitem", { name: "Show pet" })
     ).toBeVisible()
@@ -415,7 +409,7 @@ describe("Quick actions, in the status bar's account menu", () => {
     await mountAndOpen()
 
     // The routes are platform-neutral route switches and must survive off
-    // the desktop; the remote workspaces and "More" are the desktop's, so
+    // the desktop; the remote workspaces and the extras are the desktop's, so
     // they go whole.
     expect(layout()).toEqual([
       "head",
@@ -439,6 +433,9 @@ describe("Quick actions, in the status bar's account menu", () => {
     expect(screen.queryByText(/remote workspace/i)).toBeNull()
     expect(screen.queryByText("Open local workspace")).toBeNull()
     expect(screen.queryByRole("menuitem", { name: "Show pet" })).toBeNull()
+    expect(
+      screen.queryByRole("menuitem", { name: "Open browser tab" })
+    ).toBeNull()
     expect(mocks.listRemoteWorkspaceConnections).not.toHaveBeenCalled()
   })
 
@@ -454,7 +451,8 @@ describe("Quick actions, in the status bar's account menu", () => {
       "Open project",
       "Open remote workspace",
       "Open local workspace",
-      "More",
+      "Open browser tab",
+      "Show pet",
       "Sign in to SRN",
     ])
     const local = screen.getByRole("menuitem", { name: "Open local workspace" })
@@ -523,7 +521,6 @@ describe("Quick actions, in the status bar's account menu", () => {
     expect(mocks.setRoute).toHaveBeenCalledWith("harness")
 
     await reopen()
-    await openSub("More")
     await clickItem("Show pet")
     expect(mocks.openPetWindow).toHaveBeenCalled()
   })
@@ -674,7 +671,7 @@ describe("Quick actions, in the status bar's account menu", () => {
     for (const [width, name, over] of [
       [530, "Open project", true],
       [611, "Open remote workspace", true],
-      [612, "More", false],
+      [612, "Open project", false],
     ] as const) {
       window.innerWidth = width
       await openSub(name)
