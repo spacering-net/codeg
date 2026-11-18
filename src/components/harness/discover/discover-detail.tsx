@@ -53,8 +53,8 @@ const CRUMB_CLASS =
  *  kinds' own buttons are drawn for a row (`detail-kinds.tsx`); here they
  *  are made to fill it. */
 const ACTIONS_CLASS = cn(
-  "flex min-w-0 flex-col gap-2.5 p-4",
-  "[&>[data-slot=button]]:h-11 [&>[data-slot=button]]:w-full [&>[data-slot=button]]:rounded-full [&>[data-slot=button]]:text-sm"
+  "flex min-w-0 flex-col gap-2 p-3.5",
+  "[&>[data-slot=button]]:h-9 [&>[data-slot=button]]:w-full [&>[data-slot=button]]:rounded-full [&>[data-slot=button]]:text-sm"
 )
 
 function Dot() {
@@ -319,7 +319,7 @@ export function DiscoverDetail({
             {/* Beside the body on a wide pane, staying in view down a long
                 description; on a narrow one, between the heading and the
                 body — what can be done comes before what there is to read. */}
-            <aside className="min-w-0 space-y-4 @4xl/discover:sticky @4xl/discover:top-5 @4xl/discover:col-start-2 @4xl/discover:row-span-2 @4xl/discover:row-start-1 @4xl/discover:self-start">
+            <aside className="min-w-0 space-y-3 @4xl/discover:sticky @4xl/discover:top-5 @4xl/discover:col-start-2 @4xl/discover:row-span-2 @4xl/discover:row-start-1 @4xl/discover:self-start">
               {(known || websiteUrl) && (
                 <div className="overflow-hidden rounded-2xl border bg-card">
                   {known && <RiskBanner risk={known.risk} />}
@@ -327,7 +327,7 @@ export function DiscoverDetail({
                     {item && view?.Actions ? (
                       <view.Actions item={item} installed={installed} />
                     ) : detail.phase === "loading" ? (
-                      <Skeleton className="h-11 w-full rounded-full" />
+                      <Skeleton className="h-9 w-full rounded-full" />
                     ) : null}
                     {websiteUrl && (
                       <Button asChild variant="secondary">

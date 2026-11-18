@@ -7827,7 +7827,6 @@
         "copied": "نُسخ",
         "copiedNote": "نُسخ التعريف. احفظه ملفًا في \u2066~/.claude/agents/\u2069 لتستخدمه في Claude Code.",
         "copyFailed": "تعذَّر النسخ إلى الحافظة.",
-        "installLater": "يستطيع Codeg عرض المساعدين، أما تثبيتهم فسيأتي لاحقًا.",
         "copyErrors": {
           "notFound": "لا يحتفظ SRN Harness بنسخة من هذا التعريف.",
           "tooLarge": "التعريف أكبر مما ينسخه Codeg (\u2066256 KB\u2069).",

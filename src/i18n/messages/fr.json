@@ -7827,7 +7827,6 @@
         "copied": "Copié",
         "copiedNote": "Définition copiée. Enregistrez-la dans un fichier sous ~/.claude/agents/ pour l’utiliser dans Claude Code.",
         "copyFailed": "Impossible de copier dans le presse-papiers.",
-        "installLater": "Codeg peut afficher les assistants. Leur installation viendra plus tard.",
         "copyErrors": {
           "notFound": "SRN Harness ne garde pas de copie de cette définition.",
           "tooLarge": "La définition dépasse la taille que Codeg copie (256 Ko).",

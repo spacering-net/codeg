@@ -7827,7 +7827,6 @@
         "copied": "コピーしました",
         "copiedNote": "定義をコピーしました。~/.claude/agents/ にファイルとして保存すると Claude Code で使えます。",
         "copyFailed": "クリップボードにコピーできませんでした。",
-        "installLater": "Codeg ではアシスタントを表示できます。インストールは今後対応します。",
         "copyErrors": {
           "notFound": "SRN Harness にはこの定義のコピーがありません。",
           "tooLarge": "定義ファイルが Codeg でコピーできる大きさ（256 KB）を超えています。",

@@ -941,7 +941,7 @@ export function Fact({
   children: ReactNode
 }) {
   return (
-    <div className="flex min-w-0 items-baseline justify-between gap-4 py-3">
+    <div className="flex min-w-0 items-baseline justify-between gap-4 py-2">
       <dt className="shrink-0 text-muted-foreground">{label}</dt>
       <dd className="min-w-0 text-end font-medium break-words">{children}</dd>
     </div>
@@ -986,18 +986,18 @@ export function FactsPanel({ item, head, sayRights = false }: FactsPanelProps) {
   return (
     <section
       aria-labelledby={headingId}
-      className="min-w-0 rounded-2xl border bg-card px-4 pt-3 pb-1 text-sm"
+      className="min-w-0 rounded-2xl border bg-card px-3.5 pt-2.5 pb-0.5 text-sm"
     >
-      <div className="flex min-w-0 items-center justify-between gap-3 border-b pb-3">
+      <div className="flex min-w-0 items-center justify-between gap-3 border-b pb-2.5">
         <h3 id={headingId} className="shrink-0 font-semibold">
           {t("facts")}
         </h3>
         <div className="flex min-w-0 flex-wrap justify-end gap-1.5">
-          <span className="inline-flex h-7 items-center rounded-full bg-muted px-3 text-xs">
+          <span className="inline-flex h-6 items-center rounded-full bg-muted px-2.5 text-xs">
             {labels.kind(item.kind)}
           </span>
           {showsRuntime(item) && (
-            <span className="inline-flex h-7 min-w-0 items-center rounded-full border px-3 text-xs">
+            <span className="inline-flex h-6 min-w-0 items-center rounded-full border px-2.5 text-xs">
               <bdi className="truncate">{labels.runtime(item.runtime)}</bdi>
             </span>
           )}
@@ -1043,18 +1043,18 @@ export function FactsSkeleton() {
     <div
       aria-hidden="true"
       data-testid="discover-facts-loading"
-      className="min-w-0 rounded-2xl border bg-card px-4 pt-3 pb-1"
+      className="min-w-0 rounded-2xl border bg-card px-3.5 pt-2.5 pb-0.5"
     >
-      <div className="flex items-center justify-between gap-3 border-b pb-3">
+      <div className="flex items-center justify-between gap-3 border-b pb-2.5">
         <Skeleton className="h-4 w-12" />
         <div className="flex gap-1.5">
-          <Skeleton className="h-7 w-12 rounded-full" />
-          <Skeleton className="h-7 w-14 rounded-full" />
+          <Skeleton className="h-6 w-12 rounded-full" />
+          <Skeleton className="h-6 w-14 rounded-full" />
         </div>
       </div>
       <div className="divide-y">
         {["w-10", "w-12", "w-16", "w-28"].map((width, index) => (
-          <div key={index} className="flex items-center justify-between py-3.5">
+          <div key={index} className="flex items-center justify-between py-2.5">
             <Skeleton className="h-3.5 w-12" />
             <Skeleton className={cn("h-3.5", width)} />
           </div>

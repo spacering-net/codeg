@@ -1268,13 +1268,9 @@ describe("Discover — copying an assistant's definition", () => {
     )
   })
 
-  it("offers nothing that installs it, and says installing comes later", async () => {
+  it("offers nothing that installs it, and says nothing of installing later", async () => {
     const { detail } = await openDetail(ASSISTANT_REF)
-    expect(
-      within(detail).getByText(
-        "Codeg can show assistants. Installing them comes later."
-      )
-    ).toBeInTheDocument()
+    expect(within(detail).queryByText(/comes later/i)).toBeNull()
     const controls = [
       ...within(detail).queryAllByRole("button"),
       ...within(detail).queryAllByRole("link"),

@@ -7827,7 +7827,6 @@
         "copied": "已複製",
         "copiedNote": "定義已複製。把它存成 ~/.claude/agents/ 裡的一個檔案，就能在 Claude Code 裡使用。",
         "copyFailed": "無法複製到剪貼簿。",
-        "installLater": "在 Codeg 裡可以檢視助手，安裝稍後推出。",
         "copyErrors": {
           "notFound": "SRN Harness 沒有保存這份定義的副本。",
           "tooLarge": "定義檔超過了 Codeg 能複製的大小（256 KB）。",
