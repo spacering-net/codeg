@@ -166,7 +166,7 @@ function FileFacts({ info }: { info: McpAgentInfo }) {
   const problem = agentHasFileProblem(info)
   return (
     <McpDetailPart title={t("file")}>
-      <div className="space-y-2.5 rounded-xl border bg-card px-5 py-4 text-sm">
+      <div className="space-y-2.5 rounded-xl border bg-card px-4 py-3.5 text-sm">
         <div className="flex min-w-0 items-start gap-1.5">
           <PathText
             path={config.path || "—"}
@@ -279,7 +279,7 @@ function SessionFacts({ info }: { info: McpAgentInfo }) {
   }
   return (
     <McpDetailPart title={t("sessions")}>
-      <div className="space-y-1.5 rounded-xl border bg-card px-5 py-4 text-sm text-muted-foreground">
+      <div className="space-y-1.5 rounded-xl border bg-card px-4 py-3.5 text-sm text-muted-foreground">
         <p className="text-foreground">
           {delivery === "agent_file"
             ? t("deliveryFile")
@@ -332,7 +332,7 @@ function EntryRow({
     : t("row.noDefinition")
 
   return (
-    <li className="flex min-w-0 items-start gap-3 px-5 py-3.5">
+    <li className="flex min-w-0 items-start gap-3 px-4 py-3">
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <Button
@@ -439,7 +439,7 @@ function EntryRow({
 function BuiltInRow() {
   const t = useTranslations("Harness.mcp.agent")
   return (
-    <li className="flex min-w-0 items-start gap-3 px-5 py-3.5">
+    <li className="flex min-w-0 items-start gap-3 px-4 py-3">
       <Bubbles
         aria-hidden="true"
         className="mt-0.5 size-4 shrink-0 text-muted-foreground"
@@ -569,7 +569,7 @@ export function McpAgentDetail({
           }
         >
           {info.unreadable ? (
-            <p className="rounded-xl border bg-card px-5 py-4 text-sm text-muted-foreground">
+            <p className="rounded-xl border bg-card px-4 py-3.5 text-sm text-muted-foreground">
               {t("agent.entriesUnknown")}
             </p>
           ) : (
@@ -585,7 +585,7 @@ export function McpAgentDetail({
                 />
               ))}
               {shown.length === 0 && (
-                <li className="px-5 py-3.5 text-sm text-muted-foreground">
+                <li className="px-4 py-3 text-sm text-muted-foreground">
                   {filtered ? t("agent.noneMatch") : t("agent.none")}
                 </li>
               )}

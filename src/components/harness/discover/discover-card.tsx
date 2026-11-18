@@ -148,11 +148,11 @@ export function KindTile({
     <span
       aria-hidden="true"
       className={cn(
-        "flex size-10 shrink-0 items-center justify-center rounded-xl border border-border/60 bg-muted/60 text-foreground/80",
+        "flex size-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/60 text-foreground/80",
         className
       )}
     >
-      <KindIcon kind={kind} className={cn("size-5", iconClassName)} />
+      <KindIcon kind={kind} className={cn("size-[1.125rem]", iconClassName)} />
     </span>
   )
 }
@@ -257,11 +257,15 @@ export const DiscoverCard = memo(function DiscoverCard({
     return (
       <li
         className={cn(
-          "relative flex min-w-0 items-center gap-3.5 rounded-xl px-3 py-3 hover:bg-muted/50",
+          "relative flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-muted/50",
           hover
         )}
       >
-        <KindTile kind={item.kind} className="size-9 rounded-lg" />
+        <KindTile
+          kind={item.kind}
+          className="size-8 rounded-lg"
+          iconClassName="size-4"
+        />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-baseline gap-2">
             <h3 className="min-w-0 shrink text-sm font-semibold">
@@ -289,7 +293,7 @@ export const DiscoverCard = memo(function DiscoverCard({
   return (
     <li
       className={cn(
-        "relative flex min-w-0 flex-col rounded-2xl border bg-card p-5 hover:border-foreground/15 hover:shadow-sm",
+        "relative flex min-w-0 flex-col rounded-xl border bg-card p-4 hover:border-foreground/15 hover:shadow-sm",
         hover
       )}
     >
@@ -307,11 +311,11 @@ export const DiscoverCard = memo(function DiscoverCard({
       </div>
       <p
         dir="auto"
-        className="mt-3.5 line-clamp-2 min-h-10 text-[0.8125rem] leading-5 text-muted-foreground"
+        className="mt-3 line-clamp-2 min-h-10 text-[0.8125rem] leading-5 text-muted-foreground"
       >
         {summary}
       </p>
-      <div className="mt-4 flex h-6 min-w-0 items-center gap-1.5 overflow-hidden">
+      <div className="mt-3 flex h-6 min-w-0 items-center gap-1.5 overflow-hidden">
         {chips}
       </div>
     </li>

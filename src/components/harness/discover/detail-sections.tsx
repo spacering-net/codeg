@@ -114,7 +114,7 @@ const README_FOLD_SLACK_REM = 6
 
 /** A section's title. Set apart from the headings a description brings with
  *  it, which are the author's and can say anything. */
-const SECTION_TITLE_CLASS = "text-base font-semibold text-foreground"
+const SECTION_TITLE_CLASS = "text-[0.9375rem] font-semibold text-foreground"
 
 /**
  * Whether one of the open item's long parts is shown in full, and the way to

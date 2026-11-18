@@ -426,7 +426,7 @@ function PackSearch({ tab }: { tab: HarnessPackTab }) {
           size="icon-sm"
           aria-label={t("search.clear")}
           title={t("search.clear")}
-          className="absolute end-1 top-1/2 size-7 -translate-y-1/2 rounded-full text-muted-foreground max-md:size-8"
+          className="absolute end-1 top-1/2 size-6 -translate-y-1/2 rounded-full text-muted-foreground max-md:size-8"
           onClick={() => updatePackView(slots, tab, { text: "" })}
         >
           <X aria-hidden="true" />
@@ -820,7 +820,7 @@ export function PacksSection() {
         aria-label={t("openCentral")}
         title={t("openCentral")}
         onClick={() => void openCentral()}
-        className="ms-auto h-9 rounded-full px-3.5 max-md:h-10 @3xl/packs:ms-0"
+        className="ms-auto h-8 rounded-full px-3 text-[0.8125rem] max-md:h-10 @3xl/packs:ms-0"
       >
         <FolderOpen aria-hidden="true" />
         {/* On a narrow pane the folder says it; the button keeps its name

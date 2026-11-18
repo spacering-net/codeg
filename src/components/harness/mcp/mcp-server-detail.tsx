@@ -454,7 +454,7 @@ function AgentRow({ server, info, model, harness }: AgentRowProps) {
   if (skipped) reasons.push(t("agentState.skipped"))
 
   return (
-    <li className="flex min-w-0 items-start gap-3 px-5 py-3.5">
+    <li className="flex min-w-0 items-start gap-3 px-4 py-3">
       <AgentGlyph agent={info.id} className="mt-0.5 size-5" />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -657,7 +657,7 @@ function DefinitionPart({
     groupEditable(group, changeable)
   const note = (group: McpDefinitionGroup, id: string) =>
     !editableGroup(group) && explain ? (
-      <p id={id} className="border-b px-5 py-3 text-xs text-muted-foreground">
+      <p id={id} className="border-b px-4 py-3 text-xs text-muted-foreground">
         {t("definitionNotEditable")}
       </p>
     ) : null
@@ -665,7 +665,7 @@ function DefinitionPart({
   if (server.groups.length === 0) {
     return (
       <McpDetailPart title={t("definition")}>
-        <p className="rounded-xl border bg-card px-5 py-4 text-sm text-muted-foreground">
+        <p className="rounded-xl border bg-card px-4 py-3.5 text-sm text-muted-foreground">
           {t("noDefinition")}
         </p>
       </McpDetailPart>
@@ -703,7 +703,7 @@ function DefinitionPart({
           const id = `${noteId}-${group.letter}`
           return (
             <div key={group.fingerprint} className={HARNESS_CARD_CLASS}>
-              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 py-2 ps-5 pe-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 py-2 ps-4 pe-3">
                 {/* Which agents hold it, each agent's row says. */}
                 <span className="min-w-0 flex-1 text-sm font-semibold text-foreground">
                   {t("definitionLetter", { letter: group.letter })}
@@ -800,9 +800,9 @@ function SourceDefinitions({
 }) {
   const t = useTranslations("Harness.mcp.detail")
   // Inside the card's grid: what is not a row spans it, under a rule.
-  const across = "col-span-full border-t px-5 text-muted-foreground"
+  const across = "col-span-full border-t px-4 text-muted-foreground"
   if (server.groups.length === 0) {
-    return <p className={cn(across, "py-3.5")}>{t("noDefinition")}</p>
+    return <p className={cn(across, "py-3")}>{t("noDefinition")}</p>
   }
   const several = server.groups.length > 1
   const blocked =
@@ -971,7 +971,7 @@ function HarnessPart({
   return (
     <McpDetailPart title={tDetail("source")}>
       <div className={cn(HARNESS_CARD_CLASS, "divide-y")}>
-        <div className="flex min-w-0 items-start gap-4 p-5">
+        <div className="flex min-w-0 items-start gap-4 p-4">
           <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary [&_svg]:size-5">
             <Package aria-hidden="true" />
           </span>
@@ -1049,7 +1049,7 @@ function HarnessPart({
             noteId={noteId}
           />
         </McpDefinitionRows>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 bg-muted/40 px-5 py-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 bg-muted/40 px-4 py-3">
           {harness.catalog && (
             <HarnessUpdateStatus
               itemId={mark.itemId}

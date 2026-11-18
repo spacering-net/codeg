@@ -51,7 +51,7 @@ import {
 const LOAD_MORE_MARGIN = "320px"
 
 const GRID_CLASS =
-  "grid grid-cols-1 gap-4 @2xl/discover:grid-cols-2 @5xl/discover:grid-cols-3"
+  "grid grid-cols-1 gap-3 @2xl/discover:grid-cols-2 @5xl/discover:grid-cols-3"
 
 const LIST_CLASS = "flex flex-col gap-0.5"
 
@@ -61,10 +61,10 @@ function CardSkeletons() {
       {Array.from({ length: 6 }, (_, index) => (
         <li
           key={index}
-          className="flex flex-col gap-3 rounded-2xl border bg-card p-5"
+          className="flex flex-col gap-3 rounded-xl border bg-card p-4"
         >
           <div className="flex items-center gap-3">
-            <Skeleton className="size-10 rounded-xl" />
+            <Skeleton className="size-9 rounded-lg" />
             <div className="flex-1 space-y-1.5">
               <Skeleton className="h-4 w-1/2" />
               <Skeleton className="h-3.5 w-1/4" />
@@ -347,29 +347,29 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
         tabIndex={-1}
         className="flex-1"
       >
-        <div className="mx-auto w-full max-w-6xl min-w-0 px-4 pb-6 @2xl/discover:px-8">
-          <header className="flex min-w-0 flex-col items-center pt-8 pb-6 text-center @2xl/discover:pt-14 @2xl/discover:pb-8">
-            <h2 className="text-2xl leading-tight font-bold tracking-tight text-balance @2xl/discover:text-4xl">
+        <div className="mx-auto w-full max-w-6xl min-w-0 px-4 pb-6 @2xl/discover:px-6">
+          <header className="flex min-w-0 flex-col items-center pt-6 pb-5 text-center @2xl/discover:pt-10 @2xl/discover:pb-6">
+            <h2 className="text-2xl leading-tight font-bold tracking-tight text-balance @2xl/discover:text-3xl">
               {t.rich("hero.title", {
                 accent: (chunks) => (
                   <span className="text-primary">{chunks}</span>
                 ),
               })}
             </h2>
-            <p className="mt-3 max-w-2xl text-sm text-balance text-muted-foreground @2xl/discover:text-[0.9375rem]">
+            <p className="mt-2 max-w-2xl text-sm text-balance text-muted-foreground">
               {catalogTotal !== undefined
                 ? t("hero.subtitle", { count: catalogTotal })
                 : t("hero.subtitleNoCount")}
             </p>
           </header>
           <div role="search" className="min-w-0">
-            <div className="mx-auto flex w-full max-w-2xl min-w-0 flex-col items-stretch gap-5">
+            <div className="mx-auto flex w-full max-w-2xl min-w-0 flex-col items-stretch gap-4">
               <DiscoverSearchBox apply={apply} inputRef={searchRef} />
               <DiscoverKindSwitch apply={apply} totals={totals.value} />
             </div>
             <div
               ref={resultsRef}
-              className="mt-8 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b pb-3 @2xl/discover:mt-10"
+              className="mt-6 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b pb-3 @2xl/discover:mt-8"
             >
               <p className="min-w-0 text-sm text-muted-foreground">
                 {shownTotal !== null &&
@@ -397,7 +397,7 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
               </div>
             </div>
           </div>
-          <div className="pt-5">{body}</div>
+          <div className="pt-4">{body}</div>
           {/* What the observer watches. Present whenever a further page
               exists, including under an empty first page. */}
           {hasMore && (

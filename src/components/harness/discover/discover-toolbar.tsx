@@ -51,8 +51,8 @@ export const SEARCH_DEBOUNCE_MS = 300
 const ANY = "any value"
 
 const KIND_SEGMENT_CLASS = cn(
-  "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3 text-sm font-medium whitespace-nowrap",
-  "@2xl/discover:px-4",
+  "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[0.8125rem] font-medium whitespace-nowrap",
+  "@2xl/discover:px-3.5",
   "text-muted-foreground outline-none transition-colors hover:text-foreground",
   // Inset: the track scrolls sideways when the labels outgrow it, and a
   // scroller clips a ring drawn outside the segment.
@@ -163,7 +163,7 @@ export function DiscoverSearchBox({
     <div className="relative min-w-0">
       <Search
         aria-hidden="true"
-        className="pointer-events-none absolute start-4 top-1/2 size-[1.125rem] -translate-y-1/2 text-muted-foreground"
+        className="pointer-events-none absolute start-3.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
       />
       <input
         ref={inputRef}
@@ -178,7 +178,7 @@ export function DiscoverSearchBox({
         aria-keyshortcuts="/"
         placeholder={t("search.placeholder")}
         className={cn(
-          "peer h-12 w-full min-w-0 rounded-full border border-input bg-background ps-11 pe-12 text-[0.9375rem] shadow-xs outline-none transition-[color,box-shadow,border-color] ws-msg-chip",
+          "peer h-10 w-full min-w-0 rounded-full border border-input bg-background ps-10 pe-11 text-sm shadow-xs outline-none transition-[color,box-shadow,border-color] ws-msg-chip",
           "placeholder:text-muted-foreground",
           "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
         )}
@@ -213,7 +213,7 @@ export function DiscoverSearchBox({
           size="icon-sm"
           aria-label={t("search.clear")}
           title={t("search.clear")}
-          className="absolute end-2.5 top-1/2 -translate-y-1/2 rounded-full text-muted-foreground"
+          className="absolute end-1 top-1/2 -translate-y-1/2 rounded-full text-muted-foreground"
           onClick={() => apply.filter({ text: "" })}
         >
           <X aria-hidden="true" />
@@ -222,7 +222,7 @@ export function DiscoverSearchBox({
         <kbd
           aria-hidden="true"
           title={t("search.shortcut")}
-          className="pointer-events-none absolute end-3.5 top-1/2 inline-flex h-6 min-w-6 -translate-y-1/2 items-center justify-center rounded-md border bg-muted/50 px-1.5 font-mono text-xs text-muted-foreground peer-focus-visible:hidden max-md:hidden"
+          className="pointer-events-none absolute end-3 top-1/2 inline-flex h-5 min-w-5 -translate-y-1/2 items-center justify-center rounded-md border bg-muted/50 px-1.5 font-mono text-xs text-muted-foreground peer-focus-visible:hidden max-md:hidden"
         >
           /
         </kbd>
@@ -260,7 +260,7 @@ export function DiscoverKindSwitch({
         if (isKindFilter(value)) apply.filter({ kind: value })
       }}
       aria-label={t("kinds.label")}
-      className="no-scrollbar mx-auto flex h-11 max-w-full min-w-0 items-center gap-0.5 overflow-x-auto rounded-full bg-muted/70 p-1 ws-msg-chip"
+      className="no-scrollbar mx-auto flex h-9 max-w-full min-w-0 items-center gap-0.5 overflow-x-auto rounded-full bg-muted/70 p-0.5 ws-msg-chip"
     >
       {DISCOVER_KIND_FILTERS.map((kind) => {
         const total = narrowed ? undefined : totals?.[kind]

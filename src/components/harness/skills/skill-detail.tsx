@@ -240,7 +240,7 @@ export function ContentPart({
   }, [slots, links, contentKey, unavailable, stale])
   return (
     <McpDetailPart title={t("content")}>
-      <div className="min-w-0 rounded-xl border bg-card px-5 py-4">
+      <div className="min-w-0 rounded-xl border bg-card px-4 py-3.5">
         {unavailable ? (
           <p className="text-xs text-muted-foreground">{unavailable}</p>
         ) : state?.content != null ? (
@@ -283,10 +283,7 @@ export function BrokenLinksPart({
         {broken.map((link) => {
           const repointable = model.skill(baseName(link.path)) !== undefined
           return (
-            <li
-              key={link.path}
-              className="min-w-0 space-y-1 px-5 py-3.5 text-xs"
-            >
+            <li key={link.path} className="min-w-0 space-y-1 px-4 py-3 text-xs">
               <SkillPath path={link.path} className="text-xs text-foreground" />
               {link.target && (
                 <p className="text-muted-foreground">
@@ -368,10 +365,7 @@ export function BackupsPart({
     <McpDetailPart title={t("title")} aside={String(backups.length)}>
       <ul className="divide-y rounded-xl border bg-card">
         {backups.map((backup) => (
-          <li
-            key={backup.name}
-            className="min-w-0 space-y-1 px-5 py-3.5 text-xs"
-          >
+          <li key={backup.name} className="min-w-0 space-y-1 px-4 py-3 text-xs">
             <p className="font-medium text-foreground">
               {backup.created_at ? labels.date(backup.created_at) : backup.name}
             </p>

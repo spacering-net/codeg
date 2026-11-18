@@ -157,7 +157,7 @@ export function McpToolbar({
               size="icon-sm"
               aria-label={t("search.clear")}
               title={t("search.clear")}
-              className="absolute end-1 top-1/2 size-7 -translate-y-1/2 rounded-full text-muted-foreground max-md:size-8"
+              className="absolute end-1 top-1/2 size-6 -translate-y-1/2 rounded-full text-muted-foreground max-md:size-8"
               onClick={() => setFilters((prev) => ({ ...prev, text: "" }))}
             >
               <X aria-hidden="true" />
@@ -192,7 +192,7 @@ export function McpToolbar({
           <Button
             type="button"
             aria-label={t("add.label")}
-            className="ms-auto h-9 rounded-full px-3.5 max-md:h-10 @3xl/mcp:ms-0"
+            className="ms-auto h-8 rounded-full px-3 text-[0.8125rem] max-md:h-10 @3xl/mcp:ms-0"
           >
             <Plus aria-hidden="true" />
             {/* On the narrowest phones the plus says it, and the button

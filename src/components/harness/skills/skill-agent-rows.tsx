@@ -80,7 +80,7 @@ function AgentRow({
   )
 
   return (
-    <li className="flex min-w-0 items-start gap-3 px-5 py-3.5">
+    <li className="flex min-w-0 items-start gap-3 px-4 py-3">
       <AgentGlyph agent={agent.agent} className="mt-0.5 size-5" />
       <div className="min-w-0 flex-1 space-y-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -306,7 +306,7 @@ export function SkillAgentRows({
       <div className="space-y-2">
         <WriteNotices links={links} skills={new Set([row.id])} />
         {agents.length === 0 ? (
-          <p className="rounded-xl border bg-card px-5 py-4 text-sm text-muted-foreground">
+          <p className="rounded-xl border bg-card px-4 py-3.5 text-sm text-muted-foreground">
             {t("noAgents")}
           </p>
         ) : (

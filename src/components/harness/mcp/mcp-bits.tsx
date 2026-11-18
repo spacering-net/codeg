@@ -61,7 +61,8 @@ export function PathText({
 }
 
 /** A part's title: plain words, a step under the detail's heading. */
-export const DETAIL_PART_TITLE_CLASS = "text-base font-semibold text-foreground"
+export const DETAIL_PART_TITLE_CLASS =
+  "text-[0.9375rem] font-semibold text-foreground"
 
 /** A titled part of a detail. */
 export function McpDetailPart({

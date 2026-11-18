@@ -65,7 +65,7 @@ export function McpDefinitionRowsHead({ children }: { children: ReactNode }) {
   return (
     <div
       data-rows-head=""
-      className="col-span-full border-t px-5 pt-3.5 text-xs font-semibold text-foreground first:border-t-0"
+      className="col-span-full border-t px-4 pt-3 text-xs font-semibold text-foreground first:border-t-0"
     >
       {children}
     </div>
@@ -97,17 +97,12 @@ export function McpDefinitionRow({
         <dt
           className={cn(
             cell,
-            "px-5 pt-3.5 pb-1.5 text-muted-foreground @md/mcp:pe-0 @md/mcp:pb-3.5"
+            "px-4 pt-3 pb-1.5 text-muted-foreground @md/mcp:pe-0 @md/mcp:pb-3"
           )}
         >
           {label}
         </dt>
-        <dd
-          className={cn(
-            cell,
-            "min-w-0 px-5 pb-3.5 @md/mcp:ps-6 @md/mcp:pt-3.5"
-          )}
-        >
+        <dd className={cn(cell, "min-w-0 px-4 pb-3 @md/mcp:ps-6 @md/mcp:pt-3")}>
           {children}
         </dd>
       </div>

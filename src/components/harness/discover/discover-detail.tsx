@@ -207,12 +207,12 @@ export function DiscoverDetail({
         <article
           aria-labelledby={headingId}
           aria-busy={detail.phase === "loading"}
-          className="mx-auto w-full max-w-6xl min-w-0 px-4 pb-12 @2xl/discover:px-8"
+          className="mx-auto w-full max-w-6xl min-w-0 px-4 pb-10 @2xl/discover:px-6"
         >
           <nav
             aria-label={t("detail.breadcrumb")}
             // A band of its own: as far from the top as from the header.
-            className="flex min-w-0 items-center gap-1 py-5 text-sm text-muted-foreground"
+            className="flex min-w-0 items-center gap-1 py-4 text-sm text-muted-foreground"
           >
             <button
               type="button"
@@ -254,14 +254,14 @@ export function DiscoverDetail({
             )}
           </nav>
 
-          <div className="grid min-w-0 gap-8 @4xl/discover:grid-cols-[minmax(0,1fr)_20rem] @4xl/discover:gap-x-12">
+          <div className="grid min-w-0 gap-6 @4xl/discover:grid-cols-[minmax(0,1fr)_20rem] @4xl/discover:gap-x-10">
             <header className="min-w-0 @4xl/discover:col-start-1 @4xl/discover:row-start-1">
               <div className="flex min-w-0 items-start gap-4">
                 {known && (
                   <KindTile
                     kind={known.kind}
-                    className="size-14 rounded-2xl @2xl/discover:size-16"
-                    iconClassName="size-7"
+                    className="size-12 rounded-xl @2xl/discover:size-14 @2xl/discover:rounded-2xl"
+                    iconClassName="size-6"
                   />
                 )}
                 <div className="min-w-0 flex-1 space-y-2 pt-0.5">
@@ -273,7 +273,7 @@ export function DiscoverDetail({
                     // of it — its address: either way not the interface's
                     // direction.
                     dir="auto"
-                    className="text-2xl leading-tight font-bold tracking-tight break-words outline-none @2xl/discover:text-[1.75rem]"
+                    className="text-xl leading-tight font-bold tracking-tight break-words outline-none @2xl/discover:text-2xl"
                   >
                     {title}
                   </h2>
@@ -341,7 +341,7 @@ export function DiscoverDetail({
                   {summary}
                 </p>
               )}
-              <div aria-hidden="true" className="mt-6 border-b" />
+              <div aria-hidden="true" className="mt-5 border-b" />
             </header>
 
             {/* Beside the body on a wide pane, staying in view down a long
@@ -412,7 +412,7 @@ export function DiscoverDetail({
                   <Skeleton className="h-4 w-2/3" />
                 </div>
               ) : (
-                <div className="min-w-0 space-y-10">
+                <div className="min-w-0 space-y-8">
                   <ListedNotice item={item} />
                   <view.Body
                     item={item}
