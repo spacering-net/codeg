@@ -3494,6 +3494,7 @@
       "messageInput": {
         "askAnything": "무엇이든 물어보세요...",
         "promptSuggestion": "{suggestion} (Tab 키로 입력)",
+        "usePromptSuggestion": "추천 답장 입력",
         "removeAttachmentAria": "{name} 제거",
         "attachFiles": "파일 첨부",
         "addActions": "추가",

@@ -3494,6 +3494,7 @@
       "messageInput": {
         "askAnything": "Ask anything...",
         "promptSuggestion": "{suggestion} (Tab to use)",
+        "usePromptSuggestion": "Use suggested reply",
         "removeAttachmentAria": "Remove {name}",
         "attachFiles": "Attach files",
         "attachLocalUpload": "Upload local file",

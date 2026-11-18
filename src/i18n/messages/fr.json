@@ -3494,6 +3494,7 @@
       "messageInput": {
         "askAnything": "Posez n'importe quelle question...",
         "promptSuggestion": "{suggestion} (Tab pour l’utiliser)",
+        "usePromptSuggestion": "Utiliser la réponse suggérée",
         "removeAttachmentAria": "Retirer {name}",
         "attachFiles": "Joindre des fichiers",
         "addActions": "Ajouter",

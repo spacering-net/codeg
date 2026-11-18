@@ -19,6 +19,7 @@ import {
   ClipboardPaste,
   Clock,
   Copy,
+  Lightbulb,
   MessageSquareText,
   Scissors,
   Send,
@@ -1896,6 +1897,13 @@ export function MessageInput({
     [handleModeSelect, onConfigOptionChange]
   )
 
+  const handleUsePromptSuggestion = useCallback(() => {
+    const ed = editorRef.current
+    if (!ed || !offeredSuggestion) return
+    ed.setText(offeredSuggestion)
+    ed.focus()
+  }, [offeredSuggestion])
+
   const actionButtons = isEditingQueueItem ? (
     <div className="flex items-center gap-1">
       <Button
@@ -1991,15 +1999,33 @@ export function MessageInput({
       </Button>
     )
   ) : (
-    <Button
-      onClick={handleSend}
-      disabled={disabled || !hasSendableContent}
-      size="icon"
-      className="h-8 w-8"
-      title={t("send")}
-    >
-      <Send className="size-4" />
-    </Button>
+    <div className="flex items-center gap-1">
+      {/* The click twin of Tab for a keyboard without one (a phone reaching
+          the web build): fills the predicted follow-up prompt into the empty
+          composer, sending nothing. Gone as soon as the composer holds text,
+          the same moment the placeholder hint goes. */}
+      {offeredSuggestion && composerEmpty && (
+        <Button
+          onClick={handleUsePromptSuggestion}
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          title={t("usePromptSuggestion")}
+          aria-label={t("usePromptSuggestion")}
+        >
+          <Lightbulb className="size-4" />
+        </Button>
+      )}
+      <Button
+        onClick={handleSend}
+        disabled={disabled || !hasSendableContent}
+        size="icon"
+        className="h-8 w-8"
+        title={t("send")}
+      >
+        <Send className="size-4" />
+      </Button>
+    </div>
   )
 
   return (

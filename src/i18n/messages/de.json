@@ -3494,6 +3494,7 @@
       "messageInput": {
         "askAnything": "Fragen Sie alles...",
         "promptSuggestion": "{suggestion} (Tab zum Übernehmen)",
+        "usePromptSuggestion": "Vorgeschlagene Antwort übernehmen",
         "removeAttachmentAria": "{name} entfernen",
         "attachFiles": "Dateien anhängen",
         "addActions": "Hinzufügen",

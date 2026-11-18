@@ -3494,6 +3494,7 @@
       "messageInput": {
         "askAnything": "请开始输入...",
         "promptSuggestion": "{suggestion}（按 Tab 填入）",
+        "usePromptSuggestion": "填入推荐回复",
         "removeAttachmentAria": "移除 {name}",
         "attachFiles": "附加文件",
         "attachLocalUpload": "附加本地文件",
