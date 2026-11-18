@@ -51,7 +51,7 @@ import {
 const LOAD_MORE_MARGIN = "320px"
 
 const GRID_CLASS =
-  "grid grid-cols-1 gap-3 @2xl/discover:grid-cols-2 @5xl/discover:grid-cols-3"
+  "grid grid-cols-1 gap-4 @2xl/discover:grid-cols-2 @5xl/discover:grid-cols-3"
 
 const LIST_CLASS = "flex flex-col gap-0.5"
 
@@ -347,7 +347,7 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
         tabIndex={-1}
         className="flex-1"
       >
-        <div className="mx-auto w-full max-w-6xl min-w-0 px-4 pb-6 @2xl/discover:px-6">
+        <div className="mx-auto w-full max-w-6xl min-w-0 px-4 pb-4">
           <header className="flex min-w-0 flex-col items-center pt-6 pb-5 text-center @2xl/discover:pt-10 @2xl/discover:pb-6">
             <h2 className="text-2xl leading-tight font-bold tracking-tight text-balance @2xl/discover:text-3xl">
               {t.rich("hero.title", {

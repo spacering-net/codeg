@@ -207,7 +207,7 @@ export function DiscoverDetail({
         <article
           aria-labelledby={headingId}
           aria-busy={detail.phase === "loading"}
-          className="mx-auto w-full max-w-6xl min-w-0 px-4 pb-10 @2xl/discover:px-6"
+          className="mx-auto w-full max-w-6xl min-w-0 px-4 pb-10"
         >
           <nav
             aria-label={t("detail.breadcrumb")}
