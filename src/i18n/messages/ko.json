@@ -3435,7 +3435,8 @@
           "sessionLoadFallback": "{agent}에서 이전 세션을 복원하지 못해 새 세션을 시작했습니다. 이전 컨텍스트는 이어지지 않습니다.",
           "turnFailedEmpty": "{agent}이(가) 어떤 응답도 생성하지 않고 턴을 종료했습니다.",
           "turnFailedEmptyProtocol": "{agent}의 출력을 codeg가 구문 분석할 수 없습니다. 에이전트 버전이 프로토콜과 맞지 않을 수 있습니다.",
-          "turnFailedEmptyMetadata": "{agent}이(가) 이번 턴에 상태 업데이트(계획 / 모드 / 사용량)만 보내고 응답은 없었습니다."
+          "turnFailedEmptyMetadata": "{agent}이(가) 이번 턴에 상태 업데이트(계획 / 모드 / 사용량)만 보내고 응답은 없었습니다.",
+          "turnFailedEmptyHook": "훅이 응답 전에 {agent}을(를) 멈췄습니다."
         },
         "unableReadAgentConfig": "에이전트 구성을 읽을 수 없습니다: {message}",
         "connectFailedTitle": "{agent} 연결 실패",

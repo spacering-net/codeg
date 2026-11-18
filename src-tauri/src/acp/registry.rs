@@ -4933,9 +4933,71 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `policyCapacityUnavailable` error code falls to the adapter's
             // `provider_error`, so codeg shows a `service` failure offering
             // Retry.
+            //
+            // 2.7.0 keeps `@openai/codex` at ^0.166.0 (a fresh install resolves
+            // the same 0.166.0 binary, so the offline catalog snapshot and
+            // `CODEX_NESTED_VERSION_FALLBACK` stand) and moves the inline
+            // `@agentclientprotocol/sdk` ~2.4.0 → ~2.6.0 (schema 1.31.0).
+            // `engines` is still absent, and the 20.3.0 floor stands: live on
+            // 20.3.0 a session runs a plain and a shell turn, and turns a hook
+            // blocks. Under codeg's exact `clientCapabilities` the 33-scenario
+            // harness replays byte for byte as on 2.6.0, `initialize` included
+            // (bar the version), and so does a live plain and shell turn.
+            //
+            // (aaa) **#767 reports a hook that blocks or stops Codex.** codex's
+            // `hook/completed` with status `blocked` or `stopped` becomes a
+            // `warning` notice for a client with `session.notices`, as codeg
+            // is: "<Event> hook blocked the prompt" (`the tool call`, `the tool
+            // result`, …) or "<Event> hook stopped the turn", described by the
+            // hook's feedback, stop and error entries (not its `context`
+            // ones). Other hook results stay silent, as all of them did before.
+            // Measured live with trusted command hooks that exit 2: a blocked
+            // `UserPromptSubmit` ends the turn `end_turn` with no output and
+            // only the notice, and codex records neither the prompt nor a
+            // reply (just `task_started` / `task_complete`), so the exchange is
+            // gone on reload. A blocked `PreToolUse` shows no tool call live,
+            // only the notice, while the rollout keeps the call with "Command
+            // blocked by PreToolUse hook: …" as its output; the model then
+            // answers. `hook/completed` is transient, so neither is replayed.
+            // Up to 2.6.0 a blocked prompt was a silent empty turn, which codeg
+            // called "sent only status updates and no reply". Now an empty turn
+            // that raised such a notice is put down to the hook
+            // (`EmptyTurnCause::HookStopped`, `turn_failed_empty_hook`, matched
+            // on these titles only by `hook_stop_notice_text`): the failure
+            // line, the work-task failure and the chat-channel reply carry the
+            // notice's words, and the verdict's notification takes over the
+            // notice's instead of telling it twice.
+            //
+            // (bbb) #327 maps a `priority` service tier to Fast mode. codex
+            // normalizes a configured `service_tier = "fast"` to `priority`,
+            // which 2.6.0 read as Fast off, and then every turn sent no tier,
+            // overriding the config. Measured live: with `fast` or `priority`
+            // in config.toml, `fast-mode` now opens `on` and turns send
+            // `priority`; with no tier it opens `off`, even on GPT-6 Sol, whose
+            // catalog `default_service_tier` is `priority` (the adapter reads
+            // the thread's tier, not the catalog's). codeg writes no tier, and a
+            // Fast pick the user makes is replayed as before.
+            //
+            // (ccc) Inert or not adopted. #752 sends the structured plan as an
+            // `items` `plan_update` only to a client with the `plan` capability,
+            // which codeg does not advertise (`build_client_capabilities`), so
+            // codeg still gets `plan`. #755 adds the retry's cause (codex's
+            // `additionalDetails`, e.g. "idle timeout waiting for websocket")
+            // as the AIR retry record's `details`, which the composer's
+            // incident strip already shows. #760 reports delegated tasks as
+            // messages between standard subagent sessions, which codeg does not
+            // use (see (tt)); its replay now draws a collab call through the
+            // session's router, which for codeg is the same tool call as
+            // before, and `sessionCapabilities.subagents` is now advertised
+            // only to AIR clients, which codeg is. Failure and notice ids now
+            // count across prompts: on 2.6.0 the first session-scoped record (one
+            // naming no turn) of every prompt reused one id at revision 1, so
+            // codeg's monotonic merge (`SessionState::apply_event`) dropped
+            // every one after the first.
+            // v2's initial `configOptions` are ignored; codeg speaks v1.
             distribution: AgentDistribution::Npx {
-                version: "2.6.0",
-                package: "@agentclientprotocol/codex-acp@2.6.0",
+                version: "2.7.0",
+                package: "@agentclientprotocol/codex-acp@2.7.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -9392,8 +9454,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.6.0",
-            "@agentclientprotocol/codex-acp@2.6.0",
+            "2.7.0",
+            "@agentclientprotocol/codex-acp@2.7.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));

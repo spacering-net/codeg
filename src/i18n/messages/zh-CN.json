@@ -3435,7 +3435,8 @@
           "sessionLoadFallback": "{agent} 无法恢复之前的会话，已改为开始新会话，之前的上下文不再可用。",
           "turnFailedEmpty": "{agent} 本轮没有产生任何回复就结束了。",
           "turnFailedEmptyProtocol": "{agent} 本轮的输出 codeg 无法解析，可能是代理版本与协议不匹配。",
-          "turnFailedEmptyMetadata": "{agent} 本轮只收到状态更新（计划 / 模式 / 用量），没有收到任何回复。"
+          "turnFailedEmptyMetadata": "{agent} 本轮只收到状态更新（计划 / 模式 / 用量），没有收到任何回复。",
+          "turnFailedEmptyHook": "{agent} 在回复前被 hook 拦下了。"
         },
         "unableReadAgentConfig": "无法读取 Agent 配置：{message}",
         "connectFailedTitle": "{agent} 连接失败",

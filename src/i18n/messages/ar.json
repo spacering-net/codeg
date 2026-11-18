@@ -3435,7 +3435,8 @@
           "sessionLoadFallback": "تعذّر على {agent} استعادة الجلسة السابقة فبدأ جلسة جديدة، ولم يعد السياق السابق متاحًا.",
           "turnFailedEmpty": "أنهى {agent} الجولة دون إنتاج أي رد.",
           "turnFailedEmptyProtocol": "أنتج {agent} مخرجات تعذّر على codeg تحليلها — قد لا يتوافق إصدار الوكيل مع البروتوكول.",
-          "turnFailedEmptyMetadata": "أرسل {agent} تحديثات حالة فقط في هذه الجولة (الخطة / الوضع / الاستخدام) دون أي رد."
+          "turnFailedEmptyMetadata": "أرسل {agent} تحديثات حالة فقط في هذه الجولة (الخطة / الوضع / الاستخدام) دون أي رد.",
+          "turnFailedEmptyHook": "أوقف خطاف {agent} قبل أن يرد."
         },
         "unableReadAgentConfig": "تعذر قراءة إعدادات الوكيل: {message}",
         "connectFailedTitle": "فشل اتصال {agent}",

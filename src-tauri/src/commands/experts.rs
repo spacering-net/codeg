@@ -326,7 +326,7 @@ pub(crate) fn create_link_raw(src: &Path, dst: &Path) -> io::Result<bool> {
     crate::skills::link::platform_link(src, dst).map(|_| false)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn path_is_symlink(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .map(|m| m.file_type().is_symlink())
@@ -647,6 +647,7 @@ mod tests {
         assert!(!supported_agents().contains(&agent));
     }
 
+    #[cfg(not(windows))] // only the hermetic-home tests below
     use tokio::time::{timeout, Duration};
 
     // These tests run against a home of their own (`with_hermetic_home`):

@@ -3435,7 +3435,8 @@
           "sessionLoadFallback": "{agent} は以前のセッションを復元できなかったため、新しいセッションを開始しました。以前のコンテキストは引き継がれていません。",
           "turnFailedEmpty": "{agent} は応答を生成せずにターンを終了しました。",
           "turnFailedEmptyProtocol": "{agent} の出力を codeg が解析できませんでした。エージェントのバージョンがプロトコルと一致していない可能性があります。",
-          "turnFailedEmptyMetadata": "{agent} はこのターンでステータス更新（計画 / モード / 使用量）のみを送信し、応答はありませんでした。"
+          "turnFailedEmptyMetadata": "{agent} はこのターンでステータス更新（計画 / モード / 使用量）のみを送信し、応答はありませんでした。",
+          "turnFailedEmptyHook": "フックにより {agent} は応答する前に停止されました。"
         },
         "unableReadAgentConfig": "エージェント設定を読み取れません: {message}",
         "connectFailedTitle": "{agent} の接続に失敗しました",

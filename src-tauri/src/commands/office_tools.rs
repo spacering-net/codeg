@@ -1441,6 +1441,7 @@ mod tests {
         assert!(!supported_agents().contains(&agent));
     }
 
+    #[cfg(not(windows))] // only the hermetic-home tests below
     use tokio::time::{timeout, Duration};
 
     // Tests use unknown skill ids so they never touch the developer's real skill

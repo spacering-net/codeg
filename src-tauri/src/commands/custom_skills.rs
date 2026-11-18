@@ -918,6 +918,7 @@ fn is_markdown(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)] // only the unix-only link tests below
     use crate::commands::experts::{path_is_symlink, ExpertLinkState};
     use tokio::time::{timeout, Duration};
 

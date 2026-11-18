@@ -455,6 +455,7 @@ mod tests {
         assert!(!supported_agents().contains(&agent));
     }
 
+    #[cfg(not(windows))] // only the hermetic-home tests below
     use tokio::time::{timeout, Duration};
 
     // These tests run against a home of their own (`with_hermetic_home`), and

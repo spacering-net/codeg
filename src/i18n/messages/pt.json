@@ -3435,7 +3435,8 @@
           "sessionLoadFallback": "{agent} não conseguiu restaurar a sessão anterior e iniciou uma nova; o contexto anterior não está mais disponível.",
           "turnFailedEmpty": "{agent} encerrou o turno sem produzir nenhuma resposta.",
           "turnFailedEmptyProtocol": "{agent} produziu uma saída que o codeg não conseguiu analisar — a versão do agente pode não corresponder ao protocolo.",
-          "turnFailedEmptyMetadata": "{agent} enviou apenas atualizações de status neste turno (plano / modo / uso) e nenhuma resposta."
+          "turnFailedEmptyMetadata": "{agent} enviou apenas atualizações de status neste turno (plano / modo / uso) e nenhuma resposta.",
+          "turnFailedEmptyHook": "Um hook interrompeu {agent} antes de responder."
         },
         "unableReadAgentConfig": "Não foi possível ler a configuração do agente: {message}",
         "connectFailedTitle": "Falha na conexão de {agent}",

@@ -13,7 +13,9 @@ use chrono::{DateTime, Utc};
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde_json::{json, Value};
 
-use super::config::{ClientSecret, WebConfig, CALLBACK_PATH, CHILD_HIDDEN_ENV};
+#[cfg(unix)]
+use super::config::CHILD_HIDDEN_ENV;
+use super::config::{ClientSecret, WebConfig, CALLBACK_PATH};
 use super::routes::{ACCOUNT_PATH, FLOW_COOKIE, LOGIN_PATH, LOGOUT_PATH, SESSION_COOKIE};
 use super::seal::{KeySource, Sealer, KEY_FILE_NAME};
 use super::service::{Clock, SrnWeb, Waits};

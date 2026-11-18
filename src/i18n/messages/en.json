@@ -3435,7 +3435,8 @@
           "sessionLoadFallback": "{agent} couldn't restore the previous session and started a new one — it no longer has the earlier context.",
           "turnFailedEmpty": "{agent} ended the turn without producing any response.",
           "turnFailedEmptyProtocol": "{agent} produced output that codeg could not parse — the agent version may not match the protocol.",
-          "turnFailedEmptyMetadata": "{agent} sent only status updates this turn (plan / mode / usage) and no reply."
+          "turnFailedEmptyMetadata": "{agent} sent only status updates this turn (plan / mode / usage) and no reply.",
+          "turnFailedEmptyHook": "A hook stopped {agent} before it replied."
         },
         "unableReadAgentConfig": "Unable to read Agent config: {message}",
         "connectFailedTitle": "{agent} connection failed",
