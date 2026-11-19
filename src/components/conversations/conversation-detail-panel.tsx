@@ -30,6 +30,7 @@ import {
 } from "@/contexts/acp-connections-context"
 import { ActivityLiveProvider } from "@/components/message/activity/activity-live-context"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
+import { useCycleAgentShortcut } from "@/hooks/use-cycle-agent-shortcut"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { FolderTabsEmptyState } from "@/components/conversations/folder-tabs-empty-state"
@@ -1756,6 +1757,13 @@ const ConversationTabView = memo(function ConversationTabView({
 
   const showDraftHeader = !hasPersistedConversation && !hasSentMessage
   const isWelcomeMode = showDraftHeader
+
+  useCycleAgentShortcut({
+    enabled: isActive && isWelcomeMode,
+    agents: acpAgents,
+    selectedAgent,
+    onSelect: handleAgentSelect,
+  })
 
   const handleQuickAction = useCallback((payload: ComposerInjectContent) => {
     setComposerInject(payload)
