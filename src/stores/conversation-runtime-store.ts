@@ -583,50 +583,67 @@ function retireCoveredBackgroundTurns(
 /**
  * Local turns `keepAllLiveBuffers` preserved that a settled detail response
  * PROVABLY covers — the promoted round whose persisted twin arrived under a
- * parser id `dedupeTimeline` cannot match (see FETCH_DETAIL_SUCCESS). A local
- * turn is covered only when the response's window holds a STRICTLY NEWER turn
- * (the parse walked the transcript past this round, so its persisted twin is
- * inside the parse — the write race `completeTurn` documents can only affect
- * the newest round, which nothing newer has yet walked past) and the windowed
- * response's uncovered prefix cannot be holding that twin
- * (`uncovered_prefix_max_ts`, the same guard `retireCoveredBackgroundTurns`
- * applies to overlay turns). Unparseable timestamps keep the turn: the
- * failure direction is a recoverable transient duplicate, never a vanished
- * message.
+ * parser id `dedupeTimeline` cannot match (see FETCH_DETAIL_SUCCESS).
+ *
+ * The proof is the batch-boundary alignment the turn-metadata sync already
+ * trusts (`syncTurnMetadata`), NEVER timestamp ordering: promoted turns carry
+ * the client-clock round START (`buildStreamingTurnsFromLiveMessage` stamps
+ * every group with `liveMessage.startedAt`), so the round's own persisted
+ * prompt reads "strictly newer" than its reply — a timestamp rule would
+ * retire the only copy of a reply whose record has not flushed yet (the
+ * settled-but-unflushed window `completeTurn`'s write race documents).
+ *
+ * The batch captured at send time anchors the proof: the batch's turns
+ * persist starting at global index `batchBoundaryIndex`, with the prefix
+ * before it fingerprinted as `batchBoundaryPrefixHash`. The response covers
+ * the local turns only when ALL of the following hold:
+ *
+ *  - it is windowed (a legacy full response cannot be verified);
+ *  - its window reaches back to the boundary (`turns_offset <= boundary`) and
+ *    the prefix it exposes up to the boundary still fingerprints to the
+ *    captured hash — no compaction rewrote the anchored history, and no
+ *    window hole can hide the batch's turns behind the uncovered prefix;
+ *  - the turn persisting AT the boundary is a USER turn — the batch's first
+ *    record is its prompt, so anything else there (an out-of-turn background
+ *    turn completing inside the send→persist window) means the alignment is
+ *    not this batch's;
+ *  - the window holds at least as many user and non-user turns after the
+ *    boundary as `localTurns` does. Records append in transcript order and a
+ *    batch's prompts precede its replies, so the counts cannot pass while any
+ *    local turn's twin is still unwritten — they may legitimately EXCEED the
+ *    local ones (later background rounds persist after the batch).
+ *
+ * Every other shape keeps the local turns: the failure direction is a
+ * recoverable transient duplicate, never a vanished message.
  */
-function retireDetailCoveredLocalTurns(
+function retireBatchCoveredLocalTurns(
   localTurns: MessageTurn[],
-  detail: DbConversationDetail
+  detail: DbConversationDetail,
+  batchBoundaryIndex: number | null,
+  batchBoundaryPrefixHash: string | null
 ): MessageTurn[] {
   if (localTurns.length === 0) return localTurns
-  let detailMaxMs: number | null = null
-  for (const turn of detail.turns) {
-    const ms = Date.parse(turn.timestamp)
-    if (Number.isFinite(ms) && (detailMaxMs === null || ms > detailMaxMs)) {
-      detailMaxMs = ms
-    }
-  }
-  // Nothing parseable to order against — the detail cannot prove coverage.
-  if (detailMaxMs === null) return localTurns
-  // A windowed response may hold the local turn's twin in its uncovered
-  // prefix; an unparseable bound cannot prove otherwise, so keep everything.
-  const uncoveredMaxMs =
-    detail.uncovered_prefix_max_ts != null
-      ? Date.parse(detail.uncovered_prefix_max_ts)
-      : null
-  if (uncoveredMaxMs !== null && !Number.isFinite(uncoveredMaxMs)) {
+  if (batchBoundaryIndex == null || batchBoundaryPrefixHash == null) {
     return localTurns
   }
-  const retained = localTurns.filter((turn) => {
-    const ms = Date.parse(turn.timestamp)
-    // Unparseable, or possibly the newest round with its transcript write
-    // still in flight — either way the detail proves nothing about it.
-    if (!Number.isFinite(ms) || ms >= detailMaxMs) return true
-    // Inside the uncovered prefix's range: its twin may not be in the window.
-    if (uncoveredMaxMs !== null && ms <= uncoveredMaxMs) return true
-    return false
-  })
-  return retained.length === localTurns.length ? localTurns : retained
+  if (!isWindowedDetail(detail)) return localTurns
+  if (detail.turns_offset > batchBoundaryIndex) return localTurns
+  const rel = batchBoundaryIndex - detail.turns_offset
+  const prefixHash = extendPrefixFingerprint(
+    detail.prefix_hash,
+    detail.turns.slice(0, rel)
+  )
+  if (prefixHash !== batchBoundaryPrefixHash) return localTurns
+  // The batch's first persisted record is its prompt.
+  const boundaryTurn = detail.turns[rel]
+  if (boundaryTurn == null || boundaryTurn.role !== "user") return localTurns
+  const batch = detail.turns.slice(rel)
+  const localUsers = localTurns.filter((t) => t.role === "user").length
+  const localOthers = localTurns.length - localUsers
+  const batchUsers = batch.filter((t) => t.role === "user").length
+  if (batchUsers < localUsers) return localTurns
+  if (batch.length - batchUsers < localOthers) return localTurns
+  return []
 }
 
 function batchStartCapture(
@@ -2058,11 +2075,13 @@ function reducer(
       // parse — under a parser id (`msg_…`) that `dedupeTimeline` can never
       // match against the promoted `live-<cid>-…` id. Keeping it renders the
       // whole old round a SECOND time below the newer persisted tail, which
-      // reads as "the newest messages jumped to the top". Retire a kept local
-      // turn only when the response PROVABLY moved past it (see
-      // `retireDetailCoveredLocalTurns`). Mid-flight responses, the sub-agent
-      // dialog (`liveOwnsActiveTurn`), and an attached live message keep every
-      // local turn: a reply's transcript write can still be in flight there
+      // reads as "the newest messages jumped to the top". Retire the local
+      // turns only on the batch-boundary alignment proof (see
+      // `retireBatchCoveredLocalTurns`) — never on timestamp ordering, which
+      // cannot distinguish a covered round from a reply whose record has not
+      // flushed yet. Mid-flight responses, the sub-agent dialog
+      // (`liveOwnsActiveTurn`), and an attached live message keep every local
+      // turn: a reply's transcript write can still be in flight there
       // (`completeTurn`'s write race), and the dialog owns its own
       // promotion/dedup path.
       const nextLocalTurns = !keepAllLiveBuffers
@@ -2071,7 +2090,12 @@ function reducer(
             current.liveOwnsActiveTurn ||
             current.liveMessage !== null
           ? current.localTurns
-          : retireDetailCoveredLocalTurns(current.localTurns, action.detail)
+          : retireBatchCoveredLocalTurns(
+              current.localTurns,
+              action.detail,
+              current.batchBoundaryIndex,
+              current.batchBoundaryPrefixHash
+            )
 
       const nextSession: ConversationRuntimeSession = {
         ...current,
