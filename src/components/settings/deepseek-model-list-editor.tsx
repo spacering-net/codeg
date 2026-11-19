@@ -269,21 +269,6 @@ export function deepseekReadsHarnessCatalog(
   return false
 }
 
-/** Shown in place of {@link DeepSeekModelListEditor} for a deepseek-acp that
- *  no longer reads its catalog (see {@link deepseekReadsHarnessCatalog}). */
-export function DeepSeekBuiltInCatalogNotice() {
-  const t = useTranslations("DeepSeekModelEditor")
-  return (
-    <div className="space-y-1 rounded-md border bg-muted/10 p-3">
-      <label className="text-xs font-medium">{t("title")}</label>
-      <p className="flex items-start gap-1.5 text-2xs text-muted-foreground">
-        <Info className="mt-px h-3.5 w-3.5 shrink-0" />
-        <span>{t("builtInCatalogNotice")}</span>
-      </p>
-    </div>
-  )
-}
-
 /**
  * Editor for the DeepSeek Harness **deployment** model catalog:
  * `llm-deepseek.models` in `$DSH_HOME/settings.yaml`, which the agent's
@@ -297,7 +282,8 @@ export function DeepSeekBuiltInCatalogNotice() {
  * here before they can be picked at all.
  *
  * Only deepseek-acp 0.9.0 and earlier read that section; for later releases
- * the settings page shows {@link DeepSeekBuiltInCatalogNotice} instead.
+ * the settings page offers the provider-route editor instead, because the
+ * built-in catalog itself cannot be changed there.
  */
 export function DeepSeekModelListEditor({
   launchModel,
