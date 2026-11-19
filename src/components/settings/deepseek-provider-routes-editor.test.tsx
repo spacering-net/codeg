@@ -247,6 +247,18 @@ describe("DeepSeekProviderRoutesEditor", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("points at the legacy document when that is the one to repair", async () => {
+    await renderEditor(
+      routes({
+        exists: false,
+        source: "/home/u/.dsh/settings.yaml",
+        error: "`llm-pi-ai.providers` is not a mapping",
+        routes: [],
+      })
+    )
+    expect(screen.getByText("/home/u/.dsh/settings.yaml")).toBeInTheDocument()
+  })
+
   it("shows routes the agent refuses as editable rows", async () => {
     await renderEditor(
       routes({

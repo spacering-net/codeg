@@ -315,7 +315,11 @@ export function DeepSeekProviderRoutesEditor() {
           <div className="min-w-0 space-y-1">
             <p>{t("unreadable")}</p>
             <p className="break-all font-mono opacity-80">{state.error}</p>
-            <p className="break-all font-mono opacity-80">{state.path}</p>
+            {/* The file to repair: a legacy document the bridge imports when
+              that is where the error is, else the bridge's own document. */}
+            <p className="break-all font-mono opacity-80">
+              {state.source ?? state.path}
+            </p>
           </div>
         </div>
       ) : (
