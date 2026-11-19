@@ -8,8 +8,9 @@
  * - `TaskStrip`: under a task's row, one line of where it stands (the rung,
  *   its branch, its project), what it changed ("+214 −37, 6 files"), the
  *   pull request it reached as the watch last read it (its checks, its
- *   head; "may be out of date" when the read is old or held back), and
- *   [View PR] [Open session] [Stop] — the last while it still moves.
+ *   head; "may be out of date" when the read is old or held back);
+ * - `TaskActions`: [View PR] [Open session] [Stop] — the last while it
+ *   still moves — on its card's last band.
  *
  * The result card carries the strip on the latest news of its work only;
  * the panel's cards carry it always.
@@ -190,8 +191,10 @@ function PrLine({ d }: { d: DispatchInfo }) {
   )
 }
 
-/** The task card's strip, under a task's row. `chip` draws the rung on its
- *  first line — left out where the row above says it already. `compact`,
+/** The task card's strip, under a task's row: where it stands, what it
+ *  changed, its pull request — its buttons on the card's last band
+ *  (`TaskActions`). `chip` draws the rung on its first line — left out
+ *  where the row above says it already. `compact`,
  *  on the side panel's cards: the branch a chip and what it changed after
  *  it on one line, without the project (the card's line says it) or [Open
  *  session] (the card itself opens it); its buttons a size up, [Stop] red
@@ -208,12 +211,9 @@ export function TaskStrip({
   const t = useTranslations("PersonalAgent.taskCard")
   const botId = useBotId()
   const { readOnly } = usePageScope()
-  const openWork = useOpenWork()
   const [stopping, setStopping] = useState(false)
   const task = d.task
   if (!task) return null
-  const target = workTargetOf(d)
-  const canOpen = canOpenWork(target)
   // A task the board finished — its pull request ready to merge, say — is
   // past stopping.
   const live = LIVE_LADDERS.has(d.ladder) && d.state !== "completed"
@@ -251,7 +251,7 @@ export function TaskStrip({
   }
   const prButton = task.pr_url ? (
     <Button
-      size={compact ? "sm" : "xs"}
+      size="sm"
       variant="outline"
       data-pa-task-act="pr"
       onClick={() => {
@@ -314,7 +314,7 @@ export function TaskStrip({
   return (
     <div
       data-pa-task-strip
-      className="mt-2 flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground"
+      className="flex min-w-0 flex-col gap-1.5 text-xs text-muted-foreground"
     >
       {chip || where.length > 0 ? (
         <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
@@ -340,32 +340,84 @@ export function TaskStrip({
         </div>
       ) : null}
       <PrLine d={d} />
-      {prButton || canOpen || (live && !readOnly) ? (
-        <div className="flex flex-wrap gap-1">
-          {prButton}
-          {canOpen ? (
-            <Button
-              size="xs"
-              variant="secondary"
-              data-pa-task-act="open"
-              onClick={() => openWork(target)}
-            >
-              {t("openSession")}
-            </Button>
-          ) : null}
-          {live && !readOnly ? (
-            <Button
-              size="xs"
-              variant="destructive"
-              data-pa-task-act="stop"
-              disabled={stopping}
-              onClick={stop}
-            >
-              {t("stop")}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
     </div>
+  )
+}
+
+/** Whether the task card has a button to show: a pull request to view, a
+ *  session to open, work to stop. */
+export function hasTaskActions(d: DispatchInfo, readOnly: boolean): boolean {
+  const task = d.task
+  if (!task) return false
+  const live = LIVE_LADDERS.has(d.ladder) && d.state !== "completed"
+  return (
+    task.pr_url != null || canOpenWork(workTargetOf(d)) || (live && !readOnly)
+  )
+}
+
+/** The task card's buttons, on its card's last band (`SheetActions`):
+ *  [View PR] [Open session] [Stop] — the last while the work still moves.
+ *  Nothing when there is none. */
+export function TaskActions({ d }: { d: DispatchInfo }) {
+  const t = useTranslations("PersonalAgent.taskCard")
+  const botId = useBotId()
+  const { readOnly } = usePageScope()
+  const openWork = useOpenWork()
+  const [stopping, setStopping] = useState(false)
+  const task = d.task
+  if (!task) return null
+  const target = workTargetOf(d)
+  const canOpen = canOpenWork(target)
+  const live = LIVE_LADDERS.has(d.ladder) && d.state !== "completed"
+  if (!hasTaskActions(d, readOnly)) return null
+  const stop = () => {
+    setStopping(true)
+    personalAgentDispatchStop(botId, d.id)
+      .then((stopped) => {
+        if (!stopped) toast.message(t("pastStopping"))
+      })
+      .catch((e) => toast.error(toErrorMessage(e)))
+      .finally(() => setStopping(false))
+  }
+  return (
+    <>
+      {task.pr_url ? (
+        <Button
+          size="sm"
+          variant="secondary"
+          data-pa-task-act="pr"
+          onClick={() => {
+            const url = task.pr_url
+            if (url)
+              openInSystemBrowser(url).catch((e) =>
+                toast.error(toErrorMessage(e))
+              )
+          }}
+        >
+          {t("viewPr")}
+        </Button>
+      ) : null}
+      {canOpen ? (
+        <Button
+          size="sm"
+          variant="secondary"
+          data-pa-task-act="open"
+          onClick={() => openWork(target)}
+        >
+          {t("openSession")}
+        </Button>
+      ) : null}
+      {live && !readOnly ? (
+        <Button
+          size="sm"
+          variant="destructive"
+          data-pa-task-act="stop"
+          disabled={stopping}
+          onClick={stop}
+        >
+          {t("stop")}
+        </Button>
+      ) : null}
+    </>
   )
 }

@@ -319,5 +319,9 @@ describe("MirrorCard", () => {
   it("says once it is answered, in either place", () => {
     draw([mirror("answered")])
     expect(screen.getByText("Answered")).toBeTruthy()
+    // On a band of its card's sheet.
+    expect(
+      screen.getByText("Answered").closest("[data-pa-sheet-part]")
+    ).not.toBeNull()
   })
 })

@@ -111,6 +111,10 @@ import {
   canOpenWork,
   num,
   PaSheet,
+  SHEET_TITLE,
+  SheetActions,
+  SheetLabel,
+  SheetPart,
   str,
   useBotName,
   useOpenWork,
@@ -118,7 +122,7 @@ import {
   useWorkMeta,
   workTargetOf,
 } from "./shared"
-import { WORK_WELL, WorkRow } from "./work-card"
+import { WorkRow } from "./work-card"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -299,6 +303,9 @@ function ActionCard({
       ? t("unknownHint")
       : null
   const shownError = failed ?? (state === "open" ? error : null)
+  const followupIntent =
+    action === "followup" && intent && INTENTS.has(intent) ? intent : null
+  const awake = tonight && state === "open" && data?.keep_awake === true
   const Icon = uncertain ? CircleHelp : tonight ? Moon : Lightbulb
   return (
     <MessageRow
@@ -331,53 +338,67 @@ function ActionCard({
           <span className="font-medium">{heading}</span>
         </p>
         <PaSheet>
-          {hint ? <p className="mb-2.5 text-sm break-words">{hint}</p> : null}
+          {/* What it is about: the work, its row the card's head; or the
+              message, to whom, and what it says. */}
           {isMessage ? (
-            <p
-              className="mb-1 text-xs text-muted-foreground"
-              data-pa-confirm-message
-            >
-              {t("confirm.messageTo", { name: str(display, "to_name") ?? "" })}
-            </p>
-          ) : (
-            <div className={WORK_WELL}>
-              <WorkRow
-                executorId={num(display, "executor_id")}
-                executor={executor}
-                agentType={agentType}
-                title={
-                  retry
-                    ? t("retryOf", { title: str(display, "title") ?? "" })
-                    : action === "followup"
-                      ? t("followupOf", { title: str(display, "title") ?? "" })
-                      : (str(display, "title") ?? row.body)
-                }
-                meta={meta({
-                  executor,
-                  mode,
-                  folder: str(display, "project"),
+            <SheetPart className="flex flex-col gap-1.5">
+              <SheetLabel className="mb-0" data-pa-confirm-message>
+                {t("confirm.messageTo", {
+                  name: str(display, "to_name") ?? "",
                 })}
-                chip={null}
-                onOpen={openable ? () => openWork(target) : null}
-              />
-            </div>
+              </SheetLabel>
+              {text ? <CollapsedText text={text} /> : null}
+            </SheetPart>
+          ) : (
+            <WorkRow
+              flat
+              executorId={num(display, "executor_id")}
+              executor={executor}
+              agentType={agentType}
+              title={
+                retry
+                  ? t("retryOf", { title: str(display, "title") ?? "" })
+                  : action === "followup"
+                    ? t("followupOf", { title: str(display, "title") ?? "" })
+                    : (str(display, "title") ?? row.body)
+              }
+              meta={meta({
+                executor,
+                mode,
+                folder: str(display, "project"),
+              })}
+              chip={null}
+              onOpen={openable ? () => openWork(target) : null}
+            />
           )}
-          {action === "followup" && intent && INTENTS.has(intent) ? (
-            <p className="mt-2 text-xs text-muted-foreground">
-              {t(`intent.${intent}` as "intent.revise")}
-            </p>
+          {/* What to know about it: not sure it ran, what the follow-up
+              asks for, that the computer stays awake tonight. */}
+          {hint || followupIntent || awake ? (
+            <SheetPart className="flex flex-col gap-1.5">
+              {hint ? <p className="text-sm break-words">{hint}</p> : null}
+              {followupIntent ? (
+                <p className="text-xs text-muted-foreground">
+                  {t(`intent.${followupIntent}` as "intent.revise")}
+                </p>
+              ) : null}
+              {awake ? (
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-pa-tonight-awake
+                >
+                  {t("tonight.awake")}
+                </p>
+              ) : null}
+            </SheetPart>
           ) : null}
-          {text ? <CollapsedText text={text} /> : null}
-          {tonight && state === "open" && data?.keep_awake === true ? (
-            <p
-              className="mt-2 text-xs text-muted-foreground"
-              data-pa-tonight-awake
-            >
-              {t("tonight.awake")}
-            </p>
+          {/* What the work is to do. */}
+          {!isMessage && text ? (
+            <SheetPart>
+              <CollapsedText text={text} />
+            </SheetPart>
           ) : null}
           {answerable ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <SheetActions>
               {uncertain && openable ? (
                 <Button
                   size="sm"
@@ -427,7 +448,7 @@ function ActionCard({
                   disabled={busy != null}
                 />
               ) : null}
-            </div>
+            </SheetActions>
           ) : null}
         </PaSheet>
         <MutedNote data={data} />
@@ -448,7 +469,8 @@ function faces(v: unknown): BotFace[] {
 }
 
 /** The frame the cards about assistants share: a heading with its icon, the
- *  card's body, the error of an answer that did not go through. */
+ *  card's body — its parts (`SheetPart`, `SheetActions`), the sheet's direct
+ *  children — the error of an answer that did not go through. */
 function CardFrame({
   item,
   icon: Icon,
@@ -531,55 +553,59 @@ function LoopCard({ item }: { item: NoticeItem }) {
       text={text}
       failed={failed}
     >
-      <p className="text-sm break-words">{text}</p>
-      {str(data, "refused") ? (
-        <p className="mt-1.5 text-xs break-words text-muted-foreground">
-          {t("refused", { text: str(data, "refused") ?? "" })}
-        </p>
+      <SheetPart className="flex flex-col gap-1.5">
+        <p className="text-sm break-words">{text}</p>
+        {str(data, "refused") ? (
+          <p className="text-xs break-words text-muted-foreground">
+            {t("refused", { text: str(data, "refused") ?? "" })}
+          </p>
+        ) : null}
+      </SheetPart>
+      {(thread != null && a && b) || state === "open" ? (
+        <SheetActions>
+          {thread != null && a && b ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() =>
+                setSheet({
+                  ...row,
+                  data: {
+                    thread_id: thread,
+                    direction: "out",
+                    from_bot_id: a.id,
+                    to_bot_id: b.id,
+                  },
+                })
+              }
+            >
+              {t("look")}
+            </Button>
+          ) : null}
+          {state === "open" ? (
+            <>
+              <Button
+                size="sm"
+                disabled={readOnly || busy != null}
+                onClick={() => void answer("accept")}
+              >
+                {busy === "accept" ? (
+                  <SyncedSpinner small className="size-3.5" />
+                ) : null}
+                {t("goOn")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={readOnly || busy != null}
+                onClick={() => void answer("dismiss")}
+              >
+                {t("mine")}
+              </Button>
+            </>
+          ) : null}
+        </SheetActions>
       ) : null}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {thread != null && a && b ? (
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() =>
-              setSheet({
-                ...row,
-                data: {
-                  thread_id: thread,
-                  direction: "out",
-                  from_bot_id: a.id,
-                  to_bot_id: b.id,
-                },
-              })
-            }
-          >
-            {t("look")}
-          </Button>
-        ) : null}
-        {state === "open" ? (
-          <>
-            <Button
-              size="sm"
-              disabled={readOnly || busy != null}
-              onClick={() => void answer("accept")}
-            >
-              {busy === "accept" ? (
-                <SyncedSpinner small className="size-3.5" />
-              ) : null}
-              {t("goOn")}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={readOnly || busy != null}
-              onClick={() => void answer("dismiss")}
-            >
-              {t("mine")}
-            </Button>
-          </>
-        ) : null}
-      </div>
       <ExchangeSheet row={sheet} onClose={() => setSheet(null)} />
     </CardFrame>
   )
@@ -639,37 +665,33 @@ function StoppedCard({ item }: { item: NoticeItem }) {
       failed={failed}
     >
       {work.length > 0 ? (
-        <div className="mb-2">
-          <p className="text-xs text-muted-foreground">
-            {t("work", { count: work.length })}
-          </p>
-          <ul className="mt-1 list-inside list-disc text-sm">
+        <SheetPart>
+          <SheetLabel>{t("work", { count: work.length })}</SheetLabel>
+          <ul className="list-inside list-disc space-y-0.5 text-sm">
             {work.map((w) => (
               <li key={w.id} className="break-words">
                 {w.title ?? `#${w.id}`}
               </li>
             ))}
           </ul>
-        </div>
+        </SheetPart>
       ) : null}
       {messages.length > 0 ? (
-        <div className="mb-2">
-          <p className="text-xs text-muted-foreground">
-            {t("messages", { count: messages.length })}
-          </p>
-          <ul className="mt-1 flex flex-col gap-1 text-sm">
+        <SheetPart>
+          <SheetLabel>{t("messages", { count: messages.length })}</SheetLabel>
+          <ul className="flex flex-col gap-1 text-sm">
             {messages.map((m) => (
               <li key={m.id} className="break-words">
                 {t("messageTo", { name: botName(m.to), text: m.excerpt })}
               </li>
             ))}
           </ul>
-        </div>
+        </SheetPart>
       ) : null}
       {handled.length > 0 ? (
-        <div>
-          <p className="text-xs text-muted-foreground">{t("notStopped")}</p>
-          <ul className="mt-1 flex flex-col gap-1.5 text-sm">
+        <SheetPart>
+          <SheetLabel>{t("notStopped")}</SheetLabel>
+          <ul className="flex flex-col gap-1.5 text-sm">
             {handled.map((h) => (
               <li
                 key={h.id}
@@ -698,7 +720,7 @@ function StoppedCard({ item }: { item: NoticeItem }) {
               </li>
             ))}
           </ul>
-        </div>
+        </SheetPart>
       ) : null}
     </CardFrame>
   )
@@ -721,12 +743,21 @@ function pageOf(key: string): PersonalAgentPage {
 
 /** The options codeg picked for the owner on a brain or an agent, and who
  *  picked each: the owner's words, another executor config, the agent. */
-function PickedList({ picked }: { picked: PickedOption[] }) {
+function PickedList({
+  picked,
+  className,
+}: {
+  picked: PickedOption[]
+  className?: string
+}) {
   const t = useTranslations("PersonalAgent.bots.choice")
   if (picked.length === 0) return null
   return (
     <ul
-      className="mt-0.5 space-y-0.5 ps-3 text-xs text-muted-foreground"
+      className={cn(
+        "space-y-0.5 ps-3 text-xs text-muted-foreground",
+        className
+      )}
       data-pa-picked
     >
       {picked.map((p) => (
@@ -812,49 +843,60 @@ function ChangedCard({ item }: { item: NoticeItem }) {
         failed ?? (state === "open" || state === "applied" ? error : null)
       }
     >
-      <ul className="space-y-1" data-pa-changes>
-        {changes.map((c) => (
-          <li
-            key={c.key}
-            className="text-sm break-words"
-            data-pa-change={c.key}
-          >
-            <span className="text-muted-foreground">{label(c.key)}</span>{" "}
-            <span className="line-through decoration-muted-foreground/60">
-              <ChangeValue item={c.key} value={c.from} text={value} />
-            </span>
-            {" → "}
-            <span className="font-medium">
-              <ChangeValue item={c.key} value={c.to} text={value} />
-            </span>
-            <PickedList picked={pickedOf(c.picked)} />
-          </li>
-        ))}
-      </ul>
-      {bothWays ? (
-        <p className="mt-2 text-xs text-muted-foreground" data-pa-both-ways>
-          {t("bothWays")}
-        </p>
+      {changes.length > 0 ? (
+        <SheetPart>
+          <ul className="space-y-1" data-pa-changes>
+            {changes.map((c) => (
+              <li
+                key={c.key}
+                className="text-sm break-words"
+                data-pa-change={c.key}
+              >
+                <span className="text-muted-foreground">{label(c.key)}</span>{" "}
+                <span className="line-through decoration-muted-foreground/60">
+                  <ChangeValue item={c.key} value={c.from} text={value} />
+                </span>
+                {" → "}
+                <span className="font-medium">
+                  <ChangeValue item={c.key} value={c.to} text={value} />
+                </span>
+                <PickedList picked={pickedOf(c.picked)} className="mt-0.5" />
+              </li>
+            ))}
+          </ul>
+        </SheetPart>
       ) : null}
-      {forRow != null ? (
-        <QuoteBar targetId={forRow} tone="light" className="mt-2" />
-      ) : quote ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          {t("quote", { quote })}
-        </p>
+      {/* Why, and on whose word: the message it came from, the reason, what
+          was kept as it was. */}
+      {bothWays || forRow != null || quote || reason || kept.length > 0 ? (
+        <SheetPart className="flex flex-col gap-1.5">
+          {bothWays ? (
+            <p className="text-xs text-muted-foreground" data-pa-both-ways>
+              {t("bothWays")}
+            </p>
+          ) : null}
+          {forRow != null ? (
+            <QuoteBar targetId={forRow} tone="light" />
+          ) : quote ? (
+            <p className="text-xs text-muted-foreground">
+              {t("quote", { quote })}
+            </p>
+          ) : null}
+          {reason ? (
+            <p className="text-xs text-muted-foreground">
+              {t("reason", { reason })}
+            </p>
+          ) : null}
+          {kept.length > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t("kept", { items: kept.map(label).join("、") })}
+            </p>
+          ) : null}
+        </SheetPart>
       ) : null}
-      {reason ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          {t("reason", { reason })}
-        </p>
-      ) : null}
-      {kept.length > 0 ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          {t("kept", { items: kept.map(label).join("、") })}
-        </p>
-      ) : null}
-      {why !== "line" ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+      {why !== "line" &&
+      (state === "open" || state === "applied" || changes.length > 0) ? (
+        <SheetActions>
           {state === "open" ? (
             <>
               <Button
@@ -908,7 +950,7 @@ function ChangedCard({ item }: { item: NoticeItem }) {
               {t("seeSettings")}
             </Button>
           ) : null}
-        </div>
+        </SheetActions>
       ) : null}
     </CardFrame>
   )
@@ -996,195 +1038,203 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
         failed ?? (state === "open" || state === "applied" ? error : null)
       }
     >
-      {why === "made" ? (
-        <p className="mb-2 text-xs text-muted-foreground">{t("madeHint")}</p>
-      ) : null}
-      {team &&
-      (state === "open" || (state === "dismissed" && bots.length === 0)) ? (
-        <>
-          {teamProjects.length > 0 ? (
-            <p className="mb-2 text-xs text-muted-foreground">
-              {t("teamFor", { projects: teamProjects.join(", ") })}
-            </p>
-          ) : null}
-          <ul className="space-y-1.5" data-pa-team>
-            {team.map((m) => {
-              const key = m.template as string
-              const id = `pa-team-${row.id}-${key}`
+      <SheetPart className="flex flex-col gap-2">
+        {why === "made" ? (
+          <p className="text-xs text-muted-foreground">{t("madeHint")}</p>
+        ) : null}
+        {team &&
+        (state === "open" || (state === "dismissed" && bots.length === 0)) ? (
+          <>
+            {teamProjects.length > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                {t("teamFor", { projects: teamProjects.join(", ") })}
+              </p>
+            ) : null}
+            <ul className="space-y-1.5" data-pa-team>
+              {team.map((m) => {
+                const key = m.template as string
+                const id = `pa-team-${row.id}-${key}`
+                return (
+                  <li
+                    key={key}
+                    className="flex items-center gap-2"
+                    data-pa-team-member={key}
+                  >
+                    <Checkbox
+                      id={id}
+                      checked={!unticked.has(key)}
+                      disabled={state !== "open" || readOnly || busy != null}
+                      onCheckedChange={(on) =>
+                        setUnticked((u) => {
+                          const next = new Set(u)
+                          if (on === true) next.delete(key)
+                          else next.add(key)
+                          return next
+                        })
+                      }
+                    />
+                    <label
+                      htmlFor={id}
+                      className="min-w-0 flex-1 cursor-pointer text-sm font-medium"
+                    >
+                      {String(m.name ?? key)}
+                    </label>
+                  </li>
+                )
+              })}
+            </ul>
+          </>
+        ) : state === "open" || (state === "dismissed" && bots.length === 0) ? (
+          <p className="text-sm font-medium break-words" data-pa-bot-pending>
+            {str(pending, "name")}
+          </p>
+        ) : (
+          <ul className="space-y-1.5" data-pa-bots-made>
+            {bots.map((b) => {
+              const filled = b.picked.filter((p) => p.from !== "given").length
               return (
                 <li
-                  key={key}
+                  key={b.bot_id}
+                  data-pa-bot-made={b.bot_id}
+                  data-state={b.state}
                   className="flex items-center gap-2"
-                  data-pa-team-member={key}
                 >
-                  <Checkbox
-                    id={id}
-                    checked={!unticked.has(key)}
-                    disabled={state !== "open" || readOnly || busy != null}
-                    onCheckedChange={(on) =>
-                      setUnticked((u) => {
-                        const next = new Set(u)
-                        if (on === true) next.delete(key)
-                        else next.add(key)
-                        return next
-                      })
-                    }
+                  <BotAvatar
+                    avatar={b.face?.avatar ?? null}
+                    name={b.name}
+                    size={24}
                   />
-                  <label
-                    htmlFor={id}
-                    className="min-w-0 flex-1 cursor-pointer text-sm font-medium"
-                  >
-                    {String(m.name ?? key)}
-                  </label>
+                  <span className="min-w-0 flex-1">
+                    <span
+                      className={cn(
+                        "block truncate text-sm font-medium",
+                        b.state === "undone" &&
+                          "text-muted-foreground line-through"
+                      )}
+                    >
+                      {b.name}
+                    </span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {[
+                        b.template_name,
+                        b.executor_name
+                          ? b.executor_created
+                            ? filled > 0
+                              ? t("executorFilled", {
+                                  agent: b.executor_agent ?? "",
+                                  count: filled,
+                                })
+                              : t("executorMade", {
+                                  agent: b.executor_agent ?? "",
+                                })
+                            : t("executorBound", { name: b.executor_name })
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  </span>
+                  {b.state !== "undone" ? (
+                    <span className="flex shrink-0 items-center gap-1">
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => setViewBot(b.bot_id)}
+                      >
+                        {t("open")}
+                      </Button>
+                      {bots.length > 1 && state === "applied" ? (
+                        <Button
+                          size="xs"
+                          variant="secondary"
+                          disabled={readOnly || busy != null}
+                          onClick={() => void answer(`undo:${b.bot_id}`)}
+                          data-pa-undo-bot={b.bot_id}
+                        >
+                          {busy === `undo:${b.bot_id}` ? (
+                            <SyncedSpinner small className="size-3" />
+                          ) : null}
+                          {t("undoOne")}
+                        </Button>
+                      ) : null}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">
+                      {t("undoneOne")}
+                    </span>
+                  )}
                 </li>
               )
             })}
           </ul>
-        </>
-      ) : state === "open" || (state === "dismissed" && bots.length === 0) ? (
-        <p className="text-sm font-medium break-words" data-pa-bot-pending>
-          {str(pending, "name")}
-        </p>
-      ) : (
-        <ul className="space-y-1.5" data-pa-bots-made>
-          {bots.map((b) => {
-            const filled = b.picked.filter((p) => p.from !== "given").length
-            return (
-              <li
-                key={b.bot_id}
-                data-pa-bot-made={b.bot_id}
-                data-state={b.state}
-                className="flex items-center gap-2"
+        )}
+      </SheetPart>
+      {quote || reason ? (
+        <SheetPart className="flex flex-col gap-1.5">
+          {quote ? (
+            <p className="text-xs text-muted-foreground">
+              {t("quote", { quote })}
+            </p>
+          ) : null}
+          {reason ? (
+            <p className="text-xs text-muted-foreground">
+              {t("reason", { reason })}
+            </p>
+          ) : null}
+        </SheetPart>
+      ) : null}
+      {state === "open" || (state === "applied" && live.length > 0) ? (
+        <SheetActions>
+          {state === "open" ? (
+            <>
+              <Button
+                size="sm"
+                disabled={
+                  readOnly ||
+                  busy != null ||
+                  (team != null && ticked.length === 0)
+                }
+                onClick={() =>
+                  void answer(team ? `accept:${ticked.join(",")}` : "accept")
+                }
+                data-pa-bots-accept
               >
-                <BotAvatar
-                  avatar={b.face?.avatar ?? null}
-                  name={b.name}
-                  size={24}
+                {busy === "accept" || busy?.startsWith("accept:") ? (
+                  <SyncedSpinner small className="size-3.5" />
+                ) : null}
+                {team ? t("teamMake", { count: ticked.length }) : t("accept")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={readOnly || busy != null}
+                onClick={() => void answer("dismiss")}
+              >
+                {t("dismiss")}
+              </Button>
+              {why === "suggest" && !team ? (
+                <MuteKindButton
+                  noticeId={Number(row.ref_id)}
+                  disabled={busy != null}
                 />
-                <span className="min-w-0 flex-1">
-                  <span
-                    className={cn(
-                      "block truncate text-sm font-medium",
-                      b.state === "undone" &&
-                        "text-muted-foreground line-through"
-                    )}
-                  >
-                    {b.name}
-                  </span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {[
-                      b.template_name,
-                      b.executor_name
-                        ? b.executor_created
-                          ? filled > 0
-                            ? t("executorFilled", {
-                                agent: b.executor_agent ?? "",
-                                count: filled,
-                              })
-                            : t("executorMade", {
-                                agent: b.executor_agent ?? "",
-                              })
-                          : t("executorBound", { name: b.executor_name })
-                        : null,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </span>
-                </span>
-                {b.state !== "undone" ? (
-                  <span className="flex shrink-0 items-center gap-1">
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      onClick={() => setViewBot(b.bot_id)}
-                    >
-                      {t("open")}
-                    </Button>
-                    {bots.length > 1 && state === "applied" ? (
-                      <Button
-                        size="xs"
-                        variant="secondary"
-                        disabled={readOnly || busy != null}
-                        onClick={() => void answer(`undo:${b.bot_id}`)}
-                        data-pa-undo-bot={b.bot_id}
-                      >
-                        {busy === `undo:${b.bot_id}` ? (
-                          <SyncedSpinner small className="size-3" />
-                        ) : null}
-                        {t("undoOne")}
-                      </Button>
-                    ) : null}
-                  </span>
-                ) : (
-                  <span className="text-xs text-muted-foreground">
-                    {t("undoneOne")}
-                  </span>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      )}
-      {quote ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          {t("quote", { quote })}
-        </p>
-      ) : null}
-      {reason ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          {t("reason", { reason })}
-        </p>
-      ) : null}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {state === "open" ? (
-          <>
+              ) : null}
+            </>
+          ) : state === "applied" && live.length > 0 ? (
             <Button
               size="sm"
-              disabled={
-                readOnly ||
-                busy != null ||
-                (team != null && ticked.length === 0)
-              }
-              onClick={() =>
-                void answer(team ? `accept:${ticked.join(",")}` : "accept")
-              }
-              data-pa-bots-accept
+              variant="secondary"
+              disabled={readOnly || busy != null}
+              onClick={() => void answer("undo")}
+              data-pa-undo-bots
             >
-              {busy === "accept" || busy?.startsWith("accept:") ? (
+              {busy === "undo" ? (
                 <SyncedSpinner small className="size-3.5" />
               ) : null}
-              {team ? t("teamMake", { count: ticked.length }) : t("accept")}
+              {bots.length > 1 ? t("undoAll") : t("undo")}
             </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={readOnly || busy != null}
-              onClick={() => void answer("dismiss")}
-            >
-              {t("dismiss")}
-            </Button>
-            {why === "suggest" && !team ? (
-              <MuteKindButton
-                noticeId={Number(row.ref_id)}
-                disabled={busy != null}
-              />
-            ) : null}
-          </>
-        ) : state === "applied" && live.length > 0 ? (
-          <Button
-            size="sm"
-            variant="secondary"
-            disabled={readOnly || busy != null}
-            onClick={() => void answer("undo")}
-            data-pa-undo-bots
-          >
-            {busy === "undo" ? (
-              <SyncedSpinner small className="size-3.5" />
-            ) : null}
-            {bots.length > 1 ? t("undoAll") : t("undo")}
-          </Button>
-        ) : null}
-      </div>
+          ) : null}
+        </SheetActions>
+      ) : null}
     </CardFrame>
   )
 }
@@ -1292,117 +1342,127 @@ function AssistantChangedCard({ item }: { item: NoticeItem }) {
         failed ?? (state === "open" || state === "applied" ? error : null)
       }
     >
-      <p
-        className={cn(
-          "text-sm font-medium break-words",
-          state === "undone" && "text-muted-foreground line-through"
-        )}
-        data-pa-assistant-made={made?.assistant.id ?? ""}
-      >
-        {name}
-        {agent ? (
-          <span className="ms-1.5 text-xs font-normal text-muted-foreground">
-            {t("on", { agent })}
-          </span>
-        ) : null}
-      </p>
-      {state === "editor" ? (
-        <p className="mt-1.5 text-xs break-words text-muted-foreground">
-          {t("editorHint", { agent: agent ?? "", why: reason ?? "" })}
+      <SheetPart className="flex flex-col gap-1.5">
+        <p
+          className={cn(
+            SHEET_TITLE,
+            state === "undone" && "text-muted-foreground line-through"
+          )}
+          data-pa-assistant-made={made?.assistant.id ?? ""}
+        >
+          {name}
+          {agent ? (
+            <span className="ms-1.5 text-xs font-normal text-muted-foreground">
+              {t("on", { agent })}
+            </span>
+          ) : null}
         </p>
-      ) : null}
-      {picked.length > 0 ? <PickedList picked={picked} /> : null}
-      {firstFor.length > 0 ? (
-        <p className="mt-1.5 text-xs text-muted-foreground" data-pa-first-for>
-          {t("firstFor", { kinds: firstFor.join(" / ") })}
-        </p>
-      ) : null}
-      {made && state === "applied" ? (
-        <p className="mt-1.5 text-xs text-muted-foreground" data-pa-both-ways>
-          {tc("bothWays")}
-        </p>
-      ) : null}
-      {quote ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          {tc("quote", { quote })}
-        </p>
-      ) : null}
-      {reason && state !== "editor" ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          {tc("reason", { reason })}
-        </p>
-      ) : null}
-      {kept.length > 0 ? (
-        <p className="mt-2 text-xs text-muted-foreground">
-          {t("kept", { count: kept.length })}
-        </p>
-      ) : null}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {state === "open" ? (
-          <>
-            <Button
-              size="sm"
-              disabled={readOnly || busy != null}
-              onClick={() => void answer("accept")}
-              data-pa-assistant-act="accept"
-            >
-              {busy === "accept" ? (
-                <SyncedSpinner small className="size-3.5" />
-              ) : null}
-              {t("accept")}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={readOnly || busy != null}
-              onClick={() => void answer("dismiss")}
-              data-pa-assistant-act="dismiss"
-            >
-              {tc("dismiss")}
-            </Button>
-            {why === "suggest" ? (
-              <MuteKindButton
-                noticeId={Number(row.ref_id)}
-                disabled={busy != null}
-              />
-            ) : null}
-          </>
-        ) : null}
         {state === "editor" ? (
-          <Button
-            size="sm"
-            disabled={readOnly}
-            onClick={openEditor}
-            data-pa-assistant-act="editor"
-          >
-            {t("openEditor")}
-          </Button>
+          <p className="text-xs break-words text-muted-foreground">
+            {t("editorHint", { agent: agent ?? "", why: reason ?? "" })}
+          </p>
         ) : null}
-        {state === "applied" && made ? (
-          <>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={readOnly || busy != null}
-              onClick={() => void answer("undo")}
-              data-pa-assistant-act="undo"
-            >
-              {busy === "undo" ? (
-                <SyncedSpinner small className="size-3.5" />
+        {picked.length > 0 ? <PickedList picked={picked} /> : null}
+        {firstFor.length > 0 ? (
+          <p className="text-xs text-muted-foreground" data-pa-first-for>
+            {t("firstFor", { kinds: firstFor.join(" / ") })}
+          </p>
+        ) : null}
+        {made && state === "applied" ? (
+          <p className="text-xs text-muted-foreground" data-pa-both-ways>
+            {tc("bothWays")}
+          </p>
+        ) : null}
+      </SheetPart>
+      {quote || (reason && state !== "editor") || kept.length > 0 ? (
+        <SheetPart className="flex flex-col gap-1.5">
+          {quote ? (
+            <p className="text-xs text-muted-foreground">
+              {tc("quote", { quote })}
+            </p>
+          ) : null}
+          {reason && state !== "editor" ? (
+            <p className="text-xs text-muted-foreground">
+              {tc("reason", { reason })}
+            </p>
+          ) : null}
+          {kept.length > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              {t("kept", { count: kept.length })}
+            </p>
+          ) : null}
+        </SheetPart>
+      ) : null}
+      {state === "open" ||
+      state === "editor" ||
+      (state === "applied" && made) ? (
+        <SheetActions>
+          {state === "open" ? (
+            <>
+              <Button
+                size="sm"
+                disabled={readOnly || busy != null}
+                onClick={() => void answer("accept")}
+                data-pa-assistant-act="accept"
+              >
+                {busy === "accept" ? (
+                  <SyncedSpinner small className="size-3.5" />
+                ) : null}
+                {t("accept")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={readOnly || busy != null}
+                onClick={() => void answer("dismiss")}
+                data-pa-assistant-act="dismiss"
+              >
+                {tc("dismiss")}
+              </Button>
+              {why === "suggest" ? (
+                <MuteKindButton
+                  noticeId={Number(row.ref_id)}
+                  disabled={busy != null}
+                />
               ) : null}
-              {tc("undo")}
-            </Button>
+            </>
+          ) : null}
+          {state === "editor" ? (
             <Button
               size="sm"
-              variant="ghost"
-              onClick={() => openExecutorEditor(made.assistant.id)}
-              data-pa-assistant-act="edit"
+              disabled={readOnly}
+              onClick={openEditor}
+              data-pa-assistant-act="editor"
             >
-              {t("edit")}
+              {t("openEditor")}
             </Button>
-          </>
-        ) : null}
-      </div>
+          ) : null}
+          {state === "applied" && made ? (
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={readOnly || busy != null}
+                onClick={() => void answer("undo")}
+                data-pa-assistant-act="undo"
+              >
+                {busy === "undo" ? (
+                  <SyncedSpinner small className="size-3.5" />
+                ) : null}
+                {tc("undo")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => openExecutorEditor(made.assistant.id)}
+                data-pa-assistant-act="edit"
+              >
+                {t("edit")}
+              </Button>
+            </>
+          ) : null}
+        </SheetActions>
+      ) : null}
     </CardFrame>
   )
 }

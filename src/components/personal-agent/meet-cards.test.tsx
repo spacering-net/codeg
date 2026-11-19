@@ -256,6 +256,12 @@ describe("the projects", () => {
     api.personalAgentMeetProjects.mockResolvedValue([])
     draw(open())
     await screen.findByText("codeg has no project open yet.")
+    // Its buttons on the card's last band, under a hairline.
+    expect(
+      screen
+        .getByRole("button", { name: "Skip" })
+        .closest("[data-pa-sheet-actions]")
+    ).not.toBeNull()
     fireEvent.click(
       screen.getByRole("button", { name: "Open a project folder" })
     )
@@ -304,6 +310,11 @@ describe("one thing at once", () => {
     expect(
       screen.getByText("PR #231's CI is red (lint) — app: Speed up")
     ).toBeTruthy()
+    expect(
+      screen
+        .getByRole("button", { name: "Hand it to me" })
+        .closest("[data-pa-sheet-actions]")
+    ).not.toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "Hand it to me" }))
     await waitFor(() =>
       expect(api.personalAgentNoticeAct).toHaveBeenLastCalledWith(

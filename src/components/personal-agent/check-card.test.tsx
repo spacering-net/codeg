@@ -138,6 +138,16 @@ describe("the check's card", () => {
     expect(screen.getByText("- src/build.rs:3 still fails")).toBeTruthy()
     expect(screen.getByText("It builds. The tests pass.")).toBeTruthy()
     expect(screen.getByText("It answered: Does it build?")).toBeTruthy()
+    // In bands, no box in a box: what it found, what it checked, its
+    // evidence, its buttons.
+    const sheet = container.querySelector("[data-pa-surface]")!
+    const parts = [...sheet.children]
+    expect(parts).toHaveLength(4)
+    expect(
+      parts[2].contains(screen.getByText("- src/build.rs:3 still fails"))
+    ).toBe(true)
+    expect(parts[3].hasAttribute("data-pa-sheet-actions")).toBe(true)
+    expect(sheet.querySelector("[data-pa-sheet-part] .rounded-md")).toBeNull()
     // No session known for its work: nothing to watch.
     expect(screen.queryByRole("button", { name: "See the check" })).toBeNull()
     fireEvent.click(

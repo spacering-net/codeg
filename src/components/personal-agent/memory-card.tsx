@@ -28,7 +28,16 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
-import { AGENT_SURFACE, PaSheet, str, usePageScope } from "./shared"
+import {
+  AGENT_SURFACE,
+  PaSheet,
+  SheetActions,
+  SheetField,
+  SheetFields,
+  SheetPart,
+  str,
+  usePageScope,
+} from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -170,66 +179,80 @@ export function MemoryCard({ item }: { item: NoticeItem }) {
           )}
           <span className="font-medium">{title}</span>
         </p>
-        <PaSheet className="flex flex-col gap-2">
-          <p className="text-sm break-words">{summary.join(t("sep"))}</p>
-          <ul className="flex flex-col gap-0.5" data-pa-memory-files>
-            {shown.map((f) => (
-              <li
-                key={f.path}
-                className="flex min-w-0 items-baseline gap-1.5 text-xs leading-5"
-                data-pa-memory-file={f.path}
+        <PaSheet>
+          {/* What changed, and what came of it. */}
+          <SheetPart className="flex flex-col gap-1.5">
+            <p className="text-sm break-words">{summary.join(t("sep"))}</p>
+            {state === "undone" && keptNames.length > 0 ? (
+              <p className="text-xs text-muted-foreground" data-pa-memory-kept>
+                {t("kept", { files: keptNames.join(t("listSep")) })}
+              </p>
+            ) : null}
+            {tidy && TIDY_NOTES.has(state) ? (
+              <p className="text-xs text-muted-foreground" data-pa-tidy-note>
+                {tt(`note.${state}` as "note.draft")}
+              </p>
+            ) : null}
+            {tidy && str(data, "not_aside") ? (
+              <p
+                className="text-xs text-muted-foreground"
+                data-pa-tidy-not-aside
               >
-                <span className="shrink-0 text-muted-foreground">
-                  {t(`status.${f.status}` as "status.added")}
-                </span>
-                {f.status !== "deleted" &&
-                state !== "undone" &&
-                (!tidy || state === "acted" || state === "applied") ? (
-                  <button
-                    type="button"
-                    className="min-w-0 truncate text-start font-medium underline-offset-2 hover:underline"
-                    title={f.path}
-                    onClick={() => openBotPage("persona", { entry: f.path })}
+                {tt("note.notAside", { why: str(data, "not_aside") ?? "" })}
+              </p>
+            ) : null}
+          </SheetPart>
+          {/* Entry by entry: how it changed, and which. */}
+          {shown.length > 0 ? (
+            <SheetPart>
+              <SheetFields
+                className="items-baseline gap-y-0.5"
+                data-pa-memory-files
+              >
+                {shown.map((f) => (
+                  <SheetField
+                    key={f.path}
+                    label={t(`status.${f.status}` as "status.added")}
+                    data-pa-memory-file={f.path}
                   >
-                    {label(f)}
-                  </button>
-                ) : (
-                  <span className="min-w-0 truncate font-medium" title={f.path}>
-                    {label(f)}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-          {state === "undone" && keptNames.length > 0 ? (
-            <p className="text-xs text-muted-foreground" data-pa-memory-kept>
-              {t("kept", { files: keptNames.join(t("listSep")) })}
-            </p>
+                    {f.status !== "deleted" &&
+                    state !== "undone" &&
+                    (!tidy || state === "acted" || state === "applied") ? (
+                      <button
+                        type="button"
+                        className="min-w-0 truncate rounded-sm text-start font-medium underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                        title={f.path}
+                        onClick={() =>
+                          openBotPage("persona", { entry: f.path })
+                        }
+                      >
+                        {label(f)}
+                      </button>
+                    ) : (
+                      <span
+                        className="min-w-0 truncate font-medium"
+                        title={f.path}
+                      >
+                        {label(f)}
+                      </span>
+                    )}
+                  </SheetField>
+                ))}
+              </SheetFields>
+            </SheetPart>
           ) : null}
-          {tidy && TIDY_NOTES.has(state) ? (
-            <p className="text-xs text-muted-foreground" data-pa-tidy-note>
-              {tt(`note.${state}` as "note.draft")}
-            </p>
-          ) : null}
-          {tidy && str(data, "not_aside") ? (
-            <p className="text-xs text-muted-foreground" data-pa-tidy-not-aside>
-              {tt("note.notAside", { why: str(data, "not_aside") ?? "" })}
-            </p>
-          ) : null}
+          {/* The diff, the width of the card. */}
           {showDiff ? (
-            <div
-              className="overflow-hidden rounded-md border border-border/70 bg-background/60"
-              data-pa-memory-diff
-            >
+            <div className="min-w-0" data-pa-memory-diff>
               <CompactDiff diffText={diff} />
               {cut ? (
-                <p className="border-t border-border/50 px-2 py-1 text-[0.6875rem] text-muted-foreground">
+                <p className="border-t border-border/50 px-3.5 py-1.5 text-[0.6875rem] text-muted-foreground">
                   {t("diffCut")}
                 </p>
               ) : null}
             </div>
           ) : null}
-          <div className="flex flex-wrap items-center gap-2">
+          <SheetActions>
             <Button
               size="sm"
               variant="ghost"
@@ -272,7 +295,7 @@ export function MemoryCard({ item }: { item: NoticeItem }) {
                 </Button>
               </>
             ) : null}
-          </div>
+          </SheetActions>
         </PaSheet>
         {failed ? (
           <p role="alert" className="text-xs break-words text-destructive">

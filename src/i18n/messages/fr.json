@@ -9989,7 +9989,6 @@
       },
       "assistant": "Assistant : {decision}",
       "assistantWhy": "Assistant : {decision}, car : {reason}",
-      "against": "Vérification : {verdict} · Assistant : {decision}, car : {reason}",
       "fallback": "L'assistant n'a pas conclu : codeg a suivi la vérification",
       "owner": "Votre décision : {decision}",
       "question": "Il vous demande : {question}",

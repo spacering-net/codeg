@@ -39,7 +39,15 @@ import { CollapsedText } from "./event-card"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { MutedNote, MuteKindButton } from "./mute-kind"
-import { AGENT_SURFACE, PaSheet, str, usePageScope } from "./shared"
+import {
+  AGENT_SURFACE,
+  PaSheet,
+  SHEET_TITLE,
+  SheetActions,
+  SheetPart,
+  str,
+  usePageScope,
+} from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -222,74 +230,75 @@ export function ForgeCard({ item }: { item: NoticeItem }) {
           ) : null}
         </p>
         <PaSheet>
-          <p className="text-sm font-medium break-words" data-pa-forge-title>
-            {title}
-          </p>
+          {/* What it would do, where, and how it stands. */}
+          <SheetPart className="flex flex-col gap-1">
+            <p className={SHEET_TITLE} data-pa-forge-title>
+              {title}
+            </p>
+            {facts.length > 0 ? (
+              <p className="text-xs text-muted-foreground" data-pa-forge-head>
+                {facts.join(" · ")}
+              </p>
+            ) : null}
+            {checksLine ? (
+              <p
+                className="text-xs text-muted-foreground"
+                data-pa-forge-checks={checks ?? ""}
+              >
+                {checksLine}
+              </p>
+            ) : null}
+            {versionLine ? (
+              <p
+                className="text-xs text-muted-foreground"
+                data-pa-forge-version={version ?? ""}
+              >
+                {versionLine}
+              </p>
+            ) : null}
+            {action === "merge" && !guaranteed ? (
+              <p
+                data-pa-forge-unguaranteed
+                className="inline-flex h-5 w-fit items-center rounded-full bg-amber-500/15 px-2 text-[0.6875rem] font-medium text-amber-700 dark:text-amber-300"
+              >
+                {t("merge.unguaranteed")}
+              </p>
+            ) : null}
+            {state === "done" && mergeCommit ? (
+              <p
+                className="text-xs text-muted-foreground"
+                data-pa-forge-merge-commit
+              >
+                {t("merge.commit", { commit: shortSha(mergeCommit) })}
+              </p>
+            ) : null}
+            {problem ? (
+              <p
+                className="text-xs break-words text-amber-700 dark:text-amber-300"
+                data-pa-forge-problem={code ?? state}
+              >
+                {problem}
+              </p>
+            ) : null}
+            {detail ? (
+              <p className="text-xs break-words text-muted-foreground">
+                {detail}
+              </p>
+            ) : null}
+            {reason ? (
+              <p className="text-xs break-words text-muted-foreground">
+                {t("reason", { reason })}
+              </p>
+            ) : null}
+          </SheetPart>
+          {/* What it would say. */}
           {body ? (
-            <div className="text-sm" data-pa-forge-body>
+            <SheetPart className="text-sm" data-pa-forge-body>
               <CollapsedText text={body} />
-            </div>
-          ) : null}
-          {facts.length > 0 ? (
-            <p
-              className="mt-1.5 text-xs text-muted-foreground"
-              data-pa-forge-head
-            >
-              {facts.join(" · ")}
-            </p>
-          ) : null}
-          {checksLine ? (
-            <p
-              className="mt-0.5 text-xs text-muted-foreground"
-              data-pa-forge-checks={checks ?? ""}
-            >
-              {checksLine}
-            </p>
-          ) : null}
-          {versionLine ? (
-            <p
-              className="mt-0.5 text-xs text-muted-foreground"
-              data-pa-forge-version={version ?? ""}
-            >
-              {versionLine}
-            </p>
-          ) : null}
-          {action === "merge" && !guaranteed ? (
-            <p
-              data-pa-forge-unguaranteed
-              className="mt-1.5 inline-flex rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300"
-            >
-              {t("merge.unguaranteed")}
-            </p>
-          ) : null}
-          {state === "done" && mergeCommit ? (
-            <p
-              className="mt-1 text-xs text-muted-foreground"
-              data-pa-forge-merge-commit
-            >
-              {t("merge.commit", { commit: shortSha(mergeCommit) })}
-            </p>
-          ) : null}
-          {problem ? (
-            <p
-              className="mt-1.5 text-xs break-words text-amber-700 dark:text-amber-300"
-              data-pa-forge-problem={code ?? state}
-            >
-              {problem}
-            </p>
-          ) : null}
-          {detail ? (
-            <p className="mt-0.5 text-xs break-words text-muted-foreground">
-              {detail}
-            </p>
-          ) : null}
-          {reason ? (
-            <p className="mt-1.5 text-xs break-words text-muted-foreground">
-              {t("reason", { reason })}
-            </p>
+            </SheetPart>
           ) : null}
           {state === "open" || state === "unknown" || link ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <SheetActions>
               {state === "open" ? (
                 <>
                   <Button
@@ -357,7 +366,7 @@ export function ForgeCard({ item }: { item: NoticeItem }) {
                   {t("open")}
                 </Button>
               ) : null}
-            </div>
+            </SheetActions>
           ) : null}
         </PaSheet>
         <MutedNote data={data} />

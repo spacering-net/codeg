@@ -174,6 +174,10 @@ describe("the plan card", () => {
   it("shown first, it starts on Start; Change quotes the card", () => {
     const { container } = draw(card(plan({ state: "draft", done: 0 })))
     expect(acts(container)).toEqual(["start", "change", "cancel"])
+    // The card's buttons on its last band, a step's own on its line.
+    expect(
+      container.querySelectorAll("[data-pa-sheet-actions] [data-pa-plan-act]")
+    ).toHaveLength(3)
     fireEvent.click(screen.getByText("Start"))
     expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(9, "start", null)
     fireEvent.click(screen.getByText("Change"))

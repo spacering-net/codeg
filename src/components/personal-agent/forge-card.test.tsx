@@ -157,8 +157,9 @@ describe("a forge card", () => {
     expect(screen.getByText("Fixed in abc.")).toBeInTheDocument()
     expect(screen.getByText("GitHub · codeg-bot")).toBeInTheDocument()
     const open = screen.getByRole("button", { name: "Open" })
-    // Alone on the card: a button that looks one.
+    // Alone on the card: a button that looks one, on its last band.
     expect(open.getAttribute("data-variant")).toBe("secondary")
+    expect(open.closest("[data-pa-sheet-actions]")).not.toBeNull()
     fireEvent.click(open)
     expect(platform.openUrl).toHaveBeenCalledWith(
       "https://github.com/acme/app/pull/7#issuecomment-1"

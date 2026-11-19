@@ -16,7 +16,8 @@
  * Both are a thing on the bubble (`INSET_SURFACE`: a white card on its
  * grey, a wash on a card), a step deeper under the pointer and when pressed
  * (`INSET_HOVER`); a row heading a card of its own (`flat`) is that card's
- * head, no surface of its own.
+ * head, no surface of its own, its padding the card's parts', the faintest
+ * step under the pointer (`SHEET_ROW_HOVER`).
  */
 
 import { useTranslations } from "next-intl"
@@ -40,7 +41,12 @@ import type { AgentType, DispatchState } from "@/lib/types"
 import { useSyncedSpin } from "@/lib/motion/synced-spin"
 import { cn } from "@/lib/utils"
 
-import { ExecutorAvatar, INSET_HOVER, INSET_SURFACE } from "./shared"
+import {
+  ExecutorAvatar,
+  INSET_HOVER,
+  INSET_SURFACE,
+  SHEET_ROW_HOVER,
+} from "./shared"
 
 /** The well the news's row sits in, inside its bubble: its rounded clip —
  *  the row, which fills it, carries the surface and its states. */
@@ -85,9 +91,12 @@ export function WorkRow({
       disabled={!onOpen}
       onClick={onOpen ?? undefined}
       className={cn(
-        "group/work flex w-full min-w-0 items-center gap-2.5 py-2.5 ps-2.5 pe-2 text-start transition-colors focus-visible:bg-(--pa-object-hover) focus-visible:outline-none disabled:cursor-default",
+        "group/work flex w-full min-w-0 items-center gap-2.5 text-start transition-colors focus-visible:outline-none disabled:cursor-default",
+        flat
+          ? "px-3.5 py-3"
+          : "py-2.5 ps-2.5 pe-2 focus-visible:bg-(--pa-object-hover)",
         !flat && INSET_SURFACE,
-        onOpen && INSET_HOVER
+        onOpen && (flat ? SHEET_ROW_HOVER : INSET_HOVER)
       )}
       title={onOpen ? t("timeline.viewSession") : undefined}
     >

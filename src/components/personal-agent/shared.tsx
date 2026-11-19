@@ -220,15 +220,104 @@ export const INSET_SURFACE =
 export const INSET_HOVER =
   "hover:bg-(--pa-object-hover) active:bg-(--pa-object-active)"
 
+/** A row that heads a card of its own (a work's row on its news) under
+ *  the pointer and pressed: the faintest step of the text's colour on the
+ *  card's white, not the wash a thing on the card takes — the head is the
+ *  card, and a deeper grey cut it off as a band of its own. */
+export const SHEET_ROW_HOVER =
+  "hover:bg-[color-mix(in_oklab,var(--foreground)_2.5%,transparent)] active:bg-[color-mix(in_oklab,var(--foreground)_4.5%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--foreground)_2.5%,transparent)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+
 /** A card's body on a bubble: what a native card says and its buttons on
  *  one white sheet under its heading, as an assistant's own card is drawn —
  *  its buttons their own colours (`data-pa-surface`), the things on it a
- *  wash (`INSET_SURFACE`). */
+ *  wash (`INSET_SURFACE`). Every native card is drawn in the same parts,
+ *  each a band of its own with a hairline between: what it is
+ *  about (`SheetPart`: its title, a work's row as its head), its facts
+ *  (`SheetFields`), what it says, its buttons last (`SheetActions`), what
+ *  came before under them (a part with a `SheetLabel`). */
 export const PA_SHEET =
-  "min-w-0 rounded-xl border border-border/70 bg-card p-3 text-card-foreground"
+  "min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card text-card-foreground [&>*+*]:border-t [&>*+*]:border-border/60"
 
 export function PaSheet({ className, ...props }: React.ComponentProps<"div">) {
   return <div data-pa-surface className={cn(PA_SHEET, className)} {...props} />
+}
+
+/** A band of a card: the room every part keeps from the card's edge. */
+export const SHEET_PART = "min-w-0 px-3.5 py-3"
+
+export function SheetPart({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  return (
+    <div data-pa-sheet-part className={cn(SHEET_PART, className)} {...props} />
+  )
+}
+
+/** A card's buttons: its last band, as wide as their words, wrapping. */
+export function SheetActions({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-pa-sheet-actions
+      className={cn(SHEET_PART, "flex flex-wrap items-center gap-2", className)}
+      {...props}
+    />
+  )
+}
+
+/** A card's title, at the head of its first part. */
+export const SHEET_TITLE = "text-sm leading-5 font-medium break-words"
+
+/** A part's small heading ("Earlier rounds", "Evidence"). */
+export function SheetLabel({ className, ...props }: React.ComponentProps<"p">) {
+  return (
+    <p
+      className={cn(
+        "mb-1.5 text-xs leading-4 font-medium text-muted-foreground",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+/** A card's facts, one to a line — what each is on the left, quiet, their
+ *  values lined up on the right whatever the language's words. */
+export function SheetFields({
+  className,
+  ...props
+}: React.ComponentProps<"dl">) {
+  return (
+    <dl
+      className={cn(
+        "grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-1.5 text-xs leading-5",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+export function SheetField({
+  label,
+  children,
+  ...props
+}: { label: React.ReactNode; children: React.ReactNode } & Omit<
+  React.ComponentProps<"div">,
+  "children"
+>) {
+  return (
+    <div className="contents" {...props}>
+      <dt className="text-muted-foreground">{label}</dt>
+      {/* What it says wraps anywhere (a hash, a path): the card clips. */}
+      <dd className="flex min-w-0 flex-wrap items-center gap-1.5 [overflow-wrap:anywhere] [&>*]:min-w-0">
+        {children}
+      </dd>
+    </div>
+  )
 }
 
 /** Markdown lists inside a bubble or a box that clips: room for the

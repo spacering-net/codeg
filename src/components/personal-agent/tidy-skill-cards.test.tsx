@@ -148,6 +148,10 @@ describe("the tidy-up's card", () => {
     expect(
       screen.getByText("1 entry updated · 1 entry removed · its rules changed")
     ).toBeTruthy()
+    // Its buttons on the card's last band, under a hairline.
+    expect(
+      screen.getByText("Undo all").closest("[data-pa-sheet-actions]")
+    ).not.toBeNull()
     fireEvent.click(screen.getByText("Undo all"))
     expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(9, "undo", null)
   })
@@ -307,6 +311,9 @@ describe("a process skill's card", () => {
       )
     ).toBeTruthy()
     expect(screen.getByText("When: when the owner says release")).toBeTruthy()
+    expect(
+      screen.getByText("Turn off").closest("[data-pa-sheet-actions]")
+    ).not.toBeNull()
     fireEvent.click(screen.getByText("Show"))
     expect(
       container.querySelector("[data-pa-skill-content]")?.textContent

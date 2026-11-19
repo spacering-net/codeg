@@ -167,6 +167,10 @@ describe("routine cards", () => {
     expect(screen.getByText("Night CI")).toBeTruthy()
     expect(screen.getByText(/Why: you asked for it/)).toBeTruthy()
     expect(screen.getByText("Its trial run has started.")).toBeTruthy()
+    // Its buttons on the card's last band, under a hairline.
+    expect(
+      screen.getByText("Undo").closest("[data-pa-sheet-actions]")
+    ).not.toBeNull()
     fireEvent.click(screen.getByText("Undo"))
     await waitFor(() =>
       expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(31, "undo", 7)

@@ -75,7 +75,15 @@ import {
   PresetPicker,
 } from "./settings/pref-pages"
 import { useSettingsPatch } from "./settings/use-settings"
-import { AGENT_SURFACE, num, PaSheet, str, usePageScope } from "./shared"
+import {
+  AGENT_SURFACE,
+  num,
+  PaSheet,
+  SheetActions,
+  SheetPart,
+  str,
+  usePageScope,
+} from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -94,12 +102,16 @@ function MeetFrame({
   icon: Icon,
   heading,
   text,
+  error = null,
   children,
 }: {
   item: NoticeItem
   icon: LucideIcon
   heading: string
   text: string
+  /** An answer that did not go through: under the card. */
+  error?: string | null
+  /** Its sheet's parts (`SheetPart`, `SheetActions`), or its own cards. */
   children: React.ReactNode
   /** Its own cards inside (the promises' groups): not on a sheet. */
   bare?: boolean
@@ -129,6 +141,7 @@ function MeetFrame({
           <span className="font-medium">{heading}</span>
         </p>
         {bare ? children : <PaSheet>{children}</PaSheet>}
+        <Failed error={error} />
       </div>
     </MessageRow>
   )
@@ -201,24 +214,26 @@ export function MeetNameCard({ item }: { item: NoticeItem }) {
         heading={t("heading")}
         text={row.body}
       >
-        <Stepper
-          questions={questions}
-          disabled={readOnly}
-          onAnswer={async (picks) => {
-            await personalAgentChoiceAnswer(
-              noticeId,
-              {
-                answers: picks.map((p) =>
-                  p.text.trim() ? { text: p.text.trim() } : { key: p.keys[0] }
-                ),
-              },
-              botId
-            )
-          }}
-          onSkip={async () => {
-            await personalAgentChoiceAnswer(noticeId, { answers: [] }, botId)
-          }}
-        />
+        <SheetPart>
+          <Stepper
+            questions={questions}
+            disabled={readOnly}
+            onAnswer={async (picks) => {
+              await personalAgentChoiceAnswer(
+                noticeId,
+                {
+                  answers: picks.map((p) =>
+                    p.text.trim() ? { text: p.text.trim() } : { key: p.keys[0] }
+                  ),
+                },
+                botId
+              )
+            }}
+            onSkip={async () => {
+              await personalAgentChoiceAnswer(noticeId, { answers: [] }, botId)
+            }}
+          />
+        </SheetPart>
       </MeetFrame>
     )
   }
@@ -398,77 +413,95 @@ export function ConnectCard({ item }: { item: NoticeItem }) {
       icon={Compass}
       heading={t("heading")}
       text={[t("about1"), t("about2"), t("prompt")].join("\n")}
+      error={failed}
     >
-      <div className="space-y-1.5" data-pa-meet-about>
-        <p>{t("about1")}</p>
-        <p>{t("about2")}</p>
-      </div>
+      {/* What connecting does, and how it went. */}
+      <SheetPart className="flex flex-col gap-1.5">
+        <div className="space-y-1.5" data-pa-meet-about>
+          <p>{t("about1")}</p>
+          <p>{t("about2")}</p>
+        </div>
+        {open ? null : (
+          <p className="text-xs text-muted-foreground" data-pa-meet-settled>
+            {state === "connected"
+              ? t("connected", { projects: connected.join(t("joiner")) })
+              : t("skipped")}
+          </p>
+        )}
+      </SheetPart>
       {open ? (
         <>
-          <p className="mt-3 mb-2 text-sm font-medium">{t("prompt")}</p>
-          {projects == null ? (
-            <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
-              <SyncedSpinner small className="size-3.5" />
-              {t("loading")}
-            </div>
-          ) : projects.length === 0 ? (
-            <p className="py-1 text-xs text-muted-foreground">{t("none")}</p>
-          ) : (
-            <ul className="flex flex-col gap-1" data-pa-meet-projects>
-              {projects.map((p) => {
-                const id = `pa-meet-project-${row.id}-${p.id}`
-                return (
-                  <li
-                    key={p.id}
-                    data-pa-meet-project={p.id}
-                    className="flex items-center gap-2 rounded-lg border border-border/70 bg-background px-3 py-1.5"
-                  >
-                    <Checkbox
-                      id={id}
-                      checked={chosen.has(p.id)}
-                      disabled={readOnly || busy != null}
-                      onCheckedChange={() => toggle(p.id)}
-                    />
-                    <label
-                      htmlFor={id}
-                      className="min-w-0 flex-1 cursor-pointer"
+          {/* The projects to pick: rows, a hairline between. */}
+          <SheetPart>
+            <p className="mb-1 text-sm font-medium">{t("prompt")}</p>
+            {projects == null ? (
+              <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
+                <SyncedSpinner small className="size-3.5" />
+                {t("loading")}
+              </div>
+            ) : projects.length === 0 ? (
+              <p className="py-1 text-xs text-muted-foreground">{t("none")}</p>
+            ) : (
+              <ul className="flex flex-col" data-pa-meet-projects>
+                {projects.map((p) => {
+                  const id = `pa-meet-project-${row.id}-${p.id}`
+                  return (
+                    <li
+                      key={p.id}
+                      data-pa-meet-project={p.id}
+                      className="flex items-center gap-2 border-t border-border/60 py-2 first:border-t-0"
                     >
-                      <span className="block truncate text-sm">{p.name}</span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {p.provider
-                          ? p.account
-                            ? t("onForge", {
-                                forge: PROVIDER_NAME[p.provider] ?? p.provider,
-                              })
-                            : t("noAccount", {
-                                forge: PROVIDER_NAME[p.provider] ?? p.provider,
-                              })
-                          : t("noForge")}
-                      </span>
-                    </label>
-                    {p.provider && !p.account ? (
-                      <Button
-                        size="xs"
-                        variant="secondary"
-                        disabled={readOnly}
-                        data-pa-meet-connect-account
-                        onClick={() =>
-                          void openSettingsWindow("version-control").catch(
-                            (e) => setFailed(toErrorMessage(e))
-                          )
-                        }
+                      <Checkbox
+                        id={id}
+                        checked={chosen.has(p.id)}
+                        disabled={readOnly || busy != null}
+                        onCheckedChange={() => toggle(p.id)}
+                      />
+                      <label
+                        htmlFor={id}
+                        className="min-w-0 flex-1 cursor-pointer"
                       >
-                        <KeyRound aria-hidden />
-                        {t("connectAccount")}
-                      </Button>
-                    ) : null}
-                  </li>
-                )
-              })}
-            </ul>
-          )}
-          <p className="mt-2 text-xs text-muted-foreground">{t("skipHint")}</p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <span className="block truncate text-sm">{p.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {p.provider
+                            ? p.account
+                              ? t("onForge", {
+                                  forge:
+                                    PROVIDER_NAME[p.provider] ?? p.provider,
+                                })
+                              : t("noAccount", {
+                                  forge:
+                                    PROVIDER_NAME[p.provider] ?? p.provider,
+                                })
+                            : t("noForge")}
+                        </span>
+                      </label>
+                      {p.provider && !p.account ? (
+                        <Button
+                          size="xs"
+                          variant="secondary"
+                          disabled={readOnly}
+                          data-pa-meet-connect-account
+                          onClick={() =>
+                            void openSettingsWindow("version-control").catch(
+                              (e) => setFailed(toErrorMessage(e))
+                            )
+                          }
+                        >
+                          <KeyRound aria-hidden />
+                          {t("connectAccount")}
+                        </Button>
+                      ) : null}
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t("skipHint")}
+            </p>
+          </SheetPart>
+          <SheetActions>
             <Button
               size="sm"
               disabled={readOnly || busy != null || ids.length === 0}
@@ -502,20 +535,13 @@ export function ConnectCard({ item }: { item: NoticeItem }) {
               ) : null}
               {t("skip")}
             </Button>
-          </div>
-          <WorkspaceFolderDialog
-            open={folderDialog}
-            onOpenChange={setFolderDialog}
-          />
+            <WorkspaceFolderDialog
+              open={folderDialog}
+              onOpenChange={setFolderDialog}
+            />
+          </SheetActions>
         </>
-      ) : (
-        <p className="mt-2 text-xs text-muted-foreground" data-pa-meet-settled>
-          {state === "connected"
-            ? t("connected", { projects: connected.join(t("joiner")) })
-            : t("skipped")}
-        </p>
-      )}
-      <Failed error={failed} />
+      ) : null}
     </MeetFrame>
   )
 }
@@ -581,35 +607,43 @@ export function StarterCard({ item }: { item: NoticeItem }) {
       icon={Sparkles}
       heading={heading}
       text={words?.line ?? row.body}
+      error={failed}
     >
       {state === "looking" ? (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <SyncedSpinner small className="size-3.5" />
-          {t("looking")}
-        </p>
+        <SheetPart>
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <SyncedSpinner small className="size-3.5" />
+            {t("looking")}
+          </p>
+        </SheetPart>
       ) : state === "none" ? (
-        <p className="text-sm">{seen > 0 ? t("noMore") : t("none")}</p>
+        <SheetPart>
+          <p className="text-sm">{seen > 0 ? t("noMore") : t("none")}</p>
+        </SheetPart>
       ) : (
         <>
-          <p className="text-sm break-words" data-pa-starter-lead>
-            {state === "handed"
-              ? t("handed", { what: words?.line ?? row.body })
-              : state === "dismissed"
-                ? t("dismissed", { what: words?.line ?? row.body })
-                : (words?.line ?? row.body)}
-          </p>
-          {url ? (
-            <button
-              type="button"
-              onClick={() => void openUrl(url)}
-              className="mt-1 inline-flex max-w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <ExternalLink className="size-3 shrink-0" aria-hidden />
-              <span className="truncate">{url}</span>
-            </button>
-          ) : null}
+          {/* The lead, and where it is. */}
+          <SheetPart className="flex flex-col items-start gap-1">
+            <p className="text-sm break-words" data-pa-starter-lead>
+              {state === "handed"
+                ? t("handed", { what: words?.line ?? row.body })
+                : state === "dismissed"
+                  ? t("dismissed", { what: words?.line ?? row.body })
+                  : (words?.line ?? row.body)}
+            </p>
+            {url ? (
+              <button
+                type="button"
+                onClick={() => void openUrl(url)}
+                className="inline-flex max-w-full items-center gap-1 rounded-sm text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <ExternalLink className="size-3 shrink-0" aria-hidden />
+                <span className="truncate">{url}</span>
+              </button>
+            ) : null}
+          </SheetPart>
           {state === "found" ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <SheetActions>
               <Button
                 size="sm"
                 disabled={readOnly || busy != null}
@@ -642,11 +676,10 @@ export function StarterCard({ item }: { item: NoticeItem }) {
               >
                 {t("notNow")}
               </Button>
-            </div>
+            </SheetActions>
           ) : null}
         </>
       )}
-      <Failed error={failed} />
     </MeetFrame>
   )
 }
@@ -760,7 +793,10 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
   // as a card's are, and [Done] at the end.
   const actions = account ? (
     <div
-      className={cn(MEET_CARD, "mt-2 flex flex-wrap items-center gap-2 p-2")}
+      className={cn(
+        MEET_CARD,
+        "mt-2 flex flex-wrap items-center gap-2 px-3.5 py-3"
+      )}
       data-pa-surface
       data-pa-meet-actions
     >
@@ -816,6 +852,7 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
       icon={Sparkles}
       heading={t("heading")}
       text={t("heading")}
+      error={failed}
       bare
     >
       {done && !unfolded ? (
@@ -855,7 +892,6 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
           {actions}
         </>
       )}
-      <Failed error={failed} />
     </MeetFrame>
   )
 }

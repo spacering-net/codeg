@@ -23,7 +23,16 @@ import { cn } from "@/lib/utils"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { useSessionLinkOpener } from "./session-link"
-import { AGENT_SURFACE, num, PaSheet, str, usePageScope } from "./shared"
+import {
+  AGENT_SURFACE,
+  num,
+  PaSheet,
+  SheetActions,
+  SheetLabel,
+  SheetPart,
+  str,
+  usePageScope,
+} from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -35,11 +44,10 @@ const VERDICTS: readonly MessageCheckVerdict[] = [
 ]
 
 const TONE: Record<MessageCheckVerdict, string> = {
-  true: "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-  false: "border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300",
-  partly:
-    "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  unsure: "border-border bg-muted/60 text-muted-foreground",
+  true: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+  false: "bg-red-500/15 text-red-700 dark:text-red-300",
+  partly: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+  unsure: "bg-muted text-muted-foreground",
 }
 
 export function CheckCard({ item }: { item: NoticeItem }) {
@@ -132,25 +140,35 @@ export function CheckCard({ item }: { item: NoticeItem }) {
           )}
           <span className="font-medium">{t(`heading.${state}`)}</span>
         </p>
-        <PaSheet className="flex flex-col gap-2">
-          <p className="text-sm break-words" data-pa-check-line>
-            {line}
-          </p>
-          {state === "done" && verdict ? (
-            <span
-              className={cn(
-                "inline-flex w-fit items-center gap-1 rounded-full border px-2 py-0.5 text-xs",
-                TONE[verdict]
-              )}
-            >
-              <ShieldCheck className="size-3" aria-hidden />
-              {word}
-            </span>
-          ) : null}
-          <div className="flex flex-col gap-1 rounded-md border border-border/70 bg-background/60 p-2 text-xs">
-            <p className="text-muted-foreground">
-              {t(sentence ? "checkedSentence" : "checkedMessage")}
+        <PaSheet>
+          {/* What it found, and who checked it. */}
+          <SheetPart className="flex flex-col gap-2">
+            <p className="text-sm break-words" data-pa-check-line>
+              {line}
             </p>
+            {state === "done" && verdict ? (
+              <span
+                className={cn(
+                  "inline-flex h-5 w-fit items-center gap-1 rounded-full px-2 text-[0.6875rem] font-medium",
+                  TONE[verdict]
+                )}
+              >
+                <ShieldCheck className="size-3" aria-hidden />
+                {word}
+              </span>
+            ) : null}
+            {note || executor ? (
+              <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                {note ? <p data-pa-check-note>{note}</p> : null}
+                {executor ? <p>{t("by", { executor })}</p> : null}
+              </div>
+            ) : null}
+          </SheetPart>
+          {/* What it checked: the sentence, or the message. */}
+          <SheetPart className="flex flex-col gap-1 text-xs">
+            <SheetLabel className="mb-0.5">
+              {t(sentence ? "checkedSentence" : "checkedMessage")}
+            </SheetLabel>
             {sentence ? (
               <p className="break-words font-medium" data-pa-check-quote>
                 {quote}
@@ -170,7 +188,7 @@ export function CheckCard({ item }: { item: NoticeItem }) {
             {message ? (
               <button
                 type="button"
-                className="w-fit text-[0.6875rem] text-muted-foreground underline-offset-2 hover:underline"
+                className="w-fit rounded-sm text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                 aria-expanded={whole}
                 onClick={() => setWhole((v) => !v)}
               >
@@ -182,33 +200,24 @@ export function CheckCard({ item }: { item: NoticeItem }) {
                 {t("asked")}: {asked}
               </p>
             ) : null}
-          </div>
+          </SheetPart>
+          {/* What it went by. */}
           {state === "done" ? (
-            <div className="text-xs">
-              <p className="text-muted-foreground">{t("evidence")}</p>
+            <SheetPart className="text-xs">
+              <SheetLabel>{t("evidence")}</SheetLabel>
               {evidence ? (
                 <pre
-                  className="field-scrollbar mt-0.5 max-h-72 overflow-auto rounded-md border border-border/70 bg-background/60 p-2 font-sans text-xs leading-relaxed whitespace-pre-wrap break-words"
+                  className="field-scrollbar max-h-72 overflow-auto font-sans text-xs leading-relaxed whitespace-pre-wrap break-words"
                   data-pa-check-evidence
                 >
                   {evidence}
                 </pre>
               ) : (
-                <p className="mt-0.5">{t("noEvidence")}</p>
+                <p>{t("noEvidence")}</p>
               )}
-            </div>
+            </SheetPart>
           ) : null}
-          {note ? (
-            <p className="text-xs text-muted-foreground" data-pa-check-note>
-              {note}
-            </p>
-          ) : null}
-          {executor ? (
-            <p className="text-xs text-muted-foreground">
-              {t("by", { executor })}
-            </p>
-          ) : null}
-          <div className="flex flex-wrap items-center gap-2">
+          <SheetActions>
             {conversationId != null ? (
               <Button
                 size="sm"
@@ -238,7 +247,7 @@ export function CheckCard({ item }: { item: NoticeItem }) {
                 {t("process")}
               </Button>
             ) : null}
-          </div>
+          </SheetActions>
         </PaSheet>
         {failed ? (
           <p className="text-xs text-destructive" role="alert">

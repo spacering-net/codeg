@@ -9989,7 +9989,6 @@
       },
       "assistant": "어시스턴트: {decision}",
       "assistantWhy": "어시스턴트: {decision}, 이유: {reason}",
-      "against": "확인: {verdict} · 어시스턴트: {decision}, 이유: {reason}",
       "fallback": "어시스턴트가 결론을 내지 않아 확인 결과대로 처리했어요",
       "owner": "내 결정: {decision}",
       "question": "질문: {question}",

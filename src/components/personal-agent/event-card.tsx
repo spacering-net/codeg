@@ -41,6 +41,8 @@ import {
   MARKDOWN_LIST_ROOM,
   num,
   PaSheet,
+  SheetActions,
+  SheetPart,
   str,
   UnreadMark,
   useOpenWork,
@@ -48,7 +50,13 @@ import {
   useWorkMeta,
   workTargetOf,
 } from "./shared"
-import { asLadder, LadderChip, TaskStrip } from "./task-strip"
+import {
+  asLadder,
+  hasTaskActions,
+  LadderChip,
+  TaskActions,
+  TaskStrip,
+} from "./task-strip"
 import { WorkRow } from "./work-card"
 
 type EventItem = Extract<MessageItem, { kind: "event" }>
@@ -60,13 +68,19 @@ const OWN_NOTES = new Set(["boot", "lost", "gone"])
 
 /** The result, as the message's text, cut at six of its lines until asked
  *  for all. A proposal card shows its prompt the same way. */
-export function CollapsedText({ text }: { text: string }) {
+export function CollapsedText({
+  text,
+  className,
+}: {
+  text: string
+  className?: string
+}) {
   const t = useTranslations("PersonalAgent.event")
   const { contentRef, contentId, isOverflowing, expanded, toggle } =
     useCollapsibleOverflow<HTMLDivElement>(text)
   const clipped = !expanded
   return (
-    <div data-pa-result className="mt-2.5">
+    <div data-pa-result className={className}>
       <div
         ref={contentRef}
         id={contentId}
@@ -180,6 +194,23 @@ function weeklyDraft(info: DispatchInfo): RoutineDraft {
   }
 }
 
+/** The news's buttons, its card's last band: the task card's, then its
+ *  own — none of it when there is no button to show. */
+function EventActions({
+  strip,
+  children,
+}: {
+  strip: DispatchInfo | null
+  children: React.ReactNode
+}) {
+  return (
+    <SheetActions data-pa-event-actions>
+      {strip ? <TaskActions d={strip} /> : null}
+      {children}
+    </SheetActions>
+  )
+}
+
 export function EventCard({ item }: { item: EventItem }) {
   const t = useTranslations("PersonalAgent")
   const { dispatchById, botId } = usePersonalAgent()
@@ -217,6 +248,25 @@ export function EventCard({ item }: { item: EventItem }) {
   const verdict = asVerdict(data?.verdict)
   const evidence = str(data, "evidence")
   const shown = checkFor != null && evidence ? evidence : excerpt
+  // The task card, on the latest news of its work: where it stands now,
+  // said again on the strip when the row above says otherwise.
+  const strip = item.latest && info?.task ? info : null
+  const answered = item.latest && info ? info.answered_for_you : 0
+  const weekly =
+    item.latest &&
+    info &&
+    info.state === "completed" &&
+    checkFor == null &&
+    info.routine_id == null &&
+    !readOnly
+      ? info
+      : null
+  const facts =
+    strip != null ||
+    answered > 0 ||
+    note != null ||
+    retry != null ||
+    checkFor != null
   return (
     <MessageRow
       rowId={row.id}
@@ -246,9 +296,9 @@ export function EventCard({ item }: { item: EventItem }) {
         {row.reply_to != null && !item.quotesPrevious ? (
           <QuoteBar targetId={row.reply_to} tone="light" className="mb-2" />
         ) : null}
-        {/* The work and its news on one card: the work its head, what came
-            of it under a hairline. */}
-        <PaSheet className="overflow-hidden p-0" data-pa-event-card>
+        {/* The work and its news on one card: the work its head, then where
+            it stands, what came of it and its buttons, a hairline between. */}
+        <PaSheet data-pa-event-card>
           <WorkRow
             flat
             executorId={info?.executor.assistant_id ?? num(data, "executor_id")}
@@ -269,56 +319,58 @@ export function EventCard({ item }: { item: EventItem }) {
             }
             onOpen={canOpenWork(target) ? () => openWork(target) : null}
           />
-          <div className="border-t border-border/60 px-3 pt-2.5 pb-3 empty:hidden [&>:first-child]:mt-0">
-            {/* The task card, on the latest news of its work: where it stands
-            now, said again on the strip when the row above says otherwise. */}
-            {item.latest && info?.task ? (
-              <TaskStrip d={info} chip={newsLadder !== info.ladder} />
-            ) : null}
-            {item.latest && info && info.answered_for_you > 0 ? (
-              <AnsweredForYou count={info.answered_for_you} className="mt-2" />
-            ) : null}
-            {note ? (
-              <p className="mt-2 text-xs break-words text-muted-foreground">
-                {note}
-              </p>
-            ) : null}
-            {retry ? (
-              <p
-                className="mt-1.5 text-xs break-words text-muted-foreground"
-                data-pa-retry
-              >
-                {retry}
-              </p>
-            ) : null}
-            {checkFor != null ? (
-              <div
-                className="mt-2 flex flex-wrap items-center gap-1.5"
-                data-pa-check-result={verdict ?? ""}
-              >
-                <CheckLabel round={checkRound} via={null} />
-                {data?.verdict !== undefined && data?.verdict !== null ? (
-                  <VerdictChip verdict={verdict} />
-                ) : null}
-              </div>
-            ) : null}
-            {shown ? <CollapsedText text={shown} /> : null}
-            {/* Done, and not a routine's already: make it one (6.9). */}
-            {item.latest &&
-            info &&
-            info.state === "completed" &&
-            checkFor == null &&
-            info.routine_id == null &&
-            !readOnly ? (
-              <div className="mt-2">
+          {/* Where it stands, what it said in passing, what a check found. */}
+          {facts ? (
+            <SheetPart className="flex flex-col gap-1.5" data-pa-event-facts>
+              {strip ? (
+                <TaskStrip d={strip} chip={newsLadder !== strip.ladder} />
+              ) : null}
+              {answered > 0 ? <AnsweredForYou count={answered} /> : null}
+              {note ? (
+                <p className="text-xs break-words text-muted-foreground">
+                  {note}
+                </p>
+              ) : null}
+              {retry ? (
+                <p
+                  className="text-xs break-words text-muted-foreground"
+                  data-pa-retry
+                >
+                  {retry}
+                </p>
+              ) : null}
+              {checkFor != null ? (
+                <div
+                  className="flex flex-wrap items-center gap-1.5"
+                  data-pa-check-result={verdict ?? ""}
+                >
+                  <CheckLabel round={checkRound} via={null} />
+                  {data?.verdict !== undefined && data?.verdict !== null ? (
+                    <VerdictChip verdict={verdict} />
+                  ) : null}
+                </div>
+              ) : null}
+            </SheetPart>
+          ) : null}
+          {/* What came of it, as the message's text. */}
+          {shown ? (
+            <SheetPart>
+              <CollapsedText text={shown} />
+            </SheetPart>
+          ) : null}
+          {/* The task card's buttons; done, and not a routine's already:
+              make it one (6.9). */}
+          {(strip && hasTaskActions(strip, readOnly)) || weekly ? (
+            <EventActions strip={strip}>
+              {weekly ? (
                 <Button
-                  size="xs"
+                  size="sm"
                   variant="secondary"
                   onClick={() =>
                     openRoutineEditor({
                       botId,
                       routineId: null,
-                      draft: weeklyDraft(info),
+                      draft: weeklyDraft(weekly),
                       noticeId: null,
                     })
                   }
@@ -327,9 +379,9 @@ export function EventCard({ item }: { item: EventItem }) {
                   <Repeat aria-hidden />
                   {t("routines.weekly")}
                 </Button>
-              </div>
-            ) : null}
-          </div>
+              ) : null}
+            </EventActions>
+          ) : null}
         </PaSheet>
       </div>
     </MessageRow>

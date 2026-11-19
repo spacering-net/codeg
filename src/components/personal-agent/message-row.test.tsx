@@ -57,7 +57,12 @@ import { buildMessageItems, type MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { OwnerBubble } from "./owner-bubble"
 import { ReplyBubble, SaidBubble } from "./reply-bubble"
-import { AGENT_SURFACE, PageScopeContext, type PageScope } from "./shared"
+import {
+  AGENT_SURFACE,
+  PageScopeContext,
+  SHEET_ROW_HOVER,
+  type PageScope,
+} from "./shared"
 
 function row(
   id: number,
@@ -986,8 +991,10 @@ describe("the bubbles", () => {
     expect(sheet.className).toContain("overflow-hidden")
     expect(workRow.getAttribute("data-pa-work")).toBe("head")
     expect(workRow.className).not.toContain("bg-(--pa-object)")
-    expect(workRow.className).toContain("hover:bg-(--pa-object-hover)")
-    expect(workRow.className).toContain("active:bg-(--pa-object-active)")
+    // The card's head: the faintest step under the pointer, not the wash
+    // a thing on the card takes.
+    expect(workRow.className).toContain(SHEET_ROW_HOVER)
+    expect(workRow.className).not.toContain("hover:bg-(--pa-object-hover)")
     cleanup()
     const pills = draw(
       <DispatchAttachments

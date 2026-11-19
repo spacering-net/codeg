@@ -9989,7 +9989,6 @@
       },
       "assistant": "助理：{decision}",
       "assistantWhy": "助理：{decision}，理由：{reason}",
-      "against": "檢查：{verdict} · 助理：{decision}，理由：{reason}",
       "fallback": "助理沒給結論，依檢查結論處理",
       "owner": "你的決定：{decision}",
       "question": "問你：{question}",

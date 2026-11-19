@@ -44,7 +44,7 @@ vi.mock("@/contexts/tab-context", () => ({
 import { EventCard } from "./event-card"
 import { buildMessageItems, type MessageItem } from "./message-items"
 import { PageScopeContext, type PageScope } from "./shared"
-import { LadderChip, TaskStrip } from "./task-strip"
+import { LadderChip, TaskActions, TaskStrip } from "./task-strip"
 
 function facts(patch: Partial<TaskFacts> = {}): TaskFacts {
   return {
@@ -219,7 +219,7 @@ describe("the task card", () => {
 
   it("views the pull request, opens the session and stops the work", async () => {
     draw(
-      <TaskStrip
+      <TaskActions
         d={dispatch({
           ladder: "mergeable",
           state: "review",
@@ -254,7 +254,7 @@ describe("the task card", () => {
 
   it("offers no stop on settled work, nor on a read-only page", () => {
     const merged = draw(
-      <TaskStrip
+      <TaskActions
         d={dispatch({
           ladder: "merged",
           state: "completed",
@@ -264,7 +264,7 @@ describe("the task card", () => {
     )
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull()
     merged.unmount()
-    draw(<TaskStrip d={dispatch()} />, { readOnly: true })
+    draw(<TaskActions d={dispatch()} />, { readOnly: true })
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull()
     expect(screen.getByRole("button", { name: "Open session" })).toBeTruthy()
   })
@@ -322,6 +322,19 @@ describe("the task card on the news", () => {
     // The row says the rung it stands on: the strip does not repeat it.
     expect(strip.querySelector("[data-pa-ladder]")).toBeNull()
     expect(strip.textContent).toContain("+214 −37, 6 files")
+    // The card in its parts: the work its head, where it stands a band of
+    // its own, its buttons the last band — not in the strip.
+    const sheet = second.container.querySelector("[data-pa-event-card]")!
+    const parts = [...sheet.children]
+    expect(parts[0].getAttribute("data-pa-work")).toBe("head")
+    expect(strip.closest("[data-pa-sheet-part]")).toBe(parts[1])
+    expect(parts[parts.length - 1]?.hasAttribute("data-pa-sheet-actions")).toBe(
+      true
+    )
+    expect(strip.querySelector("button")).toBeNull()
+    expect(
+      parts[parts.length - 1]?.querySelector('[data-pa-task-act="open"]')
+    ).toBeTruthy()
   })
 
   it("says on the strip where the work stands now when the news is behind it", () => {

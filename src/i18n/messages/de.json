@@ -9989,7 +9989,6 @@
       },
       "assistant": "Assistent: {decision}",
       "assistantWhy": "Assistent: {decision}, weil: {reason}",
-      "against": "Prüfung: {verdict} · Assistent: {decision}, weil: {reason}",
       "fallback": "Der Assistent hat nicht entschieden: codeg ist der Prüfung gefolgt",
       "owner": "Deine Entscheidung: {decision}",
       "question": "Fragt dich: {question}",

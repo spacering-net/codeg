@@ -9989,7 +9989,6 @@
       },
       "assistant": "Assistant: {decision}",
       "assistantWhy": "Assistant: {decision}, because: {reason}",
-      "against": "Check: {verdict} · Assistant: {decision}, because: {reason}",
       "fallback": "The assistant gave no conclusion: codeg went by the check",
       "owner": "Your decision: {decision}",
       "question": "It asks you: {question}",

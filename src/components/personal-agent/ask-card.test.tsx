@@ -146,6 +146,13 @@ describe("AskCard", () => {
     ).toBe("asking")
     expect(screen.queryByRole("button", { name: /submit/i })).toBeNull()
     expect(screen.getByRole("button", { name: "Open session" })).toBeTruthy()
+    // The work its head, the way to its session on the last band.
+    expect(container.querySelector('[data-pa-work="head"]')).not.toBeNull()
+    expect(
+      screen
+        .getByRole("button", { name: "Open session" })
+        .closest("[data-pa-sheet-actions]")
+    ).not.toBeNull()
   })
 
   it("lets the owner answer a forwarded question here, with the assistant's lean", async () => {

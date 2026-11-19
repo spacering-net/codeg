@@ -134,6 +134,10 @@ describe("the memory card", () => {
   it("shows the diff when asked, and takes the change back", () => {
     const { container } = draw(card({}))
     expect(container.querySelector("[data-pa-memory-diff]")).toBeNull()
+    // Its buttons on the card's last band, under a hairline.
+    expect(
+      screen.getByText("Show changes").closest("[data-pa-sheet-actions]")
+    ).not.toBeNull()
     fireEvent.click(screen.getByText("Show changes"))
     expect(container.querySelector("[data-pa-memory-diff]")).toBeTruthy()
     expect(screen.getByText("We ship on Fridays.")).toBeTruthy()

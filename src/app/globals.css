@@ -4503,15 +4503,12 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   --pa-object-hover: color-mix(in oklab, var(--foreground) 4%, var(--card));
   --pa-object-active: color-mix(in oklab, var(--foreground) 7%, var(--card));
   --pa-object-edge: color-mix(in oklab, var(--foreground) 10%, transparent);
-  /* A table's body: white on the grey, the card's own on a card. */
-  --pa-table: var(--card);
 }
 .pa-agent-bubble :is([data-pa-surface], [data-slot="card"]) {
   --pa-object: var(--pa-inset);
   --pa-object-hover: var(--pa-inset-hover);
   --pa-object-active: var(--pa-inset-active);
   --pa-object-edge: transparent;
-  --pa-table: transparent;
 }
 [data-workspace-bg="on"] .pa-agent-bubble {
   background-color: color-mix(in oklab, var(--muted) 58%, transparent);
@@ -4521,10 +4518,9 @@ div.monaco-diff-editor.side-by-side .editor.modified {
    code block and a diagram are the bubble a step deeper, instead of their
    own greys (one of them the bubble's own) and a code body of the page
    colour — a white card on the grey; a code block's title bar and a
-   table's head a step deeper again; a table's body a white card on the
-   grey (`--pa-table`; on a card inside the bubble, that card); and no
-   frame round a code block. A table keeps its lines: they are its
-   structure. */
+   table's head a step deeper again, a table's body the bubble itself; and
+   no frame round a code block, as round nothing else in a bubble. A table
+   keeps its lines: they are its structure. */
 .pa-agent-bubble [data-streamdown="inline-code"],
 .pa-agent-bubble [data-streamdown="code-block"],
 .pa-agent-bubble [data-streamdown="mermaid-block"],
@@ -4532,11 +4528,9 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 .pa-agent-bubble [data-streamdown="table-header"] {
   background-color: var(--pa-inset);
 }
-.pa-agent-bubble [data-streamdown="code-block-body"] {
-  background-color: transparent;
-}
+.pa-agent-bubble [data-streamdown="code-block-body"],
 .pa-agent-bubble [data-streamdown="table-body"] {
-  background-color: var(--pa-table);
+  background-color: transparent;
 }
 .pa-agent-bubble [data-streamdown="code-block"] {
   border-color: transparent;

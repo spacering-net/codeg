@@ -386,6 +386,21 @@ describe("the card about work assistants made", () => {
     expect(screen.getByText("Suggestion: a new work assistant")).toBeTruthy()
     expect(screen.getByText("Night cleaner")).toBeTruthy()
     expect(screen.getByText("Why: you keep asking for cleanups")).toBeTruthy()
+    // What it would make, why, and the buttons: a band each, buttons last.
+    const sheet = screen.getByText("Night cleaner").closest("[data-pa-surface]")
+    expect(
+      screen.getByText("Night cleaner").closest("[data-pa-sheet-part]")
+    ).toBe(sheet?.firstElementChild)
+    expect(
+      screen
+        .getByText("Why: you keep asking for cleanups")
+        .closest("[data-pa-sheet-part]")
+    ).toBe(sheet?.children[1])
+    expect(
+      screen
+        .getByRole("button", { name: "Make it" })
+        .closest("[data-pa-sheet-actions]")
+    ).toBe(sheet?.lastElementChild)
     fireEvent.click(screen.getByRole("button", { name: "Make it" }))
     await waitFor(() =>
       expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(12, "accept", 7)

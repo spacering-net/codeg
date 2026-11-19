@@ -50,12 +50,14 @@ import {
   asMode,
   canOpenWork,
   PaSheet,
+  SheetActions,
+  SheetPart,
   useOpenWork,
   usePageScope,
   useWorkMeta,
   workTargetOf,
 } from "./shared"
-import { WORK_WELL, WorkRow } from "./work-card"
+import { WorkRow } from "./work-card"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -240,102 +242,105 @@ export function AskCard({ item }: { item: NoticeItem }) {
           <span className="font-medium">{heading}</span>
         </p>
         <PaSheet>
-          {mirror ? (
-            <p
-              className="mb-2 text-xs text-muted-foreground"
-              data-pa-ask-mirror
-            >
-              {t("mirror", { name: assistant })}
-            </p>
-          ) : null}
-          <div className={WORK_WELL}>
-            <WorkRow
-              executorId={data.executor_id ?? null}
-              executor={executor}
-              agentType={(data.agent_type as AgentType | null) ?? null}
-              title={text(data.title) ?? row.body}
-              meta={meta({
-                executor,
-                mode: asMode(data.mode),
-                folder: null,
-              })}
-              chip={null}
-              onOpen={openable ? () => openWork(target) : null}
-            />
-          </div>
-          <p
-            data-pa-ask-state
-            className={cn(
-              "mt-2.5 text-sm break-words",
-              state === "forwarded" && "font-medium",
-              state === "withdrawn" && "text-muted-foreground"
-            )}
-          >
-            {state === "asking"
-              ? t("state.asking", { name: assistant })
-              : state === "forwarded"
-                ? t("state.forwarded")
-                : state === "submitting"
-                  ? t("state.submitting")
-                  : state === "withdrawn"
-                    ? t("state.withdrawn")
-                    : answered}
-          </p>
-          {state === "forwarded" && why ? (
-            <p className="mt-1 text-xs text-muted-foreground">{why}</p>
-          ) : null}
-          {data.suggestion && state === "forwarded" ? (
-            <p className="mt-1.5 text-xs break-words" data-pa-ask-suggestion>
-              {t("suggestion", {
-                name: assistant,
-                suggestion: data.suggestion,
-              })}
-            </p>
-          ) : null}
-          {data.reason &&
-          (state === "forwarded" ||
-            (state === "answered" &&
-              data.answered_by?.kind === "assistant")) ? (
-            <p
-              className="mt-1 text-xs break-words text-muted-foreground"
-              data-pa-ask-reason
-            >
-              {t("reason", { reason: data.reason })}
-            </p>
-          ) : null}
-          <div className="mt-2.5">
-            {answerable && question ? (
-              <AskQuestionCard
-                question={{
-                  question_id: data.request_id ?? String(askId),
-                  questions,
-                  created_at: data.asked_at ?? row.created_at,
-                }}
-                onAnswer={(_, answer) => send({ answer })}
-              />
-            ) : answerable ? (
-              <PlanApprovalCard
-                approval={{
-                  approval_id: data.request_id ?? String(askId),
-                  tool_call_id: "",
-                  plan_markdown: plan ?? "",
-                  created_at: data.asked_at ?? row.created_at,
-                }}
-                onAnswer={(_, answer) =>
-                  send({
-                    decision: askDecision(answer.decision),
-                    feedback: answer.feedback ?? null,
-                  })
-                }
-              />
-            ) : question ? (
-              <QuestionList questions={questions} />
-            ) : plan ? (
-              <CollapsedText text={plan} />
+          {/* The work that asks: the card's head. */}
+          <WorkRow
+            flat
+            executorId={data.executor_id ?? null}
+            executor={executor}
+            agentType={(data.agent_type as AgentType | null) ?? null}
+            title={text(data.title) ?? row.body}
+            meta={meta({
+              executor,
+              mode: asMode(data.mode),
+              folder: null,
+            })}
+            chip={null}
+            onOpen={openable ? () => openWork(target) : null}
+          />
+          {/* Where its question stands, and on whose word. */}
+          <SheetPart className="flex flex-col gap-1">
+            {mirror ? (
+              <p className="text-xs text-muted-foreground" data-pa-ask-mirror>
+                {t("mirror", { name: assistant })}
+              </p>
             ) : null}
-          </div>
+            <p
+              data-pa-ask-state
+              className={cn(
+                "text-sm break-words",
+                state === "forwarded" && "font-medium",
+                state === "withdrawn" && "text-muted-foreground"
+              )}
+            >
+              {state === "asking"
+                ? t("state.asking", { name: assistant })
+                : state === "forwarded"
+                  ? t("state.forwarded")
+                  : state === "submitting"
+                    ? t("state.submitting")
+                    : state === "withdrawn"
+                      ? t("state.withdrawn")
+                      : answered}
+            </p>
+            {state === "forwarded" && why ? (
+              <p className="text-xs text-muted-foreground">{why}</p>
+            ) : null}
+            {data.suggestion && state === "forwarded" ? (
+              <p className="text-xs break-words" data-pa-ask-suggestion>
+                {t("suggestion", {
+                  name: assistant,
+                  suggestion: data.suggestion,
+                })}
+              </p>
+            ) : null}
+            {data.reason &&
+            (state === "forwarded" ||
+              (state === "answered" &&
+                data.answered_by?.kind === "assistant")) ? (
+              <p
+                className="text-xs break-words text-muted-foreground"
+                data-pa-ask-reason
+              >
+                {t("reason", { reason: data.reason })}
+              </p>
+            ) : null}
+          </SheetPart>
+          {/* What it asks: to answer here, or as it was asked. */}
+          {answerable || question || plan ? (
+            <SheetPart>
+              {answerable && question ? (
+                <AskQuestionCard
+                  question={{
+                    question_id: data.request_id ?? String(askId),
+                    questions,
+                    created_at: data.asked_at ?? row.created_at,
+                  }}
+                  onAnswer={(_, answer) => send({ answer })}
+                />
+              ) : answerable ? (
+                <PlanApprovalCard
+                  approval={{
+                    approval_id: data.request_id ?? String(askId),
+                    tool_call_id: "",
+                    plan_markdown: plan ?? "",
+                    created_at: data.asked_at ?? row.created_at,
+                  }}
+                  onAnswer={(_, answer) =>
+                    send({
+                      decision: askDecision(answer.decision),
+                      feedback: answer.feedback ?? null,
+                    })
+                  }
+                />
+              ) : question ? (
+                <QuestionList questions={questions} />
+              ) : (
+                <CollapsedText text={plan ?? ""} />
+              )}
+            </SheetPart>
+          ) : null}
           {openable && state !== "answered" && state !== "withdrawn" ? (
-            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            <SheetActions>
               <Button
                 size="sm"
                 variant="secondary"
@@ -343,7 +348,7 @@ export function AskCard({ item }: { item: NoticeItem }) {
               >
                 {t("openSession")}
               </Button>
-            </div>
+            </SheetActions>
           ) : null}
         </PaSheet>
       </div>

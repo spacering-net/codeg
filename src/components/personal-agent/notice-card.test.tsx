@@ -105,6 +105,18 @@ describe("NoticeCard", () => {
     expect(screen.getByText("Research X")).toBeTruthy()
     expect(screen.getByText("Researcher · Chat")).toBeTruthy()
     expect(screen.getByText("Find out X.")).toBeTruthy()
+    // On one sheet in parts: the work's row its head, what it is to do a
+    // band of its own, its buttons the last.
+    const sheet = screen.getByText("Research X").closest("[data-pa-surface]")
+    expect(sheet?.firstElementChild?.getAttribute("data-pa-work")).toBe("head")
+    expect(
+      screen.getByText("Find out X.").closest("[data-pa-sheet-part]")
+    ).not.toBeNull()
+    expect(
+      screen
+        .getByRole("button", { name: "Do this" })
+        .closest("[data-pa-sheet-actions]")
+    ).toBe(sheet?.lastElementChild)
     fireEvent.click(screen.getByRole("button", { name: "Do this" }))
     await waitFor(() =>
       expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept", null)
@@ -286,6 +298,12 @@ describe("cards about assistants working together", () => {
     expect(screen.getByText("Fix the login")).toBeTruthy()
     expect(screen.getByText("To Dev: Fix it.")).toBeTruthy()
     expect(screen.getByText("Review is on “Review it.”")).toBeTruthy()
+    // Each group a band of its own on the sheet, its label over it.
+    const parts = screen
+      .getByText("Fix the login")
+      .closest("[data-pa-surface]")
+      ?.querySelectorAll(":scope > [data-pa-sheet-part]")
+    expect(parts?.length).toBe(3)
     fireEvent.click(screen.getByRole("button", { name: "Stop Review's too" }))
     await waitFor(() =>
       expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "stop:8", null)
@@ -331,6 +349,21 @@ describe("a settings change card", () => {
     expect(screen.getByText("Medium")).toBeInTheDocument()
     expect(screen.getByText("Short")).toBeInTheDocument()
     expect(screen.getByText("You said: “keep it short”")).toBeInTheDocument()
+    // The change, why and the buttons: three bands, the buttons last.
+    const sheet = screen.getByText("Reply length").closest("[data-pa-surface]")
+    expect(
+      screen.getByText("Reply length").closest("[data-pa-sheet-part]")
+    ).not.toBeNull()
+    expect(
+      screen
+        .getByText("You said: “keep it short”")
+        .closest("[data-pa-sheet-part]")
+    ).not.toBe(screen.getByText("Reply length").closest("[data-pa-sheet-part]"))
+    expect(
+      screen
+        .getByRole("button", { name: "Undo" })
+        .closest("[data-pa-sheet-actions]")
+    ).toBe(sheet?.lastElementChild)
     fireEvent.click(screen.getByRole("button", { name: "Undo" }))
     await waitFor(() =>
       expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "undo", null)

@@ -9989,7 +9989,6 @@
       },
       "assistant": "アシスタント：{decision}",
       "assistantWhy": "アシスタント：{decision}（理由：{reason}）",
-      "against": "確認：{verdict} · アシスタント：{decision}（理由：{reason}）",
       "fallback": "アシスタントが結論を出さなかったため、確認結果に従いました",
       "owner": "あなたの判断：{decision}",
       "question": "質問：{question}",

@@ -9989,7 +9989,6 @@
       },
       "assistant": "助手：{decision}",
       "assistantWhy": "助手：{decision}，理由：{reason}",
-      "against": "检查：{verdict} · 助手：{decision}，理由：{reason}",
       "fallback": "助手没给结论，按检查结论处理",
       "owner": "你的决定：{decision}",
       "question": "问你：{question}",

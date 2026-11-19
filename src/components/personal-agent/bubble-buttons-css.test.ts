@@ -30,9 +30,12 @@ describe("the bubble's buttons", () => {
     const body = onCard.slice(0, onCard.indexOf("}"))
     expect(body).toContain("--pa-object: var(--pa-inset);")
     expect(body).toContain("--pa-object-edge: transparent;")
-    expect(body).toContain("--pa-table: transparent;")
+  })
+
+  it("leaves a table's body the bubble itself, not a white card", () => {
+    expect(css).not.toContain("--pa-table")
     expect(css).toMatch(
-      /\.pa-agent-bubble \[data-streamdown="table-body"\] \{\s*background-color: var\(--pa-table\);/
+      /\.pa-agent-bubble \[data-streamdown="table-body"\] \{\s*background-color: transparent;/
     )
   })
 

@@ -268,6 +268,12 @@ describe("a PR card", () => {
     expect(screen.getByText("It has moved on since.")).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Got it" })).toBeNull()
     expect(screen.getByRole("button", { name: "View PR" })).toBeInTheDocument()
+    // On the card's last band.
+    expect(
+      screen
+        .getByRole("button", { name: "View PR" })
+        .closest("[data-pa-sheet-actions]")
+    ).not.toBeNull()
   })
 
   it("never calls a PR whose checks it cannot read ready to merge", () => {

@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { useBotId } from "@/contexts/personal-agent-context"
 import { personalAgentNoticeAct } from "@/lib/api"
+import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { str, usePageScope } from "./shared"
@@ -61,7 +62,14 @@ export function MuteKindButton({
 }
 
 /** The line a card shows once its kind was muted from it. */
-export function MutedNote({ data }: { data: unknown }) {
+export function MutedNote({
+  data,
+  className = "mt-1.5",
+}: {
+  data: unknown
+  /** Its room over it: none inside a card's band, which spaces its lines. */
+  className?: string
+}) {
   const t = useTranslations("PersonalAgent.rules")
   const openSettings = usePersonalAgentUi((s) => s.openSettings)
   const fields =
@@ -69,7 +77,10 @@ export function MutedNote({ data }: { data: unknown }) {
   if (!str(fields, "muted")) return null
   return (
     <p
-      className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground"
+      className={cn(
+        "flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground",
+        className
+      )}
       data-pa-muted
     >
       <BellOff className="size-3 shrink-0" aria-hidden />

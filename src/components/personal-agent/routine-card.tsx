@@ -33,7 +33,16 @@ import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { MutedNote, MuteKindButton } from "./mute-kind"
 import { asDraft, precheckWords, RoutineWhen } from "./routine-bits"
-import { AGENT_SURFACE, num, PaSheet, str, usePageScope } from "./shared"
+import {
+  AGENT_SURFACE,
+  num,
+  PaSheet,
+  SHEET_TITLE,
+  SheetActions,
+  SheetPart,
+  str,
+  usePageScope,
+} from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -155,6 +164,19 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
         ? "text-emerald-700 dark:text-emerald-300"
         : "text-muted-foreground"
   const pausedWhy = str(data, "reason")
+  // A band only for what it has to say: notes, and buttons.
+  const notes =
+    (r?.what && what !== "paused") ||
+    what === "repeat" ||
+    what === "paused" ||
+    (what === "made" && num(data, "trial_run_id") != null) ||
+    reason ||
+    stateNote ||
+    str(data, "muted")
+  const acts =
+    !readOnly &&
+    (((what === "made" || what === "changed") && state === "made") ||
+      (open && (what === "proposal" || what === "repeat" || what === "paused")))
 
   return (
     <MessageRow
@@ -193,61 +215,64 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
           ) : null}
         </p>
         <PaSheet>
+          {/* The routine: what it is called, and when it runs. */}
           {r ? (
-            <>
-              <p
-                className="text-sm font-medium break-words"
-                data-pa-routine-title
-              >
+            <SheetPart className="flex flex-col gap-1">
+              <p className={SHEET_TITLE} data-pa-routine-title>
                 {r.title}
               </p>
-              <p className="mt-1 text-xs break-words text-muted-foreground">
+              <p className="text-xs break-words text-muted-foreground">
                 <RoutineWhen cron={r.cron} event={r.event} zone={r.timezone} />
                 {r.kind ? ` · ${tr(`kind.${r.kind}` as "kind.brain")}` : null}
                 {precheck ? ` · ${precheck}` : null}
               </p>
-              {r.what && what !== "paused" ? (
-                <p className="mt-1.5 line-clamp-4 text-xs break-words whitespace-pre-wrap text-foreground/80">
+            </SheetPart>
+          ) : null}
+          {/* What it does, and what this news says of it. */}
+          {notes ? (
+            <SheetPart className="flex flex-col gap-1.5">
+              {r?.what && what !== "paused" ? (
+                <p className="line-clamp-4 text-xs break-words whitespace-pre-wrap text-foreground/80">
                   {r.what}
                 </p>
               ) : null}
-            </>
+              {what === "repeat" ? (
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-pa-routine-repeat
+                >
+                  {t("repeatBody", { count: num(data, "count") ?? 3 })}
+                </p>
+              ) : null}
+              {what === "paused" ? (
+                <p className="text-xs break-words text-amber-700 dark:text-amber-300">
+                  {pausedWhy === "executor"
+                    ? t("pausedExecutor")
+                    : t("pausedFailures")}
+                  {str(data, "why") ? ` — ${str(data, "why")}` : null}
+                </p>
+              ) : null}
+              {what === "made" && num(data, "trial_run_id") != null ? (
+                <p className="text-xs text-muted-foreground">{t("trial")}</p>
+              ) : null}
+              {reason && what !== "paused" ? (
+                <p className="text-xs break-words text-muted-foreground">
+                  {t("reason", { reason })}
+                </p>
+              ) : null}
+              {stateNote ? (
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-pa-routine-note
+                >
+                  {stateNote}
+                </p>
+              ) : null}
+              <MutedNote data={data} className="" />
+            </SheetPart>
           ) : null}
-          {what === "repeat" ? (
-            <p
-              className="mt-1.5 text-xs text-muted-foreground"
-              data-pa-routine-repeat
-            >
-              {t("repeatBody", { count: num(data, "count") ?? 3 })}
-            </p>
-          ) : null}
-          {what === "paused" ? (
-            <p className="mt-1.5 text-xs break-words text-amber-700 dark:text-amber-300">
-              {pausedWhy === "executor"
-                ? t("pausedExecutor")
-                : t("pausedFailures")}
-              {str(data, "why") ? ` — ${str(data, "why")}` : null}
-            </p>
-          ) : null}
-          {what === "made" && num(data, "trial_run_id") != null ? (
-            <p className="mt-1.5 text-xs text-muted-foreground">{t("trial")}</p>
-          ) : null}
-          {reason && what !== "paused" ? (
-            <p className="mt-1.5 text-xs break-words text-muted-foreground">
-              {t("reason", { reason })}
-            </p>
-          ) : null}
-          {stateNote ? (
-            <p
-              className="mt-1.5 text-xs text-muted-foreground"
-              data-pa-routine-note
-            >
-              {stateNote}
-            </p>
-          ) : null}
-          <MutedNote data={data} />
-          {!readOnly ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+          {acts ? (
+            <SheetActions>
               {(what === "made" || what === "changed") && state === "made" ? (
                 <>
                   <Button
@@ -375,7 +400,7 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
                   </Button>
                 </>
               ) : null}
-            </div>
+            </SheetActions>
           ) : null}
         </PaSheet>
         {failed || error ? (

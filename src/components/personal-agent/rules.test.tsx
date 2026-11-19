@@ -263,6 +263,10 @@ describe("a rule's card", () => {
     expect(screen.getByText("Failed, and nobody's on it")).toBeTruthy()
     expect(screen.getByText("Fix the flaky test")).toBeTruthy()
     expect(screen.getByText("the agent crashed")).toBeTruthy()
+    // Its buttons on the card's last band, under a hairline.
+    expect(
+      screen.getByText("Retry").closest("[data-pa-sheet-actions]")
+    ).not.toBeNull()
     fireEvent.click(screen.getByText("Retry"))
     await waitFor(() =>
       expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(

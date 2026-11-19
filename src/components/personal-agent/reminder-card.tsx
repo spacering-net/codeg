@@ -31,7 +31,15 @@ import { useActivityTranslate } from "./activity-text"
 import { dueWhen, humanDuration, repeatText } from "./due-text"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
-import { AGENT_SURFACE, num, PaSheet, str, usePageScope } from "./shared"
+import {
+  AGENT_SURFACE,
+  num,
+  PaSheet,
+  SheetActions,
+  SheetPart,
+  str,
+  usePageScope,
+} from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -162,9 +170,20 @@ export function ReminderCard({ item }: { item: NoticeItem }) {
           ))}
         </p>
         <PaSheet>
-          <p className="text-sm break-words whitespace-pre-wrap">{summary}</p>
+          {/* What it is about, and how it ended. */}
+          <SheetPart className="flex flex-col gap-1.5">
+            <p className="text-sm break-words whitespace-pre-wrap">{summary}</p>
+            {!open && ended ? (
+              <p
+                className="text-xs text-muted-foreground"
+                data-pa-reminder-state={act ? "woke" : state}
+              >
+                {ended}
+              </p>
+            ) : null}
+          </SheetPart>
           {open ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <SheetActions>
               <Button
                 size="sm"
                 disabled={disabled}
@@ -202,14 +221,7 @@ export function ReminderCard({ item }: { item: NoticeItem }) {
                 {spin("hand_over")}
                 {t("handOver")}
               </Button>
-            </div>
-          ) : ended ? (
-            <p
-              className="mt-2 text-xs text-muted-foreground"
-              data-pa-reminder-state={act ? "woke" : state}
-            >
-              {ended}
-            </p>
+            </SheetActions>
           ) : null}
         </PaSheet>
         {shownError ? (

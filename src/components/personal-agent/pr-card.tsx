@@ -44,7 +44,15 @@ import { cn } from "@/lib/utils"
 
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
-import { AGENT_SURFACE, PaSheet, str, usePageScope } from "./shared"
+import {
+  AGENT_SURFACE,
+  PaSheet,
+  SHEET_TITLE,
+  SheetActions,
+  SheetPart,
+  str,
+  usePageScope,
+} from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -178,7 +186,7 @@ function FixLine({ fix }: { fix: PrFixState }) {
   if (fix.state === "gave_up") {
     const rounds = fix.rounds ?? []
     return (
-      <div className="mt-2 text-xs" data-pa-pr-fix="gave_up">
+      <SheetPart className="text-xs" data-pa-pr-fix="gave_up">
         <p className="font-medium text-red-700 dark:text-red-300">
           {t("gaveUp", { n: rounds.length })}
         </p>
@@ -208,18 +216,18 @@ function FixLine({ fix }: { fix: PrFixState }) {
             ))}
           </ol>
         ) : null}
-      </div>
+      </SheetPart>
     )
   }
   if (!text) return null
   return (
-    <p
-      className="mt-1.5 flex items-start gap-1 text-xs text-muted-foreground"
+    <SheetPart
+      className="flex items-start gap-1 text-xs text-muted-foreground"
       data-pa-pr-fix={fix.state}
     >
       <Wrench className="mt-0.5 size-3 shrink-0" aria-hidden />
       <span className="min-w-0 break-words">{text}</span>
-    </p>
+    </SheetPart>
   )
 }
 
@@ -227,7 +235,7 @@ function FixLine({ fix }: { fix: PrFixState }) {
 function FeedbackList({ items }: { items: PrFeedbackShown[] }) {
   const t = useTranslations("PersonalAgent.pr.feedback")
   return (
-    <ul className="mt-1.5 flex flex-col gap-1.5 text-xs" data-pa-pr-feedback>
+    <ul className="flex flex-col gap-1.5 text-xs" data-pa-pr-feedback>
       {items.map((f) => {
         const where =
           f.path != null
@@ -395,103 +403,107 @@ export function PrCard({ item }: { item: NoticeItem }) {
           <span className="font-medium">{heading}</span>
         </p>
         <PaSheet>
-          <p className="text-sm font-medium break-words" data-pa-pr-title>
-            <span dir="ltr">{target}</span>
-            {title ? (
-              <span className="font-normal text-muted-foreground">
-                {" · "}
-                {title}
-              </span>
-            ) : null}
-          </p>
-          {facts.length > 0 ? (
-            <p
-              className="mt-1.5 text-xs text-muted-foreground tabular-nums"
-              data-pa-pr-facts
-            >
-              {facts.join(" · ")}
-            </p>
-          ) : null}
-          {event === "checks_failed" && failing.length > 0 ? (
-            <ul
-              className="mt-1.5 flex flex-col gap-0.5 text-xs"
-              data-pa-pr-failing
-            >
-              {failing.map((c, i) => (
-                <li
-                  key={`${c.name}-${i}`}
-                  className="flex min-w-0 items-center gap-1"
-                >
-                  <CircleX
-                    className="size-3 shrink-0 text-red-600 dark:text-red-400"
-                    aria-hidden
-                  />
-                  {c.url ? (
-                    <button
-                      type="button"
-                      className="min-w-0 truncate text-start underline-offset-2 hover:underline"
-                      onClick={() => void openUrl(c.url ?? "")}
-                    >
-                      {c.name}
-                    </button>
-                  ) : (
-                    <span className="min-w-0 truncate">{c.name}</span>
-                  )}
-                  {c.summary ? (
-                    <span className="min-w-0 truncate text-muted-foreground">
-                      {c.summary}
-                    </span>
-                  ) : null}
-                </li>
-              ))}
-              {more > 0 ? (
-                <li className="text-muted-foreground">
-                  {t("more", { n: more })}
-                </li>
+          {/* What the pull request is, how it stands, what came of it. */}
+          <SheetPart className="flex flex-col gap-1.5">
+            <p className={SHEET_TITLE} data-pa-pr-title>
+              <span dir="ltr">{target}</span>
+              {title ? (
+                <span className="font-normal text-muted-foreground">
+                  {" · "}
+                  {title}
+                </span>
               ) : null}
-            </ul>
+            </p>
+            {facts.length > 0 ? (
+              <p
+                className="text-xs text-muted-foreground tabular-nums"
+                data-pa-pr-facts
+              >
+                {facts.join(" · ")}
+              </p>
+            ) : null}
+            {mergeNote ? (
+              <p
+                className="text-xs break-words text-muted-foreground"
+                data-pa-pr-merge={mergeNote.state}
+              >
+                {mergeNote.state === "unread"
+                  ? t("merge.unread", { why: mergeNote.why })
+                  : t("merge.refused", { why: mergeNote.why })}
+              </p>
+            ) : null}
+            {event === "feedback" && forwarded ? (
+              <p className="text-xs text-muted-foreground" data-pa-pr-forwarded>
+                {forwarded.waiting
+                  ? t("feedback.waiting")
+                  : t("feedback.forwarded")}
+              </p>
+            ) : null}
+            {event === "no_conflict" ? (
+              <p className="text-xs text-muted-foreground">
+                {t("noConflictNote")}
+              </p>
+            ) : null}
+            {why ? (
+              <p className="text-xs text-muted-foreground" data-pa-pr-why>
+                {why}
+              </p>
+            ) : null}
+            {note ? (
+              <p className="text-xs text-muted-foreground" data-pa-pr-note>
+                {note}
+              </p>
+            ) : null}
+          </SheetPart>
+          {/* The checks that failed. */}
+          {event === "checks_failed" && failing.length > 0 ? (
+            <SheetPart>
+              <ul className="flex flex-col gap-0.5 text-xs" data-pa-pr-failing>
+                {failing.map((c, i) => (
+                  <li
+                    key={`${c.name}-${i}`}
+                    className="flex min-w-0 items-center gap-1"
+                  >
+                    <CircleX
+                      className="size-3 shrink-0 text-red-600 dark:text-red-400"
+                      aria-hidden
+                    />
+                    {c.url ? (
+                      <button
+                        type="button"
+                        className="min-w-0 truncate text-start underline-offset-2 hover:underline"
+                        onClick={() => void openUrl(c.url ?? "")}
+                      >
+                        {c.name}
+                      </button>
+                    ) : (
+                      <span className="min-w-0 truncate">{c.name}</span>
+                    )}
+                    {c.summary ? (
+                      <span className="min-w-0 truncate text-muted-foreground">
+                        {c.summary}
+                      </span>
+                    ) : null}
+                  </li>
+                ))}
+                {more > 0 ? (
+                  <li className="text-muted-foreground">
+                    {t("more", { n: more })}
+                  </li>
+                ) : null}
+              </ul>
+            </SheetPart>
           ) : null}
+          {/* The review's feedback. */}
           {event === "feedback" && feedback.length > 0 ? (
-            <FeedbackList items={feedback} />
+            <SheetPart>
+              <FeedbackList items={feedback} />
+            </SheetPart>
           ) : null}
+          {/* Who is fixing it, or that nobody could. */}
           {fix ? <FixLine fix={fix} /> : null}
-          {mergeNote ? (
-            <p
-              className="mt-1.5 text-xs break-words text-muted-foreground"
-              data-pa-pr-merge={mergeNote.state}
-            >
-              {mergeNote.state === "unread"
-                ? t("merge.unread", { why: mergeNote.why })
-                : t("merge.refused", { why: mergeNote.why })}
-            </p>
-          ) : null}
-          {event === "feedback" && forwarded ? (
-            <p
-              className="mt-1.5 text-xs text-muted-foreground"
-              data-pa-pr-forwarded
-            >
-              {forwarded.waiting
-                ? t("feedback.waiting")
-                : t("feedback.forwarded")}
-            </p>
-          ) : null}
-          {event === "no_conflict" ? (
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              {t("noConflictNote")}
-            </p>
-          ) : null}
-          {why ? (
-            <p className="mt-1.5 text-xs text-muted-foreground" data-pa-pr-why>
-              {why}
-            </p>
-          ) : null}
-          {note ? (
-            <p className="mt-1.5 text-xs text-muted-foreground" data-pa-pr-note>
-              {note}
-            </p>
-          ) : null}
           {url || (current && !readOnly && !settles(event)) ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <SheetActions>
               {url ? (
                 <Button
                   size="sm"
@@ -552,7 +564,7 @@ export function PrCard({ item }: { item: NoticeItem }) {
                   ) : null}
                 </>
               ) : null}
-            </div>
+            </SheetActions>
           ) : null}
         </PaSheet>
         {failed ? (

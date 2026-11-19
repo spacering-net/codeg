@@ -201,9 +201,23 @@ describe("an acceptance card", () => {
       }),
       { zh: true }
     )
-    expect(container.querySelector("[data-pa-conclusion]")?.textContent).toBe(
-      "检查：不通过 · 助手：通过，理由：a.txt is meant to say two."
+    // The check's verdict on its line, the assistant's conclusion on the
+    // next — on the caution's tone, as it goes against it.
+    expect(
+      container.querySelector('[data-pa-verdict="fail"]')?.textContent
+    ).toBe("不通过")
+    const said = container.querySelector("[data-pa-conclusion]")!
+    expect(said.querySelector("dt")?.textContent).toBe("助手")
+    expect(said.querySelector("dd")?.textContent).toBe(
+      "通过，理由：a.txt is meant to say two."
     )
+    expect(said.hasAttribute("data-pa-against")).toBe(true)
+    // A reason with a long unbroken run (a hash, a path) wraps on the card,
+    // which clips what overflows it.
+    expect(said.querySelector("dd")?.className).toContain(
+      "[overflow-wrap:anywhere]"
+    )
+    expect(said.querySelector("dd")?.className).toContain("[&>*]:min-w-0")
     expect(container.querySelector("[data-pa-accept-ended]")?.textContent).toBe(
       "已通过"
     )
@@ -238,9 +252,10 @@ describe("an acceptance card", () => {
         verdict: "pass",
       })
     )
-    expect(
-      owner.container.querySelector("[data-pa-conclusion]")?.textContent
-    ).toBe("Your decision: accept")
+    const own = owner.container.querySelector("[data-pa-conclusion]")!
+    expect(own.querySelector("dt")?.textContent).toBe("Your decision")
+    expect(own.querySelector("dd")?.textContent).toBe("accept")
+    expect(own.hasAttribute("data-pa-against")).toBe(false)
   })
 
   it("says work accepted unchecked or unverified, and what was merged or delivered", () => {
@@ -329,7 +344,12 @@ describe("an acceptance card", () => {
     )
     expect(screen.getByText("已失效，没有执行")).toBeTruthy()
     expect(screen.getByText("之前几轮")).toBeTruthy()
-    expect(screen.getByText("第 1 轮：退回「Fix the tests.」")).toBeTruthy()
+    // Each earlier round its round on the left, how it went beside it.
+    const earlier = document.querySelector('[data-pa-history="1"]')!
+    expect(earlier.querySelector("dt")?.textContent).toBe("第 1 轮")
+    expect(earlier.querySelector("dd")?.textContent).toBe(
+      "退回「Fix the tests.」"
+    )
     expect(screen.queryByRole("button", { name: "算通过" })).toBeNull()
     expect(screen.queryByRole("button", { name: "重新检查" })).toBeNull()
     // Alone on the settled card, the way to the task looks a button: the
@@ -342,5 +362,17 @@ describe("an acceptance card", () => {
     expect(
       screen.getByText("之前几轮").closest("[data-pa-surface]")
     ).not.toBeNull()
+    // The card in bands: what it is, what the check found, its buttons, the
+    // rounds before it.
+    const sheet = screen.getByText("之前几轮").closest("[data-pa-surface]")!
+    const parts = [...sheet.children]
+    expect(parts.map((p) => p.hasAttribute("data-pa-sheet-actions"))).toEqual([
+      false,
+      false,
+      true,
+      false,
+    ])
+    expect(parts[1].hasAttribute("data-pa-evidence")).toBe(true)
+    expect(parts[3].textContent).toContain("之前几轮")
   })
 })

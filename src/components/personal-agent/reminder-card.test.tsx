@@ -104,6 +104,12 @@ describe("a reminder card", () => {
     expect(screen.getByText("Call the bank")).toBeTruthy()
     // Not the brain's English line.
     expect(screen.queryByText(/Reminder #7/)).toBeNull()
+    // Its buttons on the card's last band, under a hairline.
+    expect(
+      screen
+        .getByRole("button", { name: "Done" })
+        .closest("[data-pa-sheet-actions]")
+    ).not.toBeNull()
     for (const [name, action] of [
       ["Done", "done"],
       ["In 15 min", "snooze:15m"],
