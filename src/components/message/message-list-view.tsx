@@ -20,6 +20,10 @@ import { isWindowedDetail } from "@/lib/turn-window"
 import { CompletedTurnContent } from "./completed-turn-content"
 import { ContextCompactionCard } from "./context-compaction-card"
 import { CollapsibleUserMessage } from "./collapsible-user-message"
+import {
+  findSessionMessageSource,
+  useSessionMessageJump,
+} from "./session-message-anchor"
 import { CollapsibleSystemMessage } from "./collapsible-system-message"
 import { ContentPartsRenderer } from "./content-parts-renderer"
 import {
@@ -1998,6 +2002,60 @@ export function MessageListView({
   // Lifted scroll handle so the navigator — in the Session Details side panel,
   // outside the MessageScrollProvider subtree — can drive scrollToIndex.
   const scrollApiRef = useRef<MessageScrollContextValue | null>(null)
+  const sourceJump = useSessionMessageJump((state) =>
+    state.pending?.conversationId ===
+    (session?.dbConversationId ?? conversationId)
+      ? state.pending
+      : null
+  )
+  const sourceIndex = useMemo(
+    () =>
+      sourceJump
+        ? findSessionMessageSource(
+            threadItems.map((item) =>
+              item.kind === "turn" ? item.group : null
+            ),
+            sourceJump.anchor
+          )
+        : -1,
+    [sourceJump, threadItems]
+  )
+  const sourceOffset = isWindowedDetail(detail) ? detail.turns_offset : 0
+  useEffect(() => {
+    if (!sourceJump || !isActive || detailLoading) return
+    const clear = () => {
+      if (useSessionMessageJump.getState().pending === sourceJump) {
+        useSessionMessageJump.setState({ pending: null })
+      }
+    }
+    if (sourceIndex >= 0) {
+      const frame = requestAnimationFrame(() => {
+        scrollApiRef.current?.scrollToIndex(sourceIndex, { align: "start" })
+        clear()
+      })
+      return () => cancelAnimationFrame(frame)
+    }
+    if (sourceOffset > 0) {
+      void loadOlderTurnsThrough(conversationId, sourceOffset - 1).then(
+        (reached) => {
+          if (!reached) clear()
+        }
+      )
+    } else if (detail || detailError || acpLoadError) {
+      clear()
+    }
+  }, [
+    acpLoadError,
+    conversationId,
+    detail,
+    detailError,
+    detailLoading,
+    isActive,
+    loadOlderTurnsThrough,
+    sourceIndex,
+    sourceJump,
+    sourceOffset,
+  ])
   // The per-message rows are computed only while the side panel shows them:
   // grouping them parses every turn's diffs.
   const navDemanded = useTranscriptNavDemanded(

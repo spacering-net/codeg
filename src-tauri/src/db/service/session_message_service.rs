@@ -200,8 +200,9 @@ pub async fn settle(
             row.conversation_id,
             row.sender_conversation_id,
             format!(
-                "[Automatic reply from session {}]\n\n{}",
+                "[Automatic reply from session {}; replying to {}]\n\n{}",
                 row.conversation_id,
+                row.message_id,
                 reply_text.unwrap()
             ),
             "queue".into(),

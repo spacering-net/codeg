@@ -110,7 +110,7 @@ impl SessionCreator {
             super::delegation::types::AgentDelegationDefaults,
         >,
         broker: &DelegationBroker,
-    ) -> Result<i32, String> {
+    ) -> Result<(i32, String), String> {
         if let Some(key) = request.config_values.keys().find(|key| {
             !matches!(
                 key.as_str(),
@@ -301,7 +301,7 @@ impl SessionCreator {
         .await
         .map_err(|error| error.to_string())?;
         let message = session_message::Entity::find()
-            .filter(session_message::Column::MessageId.eq(message_id))
+            .filter(session_message::Column::MessageId.eq(message_id.clone()))
             .one(&self.db)
             .await
             .map_err(|error| error.to_string())?
@@ -315,7 +315,7 @@ impl SessionCreator {
         )
         .await
         .map_err(|error| error.to_string())?;
-        Ok(conversation_id)
+        Ok((conversation_id, message_id))
     }
 }
 
@@ -462,8 +462,8 @@ async fn dispatch(
     }
 
     let text = format!(
-        "[Codeg message from conversation {}]\n\n{}",
-        row.sender_conversation_id, row.message
+        "[Codeg message from conversation {}; message {}]\n\n{}",
+        row.sender_conversation_id, row.message_id, row.message
     );
     let (reply, mut result) = oneshot::channel();
     let prompt_id = format!("{PROMPT_ID_PREFIX}{}", row.message_id);

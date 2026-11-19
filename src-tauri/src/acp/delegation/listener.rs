@@ -883,7 +883,10 @@ impl DelegationListener {
             .create(&entry.parent_connection_id, req, &config.agent_defaults, &self.broker)
             .await
         {
-            Ok(conversation_id) => serde_json::json!({"conversation_id": conversation_id}),
+            Ok((conversation_id, message_id)) => serde_json::json!({
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+            }),
             Err(error) => serde_json::json!({"error": error}),
         }
     }
