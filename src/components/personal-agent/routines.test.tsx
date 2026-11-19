@@ -10,6 +10,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
@@ -142,7 +143,11 @@ beforeEach(() => {
   api.personalAgentRoutineAct.mockResolvedValue({})
   api.personalAgentRoutineSave.mockResolvedValue({})
   api.automationComputeNextRun.mockResolvedValue(null)
-  usePersonalAgentUi.setState({ routineEditor: null, routinesAsked: 0 })
+  usePersonalAgentUi.setState({
+    routineEditor: null,
+    routinesAsked: 0,
+    auxFolds: {},
+  })
   ctx.dispatchById = new Map()
 })
 
@@ -369,13 +374,29 @@ describe("the details' routines", () => {
     const user = userEvent.setup()
     wrap(<RoutinesSection title="Routines" readOnly={false} />)
     expect(await screen.findByText("Night CI")).toBeTruthy()
-    // The section's head: its title, how many, and [+].
-    expect(screen.getByRole("heading", { name: "Routines" })).toBeTruthy()
-    expect(screen.getByRole("button", { name: "New routine" })).toBeTruthy()
-    expect(screen.getByText(/only with matters waiting over 4 h/)).toBeTruthy()
+    // One card, as the tab's groups are: no dashed head over it — its bar
+    // the part's title, how many, [+] and the chevron.
+    const part = document.querySelector<HTMLElement>(
+      '[data-pa-detail="routines"]'
+    )!
+    expect(part.querySelector(".border-dashed")).toBeNull()
+    expect(screen.getByRole("heading", { name: /^Routines/ })).toBeTruthy()
+    expect(part.querySelector("[data-pa-group-label]")!.textContent).toBe(
+      "Routines"
+    )
     expect(
-      document.querySelector('[data-pa-routine-outcome="silent"]')
+      within(part).getByRole("button", { name: "New routine" })
     ).toBeTruthy()
+    expect(screen.getByText(/only with matters waiting over 4 h/)).toBeTruthy()
+    // Where it stands, one quiet line: its next run, how its last went.
+    const status = part.querySelector<HTMLElement>("[data-pa-routine-status]")!
+    expect(
+      status.querySelector("[data-pa-routine-state]")!.textContent
+    ).toMatch(/^Next/)
+    expect(
+      status.querySelector('[data-pa-routine-outcome="silent"]')
+    ).toBeTruthy()
+    expect(status.textContent).toContain("no change")
     // Run now, from its menu.
     await user.click(screen.getByRole("button", { name: "More actions" }))
     await user.click(await screen.findByRole("menuitem", { name: "Run now" }))
@@ -408,13 +429,93 @@ describe("the details' routines", () => {
       routine({ enabled: false, paused_reason: "failures" }),
     ])
     wrap(<RoutinesSection title="例程" readOnly={false} />, { zh: true })
-    expect(await screen.findByText("已暂停：连续失败 3 次")).toBeTruthy()
+    const why = await screen.findByText("已暂停：连续失败 3 次")
+    // Paused by codeg: why, in the caution's colour.
+    expect(why.className).toContain("text-amber-700")
     const off = screen.getByRole("switch", { name: "启用" })
     expect(off.getAttribute("aria-checked")).toBe("false")
     fireEvent.click(off)
     await waitFor(() =>
       expect(api.personalAgentRoutineAct).toHaveBeenCalledWith(7, 5, "resume")
     )
+  })
+
+  it("one paused by its owner: its switch off and its name quiet, no word more but where there is no switch", async () => {
+    api.personalAgentRoutines.mockResolvedValue([
+      routine({ enabled: false, paused_reason: "owner" }),
+    ])
+    const { unmount } = wrap(
+      <RoutinesSection title="Routines" readOnly={false} />
+    )
+    const name = await screen.findByText("Night CI")
+    expect(name.className).toContain("text-muted-foreground")
+    expect(
+      screen.getByRole("switch", { name: "Runs" }).getAttribute("aria-checked")
+    ).toBe("false")
+    expect(document.querySelector("[data-pa-routine-state]")).toBeNull()
+    expect(
+      document.querySelector("[data-pa-routine-status]")!.textContent
+    ).toMatch(/^No change · Last/)
+    unmount()
+    wrap(<RoutinesSection title="Routines" readOnly />)
+    await screen.findByText("Night CI")
+    const state = document.querySelector<HTMLElement>(
+      "[data-pa-routine-state]"
+    )!
+    expect(state.textContent).toBe("Paused")
+    expect(state.className).not.toContain("text-amber")
+  })
+
+  it("folds from its bar, the way to add one apart from it", async () => {
+    api.personalAgentRoutines.mockResolvedValue([routine()])
+    wrap(<RoutinesSection title="Routines" readOnly={false} />)
+    await screen.findByText("Night CI")
+    fireEvent.click(screen.getByRole("button", { name: "New routine" }))
+    expect(usePersonalAgentUi.getState().routineEditor?.routineId).toBeNull()
+    // Adding one does not fold it.
+    expect(screen.getByText("Night CI")).toBeTruthy()
+    const fold = document.querySelector<HTMLElement>("[data-pa-fold]")!
+    expect(fold.getAttribute("aria-expanded")).toBe("true")
+    fireEvent.click(fold)
+    expect(fold.getAttribute("aria-expanded")).toBe("false")
+    expect(screen.queryByText("Night CI")).toBeNull()
+  })
+
+  it("asked to open its routines, unfolds the card", async () => {
+    api.personalAgentRoutines.mockResolvedValue([routine()])
+    usePersonalAgentUi.setState({ auxFolds: { "activity.routines": false } })
+    wrap(<RoutinesSection title="Routines" readOnly={false} />)
+    const fold = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>("[data-pa-fold]")
+      expect(el).toBeTruthy()
+      return el!
+    })
+    expect(fold.getAttribute("aria-expanded")).toBe("false")
+    expect(screen.queryByText("Night CI")).toBeNull()
+    act(() => usePersonalAgentUi.getState().showRoutines())
+    expect(fold.getAttribute("aria-expanded")).toBe("true")
+    expect(screen.getByText("Night CI")).toBeTruthy()
+    // Folded since, drawn again: it stays as the owner left it.
+    fireEvent.click(fold)
+    cleanup()
+    wrap(<RoutinesSection title="Routines" readOnly={false} />)
+    await screen.findByText("Routines")
+    expect(
+      document
+        .querySelector<HTMLElement>("[data-pa-fold]")!
+        .getAttribute("aria-expanded")
+    ).toBe("false")
+  })
+
+  it("read-only: no [+], no switch", async () => {
+    api.personalAgentRoutines.mockResolvedValue([routine()])
+    wrap(<RoutinesSection title="Routines" readOnly />)
+    await screen.findByText("Night CI")
+    expect(document.querySelector("[data-pa-routine-new]")).toBeNull()
+    expect(screen.queryByRole("switch")).toBeNull()
+    expect(
+      document.querySelector('[data-pa-routine-outcome="silent"]')
+    ).toBeTruthy()
   })
 
   it("none yet: how to get one", async () => {

@@ -1,15 +1,18 @@
 "use client"
 
 /**
- * The activity tab's "Routines" (6.9, 10.1): this assistant's routines, each with
- * when it runs, its next run and how its last went; a switch that pauses and
- * resumes it, and [Run now] [Edit] [Delete] in its menu — its title opens
- * it to edit. Empty: one row — its name, a line saying to ask for one in
- * the conversation, and [New routine] at its end — with no head over it;
- * with some, [+] at the section's head.
+ * The activity tab's "Routines" (6.9, 10.1): this assistant's routines on
+ * one folding card, as the tab's other groups are — its bar the part's
+ * title, how many, [+] and the chevron; no head over it. Each a row: what
+ * it is called and its switch, when it runs and what it does, and one
+ * quiet line of where it stands — its next run or that it is paused (why,
+ * in the caution's colour, when codeg paused it) and how its last run went.
+ * [Run now] [Edit] [Delete] in its menu; its title opens it to edit.
+ * Empty: one row — its name, a line saying to ask for one in the
+ * conversation, and [New routine] at its end.
  */
 
-import { useEffect, useRef, useState, type RefObject } from "react"
+import { Fragment, useEffect, useRef, useState, type RefObject } from "react"
 import { useTranslations } from "next-intl"
 import {
   CalendarClock,
@@ -17,6 +20,7 @@ import {
   Pencil,
   Play,
   Plus,
+  Repeat,
   Trash2,
   Zap,
 } from "lucide-react"
@@ -46,17 +50,15 @@ import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentRoutineAct, personalAgentRoutines } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type { Routine, RoutineAction } from "@/lib/types"
-import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+import { cn } from "@/lib/utils"
+import {
+  ROUTINES_FOLD,
+  usePersonalAgentUi,
+} from "@/stores/personal-agent-ui-store"
 
+import { PanelGroup, PanelIcon, PanelItem, PanelStack } from "./panel-section"
 import {
-  PanelIcon,
-  PanelItem,
-  PanelList,
-  PanelSection,
-  PanelStack,
-} from "./panel-section"
-import {
-  OutcomeChip,
+  OutcomeWord,
   precheckWords,
   RoutineWhen,
   useWhen,
@@ -90,7 +92,8 @@ export function useRoutines(active = true): Routine[] | null {
 }
 
 /** `pa.open` on a routine, or "open its routines", brings them into view —
- *  the section, or the row that says there are none. */
+ *  the card (`showRoutines` unfolds it), or the row that says there are
+ *  none. */
 function useRoutinesAsked(ref: RefObject<HTMLElement | null>) {
   const asked = usePersonalAgentUi((s) => s.routinesAsked)
   useEffect(() => {
@@ -171,13 +174,27 @@ export function RoutinesSection({
       </PanelStack>
     )
   }
+  if (list == null) {
+    return (
+      <Skeleton
+        ref={ref as RefObject<HTMLDivElement | null>}
+        className="h-16 w-full scroll-mt-3 rounded-2xl"
+        aria-hidden
+        data-pa-detail="routines"
+      />
+    )
+  }
   return (
-    <PanelSection
+    <PanelGroup
       ref={ref}
-      title={title}
-      count={list?.length ?? null}
+      fold={ROUTINES_FOLD}
+      tone="muted"
+      icon={Repeat}
+      label={title}
+      count={list.length}
+      titled
       action={
-        !readOnly && list != null && list.length > 0 ? (
+        readOnly ? null : (
           <Button
             size="icon-xs"
             variant="ghost"
@@ -189,25 +206,19 @@ export function RoutinesSection({
           >
             <Plus aria-hidden />
           </Button>
-        ) : null
+        )
       }
       className="scroll-mt-3"
       data-pa-detail="routines"
     >
-      {list == null ? (
-        <Skeleton className="h-16 w-full rounded-2xl" aria-hidden />
-      ) : (
-        <PanelList>
-          {list.map((r) => (
-            <RoutineCard key={r.id} r={r} readOnly={readOnly} />
-          ))}
-        </PanelList>
-      )}
-    </PanelSection>
+      {list.map((r) => (
+        <RoutineRow key={r.id} r={r} readOnly={readOnly} />
+      ))}
+    </PanelGroup>
   )
 }
 
-function RoutineCard({ r, readOnly }: { r: Routine; readOnly: boolean }) {
+function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
   const t = useTranslations("PersonalAgent.routines")
   const { botId } = usePersonalAgent()
   const openEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
@@ -228,23 +239,65 @@ function RoutineCard({ r, readOnly }: { r: Routine; readOnly: boolean }) {
   const last = r.last[0]
   const precheck = precheckWords(t, r.precheck)
   const Icon = r.trigger === "event" ? Zap : CalendarClock
-  const state = !r.enabled
-    ? t(
-        `paused.${r.paused_reason === "failures" || r.paused_reason === "executor" ? r.paused_reason : "owner"}` as "paused.owner"
-      )
-    : r.trigger === "schedule" && r.next_run_at
-      ? t("next", { when: when(r.next_run_at) })
-      : null
+  // Where it stands: paused by codeg — why, in the caution's colour — or
+  // its next run. Paused by its owner says so by its switch, off, and its
+  // name, quiet: no word more on a line that has little room — but where
+  // there is no switch.
+  const codegPaused =
+    !r.enabled &&
+    (r.paused_reason === "failures" || r.paused_reason === "executor")
+  const state = codegPaused
+    ? t(`paused.${r.paused_reason}` as "paused.owner")
+    : !r.enabled && readOnly
+      ? t("paused.owner")
+      : r.enabled && r.trigger === "schedule" && r.next_run_at
+        ? t("next", { when: when(r.next_run_at) })
+        : null
+  // One quiet line: where it stands, then how its last run went.
+  const status = [
+    state ? (
+      <span
+        key="state"
+        className={cn(
+          "tabular-nums",
+          codegPaused
+            ? "text-amber-700 dark:text-amber-300"
+            : "whitespace-nowrap"
+        )}
+        data-pa-routine-state
+      >
+        {state}
+      </span>
+    ) : null,
+    last ? <OutcomeWord key="outcome" outcome={last.outcome} /> : null,
+    last ? (
+      <span key="last" className="whitespace-nowrap tabular-nums">
+        {t("last", {
+          when: when(last.ended_at ?? last.started_at),
+          n: r.runs,
+        })}
+      </span>
+    ) : null,
+    last?.note && last.outcome !== "reported" ? (
+      <span key="note">{last.note}</span>
+    ) : null,
+  ].filter((x) => x != null)
   const edit = () =>
     openEditor({ botId, routineId: r.id, draft: null, noticeId: null })
   return (
     <>
       <PanelItem
         media={<PanelIcon icon={Icon} />}
-        title={r.title}
+        // Paused: its name quiet, as its switch is off.
+        title={
+          r.enabled ? (
+            r.title
+          ) : (
+            <span className="text-muted-foreground">{r.title}</span>
+          )
+        }
         onOpen={readOnly ? null : edit}
         openLabel={t("edit")}
-        chip={readOnly && last ? <OutcomeChip outcome={last.outcome} /> : null}
         aside={
           readOnly ? null : (
             <span className="flex items-center gap-0.5">
@@ -305,42 +358,21 @@ function RoutineCard({ r, readOnly }: { r: Routine; readOnly: boolean }) {
             {precheck ? ` · ${precheck}` : null}
           </>
         }
-        notes={[
-          ...(state
+        notes={
+          status.length > 0
             ? [
-                <span
-                  key="state"
-                  className={
-                    r.enabled
-                      ? "tabular-nums"
-                      : "text-amber-700 dark:text-amber-300"
-                  }
-                  data-pa-routine-state
-                >
-                  {state}
+                // Each fact kept whole on its line: it wraps between them.
+                <span key="status" data-pa-routine-status>
+                  {status.map((el, i) => (
+                    <Fragment key={i}>
+                      {i > 0 ? " · " : null}
+                      {el}
+                    </Fragment>
+                  ))}
                 </span>,
               ]
-            : []),
-          ...(last
-            ? [
-                <span
-                  key="last"
-                  className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 tabular-nums"
-                >
-                  {readOnly ? null : <OutcomeChip outcome={last.outcome} />}
-                  <span>
-                    {t("last", {
-                      when: when(last.ended_at ?? last.started_at),
-                      n: r.runs,
-                    })}
-                    {last.note && last.outcome !== "reported"
-                      ? ` · ${last.note}`
-                      : null}
-                  </span>
-                </span>,
-              ]
-            : []),
-        ]}
+            : []
+        }
         data-pa-routine={r.id}
         data-pa-routine-enabled={r.enabled ? "on" : "off"}
       />

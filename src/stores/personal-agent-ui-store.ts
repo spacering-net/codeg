@@ -7,6 +7,9 @@ import type {
   RoutineDraft,
 } from "@/lib/types"
 
+/** Where the activity's routines' card keeps whether it is folded. */
+export const ROUTINES_FOLD = "activity.routines"
+
 /**
  * The personal agent page's view state that other branches of the tree read:
  * whether the side panel is open and on which tab (the window chrome's
@@ -165,7 +168,8 @@ interface PersonalAgentUiState {
   routineEditor: RoutineEditorRequest | null
   openRoutineEditor: (req: Omit<RoutineEditorRequest, "key">) => void
   closeRoutineEditor: () => void
-  /** Bumped to bring the activity's routines into view (`pa.open`). */
+  /** Bumped to bring the activity's routines into view (`pa.open`),
+   *  their card unfolded. */
   routinesAsked: number
   showRoutines: () => void
   /** The assistant the page shows (`null`: the primary), picked in the
@@ -256,6 +260,9 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
       settings: null,
       botPage: null,
       routinesAsked: s.routinesAsked + 1,
+      // The routines' card unfolded, as it is asked for: not again each time
+      // it is drawn, a fold the owner made since kept.
+      auxFolds: { ...s.auxFolds, [ROUTINES_FOLD]: true },
     })),
   viewBot: null,
   setViewBot: (viewBot) =>

@@ -650,6 +650,56 @@ describe("the bubbles", () => {
     expect(bubble.classList.contains("pa-agent-bubble")).toBe(true)
   })
 
+  it("draws a routine's report as a card: the routine and its run its header, all it says under it", () => {
+    const report = (id: number, body: string) =>
+      itemOf(
+        [
+          row(id, "reply", {
+            batch_id: id,
+            body,
+            data: {
+              state: "done",
+              routine: { id: 5, title: "Night CI", seq: 2 },
+            },
+          }),
+        ],
+        "reply"
+      ) as Extract<MessageItem, { kind: "reply" }>
+    const { container, unmount } = draw(
+      <ReplyBubble item={report(40, "All green.\n\nNothing to do.")} />
+    )
+    const card = container.querySelector<HTMLElement>(
+      "[data-pa-reply-routine-card='5']"
+    )!
+    expect(card).not.toBeNull()
+    expect(card.hasAttribute("data-pa-card-message")).toBe(true)
+    expect(container.querySelector(".pa-agent-bubble")).toBeNull()
+    // Its header the routine and which run, a band of its own.
+    const head = card.querySelector<HTMLElement>("[data-pa-sheet-head]")!
+    expect(head.textContent).toBe("Routine “Night CI” · run 2")
+    expect(head.querySelector("[data-pa-reply-routine='5']")).not.toBeNull()
+    // What it says under it, whole: its paragraphs no bubbles of their own.
+    const body = card.querySelector<HTMLElement>("[data-pa-sheet-part]")!
+    expect(body.textContent).toContain("All green.")
+    expect(body.textContent).toContain("Nothing to do.")
+    expect(container.querySelectorAll("[data-bubble]")).toHaveLength(1)
+    expect(container.querySelector("[data-pa-bubble-part]")).toBeNull()
+    unmount()
+    // A report that is one card is that card, the small line over it.
+    const spec =
+      '```spec\n{"root":"a","elements":{"a":{"type":"Text","props":{"text":"Hi"}}}}\n```'
+    const one = draw(<ReplyBubble item={report(41, spec)} />)
+    expect(
+      one.container.querySelector("[data-pa-reply-routine-card]")
+    ).toBeNull()
+    expect(
+      one.container.querySelector("[data-bubble]")!.hasAttribute("data-pa-bare")
+    ).toBe(true)
+    expect(
+      one.container.querySelector("[data-pa-reply-routine='5']")
+    ).not.toBeNull()
+  })
+
   it("splits a reply of short paragraphs into bubbles that act as one", async () => {
     const item = itemOf(
       [

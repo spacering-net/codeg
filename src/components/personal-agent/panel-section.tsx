@@ -12,7 +12,9 @@
  *   group of today): one card, its head a bar across its top — its marker,
  *   its name and count in its tone, the chevron at the end — its things
  *   under it, a hairline between them, and at its foot the way to show the
- *   rest.
+ *   rest. `titled`: a group that is a part of its own (the routines) — its
+ *   name the part's title, and no head over it; `action` (the way to add
+ *   one) on its bar before the chevron.
  * - `PanelBar`: the bar across a card's top (a group's, a day's of output,
  *   a window's on the workspace).
  * - `PanelStack`: things one under another — a card for each thing with
@@ -21,7 +23,7 @@
  *   card of its own (a group's, a day's), each flat on it, a hairline
  *   between them.
  * - `PanelList`: rows on one surface, a hairline between them (an inset
- *   grouped list): what a day of output or the routines hold.
+ *   grouped list): the morning brief's rows.
  * - `PanelItem`: one thing (shadcn's `Item`): what leads it, its title and
  *   when, where it stands and a quiet line under it, a box, notes, its
  *   buttons; the whole of it opens what it is about when it opens anything.
@@ -193,6 +195,8 @@ export function PanelGroup({
   icon: Icon,
   label,
   count,
+  titled = false,
+  action,
   more,
   className,
   children,
@@ -205,6 +209,12 @@ export function PanelGroup({
   icon?: LucideIcon
   label: string
   count: number
+  /** It is a part of the tab of its own (the routines): its name the
+   *  part's title — in a part's title's weight and colour, as a part's
+   *  title leads its groups' bars — and its heading to a screen reader. */
+  titled?: boolean
+  /** At the bar's end, before the chevron: the way to add one. */
+  action?: ReactNode
   /** Under the list: the way to show the rest of it (`PanelMoreRow`). */
   more?: ReactNode
   /** Its rows: `PanelItem`s. */
@@ -212,6 +222,54 @@ export function PanelGroup({
 } & ComponentProps<"section">) {
   const [open, setOpen] = useFold(fold)
   const section = useContext(SectionTitleContext)
+  const name = (
+    <>
+      {Icon ? (
+        <Icon aria-hidden className="size-3.5 shrink-0" />
+      ) : (
+        <span
+          aria-hidden
+          className={cn("size-1.5 shrink-0 rounded-full", TONE[tone].dot)}
+        />
+      )}
+      {/* The part it is in first, then its own name. */}
+      {section != null ? (
+        <>
+          <span
+            className="shrink-0 font-semibold text-foreground"
+            data-pa-group-section
+          >
+            {section}
+          </span>
+          <span aria-hidden className="shrink-0 text-muted-foreground/50">
+            ·
+          </span>
+        </>
+      ) : null}
+      <span
+        className={cn(
+          "min-w-0 truncate",
+          titled && "font-semibold text-foreground"
+        )}
+        data-pa-group-label
+      >
+        {label}
+      </span>
+      <span className="shrink-0 tabular-nums">{count}</span>
+    </>
+  )
+  const chevron = (className?: string) => (
+    <ChevronDown
+      aria-hidden
+      className={cn(
+        "size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=closed]/fold:-rotate-90 rtl:group-data-[state=closed]/fold:rotate-90",
+        className
+      )}
+    />
+  )
+  // A part of its own: its bar its heading to a screen reader too.
+  const heading = (bar: ReactNode) =>
+    titled ? <h3 className="flex min-w-0">{bar}</h3> : bar
   return (
     <Collapsible open={open} onOpenChange={setOpen} asChild>
       <section
@@ -222,44 +280,48 @@ export function PanelGroup({
         )}
         {...props}
       >
-        {/* Its head the bar across its top, the whole of it the button that
-            folds it — deeper when hovered. */}
-        <CollapsibleTrigger
-          className={cn(
-            PANEL_BAR,
-            "group/fold w-full text-start transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset",
-            TONE[tone].text
-          )}
-        >
-          {Icon ? (
-            <Icon aria-hidden className="size-3.5 shrink-0" />
-          ) : (
-            <span
-              aria-hidden
-              className={cn("size-1.5 shrink-0 rounded-full", TONE[tone].dot)}
-            />
-          )}
-          {/* The part it is in first, then its own name. */}
-          {section != null ? (
-            <>
-              <span
-                className="shrink-0 font-semibold text-foreground"
-                data-pa-group-section
+        {action ? (
+          // A button of its own on the bar: the folding button its name,
+          // stretched over the whole bar but that button, which sits over
+          // it before the chevron; the bar deeper when the fold is hovered.
+          <div
+            className={cn(
+              PANEL_BAR,
+              "group/fold relative transition-colors has-[[data-pa-fold]:hover]:bg-muted",
+              TONE[tone].text
+            )}
+            data-state={open ? "open" : "closed"}
+          >
+            {heading(
+              <CollapsibleTrigger
+                data-pa-fold
+                className="flex min-w-0 items-center gap-2 text-start outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset"
               >
-                {section}
-              </span>
-              <span aria-hidden className="shrink-0 text-muted-foreground/50">
-                ·
-              </span>
-            </>
-          ) : null}
-          <span className="min-w-0 truncate">{label}</span>
-          <span className="shrink-0 tabular-nums">{count}</span>
-          <ChevronDown
-            aria-hidden
-            className="ms-auto size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=closed]/fold:-rotate-90 rtl:group-data-[state=closed]/fold:rotate-90"
-          />
-        </CollapsibleTrigger>
+                {name}
+              </CollapsibleTrigger>
+            )}
+            <span className="relative z-10 ms-auto -me-1 flex shrink-0 items-center">
+              {action}
+            </span>
+            {chevron()}
+          </div>
+        ) : (
+          // Its head the bar across its top, the whole of it the button
+          // that folds it — deeper when hovered.
+          heading(
+            <CollapsibleTrigger
+              data-pa-fold
+              className={cn(
+                PANEL_BAR,
+                "group/fold w-full text-start transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset",
+                TONE[tone].text
+              )}
+            >
+              {name}
+              {chevron("ms-auto")}
+            </CollapsibleTrigger>
+          )
+        )}
         <CollapsibleContent className="flex min-w-0 flex-col border-t border-border/60">
           <PanelStack flush>{children}</PanelStack>
           {more ? (

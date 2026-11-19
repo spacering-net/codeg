@@ -95,29 +95,39 @@ export function precheckWords(
   }
 }
 
-const OUTCOME_TONE: Record<RoutineRunOutcome, string> = {
-  running: "bg-primary/10 text-primary",
-  asked: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  reported: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-  silent: "bg-muted text-muted-foreground",
-  skipped: "bg-muted text-muted-foreground",
-  missed: "bg-muted text-muted-foreground",
-  declined: "bg-muted text-muted-foreground",
-  stopped: "bg-muted text-muted-foreground",
-  failed: "bg-red-500/10 text-red-700 dark:text-red-300",
+/** A run's outcome's colour: a dot, and its word. */
+const OUTCOME_TONE: Record<RoutineRunOutcome, { dot: string; text: string }> = {
+  running: { dot: "bg-primary", text: "text-primary" },
+  asked: {
+    dot: "bg-amber-500",
+    text: "text-amber-700 dark:text-amber-300",
+  },
+  reported: {
+    dot: "bg-emerald-500",
+    text: "text-emerald-700 dark:text-emerald-300",
+  },
+  silent: { dot: "bg-muted-foreground/40", text: "" },
+  skipped: { dot: "bg-muted-foreground/40", text: "" },
+  missed: { dot: "bg-muted-foreground/40", text: "" },
+  declined: { dot: "bg-muted-foreground/40", text: "" },
+  stopped: { dot: "bg-muted-foreground/40", text: "" },
+  failed: { dot: "bg-red-500", text: "text-red-700 dark:text-red-300" },
 }
 
-/** How a run went, as a chip. */
-export function OutcomeChip({ outcome }: { outcome: RoutineRunOutcome }) {
+/** How a run went, in a word in a quiet line: a dot of its colour, the
+ *  word in it when it says something (a report, a failure). */
+export function OutcomeWord({ outcome }: { outcome: RoutineRunOutcome }) {
   const t = useTranslations("PersonalAgent.routines")
+  const tone = OUTCOME_TONE[outcome] ?? OUTCOME_TONE.silent
   return (
     <span
-      className={cn(
-        "inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[11px] leading-none",
-        OUTCOME_TONE[outcome] ?? OUTCOME_TONE.silent
-      )}
+      className={cn("inline-flex items-center gap-1", tone.text)}
       data-pa-routine-outcome={outcome}
     >
+      <span
+        aria-hidden
+        className={cn("size-1.5 shrink-0 rounded-full", tone.dot)}
+      />
       {t(`outcome.${outcome}` as "outcome.running")}
     </span>
   )

@@ -50,8 +50,10 @@ import {
 import {
   AGENT_SURFACE,
   BUBBLE_MARKDOWN,
+  CardMessage,
   INSET_HOVER,
   MARKDOWN_LIST_ROOM,
+  SheetPart,
   usePageScope,
 } from "./shared"
 import { isChoiceQuestionRow, QuestionChoiceCard } from "./question-choice-card"
@@ -337,18 +339,38 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
   // Short paragraphs, no code and no card: a bubble each (10.7). While it
   // streams too, so the bubbles it ends with are the ones it grew.
   const parts = slot?.kind === "text" ? splitReply(slot.text) : null
-  const split = parts != null && parts.length > 1 ? parts : null
+  const paragraphs = parts != null && parts.length > 1 ? parts : null
+  // A reply that is one card and nothing else is the card: no bubble round
+  // it (what it is of — a brief, a routine, the message it answers — and
+  // what it drew on stay small lines over and under it).
+  const bare =
+    !view.running &&
+    !liveTurn &&
+    paragraphs == null &&
+    slot?.kind === "text" &&
+    isOneCard(slot.text) &&
+    questionRows.length === 0 &&
+    view.answered.length === 0 &&
+    view.dispatches.length === 0 &&
+    view.ending == null &&
+    view.resend.length === 0
+  // The routine it reports for (6.9): its report a card of its own — the
+  // routine and which run its header, what it says under it, whole — as
+  // the other news codeg brings is; a report that is one card is that card.
+  const routine = routineOf(row?.data?.routine)
+  const routineCard = routine != null && !bare
+  const split = routineCard ? null : paragraphs
   const lastSlot: SlotView | null =
     split && slot?.kind === "text"
       ? { ...slot, text: split[split.length - 1] }
       : slot
-
-  // The routine it reports for (6.9).
-  const routine = routineOf(row?.data?.routine)
   // The morning brief or the wrap-up it is (6.4, 6.5).
   const brief = briefOf(row?.data?.brief)
   const tidied = tidyRowsOf(tidiedOf(row?.data?.brief))
   const BriefIcon = brief === "wrap" ? Sunset : Newspaper
+  const routineWords = routine
+    ? tr("reply", { title: routine.title, seq: routine.seq ?? 1 })
+    : null
   const quote = (
     <>
       {brief ? (
@@ -362,15 +384,13 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
           </span>
         </p>
       ) : null}
-      {routine ? (
+      {routine && !routineCard ? (
         <p
           className="mb-1.5 flex items-center gap-1 text-xs text-muted-foreground"
           data-pa-reply-routine={routine.id ?? ""}
         >
           <Repeat className="size-3 shrink-0" aria-hidden />
-          <span className="min-w-0 truncate">
-            {tr("reply", { title: routine.title, seq: routine.seq ?? 1 })}
-          </span>
+          <span className="min-w-0 truncate">{routineWords}</span>
         </p>
       ) : null}
       {row?.reply_to != null && !item.quotesPrevious ? (
@@ -416,20 +436,6 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
       ) : null}
     </>
   )
-  // A reply that is one card and nothing else is the card: no bubble round
-  // it (what it is of — a brief, a routine, the message it answers — and
-  // what it drew on stay small lines over and under it).
-  const bare =
-    !view.running &&
-    !liveTurn &&
-    split == null &&
-    lastSlot?.kind === "text" &&
-    isOneCard(lastSlot.text) &&
-    questionRows.length === 0 &&
-    view.answered.length === 0 &&
-    view.dispatches.length === 0 &&
-    view.ending == null &&
-    view.resend.length === 0
   const bubble = (
     part: number,
     tail: boolean,
@@ -470,7 +476,29 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
         live: liveTurn,
       }}
     >
-      {split ? (
+      {routineCard ? (
+        <CardMessage
+          data-pa-reply-routine-card={routine.id ?? ""}
+          aria-live={liveTurn ? "polite" : undefined}
+          aria-busy={liveTurn || undefined}
+          head={
+            <>
+              <Repeat aria-hidden />
+              <span
+                className="min-w-0 truncate"
+                data-pa-reply-routine={routine.id ?? ""}
+              >
+                {routineWords}
+              </span>
+            </>
+          }
+        >
+          <SheetPart className="break-words text-foreground [&>:first-child]:mt-0">
+            {quote}
+            {rest}
+          </SheetPart>
+        </CardMessage>
+      ) : split ? (
         <div className="flex min-w-0 flex-col items-start gap-1">
           {split.slice(0, -1).map((text, i) =>
             bubble(
