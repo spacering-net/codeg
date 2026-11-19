@@ -186,9 +186,8 @@ describe("useProxiedMarketplaceAsset", () => {
       useProxiedMarketplaceAsset("https://codex-pets.net/slow/poster.webp")
     )
     unmount() // cancel before settle
-    d.resolve(asset("LATE"))
-    await Promise.resolve()
-    await Promise.resolve()
+    // Flush the whole load chain so the late consumer callback actually runs.
+    await act(async () => d.resolve(asset("LATE")))
 
     expect(created).toHaveLength(0)
     expect(revoked).toHaveLength(0)
