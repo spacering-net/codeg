@@ -1555,6 +1555,89 @@ describe("AcpConnectionsProvider failed-turn line", () => {
     ])
   })
 
+  // codex-acp 2.7.0 (#767) tells a hook that blocked the prompt as a warning
+  // notice, and the turn then ends with no reply. codeg's verdict restates
+  // that notice (`turn_failed_empty_hook`, its text as the message): the
+  // line is the agent's account, and the one notification is the notice's,
+  // taken over by the verdict rather than told a second time.
+  it("closes an empty turn a hook stopped on the agent's words, in one notification", async () => {
+    const handlers = await promptingOwner()
+    h.toastWarning.mockClear()
+    h.toastError.mockClear()
+    h.recordAlert.mockClear()
+    h.notifyDesktop.mockClear()
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "session_notice",
+      notice: {
+        severity: "warning",
+        title: "UserPromptSubmit hook blocked the prompt",
+        description: "blocked by probe policy",
+      },
+    })
+    const noticeKey =
+      "acp-notice:spawned-conn:warning:UserPromptSubmit hook blocked the prompt"
+    expect(h.toastWarning).toHaveBeenCalledWith(
+      "noticeTitle",
+      expect.objectContaining({ id: noticeKey })
+    )
+
+    const agentWords =
+      "UserPromptSubmit hook blocked the prompt: blocked by probe policy"
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "error",
+      message: agentWords,
+      agent_type: "codex",
+      code: "turn_failed_empty_hook",
+    })
+    expect(lineOf()).toEqual([
+      { type: "turn_error", message: agentWords, fromAgent: true },
+    ])
+    // The session's standing error is the localized line alone.
+    expect(h.store!.getConnection(TAB)!.error).toBe(
+      "backendErrors.turnFailedEmptyHook"
+    )
+    // Same key: the warning's toast and list entry become the error.
+    expect(h.toastError).toHaveBeenCalledWith(
+      "backendErrors.turnFailedEmptyHook",
+      expect.objectContaining({ id: noticeKey, description: agentWords })
+    )
+    const keys = h.recordAlert.mock.calls.map(([alert]) => alert.key)
+    expect(new Set(keys)).toEqual(new Set([noticeKey]))
+    // The OS notification never carries the agent's (the hook's) words.
+    expect(JSON.stringify(h.notifyDesktop.mock.calls)).not.toContain(
+      "blocked by probe policy"
+    )
+  })
+
+  it("leaves a notice that did not explain the empty turn alone", async () => {
+    const handlers = await promptingOwner()
+    h.toastError.mockClear()
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "session_notice",
+      notice: { severity: "warning", title: "Fast mode turned off" },
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "error",
+      message: "PreToolUse hook blocked the tool call",
+      agent_type: "codex",
+      code: "turn_failed_empty_hook",
+    })
+    expect(h.toastError).toHaveBeenCalledWith(
+      "backendErrors.turnFailedEmptyHook",
+      expect.objectContaining({
+        id: expect.stringMatching(/^acp-turn-failure:spawned-conn:/),
+      })
+    )
+  })
+
   it("reads a rejected prompt's own message, without the backend's prefix", async () => {
     const handlers = await promptingOwner()
     emitAcpEvent(handlers, {
@@ -5540,6 +5623,7 @@ describe("empty-turn error diagnostics", () => {
       ["turn_failed_empty", "backendErrors.turnFailedEmpty"],
       ["turn_failed_empty_protocol", "backendErrors.turnFailedEmptyProtocol"],
       ["turn_failed_empty_metadata", "backendErrors.turnFailedEmptyMetadata"],
+      ["turn_failed_empty_hook", "backendErrors.turnFailedEmptyHook"],
     ] as const
 
     // Sequence numbers must advance — the store's seq guard drops replays.

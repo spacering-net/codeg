@@ -594,10 +594,15 @@ function CommitFilesTree({
   }, [treeNodes])
   const [expandedPaths, setExpandedPaths] =
     useState<Set<string>>(allDirectoryPaths)
-
-  useEffect(() => {
+  // A new file list re-expands every directory. Adjusted during render (React's
+  // "reset state on prop change" pattern) so the new tree never paints with
+  // the previous commit's expansion.
+  const [prevAllDirectoryPaths, setPrevAllDirectoryPaths] =
+    useState(allDirectoryPaths)
+  if (allDirectoryPaths !== prevAllDirectoryPaths) {
+    setPrevAllDirectoryPaths(allDirectoryPaths)
     setExpandedPaths(allDirectoryPaths)
-  }, [allDirectoryPaths])
+  }
 
   const canExpandAll = useMemo(() => {
     if (allDirectoryPaths.size === 0) return false

@@ -1,7 +1,14 @@
 "use client"
 
 import type { ReactElement } from "react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import {
   ArrowRight,
   ChevronsDownUp,
@@ -311,8 +318,14 @@ export function PushWorkspace({
   // Mirrors the live target so an in-flight load can tell whether the branch it
   // describes is still the one on screen — the generation counter alone can't,
   // since a retarget resets state without going through `loadCommits`.
+  // Synced in a layout effect: its only readers are `loadCommits`'s
+  // post-`await` continuations, and a retarget (a default-priority event
+  // update) renders and commits in one task, so no continuation can observe
+  // the gap between the render and this layout effect.
   const targetBranchRef = useRef(targetBranch)
-  targetBranchRef.current = targetBranch
+  useLayoutEffect(() => {
+    targetBranchRef.current = targetBranch
+  })
   const [pushInfoData, setPushInfoData] = useState<GitPushInfo | null>(null)
   const [selectedRemote, setSelectedRemote] = useState<string | null>(null)
   const [commits, setCommits] = useState<GitLogEntry[]>([])
@@ -502,6 +515,7 @@ export function PushWorkspace({
   // Reload commits when selected remote changes
   useEffect(() => {
     if (selectedRemote !== null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- kicks off an async commit-log fetch (flips the loading flag first)
       loadCommits(selectedRemote)
     }
   }, [selectedRemote, loadCommits])
@@ -790,10 +804,15 @@ function PushCommitFilesTree({
   }, [treeNodes])
   const [expandedPaths, setExpandedPaths] =
     useState<Set<string>>(allDirectoryPaths)
-
-  useEffect(() => {
+  // A new file list re-expands every directory. Adjusted during render (React's
+  // "reset state on prop change" pattern) so the new tree never paints with
+  // the previous commit's expansion.
+  const [prevAllDirectoryPaths, setPrevAllDirectoryPaths] =
+    useState(allDirectoryPaths)
+  if (allDirectoryPaths !== prevAllDirectoryPaths) {
+    setPrevAllDirectoryPaths(allDirectoryPaths)
     setExpandedPaths(allDirectoryPaths)
-  }, [allDirectoryPaths])
+  }
 
   const canExpandAll = useMemo(() => {
     if (allDirectoryPaths.size === 0) return false

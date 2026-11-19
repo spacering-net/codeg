@@ -188,6 +188,7 @@ export function SubagentSessionDialog({
 
   useEffect(() => {
     if (!open) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch on open; the loader flips `loading` before awaiting
     void load(true)
   }, [open, load])
 

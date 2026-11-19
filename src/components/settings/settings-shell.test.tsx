@@ -29,6 +29,24 @@ describe("settingsNavItemsFor", () => {
     expect(after("browser")).toBe("computer_use")
   })
 
+  it("leaves MCP, Skills and Skill packs to the Harness page", () => {
+    // They are sections of the workspace's Harness page now; the Settings
+    // window has no page for them, nor for the addresses that led there.
+    for (const env of ["tauri", "web"] as const) {
+      const hrefs = settingsNavItemsFor(env).map((item) => item.href)
+      for (const gone of [
+        "/settings/mcp",
+        "/settings/skills",
+        "/settings/skill-packs",
+        "/settings/experts",
+        "/settings/science",
+        "/settings/office-tools",
+      ]) {
+        expect(hrefs).not.toContain(gone)
+      }
+    }
+  })
+
   it("keeps every page on the desktop", () => {
     const labels = settingsNavItemsFor("tauri").map((item) => item.labelKey)
     expect(labels).toContain("web_service")

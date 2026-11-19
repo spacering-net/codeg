@@ -4,12 +4,16 @@
  * (not that the column has no tasks), and Escape or the clear button gets the
  * whole board back.
  */
-import { render, screen, within } from "@testing-library/react"
+import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
+import {
+  resetTasksTimeFilterCacheForTests,
+  saveTasksTimeFilter,
+} from "@/lib/tasks-board-filter-storage"
 import type { WorkTask } from "@/lib/types"
 
 const view = {
@@ -108,6 +112,8 @@ const searchBox = () => screen.getByRole("textbox", { name: "Search tasks" })
 
 beforeEach(() => {
   localStorage.clear()
+  resetTasksTimeFilterCacheForTests()
+  saveTasksTimeFilter("all")
   view.viewMode = "board"
   view.tasks = [
     task({ id: 1, title: "Fix the login timeout", status: "todo" }),
@@ -166,5 +172,144 @@ describe("TasksPage search", () => {
       within(empty).getByRole("button", { name: "Clear search" })
     )
     expect(screen.getByText("Write the release notes")).toBeInTheDocument()
+  })
+})
+
+describe("TasksPage recent-update filter", () => {
+  const now = Date.parse("2026-11-16T12:00:00Z")
+  const day = 24 * 60 * 60 * 1000
+
+  beforeEach(() => {
+    localStorage.removeItem("workspace:tasks-time-filter")
+    resetTasksTimeFilterCacheForTests()
+    vi.spyOn(Date, "now").mockReturnValue(now)
+    view.tasks = [
+      task({
+        id: 1,
+        title: "Recent fix",
+        updated_at: new Date(now - day / 2).toISOString(),
+      }),
+      task({
+        id: 2,
+        title: "Weekly fix",
+        status: "review",
+        updated_at: new Date(now - 3 * day).toISOString(),
+      }),
+      task({
+        id: 3,
+        title: "Monthly fix",
+        status: "done",
+        updated_at: new Date(now - 20 * day).toISOString(),
+      }),
+      task({
+        id: 4,
+        title: "Older fix",
+        status: "done",
+        updated_at: new Date(now - 45 * day).toISOString(),
+      }),
+    ]
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  async function selectTime(
+    user: ReturnType<typeof userEvent.setup>,
+    label: string
+  ) {
+    await user.click(screen.getByRole("combobox", { name: /^Updated:/ }))
+    await user.click(screen.getByRole("option", { name: label }))
+  }
+
+  it.each(["board", "list"] as const)(
+    "filters %s tasks through all four ranges",
+    async (mode) => {
+      const user = userEvent.setup()
+      view.viewMode = mode
+      mount()
+
+      const titles = ["Recent fix", "Weekly fix", "Monthly fix", "Older fix"]
+      for (const [label, count] of [
+        ["Last 24 hours", 1],
+        ["Last 7 days", 2],
+        ["Last 30 days", 3],
+        ["All time", 4],
+      ] as const) {
+        await selectTime(user, label)
+        for (const [index, title] of titles.entries()) {
+          if (index < count) expect(screen.getByText(title)).toBeInTheDocument()
+          else expect(screen.queryByText(title)).not.toBeInTheDocument()
+        }
+      }
+    }
+  )
+
+  it("shows every task by default", () => {
+    mount()
+    expect(
+      screen.getByRole("combobox", { name: "Updated: All time" })
+    ).toBeInTheDocument()
+    for (const title of [
+      "Recent fix",
+      "Weekly fix",
+      "Monthly fix",
+      "Older fix",
+    ])
+      expect(screen.getByText(title)).toBeInTheDocument()
+  })
+
+  it("restores the selected window on the next visit", async () => {
+    const user = userEvent.setup()
+    const { unmount } = mount()
+    await selectTime(user, "Last 7 days")
+    unmount()
+    mount()
+    expect(
+      screen.getByRole("combobox", { name: "Updated: Last 7 days" })
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Monthly fix")).not.toBeInTheDocument()
+  })
+
+  it("combines with search and status, and clears only the time window from an empty list", async () => {
+    const user = userEvent.setup()
+    view.viewMode = "list"
+    saveTasksTimeFilter("all")
+    mount()
+    await user.type(searchBox(), "Monthly")
+    await user.click(
+      screen.getByRole("combobox", { name: "Status: All statuses" })
+    )
+    await user.click(screen.getByRole("option", { name: "Done" }))
+    expect(screen.getByText("Monthly fix")).toBeInTheDocument()
+    await selectTime(user, "Last 7 days")
+    expect(screen.queryByText("Monthly fix")).not.toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "All time" }))
+    expect(screen.getByText("Monthly fix")).toBeInTheDocument()
+    expect(searchBox()).toHaveValue("Monthly")
+    expect(
+      screen.getByRole("combobox", { name: "Status: Done" })
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Recent fix")).not.toBeInTheDocument()
+  })
+
+  it("ages a task out while the page stays open", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    localStorage.setItem("workspace:tasks-time-filter", "24h")
+    view.tasks = [
+      task({
+        title: "Expiring task",
+        updated_at: new Date(now - day + 30_000).toISOString(),
+      }),
+    ]
+    mount()
+    expect(screen.getByText("Expiring task")).toBeInTheDocument()
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+    expect(screen.queryByText("Expiring task")).not.toBeInTheDocument()
+    expect(screen.getAllByText("No matches")).toHaveLength(4)
   })
 })

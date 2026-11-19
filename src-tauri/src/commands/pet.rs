@@ -480,7 +480,7 @@ pub async fn pet_set_active(
     db: tauri::State<'_, AppDatabase>,
     pet_id: Option<String>,
 ) -> Result<PetWindowConfig, AppCommandError> {
-    pet_set_active_core(&db.conn, &EventEmitter::Tauri(app), pet_id).await
+    pet_set_active_core(&db.conn, &EventEmitter::from_app(&app), pet_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -489,7 +489,7 @@ pub async fn pet_celebrate(
     app: tauri::AppHandle,
     kind: PetCelebrationKind,
 ) -> Result<(), AppCommandError> {
-    pet_celebrate_core(&EventEmitter::Tauri(app), kind);
+    pet_celebrate_core(&EventEmitter::from_app(&app), kind);
     Ok(())
 }
 

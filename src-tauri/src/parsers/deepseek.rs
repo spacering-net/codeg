@@ -43,7 +43,8 @@ pub(crate) fn resolve_dsh_home_dir() -> PathBuf {
     resolve_dsh_home_dir_for_env(&AgentEnv::inherited())
 }
 
-fn resolve_dsh_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+/// [`resolve_dsh_home_dir`] for the harness launched with `env`.
+pub(crate) fn resolve_dsh_home_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_dsh_home_from(env.var_os("DSH_HOME"), dirs::home_dir())
 }
 

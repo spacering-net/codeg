@@ -11,6 +11,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
+import { saveTasksTimeFilter } from "@/lib/tasks-board-filter-storage"
 import type { WorkTask } from "@/lib/types"
 
 const view = {
@@ -127,6 +128,7 @@ function column(name: string): HTMLElement {
 
 beforeEach(() => {
   localStorage.clear()
+  saveTasksTimeFilter("all")
   vi.clearAllMocks()
   view.viewMode = "board"
   view.tasks = [

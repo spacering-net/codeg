@@ -87,11 +87,15 @@ export function TaskFollowUpDialog({
   const taskId = task?.id ?? null
   useEffect(() => {
     if (!open) return
+    // Kept as an effect (like the sibling dialogs): the reset also re-arms the
+    // submit latch ref, which cannot be written during render.
+    /* eslint-disable react-hooks/set-state-in-effect */
     setText("")
     setAttachments(0)
     setIntent(DEFAULT_FOLLOW_UP_INTENT)
     setSubmitting(false)
     setError(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
     submittingRef.current = false
   }, [open, taskId])
 

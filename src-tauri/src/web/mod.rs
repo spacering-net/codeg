@@ -926,7 +926,7 @@ pub(crate) async fn do_start_web_server_tauri(
             .state::<Arc<crate::acp::InternalEventBus>>()
             .inner()
             .clone(),
-        emitter: crate::web::event_bridge::EventEmitter::Tauri(app.clone()),
+        emitter: crate::web::event_bridge::EventEmitter::from_app(&app),
         // Resolve through the effective data dir so a custom
         // `CODEG_DATA_DIR` reaches the credential helper and any HTTP
         // handler that reads `state.data_dir`.
@@ -1028,6 +1028,12 @@ pub(crate) async fn do_start_web_server_tauri(
     // already ran earlier in this function before the bind.
     handlers::files::purge_upload_staging().await;
 
+    // Codeg Web's SRN sign-in for this service's browsers: the same three
+    // variables as codeg-server, read when the service first starts, and its
+    // key in the keychain (`srn-web-key`). Its own Web client — never the
+    // desktop's, whose sign-in this does not touch.
+    crate::srn::web::start_for_desktop(&app_state.db.conn);
+
     let router = router::build_router(
         app_state,
         token.clone(),
@@ -1076,7 +1082,7 @@ pub(crate) async fn do_start_web_server_tauri(
 #[cfg(feature = "tauri-runtime")]
 fn emit_web_service_status_changed(app: &tauri::AppHandle, running: bool) {
     event_bridge::emit_event(
-        &event_bridge::EventEmitter::Tauri(app.clone()),
+        &event_bridge::EventEmitter::from_app(app),
         event_bridge::WEB_SERVICE_STATUS_CHANGED_EVENT,
         event_bridge::WebServiceStatusChanged { running },
     );

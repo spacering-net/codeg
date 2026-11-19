@@ -139,7 +139,7 @@ pub async fn automation_create(
     db: tauri::State<'_, AppDatabase>,
     draft: AutomationDraft,
 ) -> Result<AutomationInfo, DbError> {
-    automation_create_core(&EventEmitter::Tauri(app), &db, draft).await
+    automation_create_core(&EventEmitter::from_app(&app), &db, draft).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -150,7 +150,7 @@ pub async fn automation_update(
     id: i32,
     draft: AutomationDraft,
 ) -> Result<AutomationInfo, DbError> {
-    automation_update_core(&EventEmitter::Tauri(app), &db, id, draft).await
+    automation_update_core(&EventEmitter::from_app(&app), &db, id, draft).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -161,7 +161,7 @@ pub async fn automation_set_enabled(
     id: i32,
     enabled: bool,
 ) -> Result<AutomationInfo, DbError> {
-    automation_set_enabled_core(&EventEmitter::Tauri(app), &db, id, enabled).await
+    automation_set_enabled_core(&EventEmitter::from_app(&app), &db, id, enabled).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -171,7 +171,7 @@ pub async fn automation_delete(
     db: tauri::State<'_, AppDatabase>,
     id: i32,
 ) -> Result<(), DbError> {
-    automation_delete_core(&EventEmitter::Tauri(app), &db, id).await
+    automation_delete_core(&EventEmitter::from_app(&app), &db, id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

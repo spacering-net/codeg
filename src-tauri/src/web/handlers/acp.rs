@@ -257,14 +257,21 @@ pub async fn acp_reclaim_leaked_temp(
 pub struct AcpListAgentSkillsParams {
     pub agent_type: AgentType,
     pub workspace_path: Option<String>,
+    /// List dangling links under a skill's name too (owner `broken`).
+    #[serde(default)]
+    pub include_broken: Option<bool>,
 }
 
 pub async fn acp_list_agent_skills(
     Json(params): Json<AcpListAgentSkillsParams>,
 ) -> Result<Json<AgentSkillsListResult>, AppCommandError> {
-    let result = acp_commands::acp_list_agent_skills(params.agent_type, params.workspace_path)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let result = acp_commands::acp_list_agent_skills_with(
+        params.agent_type,
+        params.workspace_path,
+        params.include_broken.unwrap_or(false),
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(result))
 }
 
@@ -314,21 +321,26 @@ pub struct AcpSaveAgentSkillParams {
     pub content: String,
     pub workspace_path: Option<String>,
     pub layout: Option<AgentSkillLayout>,
+    /// A new skill: refused when the id is already used (`id_taken`).
+    #[serde(default)]
+    pub create: Option<bool>,
 }
 
 pub async fn acp_save_agent_skill(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpSaveAgentSkillParams>,
 ) -> Result<Json<AgentSkillItem>, AppCommandError> {
-    let skill = acp_commands::acp_save_agent_skill(
+    let skill = acp_commands::acp_save_agent_skill_core(
+        &state.emitter,
         params.agent_type,
         params.scope,
         params.skill_id,
         params.content,
         params.workspace_path,
         params.layout,
+        params.create.unwrap_or(false),
     )
-    .await
-    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    .await?;
     Ok(Json(skill))
 }
 
@@ -339,20 +351,32 @@ pub struct AcpDeleteAgentSkillParams {
     pub scope: AgentSkillScope,
     pub skill_id: String,
     pub workspace_path: Option<String>,
+    /// Say what the delete would do (who else loses the skill), do nothing.
+    #[serde(default)]
+    pub preflight: Option<bool>,
+    /// The `ack` the preflight returned, for a delete in a folder other
+    /// agents read.
+    #[serde(default)]
+    pub ack: Option<String>,
 }
 
 pub async fn acp_delete_agent_skill(
+    Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpDeleteAgentSkillParams>,
-) -> Result<Json<()>, AppCommandError> {
-    acp_commands::acp_delete_agent_skill(
+) -> Result<Json<acp_commands::SkillPageDeleteResult>, AppCommandError> {
+    let result = acp_commands::acp_delete_agent_skill_core(
+        &state.emitter,
         params.agent_type,
         params.scope,
         params.skill_id,
         params.workspace_path,
+        acp_commands::SkillPageDeleteConfirm {
+            preflight: params.preflight.unwrap_or(false),
+            ack: params.ack,
+        },
     )
-    .await
-    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
+    .await?;
+    Ok(Json(result))
 }
 
 // --- Pattern C: ConnectionManager handlers ---
@@ -1602,6 +1626,7 @@ mod tests {
 
     /// The editor reopens what it just saved from this response, so the web
     /// endpoint must return the saved item as the desktop command does.
+    #[cfg(not(windows))] // a home of its own: `skills::tests::with_hermetic_home`
     #[tokio::test]
     async fn skill_save_returns_the_item_the_web_editor_needs() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1614,7 +1639,17 @@ mod tests {
             "layout": "markdown_file"
         }))
         .unwrap();
-        let response = acp_save_agent_skill(Json(params)).await.unwrap();
+        // The handler announces the change through the server's emitter, and
+        // the save consults Codeg's skill store: under a home of the test's own.
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let state = Arc::new(AppState::new_for_test(db, tmp.path().join("data")));
+        let home = tempfile::tempdir().unwrap();
+        let response = crate::skills::tests::with_hermetic_home(
+            home.path(),
+            acp_save_agent_skill(Extension(state), Json(params)),
+        )
+        .await
+        .unwrap();
         let value = serde_json::to_value(response.0).unwrap();
         assert_eq!(value["id"], "web-skill");
         assert_eq!(value["scope"], "project");

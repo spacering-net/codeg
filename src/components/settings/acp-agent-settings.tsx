@@ -4990,6 +4990,10 @@ export function AcpAgentSettings() {
   const tCatalog = tCatalogScoped as unknown as CodexCatalogTranslator
   const tModels = useTranslations("ProviderModels")
   const rawTranslator = t as unknown as AcpTranslator
+  // The module-level helpers behind `acpText` are called while this component
+  // and its children render, so the translator must be published before they
+  // run; an effect would leave the first render on the English fallbacks.
+  // eslint-disable-next-line react-hooks/globals -- must be set before the render-time acpText readers
   acpTranslator = (key, values) => rawTranslator(key, values)
   const searchParams = useSearchParams()
   const [agents, setAgents] = useState<AcpAgentInfo[]>([])
@@ -5342,6 +5346,7 @@ export function AcpAgentSettings() {
       installStream.status === "failed"
     ) {
       if (streamAgentType) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- re-checks the agent on disk after the install stream ends
         runPreflight(streamAgentType).catch(() => {})
       }
     }
@@ -5349,6 +5354,7 @@ export function AcpAgentSettings() {
   }, [installStream.status])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial agent list fetch
     refreshAgents().catch((err) => {
       console.error("[Settings] refresh agents failed:", err)
     })
@@ -5357,6 +5363,7 @@ export function AcpAgentSettings() {
   useEffect(() => {
     if (loadingAgents || !agentTypesKey) return
     const agentTypes = agentTypesKey.split(",") as AgentType[]
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- preflight checks query the backend for each agent
     runAllPreflight(agentTypes).catch((err) => {
       console.error("[Settings] run all preflight failed:", err)
     })
@@ -5377,6 +5384,7 @@ export function AcpAgentSettings() {
       (agent) => agent.agent_type === requestedAgentType
     )
     if (matched) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- applies the `?agent=` URL request once per value (ref-guarded)
       setSelectedAgentType(matched.agent_type)
     }
     handledSearchAgentRef.current = requestedAgentType
@@ -5398,8 +5406,11 @@ export function AcpAgentSettings() {
     selected.scrollIntoView({ block: "nearest", behavior: "smooth" })
   }, [loadingAgents, selectedAgentType])
 
+  // Ordered after the `?agent=` effect above: its queued selection is the
+  // `prev` this validates against the refreshed list.
   useEffect(() => {
     if (sortedAgents.length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- keeps the selection valid after the `?agent=` effect of the same commit
       setSelectedAgentType(null)
       return
     }
@@ -5422,6 +5433,7 @@ export function AcpAgentSettings() {
       ? selectedAgent.agent_type
       : null
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with the latest-release fetch below
     setVisitLatestRelease(null)
     if (!latestLookupTarget) return
     let current = true
@@ -6844,8 +6856,11 @@ export function AcpAgentSettings() {
     return getAgentChecks(selectedAgent, selectedCurrent, selectedLatestRelease)
   }, [locale, selectedAgent, selectedCurrent, selectedLatestRelease])
 
+  // Seeds the fold state once per check: a check keeps the state it was first
+  // seen with even if its status changes later, so this cannot be derived.
   useEffect(() => {
     if (!selectedAgent || selectedChecks.length === 0) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time seeding of per-check defaults, see above
     setExpandedChecks((prev) => {
       let next = prev
       for (const check of selectedChecks) {
@@ -6874,30 +6889,21 @@ export function AcpAgentSettings() {
     setExpandedChecks((prev) => (prev[key] ? prev : { ...prev, [key]: true }))
   }, [selectedAgent, selectedChecks])
 
-  useEffect(() => {
-    if (!selectedOpenCodeConfig) {
-      if (openCodeProviderId) setOpenCodeProviderId("")
-      return
-    }
-    if (!openCodeProviderId) return
-    if (selectedOpenCodeConfig.providerIds.includes(openCodeProviderId)) {
-      return
-    }
+  // Drop an expanded / pending-delete provider once it is no longer in the
+  // selected OpenCode config. Adjusted during render (each check clears its
+  // own condition, so it settles in one extra pass) rather than in an effect.
+  if (
+    openCodeProviderId &&
+    !selectedOpenCodeConfig?.providerIds.includes(openCodeProviderId)
+  ) {
     setOpenCodeProviderId("")
-  }, [openCodeProviderId, selectedOpenCodeConfig])
-
-  useEffect(() => {
-    if (!openCodeDeleteProviderId) return
-    if (!selectedOpenCodeConfig) {
-      setOpenCodeDeleteProviderId(null)
-      return
-    }
-    if (
-      !selectedOpenCodeConfig.providerIds.includes(openCodeDeleteProviderId)
-    ) {
-      setOpenCodeDeleteProviderId(null)
-    }
-  }, [openCodeDeleteProviderId, selectedOpenCodeConfig])
+  }
+  if (
+    openCodeDeleteProviderId &&
+    !selectedOpenCodeConfig?.providerIds.includes(openCodeDeleteProviderId)
+  ) {
+    setOpenCodeDeleteProviderId(null)
+  }
 
   const updateSelectedDraft = useCallback(
     (updater: (current: AgentDraft) => AgentDraft) => {
@@ -8808,6 +8814,7 @@ export function AcpAgentSettings() {
 
   useEffect(() => {
     if (selectedAgent?.agent_type !== "codex" && codexLoginStatus !== "idle") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- stops the external device-login polling when leaving Codex
       cancelCodexDeviceLogin()
     }
   }, [selectedAgent, codexLoginStatus, cancelCodexDeviceLogin])
@@ -9399,6 +9406,7 @@ export function AcpAgentSettings() {
                               selectedIsSavingInstructions || !instructionsDirty
                             }
                             onClick={() =>
+                              // eslint-disable-next-line react-hooks/refs -- runs on click, not during render; the enclosing IIFE hides that from the compiler
                               persistSystemInstructions(
                                 selectedAgent.agent_type,
                                 selectedDraft.systemInstructionsText,

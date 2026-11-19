@@ -469,7 +469,6 @@ export function useTimelineWindow<T extends WindowRow>({
     if (!windowed) return
     // Measuring is what this is for: the list's layout, read once it is laid
     // out, before it is painted.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     measureList()
     update()
   }, [windowed, measureList, update])

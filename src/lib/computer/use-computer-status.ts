@@ -81,6 +81,7 @@ export function useComputerStatus(live: boolean) {
 
   useEffect(() => {
     if (!live) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- status fetch; refresh() flips the loading flag before awaiting
     void refresh()
     const onFocus = () => void refresh()
     const onVisible = () => {

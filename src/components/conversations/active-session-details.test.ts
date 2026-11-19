@@ -1,8 +1,11 @@
 import { describe, it, expect, vi } from "vitest"
+import { shallow } from "zustand/shallow"
 
 import {
   pickModelFromTurns,
+  projectRuntimeSessionDetails,
   resolveActiveSessionDetails,
+  resolveActiveSessionDetailsFromSnapshot,
 } from "./active-session-details"
 import type {
   DbConversationDetail,
@@ -63,8 +66,7 @@ function turn(over: Partial<MessageTurn> = {}): MessageTurn {
   }
 }
 
-// The resolver only reads `.detail` and `.sessionStats`, so a cast partial is
-// enough and keeps the fixture focused.
+// Only the projection inputs are needed, so the fixture omits unrelated state.
 function session(
   over: Partial<ConversationRuntimeSession>
 ): ConversationRuntimeSession {
@@ -275,5 +277,78 @@ describe("pickModelFromTurns", () => {
 
   it("returns null for an empty list", () => {
     expect(pickModelFromTurns([])).toBeNull()
+  })
+})
+
+describe("projectRuntimeSessionDetails", () => {
+  it("keeps the selected metadata shallow-equal across transcript-only changes", () => {
+    const loaded = detail({ turns: [turn({ model: "history-model" })] })
+    const current = session({
+      detail: loaded,
+      sessionStats: stats(),
+      localTurns: [turn({ model: "live-model" })],
+    })
+    const next = session({
+      ...current,
+      detail: {
+        ...loaded,
+        turns: [
+          ...loaded.turns,
+          turn({ blocks: [{ type: "text", text: "More history" }] }),
+        ],
+      },
+      localTurns: [
+        turn({
+          model: "live-model",
+          blocks: [{ type: "text", text: "A changed reply" }],
+        }),
+      ],
+    })
+    expect(
+      shallow(
+        projectRuntimeSessionDetails(current),
+        projectRuntimeSessionDetails(next)
+      )
+    ).toBe(true)
+  })
+
+  it("still changes when the displayed model or live usage changes", () => {
+    const current = session({
+      detail: detail(),
+      sessionStats: stats({ total_tokens: 10 }),
+      localTurns: [turn({ model: "model-a" })],
+    })
+    const projected = projectRuntimeSessionDetails(current)
+    const next = projectRuntimeSessionDetails(
+      session({
+        ...current,
+        sessionStats: stats({ total_tokens: 20 }),
+        localTurns: [turn({ model: "model-b" })],
+      })
+    )
+    expect(shallow(projected, next)).toBe(false)
+    expect(next.model).toBe("model-b")
+    expect(next.stats?.total_tokens).toBe(20)
+  })
+
+  it("applies live title/status and preserves projected model/usage", () => {
+    const projected = projectRuntimeSessionDetails(
+      session({
+        detail: detail({
+          summary: summary({ title: "old", status: "in_progress" }),
+          session_stats: stats({ total_tokens: 9 }),
+          turns: [turn({ model: "history-model" })],
+        }),
+      })
+    )
+    const resolved = resolveActiveSessionDetailsFromSnapshot(
+      { conversationId: 5, status: "completed" },
+      projected,
+      [summary({ title: "renamed", status: "pending_review" })]
+    )
+    expect(resolved.summary?.title).toBe("renamed")
+    expect(resolved.summary?.status).toBe("completed")
+    expect(resolved.stats?.total_tokens).toBe(9)
+    expect(resolved.model).toBe("history-model")
   })
 })

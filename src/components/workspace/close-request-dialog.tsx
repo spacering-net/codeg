@@ -24,7 +24,13 @@
  *   terminals would die with it. Confirm the loss, do not re-ask the pref.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
@@ -70,7 +76,11 @@ export function CloseRequestDialog() {
   // Read inside the async responder, which is created once per render but may
   // fire after a state change; a ref keeps it reading the live value.
   const rememberRef = useRef(false)
-  rememberRef.current = remember
+  // Synced in a layout effect rather than during render; the only reader is the
+  // click-driven responder, which always runs after the commit.
+  useLayoutEffect(() => {
+    rememberRef.current = remember
+  })
 
   useEffect(() => {
     if (!isDesktop()) return
