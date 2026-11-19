@@ -659,25 +659,63 @@ describe("TerminalView recovery", () => {
     expect(h.kill).not.toHaveBeenCalled()
   })
 
-  it("releases a registration that completes after the view unmounts", async () => {
-    let finish!: () => void
-    const pendingRegistration = new Promise<void>((resolve) => {
-      finish = resolve
-    })
-    const exit = "terminal://exit/terminal-1"
-    h.waitForRegistration = async (channel) => {
-      if (channel === exit) await pendingRegistration
-    }
-    const view = render(<TerminalView {...props} attach />)
-    await waitFor(() => expect(h.handlers.has(exit)).toBe(true))
-    view.unmount()
+  it.each(["output", "exit"])(
+    "releases the %s registration that completes after the view unmounts",
+    async (kind) => {
+      let finish!: () => void
+      const pendingRegistration = new Promise<void>((resolve) => {
+        finish = resolve
+      })
+      const channel = `terminal://${kind}/terminal-1`
+      h.waitForRegistration = async (name) => {
+        if (name === channel) await pendingRegistration
+      }
+      const view = render(<TerminalView {...props} attach />)
+      await waitFor(() => expect(h.handlers.has(channel)).toBe(true))
+      view.unmount()
 
-    expect([...h.handlers.keys()]).toEqual([exit])
-    expect(h.disposed).toBe(1)
-    await act(async () => finish())
+      // Listeners already established are released at once; only the one
+      // whose registration is still pending waits for its handle.
+      expect([...h.handlers.keys()]).toEqual([channel])
+      expect(h.disposed).toBe(1)
+      act(() => {
+        h.handlers.get(channel)?.({
+          terminal_id: "terminal-1",
+          data: "after disposal",
+          seq: 1,
+          generation: "new-generation",
+        })
+      })
+      await act(async () => finish())
+      expect(h.handlers.size).toBe(0)
+      expect(h.writes).toEqual([])
+      expect(h.snapshot).not.toHaveBeenCalled()
+      expect(h.spawn).not.toHaveBeenCalled()
+      expect(h.disposed).toBe(1)
+    }
+  )
+
+  it("kills a spawn that completes after a non-attach view unmounts", async () => {
+    let finishSpawn!: (id: string) => void
+    h.spawn.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishSpawn = resolve
+        })
+    )
+    const spawned = vi.fn()
+    const view = render(<TerminalView {...props} onSpawned={spawned} />)
+    await waitFor(() => expect(h.spawn).toHaveBeenCalledTimes(1))
+    view.unmount()
     expect(h.handlers.size).toBe(0)
+    expect(h.disposed).toBe(1)
+    await act(async () => {
+      finishSpawn("terminal-1")
+    })
+    // Without `attach` this mount owns the PTY it launched.
+    expect(h.kill).toHaveBeenCalledWith("terminal-1")
+    expect(spawned).toHaveBeenCalledWith("terminal-1")
     expect(h.snapshot).not.toHaveBeenCalled()
-    expect(h.spawn).not.toHaveBeenCalled()
     expect(h.disposed).toBe(1)
   })
 
