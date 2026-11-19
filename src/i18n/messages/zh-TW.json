@@ -10208,12 +10208,17 @@
         "dispatch": "直接派工作"
       },
       "paused": {
-        "owner": "已暫停",
-        "failures": "已暫停：連續失敗 3 次",
-        "executor": "已暫停：它用的執行設定不能用了"
+        "owner": "已暫停"
       },
-      "next": "下次：{when}",
-      "last": "上次 {when} · 共跑了 {n} 次",
+      "row": {
+        "when": "時間",
+        "trigger": "觸發",
+        "how": "方式",
+        "next": "下次",
+        "last": "上次",
+        "why": "原因",
+        "runs": "共 {n} 次"
+      },
       "runNow": "立即跑",
       "pause": "暫停",
       "resume": "恢復",

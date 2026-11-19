@@ -10208,12 +10208,17 @@
         "dispatch": "Delega trabalho"
       },
       "paused": {
-        "owner": "Pausada",
-        "failures": "Pausada: falhou três vezes seguidas",
-        "executor": "Pausada: a configuração de execução não pode ser usada"
+        "owner": "Pausada"
       },
-      "next": "Próxima: {when}",
-      "last": "Última {when} · {n} no total",
+      "row": {
+        "when": "Quando",
+        "trigger": "Gatilho",
+        "how": "Como",
+        "next": "Próxima",
+        "last": "Última",
+        "why": "Motivo",
+        "runs": "{n, plural, one {# execução} other {# execuções}} no total"
+      },
       "runNow": "Executar agora",
       "pause": "Pausar",
       "resume": "Retomar",

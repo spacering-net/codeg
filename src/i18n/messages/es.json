@@ -10208,12 +10208,17 @@
         "dispatch": "Encarga trabajo"
       },
       "paused": {
-        "owner": "En pausa",
-        "failures": "En pausa: falló tres veces seguidas",
-        "executor": "En pausa: no se puede usar su configuración de ejecución"
+        "owner": "En pausa"
       },
-      "next": "Próxima: {when}",
-      "last": "Última {when} · {n} en total",
+      "row": {
+        "when": "Cuándo",
+        "trigger": "Disparador",
+        "how": "Cómo",
+        "next": "Próxima",
+        "last": "Última",
+        "why": "Motivo",
+        "runs": "{n, plural, one {# vez} other {# veces}} en total"
+      },
       "runNow": "Ejecutar ahora",
       "pause": "Pausar",
       "resume": "Reanudar",

@@ -10208,12 +10208,17 @@
         "dispatch": "Confie du travail"
       },
       "paused": {
-        "owner": "En pause",
-        "failures": "En pause : trois échecs d'affilée",
-        "executor": "En pause : sa configuration d'exécution est inutilisable"
+        "owner": "En pause"
       },
-      "next": "Prochaine : {when}",
-      "last": "Dernière {when} · {n} au total",
+      "row": {
+        "when": "Quand",
+        "trigger": "Déclencheur",
+        "how": "Comment",
+        "next": "Prochaine",
+        "last": "Dernière",
+        "why": "Raison",
+        "runs": "{n, plural, one {# exécution} other {# exécutions}} au total"
+      },
       "runNow": "Exécuter maintenant",
       "pause": "Mettre en pause",
       "resume": "Reprendre",

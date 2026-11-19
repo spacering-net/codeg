@@ -10208,12 +10208,17 @@
         "dispatch": "Vergibt Arbeit"
       },
       "paused": {
-        "owner": "Pausiert",
-        "failures": "Pausiert: dreimal hintereinander fehlgeschlagen",
-        "executor": "Pausiert: Ausführungskonfiguration nicht nutzbar"
+        "owner": "Pausiert"
       },
-      "next": "Nächste: {when}",
-      "last": "Zuletzt {when} · insgesamt {n}",
+      "row": {
+        "when": "Wann",
+        "trigger": "Auslöser",
+        "how": "Wie",
+        "next": "Nächster",
+        "last": "Letzter",
+        "why": "Grund",
+        "runs": "{n, plural, one {# Lauf} other {# Läufe}} insgesamt"
+      },
       "runNow": "Jetzt ausführen",
       "pause": "Pausieren",
       "resume": "Fortsetzen",

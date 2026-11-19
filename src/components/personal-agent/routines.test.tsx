@@ -388,15 +388,31 @@ describe("the details' routines", () => {
       within(part).getByRole("button", { name: "New routine" })
     ).toBeTruthy()
     expect(screen.getByText(/only with matters waiting over 4 h/)).toBeTruthy()
-    // Where it stands, one quiet line: its next run, how its last went.
-    const status = part.querySelector<HTMLElement>("[data-pa-routine-status]")!
+    // Its facts, one to a line, each named: when, how, next, last.
+    const facts = [
+      ...part.querySelectorAll<HTMLElement>("[data-pa-routine-fact]"),
+    ]
+    expect(facts.map((f) => f.getAttribute("data-pa-routine-fact"))).toEqual([
+      "when",
+      "how",
+      "next",
+      "last",
+    ])
+    const fact = (k: string) =>
+      part.querySelector<HTMLElement>(`[data-pa-routine-fact="${k}"]`)!
+    expect(fact("when").querySelector("dt")!.textContent).toBe("When")
+    expect(fact("how").textContent).toMatch(
+      /^HowThe assistant looks · only with matters waiting over 4 h$/
+    )
+    const lastRun = fact("last")
+    expect(lastRun.querySelector("dt")!.textContent).toBe("Last")
     expect(
-      status.querySelector("[data-pa-routine-state]")!.textContent
-    ).toMatch(/^Next/)
-    expect(
-      status.querySelector('[data-pa-routine-outcome="silent"]')
+      lastRun.querySelector('[data-pa-routine-outcome="silent"]')
     ).toBeTruthy()
-    expect(status.textContent).toContain("no change")
+    expect(lastRun.textContent).toContain("3 runs in all")
+    expect(lastRun.textContent).toContain("no change")
+    // Running: no pill saying it is paused.
+    expect(part.querySelector("[data-pa-routine-state]")).toBeNull()
     // Run now, from its menu.
     await user.click(screen.getByRole("button", { name: "More actions" }))
     await user.click(await screen.findByRole("menuitem", { name: "Run now" }))
@@ -429,9 +445,17 @@ describe("the details' routines", () => {
       routine({ enabled: false, paused_reason: "failures" }),
     ])
     wrap(<RoutinesSection title="例程" readOnly={false} />, { zh: true })
-    const why = await screen.findByText("已暂停：连续失败 3 次")
-    // Paused by codeg: why, in the caution's colour.
+    const why = await screen.findByText("连续失败了 3 次。")
+    // Paused by codeg: its pill and why, in the caution's colour.
     expect(why.className).toContain("text-amber-700")
+    expect(
+      why.closest("[data-pa-routine-fact]")!.querySelector("dt")!.textContent
+    ).toBe("原因")
+    const pill = document.querySelector<HTMLElement>("[data-pa-routine-state]")!
+    expect(pill.textContent).toBe("已暂停")
+    expect(pill.className).toContain("text-amber-700")
+    // Paused: no next run.
+    expect(document.querySelector('[data-pa-routine-fact="next"]')).toBeNull()
     const off = screen.getByRole("switch", { name: "启用" })
     expect(off.getAttribute("aria-checked")).toBe("false")
     fireEvent.click(off)
@@ -440,30 +464,41 @@ describe("the details' routines", () => {
     )
   })
 
-  it("one paused by its owner: its switch off and its name quiet, no word more but where there is no switch", async () => {
+  it("one paused by its owner: its name as ever, a quiet pill after it, no reason", async () => {
     api.personalAgentRoutines.mockResolvedValue([
       routine({ enabled: false, paused_reason: "owner" }),
     ])
-    const { unmount } = wrap(
-      <RoutinesSection title="Routines" readOnly={false} />
-    )
+    wrap(<RoutinesSection title="Routines" readOnly={false} />)
     const name = await screen.findByText("Night CI")
-    expect(name.className).toContain("text-muted-foreground")
+    // The name keeps its weight and colour: the head of its row.
+    expect(name.className).toContain("font-semibold")
+    expect(name.className).toContain("text-foreground")
     expect(
       screen.getByRole("switch", { name: "Runs" }).getAttribute("aria-checked")
     ).toBe("false")
-    expect(document.querySelector("[data-pa-routine-state]")).toBeNull()
-    expect(
-      document.querySelector("[data-pa-routine-status]")!.textContent
-    ).toMatch(/^No change · Last/)
-    unmount()
-    wrap(<RoutinesSection title="Routines" readOnly />)
+    const pill = document.querySelector<HTMLElement>("[data-pa-routine-state]")!
+    expect(pill.textContent).toBe("Paused")
+    expect(pill.className).not.toContain("text-amber")
+    expect(document.querySelector('[data-pa-routine-fact="why"]')).toBeNull()
+  })
+
+  it("one run on an event says what it runs on", async () => {
+    api.personalAgentRoutines.mockResolvedValue([
+      routine({
+        trigger: "event",
+        cron: null,
+        next_run_at: null,
+        event: { kind: "pr_merged" },
+      }),
+    ])
+    wrap(<RoutinesSection title="Routines" readOnly={false} />)
     await screen.findByText("Night CI")
-    const state = document.querySelector<HTMLElement>(
-      "[data-pa-routine-state]"
+    const when = document.querySelector<HTMLElement>(
+      '[data-pa-routine-fact="when"]'
     )!
-    expect(state.textContent).toBe("Paused")
-    expect(state.className).not.toContain("text-amber")
+    expect(when.querySelector("dt")!.textContent).toBe("Trigger")
+    expect(when.querySelector("dd")!.textContent).toBe("A watched PR is merged")
+    expect(document.querySelector('[data-pa-routine-fact="next"]')).toBeNull()
   })
 
   it("folds from its bar, the way to add one apart from it", async () => {

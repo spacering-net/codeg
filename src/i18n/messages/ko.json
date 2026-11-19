@@ -10208,12 +10208,17 @@
         "dispatch": "작업을 맡김"
       },
       "paused": {
-        "owner": "일시 중지됨",
-        "failures": "일시 중지: 3번 연속 실패",
-        "executor": "일시 중지: 실행 구성을 쓸 수 없음"
+        "owner": "일시 중지됨"
       },
-      "next": "다음: {when}",
-      "last": "지난 실행 {when} · 총 {n}회",
+      "row": {
+        "when": "시간",
+        "trigger": "트리거",
+        "how": "방식",
+        "next": "다음",
+        "last": "지난번",
+        "why": "이유",
+        "runs": "총 {n}회"
+      },
       "runNow": "지금 실행",
       "pause": "일시 중지",
       "resume": "재개",

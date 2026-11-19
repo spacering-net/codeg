@@ -10208,12 +10208,17 @@
         "dispatch": "作業を依頼"
       },
       "paused": {
-        "owner": "一時停止中",
-        "failures": "一時停止：3 回連続で失敗",
-        "executor": "一時停止：実行設定が使えません"
+        "owner": "一時停止中"
       },
-      "next": "次回：{when}",
-      "last": "前回 {when} · 計 {n} 回",
+      "row": {
+        "when": "日時",
+        "trigger": "トリガー",
+        "how": "方法",
+        "next": "次回",
+        "last": "前回",
+        "why": "理由",
+        "runs": "計 {n} 回"
+      },
       "runNow": "今すぐ実行",
       "pause": "一時停止",
       "resume": "再開",

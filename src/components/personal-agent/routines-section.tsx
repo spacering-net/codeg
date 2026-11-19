@@ -12,7 +12,7 @@
  * conversation, and [New routine] at its end.
  */
 
-import { Fragment, useEffect, useRef, useState, type RefObject } from "react"
+import { useEffect, useRef, useState, type RefObject } from "react"
 import { useTranslations } from "next-intl"
 import {
   CalendarClock,
@@ -22,7 +22,6 @@ import {
   Plus,
   Repeat,
   Trash2,
-  Zap,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -58,11 +57,14 @@ import {
 
 import { PanelGroup, PanelIcon, PanelItem, PanelStack } from "./panel-section"
 import {
+  eventWords,
   OutcomeWord,
   precheckWords,
   RoutineWhen,
   useWhen,
 } from "./routine-bits"
+import { SheetField, SheetFields } from "./shared"
+import { StatusPill } from "./aux/kit/status-pill"
 
 /** An assistant's routines, kept fresh as they change — read only while
  *  `active` (the page above may have read them already). */
@@ -238,69 +240,56 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
   }
   const last = r.last[0]
   const precheck = precheckWords(t, r.precheck)
-  const Icon = r.trigger === "event" ? Zap : CalendarClock
-  // Where it stands: paused by codeg — why, in the caution's colour — or
-  // its next run. Paused by its owner says so by its switch, off, and its
-  // name, quiet: no word more on a line that has little room — but where
-  // there is no switch.
+  // Paused by codeg: why, in the caution's colour — and its pill so.
   const codegPaused =
     !r.enabled &&
     (r.paused_reason === "failures" || r.paused_reason === "executor")
-  const state = codegPaused
-    ? t(`paused.${r.paused_reason}` as "paused.owner")
-    : !r.enabled && readOnly
-      ? t("paused.owner")
-      : r.enabled && r.trigger === "schedule" && r.next_run_at
-        ? t("next", { when: when(r.next_run_at) })
-        : null
-  // One quiet line: where it stands, then how its last run went.
-  const status = [
-    state ? (
-      <span
-        key="state"
-        className={cn(
-          "tabular-nums",
-          codegPaused
-            ? "text-amber-700 dark:text-amber-300"
-            : "whitespace-nowrap"
-        )}
-        data-pa-routine-state
-      >
-        {state}
-      </span>
-    ) : null,
-    last ? <OutcomeWord key="outcome" outcome={last.outcome} /> : null,
-    last ? (
-      <span key="last" className="whitespace-nowrap tabular-nums">
-        {t("last", {
-          when: when(last.ended_at ?? last.started_at),
-          n: r.runs,
-        })}
-      </span>
-    ) : null,
-    last?.note && last.outcome !== "reported" ? (
-      <span key="note">{last.note}</span>
-    ) : null,
-  ].filter((x) => x != null)
   const edit = () =>
     openEditor({ botId, routineId: r.id, draft: null, noticeId: null })
+  const titleClass =
+    "line-clamp-2 max-w-full min-w-0 text-sm leading-5 font-semibold break-words text-foreground"
   return (
     <>
-      <PanelItem
-        media={<PanelIcon icon={Icon} />}
-        // Paused: its name quiet, as its switch is off.
-        title={
-          r.enabled ? (
-            r.title
-          ) : (
-            <span className="text-muted-foreground">{r.title}</span>
-          )
-        }
-        onOpen={readOnly ? null : edit}
-        openLabel={t("edit")}
-        aside={
-          readOnly ? null : (
-            <span className="flex items-center gap-0.5">
+      <div
+        role="listitem"
+        className={cn(
+          "relative flex min-w-0 flex-col gap-2 border-b border-border/50 px-4 py-3 last:border-b-0",
+          !readOnly && "has-[[data-pa-item-open]:hover]:bg-muted/40"
+        )}
+        data-pa-routine={r.id}
+        data-pa-routine-enabled={r.enabled ? "on" : "off"}
+      >
+        {/* Its head: what it is called, whether it is paused, and its
+            controls at the end. Narrow, the pill goes under the name: the
+            name keeps the room the controls leave. */}
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+            {readOnly ? (
+              <span className={titleClass}>{r.title}</span>
+            ) : (
+              // Its ::after covers the row: a click anywhere on it opens it
+              // to edit, but on its controls, which sit over it.
+              <button
+                type="button"
+                data-pa-item-open
+                onClick={edit}
+                title={t("edit")}
+                className="flex max-w-full min-w-0 text-start outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-ring/50 focus-visible:after:ring-inset"
+              >
+                <span className={titleClass}>{r.title}</span>
+              </button>
+            )}
+            {!r.enabled ? (
+              <StatusPill
+                tone={codegPaused ? "amber" : "muted"}
+                data-pa-routine-state
+              >
+                {t("paused.owner")}
+              </StatusPill>
+            ) : null}
+          </div>
+          {readOnly ? null : (
+            <span className="relative z-10 -me-1 flex h-5 shrink-0 items-center gap-0.5">
               <Switch
                 checked={r.enabled}
                 disabled={busy != null}
@@ -348,34 +337,69 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
                 </DropdownMenuContent>
               </DropdownMenu>
             </span>
-          )
-        }
-        meta={
-          <>
-            <RoutineWhen cron={r.cron} event={r.event} zone={r.timezone} />
-            {" · "}
-            {t(`kind.${r.kind}` as "kind.brain")}
-            {precheck ? ` · ${precheck}` : null}
-          </>
-        }
-        notes={
-          status.length > 0
-            ? [
-                // Each fact kept whole on its line: it wraps between them.
-                <span key="status" data-pa-routine-status>
-                  {status.map((el, i) => (
-                    <Fragment key={i}>
-                      {i > 0 ? " · " : null}
-                      {el}
-                    </Fragment>
-                  ))}
-                </span>,
-              ]
-            : []
-        }
-        data-pa-routine={r.id}
-        data-pa-routine-enabled={r.enabled ? "on" : "off"}
-      />
+          )}
+        </div>
+        {/* Its facts, one to a line: what each is quiet on the left, the
+            values lined up after them. */}
+        <SheetFields className="gap-y-1" data-pa-routine-facts>
+          {r.cron || r.event ? (
+            <SheetField
+              label={t(r.cron ? "row.when" : "row.trigger")}
+              data-pa-routine-fact="when"
+            >
+              <span>
+                {r.cron ? (
+                  <RoutineWhen cron={r.cron} event={null} zone={r.timezone} />
+                ) : (
+                  eventWords(t, r.event!)
+                )}
+              </span>
+            </SheetField>
+          ) : null}
+          <SheetField label={t("row.how")} data-pa-routine-fact="how">
+            <span>
+              {t(`kind.${r.kind}` as "kind.brain")}
+              {precheck ? ` · ${precheck}` : null}
+            </span>
+          </SheetField>
+          {r.enabled && r.trigger === "schedule" && r.next_run_at ? (
+            <SheetField label={t("row.next")} data-pa-routine-fact="next">
+              <span className="tabular-nums">{when(r.next_run_at)}</span>
+            </SheetField>
+          ) : null}
+          {last ? (
+            <SheetField label={t("row.last")} data-pa-routine-fact="last">
+              {/* Each fact kept whole on its line: it wraps between them. */}
+              <span>
+                <span className="whitespace-nowrap tabular-nums">
+                  {when(last.ended_at ?? last.started_at)}
+                </span>
+                {" · "}
+                <OutcomeWord outcome={last.outcome} />
+                {" · "}
+                <span className="whitespace-nowrap tabular-nums">
+                  {t("row.runs", { n: r.runs })}
+                </span>
+                {last.note && last.outcome !== "reported" ? (
+                  <span className="text-muted-foreground">
+                    {" · "}
+                    {last.note}
+                  </span>
+                ) : null}
+              </span>
+            </SheetField>
+          ) : null}
+          {codegPaused ? (
+            <SheetField label={t("row.why")} data-pa-routine-fact="why">
+              <span className="text-amber-700 dark:text-amber-300">
+                {r.paused_reason === "executor"
+                  ? t("card.pausedExecutor")
+                  : t("card.pausedFailures")}
+              </span>
+            </SheetField>
+          ) : null}
+        </SheetFields>
+      </div>
       <AlertDialog open={deleting} onOpenChange={setDeleting}>
         <AlertDialogContent>
           <AlertDialogHeader>

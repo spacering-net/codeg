@@ -10208,12 +10208,17 @@
         "dispatch": "Hands out work"
       },
       "paused": {
-        "owner": "Paused",
-        "failures": "Paused: failed three times in a row",
-        "executor": "Paused: its executor config can't be used"
+        "owner": "Paused"
       },
-      "next": "Next: {when}",
-      "last": "Last run {when} · {n} runs in all",
+      "row": {
+        "when": "When",
+        "trigger": "Trigger",
+        "how": "How",
+        "next": "Next",
+        "last": "Last",
+        "why": "Why",
+        "runs": "{n, plural, one {# run} other {# runs}} in all"
+      },
       "runNow": "Run now",
       "pause": "Pause",
       "resume": "Resume",
