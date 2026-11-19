@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest"
 import {
   cardIdOf,
   elementIdOf,
+  itemizeOpeners,
   itemizeRepeats,
   PA_ITEM_CARD,
   PA_LINE,
@@ -260,7 +261,7 @@ describe("itemizeRepeats", () => {
     })
     expect(out.elements["list~item"]).toEqual({
       type: PA_ITEM_CARD,
-      props: { actions: ["go"], lead: null },
+      props: { actions: ["go"], lead: null, sole: false },
       children: ["line", "go"],
     })
     // The button as it was: its key, and the container it was written in.
@@ -296,6 +297,7 @@ describe("itemizeRepeats", () => {
     expect(out.elements["list~item~"].props).toEqual({
       actions: ["row"],
       lead: null,
+      sole: false,
     })
     expect(out.elements["list~item"]).toEqual(text("the spec's own"))
   })
@@ -383,10 +385,189 @@ describe("itemizeRepeats", () => {
     expect(out.elements["list~item"].props).toEqual({
       actions: ["ask", "open"],
       lead: { target: { $item: "target" }, id: { $item: "id" } },
+      sole: false,
     })
     expect(out.elements.list.props).toEqual({
       gap: "md",
       className: "pt-1 gap-0",
     })
+  })
+})
+
+describe("itemizeOpeners", () => {
+  const text = (t: string, variant?: string) => ({
+    type: "Text",
+    props: variant ? { text: t, variant } : { text: t },
+    children: [],
+  })
+  const heading = (t: string) => ({
+    type: "Heading",
+    props: { text: t, level: "h3" },
+    children: [],
+  })
+  const open = (label: string, target: string, id: number) => ({
+    type: "Button",
+    props: { label },
+    on: { press: { action: "pa.open", params: { target, id } } },
+    children: [],
+  })
+
+  it("draws a line and the button that opens its thing as one row, set off above and below", () => {
+    const { spec: marked } = sanitizeAssistantSpec(
+      spec({
+        main: {
+          type: "Card",
+          props: {},
+          children: ["watch", "watchText", "done", "doneText", "doneButton"],
+        },
+        watch: heading("Watching"),
+        watchText: text("my-app has changes"),
+        done: heading("Done yesterday"),
+        doneText: text("dispatch #13 · Tidy: done at 20:55"),
+        doneButton: open("See the result", "dispatch", 13),
+      })
+    )
+    const out = itemizeOpeners(marked)
+    // A line with nothing to open stays as written; the line and its
+    // button a row, in a list of its own.
+    expect(out.elements.main.children).toEqual([
+      "watch",
+      "watchText",
+      "done",
+      "doneText~rows",
+    ])
+    expect(out.elements["doneText~rows"]).toEqual({
+      type: "Stack",
+      props: { gap: "none" },
+      children: ["doneText~row"],
+    })
+    expect(out.elements["doneText~row"]).toEqual({
+      type: PA_ITEM_CARD,
+      props: {
+        actions: ["doneButton"],
+        lead: { target: "dispatch", id: 13 },
+        sole: true,
+      },
+      children: ["doneText", "doneButton"],
+    })
+    // The button as it was: its key and the container it was written in.
+    expect(out.elements.doneButton).toBe(marked.elements.doneButton)
+    expect(out.elements.doneButton.props).toMatchObject({
+      __paKey: "doneButton",
+      __paParent: "main",
+    })
+    expect(out.elements.doneText.props).toEqual({
+      text: "dispatch #13 · Tidy: done at 20:55",
+      [PA_LINE]: true,
+    })
+    expect(out.elements.watchText).toBe(marked.elements.watchText)
+    expect(marked.elements.main.children).toHaveLength(5)
+    // Once is enough.
+    expect(itemizeOpeners(out)).toBe(out)
+  })
+
+  it("lists such rows one after another together, and leaves the rest as written", () => {
+    const { spec: marked } = sanitizeAssistantSpec(
+      spec({
+        main: {
+          type: "Stack",
+          props: {},
+          children: ["a", "aGo", "b", "bGo", "bSee", "note", "c", "cReply"],
+        },
+        a: text("Task #1: failed"),
+        aGo: open("Open task", "task", 1),
+        b: text("Task #2: review"),
+        bGo: open("Open task", "task", 2),
+        bSee: open("Its session", "session", 7),
+        note: text("an aside", "muted"),
+        c: text("Should I?"),
+        cReply: {
+          type: "Button",
+          props: { label: "Yes" },
+          on: { press: REPLY },
+          children: [],
+        },
+      })
+    )
+    const out = itemizeOpeners(marked)
+    expect(out.elements.main.children).toEqual([
+      "a~rows",
+      "note",
+      "c",
+      "cReply",
+    ])
+    expect(out.elements["a~rows"].children).toEqual(["a~row", "b~row"])
+    expect(out.elements["b~row"].props).toEqual({
+      actions: ["bGo", "bSee"],
+      lead: { target: "task", id: 2 },
+      sole: false,
+    })
+    // A muted aside before an opener is no line of its; a button that
+    // answers is no opener: both as written.
+    const { spec: aside } = sanitizeAssistantSpec(
+      spec({
+        main: { type: "Stack", props: {}, children: ["n", "go"] },
+        n: text("an aside", "muted"),
+        go: open("Open", "task", 1),
+      })
+    )
+    expect(itemizeOpeners(aside)).toBe(aside)
+  })
+
+  it("leaves a list's items and a repeated element to itemizeRepeats", () => {
+    const { spec: marked } = sanitizeAssistantSpec(
+      spec({
+        main: { type: "Card", props: {}, children: ["list"] },
+        list: {
+          type: "Stack",
+          props: {},
+          repeat: { statePath: "/needs", key: "key" },
+          children: ["line", "go"],
+        },
+        line: text("x"),
+        go: open("Open", "task", 1),
+      })
+    )
+    const rows = itemizeRepeats(marked)
+    expect(itemizeOpeners(rows)).toBe(rows)
+    expect(itemizeOpeners(marked)).toBe(marked)
+  })
+
+  it("leads a list's row by an opener always shown, not one shown now and then", () => {
+    const { spec: marked } = sanitizeAssistantSpec(
+      spec({
+        main: { type: "Card", props: {}, children: ["list"] },
+        list: {
+          type: "Stack",
+          props: {},
+          repeat: { statePath: "/needs", key: "key" },
+          children: ["line", "maybe", "go"],
+        },
+        line: text("x"),
+        maybe: { ...open("Dev", "bot", 5), visible: { $state: "/never" } },
+        go: open("Its session", "session", 7),
+      })
+    )
+    const out = itemizeRepeats(marked)
+    expect(out.elements["list~item"].props).toEqual({
+      actions: ["maybe", "go"],
+      lead: { target: "session", id: 7 },
+      sole: false,
+    })
+  })
+
+  it("never takes a key in use", () => {
+    const { spec: marked } = sanitizeAssistantSpec(
+      spec({
+        main: { type: "Card", props: {}, children: ["t", "go"] },
+        t: text("x"),
+        go: open("Open", "task", 1),
+        "t~row": text("the spec's own"),
+      })
+    )
+    const out = itemizeOpeners(marked)
+    expect(out.elements.main.children).toEqual(["t~rows"])
+    expect(out.elements["t~rows"].children).toEqual(["t~row~"])
+    expect(out.elements["t~row"]).toEqual(text("the spec's own"))
   })
 })

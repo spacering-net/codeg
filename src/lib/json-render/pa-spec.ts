@@ -226,6 +226,9 @@ export const PA_LINE = "__paLine"
 export type PaItemCardProps = {
   actions: string[]
   lead?: { target: unknown; id: unknown } | null
+  /** Its one action is a lone `pa.open` button: what it opens is the
+   *  row's own, so a number in its words only repeats the row's line. */
+  sole?: boolean
 }
 
 /** The parameters of the first `pa.open` button under `key`, as marked. */
@@ -236,6 +239,8 @@ function openParams(
 ): Record<string, unknown> | null {
   const el = elements[key]
   if (!el || typeof el !== "object" || seen.has(key)) return null
+  // One shown only now and then cannot say what the row is about.
+  if (el.visible != null) return null
   seen.add(key)
   const marks = el.props as PaMarks | undefined
   if (marks?.__paAction === PA_OPEN && marks.__paParams) {
@@ -316,7 +321,11 @@ export function itemizeRepeats(spec: Spec): Spec {
         break
       }
     }
-    const props: PaItemCardProps = { actions, lead }
+    const props: PaItemCardProps = {
+      actions,
+      lead,
+      sole: soleOpener(source, actions),
+    }
     elements[wrap] = { type: PA_ITEM_CARD, props, children: [...kids] }
     // An item whose words are one Text: that line, marked as the item's.
     const reads = kids.filter((k) => !actions.includes(k))
@@ -343,6 +352,106 @@ export function itemizeRepeats(spec: Spec): Spec {
         : {}),
       children: [wrap],
     }
+  }
+  return elements ? { ...spec, elements } : spec
+}
+
+/** A row's actions one lone button that opens a place. */
+function soleOpener(
+  elements: Record<string, UIElement>,
+  actions: string[]
+): boolean {
+  return actions.length === 1 && opens(elements, actions[0])
+}
+
+/** A line of body text — not a heading's, not a muted aside. */
+function isLine(el: UIElement | undefined): boolean {
+  if (!el || typeof el !== "object" || el.type !== "Text") return false
+  const variant = (el.props as Record<string, unknown> | undefined)?.variant
+  return variant == null || variant === "body"
+}
+
+/** A button or link that takes the owner somewhere (`pa.open`), as marked. */
+function opens(elements: Record<string, UIElement>, key: unknown): boolean {
+  if (typeof key !== "string") return false
+  const el = elements[key]
+  if (!el || typeof el !== "object" || !PRESSABLE.has(String(el.type))) {
+    return false
+  }
+  // One shown only now and then is no part of a row that is always there.
+  if (el.visible != null) return false
+  return (el.props as PaMarks | undefined)?.__paAction === PA_OPEN
+}
+
+/**
+ * What a card says of one thing and the button that opens it, written one
+ * after the other outside a list — a brief's "Done yesterday: dispatch #13
+ * …" and its [See the result] — drawn as a list's item is
+ * (`itemizeRepeats`): a row led by what the button opens, the button at its
+ * end, a hairline over and under it. Written loose, the button sat under
+ * the line as far from it as from the next heading, and whose it was could
+ * not be told. A line and the `pa.open` buttons right after it become one
+ * row; such rows one after another one list (a `Stack` with no gap of its
+ * own, so the first has its line over it and the last its line under it).
+ * Their keys stay, so every button's id and container do; a list's item
+ * (already a row) and a repeated element are left as they are.
+ */
+export function itemizeOpeners(spec: Spec): Spec {
+  const source = spec.elements ?? {}
+  let elements: Record<string, UIElement> | null = null
+  const fresh = (base: string) => {
+    let k = base
+    while (k in source || (elements && k in elements)) k += "~"
+    return k
+  }
+  for (const [key, el] of Object.entries(source)) {
+    if (!el || typeof el !== "object" || el.repeat) continue
+    if (el.type === PA_ITEM_CARD) continue
+    const kids = Array.isArray(el.children) ? el.children : []
+    if (kids.length < 2) continue
+    let out: string[] | null = null
+    let list: string[] | null = null
+    for (let i = 0; i < kids.length; i++) {
+      const kid = kids[i]
+      const line = typeof kid === "string" ? source[kid] : undefined
+      let j = i + 1
+      if (typeof kid === "string" && isLine(line)) {
+        while (j < kids.length && opens(source, kids[j])) j++
+      }
+      if (j === i + 1 || typeof kid !== "string" || !line) {
+        list = null
+        out?.push(kid)
+        continue
+      }
+      elements ??= { ...source }
+      out ??= kids.slice(0, i) as string[]
+      const actions = kids.slice(i + 1, j) as string[]
+      const params = (elements[actions[0]].props as PaMarks).__paParams
+      const row = fresh(`${kid}~row`)
+      const props: PaItemCardProps = {
+        actions,
+        lead: params ? { target: params.target, id: params.id } : null,
+        sole: actions.length === 1,
+      }
+      elements[row] = { type: PA_ITEM_CARD, props, children: [kid, ...actions] }
+      elements[kid] = {
+        ...line,
+        props: { ...(line.props ?? {}), [PA_LINE]: true },
+      }
+      if (!list) {
+        const wrap = fresh(`${kid}~rows`)
+        list = []
+        elements[wrap] = {
+          type: "Stack",
+          props: { gap: "none" },
+          children: list,
+        }
+        out.push(wrap)
+      }
+      list.push(row)
+      i = j - 1
+    }
+    if (out) elements![key] = { ...(elements![key] ?? el), children: out }
   }
   return elements ? { ...spec, elements } : spec
 }

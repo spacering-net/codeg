@@ -754,6 +754,187 @@ describe("an assistant's card: a list", () => {
     __resetRosterForTests()
   })
 
+  it("draws a line and the button that opens its thing as a row, not loose under it", () => {
+    const src = [
+      line({ op: "add", path: "/root", value: "main" }),
+      el("main", {
+        type: "Card",
+        props: {},
+        children: ["watch", "watchText", "done", "doneText", "doneButton"],
+      }),
+      el("watch", {
+        type: "Heading",
+        props: { text: "Watching", level: "h3" },
+        children: [],
+      }),
+      el("watchText", {
+        type: "Text",
+        props: { text: "my-app has changes" },
+        children: [],
+      }),
+      el("done", {
+        type: "Heading",
+        props: { text: "Done yesterday", level: "h3" },
+        children: [],
+      }),
+      el("doneText", {
+        type: "Text",
+        props: { text: "Dispatch #13 · Tidy: done at 20:55" },
+        children: [],
+      }),
+      el("doneButton", {
+        type: "Button",
+        props: { label: "See the result #13" },
+        on: {
+          press: { action: "pa.open", params: { target: "dispatch", id: 13 } },
+        },
+        children: [],
+      }),
+    ].join("\n")
+    const { container } = draw(src)
+    const rows = container.querySelectorAll<HTMLElement>("[data-pa-card-item]")
+    expect(rows).toHaveLength(1)
+    const [row] = rows
+    // Led by the kind of place it opens, its subject over what about it,
+    // its button at its end without the number its line names.
+    expect(row.querySelector("svg.lucide-send")).not.toBeNull()
+    expect(row).toHaveTextContent("Dispatch #13 · Tidy")
+    expect(row).toHaveTextContent("done at 20:55")
+    expect(within(row).getByRole("button")).toHaveAccessibleName(
+      "See the result"
+    )
+    // Alone in its list: a hairline over and under it.
+    expect(row.className).toContain("border-t")
+    expect(row.className).toContain("last:border-b")
+    expect(row.parentElement?.lastElementChild).toBe(row)
+    // A line with nothing to open stays a line.
+    expect(
+      screen.getByText("my-app has changes").closest("[data-pa-card-item]")
+    ).toBeNull()
+  })
+
+  it("says a reply button is to the assistant only on a row its face leads", () => {
+    __resetRosterForTests()
+    usePersonalAgentRoster.setState({
+      entries: [
+        {
+          id: 5,
+          kind: "worker",
+          name: "Dev",
+          avatar: { kind: "face", shape: "blob", color: "blue" },
+        } as unknown as RosterEntry,
+        {
+          id: 6,
+          kind: "worker",
+          name: "QA",
+          avatar: { kind: "face", shape: "blob", color: "green" },
+        } as unknown as RosterEntry,
+      ],
+    })
+    const src = [
+      line({ op: "add", path: "/root", value: "main" }),
+      el("main", { type: "Card", props: {}, children: ["list"] }),
+      el("list", {
+        type: "Stack",
+        props: {},
+        repeat: { statePath: "/needs", key: "key" },
+        children: ["text", "dev", "qa"],
+      }),
+      el("text", {
+        type: "Text",
+        props: { text: { $item: "text" } },
+        children: [],
+      }),
+      el("dev", {
+        type: "Button",
+        props: { label: "Reply to Dev" },
+        visible: { $state: "/shown" },
+        on: { press: { action: "pa.open", params: { target: "bot", id: 5 } } },
+        children: [],
+      }),
+      el("qa", {
+        type: "Button",
+        props: { label: "Reply to QA" },
+        on: { press: { action: "pa.open", params: { target: "bot", id: 6 } } },
+        children: [],
+      }),
+      line({ op: "add", path: "/state/shown", value: true }),
+      line({
+        op: "add",
+        path: "/state/needs",
+        value: [{ key: "a", text: "Both wait" }],
+      }),
+    ].join("\n")
+    const { container } = draw(src)
+    const row = container.querySelector<HTMLElement>("[data-pa-card-item]")!
+    // QA's face leads it (the opener always shown): QA's button says it is
+    // to the assistant; Dev's, beside QA's face, names Dev still.
+    expect(within(row).getByRole("img", { name: "QA" })).toBeTruthy()
+    expect(
+      within(row)
+        .getAllByRole("button")
+        .map((b) => b.textContent)
+    ).toEqual(["Reply to Dev", "Reply to the assistant"])
+    __resetRosterForTests()
+  })
+
+  it("keeps the numbers that tell a row's openers apart, and leads it by one always shown", () => {
+    const open = (key: string, label: string, target: string, id: number) =>
+      el(key, {
+        type: "Button",
+        props: { label },
+        on: { press: { action: "pa.open", params: { target, id } } },
+        children: [],
+      })
+    const src = [
+      line({ op: "add", path: "/root", value: "main" }),
+      el("main", {
+        type: "Card",
+        props: {},
+        children: ["two", "s13", "s14", "hid", "maybe", "see"],
+      }),
+      el("two", {
+        type: "Text",
+        props: { text: "Compare the two sessions" },
+        children: [],
+      }),
+      open("s13", "Open session #13", "session", 13),
+      open("s14", "Open session #14", "session", 14),
+      el("hid", {
+        type: "Text",
+        props: { text: "Its session" },
+        children: [],
+      }),
+      el("maybe", {
+        type: "Button",
+        props: { label: "Reply to Dev" },
+        visible: { $state: "/never" },
+        on: { press: { action: "pa.open", params: { target: "bot", id: 5 } } },
+        children: [],
+      }),
+      open("see", "Open session #15", "session", 15),
+    ].join("\n")
+    const { container } = draw(src)
+    const [two] = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-pa-card-item]")
+    )
+    // Two openers on one row: each keeps the number that tells them apart.
+    expect(
+      within(two)
+        .getAllByRole("button")
+        .map((b) => b.textContent)
+    ).toEqual(["Open session #13", "Open session #14"])
+    // A button shown only now and then is no part of a row: the line before
+    // it stays a line, the button after it as written, no face of Dev's.
+    expect(
+      screen.getByText("Its session").closest("[data-pa-card-item]")
+    ).toBeNull()
+    expect(container.querySelectorAll("[data-pa-card-item]")).toHaveLength(1)
+    expect(
+      screen.getByRole("button", { name: "Open session #15" })
+    ).toBeTruthy()
+  })
+
   it("sets an item's subject over what about it, a hairline over and under each row", () => {
     const src = [
       line({ op: "add", path: "/root", value: "main" }),

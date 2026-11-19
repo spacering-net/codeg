@@ -120,6 +120,7 @@ import { jsonRenderCatalog } from "@/lib/json-render/catalog"
 import {
   cardIdOf,
   elementIdOf,
+  itemizeOpeners,
   itemizeRepeats,
   PA_ITEM_CARD,
   PA_LINE,
@@ -301,12 +302,19 @@ function withoutNumber(label: string): string {
 
 /** Inside a list's row (`PaItemCard`): its buttons are smaller. */
 const InItemCard = createContext(false)
+/** The row's one action a lone button that opens its thing: a number at
+ *  its words' end goes. With more than one, the numbers tell them apart. */
+const SoleOpener = createContext(false)
+/** Whose face leads the row (`PaItemCard`'s lead), when an assistant's. */
+const RowBot = createContext<unknown>(null)
 
 function PaButton(ctx: BaseComponentProps<ShadcnProps<"Button">>) {
   const { props, emit } = ctx
   const t = useTranslations("PersonalAgent.card")
   const marked = useMarked(props as Record<string, unknown>)
   const inItem = useContext(InItemCard)
+  const sole = useContext(SoleOpener)
+  const rowBot = useContext(RowBot)
   const roster = usePersonalAgentRoster((s) => s.entries)
   const botName = useBotName()
   if (!marked) return <PlainButton {...ctx} />
@@ -315,14 +323,18 @@ function PaButton(ctx: BaseComponentProps<ShadcnProps<"Button">>) {
   // row — the face already shows whose; one that says something else
   // ("See the acceptance") keeps its words.
   const to =
-    inItem && marked.action === PA_OPEN && marked.params.target === "bot"
+    inItem &&
+    marked.action === PA_OPEN &&
+    marked.params.target === "bot" &&
+    rowBot != null &&
+    marked.params.id === rowBot
       ? roster?.find((e) => e.id === marked.params.id)
       : undefined
   const name = to ? botName(to).trim() : ""
   const label =
     name && typeof props.label === "string" && repliesTo(props.label, name)
       ? t("replyAssistant")
-      : inItem &&
+      : sole &&
           marked.action === PA_OPEN &&
           marked.params.target !== "bot" &&
           typeof props.label === "string"
@@ -462,7 +474,8 @@ function PaText(ctx: BaseComponentProps<ShadcnProps<"Text">>) {
   return <RowLines head={lines.head} text={lines.text} />
 }
 
-/** One item of a list as a row of its own (`itemizeRepeats`, `LIST_ROW`):
+/** One item of a list as a row of its own (`itemizeRepeats`, `LIST_ROW`) —
+ *  or a line and the button that opens its thing (`itemizeOpeners`):
  *  whom or what it opens first, what to read — its lone line as its subject
  *  over what about it, when written "subject: what" (`PaText`) — and what to do about
  *  it at its end, under it when the row is too narrow for both. */
@@ -484,7 +497,11 @@ const PaItemCard: ComponentRegistry[string] = ({ element, children }) => {
         <div className={ROW_BODY}>{body}</div>
         {actions.length > 0 ? (
           <InItemCard.Provider value>
-            <div className={ROW_ACTIONS}>{actions}</div>
+            <SoleOpener.Provider value={props?.sole === true}>
+              <RowBot.Provider value={lead?.target === "bot" ? lead.id : null}>
+                <div className={ROW_ACTIONS}>{actions}</div>
+              </RowBot.Provider>
+            </SoleOpener.Provider>
           </InItemCard.Provider>
         ) : null}
       </div>
@@ -580,7 +597,10 @@ export default function PaJsonRenderBlock({
     if (!spec) return null
     // Marked first: a button's container is the one it was written in.
     const sanitized = sanitizeAssistantSpec(spec)
-    return { ...sanitized, spec: itemizeRepeats(sanitized.spec) }
+    return {
+      ...sanitized,
+      spec: itemizeOpeners(itemizeRepeats(sanitized.spec)),
+    }
   }, [source])
   if (!compiled || !scope) return <>{fallback}</>
   return (
