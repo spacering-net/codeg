@@ -7682,6 +7682,49 @@ describe("a `prompting` state whose connection is gone can always recover", () =
     }
   })
 
+  it("probes a replacement connection while the old probe is still pending", async () => {
+    vi.useFakeTimers()
+    try {
+      await seedPromptingTab()
+      act(() => h.actions!.registerLiveSurfaceKeys("canvas", new Set([TAB])))
+      h.acpTouchConnection.mockClear()
+      let resolveOldProbe: (live: boolean) => void = () => {}
+      h.acpTouchConnection.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            resolveOldProbe = resolve
+          })
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONNECTION_KEEPALIVE_INTERVAL_MS)
+      })
+      expect(h.acpTouchConnection.mock.calls).toEqual([["spawned-conn"]])
+
+      // connect()'s own liveness check finds the old connection gone and
+      // re-spawns while the keepalive probe for it is still in flight.
+      h.acpTouchConnection.mockResolvedValueOnce(false)
+      h.acpConnect.mockResolvedValue("respawned-conn")
+      await act(async () => {
+        await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+      })
+      expect(h.store!.getConnection(TAB)!.connectionId).toBe("respawned-conn")
+
+      h.acpTouchConnection.mockResolvedValue(true)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONNECTION_KEEPALIVE_INTERVAL_MS)
+      })
+      expect(h.acpTouchConnection).toHaveBeenLastCalledWith("respawned-conn")
+
+      // The stale answer for the old id must not settle the replacement.
+      await act(async () => resolveOldProbe(false))
+      const conn = h.store!.getConnection(TAB)!
+      expect(conn.connectionId).toBe("respawned-conn")
+      expect(conn.status).not.toBe("disconnected")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("Stop settles the state when the backend disowns the connection", async () => {
     await seedPromptingTab()
     h.acpCancel.mockRejectedValue(new Error("Connection not found: x"))
