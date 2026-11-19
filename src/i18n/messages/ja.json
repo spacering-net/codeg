@@ -2229,6 +2229,7 @@
       "sectionOrderMoveDown": "下へ移動",
       "sectionOrderItemLabel": "{name} — {total} 件中 {position} 番目",
       "statusRunningBadge": "実行中",
+      "statusWaitingBadge": "対応待ち",
       "runningCountBadge": "{count} 件の会話が実行中",
       "statusCancelledBadge": "キャンセル済み",
       "originalWorkingDir": "元の作業ディレクトリ",

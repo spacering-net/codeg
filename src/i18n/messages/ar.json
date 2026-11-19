@@ -2229,6 +2229,7 @@
       "sectionOrderMoveDown": "تحريك لأسفل",
       "sectionOrderItemLabel": "{name} — الموضع {position} من {total}",
       "statusRunningBadge": "قيد التشغيل",
+      "statusWaitingBadge": "بانتظارك",
       "runningCountBadge": "{count} جلسة قيد التشغيل",
       "statusCancelledBadge": "ملغى",
       "originalWorkingDir": "دليل العمل الأصلي",

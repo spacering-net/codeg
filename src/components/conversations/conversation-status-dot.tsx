@@ -9,6 +9,7 @@ type ConversationStatusDotSize = "xs" | "sm" | "md"
 
 interface ConversationStatusDotProps {
   status?: ConversationStatus | null
+  waiting?: boolean
   size?: ConversationStatusDotSize
   className?: string
   title?: string
@@ -25,12 +26,15 @@ const FALLBACK_COLOR = "bg-gray-400 dark:bg-gray-500"
 
 export function ConversationStatusDot({
   status,
+  waiting = false,
   size = "md",
   className,
   title,
   children,
 }: ConversationStatusDotProps) {
-  const colorClass = (status && STATUS_COLORS[status]) || FALLBACK_COLOR
+  const colorClass = waiting
+    ? "bg-orange-500"
+    : (status && STATUS_COLORS[status]) || FALLBACK_COLOR
   return (
     <span
       className={cn(
