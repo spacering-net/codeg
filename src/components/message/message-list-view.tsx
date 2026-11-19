@@ -1596,7 +1596,10 @@ export function MessageListView({
   // milliseconds — the race that got the refetch-on-turn-complete patch
   // reverted, see `completeTurn` in conversation-runtime-store — and a click
   // lands far outside that window. `preserveLive` so a turn the user started in
-  // the meantime keeps streaming underneath. The flag clears on the response,
+  // the meantime keeps streaming underneath; promoted rounds the refreshed
+  // detail provably covers (batch-boundary alignment, see
+  // `retireBatchCoveredLocalTurns`) are retired so the old round does not
+  // render a second time below the new tail. The flag clears on the response,
   // so the pill doubles as its own progress indicator via `detailLoading`.
   const pendingOutOfTurnContent = session?.pendingOutOfTurnContent ?? false
   const handleLoadOutOfTurnContent = useCallback(() => {
