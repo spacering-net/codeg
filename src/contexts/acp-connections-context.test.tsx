@@ -20,6 +20,7 @@ import {
 } from "@/contexts/acp-connections-context"
 import {
   CONNECTION_IDLE_TIMEOUT_MS,
+  CONNECTION_KEEPALIVE_INTERVAL_MS,
   IDLE_SWEEP_INTERVAL_MS,
 } from "@/lib/constants"
 import { DelegationProvider } from "@/contexts/delegation-context"
@@ -7645,6 +7646,40 @@ describe("a `prompting` state whose connection is gone can always recover", () =
 
     expect(h.acpConnect).toHaveBeenCalledTimes(1)
     expect(h.store!.getConnection(TAB)!.status).toBe("prompting")
+  })
+
+  it("does not stack keepalive probes while the same connection is pending", async () => {
+    vi.useFakeTimers()
+    try {
+      await seedPromptingTab()
+      act(() => h.actions!.registerLiveSurfaceKeys("canvas", new Set([TAB])))
+      h.acpTouchConnection.mockClear()
+      let resolveProbe: (live: boolean) => void = () => {}
+      h.acpTouchConnection.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            resolveProbe = resolve
+          })
+      )
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3 * CONNECTION_KEEPALIVE_INTERVAL_MS)
+      })
+      expect(h.acpTouchConnection.mock.calls).toEqual([["spawned-conn"]])
+
+      await act(async () => resolveProbe(true))
+      h.acpTouchConnection.mockResolvedValue(false)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CONNECTION_KEEPALIVE_INTERVAL_MS)
+      })
+      expect(h.acpTouchConnection.mock.calls).toEqual([
+        ["spawned-conn"],
+        ["spawned-conn"],
+      ])
+      expect(h.store!.getConnection(TAB)?.status).toBe("disconnected")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("Stop settles the state when the backend disowns the connection", async () => {
