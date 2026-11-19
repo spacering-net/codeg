@@ -2343,7 +2343,6 @@ describe("AcpConnectionsProvider retained tool output", () => {
     "replacement",
     "append",
     "unannounced update",
-    "out-of-turn opening",
   ])("bounds a large plain-text %s frame", async (route) => {
     const originalRaf = globalThis.requestAnimationFrame
     const originalCancelRaf = globalThis.cancelAnimationFrame
@@ -2375,19 +2374,13 @@ describe("AcpConnectionsProvider retained tool output", () => {
           raw_input: '{"command":"build"}',
           raw_output: rawOutput,
         })
-      if (route !== "out-of-turn opening") {
-        emitAcpEvent(handlers, {
-          seq: ++seq,
-          connection_id: "spawned-conn",
-          type: "status_changed",
-          status: "prompting",
-        })
-      }
-      if (
-        route === "opening" ||
-        route === "out-of-turn opening" ||
-        route === "repeated opening"
-      ) {
+      emitAcpEvent(handlers, {
+        seq: ++seq,
+        connection_id: "spawned-conn",
+        type: "status_changed",
+        status: "prompting",
+      })
+      if (route === "opening" || route === "repeated opening") {
         if (route === "repeated opening") opening("small")
         opening(large)
       } else {
@@ -2415,12 +2408,7 @@ describe("AcpConnectionsProvider retained tool output", () => {
         (item) =>
           item.type === "tool_call" && item.info.tool_call_id === "large-call"
       )
-      const info =
-        route === "out-of-turn opening"
-          ? connection.outOfTurnToolCalls?.get("large-call")
-          : block?.type === "tool_call"
-            ? block.info
-            : null
+      const info = block?.type === "tool_call" ? block.info : null
       expect(info).toBeTruthy()
       expect(info?.raw_output_total_bytes).toBe(200_000)
       expect(info?.raw_output_chunks.join("")).toBe(large.slice(-200_000))
@@ -2434,6 +2422,44 @@ describe("AcpConnectionsProvider retained tool output", () => {
 })
 
 describe("AcpConnectionsProvider permission request details", () => {
+  it("keeps permission details without retaining out-of-turn tool output", async () => {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+    })
+    const handlers = latestAttachHandlers()
+    const rawInput = JSON.stringify({ command: "pnpm test", cwd: "/tmp/x" })
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "tool_call",
+      tool_call_id: "background-call",
+      title: "Bash",
+      kind: "execute",
+      status: "pending",
+      content: "tool output text",
+      raw_input: rawInput,
+      raw_output: JSON.stringify({ result: "reply".repeat(50_000) }),
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "background-permission",
+      tool_call: { toolCallId: "background-call" },
+      options: [],
+    })
+    const connection = h.store!.getConnection(TAB)!
+    expect(
+      parsePermissionToolCall(connection.pendingPermission?.tool_call)
+    ).toMatchObject({ title: "Bash", command: "pnpm test", cwd: "/tmp/x" })
+    const cached = connection.outOfTurnToolCalls?.get("background-call")
+    expect(cached?.raw_input).toBe(rawInput)
+    for (const field of ["content", "raw_output_chunks", "images"]) {
+      expect(cached).not.toHaveProperty(field)
+    }
+  })
+
   it("hydrates a permission request from an existing live tool call input", async () => {
     await mountProvider()
 
