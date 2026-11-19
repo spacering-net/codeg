@@ -9991,6 +9991,12 @@
       "assistantWhy": "Assistant: {decision}, because: {reason}",
       "fallback": "The assistant gave no conclusion: codeg went by the check",
       "owner": "Your decision: {decision}",
+      "result": "Result",
+      "why": "Reason",
+      "by": {
+        "owner": "your decision",
+        "assistant": "the assistant's decision"
+      },
       "question": "It asks you: {question}",
       "usedUp": "{count, plural, one {Checked # round} other {Checked # rounds}} — as many as you allow",
       "wouldSend": "What sending it back would say",

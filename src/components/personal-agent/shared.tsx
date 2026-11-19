@@ -236,7 +236,7 @@ export const SHEET_ROW_HOVER =
  *  (`SheetFields`), what it says, its buttons last (`SheetActions`), what
  *  came before under them (a part with a `SheetLabel`). */
 export const PA_SHEET =
-  "min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card text-card-foreground [&>*+*]:border-t [&>*+*]:border-border/60 [&>[data-pa-sheet-head]+*]:border-t-0 [&>[data-pa-sheet-head]+*]:pt-1.5"
+  "min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card text-card-foreground [&>*+*]:border-t [&>*+*]:border-border/60"
 
 export function PaSheet({ className, ...props }: React.ComponentProps<"div">) {
   return <div data-pa-surface className={cn(PA_SHEET, className)} {...props} />
@@ -246,7 +246,7 @@ export function PaSheet({ className, ...props }: React.ComponentProps<"div">) {
  * A card that is a message of its own — no bubble round it: what codeg
  * writes in the conversation (an acceptance, a suggestion, a work's news)
  * is the card itself, its small heading (`head`: the kind's icon and what
- * it is) the top line of its first band. A reply's padding and a bubble's
+ * it is) its header, a band of its own over the rest. A reply's padding and a bubble's
  * grey would only frame it twice. As wide as the message's column, every
  * card alike: one under another lines up at both edges.
  */
@@ -269,8 +269,8 @@ export function CardMessage({
   )
 }
 
-/** A card's small heading — the kind's icon, what it is, whose — the top
- *  line of its first band, no hairline under it. */
+/** A card's small heading — the kind's icon, what it is, whose — its
+ *  header: a band of its own, a hairline under it as under every band. */
 export function SheetHead({
   className,
   ...props
@@ -279,7 +279,7 @@ export function SheetHead({
     <div
       data-pa-sheet-head
       className={cn(
-        "flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 px-3.5 pt-3 text-xs leading-4 text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0",
+        "flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 px-3.5 py-2.5 text-xs leading-4 text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0",
         className
       )}
       {...props}

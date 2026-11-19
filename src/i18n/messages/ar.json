@@ -9991,6 +9991,12 @@
       "assistantWhy": "المساعد: {decision}، والسبب: {reason}",
       "fallback": "لم يقدّم المساعد قرارًا: اتبع codeg نتيجة الفحص",
       "owner": "قرارك: {decision}",
+      "result": "النتيجة",
+      "why": "السبب",
+      "by": {
+        "owner": "قرارك",
+        "assistant": "قرار المساعد"
+      },
       "question": "يسألك: {question}",
       "usedUp": "عدد جولات الفحص: {count}، وهو الحد الذي تسمح به",
       "wouldSend": "ما سيُرسل عند الإعادة",

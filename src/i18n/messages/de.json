@@ -9991,6 +9991,12 @@
       "assistantWhy": "Assistent: {decision}, weil: {reason}",
       "fallback": "Der Assistent hat nicht entschieden: codeg ist der Prüfung gefolgt",
       "owner": "Deine Entscheidung: {decision}",
+      "result": "Ergebnis",
+      "why": "Grund",
+      "by": {
+        "owner": "deine Entscheidung",
+        "assistant": "Entscheidung des Assistenten"
+      },
       "question": "Fragt dich: {question}",
       "usedUp": "{count, plural, one {# Runde geprüft} other {# Runden geprüft}} – so viele, wie du erlaubst",
       "wouldSend": "Was beim Zurückschicken mitginge",

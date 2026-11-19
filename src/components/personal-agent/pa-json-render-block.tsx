@@ -270,6 +270,35 @@ function repliesTo(label: string, name: string): boolean {
   return label.includes(name) && REPLY_CUE.test(label)
 }
 
+/** A button's words that end in a number — "打开任务 #5", "Open task
+ *  #5": on a list's row, whose own line already names what it opens, the
+ *  number again only crowds the button. Its words without it, when
+ *  anything is left. */
+function withoutNumber(label: string): string {
+  // Walked back from its end once — a pattern with spaces on both sides of
+  // the number would backtrack over a long label with none.
+  const space = (c: string) => /\s/u.test(c)
+  const digit = (c: string) => /\p{Nd}/u.test(c)
+  let i = label.length
+  const skip = (ok: (c: string) => boolean) => {
+    while (i > 0 && ok(label[i - 1])) i--
+  }
+  skip(space)
+  if (i > 0 && (label[i - 1] === ")" || label[i - 1] === "）")) i--
+  skip(space)
+  const end = i
+  skip(digit)
+  if (i === end) return label
+  skip(space)
+  if (i === 0 || (label[i - 1] !== "#" && label[i - 1] !== "＃")) return label
+  i--
+  skip(space)
+  if (i > 0 && (label[i - 1] === "(" || label[i - 1] === "（")) i--
+  skip(space)
+  const cut = label.slice(0, i)
+  return cut.trim() ? cut : label
+}
+
 /** Inside a list's row (`PaItemCard`): its buttons are smaller. */
 const InItemCard = createContext(false)
 
@@ -293,7 +322,12 @@ function PaButton(ctx: BaseComponentProps<ShadcnProps<"Button">>) {
   const label =
     name && typeof props.label === "string" && repliesTo(props.label, name)
       ? t("replyAssistant")
-      : props.label
+      : inItem &&
+          marked.action === PA_OPEN &&
+          marked.params.target !== "bot" &&
+          typeof props.label === "string"
+        ? withoutNumber(props.label)
+        : props.label
   const variant =
     props.variant === "danger"
       ? "destructive"

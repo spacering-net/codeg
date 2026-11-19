@@ -116,6 +116,11 @@ describe("NoticeCard", () => {
       true
     )
     expect(sheet?.children[1]?.getAttribute("data-pa-work")).toBe("head")
+    // The heading a header of its own: a band with the hairline under it
+    // every band has, the next one's room not cut short.
+    expect(sheet?.firstElementChild?.className).toContain("py-2.5")
+    expect(sheet?.className).toContain("[&>*+*]:border-t")
+    expect(sheet?.className).not.toContain("[&>[data-pa-sheet-head]+*]")
     expect(
       screen.getByText("Find out X.").closest("[data-pa-sheet-part]")
     ).not.toBeNull()

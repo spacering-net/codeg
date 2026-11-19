@@ -9991,6 +9991,12 @@
       "assistantWhy": "Asistente: {decision}, porque: {reason}",
       "fallback": "El asistente no dio una conclusión: codeg siguió la revisión",
       "owner": "Tu decisión: {decision}",
+      "result": "Resultado",
+      "why": "Motivo",
+      "by": {
+        "owner": "tu decisión",
+        "assistant": "decisión del asistente"
+      },
       "question": "Te pregunta: {question}",
       "usedUp": "{count, plural, one {Revisado # vez} other {Revisado # veces}}: todas las que permites",
       "wouldSend": "Lo que diría al devolverlo",

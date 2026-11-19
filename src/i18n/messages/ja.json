@@ -9991,6 +9991,12 @@
       "assistantWhy": "アシスタント：{decision}（理由：{reason}）",
       "fallback": "アシスタントが結論を出さなかったため、確認結果に従いました",
       "owner": "あなたの判断：{decision}",
+      "result": "結果",
+      "why": "理由",
+      "by": {
+        "owner": "あなたの判断",
+        "assistant": "アシスタントの判断"
+      },
       "question": "質問：{question}",
       "usedUp": "{count} 回確認しました。許可された回数に達しています",
       "wouldSend": "差し戻すときに送る修正内容",

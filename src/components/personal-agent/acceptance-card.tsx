@@ -14,10 +14,18 @@
 
 import { useState } from "react"
 import { useTranslations } from "next-intl"
-import { CircleAlert, CircleCheck, ClipboardCheck, Undo2 } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronUp,
+  CircleAlert,
+  CircleCheck,
+  ClipboardCheck,
+  Undo2,
+} from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
+import { useCollapsibleOverflow } from "@/hooks/use-collapsible-overflow"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentNoticeAct, type NoticeAction } from "@/lib/api"
 import type {
@@ -99,6 +107,47 @@ function NotVerified({ label }: { label: string }) {
       className="inline-flex h-5 items-center rounded-full bg-amber-500/15 px-2 font-medium text-amber-700 dark:text-amber-300"
     >
       {label}
+    </span>
+  )
+}
+
+/** An earlier round's line: one line, cut where it runs over, a chevron
+ *  at its end to read it whole. */
+function HistoryLine({ text }: { text: string }) {
+  const t = useTranslations("PersonalAgent.event")
+  const { contentRef, contentId, isOverflowing, expanded, toggle } =
+    useCollapsibleOverflow<HTMLSpanElement>(text)
+  return (
+    <span className="flex w-full min-w-0 items-start gap-1">
+      <span
+        ref={contentRef}
+        id={contentId}
+        data-pa-history-text
+        className={cn(
+          "min-w-0 flex-1 text-foreground/80",
+          expanded ? "whitespace-pre-wrap" : "line-clamp-1"
+        )}
+      >
+        {text}
+      </span>
+      {isOverflowing ? (
+        <button
+          type="button"
+          onClick={toggle}
+          aria-expanded={expanded}
+          aria-controls={contentId}
+          aria-label={expanded ? t("less") : t("more")}
+          title={expanded ? t("less") : t("more")}
+          data-pa-history-toggle
+          className="mt-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          {expanded ? (
+            <ChevronUp className="size-3.5" aria-hidden />
+          ) : (
+            <ChevronDown className="size-3.5" aria-hidden />
+          )}
+        </button>
+      ) : null}
     </span>
   )
 }
@@ -207,6 +256,19 @@ export function AcceptanceCard({ item }: { item: NoticeItem }) {
             : phase === "stale"
               ? t("stale")
               : null
+  // A round that ended as it was decided: how it ended says the decision
+  // already — whose word it was goes on that line, the assistant's reason
+  // a fact of its own, not a conclusion line saying "accept" once more.
+  const endedAsDecided =
+    (phase === "accepted" && decision === "accept") ||
+    (phase === "revised" && decision === "revise")
+  const byWord =
+    endedAsDecided && decidedBy === "owner"
+      ? t("by.owner")
+      : endedAsDecided && decidedBy === "assistant"
+        ? t("by.assistant")
+        : null
+  const againstCheck = against(decision, verdict)
   const asked = phase === "asked" && !superseded
   const recheck = (phase === "void" || phase === "changed") && !superseded
   const canOpen = canOpenWork(target)
@@ -256,18 +318,17 @@ export function AcceptanceCard({ item }: { item: NoticeItem }) {
                 ) : null}
               </SheetField>
             )}
-            {conclusion ? (
+            {conclusion && !byWord ? (
               conclusion.split ? (
                 <SheetField
                   label={conclusion.split.head}
                   data-pa-conclusion
-                  data-pa-against={against(decision, verdict) ? "" : undefined}
+                  data-pa-against={againstCheck ? "" : undefined}
                 >
                   {/* Against the check: on the caution's tone. */}
                   <span
                     className={cn(
-                      against(decision, verdict) &&
-                        "text-amber-700 dark:text-amber-300"
+                      againstCheck && "text-amber-700 dark:text-amber-300"
                     )}
                   >
                     {conclusion.split.text}
@@ -283,43 +344,68 @@ export function AcceptanceCard({ item }: { item: NoticeItem }) {
               )
             ) : null}
             {ended ? (
-              <p
-                className={cn(
-                  "col-span-2 flex items-start gap-1.5 [overflow-wrap:anywhere]",
-                  ENDED_TONE[phase] ?? "text-muted-foreground"
-                )}
-              >
-                <EndedIcon phase={phase} />
-                <span>
-                  <span data-pa-accept-ended={phase}>
-                    {ended}
-                    {superseded && (phase === "void" || phase === "changed") ? (
+              <SheetField label={t("result")} data-pa-result-field>
+                <span
+                  className={cn(
+                    "flex items-start gap-1.5",
+                    ENDED_TONE[phase] ?? "text-muted-foreground"
+                  )}
+                >
+                  <EndedIcon phase={phase} />
+                  <span>
+                    <span data-pa-accept-ended={phase}>
+                      {ended}
+                      {superseded &&
+                      (phase === "void" || phase === "changed") ? (
+                        <span
+                          data-pa-superseded
+                          className="before:mx-1.5 before:content-['·']"
+                        >
+                          {t("superseded")}
+                        </span>
+                      ) : null}
+                    </span>
+                    {/* Whose word it ended on, when the conclusion line
+                        would only have said it again; against the check
+                        on the caution's tone. */}
+                    {byWord ? (
                       <span
-                        data-pa-superseded
-                        className="before:mx-1.5 before:content-['·']"
+                        data-pa-decided-by={decidedBy}
+                        data-pa-against={againstCheck ? "" : undefined}
+                        className={cn(
+                          "before:mx-1.5 before:content-['·']",
+                          againstCheck
+                            ? "text-amber-700 dark:text-amber-300"
+                            : "text-muted-foreground"
+                        )}
                       >
-                        {t("superseded")}
+                        {byWord}
+                      </span>
+                    ) : null}
+                    {phase === "accepted" && mergeCommit ? (
+                      <span
+                        className="text-muted-foreground before:mx-1.5 before:content-['·']"
+                        data-pa-merged
+                      >
+                        {t("merged", { commit: mergeCommit.slice(0, 7) })}
+                      </span>
+                    ) : null}
+                    {phase === "accepted" && deliveredHead && !mergeCommit ? (
+                      <span
+                        className="text-muted-foreground before:mx-1.5 before:content-['·']"
+                        data-pa-delivered
+                      >
+                        {t("delivered", { head: deliveredHead.slice(0, 7) })}
                       </span>
                     ) : null}
                   </span>
-                  {phase === "accepted" && mergeCommit ? (
-                    <span
-                      className="text-muted-foreground before:mx-1.5 before:content-['·']"
-                      data-pa-merged
-                    >
-                      {t("merged", { commit: mergeCommit.slice(0, 7) })}
-                    </span>
-                  ) : null}
-                  {phase === "accepted" && deliveredHead && !mergeCommit ? (
-                    <span
-                      className="text-muted-foreground before:mx-1.5 before:content-['·']"
-                      data-pa-delivered
-                    >
-                      {t("delivered", { head: deliveredHead.slice(0, 7) })}
-                    </span>
-                  ) : null}
                 </span>
-              </p>
+              </SheetField>
+            ) : null}
+            {byWord && decidedBy === "assistant" && reason ? (
+              <SheetField label={t("why")} data-pa-reason>
+                <span className="text-foreground/80">{reason}</span>
+              </SheetField>
             ) : null}
           </SheetFields>
         </SheetPart>
@@ -431,15 +517,15 @@ export function AcceptanceCard({ item }: { item: NoticeItem }) {
                     label={split.head}
                     data-pa-history={n}
                   >
-                    <span className="text-foreground/80">{split.text}</span>
+                    <HistoryLine text={split.text} />
                   </SheetField>
                 ) : (
                   <p
                     key={`${n}-${h.state}`}
                     data-pa-history={n}
-                    className="col-span-2 [overflow-wrap:anywhere]"
+                    className="col-span-2 flex min-w-0 [overflow-wrap:anywhere]"
                   >
-                    {line}
+                    <HistoryLine text={line} />
                   </p>
                 )
               })}

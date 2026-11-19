@@ -9991,6 +9991,12 @@
       "assistantWhy": "助理：{decision}，理由：{reason}",
       "fallback": "助理沒給結論，依檢查結論處理",
       "owner": "你的決定：{decision}",
+      "result": "結果",
+      "why": "理由",
+      "by": {
+        "owner": "你決定的",
+        "assistant": "助理決定的"
+      },
       "question": "問你：{question}",
       "usedUp": "已經檢查了 {count} 輪，到了你允許的輪數",
       "wouldSend": "退回時會送出的修改意見",

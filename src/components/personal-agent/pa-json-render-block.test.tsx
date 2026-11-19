@@ -626,7 +626,7 @@ describe("an assistant's card: a list", () => {
           {
             key: "t4",
             text: "Task 4 failed",
-            label: "Open task 4",
+            label: "Open task #4",
             target: "task",
             id: 4,
           },
@@ -665,11 +665,50 @@ describe("an assistant's card: a list", () => {
             target: "constructor",
             id: 1,
           },
+          {
+            key: "d9",
+            text: "Dispatch 9 waits",
+            label: "打开派发（＃9）",
+            target: "dispatch",
+            id: 9,
+          },
+          {
+            key: "n",
+            text: "Only a number",
+            label: "#3",
+            target: "task",
+            id: 3,
+          },
+          {
+            key: "w",
+            text: "Task 5, written wide",
+            label: "打开任务（＃５）",
+            target: "task",
+            id: 5,
+          },
+          {
+            key: "long",
+            text: "A long label, no number",
+            label: `Open ${" ".repeat(4000)}it #x`,
+            target: "task",
+            id: 6,
+          },
         ],
       }),
     ].join("\n")
     const { container } = draw(src)
-    const [task, bot, accept, again, approves, odd] = Array.from(
+    const [
+      task,
+      bot,
+      accept,
+      again,
+      approves,
+      odd,
+      dispatch,
+      bare,
+      wide,
+      long,
+    ] = Array.from(
       container.querySelectorAll<HTMLElement>("[data-pa-card-item]")
     )
     // No wash of their own: rows on the card, a hairline between them.
@@ -677,7 +716,19 @@ describe("an assistant's card: a list", () => {
     expect(bot.className).toContain("border-t")
     expect(task.parentElement?.className).toContain("gap-0")
     expect(task.querySelector("svg.lucide-square-kanban")).not.toBeNull()
-    expect(within(task).getByRole("button")).toHaveAccessibleName("Open task 4")
+    // The row's own line names what it opens: its button without the number.
+    expect(within(task).getByRole("button")).toHaveAccessibleName("Open task")
+    expect(within(dispatch).getByRole("button")).toHaveAccessibleName(
+      "打开派发"
+    )
+    // Nothing left without it: its words as written.
+    expect(within(bare).getByRole("button")).toHaveAccessibleName("#3")
+    // Its digits written wide too.
+    expect(within(wide).getByRole("button")).toHaveAccessibleName("打开任务")
+    // No number at its end: its words as written.
+    expect(within(long).getByRole("button").textContent).toBe(
+      `Open ${" ".repeat(4000)}it #x`
+    )
     expect(within(bot).getByRole("img", { name: "Dev" })).toBeTruthy()
     expect(within(bot).getByRole("button")).toHaveAccessibleName(
       "Reply to the assistant"

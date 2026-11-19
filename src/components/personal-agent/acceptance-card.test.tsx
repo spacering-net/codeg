@@ -201,26 +201,38 @@ describe("an acceptance card", () => {
       }),
       { zh: true }
     )
-    // The check's verdict on its line, the assistant's conclusion on the
-    // next — on the caution's tone, as it goes against it.
+    // The check's verdict on its line; how it ended on the next, whose word
+    // it was on that line — not a conclusion line saying "通过" once more —
+    // on the caution's tone, as it goes against the check; the reason a
+    // fact of its own.
     expect(
       container.querySelector('[data-pa-verdict="fail"]')?.textContent
     ).toBe("不通过")
-    const said = container.querySelector("[data-pa-conclusion]")!
-    expect(said.querySelector("dt")?.textContent).toBe("助手")
-    expect(said.querySelector("dd")?.textContent).toBe(
-      "通过，理由：a.txt is meant to say two."
+    expect(container.querySelector("[data-pa-conclusion]")).toBeNull()
+    const result = container.querySelector("[data-pa-result-field]")!
+    expect(result.querySelector("dt")?.textContent).toBe("结果")
+    expect(result.querySelector("dd")?.textContent).toBe("已通过助手决定的")
+    const by = container.querySelector('[data-pa-decided-by="assistant"]')!
+    expect(by.hasAttribute("data-pa-against")).toBe(true)
+    expect(by.className).toContain("text-amber-700")
+    const why = container.querySelector("[data-pa-reason]")!
+    expect(why.querySelector("dt")?.textContent).toBe("理由")
+    expect(why.querySelector("dd")?.textContent).toBe(
+      "a.txt is meant to say two."
     )
-    expect(said.hasAttribute("data-pa-against")).toBe(true)
     // A reason with a long unbroken run (a hash, a path) wraps on the card,
     // which clips what overflows it.
-    expect(said.querySelector("dd")?.className).toContain(
+    expect(why.querySelector("dd")?.className).toContain(
       "[overflow-wrap:anywhere]"
     )
-    expect(said.querySelector("dd")?.className).toContain("[&>*]:min-w-0")
+    expect(why.querySelector("dd")?.className).toContain("[&>*]:min-w-0")
     expect(container.querySelector("[data-pa-accept-ended]")?.textContent).toBe(
       "已通过"
     )
+    // "通过" said twice at most: the check's, and how it ended.
+    expect(
+      container.querySelector("dl")?.textContent?.split("通过").length
+    ).toBe(3)
     expect(screen.queryByRole("button", { name: "算通过" })).toBeNull()
     expect(waitsForOwner(card({ state: "acted", phase: "accepted" }))).toBe(
       false
@@ -252,10 +264,30 @@ describe("an acceptance card", () => {
         verdict: "pass",
       })
     )
-    const own = owner.container.querySelector("[data-pa-conclusion]")!
-    expect(own.querySelector("dt")?.textContent).toBe("Your decision")
-    expect(own.querySelector("dd")?.textContent).toBe("accept")
+    // The owner's word on the line of how it ended, not a line of its own.
+    expect(owner.container.querySelector("[data-pa-conclusion]")).toBeNull()
+    const own = owner.container.querySelector('[data-pa-decided-by="owner"]')!
+    expect(own.textContent).toBe("your decision")
     expect(own.hasAttribute("data-pa-against")).toBe(false)
+    expect(
+      owner.container.querySelector("[data-pa-result-field] dd")?.textContent
+    ).toBe("Acceptedyour decision")
+    expect(owner.container.querySelector("[data-pa-reason]")).toBeNull()
+    owner.unmount()
+    // Not yet ended as decided: the conclusion its own line still.
+    const pending = draw(
+      card({
+        state: "acted",
+        phase: "changed",
+        decision: "accept",
+        decided_by: "owner",
+        verdict: "pass",
+      })
+    )
+    const said = pending.container.querySelector("[data-pa-conclusion]")!
+    expect(said.querySelector("dt")?.textContent).toBe("Your decision")
+    expect(said.querySelector("dd")?.textContent).toBe("accept")
+    expect(pending.container.querySelector("[data-pa-decided-by]")).toBeNull()
   })
 
   it("says work accepted unchecked or unverified, and what was merged or delivered", () => {
@@ -325,6 +357,65 @@ describe("an acceptance card", () => {
     expect(waitsForOwner(old)).toBe(false)
   })
 
+  it("opens an earlier round's long line whole, and closes it again", async () => {
+    // A layout that runs every line over its one: the observer reports it.
+    const RO = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      constructor(private cb: ResizeObserverCallback) {}
+      observe() {
+        this.cb([], this as unknown as ResizeObserver)
+      }
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver
+    const sh = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockReturnValue(60)
+    const ch = vi
+      .spyOn(HTMLElement.prototype, "clientHeight", "get")
+      .mockReturnValue(20)
+    try {
+      draw(
+        card({
+          state: "stale",
+          phase: "stale",
+          round: 2,
+          history: [
+            {
+              round: 1,
+              state: "revised",
+              verdict: "fail",
+              message: "Keep the parent commit; only add the review's record.",
+            },
+          ],
+        }),
+        { zh: true }
+      )
+      const text = document.querySelector("[data-pa-history-text]")!
+      // The evidence's own toggle aside: the round's.
+      await waitFor(() =>
+        expect(
+          document.querySelector("[data-pa-history-toggle]")
+        ).not.toBeNull()
+      )
+      const open = document.querySelector("[data-pa-history-toggle]")!
+      expect(open.getAttribute("aria-label")).toBe("展开")
+      expect(open.getAttribute("aria-expanded")).toBe("false")
+      expect(open.getAttribute("aria-controls")).toBe(text.id)
+      fireEvent.click(open)
+      expect(text.className).not.toContain("line-clamp-1")
+      const close = document.querySelector("[data-pa-history-toggle]")!
+      expect(close.getAttribute("aria-label")).toBe("收起")
+      expect(close.getAttribute("aria-expanded")).toBe("true")
+      fireEvent.click(close)
+      expect(text.className).toContain("line-clamp-1")
+    } finally {
+      sh.mockRestore()
+      ch.mockRestore()
+      globalThis.ResizeObserver = RO
+    }
+  })
+
   it("says a round that no longer applies, and lists the earlier rounds", () => {
     draw(
       card({
@@ -350,6 +441,10 @@ describe("an acceptance card", () => {
     expect(earlier.querySelector("dd")?.textContent).toBe(
       "退回「Fix the tests.」"
     )
+    // One line each, cut where it runs over.
+    expect(
+      earlier.querySelector("[data-pa-history-text]")?.className
+    ).toContain("line-clamp-1")
     expect(screen.queryByRole("button", { name: "算通过" })).toBeNull()
     expect(screen.queryByRole("button", { name: "重新检查" })).toBeNull()
     // Alone on the settled card, the way to the task looks a button: the

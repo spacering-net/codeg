@@ -9991,6 +9991,12 @@
       "assistantWhy": "Assistant : {decision}, car : {reason}",
       "fallback": "L'assistant n'a pas conclu : codeg a suivi la vérification",
       "owner": "Votre décision : {decision}",
+      "result": "Résultat",
+      "why": "Raison",
+      "by": {
+        "owner": "votre décision",
+        "assistant": "décision de l'assistant"
+      },
       "question": "Il vous demande : {question}",
       "usedUp": "Vérifié {count} fois — autant que vous le permettez",
       "wouldSend": "Ce que le renvoi enverrait",
