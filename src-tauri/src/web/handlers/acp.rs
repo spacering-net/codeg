@@ -1044,6 +1044,32 @@ pub async fn acp_update_deepseek_model_catalog(
     Ok(Json(()))
 }
 
+pub async fn acp_load_deepseek_provider_routes(
+) -> Result<Json<deepseek_settings_commands::DeepSeekProviderRoutes>, AppCommandError> {
+    Ok(Json(
+        deepseek_settings_commands::load_deepseek_provider_routes_core(),
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpUpdateDeepSeekProviderRoutesParams {
+    /// Absent (or empty) clears the stored routes so only the official
+    /// DeepSeek route remains.
+    #[serde(default)]
+    pub routes: Option<Vec<deepseek_settings_commands::DeepSeekProviderRoute>>,
+}
+
+pub async fn acp_update_deepseek_provider_routes(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AcpUpdateDeepSeekProviderRoutesParams>,
+) -> Result<Json<()>, AppCommandError> {
+    let emitter = state.emitter.clone();
+    deepseek_settings_commands::update_deepseek_provider_routes_core(params.routes, &emitter)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(()))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpValidatePiCommandParams {

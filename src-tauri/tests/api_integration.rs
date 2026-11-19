@@ -596,6 +596,42 @@ async fn deepseek_model_catalog_requires_a_token() {
     assert_eq!(resp.status_code(), 401);
 }
 
+#[tokio::test]
+async fn deepseek_provider_routes_are_readable_and_shaped_for_the_panel() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/acp_load_deepseek_provider_routes")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body: Value = resp.json();
+    // Same contract as the catalog above: camelCase on the wire, and the
+    // missing-document case is reported in-band rather than as an error.
+    assert!(body["path"].is_string(), "got {body}");
+    assert!(body["exists"].is_boolean(), "got {body}");
+    assert!(body["configured"].is_boolean(), "got {body}");
+    assert!(
+        body["source"].is_string() || body["source"].is_null(),
+        "got {body}"
+    );
+    assert!(body["routes"].is_array(), "got {body}");
+    assert!(
+        body["error"].is_string() || body["error"].is_null(),
+        "got {body}"
+    );
+}
+
+#[tokio::test]
+async fn deepseek_provider_routes_require_a_token() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/acp_load_deepseek_provider_routes")
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 401);
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Computer use
 //

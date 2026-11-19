@@ -219,10 +219,10 @@ import {
   DeepSeekConfigPanel,
 } from "./deepseek-config-panel"
 import {
-  DeepSeekBuiltInCatalogNotice,
   DeepSeekModelListEditor,
   deepseekReadsHarnessCatalog,
 } from "./deepseek-model-list-editor"
+import { DeepSeekProviderRoutesEditor } from "./deepseek-provider-routes-editor"
 import { MiniMaxCodeConfigPanel } from "./minimax-code-config-panel"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
@@ -12045,14 +12045,16 @@ base_url = "https://api.openai.com/v1"`}
                         )
                       }
                     />
-                    {/* The deployment's model catalog. Through deepseek-acp
-                      0.9.0 it lives in the harness' own `settings.yaml`, not
-                      in the agent env, so it has its own section and its own
-                      save — and it is what the composer's per-session model
-                      selector gets to choose from. 0.10.0 builds it into the
-                      bridge and reads that file no more, so later releases
-                      get a notice instead of an editor that changes nothing.
-                      Judged on the installed release, else the pinned one. */}
+                    {/* What the composer's per-session model picker gets to
+                      choose from. Through deepseek-acp 0.9.0 that is an
+                      editable catalog in the harness' own `settings.yaml`
+                      (`llm-deepseek.models`), not the agent env, so it has its
+                      own section and its own save. 0.10.0 builds that catalog
+                      into the bridge and reads the file no more; the surface it
+                      does read is `llm-pi-ai.providers` in the bridge's own
+                      document, where each route adds a provider's catalog to
+                      the picker. Judged on the installed release, else the
+                      pinned one. */}
                     {deepseekReadsHarnessCatalog(
                       selectedAgent.installed_version ??
                         selectedAgent.registry_version
@@ -12070,7 +12072,7 @@ base_url = "https://api.openai.com/v1"`}
                         }}
                       />
                     ) : (
-                      <DeepSeekBuiltInCatalogNotice />
+                      <DeepSeekProviderRoutesEditor />
                     )}
                   </>
                 ) : selectedAgent.agent_type === "qoder" ? (

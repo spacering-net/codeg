@@ -176,9 +176,13 @@ describe("login page — a Harness item kept for after the login", () => {
   })
 
   it("does not bring back an item kept too long ago", async () => {
+    // Freeze the clock for the stamp: a real `Date.now()` read before keeping
+    // can trail the stamp by a millisecond on a slow runner, leaving the item
+    // exactly at the limit instead of past it.
     const keptAt = Date.now()
+    const now = vi.spyOn(Date, "now").mockReturnValue(keptAt)
     keptForLogin("acme/pdf-tools")
-    vi.spyOn(Date, "now").mockReturnValue(keptAt + AFTER_LOGIN_MAX_AGE_MS + 1)
+    now.mockReturnValue(keptAt + AFTER_LOGIN_MAX_AGE_MS + 1)
     fetchMock
       .mockResolvedValueOnce(reply(401, 'Bearer realm="codeg"'))
       .mockResolvedValue(reply(200))

@@ -8103,7 +8103,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   同一份两条模型的 `llm-deepseek.models`，0.9.0 的模型下拉换成这两条，
             //   0.11.0 仍是内置的 `deepseek-flash` / `deepseek-v4-pro`，也没有任何环境
             //   变量能改这份目录。所以设置页只对低于 0.10.0 的安装显示目录编辑器
-            //   （`deepseekReadsHarnessCatalog`），其余显示一句说明，旧文件原样不动。
+            //   （`deepseekReadsHarnessCatalog`）。0.10.0 及以后显示的是
+            //   `commands::deepseek_settings` 的**路由编辑器**：它写
+            //   `$DSH_HOME/deepseek-acp/settings.yaml` 的 `llm-pi-ai.providers`，
+            //   每条路由把一个 pi-ai provider 的目录加进同一个模型下拉——那是这些
+            //   版本上唯一还能扩充可选模型的入口。codeg 不调用 `providers/*` 那套
+            //   UNSTABLE 协议面，只写同一个文档，行为一致而少一层依赖。
             // * **官方路由换了协议**：从 OpenAI Chat Completions
             //   （`{baseURL}/chat/completions`，默认 `https://api.deepseek.com`）换成
             //   DeepSeek 兼容 Anthropic 的 Messages API（`{root}/v1/messages`，路径

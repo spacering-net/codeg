@@ -1260,6 +1260,14 @@ pub fn build_router_with_srn(
             post(handlers::acp::acp_update_deepseek_model_catalog),
         )
         .route(
+            "/acp_load_deepseek_provider_routes",
+            post(handlers::acp::acp_load_deepseek_provider_routes),
+        )
+        .route(
+            "/acp_update_deepseek_provider_routes",
+            post(handlers::acp::acp_update_deepseek_provider_routes),
+        )
+        .route(
             "/acp_validate_pi_command",
             post(handlers::acp::acp_validate_pi_command),
         )
