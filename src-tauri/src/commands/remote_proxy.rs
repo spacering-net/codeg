@@ -2066,16 +2066,23 @@ async fn forward_frame(
     }
 }
 
-/// Emit one of the internal lifecycle channels (`__ready__`,
-/// `__disconnected__`, `__unauthorized__`) to all current subscribers.
+/// Build one of the internal lifecycle envelopes (`__ready__`,
+/// `__disconnected__`, `__unauthorized__`).
 fn lifecycle_frame(channel: &'static str) -> Value {
     serde_json::json!({ "channel": channel, "payload": Value::Null })
+}
+
+/// Tauri event name for one subscriber webview of one connection. Must match
+/// the name `RemoteDesktopTransport.startWs` listens on. Webview labels only
+/// use characters Tauri also allows in event names, so this is always valid.
+fn remote_ws_event_name(connection_id: i32, label: &str) -> String {
+    format!("remote-ws-event-{connection_id}-{label}")
 }
 
 fn emit_frame_to_label(app: &AppHandle, connection_id: i32, label: &str, envelope: &Value) {
     // Tauri evaluates an event script in other webviews with the same event
     // name, even when the target filter leaves them no recipients.
-    let event_name = format!("remote-ws-event-{connection_id}-{label}");
+    let event_name = remote_ws_event_name(connection_id, label);
     if let Err(e) = app.emit_to(EventTarget::webview(label), &event_name, envelope) {
         tracing::error!("[RemoteProxy] emit_to {label} for {event_name} failed: {e}");
     }
@@ -2285,6 +2292,19 @@ mod tests {
             shutdown_tx,
             outbound_tx,
         })
+    }
+
+    #[test]
+    fn ws_event_name_is_scoped_to_connection_and_webview() {
+        // Same literal the transport tests pin on the listening side.
+        assert_eq!(
+            remote_ws_event_name(17, "main-webview"),
+            "remote-ws-event-17-main-webview"
+        );
+        assert_ne!(
+            remote_ws_event_name(7, "remote-webview-a"),
+            remote_ws_event_name(7, "remote-webview-b")
+        );
     }
 
     // ─── Host pinning for credential-carrying requests ──────────────────
