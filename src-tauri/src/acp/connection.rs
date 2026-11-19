@@ -1528,24 +1528,27 @@ const AGENT_STARTUP_RETRY_MAX_DELAY: std::time::Duration = std::time::Duration::
 /// Whether `e` is an agent reporting that the session request arrived before
 /// it finished starting.
 ///
-/// OpenCode 2.x is the case this exists for: its ACP bridge answers
-/// `session/resume` (and `session/new`) with HTTP-503-equivalent
-/// `ServiceUnavailableError` — "Location plugins did not finish activating"
-/// — for the first seconds after `initialize`, then maps that to
-/// `Internal error: Internal service failure: {"errorName":
-/// "ServiceUnavailableError"}`, dropping the sentence that explains it. The
-/// bridge has used "OpenCode service failure" for the same condition in older
-/// releases, so both wordings count. The error name is also checked in `data`:
-/// ACP renders `data` into `Display`, but not every adapter puts it there.
+/// OpenCode 2.x is the case this exists for: until a location's plugins have
+/// activated, its server answers the catalog reads `session/new`, `session/load`
+/// and `session/resume` depend on with HTTP 503 `ServiceUnavailableError`
+/// ("Location plugins did not finish activating", `server/src/location.ts`).
+/// The ACP bridge turns that defect into `Internal service failure` with
+/// `data: {"errorName": "ServiceUnavailableError"}`, dropping the sentence that
+/// explains it (`cli/src/acp/error.ts` `fromUnknown`).
+///
+/// Only that error name counts. A free-text "service unavailable" would match
+/// whatever an arbitrary agent wraps in that phrase, and OpenCode 1.x's
+/// "OpenCode service failure" was its catch-all for every failure — including
+/// permanent ones like a proxy misrouting its loopback server (see
+/// `network::proxy`) — besides 1.x being refused before launch. The name is
+/// looked up in the rendered error and in `data`: ACP renders `data` into
+/// `Display`, but not every adapter puts the name there.
 fn session_establishment_is_retryable(e: &agent_client_protocol::Error) -> bool {
-    let mut text = e.to_string().to_ascii_lowercase();
-    if let Some(data) = e.data.as_ref() {
-        text.push(' ');
-        text.push_str(&data.to_string().to_ascii_lowercase());
-    }
-    text.contains("serviceunavailableerror")
-        || text.contains("service unavailable")
-        || text.contains("opencode service failure")
+    const STARTING: &str = "ServiceUnavailableError";
+    e.to_string().contains(STARTING)
+        || e.data
+            .as_ref()
+            .is_some_and(|data| data.to_string().contains(STARTING))
 }
 
 /// Run a session-establishing RPC, retrying while the agent says it is still
@@ -27232,19 +27235,41 @@ mod tests {
     /// OpenCode's ACP bridge as codeg sees it on the wire: the 503's sentence
     /// is dropped, only the error name survives.
     fn opencode_starting_error() -> agent_client_protocol::Error {
-        agent_client_protocol::util::internal_error(
-            "Internal error: Internal service failure",
-        )
-        .data(serde_json::json!({ "errorName": "ServiceUnavailableError" }))
+        let mut e = agent_client_protocol::Error::internal_error()
+            .data(serde_json::json!({ "errorName": "ServiceUnavailableError" }));
+        e.message = "Internal service failure".to_string();
+        e
     }
 
     #[test]
     fn recognizes_an_agent_still_starting() {
-        assert!(session_establishment_is_retryable(&opencode_starting_error()));
+        assert!(session_establishment_is_retryable(
+            &opencode_starting_error()
+        ));
 
-        // The same condition in the wording OpenCode 1.x used.
-        let legacy = agent_client_protocol::util::internal_error("OpenCode service failure");
-        assert!(session_establishment_is_retryable(&legacy));
+        // Adapters that put the error name in the message or a string `data`.
+        let mut named_in_message = agent_client_protocol::Error::internal_error();
+        named_in_message.message = "ServiceUnavailableError: plugins".to_string();
+        assert!(session_establishment_is_retryable(&named_in_message));
+        assert!(session_establishment_is_retryable(
+            &agent_client_protocol::util::internal_error(
+                "Internal service failure: ServiceUnavailableError"
+            )
+        ));
+
+        // OpenCode 1.x's catch-all and a bare 503 phrase say nothing about
+        // startup: a misrouted proxy fails this way forever.
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::util::internal_error("OpenCode service failure")
+        ));
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::util::internal_error("Service Unavailable")
+        ));
+        // OpenCode's other internal failures carry other error names.
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::util::internal_error("Internal service failure")
+                .data(serde_json::json!({ "errorName": "UnknownError" }))
+        ));
 
         // Ordinary session failures stay terminal, or every typo would wait
         // out the whole budget.
@@ -27344,6 +27369,31 @@ mod tests {
 
         let err = result.expect_err("cancellation is the outer error");
         assert!(err.to_string().contains(HANDSHAKE_CANCELLED_SENTINEL));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelling_during_the_backoff_stops_before_the_next_attempt() {
+        let handshake = CancellationToken::new();
+        let deadline = tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let cancel = handshake.clone();
+        let result = retry_session_establishment(&handshake, deadline, || {
+            let calls = Arc::clone(&calls);
+            let cancel = cancel.clone();
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                // Cancelled after this attempt answered, i.e. while the
+                // retry loop is sleeping before the next one.
+                cancel.cancel();
+                Err::<(), _>(opencode_starting_error())
+            }
+        })
+        .await;
+
+        let err = result.expect_err("cancellation is the outer error");
+        assert!(err.to_string().contains(HANDSHAKE_CANCELLED_SENTINEL));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     // ── ConnectionCleanupGuard ──────────────────────────────────────────────
