@@ -10,12 +10,15 @@
  * second time BELOW the newer persisted tail, which reads as "the newest
  * messages jumped to the top".
  *
- * Retirement must rest on the batch-boundary alignment proof
+ * Retirement rests on the batch-boundary alignment proof
  * (`retireBatchCoveredLocalTurns`), never on timestamp ordering: promoted
  * turns carry the client-clock round START, so the round's own persisted
  * prompt reads "newer" than its reply, and a timestamp rule retires the only
- * copy of a reply whose record has not flushed yet (the review repro on
- * PR #1187 — the keep-cases below pin that loss).
+ * copy of a reply whose record has not flushed yet (the first review repro
+ * on PR #1187). The boundary turn is verified by CONTENT — the batch's own
+ * prompt text — because a co-controlling client's prompt racing ours onto
+ * the disk at the same index passes a role-only check and inflates the
+ * counts while our reply is still unwritten (the second review repro).
  *
  * Turn ids mirror the real failure (opencode session
  * ses_e117f284affeNxE0ryo9ujXPRm, 2026-11-18): parser turns carry `msg_…`
@@ -40,6 +43,9 @@ const { getFolderConversation } = await import("@/lib/api")
 const mockGetFolderConversation = vi.mocked(getFolderConversation)
 
 const CID = 7
+
+/** The round's typed prompt — identical in the parser and promoted copies. */
+const PROMPT = "為什麼codeg裡右下角的context圓圈沒有即時更新？"
 
 /**
  * A windowed response over `full`, starting at global `offset` — mirrors the
@@ -94,8 +100,13 @@ function boundary(
   return { batchBoundaryIndex: index, batchBoundaryPrefixHash: hash }
 }
 
-function turn(id: string, role: "user" | "assistant", ts: string): MessageTurn {
-  return { id, role, blocks: [{ type: "text", text: id }], timestamp: ts }
+function turn(
+  id: string,
+  role: "user" | "assistant",
+  ts: string,
+  text: string = id
+): MessageTurn {
+  return { id, role, blocks: [{ type: "text", text }], timestamp: ts }
 }
 
 // ── The real failure's shape ─────────────────────────────────────────────
@@ -107,13 +118,13 @@ const T2 = "2026-11-18T03:55:18.000Z"
 const T3 = "2026-11-18T04:02:50.000Z"
 
 // Persisted (parser) copies: ids are the opencode message ids.
-const userP = turn("msg_user", "user", T0)
+const userP = turn("msg_user", "user", T0, PROMPT)
 const a1P = turn("msg_a1", "assistant", T1)
 const a2P = turn("msg_a2", "assistant", T2)
 const bgP = turn("msg_a3", "assistant", T3) // the newest, background round
 
 // Promoted live copies of the SAME round 1 (ids as COMPLETE_TURN builds them).
-const userL = turn(`live-${CID}-m0`, "user", T0)
+const userL = turn(`live-${CID}-m0`, "user", T0, PROMPT)
 const a1L = turn(`live-${CID}-m1`, "assistant", T1)
 const a2L = turn(`live-${CID}-m2`, "assistant", T2)
 const promotedRound = [userL, a1L, a2L]
@@ -224,8 +235,8 @@ describe("load-background-activity pill refetch (preserveLive)", () => {
   it("retires the covered round when the window starts before the boundary", async () => {
     // Long conversation: the pill refetch re-requests the loaded window
     // (fromIndex 0) while the batch boundary sits further in. The chain-
-    // extended prefix up to the boundary still verifies, and the counts
-    // after it cover the promoted round.
+    // extended prefix up to the boundary still verifies, the boundary turn
+    // is the batch's own prompt, and the counts after it cover the round.
     const full = [...hist, userP, a1P, a2P, bgP]
     const b = boundary(full, hist.length)
     seed(windowed(hist, 0), { localTurns: promotedRound, ...b })
@@ -238,22 +249,26 @@ describe("load-background-activity pill refetch (preserveLive)", () => {
     expect(sessionLocalTurnIds()).toEqual([])
   })
 
-  it("keeps the reply whose record has not flushed (review repro)", async () => {
+  it("keeps the reply whose record has not flushed (first review repro)", async () => {
     // Settled-but-unflushed: the turn ended, the reply's record is not on
-    // disk, and the response's tail is the round's OWN prompt — whose
-    // agent-clock timestamp reads "newer" than the promoted reply (stamped
-    // with the round start). The assistant count after the boundary (0)
-    // cannot cover the local reply (1), so the promoted copy — the ONLY
-    // copy — must stay.
+    // disk, and the response's tail is the round's OWN prompt — text-
+    // verified, so the boundary check passes. The assistant count after the
+    // boundary (0) cannot cover the local reply (1), so the promoted copy —
+    // the ONLY copy — must stay.
     const b = boundary(hist, hist.length)
     seed(windowed(hist, 0), {
       localTurns: [
-        turn(`live-${CID}-m0`, "user", T0),
+        turn(`live-${CID}-m0`, "user", T0, PROMPT),
         turn(`live-${CID}-m1`, "assistant", "2026-11-18T03:55:01.005Z"),
       ],
       ...b,
     })
-    const promptP = turn("msg_user2", "user", "2026-11-18T03:55:01.040Z")
+    const promptP = turn(
+      "msg_user2",
+      "user",
+      "2026-11-18T03:55:01.040Z",
+      PROMPT
+    )
     mockGetFolderConversation.mockResolvedValueOnce(
       windowed([...hist, promptP], 0)
     )
@@ -265,15 +280,74 @@ describe("load-background-activity pill refetch (preserveLive)", () => {
     )
   })
 
+  it("keeps the reply when another client's prompt raced ours onto the boundary (second review repro)", async () => {
+    // A co-controlling client's prompt landed at the captured boundary index
+    // BEFORE ours, and their round completed and flushed — so the counts
+    // after the boundary cover our local shapes (1 user, 1 assistant) while
+    // OUR reply's record is still unwritten. Only the prompt-content check
+    // can tell their prompt from ours.
+    const b = boundary(hist, hist.length)
+    const theirP = turn(
+      "msg_theirs",
+      "user",
+      T0,
+      "請順便檢查另一個資料夾的設定"
+    )
+    const theirReply = turn("msg_theirs_a", "assistant", T1)
+    seed(windowed(hist, 0), {
+      localTurns: [
+        turn(`live-${CID}-m0`, "user", T0, PROMPT),
+        turn(`live-${CID}-m1`, "assistant", T1),
+      ],
+      ...b,
+    })
+    mockGetFolderConversation.mockResolvedValueOnce(
+      windowed([...hist, theirP, theirReply], 0)
+    )
+    actions().refetchDetail(CID, { preserveLive: true })
+    await flushMicrotasks()
+    expect(sessionLocalTurnIds()).toEqual([`live-${CID}-m0`, `live-${CID}-m1`])
+    expect(getTimelineTurns(CID).map((t) => t.turn.id)).toContain(
+      `live-${CID}-m1`
+    )
+  })
+
+  it("keeps the round when the parser reformatted the prompt (safe duplicate)", async () => {
+    // Some parsers rewrite the prompt record (slash commands, wrapping) —
+    // the content check cannot recognize it, so retirement must not guess.
+    // The duplicate self-heals on the next plain refetch.
+    const b = boundary(hist, hist.length)
+    const reformatted = turn(
+      "msg_user2",
+      "user",
+      T0,
+      "<command-message>plan</command-message> 重新規劃"
+    )
+    const replyP = turn("msg_a1x", "assistant", T1)
+    seed(windowed(hist, 0), {
+      localTurns: [
+        turn(`live-${CID}-m0`, "user", T0, PROMPT),
+        turn(`live-${CID}-m1`, "assistant", T1),
+      ],
+      ...b,
+    })
+    mockGetFolderConversation.mockResolvedValueOnce(
+      windowed([...hist, reformatted, replyP], 0)
+    )
+    actions().refetchDetail(CID, { preserveLive: true })
+    await flushMicrotasks()
+    expect(sessionLocalTurnIds()).toEqual([`live-${CID}-m0`, `live-${CID}-m1`])
+  })
+
   it("keeps the still-unflushed last group of a multi-group round", async () => {
     // First group flushed, last group not: the counts after the boundary
     // cover only one of the two local assistant turns.
     const b = boundary(hist, hist.length)
-    const promptP = turn("msg_user2", "user", T0)
+    const promptP = turn("msg_user2", "user", T0, PROMPT)
     const a1P2 = turn("msg_a1x", "assistant", T1)
     seed(windowed(hist, 0), {
       localTurns: [
-        turn(`live-${CID}-m0`, "user", T0),
+        turn(`live-${CID}-m0`, "user", T0, PROMPT),
         turn(`live-${CID}-m1`, "assistant", T1),
         turn(`live-${CID}-m2`, "assistant", T2),
       ],
@@ -291,7 +365,7 @@ describe("load-background-activity pill refetch (preserveLive)", () => {
     const b = boundary(hist, hist.length)
     seed(windowed(hist, 0), {
       localTurns: [
-        turn(`live-${CID}-m0`, "user", T0),
+        turn(`live-${CID}-m0`, "user", T0, PROMPT),
         turn(`live-${CID}-m1`, "assistant", T1),
       ],
       ...b,
@@ -324,12 +398,12 @@ describe("load-background-activity pill refetch (preserveLive)", () => {
     // window, so the turn at the boundary is not this batch's prompt — the
     // alignment is not this batch's, whatever the counts say.
     const b = boundary(hist, hist.length)
-    const promptP = turn("msg_user2", "user", T0)
     const bgEarly = turn("msg_bg_early", "assistant", T0)
+    const promptP = turn("msg_user2", "user", T0, PROMPT)
     const a1P2 = turn("msg_a1x", "assistant", T1)
     seed(windowed(hist, 0), {
       localTurns: [
-        turn(`live-${CID}-m0`, "user", T0),
+        turn(`live-${CID}-m0`, "user", T0, PROMPT),
         turn(`live-${CID}-m1`, "assistant", T1),
       ],
       ...b,

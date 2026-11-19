@@ -603,10 +603,11 @@ function retireCoveredBackgroundTurns(
  *    the prefix it exposes up to the boundary still fingerprints to the
  *    captured hash — no compaction rewrote the anchored history, and no
  *    window hole can hide the batch's turns behind the uncovered prefix;
- *  - the turn persisting AT the boundary is a USER turn — the batch's first
- *    record is its prompt, so anything else there (an out-of-turn background
- *    turn completing inside the send→persist window) means the alignment is
- *    not this batch's;
+ *  - the turn persisting AT the boundary is the batch's OWN prompt: a USER
+ *    turn whose first text block matches the local batch's leading user
+ *    turn's text — a co-controlling client's prompt racing ours onto the disk
+ *    at the same index must not pass for ours (it would inflate the counts
+ *    below while our reply is still unwritten);
  *  - the window holds at least as many user and non-user turns after the
  *    boundary as `localTurns` does. Records append in transcript order and a
  *    batch's prompts precede its replies, so the counts cannot pass while any
@@ -634,9 +635,17 @@ function retireBatchCoveredLocalTurns(
     detail.turns.slice(0, rel)
   )
   if (prefixHash !== batchBoundaryPrefixHash) return localTurns
-  // The batch's first persisted record is its prompt.
+  // The batch's first record is its prompt — verified by CONTENT, not just
+  // role. A co-controlling client's prompt can race ours onto the disk AT
+  // the captured boundary; a role-only check would take theirs for ours and
+  // let their round's turns inflate the counts below while this batch's
+  // reply is still unwritten. A parser that reformats the prompt (slash
+  // commands, wrapping) simply fails the match — keep, a safe duplicate.
   const boundaryTurn = detail.turns[rel]
   if (boundaryTurn == null || boundaryTurn.role !== "user") return localTurns
+  const localPrompt = firstUserTurnText(localTurns)
+  if (localPrompt === null) return localTurns
+  if (firstUserTurnText([boundaryTurn]) !== localPrompt) return localTurns
   const batch = detail.turns.slice(rel)
   const localUsers = localTurns.filter((t) => t.role === "user").length
   const localOthers = localTurns.length - localUsers
@@ -644,6 +653,23 @@ function retireBatchCoveredLocalTurns(
   if (batchUsers < localUsers) return localTurns
   if (batch.length - batchUsers < localOthers) return localTurns
   return []
+}
+
+/**
+ * The trimmed text of a batch's leading user turn's first text block — the
+ * typed prompt. `null` when the local turns do not lead with a readable user
+ * prompt (an adopted/assistant-only promotion, an image-only send): there is
+ * then no content anchor for the boundary turn and retirement must not guess.
+ */
+function firstUserTurnText(turns: MessageTurn[]): string | null {
+  const first = turns[0]
+  if (first == null || first.role !== "user") return null
+  for (const block of first.blocks) {
+    if (block.type === "text" && block.text.trim() !== "") {
+      return block.text.trim()
+    }
+  }
+  return null
 }
 
 function batchStartCapture(
