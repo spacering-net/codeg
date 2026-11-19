@@ -2460,6 +2460,63 @@ describe("AcpConnectionsProvider permission request details", () => {
     }
   })
 
+  it("keeps only permission details from out-of-turn tool updates", async () => {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+    })
+    const handlers = latestAttachHandlers()
+    const rawInput = JSON.stringify({ command: "pnpm lint", cwd: "/tmp/x" })
+    const image = { data: "aW1n".repeat(10_000), mime_type: "image/png" }
+    // An update for a call never announced creates the entry from the
+    // fallbacks; a later update merges into it, keeping the earlier input
+    // when it carries none. Neither keeps output, content or images.
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "tool_call_update",
+      tool_call_id: "background-update",
+      title: null,
+      status: "in_progress",
+      content: "partial output",
+      raw_input: rawInput,
+      raw_output: "x".repeat(100_000),
+      meta: { claudeCode: { toolName: "Bash" } },
+      images: [image],
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "tool_call_update",
+      tool_call_id: "background-update",
+      title: "Run lint",
+      status: "completed",
+      content: "final output",
+      raw_input: null,
+      raw_output: JSON.stringify({ result: "done".repeat(50_000) }),
+      images: [image],
+    })
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "background-update-permission",
+      tool_call: { toolCallId: "background-update" },
+      options: [],
+    })
+    const connection = h.store!.getConnection(TAB)!
+    expect(
+      parsePermissionToolCall(connection.pendingPermission?.tool_call)
+    ).toMatchObject({ title: "Run lint", command: "pnpm lint", cwd: "/tmp/x" })
+    expect(connection.outOfTurnToolCalls?.get("background-update")).toEqual({
+      tool_call_id: "background-update",
+      title: "Run lint",
+      kind: "tool",
+      raw_input: rawInput,
+      meta: { claudeCode: { toolName: "Bash" } },
+    })
+  })
+
   it("hydrates a permission request from an existing live tool call input", async () => {
     await mountProvider()
 
