@@ -6408,3 +6408,43 @@ export interface DeepSeekModelCatalog {
    *  fixed, sessions run on the agent's built-in catalog instead. */
   invalid: string | null
 }
+
+/** One `llm-pi-ai` provider route: a provider a DeepSeek session may serve
+ *  models from, keyed by the route id a request selects with. */
+export interface DeepSeekProviderRoute {
+  /** Route id (any non-empty key). A stored sign-in addresses it as a
+   *  credential-key segment, so catalog ids follow `[a-z][a-z0-9-]*`. */
+  id: string
+  /** Selector label; absent falls back to the provider's own name. */
+  displayName?: string
+  /** Credential reference resolved through `$DSH_HOME/.credentials.yaml`;
+   *  absent defers to pi-ai's ambient environment discovery for the provider. */
+  apiKeyEnv?: string
+  /** Wire protocol override; absent takes the pi-ai catalog's protocol. */
+  api?:
+    | "openai-completions"
+    | "openai-responses"
+    | "anthropic-messages"
+    | "google-generative-ai"
+  /** Endpoint override; absent takes the pi-ai catalog's endpoint. */
+  baseURL?: string
+}
+
+/** What the settings panel reads about the stored provider routes. */
+export interface DeepSeekProviderRoutes {
+  /** Where a save lands: `$DSH_HOME/deepseek-acp/settings.yaml`. */
+  path: string
+  /** Whether that document exists at all. */
+  exists: boolean
+  /** Whether the effective document declares `llm-pi-ai.providers`. */
+  configured: boolean
+  /** The document the routes on screen came from — the bridge's own document,
+   *  or a legacy harness document it imports from until this panel writes one. */
+  source: string | null
+  routes: DeepSeekProviderRoute[]
+  /** Why the effective document could not be read; editing is refused. */
+  error: string | null
+  /** Why the stored routes are ones the agent refuses. Editable, but sessions
+   *  keep the routes they had until the rows are fixed. */
+  invalid: string | null
+}

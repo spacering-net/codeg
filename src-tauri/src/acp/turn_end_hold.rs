@@ -13,7 +13,9 @@
 //! read the result. claude-agent-acp (0.97.0+) publishes that turn as an AIR
 //! async task of type `turn` (`autonomous-turn-<uuid>`) for as long as it runs,
 //! next to the rows of the background shells and monitors themselves, so the
-//! connection's async-task table is a complete "still working" signal — and
+//! connection's async-task table is a complete "still working" signal for
+//! everything but background sub-agents, which it never carries and the
+//! transcript watcher alone counts — and
 //! [`SessionState::has_active_background_work`] already reads it (together
 //! with the transcript watcher's count) for the idle sweeps. The turn itself
 //! never reaches the wire as a prompt's turn; its answer arrives only as the
@@ -34,7 +36,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::acp::manager::{ConnectionBusy, ConnectionManager};
 use crate::acp::session_state::{background_keepalive_max_age, SessionState};
-use crate::acp::types::{async_task_state_is_terminal, ConnectionStatus};
+use crate::acp::types::{
+    async_task_state_is_terminal, BackgroundOutstandingTask, BackgroundTaskKind, ConnectionStatus,
+};
 use crate::models::agent::AgentType;
 
 /// How often a held connection is looked at.
@@ -169,15 +173,26 @@ pub(crate) fn turn_end_blocker(
 }
 
 /// Whether this agent's async-task table carries every kind of background
-/// work it runs, so that the table can stand in for the watcher's count.
-/// claude-agent-acp publishes every background shell and monitor there, and
-/// the agent's own follow-up turn. Grok publishes only its workflow runs: its
-/// background sub-agents are counted by `BackgroundActivity` alone.
+/// work it runs but its sub-agents, so that the table can stand in for the
+/// watcher's count of everything else. claude-agent-acp publishes every
+/// background shell and monitor there (a sub-agent's own included), and the
+/// agent's own follow-up turn — but never a sub-agent (`isSubagentTask`):
+/// those the watcher alone counts ([`watcher_only_task`]). Grok publishes only
+/// its workflow runs: its background sub-agents are counted by
+/// `BackgroundActivity` alone, and so is everything else when the table is
+/// not complete.
 fn async_table_is_complete(agent_type: AgentType) -> bool {
     matches!(agent_type, AgentType::ClaudeCode)
 }
 
-/// Whether the async-task table alone decides what still runs — see
+/// Whether a watcher task is one the complete async-task table never carries:
+/// a background sub-agent.
+fn watcher_only_task(task: &BackgroundOutstandingTask) -> bool {
+    task.kind == BackgroundTaskKind::Agent
+}
+
+/// Whether the async-task table decides what still runs, the watcher keeping
+/// only what the table never carries ([`watcher_only_task`]) — see
 /// [`background_work_running`].
 fn async_table_decides(state: &SessionState, agent_type: AgentType) -> bool {
     async_table_is_complete(agent_type) && !state.async_tasks.is_empty()
@@ -189,19 +204,21 @@ fn async_table_decides(state: &SessionState, agent_type: AgentType) -> bool {
 /// ([`SessionState::has_active_background_work`]): a false "still running"
 /// costs them one idle connection. A hold pays more for one — a task stuck in
 /// "running" until the cap — so once an adapter whose table is complete
-/// ([`async_table_is_complete`]) has published a row, that table alone
-/// decides: it carries an explicit terminal state per task, where the
-/// watcher infers its count from transcript records that can go missing. Any
-/// other adapter — one that never published a row, or one whose table covers
-/// only part of its work — keeps the OR: a source that only one of them
-/// reports must not settle the run under work still running.
+/// ([`async_table_is_complete`]) has published a row, that table decides
+/// for everything it carries: it holds an explicit terminal state per task,
+/// where the watcher infers its count from transcript records that can go
+/// missing. What the table never carries — a background sub-agent — the
+/// watcher still decides: a finished shell's row must not hide a sub-agent
+/// still running. Any other adapter — one that never published a row, or one
+/// whose table covers only part of its work — keeps the OR: a source that
+/// only one of them reports must not settle the run under work still running.
 fn background_work_running(
     state: &SessionState,
     agent_type: AgentType,
     now: DateTime<Utc>,
 ) -> bool {
     if async_table_decides(state, agent_type) {
-        state.has_live_async_task(now)
+        state.has_live_async_task(now) || state.has_outstanding_background_agent(now)
     } else {
         state.has_active_background_work(now)
     }
@@ -215,8 +232,9 @@ const MAX_DESCRIPTION_CHARS: usize = 120;
 
 /// The background work still running on this connection, described: the
 /// async-task rows that are not terminal (the agent's own autonomous turn
-/// aside), and — unless that table alone decides — what the transcript watcher
-/// still counts (the same source rule as [`background_work_running`]).
+/// aside), and what the transcript watcher still counts — only what the table
+/// never carries when the table decides (the same source rule as
+/// [`background_work_running`]).
 fn running_work(state: &SessionState, agent_type: AgentType) -> Vec<String> {
     fn push(text: &str, out: &mut Vec<String>) {
         let text: String = text.trim().chars().take(MAX_DESCRIPTION_CHARS).collect();
@@ -239,14 +257,16 @@ fn running_work(state: &SessionState, agent_type: AgentType) -> Vec<String> {
         };
         push(label, &mut out);
     }
-    if !async_table_decides(state, agent_type) {
-        for task in &state.background_outstanding_tasks {
-            if ids.insert(task.task_id.as_str()) {
-                push(
-                    task.description.as_deref().unwrap_or(&task.task_id),
-                    &mut out,
-                );
-            }
+    let table_decides = async_table_decides(state, agent_type);
+    for task in &state.background_outstanding_tasks {
+        if table_decides && !watcher_only_task(task) {
+            continue;
+        }
+        if ids.insert(task.task_id.as_str()) {
+            push(
+                task.description.as_deref().unwrap_or(&task.task_id),
+                &mut out,
+            );
         }
     }
     out.truncate(MAX_RUNNING_LISTED);
@@ -617,20 +637,51 @@ mod tests {
     /// What the transcript watcher (or Grok's sub-agent accounting) reports:
     /// `outstanding` tasks, the one listed described as "watched build".
     fn watcher(outstanding: u32) -> AcpEvent {
+        watcher_of(outstanding, BackgroundTaskKind::Shell, "watched build")
+    }
+
+    fn watcher_of(outstanding: u32, kind: BackgroundTaskKind, description: &str) -> AcpEvent {
         AcpEvent::BackgroundActivity {
             session_id: "sid".into(),
             turns: vec![],
             outstanding,
-            outstanding_tasks: vec![crate::acp::types::BackgroundOutstandingTask {
-                task_id: "w1".into(),
-                kind: crate::acp::types::BackgroundTaskKind::Shell,
-                tool_use_id: None,
-                description: Some("watched build".into()),
-                started_at_ms: 0,
-            }],
+            outstanding_tasks: (outstanding > 0)
+                .then(|| BackgroundOutstandingTask {
+                    task_id: "w1".into(),
+                    kind,
+                    tool_use_id: None,
+                    description: Some(description.into()),
+                    started_at_ms: 0,
+                })
+                .into_iter()
+                .collect(),
             settled: vec![],
             watermark: 0,
         }
+    }
+
+    /// claude-agent-acp never puts a sub-agent in the async-task table, only
+    /// the shells it (or one of its sub-agents) runs. A finished shell's
+    /// terminal row must not hide a background sub-agent the watcher still
+    /// counts (#1198) — while a stale watcher shell still yields to the table.
+    #[tokio::test]
+    async fn a_finished_async_row_does_not_hide_a_running_sub_agent() {
+        let manager = connection(AgentType::ClaudeCode).await;
+        apply(
+            &manager,
+            watcher_of(1, BackgroundTaskKind::Agent, "background reviewer"),
+        )
+        .await;
+        apply(&manager, delta("b1", "shell", "running", true)).await;
+        apply(&manager, delta("b1", "shell", "completed", false)).await;
+        let probe = should_hold(&manager, CONN, "end_turn")
+            .await
+            .expect("the sub-agent still runs");
+        assert_eq!(probe.blocker, Some(ConnectionBusy::BackgroundWork));
+        assert_eq!(probe.running, vec!["background reviewer".to_string()]);
+
+        apply(&manager, watcher_of(0, BackgroundTaskKind::Agent, "")).await;
+        assert!(should_hold(&manager, CONN, "end_turn").await.is_none());
     }
 
     /// With async tasks published, their terminal states decide: a watcher

@@ -40,6 +40,8 @@ import type {
   AutomationDraft,
   DeepSeekCatalogModel,
   DeepSeekModelCatalog,
+  DeepSeekProviderRoute,
+  DeepSeekProviderRoutes,
   ForgeAutoScanReport,
   ForgeAutoStatus,
   ForgeApproveResult,
@@ -957,6 +959,28 @@ export async function updateDeepSeekModelCatalog(
   models: DeepSeekCatalogModel[] | null
 ): Promise<void> {
   return getTransport().call("acp_update_deepseek_model_catalog", { models })
+}
+
+/**
+ * Read the DeepSeek Harness provider routes — `llm-pi-ai.providers` in the
+ * bridge's own `$DSH_HOME/deepseek-acp/settings.yaml`. While that document does
+ * not exist the routes come from the legacy harness documents the bridge
+ * imports, and `source` says which one.
+ */
+export async function loadDeepSeekProviderRoutes(): Promise<DeepSeekProviderRoutes> {
+  return getTransport().call("acp_load_deepseek_provider_routes", {})
+}
+
+/**
+ * Store the DeepSeek Harness provider routes, replacing `llm-pi-ai.providers`
+ * in the bridge's own document and leaving every other key (and every other
+ * section) alone. `null` — and an empty list — REMOVE the routes, so only the
+ * official DeepSeek route remains.
+ */
+export async function updateDeepSeekProviderRoutes(
+  routes: DeepSeekProviderRoute[] | null
+): Promise<void> {
+  return getTransport().call("acp_update_deepseek_provider_routes", { routes })
 }
 
 /**
