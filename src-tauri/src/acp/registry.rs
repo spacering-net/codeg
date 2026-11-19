@@ -3555,9 +3555,85 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     keeps a malformed Read or Edit path from failing the prompt.
             //     Each is a fix on paths codeg already takes, checked by the
             //     adapter's tests; not reproduced live.
+            //
+            // 0.108.1 (2026-11-18) and 0.109.0 (2026-11-19) move the ACP SDK to
+            // 2.8.0 (schema 1.33.0) and the Claude Agent SDK to 0.3.328
+            // (Claude Code 2.1.326 → 2.1.328); `engines.node` stays ">=22".
+            // Measured live with the same harness, 0.108.0 and 0.109.0 side by
+            // side: the twenty earlier scenarios match apart from what
+            // (wwwww) says, timing (a gateway reconnect in one run, request
+            // order), the CLI asking the fake gateway, which refuses titles,
+            // for a session title twice more, one more `last-prompt` record in
+            // an idle session's transcript, and `/code-review`'s reworded
+            // description. A new scenario ran a session with codeg's session
+            // meta (a `modelPicker` row in `options.settings`), with and
+            // without `promptSuggestions: false`, through `session/new`, three
+            // prompts on the picker's row and `session/resume`.
+            //
+            // (wwwww) **Four changes codeg gets with the bump, with no
+            // change.**
+            //   * #1669 sends a session's settings to Claude Code in the SDK's
+            //     initialize request, as #1647 did for MCP servers: Claude Code
+            //     starts with `--await-initialize --initialize-fields=settings`
+            //     and no `--settings`. The settings land in the same tier
+            //     (`flagSettings`). Measured: on 0.109.0 codeg's picker id is no
+            //     longer on the CLI's command line after `session/new` or
+            //     `session/resume`, the row is listed after both, and after
+            //     `session/new` it takes `set_config_option` and reaches the
+            //     gateway as the model. A CLI named by `CLAUDE_CODE_EXECUTABLE`
+            //     keeps `--settings`; codeg does not set it.
+            //   * #1666 sends the config options as model, effort, fast,
+            //     ultracode, mode (mode came first). codeg sets the order
+            //     itself where it matters: the composer ranks model, effort,
+            //     mode, then the rest (`rankOf` in `session-settings.ts`), and
+            //     a connect replays a saved model before the other saved
+            //     options (`order_preferred_config_values`). Only the agent
+            //     options editor, which keeps the agent's order after the
+            //     model, now shows Mode below Fast and Ultracode.
+            //   * #1659 files the Fast option under the `speed` category (it
+            //     was `model_config`, which `map_session_config_category`
+            //     reported as "unknown") and lists Off before On. codeg reads
+            //     only the `model`, `thought_level` and `mode` categories, and
+            //     `onOffValues` reads the on/off pair in either order.
+            //   * #1660 sends the predicted next prompt as ACP's unstable
+            //     `prompt_suggestions_update` to a client that declares
+            //     `session.promptSuggestions`, and asks Claude Code for a
+            //     prediction only for that client or AIR. codeg is an AIR
+            //     client, so it keeps getting `_meta.promptSuggestions`.
+            //     Measured: the same suggestion frames on 0.108.0 and 0.109.0,
+            //     and with `promptSuggestions: false` no prediction request on
+            //     either. codeg declares no capability for the standard update.
+            //     The schema crate (1.12.0) has no variant for it, and it gives
+            //     what the AIR form gives.
+            //
+            // (xxxxx) Nothing to change in codeg, each checked:
+            //   * #1506 checks a `providers/set` gateway's models, and codeg
+            //     never sends `providers/set`.
+            //   * #1603 ends a v1 turn at its result for a client in the
+            //     subagents RFD form, and #1656 answers -32602 to a request that
+            //     names a subagent's child session. codeg declares no
+            //     `subagents`, so it gets neither the RFD form nor child
+            //     session ids.
+            //   * #1604 closes a server tool call (the advisor's) whose reply
+            //     Claude Code gave up on at its stream idle timeout, as
+            //     `failed`, once the next reply starts. The v1 turn no longer
+            //     fails with `incomplete_tool_call` for it. codeg shows the
+            //     card's `failed` status as it shows any other.
+            //   * #1653 concerns MCP-over-ACP (`"type": "acp"`) servers, and
+            //     codeg declares none.
+            //   * ACP SDK 2.8.0 makes `session/fork` refuse a `cursorId`.
+            //     codeg's fork request names none (`fork::build_fork_request`).
+            //     The rest of 2.8.0 is v2.
+            //   * SDK 0.3.327 refuses session options that it cannot send to
+            //     Claude Code (a hook matcher without hooks). codeg sends no
+            //     `hooks` option.
+            //   * CLI 2.1.328 adds an `api-request-resumed` transcript record
+            //     to the `api-request` family. The parser skips it like the
+            //     others (pinned in `parsers::claude`). Its other changes that
+            //     reach an SDK host are fixes on paths codeg already takes.
             distribution: AgentDistribution::Npx {
-                version: "0.108.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.108.0",
+                version: "0.109.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.109.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -9569,8 +9645,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.108.0",
-            "@agentclientprotocol/claude-agent-acp@0.108.0",
+            "0.109.0",
+            "@agentclientprotocol/claude-agent-acp@0.109.0",
             Some("22.0.0"),
         );
         assert_npx_version(
