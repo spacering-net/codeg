@@ -52,10 +52,11 @@ fn resolve_cursor_config_from(
 }
 
 /// Cursor (cursor-agent CLI) stores each conversation as a **SQLite blob
-/// store**. Interactive CLI/IDE chats — and the sub-agent children spawned by
-/// `task` tool calls — are grouped by the MD5 of the resolved working
-/// directory, while ACP sessions (what codeg drives) live under a flat
-/// per-session root with a JSON sidecar:
+/// store**. CLI chats — and the sub-agent children spawned by `task` tool
+/// calls — are grouped by the MD5 of the resolved working directory, while ACP
+/// sessions (what codeg drives) live under a flat per-session root with a JSON
+/// sidecar. The desktop IDE's independent `state.vscdb` composer history is
+/// decoded by `parsers::cursor_desktop`.
 ///
 /// ```text
 /// $CURSOR_CONFIG_DIR/                (default ~/.cursor)
@@ -96,6 +97,7 @@ fn resolve_cursor_config_from(
 pub struct CursorParser {
     chats_dir: PathBuf,
     acp_sessions_dir: PathBuf,
+    desktop: crate::parsers::cursor_desktop::CursorDesktopParser,
     /// Root of codeg's own per-turn timing journal (`crate::turn_timings`) —
     /// the fallback clock for turns whose store yields none (thinking+text
     /// only; the ACP store has no message timestamps).
@@ -107,13 +109,14 @@ impl CursorParser {
         Self::for_env(&AgentEnv::inherited())
     }
 
-    /// The history of the Cursor CLI launched with `env`. The turn-timing
-    /// journal is codeg's own and does not move with it.
+    /// The history of the Cursor CLI launched with `env`, plus the Cursor
+    /// desktop app's independent local composer store.
     pub fn for_env(env: &AgentEnv) -> Self {
         let config_dir = resolve_cursor_config_dir_for_env(env);
         Self {
             chats_dir: config_dir.join("chats"),
             acp_sessions_dir: config_dir.join("acp-sessions"),
+            desktop: crate::parsers::cursor_desktop::CursorDesktopParser::for_env(env),
             turn_timings_root: crate::paths::codeg_turn_timings_root(),
         }
     }
@@ -134,6 +137,7 @@ impl CursorParser {
         Self {
             chats_dir,
             acp_sessions_dir,
+            desktop: crate::parsers::cursor_desktop::CursorDesktopParser::empty(),
             turn_timings_root,
         }
     }
@@ -222,7 +226,11 @@ impl CursorParser {
                 })
             });
         let sidecar = read_sidecar_meta(chat_dir);
-        let title = meta.name.clone().or_else(|| sidecar.title.clone()).or(title);
+        let title = meta
+            .name
+            .clone()
+            .or_else(|| sidecar.title.clone())
+            .or(title);
         let summary = summary_from(chat_id, &meta, &state, &sidecar, title);
 
         Some(ConversationDetail {
@@ -285,16 +293,18 @@ impl AgentParser for CursorParser {
         for chat_dir in read_subdirs(&self.acp_sessions_dir) {
             self.collect_summary(&chat_dir, &mut conversations);
         }
+        conversations.extend(self.desktop.list_conversations()?);
         conversations.sort_by_key(|c| std::cmp::Reverse(c.started_at));
         Ok(conversations)
     }
 
     fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
-        let chat_dir = self
-            .find_chat_dir(conversation_id)
-            .ok_or_else(|| ParseError::ConversationNotFound(conversation_id.to_string()))?;
-        self.build_detail(&chat_dir, conversation_id)
-            .ok_or_else(|| ParseError::ConversationNotFound(conversation_id.to_string()))
+        if let Some(chat_dir) = self.find_chat_dir(conversation_id) {
+            return self
+                .build_detail(&chat_dir, conversation_id)
+                .ok_or_else(|| ParseError::ConversationNotFound(conversation_id.to_string()));
+        }
+        self.desktop.get_conversation(conversation_id)
     }
 }
 
@@ -369,9 +379,10 @@ struct ChatMeta {
 
 fn open_store(path: &Path) -> Option<Connection> {
     // Prefer a read-only handle — codeg never mutates cursor's stores.
-    if let Some(conn) =
-        try_open_store(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-    {
+    if let Some(conn) = try_open_store(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
         return Some(conn);
     }
     // The CLI keeps live stores in WAL mode with most data in `-wal`; after a
@@ -456,9 +467,7 @@ fn read_chat_meta(conn: &Connection) -> Option<ChatMeta> {
             .get("latestRootBlobId")
             .and_then(Value::as_str)
             .and_then(hex_decode),
-        is_subagent: v
-            .get("subagentInfo")
-            .is_some_and(|s| !s.is_null()),
+        is_subagent: v.get("subagentInfo").is_some_and(|s| !s.is_null()),
     })
 }
 
@@ -597,7 +606,10 @@ mod wire {
                     let end = self.pos.checked_add(8)?;
                     let raw = self.buf.get(self.pos..end)?;
                     self.pos = end;
-                    Some((field_no, Val::Fixed64(u64::from_le_bytes(raw.try_into().ok()?))))
+                    Some((
+                        field_no,
+                        Val::Fixed64(u64::from_le_bytes(raw.try_into().ok()?)),
+                    ))
                 }
                 2 => {
                     let len = usize::try_from(self.varint()?).ok()?;
@@ -831,10 +843,8 @@ fn decode_state(buf: &[u8]) -> DecodedState {
             21 => {
                 if let Some(b) = val.bytes() {
                     if state.repo_path.is_none() {
-                        state.repo_path =
-                            wire::first_str(b, 1).filter(|s| !s.trim().is_empty());
-                        state.git_branch =
-                            wire::first_str(b, 2).filter(|s| !s.trim().is_empty());
+                        state.repo_path = wire::first_str(b, 1).filter(|s| !s.trim().is_empty());
+                        state.git_branch = wire::first_str(b, 2).filter(|s| !s.trim().is_empty());
                     }
                 }
             }
@@ -894,12 +904,10 @@ fn decode_user_images(conn: &Connection, msg: &[u8]) -> Vec<ContentBlock> {
         let Some(image) = wire::first_message(attachment, 1) else {
             continue;
         };
-        let Some(mime_type) = wire::first_str(&image, 7).filter(|m| m.starts_with("image/"))
-        else {
+        let Some(mime_type) = wire::first_str(&image, 7).filter(|m| m.starts_with("image/")) else {
             continue;
         };
-        let Some(bytes) = wire::first_bytes(&image, 1).and_then(|id| read_blob(conn, &id))
-        else {
+        let Some(bytes) = wire::first_bytes(&image, 1).and_then(|id| read_blob(conn, &id)) else {
             continue;
         };
         if bytes.is_empty() {
@@ -958,7 +966,9 @@ fn build_turns(
                 if no != 2 {
                     continue;
                 }
-                let Some(step_ref) = val.bytes() else { continue };
+                let Some(step_ref) = val.bytes() else {
+                    continue;
+                };
                 let step = read_blob(conn, step_ref).unwrap_or_else(|| step_ref.to_vec());
                 if want_span {
                     fold_tool_span(&step, &mut span);
@@ -970,10 +980,9 @@ fn build_turns(
             // text steps carry no clock at all, so a tool-free turn stays
             // clockless rather than borrowing a wrong timestamp.
             let ts = span.and_then(|(lo, _)| ms_to_utc(lo)).unwrap_or(ts);
-            let completed_at =
-                completed_at.or_else(|| span.and_then(|(_, hi)| ms_to_utc(hi)));
-            let duration_ms = duration_ms
-                .or_else(|| span.and_then(|(lo, hi)| (hi > lo).then_some(hi - lo)));
+            let completed_at = completed_at.or_else(|| span.and_then(|(_, hi)| ms_to_utc(hi)));
+            let duration_ms =
+                duration_ms.or_else(|| span.and_then(|(lo, hi)| (hi > lo).then_some(hi - lo)));
 
             // --- user prompt (text + attached images) ---
             if let Some(user_ref) = wire::first_bytes(&agent_turn, 1) {
@@ -997,7 +1006,7 @@ fn build_turns(
                         duration_ms: None,
                         model: None,
                         completed_at: None,
-                    agent_message_id: None,
+                        agent_message_id: None,
                     });
                 }
             }
@@ -1014,7 +1023,7 @@ fn build_turns(
                     duration_ms,
                     model: meta.last_used_model.clone(),
                     completed_at,
-                agent_message_id: None,
+                    agent_message_id: None,
                 });
             }
         } else if let Some(shell_turn) = wire::first_message(&turn_bytes, 2) {
@@ -1049,7 +1058,7 @@ fn build_turns(
                 duration_ms: None,
                 model: None,
                 completed_at: None,
-            agent_message_id: None,
+                agent_message_id: None,
             });
             let tool_id = format!("cursor-shell-{i}");
             // proto3 leaves a zero exit code off the wire, so a present result
@@ -1088,7 +1097,7 @@ fn build_turns(
                 duration_ms,
                 model: None,
                 completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
         }
     }
@@ -1268,7 +1277,10 @@ fn apply_turn_timing_journal(
         let assistant_idx = (user_idx + 1 < turns.len()
             && matches!(turns[user_idx + 1].role, TurnRole::Assistant))
         .then_some(user_idx + 1);
-        if assistant_idx.map(|a| store_clocked.contains(&a)).unwrap_or(false) {
+        if assistant_idx
+            .map(|a| store_clocked.contains(&a))
+            .unwrap_or(false)
+        {
             continue; // store-native root timing present — journal only corroborates
         }
         let Some(a) = assistant_idx else { continue };
@@ -1680,9 +1692,8 @@ fn decode_tool_variant(
                     .filter(|(no, _)| *no == 1)
                     .filter_map(|(_, v)| v.bytes().map(<[u8]>::to_vec))
                     .filter_map(|item| {
-                        wire::first_str(&item, 2).map(|content| {
-                            serde_json::json!({ "content": content })
-                        })
+                        wire::first_str(&item, 2)
+                            .map(|content| serde_json::json!({ "content": content }))
                     })
                     .collect();
                 tool.input = Some(serde_json::json!({ "todos": todos }));
@@ -2140,7 +2151,13 @@ mod tests {
         // AgentConversationTurnStructure
         let mut agent_turn = Vec::new();
         field_bytes(1, &user_id, &mut agent_turn);
-        for id in [&step_thinking_id, &step_text_id, &step_shell_id, &step_edit_id, &step_mcp_id] {
+        for id in [
+            &step_thinking_id,
+            &step_text_id,
+            &step_shell_id,
+            &step_edit_id,
+            &step_mcp_id,
+        ] {
             field_bytes(2, id, &mut agent_turn);
         }
         let mut turn = Vec::new();
@@ -2177,6 +2194,453 @@ mod tests {
         (root.join("chats"), chat_id.to_string())
     }
 
+    fn build_desktop_fixture(root: &Path) -> (PathBuf, String) {
+        let user_dir = root.join("desktop-user");
+        let storage_dir = user_dir.join("globalStorage");
+        std::fs::create_dir_all(&storage_dir).unwrap();
+        let workspace_dir = user_dir.join("workspaceStorage/workspace-1");
+        std::fs::create_dir_all(&workspace_dir).unwrap();
+        std::fs::write(
+            workspace_dir.join("workspace.json"),
+            r#"{"folder":"file:///Users/me/desktop-proj"}"#,
+        )
+        .unwrap();
+        let conn = Connection::open(storage_dir.join("state.vscdb")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE composerHeaders (\
+                composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER,\
+                lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER,\
+                recency INTEGER, checkpointAt INTEGER, value TEXT,\
+                subagentTypeName TEXT\
+            );\
+             CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);",
+        )
+        .unwrap();
+
+        let chat_id = "desktop-chat-1";
+        let user_header = serde_json::json!({
+            "bubbleId": "desktop-user-1",
+            "type": 1,
+            "createdAt": "2026-11-01T10:00:00.000Z"
+        });
+        let assistant_header = serde_json::json!({
+            "bubbleId": "desktop-assistant-1",
+            "type": 2,
+            "createdAt": "2026-11-01T10:00:01.000Z",
+            "completedAtMs": 1_793_530_801_500_u64
+        });
+        let composer = serde_json::json!({
+            "_v": 18,
+            "composerId": chat_id,
+            "name": "Desktop chat",
+            "createdAt": 1_793_530_800_000_u64,
+            "lastUpdatedAt": 1_793_530_801_500_u64,
+            "fullConversationHeadersOnly": [],
+            "headerLog": { "chunkSize": 256, "chunkCount": 2, "count": 2 },
+            "modelConfig": { "modelName": "composer-2" },
+            "contextTokensUsed": 1200,
+            "contextTokenLimit": 200000
+        });
+        conn.execute(
+            "INSERT INTO composerHeaders (\
+                composerId, workspaceId, createdAt, lastUpdatedAt, isArchived,\
+                isSubagent, value\
+             ) VALUES (?1, ?2, ?3, ?4, 0, 0, ?5)",
+            rusqlite::params![
+                chat_id,
+                "workspace-1",
+                1_793_530_800_000_u64,
+                1_793_530_801_500_u64,
+                composer.to_string()
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+            rusqlite::params![format!("composerData:{chat_id}"), composer.to_string()],
+        )
+        .unwrap();
+        for (index, header) in [(0, user_header), (1, assistant_header)] {
+            conn.execute(
+                "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+                rusqlite::params![
+                    format!("composerConvHeaders:{chat_id}:{index:06}"),
+                    serde_json::json!([header]).to_string()
+                ],
+            )
+            .unwrap();
+        }
+        for (bubble_id, bubble) in [
+            (
+                "desktop-user-1",
+                serde_json::json!({
+                    "_v": 3,
+                    "bubbleId": "desktop-user-1",
+                    "type": 1,
+                    "text": "从桌面端导入",
+                    "createdAt": "2026-11-01T10:00:00.000Z"
+                }),
+            ),
+            (
+                "desktop-assistant-1",
+                serde_json::json!({
+                    "_v": 3,
+                    "bubbleId": "desktop-assistant-1",
+                    "type": 2,
+                    "text": "桌面端回复",
+                    "createdAt": "2026-11-01T10:00:01.000Z",
+                    "modelInfo": { "modelName": "composer-2" },
+                    "tokenCount": { "inputTokens": 100, "outputTokens": 20 },
+                    "timingInfo": {
+                        "clientStartTime": 1_793_530_801_000.0_f64,
+                        "clientEndTime": 1_793_530_802_500.0_f64
+                    }
+                }),
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+                rusqlite::params![
+                    format!("bubbleId:{chat_id}:{bubble_id}"),
+                    bubble.to_string().into_bytes()
+                ],
+            )
+            .unwrap();
+        }
+        (user_dir, chat_id.to_string())
+    }
+
+    #[test]
+    fn imports_desktop_composer_with_chunked_headers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (user_dir, chat_id) = build_desktop_fixture(tmp.path());
+        let cli_dir = tmp.path().join("cli");
+        let env = AgentEnv::with_overrides(&[
+            ("CURSOR_CONFIG_DIR", cli_dir.to_str().unwrap()),
+            ("CURSOR_DESKTOP_USER_DIR", user_dir.to_str().unwrap()),
+        ]);
+        let parser = CursorParser::for_env(&env);
+
+        let list = parser.list_conversations().unwrap();
+        assert_eq!(list.len(), 1, "desktop composer must be discoverable");
+        let summary = &list[0];
+        assert_eq!(summary.id, chat_id);
+        assert_eq!(summary.title.as_deref(), Some("Desktop chat"));
+        assert_eq!(
+            summary.folder_path.as_deref(),
+            Some("/Users/me/desktop-proj")
+        );
+        assert_eq!(summary.model.as_deref(), Some("composer-2"));
+        assert_eq!(summary.message_count, 2);
+
+        let detail = parser.get_conversation(&chat_id).unwrap();
+        assert_eq!(detail.turns.len(), 2);
+        assert!(matches!(
+            &detail.turns[0].blocks[0],
+            ContentBlock::Text { text } if text == "从桌面端导入"
+        ));
+        assert!(matches!(
+            &detail.turns[1].blocks[0],
+            ContentBlock::Text { text } if text == "桌面端回复"
+        ));
+        assert_eq!(detail.turns[1].duration_ms, Some(1500));
+        let usage = detail.turns[1].usage.as_ref().unwrap();
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 20);
+    }
+
+    #[test]
+    fn imports_desktop_inline_and_unindexed_composers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (user_dir, _) = build_desktop_fixture(tmp.path());
+        let conn = Connection::open(user_dir.join("globalStorage/state.vscdb")).unwrap();
+        for (chat_id, name, folder, headers) in [
+            (
+                "desktop-inline",
+                "Inline desktop chat",
+                "/Users/me/inline-proj",
+                serde_json::json!([{ "bubbleId": "inline-user", "type": 1 }]),
+            ),
+            (
+                "desktop-unindexed",
+                "Unindexed desktop chat",
+                "/Users/me/unindexed-proj",
+                serde_json::json!([]),
+            ),
+        ] {
+            let composer = serde_json::json!({
+                "_v": 11,
+                "composerId": chat_id,
+                "name": name,
+                "createdAt": 1_793_530_900_000_u64,
+                "fullConversationHeadersOnly": headers,
+                "workspaceIdentifier": {
+                    "uri": { "fsPath": folder, "scheme": "file" }
+                }
+            });
+            conn.execute(
+                "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+                rusqlite::params![format!("composerData:{chat_id}"), composer.to_string()],
+            )
+            .unwrap();
+        }
+        for (chat_id, bubble_id, role, text) in [
+            ("desktop-inline", "inline-user", 1, "旧版内联消息"),
+            ("desktop-unindexed", "standalone", 2, "无索引消息"),
+        ] {
+            let bubble = serde_json::json!({
+                "_v": 3,
+                "bubbleId": bubble_id,
+                "type": role,
+                "text": text,
+                "createdAt": "2026-11-01T11:00:00.000Z"
+            });
+            conn.execute(
+                "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+                rusqlite::params![
+                    format!("bubbleId:{chat_id}:{bubble_id}"),
+                    bubble.to_string()
+                ],
+            )
+            .unwrap();
+        }
+        let tool = serde_json::json!({
+            "_v": 3,
+            "bubbleId": "desktop-tool",
+            "type": 2,
+            "text": "",
+            "capabilityType": 15,
+            "toolFormerData": {
+                "tool": 15,
+                "toolCallId": "desktop-tool-1",
+                "status": "completed",
+                "name": "run_terminal_command_v2",
+                "params": "{\"command\":\"pwd\"}",
+                "result": "{\"output\":\"/Users/me\",\"exitCode\":0}"
+            },
+            "createdAt": "2026-11-01T11:01:00.000Z"
+        });
+        conn.execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+            rusqlite::params!["bubbleId:desktop-unindexed:desktop-tool", tool.to_string()],
+        )
+        .unwrap();
+        drop(conn);
+        let cli_dir = tmp.path().join("cli");
+        let env = AgentEnv::with_overrides(&[
+            ("CURSOR_CONFIG_DIR", cli_dir.to_str().unwrap()),
+            ("CURSOR_DESKTOP_USER_DIR", user_dir.to_str().unwrap()),
+        ]);
+        let parser = CursorParser::for_env(&env);
+
+        let list = parser.list_conversations().unwrap();
+        assert_eq!(list.len(), 3);
+        let inline = list
+            .iter()
+            .find(|summary| summary.id == "desktop-inline")
+            .unwrap();
+        assert_eq!(inline.folder_path.as_deref(), Some("/Users/me/inline-proj"));
+        let inline = parser.get_conversation("desktop-inline").unwrap();
+        assert_eq!(inline.turns.len(), 1);
+        assert!(matches!(
+            &inline.turns[0].blocks[0],
+            ContentBlock::Text { text } if text == "旧版内联消息"
+        ));
+
+        let unindexed = parser.get_conversation("desktop-unindexed").unwrap();
+        assert_eq!(unindexed.turns.len(), 2);
+        assert!(matches!(unindexed.turns[0].role, TurnRole::Assistant));
+        assert!(matches!(
+            &unindexed.turns[0].blocks[0],
+            ContentBlock::Text { text } if text == "无索引消息"
+        ));
+        assert!(matches!(
+            &unindexed.turns[1].blocks[0],
+            ContentBlock::ToolUse { tool_name, input_preview, .. }
+                if tool_name == "run_terminal_command_v2"
+                    && input_preview.as_deref() == Some("{\"command\":\"pwd\"}")
+        ));
+        assert!(matches!(
+            &unindexed.turns[1].blocks[1],
+            ContentBlock::ToolResult { output_preview, exit_code, .. }
+                if output_preview.as_deref() == Some("{\"output\":\"/Users/me\",\"exitCode\":0}")
+                    && *exit_code == Some(0)
+        ));
+    }
+
+    #[test]
+    fn imports_composer_stored_only_in_composer_headers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (user_dir, _) = build_desktop_fixture(tmp.path());
+        let conn = Connection::open(user_dir.join("globalStorage/state.vscdb")).unwrap();
+        let chat_id = "desktop-header-only";
+        let composer = serde_json::json!({
+            "_v": 18,
+            "composerId": chat_id,
+            "name": "Header-only desktop chat",
+            "createdAt": 1_793_530_900_000_u64,
+            "fullConversationHeadersOnly": [{ "bubbleId": "header-only-user", "type": 1 }],
+            "workspaceIdentifier": {
+                "uri": { "fsPath": "/Users/me/header-only-proj", "scheme": "file" }
+            }
+        });
+        conn.execute(
+            "INSERT INTO composerHeaders (\
+                composerId, workspaceId, createdAt, lastUpdatedAt, isArchived,\
+                isSubagent, value\
+             ) VALUES (?1, ?2, ?3, ?4, 0, 0, ?5)",
+            rusqlite::params![
+                chat_id,
+                "workspace-1",
+                1_793_530_900_000_u64,
+                1_793_530_900_000_u64,
+                composer.to_string()
+            ],
+        )
+        .unwrap();
+        let bubble = serde_json::json!({
+            "_v": 3,
+            "bubbleId": "header-only-user",
+            "type": 1,
+            "text": "仅头部记录",
+            "createdAt": "2026-11-01T11:00:00.000Z"
+        });
+        conn.execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+            rusqlite::params![
+                "bubbleId:desktop-header-only:header-only-user",
+                bubble.to_string()
+            ],
+        )
+        .unwrap();
+        drop(conn);
+        let cli_dir = tmp.path().join("cli");
+        let env = AgentEnv::with_overrides(&[
+            ("CURSOR_CONFIG_DIR", cli_dir.to_str().unwrap()),
+            ("CURSOR_DESKTOP_USER_DIR", user_dir.to_str().unwrap()),
+        ]);
+        let parser = CursorParser::for_env(&env);
+
+        let list = parser.list_conversations().unwrap();
+        assert!(
+            list.iter().any(|summary| summary.id == chat_id),
+            "composerHeaders.value is the document when composerData is absent"
+        );
+        let detail = parser.get_conversation(chat_id).unwrap();
+        assert_eq!(detail.turns.len(), 1);
+        assert!(matches!(
+            &detail.turns[0].blocks[0],
+            ContentBlock::Text { text } if text == "仅头部记录"
+        ));
+    }
+
+    #[test]
+    fn skips_desktop_composers_without_decodable_turns() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (user_dir, chat_id) = build_desktop_fixture(tmp.path());
+        let conn = Connection::open(user_dir.join("globalStorage/state.vscdb")).unwrap();
+        for (id, bubble_id, write_empty_bubble) in [
+            ("desktop-missing-bubble", "missing-user", false),
+            ("desktop-empty-bubble", "empty-user", true),
+        ] {
+            let composer = serde_json::json!({
+                "_v": 18,
+                "composerId": id,
+                "name": id,
+                "createdAt": 1_793_530_900_000_u64,
+                "fullConversationHeadersOnly": [{ "bubbleId": bubble_id, "type": 1 }]
+            });
+            conn.execute(
+                "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+                rusqlite::params![format!("composerData:{id}"), composer.to_string()],
+            )
+            .unwrap();
+            if write_empty_bubble {
+                let bubble = serde_json::json!({
+                    "_v": 3,
+                    "bubbleId": bubble_id,
+                    "type": 1,
+                    "text": ""
+                });
+                conn.execute(
+                    "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+                    rusqlite::params![format!("bubbleId:{id}:{bubble_id}"), bubble.to_string()],
+                )
+                .unwrap();
+            }
+        }
+        drop(conn);
+        let cli_dir = tmp.path().join("cli");
+        let env = AgentEnv::with_overrides(&[
+            ("CURSOR_CONFIG_DIR", cli_dir.to_str().unwrap()),
+            ("CURSOR_DESKTOP_USER_DIR", user_dir.to_str().unwrap()),
+        ]);
+        let parser = CursorParser::for_env(&env);
+
+        let list = parser.list_conversations().unwrap();
+        assert_eq!(list.len(), 1, "empty and unreadable composers stay hidden");
+        assert_eq!(list[0].id, chat_id);
+        assert!(parser.get_conversation("desktop-missing-bubble").is_err());
+        assert!(parser.get_conversation("desktop-empty-bubble").is_err());
+    }
+
+    #[test]
+    fn marks_nonzero_desktop_tool_exit_as_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (user_dir, _) = build_desktop_fixture(tmp.path());
+        let conn = Connection::open(user_dir.join("globalStorage/state.vscdb")).unwrap();
+        let chat_id = "desktop-tool-error";
+        let composer = serde_json::json!({
+            "_v": 18,
+            "composerId": chat_id,
+            "name": "Failed desktop command",
+            "createdAt": 1_793_530_900_000_u64,
+            "fullConversationHeadersOnly": [{ "bubbleId": "failed-tool", "type": 2 }]
+        });
+        conn.execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+            rusqlite::params![format!("composerData:{chat_id}"), composer.to_string()],
+        )
+        .unwrap();
+        let bubble = serde_json::json!({
+            "_v": 3,
+            "bubbleId": "failed-tool",
+            "type": 2,
+            "text": "",
+            "capabilityType": 15,
+            "toolFormerData": {
+                "tool": 15,
+                "toolCallId": "failed-tool-1",
+                "status": "completed",
+                "name": "run_terminal_command_v2",
+                "params": "{\"command\":\"false\"}",
+                "result": "{\"output\":\"failed\",\"exitCode\":1}"
+            }
+        });
+        conn.execute(
+            "INSERT INTO cursorDiskKV (key, value) VALUES (?1, ?2)",
+            rusqlite::params![
+                "bubbleId:desktop-tool-error:failed-tool",
+                bubble.to_string()
+            ],
+        )
+        .unwrap();
+        drop(conn);
+        let cli_dir = tmp.path().join("cli");
+        let env = AgentEnv::with_overrides(&[
+            ("CURSOR_CONFIG_DIR", cli_dir.to_str().unwrap()),
+            ("CURSOR_DESKTOP_USER_DIR", user_dir.to_str().unwrap()),
+        ]);
+        let parser = CursorParser::for_env(&env);
+
+        let detail = parser.get_conversation(chat_id).unwrap();
+        assert!(matches!(
+            &detail.turns[0].blocks[1],
+            ContentBlock::ToolResult { is_error, exit_code, .. }
+                if *is_error && *exit_code == Some(1)
+        ));
+    }
+
     #[test]
     fn lists_chat_with_metadata() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2204,9 +2668,7 @@ mod tests {
 
         let user = &detail.turns[0];
         assert!(matches!(user.role, TurnRole::User));
-        assert!(
-            matches!(&user.blocks[0], ContentBlock::Text { text } if text == "帮我构建项目")
-        );
+        assert!(matches!(&user.blocks[0], ContentBlock::Text { text } if text == "帮我构建项目"));
 
         let assistant = &detail.turns[1];
         assert!(matches!(assistant.role, TurnRole::Assistant));
@@ -2290,7 +2752,10 @@ mod tests {
             .expect("mcp tool present");
         assert_eq!(mcp_name, "codeg-mcp__delegate_to_agent");
         let mcp_json: Value = serde_json::from_str(&mcp_input.unwrap()).unwrap();
-        assert_eq!(mcp_json.get("task").and_then(Value::as_str), Some("run build"));
+        assert_eq!(
+            mcp_json.get("task").and_then(Value::as_str),
+            Some("run build")
+        );
         assert_eq!(
             mcp_json.get("agent_type").and_then(Value::as_str),
             Some("codex")
@@ -2464,7 +2929,10 @@ mod tests {
         // two-hop path and return the text verbatim.
         let report_text = "\n# 构建结果\n\n退出码 0：共 3 个路由全部静态预渲染成功，\
                            无警告无错误，构建产物完整可用，总耗时约四十秒。";
-        assert!(report_text.len() > 128, "report must use a two-byte length prefix");
+        assert!(
+            report_text.len() > 128,
+            "report must use a two-byte length prefix"
+        );
         let mut report_inner = Vec::new();
         field_str(1, report_text, &mut report_inner);
         let mut report_wrap = Vec::new();
@@ -2990,9 +3458,8 @@ mod tests {
                 },
             );
 
-            let parser = crate::parsers::sanitized(CursorParser::with_base_dir(
-                tmp.path().join("chats"),
-            ));
+            let parser =
+                crate::parsers::sanitized(CursorParser::with_base_dir(tmp.path().join("chats")));
             let detail = parser.get_conversation("acp-frames").unwrap();
             assert_eq!(
                 detail.turns[1].duration_ms,
@@ -3002,7 +3469,11 @@ mod tests {
             let ContentBlock::Text { text } = &detail.turns[0].blocks[0] else {
                 panic!("user text");
             };
-            assert_eq!(text, visible.trim_end(), "the frames are gone from the bubble");
+            assert_eq!(
+                text,
+                visible.trim_end(),
+                "the frames are gone from the bubble"
+            );
         }
     }
 

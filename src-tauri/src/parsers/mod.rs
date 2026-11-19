@@ -10,6 +10,7 @@ mod codex_desktop_attachments;
 mod codex_async_questions;
 mod codex_file_citations;
 pub mod cursor;
+mod cursor_desktop;
 pub mod deepseek;
 pub mod gemini;
 pub mod grok;
