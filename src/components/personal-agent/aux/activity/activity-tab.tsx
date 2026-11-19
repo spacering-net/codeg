@@ -119,7 +119,7 @@ export function ActivityTab({
           ) : (
             <PanelSection
               title={t("sections.matters")}
-              count={work?.open.length ?? null}
+              titleInCards
               data-pa-detail="matters"
             >
               <WorkBody work={work} inDrawer={inDrawer} />

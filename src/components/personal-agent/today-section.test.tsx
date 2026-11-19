@@ -270,6 +270,24 @@ describe("today", () => {
     const needs = document.querySelector(
       '[data-pa-today-group="needs"]'
     ) as HTMLElement
+    // No head over the part: its title leads every group's bar, before
+    // the group's own name — and is still its heading to a screen reader.
+    expect(document.querySelector(".border-dashed")).toBeNull()
+    expect(screen.getByRole("heading", { name: "Today" }).className).toContain(
+      "sr-only"
+    )
+    for (const g of document.querySelectorAll("[data-pa-today-group]")) {
+      const bar = g.querySelector("button")!
+      const section = bar.querySelector("[data-pa-group-section]")!
+      expect(section.textContent).toBe("Today")
+      expect(bar.textContent!.indexOf("Today")).toBeLessThan(
+        bar.textContent!.indexOf(
+          g.getAttribute("data-pa-today-group") === "needs"
+            ? "Needs you"
+            : "Done today"
+        )
+      )
+    }
     expect(within(needs).getByText("Needs you")).toBeTruthy()
     expect(within(needs).getByText("1")).toBeTruthy()
     // One card: its head the bar across its top, the chevron at its end;

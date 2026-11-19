@@ -623,6 +623,19 @@ describe("the activity's matters", () => {
     expect(groups).toEqual(["owner", "external", "agent", "time"])
     const group = (g: string) =>
       container.querySelector<HTMLElement>(`[data-pa-group='${g}']`)!
+    // No pill over the matters: "Matters" leads each group's bar, before
+    // its own name.
+    const part = container.querySelector<HTMLElement>(
+      '[data-pa-detail="matters"]'
+    )!
+    expect(part.querySelector(".border-dashed")).toBeNull()
+    for (const g of groups) {
+      const bar = group(g!).querySelector("button")!
+      expect(bar.querySelector("[data-pa-group-section]")!.textContent).toBe(
+        "Matters"
+      )
+      expect(bar.textContent).toMatch(/^Matters·/)
+    }
     expect(
       within(group("owner")).getByText("Review the login fix")
     ).toBeTruthy()

@@ -269,6 +269,7 @@ export function TodaySection({
     <PanelSection
       ref={ref}
       title={title}
+      titleInCards
       className="scroll-mt-3"
       data-pa-detail="today"
     >

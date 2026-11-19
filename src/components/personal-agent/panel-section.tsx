@@ -5,7 +5,9 @@
  * of its tabs:
  * - `PanelSection`: a part of a tab — its title centred on a dashed pill,
  *   how many it holds after it, an action at the head's end — over its
- *   body.
+ *   body. `titleInCards`: a part that is only its groups' cards and whose
+ *   title does nothing ("Today", the matters) has no head of its own — its
+ *   title leads each group's bar, before the group's own name.
  * - `PanelGroup`: a folding group inside a part (who a matter waits on, a
  *   group of today): one card, its head a bar across its top — its marker,
  *   its name and count in its tone, the chevron at the end — its things
@@ -77,10 +79,14 @@ export const PANEL_SURFACE =
   "ws-msg-card rounded-2xl border border-border/70 bg-card"
 const SURFACE = PANEL_SURFACE
 
+/** The title of the part a group is in, when it leads the group's bar. */
+const SectionTitleContext = createContext<ReactNode>(null)
+
 export function PanelSection({
   title,
   count,
   action,
+  titleInCards = false,
   className,
   children,
   ...props
@@ -90,8 +96,22 @@ export function PanelSection({
   count?: number | null
   /** At the head's end: the way to add one. */
   action?: ReactNode
+  /** No head: the title leads each of its groups' bars instead. */
+  titleInCards?: boolean
   children: ReactNode
 } & Omit<ComponentProps<"section">, "title">) {
+  if (titleInCards) {
+    return (
+      <section
+        className={cn("flex min-w-0 flex-col gap-4", className)}
+        {...props}
+      >
+        {/* Still the part's heading to a screen reader: out of the flow. */}
+        <h3 className="sr-only">{title}</h3>
+        <SectionTitleContext value={title}>{children}</SectionTitleContext>
+      </section>
+    )
+  }
   return (
     <section
       className={cn("flex min-w-0 flex-col gap-4", className)}
@@ -191,6 +211,7 @@ export function PanelGroup({
   children: ReactNode
 } & ComponentProps<"section">) {
   const [open, setOpen] = useFold(fold)
+  const section = useContext(SectionTitleContext)
   return (
     <Collapsible open={open} onOpenChange={setOpen} asChild>
       <section
@@ -218,6 +239,20 @@ export function PanelGroup({
               className={cn("size-1.5 shrink-0 rounded-full", TONE[tone].dot)}
             />
           )}
+          {/* The part it is in first, then its own name. */}
+          {section != null ? (
+            <>
+              <span
+                className="shrink-0 font-semibold text-foreground"
+                data-pa-group-section
+              >
+                {section}
+              </span>
+              <span aria-hidden className="shrink-0 text-muted-foreground/50">
+                ·
+              </span>
+            </>
+          ) : null}
           <span className="min-w-0 truncate">{label}</span>
           <span className="shrink-0 tabular-nums">{count}</span>
           <ChevronDown
