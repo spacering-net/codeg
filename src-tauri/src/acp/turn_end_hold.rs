@@ -13,7 +13,9 @@
 //! read the result. claude-agent-acp (0.97.0+) publishes that turn as an AIR
 //! async task of type `turn` (`autonomous-turn-<uuid>`) for as long as it runs,
 //! next to the rows of the background shells and monitors themselves, so the
-//! connection's async-task table is a complete "still working" signal — and
+//! connection's async-task table is a complete "still working" signal for
+//! everything but background sub-agents, which it never carries and the
+//! transcript watcher alone counts — and
 //! [`SessionState::has_active_background_work`] already reads it (together
 //! with the transcript watcher's count) for the idle sweeps. The turn itself
 //! never reaches the wire as a prompt's turn; its answer arrives only as the
@@ -189,7 +191,8 @@ fn watcher_only_task(task: &BackgroundOutstandingTask) -> bool {
     task.kind == BackgroundTaskKind::Agent
 }
 
-/// Whether the async-task table alone decides what still runs — see
+/// Whether the async-task table decides what still runs, the watcher keeping
+/// only what the table never carries ([`watcher_only_task`]) — see
 /// [`background_work_running`].
 fn async_table_decides(state: &SessionState, agent_type: AgentType) -> bool {
     async_table_is_complete(agent_type) && !state.async_tasks.is_empty()
