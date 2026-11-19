@@ -9861,7 +9861,7 @@ export function AcpAgentSettings() {
                         onChange={(event) => {
                           handleCodexConfigTomlTextChange(event.target.value)
                         }}
-                        placeholder={`model = "gpt-6-astra"
+                        placeholder={`model = "gpt-6.2-sol"
 model_reasoning_effort = "high"
 model_provider = "codeg"
 
@@ -13335,7 +13335,7 @@ base_url = "https://api.openai.com/v1"`}
                                 event.target.value
                               )
                             }}
-                            placeholder="gpt-6-astra / claude-sonnet-5-5 / gemini-3.1-pro-preview"
+                            placeholder="gpt-6.2-sol / claude-sonnet-5-5 / gemini-3.1-pro-preview"
                           />
                         </div>
                       )
@@ -13353,7 +13353,7 @@ base_url = "https://api.openai.com/v1"`}
                         placeholder={`{
   "apiBaseUrl": "https://api.example.com",
   "apiKey": "sk-...",
-  "model": "gpt-6-astra",
+  "model": "gpt-6.2-sol",
   "env": {
     "CUSTOM_KEY": "VALUE"
   }

@@ -465,7 +465,7 @@ pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 /// for when the installed copy's own package.json cannot be read. A runtime
 /// resolved to this value is marked unconfirmed (`codex_runtime`), so it never
 /// counts as the version a catalog was checked against. Move it with the pin.
-pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.166.0";
+pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.170.0";
 
 /// The npm package the built-in Claude Code entry runs — and the name the
 /// adapter reports as `agentInfo.name` at `initialize`, which is its
@@ -5071,9 +5071,64 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // codeg's monotonic merge (`SessionState::apply_event`) dropped
             // every one after the first.
             // v2's initial `configOptions` are ignored; codeg speaks v1.
+            //
+            // 2.8.0 moves `@openai/codex` ^0.166.0 → **^0.170.0** (a fresh
+            // install resolves 0.170.0, now `CODEX_NESTED_VERSION_FALLBACK`)
+            // and the inline `@agentclientprotocol/sdk` ~2.6.0 → ~2.8.0.
+            // `engines` is still absent, and the 20.3.0 floor stands: live on
+            // 20.3.0 a session runs a plain and a shell turn, and turns a hook
+            // blocks. Under codeg's exact `clientCapabilities` the 33-scenario
+            // harness replays as on 2.7.0 bar the order of `configOptions`
+            // (see (fff)), and live plain, shell, hook, async-question,
+            // permission-profile, steering and suggestion runs match 2.7.0's
+            // apart from the model list and `mcpCapabilities.acp`.
+            //
+            // (ddd) **codex 0.170's catalog: GPT-6.2 Sol and GPT-6.2 Astra.**
+            // GPT-6.2 Sol is the new default (priority 1, a 500K window), so
+            // a fresh `session/new` now opens on `gpt-6.2-sol` and the AIR
+            // `recommendedValue` follows; GPT-6.2 Astra (272K) is second, and
+            // GPT-6.1 Sol's window rises from 272K to 500K (its
+            // `model_context_window` reads 475000 live, as GPT-6.1 Terra's
+            // does). The offline snapshot is regenerated from the 0.170.0
+            // binary, the context-window fallback
+            // (`parsers::infer_context_window_max_tokens`) puts both Sols on
+            // 475K, and the catalog strictness is re-probed: one new strict
+            // enum, `web_search_provider` (`codex_model_catalog.rs`). The model
+            // placeholders in the settings follow.
+            //
+            // (eee) **codex 0.170 refuses a provider change in its own words.**
+            // Reopening a thread after the configured `model_provider` moved
+            // still answers `session/load` and `session/resume` with a bare
+            // -32603, but `data.details` is no longer the 0.166 sentence
+            // ("This chat uses fake, but your current provider is fake2. …"):
+            // it is the config-load error "failed to load configuration:
+            // Cannot change this thread's model provider from `fake` to
+            // `fake2` on resume.\n\nCheck … any CODEX_CONFIG override." (live).
+            // Unrecognized, that fell to the `session/new` fallback and rebound
+            // the row to an empty session on the new provider; now
+            // `codex_thread_provider_refused` reads it as `provider_mismatch`,
+            // and the banner quotes only the sentence naming both providers.
+            //
+            // (fff) Inert or not adopted. #778 lists session `configOptions`
+            // model, reasoning effort, mode, collaboration mode (2.7.0: mode,
+            // collaboration mode, model, effort); codeg ranks them itself
+            // (`src/lib/session-settings.ts`). #771 serves MCP over the ACP
+            // connection (`initialize` now says `mcpCapabilities.acp: true`
+            // once codex's `mcp_2026_07_28` feature checks out); codeg keeps
+            // codeg-mcp on stdio, which every agent shares, and the bridge
+            // takes only MCP 2026-07-28 servers. #777's background list and
+            // `terminal/cancel`, the replay boundaries and keyed prompt ids are
+            // ACP v2 only; so is the new `plan_removed` after an emptied
+            // checklist, which a v1 client still gets as a `plan` with no
+            // entries (codeg's plan card then draws nothing). #742 (deeply nested JSON) and per-thread
+            // `CODEX_CONFIG` MCP tables (now kept beside the session's servers)
+            // need nothing from codeg. In codex 0.170 itself the rollout gains
+            // only metadata (`history_sequence`, `account_scoped`, …) and a
+            // developer-message part, all ignored by the parser, and every
+            // `config.toml` key codeg writes keeps its shape.
             distribution: AgentDistribution::Npx {
-                version: "2.7.0",
-                package: "@agentclientprotocol/codex-acp@2.7.0",
+                version: "2.8.0",
+                package: "@agentclientprotocol/codex-acp@2.8.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -9687,8 +9742,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.7.0",
-            "@agentclientprotocol/codex-acp@2.7.0",
+            "2.8.0",
+            "@agentclientprotocol/codex-acp@2.8.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));

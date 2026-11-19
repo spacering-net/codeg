@@ -9981,7 +9981,9 @@ async fn run_connection(
                             // in `details`, which names both providers; the
                             // banner quotes that rather than the error dump.
                             let message = if code == "provider_mismatch" {
-                                error_details_text(&e).unwrap_or(err_str)
+                                error_details_text(&e)
+                                    .map(|details| codex_provider_refusal_text(&details).to_string())
+                                    .unwrap_or(err_str)
                             } else {
                                 err_str
                             };
@@ -14118,6 +14120,11 @@ fn error_details_text(e: &agent_client_protocol::Error) -> Option<String> {
 /// * "This chat’s model provider settings no longer match your organization’s
 ///   requirements. …"
 ///
+/// codex 0.170 (codex-acp 2.8.0) refuses the resume itself earlier, while it
+/// loads the thread's config, in a sentence of its own wrapped in the config
+/// error ([`CODEX_PROVIDER_CHANGE_REFUSAL`]); the four above stay in the
+/// binary for the other paths.
+///
 /// The session is intact: switching the provider back opens it, which is why
 /// this must not fall through to `session/new`. That would rebind the row to an
 /// empty session on the new provider and drop the only pointer to the history.
@@ -14127,6 +14134,35 @@ fn codex_thread_provider_refused(message: &str) -> bool {
             || message.contains("which is no longer configured")
             || message.contains("but your organization requires")))
         || message.contains("This chat\u{2019}s model provider settings no longer match")
+        || message.contains(CODEX_PROVIDER_CHANGE_REFUSAL)
+}
+
+/// The start of codex 0.170's resume refusal (`app-server/src/config_manager.rs`),
+/// which codex-acp 2.8.0 hands on in `data.details` as
+///
+/// "failed to load configuration: Cannot change this thread's model provider
+/// from `fake` to `fake2` on resume.\n\nCheck /…/.codex and project .codex
+/// directories, especially their config.toml files, or any CODEX_CONFIG
+/// override."
+///
+/// (measured live: a thread made on provider `fake`, reopened after
+/// config.toml moved to `fake2`, by `session/load` and `session/resume` alike).
+const CODEX_PROVIDER_CHANGE_REFUSAL: &str = "Cannot change this thread's model provider from ";
+
+/// The words the `provider_mismatch` banner quotes: codex's sentence naming
+/// both providers. codex 0.170 wraps it in a config-load error whose advice
+/// (check config.toml and `CODEX_CONFIG`) points away from the fix the banner
+/// gives (switch the provider back in codeg's settings), so only the sentence
+/// is kept; the 0.166 sentences are the whole `details` already.
+fn codex_provider_refusal_text(details: &str) -> &str {
+    let Some(start) = details.find(CODEX_PROVIDER_CHANGE_REFUSAL) else {
+        return details;
+    };
+    let sentence = &details[start..];
+    match sentence.find(" on resume.") {
+        Some(end) => &sentence[..end + " on resume.".len()],
+        None => sentence.lines().next().unwrap_or(sentence),
+    }
 }
 
 /// [`classify_session_load_failure`] for the error itself: the structured
@@ -31439,6 +31475,31 @@ mod tests {
                 "{details}"
             );
         }
+        // codex 0.170 (codex-acp 2.8.0), measured live the same way: its own
+        // refusal, wrapped in the config-load error. The banner keeps only the
+        // sentence naming both providers.
+        let codex_0_170 = "failed to load configuration: Cannot change this thread's model \
+             provider from `fake` to `fake2` on resume.\n\nCheck /h/.codex and project .codex \
+             directories, especially their config.toml files, or any CODEX_CONFIG override.";
+        assert_eq!(
+            classify_session_load_error(&error(codex_0_170)),
+            Some("provider_mismatch")
+        );
+        assert_eq!(
+            codex_provider_refusal_text(codex_0_170),
+            "Cannot change this thread's model provider from `fake` to `fake2` on resume."
+        );
+        // Without the closing words, the sentence's own line; the 0.166
+        // sentences pass through whole.
+        assert_eq!(
+            codex_provider_refusal_text(
+                "x: Cannot change this thread's model provider from `a` to `b`\nmore"
+            ),
+            "Cannot change this thread's model provider from `a` to `b`"
+        );
+        let codex_0_166 =
+            "This chat uses a, but your current provider is b. Switch to a to continue.";
+        assert_eq!(codex_provider_refusal_text(codex_0_166), codex_0_166);
         // Nothing else reads as one: a chat that merely mentions a provider.
         assert_eq!(
             classify_session_load_error(&error("This chat uses a lot of tokens")),

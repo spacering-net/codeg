@@ -4725,7 +4725,7 @@
     "agentTypeRequired": "에이전트 유형을 선택하세요.",
     "agentTypeImmutableHint": "에이전트 유형은 생성 후 변경할 수 없습니다.",
     "model": "모델",
-    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6.1-terra",
+    "modelPlaceholderCodex": "gpt-6.2-sol / gpt-6.2-astra",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "메인 모델",
     "claudeReasoningModel": "추론 모델 (사고)",
