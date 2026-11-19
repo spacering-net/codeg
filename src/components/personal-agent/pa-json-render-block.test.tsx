@@ -754,6 +754,41 @@ describe("an assistant's card: a list", () => {
     __resetRosterForTests()
   })
 
+  it("sets the card's title off as its header, a part's heading close over what it heads", () => {
+    const src = [
+      line({ op: "add", path: "/root", value: "main" }),
+      el("main", {
+        type: "Card",
+        props: { title: "Morning brief" },
+        children: ["needs", "text", "inner"],
+      }),
+      el("needs", {
+        type: "Heading",
+        props: { text: "Needs you", level: "h3" },
+        children: [],
+      }),
+      el("text", { type: "Text", props: { text: "x" }, children: [] }),
+      el("inner", {
+        type: "Card",
+        props: { title: "Inside" },
+        children: [],
+      }),
+    ].join("\n")
+    const { container } = draw(src)
+    const [outer, inner] = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-slot="card"]')
+    )
+    // Its title a band of its own, a hairline under it.
+    expect(outer.className).toContain("[&>[data-slot=card-header]]:border-b")
+    expect(outer.className).toContain("[&>[data-slot=card-header]]:pb-3")
+    // A part's heading half the card's gap over what it heads.
+    expect(outer.className).toContain(
+      "[&>[data-slot=card-content]>:is(h1,h2,h3,h4)+*]:-mt-1.5"
+    )
+    // A card inside it is one thing on it: no header band.
+    expect(inner.className).not.toContain("border-b")
+  })
+
   it("draws a line and the button that opens its thing as a row, not loose under it", () => {
     const src = [
       line({ op: "add", path: "/root", value: "main" }),

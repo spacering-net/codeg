@@ -389,15 +389,19 @@ function PaLink(ctx: BaseComponentProps<ShadcnProps<"Link">>) {
 /** A card's depth: the reply's own card is 1, a card inside it 2. */
 const CardDepth = createContext(0)
 
-/** The reply's card, as the bubble's other surfaces are spaced: its title,
- *  then its parts — a part's heading set apart from the part before, none
- *  over the first. A card inside it is one thing on it: the list items'
- *  wash, tighter, with a smaller title. */
+/** The reply's card, as the bubble's other surfaces are spaced: its title
+ *  its header — a band of its own, a hairline under it, as a native card's
+ *  small heading is — then its parts: a part's heading set apart from the
+ *  part before, none over the first, and close over what it heads (half
+ *  the card's gap), so it reads as that part's. A card inside it is one
+ *  thing on it: the list items' wash, tighter, with a smaller title. */
 const OUTER_CARD = cn(
   "gap-4 py-4",
   "[&>[data-slot=card-header]]:px-4 [&>[data-slot=card-content]]:px-4",
+  "[&>[data-slot=card-header]]:border-b [&>[data-slot=card-header]]:border-border/60 [&>[data-slot=card-header]]:pb-3",
   "[&_[data-slot=card-content]_:is(h1,h2,h3,h4)]:mt-0",
-  "[&>[data-slot=card-content]>:is(h1,h2,h3,h4):not(:first-child)]:mt-2"
+  "[&>[data-slot=card-content]>:is(h1,h2,h3,h4):not(:first-child)]:mt-2",
+  "[&>[data-slot=card-content]>:is(h1,h2,h3,h4)+*]:-mt-1.5"
 )
 const INNER_CARD = cn(
   "gap-2 rounded-xl border-transparent bg-(--pa-inset) py-3",
