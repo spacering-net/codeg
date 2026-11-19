@@ -1,3 +1,5 @@
+import { setFlagsFromString } from "node:v8"
+import { runInNewContext } from "node:vm"
 import { describe, expect, it, vi } from "vitest"
 
 import {
@@ -306,6 +308,25 @@ describe("buildActivity on a live turn", () => {
     })
     expect(settled.steps[0]).toBe(first.steps[0])
     expect(settled.items[0]).toBe(first.items[0])
+  })
+
+  it("does not keep a released reply's tool output reachable", async () => {
+    // The in-process `gc` behind --expose-gc, for this worker only.
+    setFlagsFromString("--expose-gc")
+    const gc = runInNewContext("gc") as () => void
+    const build = (index: number) => {
+      const part = completedTool(`released-${index}`)
+      buildActivity([part], { isStreaming: false })
+      return new WeakRef(part)
+    }
+    // Fewer replies than the index holds: a strong index keeps every one.
+    const released = Array.from({ length: 4 }, (_, i) => build(i))
+    for (let i = 0; i < 8; i++) {
+      // A WeakRef keeps its target until the job that made it has ended.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      gc()
+    }
+    expect(released.filter((ref) => ref.deref() !== undefined)).toHaveLength(0)
   })
 
   it("rebuilds across different parts arrays when WeakRef is unavailable", () => {
