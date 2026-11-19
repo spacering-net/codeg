@@ -289,6 +289,18 @@ describe("extractLatestPlanEntriesFromMessages — Claude Code Task tools", () =
         assistant("a40", update("1", { description: "More detail" })),
       ])
     ).toEqual([])
+    // …but its labels are kept for the update that does.
+    expect(
+      extractLatestPlanEntriesFromMessages([
+        assistant(
+          "a40",
+          update("1", { subject: "Fix login", activeForm: "Fixing login" })
+        ),
+        assistant("a41", update("1", { status: "in_progress" })),
+      ])
+    ).toEqual([
+      { content: "Fixing login", status: "in_progress", priority: "medium" },
+    ])
   })
 
   it("lets TaskList replace the accumulated list", () => {

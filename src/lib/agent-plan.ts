@@ -105,9 +105,11 @@ type TaskOp =
     }
   | { kind: "list"; tasks: { id: string; subject: string; status: string }[] }
 
+// `status` is absent only for a task seen solely through updates that never
+// said its status (see `applyTaskOp`): it is remembered, not shown.
 type TaskState = Map<
   string,
-  { subject: string; status: string; activeForm?: string }
+  { subject: string; status?: string; activeForm?: string }
 >
 
 function parseJsonRecord(input: string | null): Record<string, unknown> | null {
@@ -226,8 +228,8 @@ function applyTaskOp(state: TaskState, op: TaskOp) {
     // A task whose TaskCreate is not in the messages — a reopened long session
     // loads only its latest turns until older ones are paged in — still
     // counts once an update states its status: named by what it is doing when
-    // the update says, else by its id, as Claude Code itself names it.
-    if (!status) return
+    // the update says, else by its id, as Claude Code itself names it. Until
+    // then its labels are kept but it is not shown: it may be done already.
     const subject = op.subject ?? existing?.subject ?? `Task #${op.id}`
     state.set(op.id, {
       subject,
@@ -254,14 +256,20 @@ function taskStateToEntries(state: TaskState): PlanEntryInfo[] {
   if (tasks.every(([id]) => /^\d+$/.test(id))) {
     tasks.sort(([a], [b]) => Number(a) - Number(b))
   }
-  return tasks.map(([, task]) => ({
-    content:
-      task.status === "in_progress" && task.activeForm
-        ? task.activeForm
-        : task.subject,
-    status: task.status,
-    priority: "medium",
-  }))
+  return tasks.flatMap(([, task]) =>
+    task.status
+      ? [
+          {
+            content:
+              task.status === "in_progress" && task.activeForm
+                ? task.activeForm
+                : task.subject,
+            status: task.status,
+            priority: "medium",
+          },
+        ]
+      : []
+  )
 }
 
 // What one message says about the plan: its latest plan (and the part it is
