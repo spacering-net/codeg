@@ -1,3 +1,5 @@
+/// <reference lib="es2021.weakref" />
+
 /**
  * `buildActivity`: a reply's adapted parts → the activity timeline's view
  * model (steps, grouped rows, trailing answer, header summary).
@@ -382,10 +384,9 @@ function collectSteps(
   return steps
 }
 
-/** The last model built for each reply, by the anchor its keys carry — what
- *  its next rebuild keeps from (see `Previous`). A few replies at a time: the
- *  ones streaming now, and those just handed over to history. */
-const lastBuilt = new Map<string, ActivityModel>()
+/** Reuse a recent model while a view or its parts still owns it. This index
+ *  must not keep tool output alive after the original owner releases it. */
+const lastBuilt = new Map<string, WeakRef<ActivityModel>>()
 const LAST_BUILT_MAX = 8
 
 function buildActivityUncached(
@@ -398,7 +399,7 @@ function buildActivityUncached(
     : { body: parts, trailing: [] }
   const anchor = replyAnchor(body)
   const slot = `${splitAnswer ? "reply" : "all"}:${anchor}`
-  const last = lastBuilt.get(slot)
+  const last = lastBuilt.get(slot)?.deref()
   const previous = last ? previousOf(last) : null
   const steps = linkLaterDelegationPolls(
     collectSteps(body, isStreaming, anchor, previous)
@@ -418,10 +419,12 @@ function buildActivityUncached(
         ? { ...summary, recoveredKeys: previous.recoveredKeys }
         : summary,
   }
-  lastBuilt.delete(slot)
-  lastBuilt.set(slot, model)
-  if (lastBuilt.size > LAST_BUILT_MAX) {
-    lastBuilt.delete(lastBuilt.keys().next().value!)
+  if (typeof WeakRef === "function") {
+    lastBuilt.delete(slot)
+    lastBuilt.set(slot, new WeakRef(model))
+    if (lastBuilt.size > LAST_BUILT_MAX) {
+      lastBuilt.delete(lastBuilt.keys().next().value!)
+    }
   }
   return model
 }
