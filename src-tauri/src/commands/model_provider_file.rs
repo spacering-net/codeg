@@ -654,7 +654,7 @@ mod tauri_commands {
     }
 
     fn tauri_emitter(app: tauri::AppHandle) -> EventEmitter {
-        EventEmitter::Tauri(app)
+        EventEmitter::from_app(&app)
     }
 
     #[tauri::command]

@@ -3000,6 +3000,7 @@ async fn the_engine_reads_each_agents_environment_from_its_settings() {
             enabled: true,
             env_json: Some(r#"{"CODEX_HOME":"/srv/team-codex"}"#.to_string()),
             model_provider_id: None,
+            model_source: "native".to_string(),
         },
     )
     .await

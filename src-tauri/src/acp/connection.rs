@@ -36518,7 +36518,7 @@ mod tests {
             ),
         );
 
-        let (reason, report) = finish_turn_reason(&probe, "end_turn", &tail);
+        let (reason, report) = finish_turn_reason(&probe, "end_turn", &tail, None);
         assert_eq!(reason, "empty");
         let report = report.expect("an empty turn is diagnosed");
         assert_eq!(report.cause, EmptyTurnCause::HookStopped);
@@ -36545,7 +36545,7 @@ mod tests {
 
         // A turn that did reply is not empty, whatever it warned about.
         probe.saw_agent_output = true;
-        assert!(finish_turn_reason(&probe, "end_turn", &tail).1.is_none());
+        assert!(finish_turn_reason(&probe, "end_turn", &tail, None).1.is_none());
     }
 
     #[test]
