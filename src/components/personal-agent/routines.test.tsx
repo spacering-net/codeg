@@ -410,6 +410,21 @@ describe("the details' routines", () => {
       lastRun.querySelector('[data-pa-routine-outcome="silent"]')
     ).toBeTruthy()
     expect(lastRun.textContent).toContain("3 runs in all")
+    // How it went sits on the line's baseline as the words round it do:
+    // inline, its dot on their middle.
+    const outcome = lastRun.querySelector<HTMLElement>(
+      "[data-pa-routine-outcome]"
+    )!
+    expect(outcome.className).not.toMatch(/(^| )(inline-)?flex( |$)/)
+    expect(outcome.firstElementChild!.className).toContain("align-middle")
+    // Its controls a pair of one size: the small switch, the menu's dots
+    // as tall as it.
+    const sw = screen.getByRole("switch", { name: "Runs" })
+    expect(sw.getAttribute("data-size")).toBe("sm")
+    expect(sw.className).toContain("h-4")
+    expect(
+      part.querySelector("[data-pa-routine-menu] svg")!.getAttribute("class")
+    ).toContain("size-4")
     expect(lastRun.textContent).toContain("no change")
     // Running: no pill saying it is paused.
     expect(part.querySelector("[data-pa-routine-state]")).toBeNull()

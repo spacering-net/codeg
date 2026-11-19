@@ -289,8 +289,11 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
             ) : null}
           </div>
           {readOnly ? null : (
-            <span className="relative z-10 -me-1 flex h-5 shrink-0 items-center gap-0.5">
+            // A pair of one size: the small switch and the menu's dots each
+            // as tall as a line of small text, centred on the name's line.
+            <span className="relative z-10 -me-1.5 flex h-5 shrink-0 items-center gap-1">
               <Switch
+                size="sm"
                 checked={r.enabled}
                 disabled={busy != null}
                 onCheckedChange={(on) => void act(on ? "resume" : "pause")}
@@ -303,13 +306,13 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
                   <Button
                     size="icon-xs"
                     variant="ghost"
-                    className="text-muted-foreground"
+                    className="text-muted-foreground hover:text-foreground"
                     disabled={busy != null}
                     aria-label={t("more")}
                     title={t("more")}
                     data-pa-routine-menu
                   >
-                    <MoreHorizontal aria-hidden />
+                    <MoreHorizontal aria-hidden className="size-4" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-36">

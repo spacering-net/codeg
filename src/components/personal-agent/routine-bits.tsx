@@ -115,18 +115,22 @@ const OUTCOME_TONE: Record<RoutineRunOutcome, { dot: string; text: string }> = {
 }
 
 /** How a run went, in a word in a quiet line: a dot of its colour, the
- *  word in it when it says something (a report, a failure). */
+ *  word in it when it says something (a report, a failure). Inline, as the
+ *  words round it are: on their baseline, the dot on their middle. */
 export function OutcomeWord({ outcome }: { outcome: RoutineRunOutcome }) {
   const t = useTranslations("PersonalAgent.routines")
   const tone = OUTCOME_TONE[outcome] ?? OUTCOME_TONE.silent
   return (
     <span
-      className={cn("inline-flex items-center gap-1", tone.text)}
+      className={cn("whitespace-nowrap", tone.text)}
       data-pa-routine-outcome={outcome}
     >
       <span
         aria-hidden
-        className={cn("size-1.5 shrink-0 rounded-full", tone.dot)}
+        className={cn(
+          "me-1 inline-block size-1.5 rounded-full align-middle",
+          tone.dot
+        )}
       />
       {t(`outcome.${outcome}` as "outcome.running")}
     </span>
