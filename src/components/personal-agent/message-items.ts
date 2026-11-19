@@ -43,7 +43,11 @@ export const TIME_GAP_MS = 5 * 60 * 1000
  *  (whoever spoke it), or after the other side — under the actions the last
  *  message there shows on hover. Nothing under a time line, which keeps its
  *  own. */
-export type MessageGap = "near" | "side"
+/** The room over a message: `near` under another of its side, `card` the
+ *  same when it or the one above is a card of its own (a card does not
+ *  join a run of bubbles, and two cards that touch read as one), `side`
+ *  under the other side's. */
+export type MessageGap = "near" | "card" | "side"
 
 interface ItemBase {
   key: string
@@ -171,6 +175,14 @@ export function isLine(item: MessageItem | undefined): boolean {
   return item?.kind === "time" || item?.kind === "exchange"
 }
 
+/** A message that is a card of its own, no bubble (`CardMessage`): the news
+ *  of a work, a native card, a request shown for another assistant. */
+function isCardMessage(item: MessageItem): boolean {
+  return (
+    item.kind === "event" || item.kind === "notice" || item.kind === "mirror"
+  )
+}
+
 /** A request row shown here for another assistant (`mirror_of`). */
 export function isMirror(row: TimelineRow): boolean {
   return row.data?.mirror_of != null
@@ -248,7 +260,9 @@ export function buildMessageItems(rows: readonly TimelineRow[]): MessageItem[] {
       last.item.kind === "exchange" ||
       sideOf(last.item) !== sideOf(item)
         ? "side"
-        : "near"
+        : isCardMessage(item) || isCardMessage(last.item)
+          ? "card"
+          : "near"
     if (
       item.kind !== "owner" &&
       item.kind !== "exchange" &&

@@ -365,7 +365,11 @@ describe("an acceptance card", () => {
     // The card in bands: what it is, what the check found, its buttons, the
     // rounds before it.
     const sheet = screen.getByText("之前几轮").closest("[data-pa-surface]")!
-    const parts = [...sheet.children]
+    // A card of its own, no bubble round it: its heading its first line.
+    expect(sheet.hasAttribute("data-bubble")).toBe(true)
+    expect(sheet.closest(".pa-agent-bubble")).toBeNull()
+    expect(sheet.children[0].hasAttribute("data-pa-sheet-head")).toBe(true)
+    const parts = [...sheet.children].slice(1)
     expect(parts.map((p) => p.hasAttribute("data-pa-sheet-actions"))).toEqual([
       false,
       false,

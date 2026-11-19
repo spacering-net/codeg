@@ -323,5 +323,13 @@ describe("MirrorCard", () => {
     expect(
       screen.getByText("Answered").closest("[data-pa-sheet-part]")
     ).not.toBeNull()
+    // Settled: a line on its tone, where an answer was asked for.
+    expect(
+      screen.getByText("Answered").closest("[data-pa-mirror-settled]")
+    ).not.toBeNull()
+    // A card of its own: no bubble round it.
+    const card = screen.getByText("Answered").closest("[data-pa-card-message]")!
+    expect(card).not.toBeNull()
+    expect(card.closest(".pa-agent-bubble")).toBeNull()
   })
 })

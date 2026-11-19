@@ -23,6 +23,8 @@ import { useTranslations } from "next-intl"
 import {
   ChevronDown,
   ChevronRight,
+  CircleCheck,
+  CircleSlash,
   Compass,
   ExternalLink,
   FolderOpenDot,
@@ -66,7 +68,8 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
+import { OutcomeLine } from "./outcome-line"
 import { Stepper } from "./question-choice-card"
 import {
   DISTURB_PRESETS,
@@ -76,10 +79,12 @@ import {
 } from "./settings/pref-pages"
 import { useSettingsPatch } from "./settings/use-settings"
 import {
-  AGENT_SURFACE,
+  CardMessage,
   num,
-  PaSheet,
   SheetActions,
+  SheetField,
+  SheetFields,
+  SheetNote,
   SheetPart,
   str,
   usePageScope,
@@ -95,10 +100,10 @@ function obj(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" ? (v as Record<string, unknown>) : null
 }
 
-/** A native card's bubble, with its heading. */
+/** A native card of its own — no bubble round it — its heading the top
+ *  line of its first band; an answer that did not go through its last. */
 function MeetFrame({
   item,
-  bare = false,
   icon: Icon,
   heading,
   text,
@@ -109,12 +114,10 @@ function MeetFrame({
   icon: LucideIcon
   heading: string
   text: string
-  /** An answer that did not go through: under the card. */
+  /** An answer that did not go through: the card's last band. */
   error?: string | null
-  /** Its sheet's parts (`SheetPart`, `SheetActions`), or its own cards. */
+  /** Its parts (`SheetPart`, `SheetActions`). */
   children: React.ReactNode
-  /** Its own cards inside (the promises' groups): not on a sheet. */
-  bare?: boolean
 }) {
   const row = item.row
   return (
@@ -126,23 +129,19 @@ function MeetFrame({
       roomy
       actions={{ rowId: row.id, text, at: row.created_at }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-notice={str(row.data, "state") ?? "open"}
         data-pa-meet={str(row.data, "purpose") ?? str(row.data, "notice")}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground"
-        )}
+        head={
+          <>
+            <Icon aria-hidden />
+            <span className="font-medium">{heading}</span>
+          </>
+        }
       >
-        <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Icon className="size-3.5 shrink-0" aria-hidden />
-          <span className="font-medium">{heading}</span>
-        </p>
-        {bare ? children : <PaSheet>{children}</PaSheet>}
+        {children}
         <Failed error={error} />
-      </div>
+      </CardMessage>
     </MessageRow>
   )
 }
@@ -169,9 +168,11 @@ function useAct(noticeId: number) {
 
 function Failed({ error }: { error: string | null }) {
   return error ? (
-    <p role="alert" className="mt-2 text-xs break-words text-destructive">
-      {error}
-    </p>
+    <SheetNote>
+      <p role="alert" className="break-words text-destructive">
+        {error}
+      </p>
+    </SheetNote>
   ) : null
 }
 
@@ -256,49 +257,56 @@ export function MeetNameCard({ item }: { item: NoticeItem }) {
       roomy
       actions={{ rowId: row.id, text: line, at: row.created_at }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-notice={state}
         data-pa-meet="meet"
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground"
-        )}
+        head={
+          <>
+            <Handshake aria-hidden />
+            <span className="font-medium">{t("heading")}</span>
+          </>
+        }
       >
-        <button
-          type="button"
-          onClick={() => setUnfolded((u) => !u)}
-          aria-expanded={unfolded}
-          className="flex w-full items-center gap-1.5 text-start text-sm"
-          data-pa-choice-answered
-        >
+        <SheetPart className="flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => setUnfolded((u) => !u)}
+            aria-expanded={unfolded}
+            className="flex w-full items-start gap-1.5 rounded-sm text-start text-sm leading-5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            data-pa-choice-answered
+          >
+            {state === "skipped" ? (
+              <CircleSlash
+                className="mt-[0.1875rem] size-3.5 shrink-0 text-muted-foreground"
+                aria-hidden
+              />
+            ) : (
+              <CircleCheck
+                className="mt-[0.1875rem] size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+                aria-hidden
+              />
+            )}
+            <span className="min-w-0 flex-1 break-words">{line}</span>
+            {unfolded ? (
+              <ChevronDown
+                className="mt-[0.1875rem] size-3.5 shrink-0 text-muted-foreground"
+                aria-hidden
+              />
+            ) : (
+              <ChevronRight
+                className="mt-[0.1875rem] size-3.5 shrink-0 text-muted-foreground rtl:rotate-180"
+                aria-hidden
+              />
+            )}
+          </button>
           {unfolded ? (
-            <ChevronDown
-              className="size-3.5 shrink-0 text-muted-foreground"
-              aria-hidden
-            />
-          ) : (
-            <ChevronRight
-              className="size-3.5 shrink-0 text-muted-foreground rtl:rotate-180"
-              aria-hidden
-            />
-          )}
-          <span className="min-w-0 flex-1 break-words">{line}</span>
-        </button>
-        {unfolded ? (
-          <dl className="mt-2 space-y-1 text-xs text-muted-foreground">
-            <div>
-              <dt className="inline">{t("call")} </dt>
-              <dd className="inline text-foreground">{call ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="inline">{t("name")} </dt>
-              <dd className="inline text-foreground">{name}</dd>
-            </div>
-          </dl>
-        ) : null}
-      </div>
+            <SheetFields className="ps-5">
+              <SheetField label={t("call")}>{call ?? "—"}</SheetField>
+              <SheetField label={t("name")}>{name}</SheetField>
+            </SheetFields>
+          ) : null}
+        </SheetPart>
+      </CardMessage>
     </MessageRow>
   )
 }
@@ -422,11 +430,14 @@ export function ConnectCard({ item }: { item: NoticeItem }) {
           <p>{t("about2")}</p>
         </div>
         {open ? null : (
-          <p className="text-xs text-muted-foreground" data-pa-meet-settled>
+          <OutcomeLine
+            tone={state === "connected" ? "done" : "off"}
+            data-pa-meet-settled
+          >
             {state === "connected"
               ? t("connected", { projects: connected.join(t("joiner")) })
               : t("skipped")}
-          </p>
+          </OutcomeLine>
         )}
       </SheetPart>
       {open ? (
@@ -624,18 +635,30 @@ export function StarterCard({ item }: { item: NoticeItem }) {
         <>
           {/* The lead, and where it is. */}
           <SheetPart className="flex flex-col items-start gap-1">
-            <p className="text-sm break-words" data-pa-starter-lead>
-              {state === "handed"
-                ? t("handed", { what: words?.line ?? row.body })
-                : state === "dismissed"
-                  ? t("dismissed", { what: words?.line ?? row.body })
-                  : (words?.line ?? row.body)}
-            </p>
+            {state === "handed" || state === "dismissed" ? (
+              <OutcomeLine
+                tone={state === "handed" ? "done" : "off"}
+                className="text-sm"
+                data-pa-starter-lead
+              >
+                {state === "handed"
+                  ? t("handed", { what: words?.line ?? row.body })
+                  : t("dismissed", { what: words?.line ?? row.body })}
+              </OutcomeLine>
+            ) : (
+              <p
+                className="text-sm leading-5 font-medium break-words"
+                data-pa-starter-lead
+              >
+                {words?.line ?? row.body}
+              </p>
+            )}
             {url ? (
               <button
                 type="button"
                 onClick={() => void openUrl(url)}
-                className="inline-flex max-w-full items-center gap-1 rounded-sm text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                className="inline-flex max-w-full items-center gap-1 rounded-sm font-mono text-[0.6875rem] text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                dir="ltr"
               >
                 <ExternalLink className="size-3 shrink-0" aria-hidden />
                 <span className="truncate">{url}</span>
@@ -706,11 +729,9 @@ export const PROMISES: ReadonlyArray<{
   { key: "presence", on: "on", off: "off" },
 ]
 
-/** A group of the card's on the bubble: the card's colour and its edge, as
- *  an assistant's card is drawn — its buttons their own colours too
- *  (`data-pa-surface`), not raised off the bubble's grey. */
-const MEET_CARD =
-  "rounded-xl border border-border/70 bg-card text-card-foreground"
+/** A settings group as a band of the card: no frame or wash of its own,
+ *  its rows the card's room from its edge, a hairline between them. */
+const FLAT_GROUP = "rounded-none border-0 bg-transparent"
 
 export function PromisesCard({ item }: { item: NoticeItem }) {
   const t = useTranslations("PersonalAgent.meet.promises")
@@ -737,13 +758,17 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
 
   const level = account ? disturbOf(account) : "standard"
   const done = state === "done"
-  // As the settings write them — a group's rows on one surface, a hairline
-  // between them, the switch on each row's end — each group a card on the
-  // bubble, as an assistant's card is: white (the card's colour), its edge.
-  const group = MEET_CARD
-  const body = account ? (
-    <div className="flex flex-col gap-2">
-      <SettingCard className={group} data-pa-surface data-pa-meet-level>
+  // One card, as the settings write it — how much it may disturb, then the
+  // switches of what it does unasked (each a row, a hairline between, the
+  // switch at its end), then its buttons: the ways on — a team, the
+  // preferences, the desktop companion — secondary, [Done] at the end.
+  const groups = account ? (
+    <>
+      <SettingCard
+        className={cn(FLAT_GROUP, "[&>*]:px-3.5")}
+        data-pa-surface
+        data-pa-meet-level
+      >
         <PresetPicker
           item="disturb_level"
           levels={["quiet", "standard", "more"] as const}
@@ -756,13 +781,14 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
           onPick={(l) => void patch([{ key: "prefs.disturb_level", value: l }])}
         />
       </SettingCard>
-      <SettingCard className={group} data-pa-surface data-pa-meet-promises>
+      <SettingCard className={FLAT_GROUP} data-pa-surface data-pa-meet-promises>
         {PROMISES.map(({ key, on, off }) => {
           const id = `pa-meet-promise-${row.id}-${key}`
           const value = account.prefs[key] as unknown as string
           return (
             <div key={key} data-pa-promise={key}>
               <SettingRow
+                className="px-3.5"
                 icon={PREF_ICONS[key]}
                 title={t(`items.${key}.title` as "items.proactive.title")}
                 description={t(`items.${key}.hint` as "items.proactive.hint")}
@@ -784,67 +810,62 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
           )
         })}
       </SettingCard>
-    </div>
-  ) : (
-    <p className="text-xs text-muted-foreground">{t("unavailable")}</p>
-  )
-  // Its actions on a card of their own under the groups: the ways on — a
-  // team, the preferences, the desktop companion — as secondary buttons,
-  // as a card's are, and [Done] at the end.
-  const actions = account ? (
-    <div
-      className={cn(
-        MEET_CARD,
-        "mt-2 flex flex-wrap items-center gap-2 px-3.5 py-3"
-      )}
-      data-pa-surface
-      data-pa-meet-actions
-    >
-      <Button
-        size="sm"
-        variant="secondary"
-        disabled={readOnly || busy != null || suggested}
-        onClick={() => void act("team")}
-        data-pa-meet-team
-      >
-        {busy === "team" ? (
-          <SyncedSpinner small className="size-3.5" />
-        ) : (
-          <Users aria-hidden />
-        )}
-        {suggested ? t("teamSuggested") : t("team")}
-      </Button>
-      <Button
-        size="sm"
-        variant="secondary"
-        onClick={() => openSettings("proactive")}
-        data-pa-meet-prefs
-      >
-        <Settings2 aria-hidden />
-        {t("prefs")}
-      </Button>
-      {desktop ? (
-        <Button size="sm" variant="secondary" onClick={summon} data-pa-meet-pet>
-          <PawPrint aria-hidden />
-          {t("pet")}
-        </Button>
-      ) : null}
-      {!done ? (
+      <SheetActions data-pa-meet-actions>
         <Button
           size="sm"
-          className="ms-auto min-w-20"
-          disabled={readOnly || busy != null}
-          onClick={() => void act("done")}
-          data-pa-meet-done
+          variant="secondary"
+          disabled={readOnly || busy != null || suggested}
+          onClick={() => void act("team")}
+          data-pa-meet-team
         >
-          {busy === "done" ? (
+          {busy === "team" ? (
             <SyncedSpinner small className="size-3.5" />
-          ) : null}
-          {t("done")}
+          ) : (
+            <Users aria-hidden />
+          )}
+          {suggested ? t("teamSuggested") : t("team")}
         </Button>
-      ) : null}
-    </div>
-  ) : null
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => openSettings("proactive")}
+          data-pa-meet-prefs
+        >
+          <Settings2 aria-hidden />
+          {t("prefs")}
+        </Button>
+        {desktop ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={summon}
+            data-pa-meet-pet
+          >
+            <PawPrint aria-hidden />
+            {t("pet")}
+          </Button>
+        ) : null}
+        {!done ? (
+          <Button
+            size="sm"
+            className="ms-auto min-w-20"
+            disabled={readOnly || busy != null}
+            onClick={() => void act("done")}
+            data-pa-meet-done
+          >
+            {busy === "done" ? (
+              <SyncedSpinner small className="size-3.5" />
+            ) : null}
+            {t("done")}
+          </Button>
+        ) : null}
+      </SheetActions>
+    </>
+  ) : (
+    <SheetPart>
+      <p className="text-xs text-muted-foreground">{t("unavailable")}</p>
+    </SheetPart>
+  )
 
   return (
     <MeetFrame
@@ -853,43 +874,49 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
       heading={t("heading")}
       text={t("heading")}
       error={failed}
-      bare
     >
       {done && !unfolded ? (
-        <button
-          type="button"
-          onClick={() => setUnfolded(true)}
-          className="flex w-full items-center gap-1.5 text-start text-sm"
-          data-pa-meet-folded
-        >
-          <ChevronRight
-            className="size-3.5 shrink-0 text-muted-foreground rtl:rotate-180"
-            aria-hidden
-          />
-          <span className="min-w-0 flex-1 break-words">
-            {t("folded", {
-              level: tLevel(
-                `disturb_level.${level}` as "disturb_level.standard"
-              ),
-            })}
-          </span>
-        </button>
+        <SheetPart>
+          <button
+            type="button"
+            onClick={() => setUnfolded(true)}
+            className="flex w-full items-start gap-1.5 rounded-sm text-start text-sm leading-5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            data-pa-meet-folded
+          >
+            <CircleCheck
+              className="mt-[0.1875rem] size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+              aria-hidden
+            />
+            <span className="min-w-0 flex-1 break-words">
+              {t("folded", {
+                level: tLevel(
+                  `disturb_level.${level}` as "disturb_level.standard"
+                ),
+              })}
+            </span>
+            <ChevronRight
+              className="mt-[0.1875rem] size-3.5 shrink-0 text-muted-foreground rtl:rotate-180"
+              aria-hidden
+            />
+          </button>
+        </SheetPart>
       ) : (
         <>
-          {done ? (
-            <button
-              type="button"
-              onClick={() => setUnfolded(false)}
-              className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <ChevronDown className="size-3.5" aria-hidden />
-              {t("collapse")}
-            </button>
-          ) : (
-            <p className="mb-3 text-sm">{t("intro")}</p>
-          )}
-          {body}
-          {actions}
+          <SheetPart>
+            {done ? (
+              <button
+                type="button"
+                onClick={() => setUnfolded(false)}
+                className="flex items-center gap-1.5 rounded-sm text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                <ChevronDown className="size-3.5" aria-hidden />
+                {t("collapse")}
+              </button>
+            ) : (
+              <p className="text-sm leading-5">{t("intro")}</p>
+            )}
+          </SheetPart>
+          {groups}
         </>
       )}
     </MeetFrame>

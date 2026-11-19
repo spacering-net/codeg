@@ -236,10 +236,73 @@ export const SHEET_ROW_HOVER =
  *  (`SheetFields`), what it says, its buttons last (`SheetActions`), what
  *  came before under them (a part with a `SheetLabel`). */
 export const PA_SHEET =
-  "min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card text-card-foreground [&>*+*]:border-t [&>*+*]:border-border/60"
+  "min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card text-card-foreground [&>*+*]:border-t [&>*+*]:border-border/60 [&>[data-pa-sheet-head]+*]:border-t-0 [&>[data-pa-sheet-head]+*]:pt-1.5"
 
 export function PaSheet({ className, ...props }: React.ComponentProps<"div">) {
   return <div data-pa-surface className={cn(PA_SHEET, className)} {...props} />
+}
+
+/**
+ * A card that is a message of its own — no bubble round it: what codeg
+ * writes in the conversation (an acceptance, a suggestion, a work's news)
+ * is the card itself, its small heading (`head`: the kind's icon and what
+ * it is) the top line of its first band. A reply's padding and a bubble's
+ * grey would only frame it twice. As wide as the message's column, every
+ * card alike: one under another lines up at both edges.
+ */
+export function CardMessage({
+  head,
+  children,
+  className,
+  ...props
+}: { head?: React.ReactNode } & React.ComponentProps<"div">) {
+  return (
+    <PaSheet
+      data-bubble
+      data-pa-card-message
+      className={cn("w-full text-sm", className)}
+      {...props}
+    >
+      {head != null && head !== false ? <SheetHead>{head}</SheetHead> : null}
+      {children}
+    </PaSheet>
+  )
+}
+
+/** A card's small heading — the kind's icon, what it is, whose — the top
+ *  line of its first band, no hairline under it. */
+export function SheetHead({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-pa-sheet-head
+      className={cn(
+        "flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 px-3.5 pt-3 text-xs leading-4 text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+/** What a card says of itself after its buttons — a kind muted, an answer
+ *  that did not go through: its last band, small. */
+export function SheetNote({
+  className,
+  ...props
+}: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-pa-sheet-note
+      className={cn(
+        "flex min-w-0 flex-col gap-1 px-3.5 py-2.5 text-xs",
+        className
+      )}
+      {...props}
+    />
+  )
 }
 
 /** A band of a card: the room every part keeps from the card's edge. */

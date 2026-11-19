@@ -153,6 +153,12 @@ describe("the brief codeg wrote itself", () => {
   it("draws its parts from the materials", () => {
     const { container } = draw(card(material()))
     expect(screen.getByText("Morning brief")).toBeTruthy()
+    // The card is the message: no bubble round it, its heading its first
+    // line.
+    const self = container.querySelector("[data-pa-brief-card]")!
+    expect(self.hasAttribute("data-pa-card-message")).toBe(true)
+    expect(self.closest(".pa-agent-bubble")).toBeNull()
+    expect(self.firstElementChild?.textContent).toContain("Morning brief")
     expect(
       screen.getByText(
         "codeg wrote this from its records — the assistant couldn't write it."

@@ -18,7 +18,7 @@
 
 import { useState } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { AlarmClock } from "lucide-react"
+import { AlarmClock, Bot } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
@@ -30,12 +30,14 @@ import { cn } from "@/lib/utils"
 import { useActivityTranslate } from "./activity-text"
 import { dueWhen, humanDuration, repeatText } from "./due-text"
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
+import { OutcomeLine, type OutcomeTone } from "./outcome-line"
 import {
-  AGENT_SURFACE,
+  CardMessage,
   num,
-  PaSheet,
+  SHEET_TITLE,
   SheetActions,
+  SheetNote,
   SheetPart,
   str,
   usePageScope,
@@ -130,6 +132,16 @@ export function ReminderCard({ item }: { item: NoticeItem }) {
                 : state === "closed"
                   ? t("state.closed")
                   : null
+  // How it ended, on its tone: done, handed on or woken through; put off
+  // later; let go or past quiet.
+  const endedTone: OutcomeTone =
+    act || state === "woke"
+      ? "info"
+      : state === "snoozed"
+        ? "later"
+        : state === "dropped" || state === "expired"
+          ? "off"
+          : "done"
   const open = !act && state === "open"
   const shownError = failed ?? (open ? error : null)
   const disabled = readOnly || busy != null
@@ -145,91 +157,88 @@ export function ReminderCard({ item }: { item: NoticeItem }) {
       roomy
       actions={{ rowId: row.id, text: summary, at: row.created_at }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-notice={state}
         data-pa-reminder={act ? "act" : "notify"}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground"
-        )}
+        head={
+          <>
+            <AlarmClock aria-hidden />
+            {head.map((part, i) => (
+              <span
+                key={i}
+                className={cn(
+                  i === 0 && "font-medium",
+                  i > 0 && "before:me-1.5 before:content-['·']"
+                )}
+              >
+                {part}
+              </span>
+            ))}
+          </>
+        }
       >
-        <p className="mb-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
-          <AlarmClock className="size-3.5 shrink-0" aria-hidden />
-          {head.map((part, i) => (
-            <span
-              key={i}
-              className={cn(
-                i === 0 && "font-medium",
-                i > 0 && "before:me-1.5 before:content-['·']"
-              )}
+        {/* What it is about, and how it ended. */}
+        <SheetPart className="flex flex-col gap-1.5">
+          <p className={cn(SHEET_TITLE, "whitespace-pre-wrap")}>{summary}</p>
+          {!open && ended ? (
+            <OutcomeLine
+              tone={endedTone}
+              icon={act || state === "woke" ? Bot : undefined}
+              data-pa-reminder-state={act ? "woke" : state}
             >
-              {part}
-            </span>
-          ))}
-        </p>
-        <PaSheet>
-          {/* What it is about, and how it ended. */}
-          <SheetPart className="flex flex-col gap-1.5">
-            <p className="text-sm break-words whitespace-pre-wrap">{summary}</p>
-            {!open && ended ? (
-              <p
-                className="text-xs text-muted-foreground"
-                data-pa-reminder-state={act ? "woke" : state}
-              >
-                {ended}
-              </p>
-            ) : null}
-          </SheetPart>
-          {open ? (
-            <SheetActions>
-              <Button
-                size="sm"
-                disabled={disabled}
-                onClick={() => void answer("done")}
-                data-pa-reminder-act="done"
-              >
-                {spin("done")}
-                {t("done")}
-              </Button>
-              {SNOOZES.map((s) => (
-                <Button
-                  key={s.action}
-                  size="sm"
-                  variant="secondary"
-                  disabled={disabled}
-                  onClick={() => void answer(s.action)}
-                  data-pa-reminder-act={s.attr}
-                >
-                  {spin(s.action)}
-                  {t(s.label)}
-                </Button>
-              ))}
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={disabled}
-                onClick={() =>
-                  void answer(
-                    "hand_over",
-                    t("handOverText", { id: itemId ?? "", summary })
-                  )
-                }
-                data-pa-reminder-act="hand-over"
-              >
-                {spin("hand_over")}
-                {t("handOver")}
-              </Button>
-            </SheetActions>
+              {ended}
+            </OutcomeLine>
           ) : null}
-        </PaSheet>
-        {shownError ? (
-          <p role="alert" className="mt-2 text-xs break-words text-destructive">
-            {tn("failed", { error: shownError })}
-          </p>
+        </SheetPart>
+        {open ? (
+          <SheetActions>
+            <Button
+              size="sm"
+              disabled={disabled}
+              onClick={() => void answer("done")}
+              data-pa-reminder-act="done"
+            >
+              {spin("done")}
+              {t("done")}
+            </Button>
+            {SNOOZES.map((s) => (
+              <Button
+                key={s.action}
+                size="sm"
+                variant="secondary"
+                disabled={disabled}
+                onClick={() => void answer(s.action)}
+                data-pa-reminder-act={s.attr}
+              >
+                {spin(s.action)}
+                {t(s.label)}
+              </Button>
+            ))}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={disabled}
+              onClick={() =>
+                void answer(
+                  "hand_over",
+                  t("handOverText", { id: itemId ?? "", summary })
+                )
+              }
+              data-pa-reminder-act="hand-over"
+            >
+              {spin("hand_over")}
+              {t("handOver")}
+            </Button>
+          </SheetActions>
         ) : null}
-      </div>
+        {shownError ? (
+          <SheetNote>
+            <p role="alert" className="break-words text-destructive">
+              {tn("failed", { error: shownError })}
+            </p>
+          </SheetNote>
+        ) : null}
+      </CardMessage>
     </MessageRow>
   )
 }

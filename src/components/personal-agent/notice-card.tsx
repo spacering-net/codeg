@@ -45,14 +45,24 @@
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import {
+  ArrowLeftRight,
+  CircleAlert,
+  CircleCheck,
   CircleHelp,
+  CircleSlash,
+  History,
+  Info,
   Layers,
   Lightbulb,
+  ListTodo,
+  MessageSquareQuote,
   Moon,
-  UserPlus,
   OctagonX,
   Repeat,
   SlidersHorizontal,
+  Undo2,
+  UserPlus,
+  type LucideIcon,
 } from "lucide-react"
 
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
@@ -72,6 +82,7 @@ import type {
 import { AGENT_LABELS } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
 
 import { AcceptanceCard } from "./acceptance-card"
 import { AskCard } from "./ask-card"
@@ -91,7 +102,8 @@ import { RuleCard } from "./rule-card"
 import { MutedNote, MuteKindButton } from "./mute-kind"
 import { ChangeValue, changesOf, namesOf, useChangeText } from "./change-text"
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
+import { RowIcon, RowLines, splitLine } from "./list-row"
 import { QuoteBar } from "./quote-bar"
 import {
   ConnectCard,
@@ -106,14 +118,16 @@ import {
   PROACTIVE_ITEMS,
 } from "./settings/pref-pages"
 import {
-  AGENT_SURFACE,
   asMode,
   canOpenWork,
+  CardMessage,
   num,
-  PaSheet,
   SHEET_TITLE,
   SheetActions,
+  SheetField,
+  SheetFields,
   SheetLabel,
+  SheetNote,
   SheetPart,
   str,
   useBotName,
@@ -133,6 +147,131 @@ function obj(v: unknown): Display {
 }
 
 const INTENTS = new Set(["revise", "continue", "question", "verify"])
+
+/** How a card stands, as its heading says it: waiting on the owner, being
+ *  carried out, done, let go, undone, or not sure. */
+type Settle = "open" | "busy" | "done" | "off" | "undone" | "warn"
+
+/** A settled card's heading on its tone, its kind's icon swapped for how
+ *  it ended: done green, not sure amber, let go or undone quiet. */
+const SETTLE_TONE: Record<Settle, string> = {
+  open: "",
+  busy: "",
+  done: "text-emerald-700 dark:text-emerald-400",
+  off: "",
+  undone: "",
+  warn: "text-amber-700 dark:text-amber-400",
+}
+
+const SETTLE_ICON: Partial<Record<Settle, LucideIcon>> = {
+  done: CircleCheck,
+  off: CircleSlash,
+  undone: Undo2,
+  warn: CircleAlert,
+}
+
+/** A card's heading: its kind's icon (how it ended, once it has) and what
+ *  it says of where it stands. */
+function CardHead({
+  icon,
+  settle,
+  heading,
+}: {
+  icon: LucideIcon
+  settle: Settle
+  heading: string
+}) {
+  const Icon = SETTLE_ICON[settle] ?? icon
+  return (
+    <span
+      className={cn(
+        "inline-flex min-w-0 items-center gap-1.5",
+        SETTLE_TONE[settle]
+      )}
+      data-pa-settle={settle}
+    >
+      {settle === "busy" ? (
+        <SyncedSpinner small className="size-3.5 shrink-0" />
+      ) : (
+        <Icon aria-hidden />
+      )}
+      <span className="font-medium">{heading}</span>
+    </span>
+  )
+}
+
+/** A card's last band, when it has something to say there: that its kind
+ *  was muted from it, an answer that did not go through. */
+function NoticeFoot({
+  data,
+  error,
+}: {
+  data: Record<string, unknown> | null | undefined
+  error: string | null
+}) {
+  if (!str(data, "muted") && !error) return null
+  return (
+    <SheetNote>
+      {/* "Don't suggest these" was pressed on it (6.7). */}
+      <MutedNote data={data} className="" />
+      {error ? (
+        <p role="alert" className="break-words text-destructive">
+          {error}
+        </p>
+      ) : null}
+    </SheetNote>
+  )
+}
+
+/** A list on a card: its rows a hairline apart, none over the first or
+ *  under the last — the band's own lines are those. */
+const CARD_LIST =
+  "flex flex-col divide-y divide-border/60 [&>li]:py-2 [&>li:first-child]:pt-0 [&>li:last-child]:pb-0"
+
+/** Why, and on whose word — the owner's words, the assistant's reason,
+ *  what was kept — a line each, led by what it is. */
+function WhyLines({
+  lines,
+}: {
+  lines: { key: string; icon: LucideIcon; text: React.ReactNode }[]
+}) {
+  if (lines.length === 0) return null
+  return (
+    <ul className="flex flex-col gap-1.5 text-xs leading-5 text-muted-foreground">
+      {lines.map(({ key, icon: Icon, text }) => (
+        <li
+          key={key}
+          className="flex items-start gap-2"
+          data-pa-why={key}
+          // The line it was before, where a test or a style reaches it.
+          data-pa-both-ways={key === "bothWays" ? "" : undefined}
+        >
+          <Icon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          <span className="min-w-0 break-words">{text}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** An assistant's face, by its id, from the roster the page holds — read
+ *  as it is, not fetched for a card. */
+function RosterFace({ botId, size = 24 }: { botId: number; size?: number }) {
+  const entries = usePersonalAgentRoster((st) => st.entries)
+  const botName = useBotName()
+  const entry = entries?.find((e) => e.id === botId)
+  return (
+    <BotAvatar
+      avatar={entry?.avatar}
+      name={botName(entry ?? { id: botId, kind: "worker" })}
+      size={size}
+      star={entry?.kind === "primary"}
+    />
+  )
+}
+
+/** What will be sent (or was): set in as a quote is. */
+const QUOTED = "border-s-2 border-border ps-3"
 
 export function NoticeCard({ item }: { item: NoticeItem }) {
   const kind = str(item.row.data, "notice")
@@ -307,6 +446,17 @@ function ActionCard({
     action === "followup" && intent && INTENTS.has(intent) ? intent : null
   const awake = tonight && state === "open" && data?.keep_awake === true
   const Icon = uncertain ? CircleHelp : tonight ? Moon : Lightbulb
+  const settle: Settle =
+    state === "acting"
+      ? "busy"
+      : state === "acted" || state === "resolved"
+        ? "done"
+        : state === "dismissed"
+          ? "off"
+          : state === "unknown"
+            ? "warn"
+            : "open"
+  const toId = num(display, "to")
   return (
     <MessageRow
       rowId={row.id}
@@ -320,144 +470,149 @@ function ActionCard({
         at: row.created_at,
       }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-notice={state}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground"
-        )}
+        head={<CardHead icon={Icon} settle={settle} heading={heading} />}
       >
-        <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-          {state === "acting" ? (
-            <SyncedSpinner small className="size-3.5 shrink-0" />
-          ) : (
-            <Icon className="size-3.5 shrink-0" aria-hidden />
-          )}
-          <span className="font-medium">{heading}</span>
-        </p>
-        <PaSheet>
-          {/* What it is about: the work, its row the card's head; or the
-              message, to whom, and what it says. */}
-          {isMessage ? (
-            <SheetPart className="flex flex-col gap-1.5">
-              <SheetLabel className="mb-0" data-pa-confirm-message>
+        {/* What it is about: the work, its row the card's head; or the
+            message — to whom, and what it says. */}
+        {isMessage ? (
+          <SheetPart className="flex flex-col gap-2.5">
+            <div className="flex min-w-0 items-center gap-2.5">
+              {toId != null ? <RosterFace botId={toId} size={28} /> : null}
+              <p
+                className="min-w-0 text-sm leading-5 font-medium break-words"
+                data-pa-confirm-message
+              >
                 {t("confirm.messageTo", {
                   name: str(display, "to_name") ?? "",
                 })}
-              </SheetLabel>
-              {text ? <CollapsedText text={text} /> : null}
-            </SheetPart>
-          ) : (
-            <WorkRow
-              flat
-              executorId={num(display, "executor_id")}
-              executor={executor}
-              agentType={agentType}
-              title={
-                retry
-                  ? t("retryOf", { title: str(display, "title") ?? "" })
-                  : action === "followup"
-                    ? t("followupOf", { title: str(display, "title") ?? "" })
-                    : (str(display, "title") ?? row.body)
-              }
-              meta={meta({
-                executor,
-                mode,
-                folder: str(display, "project"),
-              })}
-              chip={null}
-              onOpen={openable ? () => openWork(target) : null}
-            />
-          )}
-          {/* What to know about it: not sure it ran, what the follow-up
-              asks for, that the computer stays awake tonight. */}
-          {hint || followupIntent || awake ? (
-            <SheetPart className="flex flex-col gap-1.5">
-              {hint ? <p className="text-sm break-words">{hint}</p> : null}
-              {followupIntent ? (
-                <p className="text-xs text-muted-foreground">
+              </p>
+            </div>
+            {text ? (
+              <div className={QUOTED}>
+                <CollapsedText text={text} />
+              </div>
+            ) : null}
+          </SheetPart>
+        ) : (
+          <WorkRow
+            flat
+            executorId={num(display, "executor_id")}
+            executor={executor}
+            agentType={agentType}
+            title={
+              retry
+                ? t("retryOf", { title: str(display, "title") ?? "" })
+                : action === "followup"
+                  ? t("followupOf", { title: str(display, "title") ?? "" })
+                  : (str(display, "title") ?? row.body)
+            }
+            meta={meta({
+              executor,
+              mode,
+              folder: str(display, "project"),
+            })}
+            chip={
+              followupIntent ? (
+                <span
+                  className="inline-flex h-5 shrink-0 items-center rounded-full bg-sky-500/15 px-2 text-[0.6875rem] font-medium text-sky-700 dark:text-sky-300"
+                  data-pa-intent={followupIntent}
+                >
                   {t(`intent.${followupIntent}` as "intent.revise")}
-                </p>
-              ) : null}
-              {awake ? (
-                <p
-                  className="text-xs text-muted-foreground"
-                  data-pa-tonight-awake
-                >
-                  {t("tonight.awake")}
-                </p>
-              ) : null}
-            </SheetPart>
-          ) : null}
-          {/* What the work is to do. */}
-          {!isMessage && text ? (
-            <SheetPart>
+                </span>
+              ) : null
+            }
+            onOpen={openable ? () => openWork(target) : null}
+          />
+        )}
+        {/* What the work is to do, as it will be sent. */}
+        {!isMessage && text ? (
+          <SheetPart>
+            <div className={QUOTED}>
               <CollapsedText text={text} />
-            </SheetPart>
-          ) : null}
-          {answerable ? (
-            <SheetActions>
-              {uncertain && openable ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => openWork(target)}
-                >
-                  {t("uncertain.look")}
-                </Button>
-              ) : null}
-              <Button
-                size="sm"
-                disabled={readOnly || busy != null}
-                onClick={() => void answer("accept")}
-              >
-                {busy === "accept" ? (
-                  <SyncedSpinner small className="size-3.5" />
-                ) : null}
-                {uncertain
-                  ? t("uncertain.again")
-                  : state === "unknown"
-                    ? t("again")
-                    : confirm
-                      ? tc("accept")
-                      : tonight
-                        ? t("tonight.accept")
-                        : t("accept")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={readOnly || busy != null}
-                onClick={() => void answer("dismiss")}
-              >
-                {uncertain
-                  ? t("uncertain.dismiss")
-                  : confirm
-                    ? tc("dismiss")
-                    : tonight
-                      ? t("tonight.dismiss")
-                      : t("dismiss")}
-              </Button>
-              {/* The assistant's own suggestion (6.7); tonight's offer is
-                the owner's "tonight I can do", not that. */}
-              {!uncertain && !confirm && !tonight && state === "open" ? (
-                <MuteKindButton
-                  noticeId={Number(row.ref_id)}
-                  disabled={busy != null}
-                />
-              ) : null}
-            </SheetActions>
-          ) : null}
-        </PaSheet>
-        <MutedNote data={data} />
-        {shownError ? (
-          <p role="alert" className="mt-2 text-xs break-words text-destructive">
-            {t("failed", { error: shownError })}
-          </p>
+            </div>
+          </SheetPart>
         ) : null}
-      </div>
+        {/* What to know before answering: not sure it ran, that the
+            computer stays awake tonight. */}
+        {hint || awake ? (
+          <SheetPart className="flex flex-col gap-1.5 text-xs leading-5">
+            {hint ? (
+              <p className="flex items-start gap-2 break-words text-amber-700 dark:text-amber-400">
+                <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                <span className="min-w-0">{hint}</span>
+              </p>
+            ) : null}
+            {awake ? (
+              <p
+                className="flex items-start gap-2 text-muted-foreground"
+                data-pa-tonight-awake
+              >
+                <Moon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                <span className="min-w-0">{t("tonight.awake")}</span>
+              </p>
+            ) : null}
+          </SheetPart>
+        ) : null}
+        {answerable ? (
+          <SheetActions>
+            <Button
+              size="sm"
+              disabled={readOnly || busy != null}
+              onClick={() => void answer("accept")}
+            >
+              {busy === "accept" ? (
+                <SyncedSpinner small className="size-3.5" />
+              ) : null}
+              {uncertain
+                ? t("uncertain.again")
+                : state === "unknown"
+                  ? t("again")
+                  : confirm
+                    ? tc("accept")
+                    : tonight
+                      ? t("tonight.accept")
+                      : t("accept")}
+            </Button>
+            {uncertain && openable ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => openWork(target)}
+              >
+                {t("uncertain.look")}
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={readOnly || busy != null}
+              onClick={() => void answer("dismiss")}
+            >
+              {uncertain
+                ? t("uncertain.dismiss")
+                : confirm
+                  ? tc("dismiss")
+                  : tonight
+                    ? t("tonight.dismiss")
+                    : t("dismiss")}
+            </Button>
+            {/* The assistant's own suggestion (6.7); tonight's offer is
+                the owner's "tonight I can do", not that. */}
+            {!uncertain && !confirm && !tonight && state === "open" ? (
+              <MuteKindButton
+                noticeId={Number(row.ref_id)}
+                disabled={busy != null}
+              />
+            ) : null}
+          </SheetActions>
+        ) : null}
+        <NoticeFoot
+          data={data}
+          error={shownError ? t("failed", { error: shownError }) : null}
+        />
+      </CardMessage>
     </MessageRow>
   )
 }
@@ -468,20 +623,23 @@ function faces(v: unknown): BotFace[] {
     : []
 }
 
-/** The frame the cards about assistants share: a heading with its icon, the
- *  card's body — its parts (`SheetPart`, `SheetActions`), the sheet's direct
- *  children — the error of an answer that did not go through. */
+/** The frame the cards about assistants share: the card itself, its
+ *  heading (its kind's icon, where it stands, on its tone once settled),
+ *  its parts (`SheetPart`, `SheetActions`) — the sheet's direct children —
+ *  and a last band for a muted kind or an answer that did not go through. */
 function CardFrame({
   item,
-  icon: Icon,
+  icon,
   heading,
+  settle = "open",
   text,
   failed,
   children,
 }: {
   item: NoticeItem
-  icon: typeof Repeat
+  icon: LucideIcon
   heading: string
+  settle?: Settle
   text: string
   failed: string | null
   children: React.ReactNode
@@ -497,28 +655,16 @@ function CardFrame({
       roomy
       actions={{ rowId: row.id, text, at: row.created_at }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-notice={str(row.data, "state") ?? "open"}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground"
-        )}
+        head={<CardHead icon={icon} settle={settle} heading={heading} />}
       >
-        <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Icon className="size-3.5 shrink-0" aria-hidden />
-          <span className="font-medium">{heading}</span>
-        </p>
-        <PaSheet>{children}</PaSheet>
-        {/* "Don't suggest these" was pressed on it (6.7). */}
-        <MutedNote data={row.data} />
-        {failed ? (
-          <p role="alert" className="mt-2 text-xs break-words text-destructive">
-            {t("failed", { error: failed })}
-          </p>
-        ) : null}
-      </div>
+        {children}
+        <NoticeFoot
+          data={row.data}
+          error={failed ? t("failed", { error: failed }) : null}
+        />
+      </CardMessage>
     </MessageRow>
   )
 }
@@ -539,10 +685,14 @@ function LoopCard({ item }: { item: NoticeItem }) {
       ? t("cycle", names)
       : t("noProgress", { ...names, count: num(data, "count") ?? 0 })
   const thread = num(data, "thread_id")
+  const refused = str(data, "refused")
   return (
     <CardFrame
       item={item}
       icon={Repeat}
+      settle={
+        state === "acted" ? "done" : state === "dismissed" ? "off" : "open"
+      }
       heading={
         state === "acted"
           ? t("continued")
@@ -553,16 +703,53 @@ function LoopCard({ item }: { item: NoticeItem }) {
       text={text}
       failed={failed}
     >
-      <SheetPart className="flex flex-col gap-1.5">
-        <p className="text-sm break-words">{text}</p>
-        {str(data, "refused") ? (
-          <p className="text-xs break-words text-muted-foreground">
-            {t("refused", { text: str(data, "refused") ?? "" })}
+      {/* The two assistants it is between, then what happened. */}
+      <SheetPart className="flex flex-col gap-2.5">
+        {a && b ? (
+          <div
+            className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium"
+            data-pa-loop-between
+          >
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <BotAvatar avatar={a.avatar} name={names.a} size={24} />
+              <span className="truncate">{names.a}</span>
+            </span>
+            <ArrowLeftRight
+              className="size-3.5 shrink-0 text-muted-foreground rtl:-scale-x-100"
+              aria-hidden
+            />
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <BotAvatar avatar={b.avatar} name={names.b} size={24} />
+              <span className="truncate">{names.b}</span>
+            </span>
+          </div>
+        ) : null}
+        <p className="text-sm leading-5 break-words">{text}</p>
+        {refused ? (
+          <p
+            className={cn(
+              QUOTED,
+              "text-xs leading-5 break-words text-muted-foreground"
+            )}
+          >
+            {t("refused", { text: refused })}
           </p>
         ) : null}
       </SheetPart>
       {(thread != null && a && b) || state === "open" ? (
         <SheetActions>
+          {state === "open" ? (
+            <Button
+              size="sm"
+              disabled={readOnly || busy != null}
+              onClick={() => void answer("accept")}
+            >
+              {busy === "accept" ? (
+                <SyncedSpinner small className="size-3.5" />
+              ) : null}
+              {t("goOn")}
+            </Button>
+          ) : null}
           {thread != null && a && b ? (
             <Button
               size="sm"
@@ -583,26 +770,14 @@ function LoopCard({ item }: { item: NoticeItem }) {
             </Button>
           ) : null}
           {state === "open" ? (
-            <>
-              <Button
-                size="sm"
-                disabled={readOnly || busy != null}
-                onClick={() => void answer("accept")}
-              >
-                {busy === "accept" ? (
-                  <SyncedSpinner small className="size-3.5" />
-                ) : null}
-                {t("goOn")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={readOnly || busy != null}
-                onClick={() => void answer("dismiss")}
-              >
-                {t("mine")}
-              </Button>
-            </>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={readOnly || busy != null}
+              onClick={() => void answer("dismiss")}
+            >
+              {t("mine")}
+            </Button>
           ) : null}
         </SheetActions>
       ) : null}
@@ -667,10 +842,13 @@ function StoppedCard({ item }: { item: NoticeItem }) {
       {work.length > 0 ? (
         <SheetPart>
           <SheetLabel>{t("work", { count: work.length })}</SheetLabel>
-          <ul className="list-inside list-disc space-y-0.5 text-sm">
+          <ul className={CARD_LIST} data-pa-stopped-work>
             {work.map((w) => (
-              <li key={w.id} className="break-words">
-                {w.title ?? `#${w.id}`}
+              <li key={w.id} className="flex min-w-0 items-center gap-2.5">
+                <RowIcon icon={ListTodo} className="size-6 rounded-md" />
+                <span className="min-w-0 text-sm leading-5 break-words">
+                  {w.title ?? `#${w.id}`}
+                </span>
               </li>
             ))}
           </ul>
@@ -679,29 +857,59 @@ function StoppedCard({ item }: { item: NoticeItem }) {
       {messages.length > 0 ? (
         <SheetPart>
           <SheetLabel>{t("messages", { count: messages.length })}</SheetLabel>
-          <ul className="flex flex-col gap-1 text-sm">
-            {messages.map((m) => (
-              <li key={m.id} className="break-words">
-                {t("messageTo", { name: botName(m.to), text: m.excerpt })}
-              </li>
-            ))}
+          <ul className={CARD_LIST} data-pa-stopped-messages>
+            {messages.map((m) => {
+              const line = t("messageTo", {
+                name: botName(m.to),
+                text: m.excerpt,
+              })
+              const split = splitLine(line)
+              return (
+                <li key={m.id} className="flex min-w-0 items-start gap-2.5">
+                  {m.to ? (
+                    <BotAvatar
+                      avatar={m.to.avatar}
+                      name={botName(m.to)}
+                      size={24}
+                    />
+                  ) : null}
+                  <div className="flex min-w-0 flex-col gap-0.5 break-words">
+                    {split ? (
+                      <RowLines head={split.head} text={split.text} />
+                    ) : (
+                      <p className="text-sm leading-5">{line}</p>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         </SheetPart>
       ) : null}
       {handled.length > 0 ? (
         <SheetPart>
-          <SheetLabel>{t("notStopped")}</SheetLabel>
-          <ul className="flex flex-col gap-1.5 text-sm">
+          <SheetLabel>{bareLabel(t("notStopped"))}</SheetLabel>
+          <ul className={CARD_LIST} data-pa-stopped-handled>
             {handled.map((h) => (
               <li
                 key={h.id}
-                className="flex flex-wrap items-center justify-between gap-2"
+                className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-2"
               >
-                <span className="min-w-0 break-words">
-                  {t("onIt", { name: botName(h.to), text: h.excerpt })}
+                <span className="flex min-w-0 flex-[1_1_12rem] items-start gap-2.5">
+                  {h.to ? (
+                    <BotAvatar
+                      avatar={h.to.avatar}
+                      name={botName(h.to)}
+                      size={24}
+                    />
+                  ) : null}
+                  <span className="min-w-0 text-sm leading-5 break-words">
+                    {t("onIt", { name: botName(h.to), text: h.excerpt })}
+                  </span>
                 </span>
                 {also.has(h.id) ? (
-                  <span className="text-xs text-muted-foreground">
+                  <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                    <CircleCheck className="size-3.5" aria-hidden />
                     {t("alsoStopped")}
                   </span>
                 ) : (
@@ -724,6 +932,11 @@ function StoppedCard({ item }: { item: NoticeItem }) {
       ) : null}
     </CardFrame>
   )
+}
+
+/** A label as a band's heading: its own colon left to the layout. */
+function bareLabel(label: string): string {
+  return label.replace(/\s*[:：]\s*$/u, "")
 }
 
 /** The page an item is on: a tab of the assistant's own page, or a page of
@@ -755,18 +968,19 @@ function PickedList({
   return (
     <ul
       className={cn(
-        "space-y-0.5 ps-3 text-xs text-muted-foreground",
+        "grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 border-s-2 border-border ps-3 text-xs leading-5",
         className
       )}
       data-pa-picked
     >
       {picked.map((p) => (
-        <li key={p.id} className="break-words" data-pa-picked-from={p.from}>
-          <span className="text-foreground/80">{p.name}</span>
-          {": "}
-          {p.value_label}
-          <span className="ms-1 rounded bg-muted px-1 text-[0.6875rem]">
-            {t(`from.${p.from}` as "from.given")}
+        <li key={p.id} className="contents" data-pa-picked-from={p.from}>
+          <span className="text-muted-foreground">{p.name}</span>
+          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 break-words">
+            <span>{p.value_label}</span>
+            <span className="inline-flex h-4 items-center rounded-sm bg-muted px-1 text-[0.625rem] text-muted-foreground">
+              {t(`from.${p.from}` as "from.given")}
+            </span>
           </span>
         </li>
       ))}
@@ -833,65 +1047,85 @@ function ChangedCard({ item }: { item: NoticeItem }) {
       (c) => `${label(c.key)}: ${value(c.key, c.from)} → ${value(c.key, c.to)}`
     )
     .join("\n")
+  const why_: { key: string; icon: LucideIcon; text: React.ReactNode }[] = []
+  if (forRow == null && quote) {
+    why_.push({
+      key: "quote",
+      icon: MessageSquareQuote,
+      text: t("quote", { quote }),
+    })
+  }
+  if (reason)
+    why_.push({ key: "reason", icon: Lightbulb, text: t("reason", { reason }) })
+  if (kept.length > 0) {
+    why_.push({
+      key: "kept",
+      icon: History,
+      text: t("kept", { items: kept.map(label).join("、") }),
+    })
+  }
+  if (bothWays) why_.push({ key: "bothWays", icon: Info, text: t("bothWays") })
   return (
     <CardFrame
       item={item}
       icon={SlidersHorizontal}
+      settle={
+        why === "line" || state === "applied"
+          ? "done"
+          : state === "undone"
+            ? "undone"
+            : state === "dismissed"
+              ? "off"
+              : "open"
+      }
       heading={heading}
       text={text}
       failed={
         failed ?? (state === "open" || state === "applied" ? error : null)
       }
     >
+      {/* Each setting: what it is on the left, what it was and what it is
+          now on the right. */}
       {changes.length > 0 ? (
         <SheetPart>
-          <ul className="space-y-1" data-pa-changes>
+          <SheetFields className="text-sm" data-pa-changes>
             {changes.map((c) => (
-              <li
+              <SheetField
                 key={c.key}
-                className="text-sm break-words"
+                label={
+                  <span className="text-xs leading-5">{label(c.key)}</span>
+                }
                 data-pa-change={c.key}
               >
-                <span className="text-muted-foreground">{label(c.key)}</span>{" "}
-                <span className="line-through decoration-muted-foreground/60">
-                  <ChangeValue item={c.key} value={c.from} text={value} />
+                <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 leading-5">
+                  <span className="text-muted-foreground line-through decoration-muted-foreground/60">
+                    <ChangeValue item={c.key} value={c.from} text={value} />
+                  </span>
+                  <span
+                    aria-hidden
+                    className="text-muted-foreground rtl:-scale-x-100"
+                  >
+                    →
+                  </span>
+                  <span className="font-medium">
+                    <ChangeValue item={c.key} value={c.to} text={value} />
+                  </span>
                 </span>
-                {" → "}
-                <span className="font-medium">
-                  <ChangeValue item={c.key} value={c.to} text={value} />
-                </span>
-                <PickedList picked={pickedOf(c.picked)} className="mt-0.5" />
-              </li>
+                <PickedList
+                  picked={pickedOf(c.picked)}
+                  className="mt-1 w-full"
+                />
+              </SheetField>
             ))}
-          </ul>
+          </SheetFields>
         </SheetPart>
       ) : null}
       {/* Why, and on whose word: the message it came from, the reason, what
-          was kept as it was. */}
-      {bothWays || forRow != null || quote || reason || kept.length > 0 ? (
-        <SheetPart className="flex flex-col gap-1.5">
-          {bothWays ? (
-            <p className="text-xs text-muted-foreground" data-pa-both-ways>
-              {t("bothWays")}
-            </p>
-          ) : null}
-          {forRow != null ? (
-            <QuoteBar targetId={forRow} tone="light" />
-          ) : quote ? (
-            <p className="text-xs text-muted-foreground">
-              {t("quote", { quote })}
-            </p>
-          ) : null}
-          {reason ? (
-            <p className="text-xs text-muted-foreground">
-              {t("reason", { reason })}
-            </p>
-          ) : null}
-          {kept.length > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {t("kept", { items: kept.map(label).join("、") })}
-            </p>
-          ) : null}
+          was kept as it was, where else it takes effect. */}
+      {forRow != null || why_.length > 0 ? (
+        <SheetPart className="flex flex-col gap-2">
+          {forRow != null ? <QuoteBar targetId={forRow} tone="light" /> : null}
+          <WhyLines lines={why_} />
         </SheetPart>
       ) : null}
       {why !== "line" &&
@@ -1028,36 +1262,58 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
     bots.map((b) => b.name).join(", ") ||
     str(pending, "name") ||
     (team ?? []).map((m) => String(m.name ?? "")).join(", ")
+  const why_: { key: string; icon: LucideIcon; text: React.ReactNode }[] = []
+  if (quote) {
+    why_.push({
+      key: "quote",
+      icon: MessageSquareQuote,
+      text: t("quote", { quote }),
+    })
+  }
+  if (reason)
+    why_.push({ key: "reason", icon: Lightbulb, text: t("reason", { reason }) })
+  const proposing =
+    state === "open" || (state === "dismissed" && bots.length === 0)
   return (
     <CardFrame
       item={item}
       icon={UserPlus}
+      settle={
+        state === "open"
+          ? "open"
+          : state === "dismissed"
+            ? "off"
+            : state === "undone"
+              ? "undone"
+              : "done"
+      }
       heading={heading}
       text={text}
       failed={
         failed ?? (state === "open" || state === "applied" ? error : null)
       }
     >
-      <SheetPart className="flex flex-col gap-2">
+      <SheetPart className="flex flex-col gap-2.5">
         {why === "made" ? (
-          <p className="text-xs text-muted-foreground">{t("madeHint")}</p>
+          <p className="text-xs leading-5 text-muted-foreground">
+            {t("madeHint")}
+          </p>
         ) : null}
-        {team &&
-        (state === "open" || (state === "dismissed" && bots.length === 0)) ? (
+        {team && proposing ? (
           <>
             {teamProjects.length > 0 ? (
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs leading-5 text-muted-foreground">
                 {t("teamFor", { projects: teamProjects.join(", ") })}
               </p>
             ) : null}
-            <ul className="space-y-1.5" data-pa-team>
+            <ul className={CARD_LIST} data-pa-team>
               {team.map((m) => {
                 const key = m.template as string
                 const id = `pa-team-${row.id}-${key}`
                 return (
                   <li
                     key={key}
-                    className="flex items-center gap-2"
+                    className="flex items-center gap-2.5"
                     data-pa-team-member={key}
                   >
                     <Checkbox
@@ -1075,7 +1331,7 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
                     />
                     <label
                       htmlFor={id}
-                      className="min-w-0 flex-1 cursor-pointer text-sm font-medium"
+                      className="min-w-0 flex-1 cursor-pointer text-sm leading-5 font-medium"
                     >
                       {String(m.name ?? key)}
                     </label>
@@ -1084,12 +1340,12 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
               })}
             </ul>
           </>
-        ) : state === "open" || (state === "dismissed" && bots.length === 0) ? (
-          <p className="text-sm font-medium break-words" data-pa-bot-pending>
+        ) : proposing ? (
+          <p className={SHEET_TITLE} data-pa-bot-pending>
             {str(pending, "name")}
           </p>
         ) : (
-          <ul className="space-y-1.5" data-pa-bots-made>
+          <ul className={CARD_LIST} data-pa-bots-made>
             {bots.map((b) => {
               const filled = b.picked.filter((p) => p.from !== "given").length
               return (
@@ -1097,56 +1353,58 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
                   key={b.bot_id}
                   data-pa-bot-made={b.bot_id}
                   data-state={b.state}
-                  className="flex items-center gap-2"
+                  className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-2"
                 >
-                  <BotAvatar
-                    avatar={b.face?.avatar ?? null}
-                    name={b.name}
-                    size={24}
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span
-                      className={cn(
-                        "block truncate text-sm font-medium",
-                        b.state === "undone" &&
-                          "text-muted-foreground line-through"
-                      )}
-                    >
-                      {b.name}
-                    </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {[
-                        b.template_name,
-                        b.executor_name
-                          ? b.executor_created
-                            ? filled > 0
-                              ? t("executorFilled", {
-                                  agent: b.executor_agent ?? "",
-                                  count: filled,
-                                })
-                              : t("executorMade", {
-                                  agent: b.executor_agent ?? "",
-                                })
-                            : t("executorBound", { name: b.executor_name })
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
+                  <span className="flex min-w-0 flex-[1_1_12rem] items-center gap-2.5">
+                    <BotAvatar
+                      avatar={b.face?.avatar ?? null}
+                      name={b.name}
+                      size={32}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={cn(
+                          "block truncate text-sm leading-5 font-medium",
+                          b.state === "undone" &&
+                            "text-muted-foreground line-through"
+                        )}
+                      >
+                        {b.name}
+                      </span>
+                      <span className="block truncate text-xs leading-4 text-muted-foreground">
+                        {[
+                          b.template_name,
+                          b.executor_name
+                            ? b.executor_created
+                              ? filled > 0
+                                ? t("executorFilled", {
+                                    agent: b.executor_agent ?? "",
+                                    count: filled,
+                                  })
+                                : t("executorMade", {
+                                    agent: b.executor_agent ?? "",
+                                  })
+                              : t("executorBound", { name: b.executor_name })
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
                     </span>
                   </span>
                   {b.state !== "undone" ? (
-                    <span className="flex shrink-0 items-center gap-1">
+                    <span className="flex shrink-0 items-center gap-1.5">
                       <Button
-                        size="xs"
-                        variant="ghost"
+                        size="sm"
+                        variant="secondary"
                         onClick={() => setViewBot(b.bot_id)}
                       >
                         {t("open")}
                       </Button>
                       {bots.length > 1 && state === "applied" ? (
                         <Button
-                          size="xs"
-                          variant="secondary"
+                          size="sm"
+                          variant="ghost"
                           disabled={readOnly || busy != null}
                           onClick={() => void answer(`undo:${b.bot_id}`)}
                           data-pa-undo-bot={b.bot_id}
@@ -1159,7 +1417,8 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
                       ) : null}
                     </span>
                   ) : (
-                    <span className="text-xs text-muted-foreground">
+                    <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                      <Undo2 className="size-3.5" aria-hidden />
                       {t("undoneOne")}
                     </span>
                   )}
@@ -1169,18 +1428,9 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
           </ul>
         )}
       </SheetPart>
-      {quote || reason ? (
-        <SheetPart className="flex flex-col gap-1.5">
-          {quote ? (
-            <p className="text-xs text-muted-foreground">
-              {t("quote", { quote })}
-            </p>
-          ) : null}
-          {reason ? (
-            <p className="text-xs text-muted-foreground">
-              {t("reason", { reason })}
-            </p>
-          ) : null}
+      {why_.length > 0 ? (
+        <SheetPart>
+          <WhyLines lines={why_} />
         </SheetPart>
       ) : null}
       {state === "open" || (state === "applied" && live.length > 0) ? (
@@ -1332,65 +1582,98 @@ function AssistantChangedCard({ item }: { item: NoticeItem }) {
       options: optionsOf(prefill.options) ?? undefined,
     })
   }
+  const why_: { key: string; icon: LucideIcon; text: React.ReactNode }[] = []
+  if (quote) {
+    why_.push({
+      key: "quote",
+      icon: MessageSquareQuote,
+      text: tc("quote", { quote }),
+    })
+  }
+  if (reason && state !== "editor") {
+    why_.push({
+      key: "reason",
+      icon: Lightbulb,
+      text: tc("reason", { reason }),
+    })
+  }
+  if (kept.length > 0) {
+    why_.push({
+      key: "kept",
+      icon: History,
+      text: t("kept", { count: kept.length }),
+    })
+  }
   return (
     <CardFrame
       item={item}
       icon={Layers}
+      settle={
+        state === "editor"
+          ? "warn"
+          : state === "applied"
+            ? "done"
+            : state === "undone"
+              ? "undone"
+              : state === "dismissed"
+                ? "off"
+                : "open"
+      }
       heading={heading}
       text={[name, agent].filter(Boolean).join(" · ")}
       failed={
         failed ?? (state === "open" || state === "applied" ? error : null)
       }
     >
-      <SheetPart className="flex flex-col gap-1.5">
-        <p
-          className={cn(
-            SHEET_TITLE,
-            state === "undone" && "text-muted-foreground line-through"
-          )}
-          data-pa-assistant-made={made?.assistant.id ?? ""}
-        >
-          {name}
+      {/* The executor config: its name and agent, what codeg picked for
+          it, where it goes first. */}
+      <SheetPart className="flex flex-col gap-2">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <p
+            className={cn(
+              SHEET_TITLE,
+              state === "undone" && "text-muted-foreground line-through"
+            )}
+            data-pa-assistant-made={made?.assistant.id ?? ""}
+          >
+            {name}
+          </p>
           {agent ? (
-            <span className="ms-1.5 text-xs font-normal text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               {t("on", { agent })}
             </span>
           ) : null}
-        </p>
+        </div>
         {state === "editor" ? (
-          <p className="text-xs break-words text-muted-foreground">
-            {t("editorHint", { agent: agent ?? "", why: reason ?? "" })}
+          <p className="flex items-start gap-2 text-xs leading-5 break-words text-amber-700 dark:text-amber-400">
+            <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0">
+              {t("editorHint", { agent: agent ?? "", why: reason ?? "" })}
+            </span>
           </p>
         ) : null}
         {picked.length > 0 ? <PickedList picked={picked} /> : null}
         {firstFor.length > 0 ? (
-          <p className="text-xs text-muted-foreground" data-pa-first-for>
+          <p
+            className="text-xs leading-5 text-muted-foreground"
+            data-pa-first-for
+          >
             {t("firstFor", { kinds: firstFor.join(" / ") })}
           </p>
         ) : null}
         {made && state === "applied" ? (
-          <p className="text-xs text-muted-foreground" data-pa-both-ways>
-            {tc("bothWays")}
+          <p
+            className="flex items-start gap-2 text-xs leading-5 text-muted-foreground"
+            data-pa-both-ways
+          >
+            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span className="min-w-0">{tc("bothWays")}</span>
           </p>
         ) : null}
       </SheetPart>
-      {quote || (reason && state !== "editor") || kept.length > 0 ? (
-        <SheetPart className="flex flex-col gap-1.5">
-          {quote ? (
-            <p className="text-xs text-muted-foreground">
-              {tc("quote", { quote })}
-            </p>
-          ) : null}
-          {reason && state !== "editor" ? (
-            <p className="text-xs text-muted-foreground">
-              {tc("reason", { reason })}
-            </p>
-          ) : null}
-          {kept.length > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              {t("kept", { count: kept.length })}
-            </p>
-          ) : null}
+      {why_.length > 0 ? (
+        <SheetPart>
+          <WhyLines lines={why_} />
         </SheetPart>
       ) : null}
       {state === "open" ||

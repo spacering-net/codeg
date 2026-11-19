@@ -55,7 +55,7 @@ import {
   usePageScope,
 } from "./shared"
 import { isChoiceQuestionRow, QuestionChoiceCard } from "./question-choice-card"
-import { splitReply } from "./reply-split"
+import { isOneCard, splitReply } from "./reply-split"
 import { StepSlot } from "./step-slot"
 import { TidyLines, tidyRowsOf } from "./tidy-lines"
 
@@ -416,6 +416,20 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
       ) : null}
     </>
   )
+  // A reply that is one card and nothing else is the card: no bubble round
+  // it (what it is of — a brief, a routine, the message it answers — and
+  // what it drew on stay small lines over and under it).
+  const bare =
+    !view.running &&
+    !liveTurn &&
+    split == null &&
+    lastSlot?.kind === "text" &&
+    isOneCard(lastSlot.text) &&
+    questionRows.length === 0 &&
+    view.answered.length === 0 &&
+    view.dispatches.length === 0 &&
+    view.ending == null &&
+    view.resend.length === 0
   const bubble = (
     part: number,
     tail: boolean,
@@ -426,13 +440,15 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
       key={part}
       data-bubble
       data-pa-bubble-part={split ? part : undefined}
+      data-pa-bare={bare || undefined}
       className={cn(
-        AGENT_SURFACE,
-        bubbleCorners("start", tail),
+        !bare && AGENT_SURFACE,
+        !bare && bubbleCorners("start", tail),
         // No wider than the message's share of the column, beside its
         // others too: a line that does not wrap (a quote's title, a long
         // name in code) must not widen it past the column.
-        "max-w-full min-w-0 p-3 text-sm break-words text-foreground [&>:first-child]:mt-0"
+        "max-w-full min-w-0 text-sm break-words text-foreground [&>:first-child]:mt-0",
+        !bare && "p-3"
       )}
       aria-live={live ? "polite" : undefined}
       aria-busy={live || undefined}

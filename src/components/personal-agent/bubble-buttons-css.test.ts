@@ -22,20 +22,27 @@ describe("the bubble's buttons", () => {
       ".pa-agent-bubble {\n  --pa-object: var(--card);"
     )
     expect(bubble).toBeGreaterThan(-1)
+    // On a card — in a bubble, or a message of its own with none round it
+    // — the card's own steps, a wash, no line.
     const onCard = css.slice(
       css.indexOf(
-        '.pa-agent-bubble :is([data-pa-surface], [data-slot="card"]) {'
+        ':is(.pa-agent-bubble, [data-pa-list])\n  :is([data-pa-surface], [data-slot="card"], [data-pa-bare]) {'
       )
     )
     const body = onCard.slice(0, onCard.indexOf("}"))
+    expect(body).toContain("--pa-inset: color-mix(")
     expect(body).toContain("--pa-object: var(--pa-inset);")
     expect(body).toContain("--pa-object-edge: transparent;")
   })
 
-  it("leaves a table's body the bubble itself, not a white card", () => {
+  it("leaves a table in the conversation no colour of its own", () => {
     expect(css).not.toContain("--pa-table")
     expect(css).toMatch(
-      /\.pa-agent-bubble \[data-streamdown="table-body"\] \{\s*background-color: transparent;/
+      /\[data-pa-list\] \[data-streamdown="table-body"\] \{\s*background-color: transparent;/
+    )
+    // Its head a see-through step over whatever it sits on.
+    expect(css).toMatch(
+      /\[data-pa-list\] \[data-streamdown="table-header"\] \{\s*background-color: color-mix\(in oklab, var\(--foreground\) 4%, transparent\);/
     )
   })
 

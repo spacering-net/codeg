@@ -181,6 +181,16 @@ describe("the opening choice card", () => {
     expect(
       screen.getByText("Send me a PR, a diff or a repository link.")
     ).toBeTruthy()
+    // The card is the message, no bubble round it; what codeg set up a band
+    // of its own, not a box in it.
+    const self = document.querySelector("[data-pa-choice-card]")!
+    expect(self.hasAttribute("data-pa-card-message")).toBe(true)
+    expect(self.closest(".pa-agent-bubble")).toBeNull()
+    expect(
+      document
+        .querySelector("[data-pa-starter-foot]")
+        ?.hasAttribute("data-pa-sheet-part")
+    ).toBe(true)
     fireEvent.click(screen.getByText("Look at local changes"))
     await waitFor(() =>
       expect(api.personalAgentChoiceAnswer).toHaveBeenCalledWith(
@@ -387,15 +397,22 @@ describe("the card about work assistants made", () => {
     expect(screen.getByText("Night cleaner")).toBeTruthy()
     expect(screen.getByText("Why: you keep asking for cleanups")).toBeTruthy()
     // What it would make, why, and the buttons: a band each, buttons last.
+    // The card is the message: no bubble round it, its heading its first
+    // line, on its kind's tone.
     const sheet = screen.getByText("Night cleaner").closest("[data-pa-surface]")
+    expect(sheet?.hasAttribute("data-pa-card-message")).toBe(true)
+    expect(sheet?.closest(".pa-agent-bubble")).toBeNull()
+    expect(sheet?.firstElementChild?.hasAttribute("data-pa-sheet-head")).toBe(
+      true
+    )
     expect(
       screen.getByText("Night cleaner").closest("[data-pa-sheet-part]")
-    ).toBe(sheet?.firstElementChild)
+    ).toBe(sheet?.children[1])
     expect(
       screen
         .getByText("Why: you keep asking for cleanups")
         .closest("[data-pa-sheet-part]")
-    ).toBe(sheet?.children[1])
+    ).toBe(sheet?.children[2])
     expect(
       screen
         .getByRole("button", { name: "Make it" })

@@ -610,6 +610,46 @@ describe("the bubbles", () => {
     )
   })
 
+  it("draws a reply that is one card as the card, no bubble round it", () => {
+    const spec =
+      '```spec\n{"root":"a","elements":{"a":{"type":"Text","props":{"text":"Hi"}}}}\n```'
+    const one = (
+      id: number,
+      body: string,
+      data: Record<string, unknown> = {}
+    ) =>
+      itemOf(
+        [
+          row(id, "reply", {
+            batch_id: id,
+            body,
+            data: { state: "done", ...data },
+          }),
+        ],
+        "reply"
+      ) as Extract<MessageItem, { kind: "reply" }>
+    for (const body of [spec, spec.replace(/\n/g, "\r\n")]) {
+      const { container, unmount } = draw(
+        <ReplyBubble item={one(30, body, { brief: { kind: "brief" } })} />
+      )
+      const bubble = container.querySelector("[data-bubble]")!
+      expect(bubble.hasAttribute("data-pa-bare")).toBe(true)
+      expect(bubble.classList.contains("pa-agent-bubble")).toBe(false)
+      // What it is of stays, a small line over the card.
+      expect(
+        container.querySelector("[data-pa-reply-brief='brief']")
+      ).not.toBeNull()
+      unmount()
+    }
+    // Words with it: a bubble as ever.
+    const { container } = draw(
+      <ReplyBubble item={one(31, `Here it is:\n\n${spec}`)} />
+    )
+    const bubble = container.querySelector("[data-bubble]")!
+    expect(bubble.hasAttribute("data-pa-bare")).toBe(false)
+    expect(bubble.classList.contains("pa-agent-bubble")).toBe(true)
+  })
+
   it("splits a reply of short paragraphs into bubbles that act as one", async () => {
     const item = itemOf(
       [
@@ -979,13 +1019,13 @@ describe("the bubbles", () => {
         }
       />
     )
-    const bubble = container.querySelector<HTMLElement>("[data-bubble]")!
-    expect(bubble.classList.contains("pa-agent-bubble")).toBe(true)
-    expect(bubble.className).not.toMatch(/(^|\s)border(\s|$)/)
-    // The news on a white card, the work its head: no surface of its own,
-    // a step deeper under the pointer and when pressed.
+    // The news is a card of its own, no bubble round it; the work its head,
+    // no surface of its own.
+    const sheet = container.querySelector<HTMLElement>("[data-bubble]")!
+    expect(sheet.hasAttribute("data-pa-card-message")).toBe(true)
+    expect(container.querySelector(".pa-agent-bubble")).toBeNull()
     const workRow = container.querySelector<HTMLElement>("[data-pa-work]")!
-    const sheet = workRow.parentElement!
+    expect(workRow.parentElement).toBe(sheet)
     expect(sheet.hasAttribute("data-pa-surface")).toBe(true)
     expect(sheet.className).toContain("bg-card")
     expect(sheet.className).toContain("overflow-hidden")
@@ -1051,8 +1091,12 @@ describe("the bubbles", () => {
     expect(corners(2)).toContain(bubbleCorners("end", true))
     expect(corners(2)).not.toContain("rounded-ee-")
     expect(corners(3)).toContain(bubbleCorners("start", false))
-    expect(corners(4)).toContain(bubbleCorners("start", true))
-    expect(corners(4)).not.toContain("rounded-es-")
+    // The news is a card of its own: no bubble, no bubble's corners.
+    expect(
+      container
+        .querySelector("[data-row-id='4'] [data-bubble]")!
+        .hasAttribute("data-pa-card-message")
+    ).toBe(true)
   })
 
   it("marks an executor's avatar with its agent, at the avatar's foot", () => {

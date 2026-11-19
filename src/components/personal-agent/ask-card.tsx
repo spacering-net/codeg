@@ -22,7 +22,13 @@
  */
 
 import { useTranslations } from "next-intl"
-import { ListTodo, MessageCircleQuestion } from "lucide-react"
+import {
+  CircleAlert,
+  CircleCheck,
+  CircleSlash,
+  ListTodo,
+  MessageCircleQuestion,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { AskQuestionCard } from "@/components/chat/ask-question-card"
@@ -44,12 +50,11 @@ import { cn } from "@/lib/utils"
 
 import { CollapsedText } from "./event-card"
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
 import {
-  AGENT_SURFACE,
   asMode,
   canOpenWork,
-  PaSheet,
+  CardMessage,
   SheetActions,
   SheetPart,
   useOpenWork,
@@ -71,6 +76,36 @@ const FORWARD_REASONS = new Set([
   "timeout",
   "handed_over",
 ])
+
+/** A request's own card (a question, a plan, a permission — the chat's)
+ *  as a band of this one: its frame, shadow and margins off, so it is not a
+ *  card in a card. */
+export const FLAT_REQUEST =
+  "p-0 [&>*]:!m-0 [&>*]:!rounded-none [&>*]:!border-0 [&>*]:!bg-transparent [&>*]:!shadow-none"
+
+/** Where an ask stands, on its tone: the owner's to answer amber and
+ *  heavier, answered green, the rest quiet. */
+const STATE_TONE: Record<string, string> = {
+  asking: "text-muted-foreground",
+  forwarded: "font-medium text-amber-700 dark:text-amber-400",
+  submitting: "text-muted-foreground",
+  withdrawn: "text-muted-foreground",
+  answered: "text-foreground",
+}
+
+function StateIcon({ state }: { state: string }) {
+  const cls = "mt-0.5 size-4 shrink-0"
+  if (state === "asking" || state === "submitting")
+    return <SyncedSpinner small className="mt-0.5 size-4" />
+  if (state === "forwarded") return <CircleAlert className={cls} aria-hidden />
+  if (state === "withdrawn") return <CircleSlash className={cls} aria-hidden />
+  return (
+    <CircleCheck
+      className={cn(cls, "text-emerald-600 dark:text-emerald-400")}
+      aria-hidden
+    />
+  )
+}
 
 /** A plan decision as the page sends it. */
 export function askDecision(d: PlanApprovalDecision): AskPlanDecision {
@@ -210,6 +245,14 @@ export function AskCard({ item }: { item: NoticeItem }) {
   const heading = question
     ? t("heading.question", { executor: executor ?? t("someone") })
     : t("heading.plan", { executor: executor ?? t("someone") })
+  // The assistant's grounds: while it is the owner's to answer, or when
+  // the assistant answered it.
+  const shownReason =
+    data.reason &&
+    (state === "forwarded" ||
+      (state === "answered" && data.answered_by?.kind === "assistant"))
+      ? data.reason
+      : null
   const answered =
     state === "answered"
       ? answeredLine(data.answered_by, answerText(data))
@@ -224,54 +267,47 @@ export function AskCard({ item }: { item: NoticeItem }) {
       roomy
       actions={{ rowId: row.id, text: row.body, at: row.created_at }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-ask={state}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground"
-        )}
+        head={
+          <>
+            <Icon aria-hidden />
+            <span className="font-medium">{heading}</span>
+          </>
+        }
       >
-        <p className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-          {state === "asking" || state === "submitting" ? (
-            <SyncedSpinner small className="size-3.5 shrink-0" />
-          ) : (
-            <Icon className="size-3.5 shrink-0" aria-hidden />
-          )}
-          <span className="font-medium">{heading}</span>
-        </p>
-        <PaSheet>
-          {/* The work that asks: the card's head. */}
-          <WorkRow
-            flat
-            executorId={data.executor_id ?? null}
-            executor={executor}
-            agentType={(data.agent_type as AgentType | null) ?? null}
-            title={text(data.title) ?? row.body}
-            meta={meta({
-              executor,
-              mode: asMode(data.mode),
-              folder: null,
-            })}
-            chip={null}
-            onOpen={openable ? () => openWork(target) : null}
-          />
-          {/* Where its question stands, and on whose word. */}
-          <SheetPart className="flex flex-col gap-1">
-            {mirror ? (
-              <p className="text-xs text-muted-foreground" data-pa-ask-mirror>
-                {t("mirror", { name: assistant })}
-              </p>
-            ) : null}
-            <p
-              data-pa-ask-state
-              className={cn(
-                "text-sm break-words",
-                state === "forwarded" && "font-medium",
-                state === "withdrawn" && "text-muted-foreground"
-              )}
-            >
+        {/* The work that asks: the card's head. */}
+        <WorkRow
+          flat
+          executorId={data.executor_id ?? null}
+          executor={executor}
+          agentType={(data.agent_type as AgentType | null) ?? null}
+          title={text(data.title) ?? row.body}
+          meta={meta({
+            executor,
+            mode: asMode(data.mode),
+            folder: null,
+          })}
+          chip={null}
+          onOpen={openable ? () => openWork(target) : null}
+        />
+        {/* Where its question stands, and on whose word: the state on
+              its tone, why it came to the owner, what the assistant leans
+              to and on what — its words set in as a quote. */}
+        <SheetPart className="flex flex-col gap-2">
+          {mirror ? (
+            <p className="text-xs text-muted-foreground" data-pa-ask-mirror>
+              {t("mirror", { name: assistant })}
+            </p>
+          ) : null}
+          <p
+            className={cn(
+              "flex items-start gap-1.5 text-sm leading-5 break-words",
+              STATE_TONE[state]
+            )}
+          >
+            <StateIcon state={state} />
+            <span data-pa-ask-state>
               {state === "asking"
                 ? t("state.asking", { name: assistant })
                 : state === "forwarded"
@@ -281,95 +317,108 @@ export function AskCard({ item }: { item: NoticeItem }) {
                     : state === "withdrawn"
                       ? t("state.withdrawn")
                       : answered}
-            </p>
-            {state === "forwarded" && why ? (
-              <p className="text-xs text-muted-foreground">{why}</p>
-            ) : null}
-            {data.suggestion && state === "forwarded" ? (
-              <p className="text-xs break-words" data-pa-ask-suggestion>
-                {t("suggestion", {
-                  name: assistant,
-                  suggestion: data.suggestion,
-                })}
-              </p>
-            ) : null}
-            {data.reason &&
-            (state === "forwarded" ||
-              (state === "answered" &&
-                data.answered_by?.kind === "assistant")) ? (
-              <p
-                className="text-xs break-words text-muted-foreground"
-                data-pa-ask-reason
-              >
-                {t("reason", { reason: data.reason })}
-              </p>
-            ) : null}
+            </span>
+          </p>
+          {state === "forwarded" && why ? (
+            <p className="text-xs text-muted-foreground">{why}</p>
+          ) : null}
+          {(data.suggestion && state === "forwarded") || shownReason ? (
+            <div className="flex flex-col gap-0.5 border-s-2 border-border ps-3">
+              {data.suggestion && state === "forwarded" ? (
+                <p
+                  className="text-sm leading-5 break-words"
+                  data-pa-ask-suggestion
+                >
+                  {t("suggestion", {
+                    name: assistant,
+                    suggestion: data.suggestion,
+                  })}
+                </p>
+              ) : null}
+              {shownReason ? (
+                <p
+                  className="text-xs break-words text-muted-foreground"
+                  data-pa-ask-reason
+                >
+                  {t("reason", { reason: shownReason })}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+        </SheetPart>
+        {/* What it asks: to answer here, or as it was asked. */}
+        {answerable || question || plan ? (
+          <SheetPart className={cn(answerable && FLAT_REQUEST)}>
+            {answerable && question ? (
+              <AskQuestionCard
+                question={{
+                  question_id: data.request_id ?? String(askId),
+                  questions,
+                  created_at: data.asked_at ?? row.created_at,
+                }}
+                onAnswer={(_, answer) => send({ answer })}
+              />
+            ) : answerable ? (
+              <PlanApprovalCard
+                approval={{
+                  approval_id: data.request_id ?? String(askId),
+                  tool_call_id: "",
+                  plan_markdown: plan ?? "",
+                  created_at: data.asked_at ?? row.created_at,
+                }}
+                onAnswer={(_, answer) =>
+                  send({
+                    decision: askDecision(answer.decision),
+                    feedback: answer.feedback ?? null,
+                  })
+                }
+              />
+            ) : question ? (
+              <QuestionList questions={questions} />
+            ) : (
+              <CollapsedText text={plan ?? ""} />
+            )}
           </SheetPart>
-          {/* What it asks: to answer here, or as it was asked. */}
-          {answerable || question || plan ? (
-            <SheetPart>
-              {answerable && question ? (
-                <AskQuestionCard
-                  question={{
-                    question_id: data.request_id ?? String(askId),
-                    questions,
-                    created_at: data.asked_at ?? row.created_at,
-                  }}
-                  onAnswer={(_, answer) => send({ answer })}
-                />
-              ) : answerable ? (
-                <PlanApprovalCard
-                  approval={{
-                    approval_id: data.request_id ?? String(askId),
-                    tool_call_id: "",
-                    plan_markdown: plan ?? "",
-                    created_at: data.asked_at ?? row.created_at,
-                  }}
-                  onAnswer={(_, answer) =>
-                    send({
-                      decision: askDecision(answer.decision),
-                      feedback: answer.feedback ?? null,
-                    })
-                  }
-                />
-              ) : question ? (
-                <QuestionList questions={questions} />
-              ) : (
-                <CollapsedText text={plan ?? ""} />
-              )}
-            </SheetPart>
-          ) : null}
-          {openable && state !== "answered" && state !== "withdrawn" ? (
-            <SheetActions>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => openWork(target)}
-              >
-                {t("openSession")}
-              </Button>
-            </SheetActions>
-          ) : null}
-        </PaSheet>
-      </div>
+        ) : null}
+        {openable && state !== "answered" && state !== "withdrawn" ? (
+          <SheetActions>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => openWork(target)}
+            >
+              {t("openSession")}
+            </Button>
+          </SheetActions>
+        ) : null}
+      </CardMessage>
     </MessageRow>
   )
 }
 
-/** The questions as asked, read-only: each with its options. */
+/** The questions as asked, read-only: each with its options, a hairline
+ *  between two. */
 function QuestionList({ questions }: { questions: QuestionSpec[] }) {
   return (
-    <ul className="space-y-2" data-pa-ask-questions>
+    <ul
+      className="flex flex-col divide-y divide-border/60"
+      data-pa-ask-questions
+    >
       {questions.map((q) => (
-        <li key={q.id} className="min-w-0">
-          <p className="text-sm break-words">{q.question}</p>
+        <li key={q.id} className="min-w-0 py-2 first:pt-0 last:pb-0">
+          {q.header ? (
+            <p className="text-xs leading-4 text-muted-foreground">
+              {q.header}
+            </p>
+          ) : null}
+          <p className="text-sm leading-5 break-words">{q.question}</p>
           {q.options.length > 0 ? (
-            <ul className="mt-1 flex flex-wrap gap-1">
+            <ul className="mt-1.5 flex flex-wrap gap-1.5">
               {q.options.map((o) => (
                 <li
                   key={o.label}
                   title={o.description || undefined}
-                  className="rounded-full bg-(--pa-inset) px-2 py-0.5 text-xs text-muted-foreground"
+                  className="inline-flex h-6 items-center rounded-full bg-muted px-2.5 text-xs text-foreground/80"
                 >
                   {o.label}
                 </li>

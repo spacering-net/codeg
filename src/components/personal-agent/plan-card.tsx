@@ -20,6 +20,7 @@ import {
   ChevronDown,
   ChevronRight,
   Circle,
+  CircleAlert,
   CircleCheck,
   CircleDashed,
   CircleSlash,
@@ -44,15 +45,15 @@ import { cn } from "@/lib/utils"
 
 import { BotAvatar } from "./bot-avatar"
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
 import {
-  AGENT_SURFACE,
   canOpenWork,
   ExecutorAvatar,
-  PaSheet,
+  CardMessage,
   SHEET_TITLE,
   SheetActions,
   SheetLabel,
+  SheetNote,
   SheetPart,
   useOpenWork,
   usePageScope,
@@ -123,6 +124,14 @@ function StepIcon({ word }: { word: string }) {
         />
       )
   }
+}
+
+/** A step's word on its tone, beside who carries it out. */
+const STATUS_TONE: Record<string, string> = {
+  done: "text-emerald-700 dark:text-emerald-400",
+  running: "text-sky-700 dark:text-sky-400",
+  failed: "text-red-700 dark:text-red-400",
+  confirm: "font-medium text-orange-700 dark:text-orange-400",
 }
 
 function useChangeText(): (i: PlanChangeItem) => string {
@@ -255,220 +264,242 @@ export function PlanCard({ item }: { item: NoticeItem }) {
       roomy
       actions={{ rowId: row.id, text: row.body || null, at: row.created_at }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-plan-card={plan.state}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "flex min-w-0 flex-col gap-2 p-3 text-sm text-foreground"
-        )}
+        head={
+          <>
+            <ListTree aria-hidden />
+            <span className="font-medium">{t("title")}</span>
+            <span aria-hidden>·</span>
+            <span data-pa-plan-state>{t(`state.${plan.state}`)}</span>
+          </>
+        }
       >
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <ListTree className="size-3.5 shrink-0" aria-hidden />
-          <span className="font-medium">{t("title")}</span>
-          <span aria-hidden>·</span>
-          <span data-pa-plan-state>{t(`state.${plan.state}`)}</span>
-          <span className="ms-auto tabular-nums" data-pa-plan-progress>
-            {t("progress", { done: plan.done, total: plan.total })}
-          </span>
-        </p>
-        <PaSheet>
-          {/* What the plan is for, and how it stands. */}
-          <SheetPart className="flex flex-col gap-1.5">
-            <p className={SHEET_TITLE}>{plan.title}</p>
-            {plan.goal ? (
-              <p className="text-xs break-words text-muted-foreground">
-                {plan.goal}
-              </p>
-            ) : null}
-            {plan.state === "draft" ? (
-              <p className="text-xs text-muted-foreground">{t("hint.draft")}</p>
-            ) : plan.state === "stopped" ? (
-              <p className="text-xs text-muted-foreground">
-                {t("hint.stopped")}
-              </p>
-            ) : plan.state === "stuck" && stuckOn ? (
-              <p
-                className="text-xs text-orange-700 dark:text-orange-400"
-                data-pa-plan-stuck
-              >
+        {/* What the plan is for, how far it got, and how it stands. */}
+        <SheetPart className="flex flex-col gap-2">
+          <div className="flex min-w-0 items-start gap-3">
+            <p className={cn(SHEET_TITLE, "min-w-0 flex-1")}>{plan.title}</p>
+            <span
+              className="mt-0.5 shrink-0 text-xs text-muted-foreground tabular-nums"
+              data-pa-plan-progress
+            >
+              {t("progress", { done: plan.done, total: plan.total })}
+            </span>
+          </div>
+          {plan.total > 0 ? (
+            <div
+              className="h-1 overflow-hidden rounded-full bg-muted"
+              aria-hidden
+            >
+              <div
+                className={cn(
+                  "h-full rounded-full transition-[width]",
+                  plan.state === "stuck"
+                    ? "bg-orange-500"
+                    : plan.state === "done"
+                      ? "bg-emerald-500"
+                      : plan.state === "canceled" || plan.state === "stopped"
+                        ? "bg-muted-foreground/40"
+                        : "bg-primary"
+                )}
+                style={{
+                  width: `${Math.min(100, (plan.done / plan.total) * 100)}%`,
+                }}
+              />
+            </div>
+          ) : null}
+          {plan.goal ? (
+            <p className="text-xs leading-5 break-words text-muted-foreground">
+              {plan.goal}
+            </p>
+          ) : null}
+          {plan.state === "draft" ? (
+            <p className="text-xs text-muted-foreground">{t("hint.draft")}</p>
+          ) : plan.state === "stopped" ? (
+            <p className="text-xs text-muted-foreground">{t("hint.stopped")}</p>
+          ) : plan.state === "stuck" && stuckOn ? (
+            <p className="flex items-start gap-1.5 text-xs text-orange-700 dark:text-orange-400">
+              <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              <span data-pa-plan-stuck>
                 {stuckOn.state === "canceled"
                   ? t("hint.stuckCanceled", {
                       seq: stuckOn.seq,
                       title: stuckOn.title,
                     })
                   : t("hint.stuck", { seq: stuckOn.seq, title: stuckOn.title })}
-              </p>
-            ) : null}
-          </SheetPart>
-          {/* Its steps. */}
-          <SheetPart>
-            <ol className="flex flex-col gap-2" data-pa-plan-steps>
-              {plan.steps.map((s) => {
-                const word = stepWord(s)
-                const target = {
-                  dispatchId: s.dispatch_id,
-                  mode: s.mode,
-                  workTaskId: s.work_task_id,
-                  conversationId: s.conversation_id,
-                  folderId:
-                    s.mode === "task" ? s.project_id : s.conversation_folder_id,
-                  agentType: (s.agent_type ?? null) as AgentType | null,
-                  title: s.title,
-                  executorId:
-                    s.target_kind === "assistant" ? s.target_id : null,
-                  executorName: s.target_name,
-                  prompt: null,
-                  connectionId: null,
-                  state: null,
-                }
-                const shown = open.has(s.seq)
-                const status =
-                  s.state === "running" && s.ladder
-                    ? tl(s.ladder as "working")
-                    : t(`step.${word}` as "step.pending")
-                return (
-                  <li
-                    key={s.seq}
-                    className="flex min-w-0 flex-col gap-0.5"
-                    data-pa-plan-step={s.seq}
-                    data-pa-plan-step-state={word}
-                  >
-                    <div className="flex min-w-0 items-center gap-1.5">
-                      <StepIcon word={word} />
+              </span>
+            </p>
+          ) : null}
+        </SheetPart>
+        {/* Its steps. */}
+        <SheetPart>
+          <ol
+            className="flex flex-col divide-y divide-border/60"
+            data-pa-plan-steps
+          >
+            {plan.steps.map((s) => {
+              const word = stepWord(s)
+              const target = {
+                dispatchId: s.dispatch_id,
+                mode: s.mode,
+                workTaskId: s.work_task_id,
+                conversationId: s.conversation_id,
+                folderId:
+                  s.mode === "task" ? s.project_id : s.conversation_folder_id,
+                agentType: (s.agent_type ?? null) as AgentType | null,
+                title: s.title,
+                executorId: s.target_kind === "assistant" ? s.target_id : null,
+                executorName: s.target_name,
+                prompt: null,
+                connectionId: null,
+                state: null,
+              }
+              const shown = open.has(s.seq)
+              const status =
+                s.state === "running" && s.ladder
+                  ? tl(s.ladder as "working")
+                  : t(`step.${word}` as "step.pending")
+              return (
+                <li
+                  key={s.seq}
+                  className="flex min-w-0 flex-col gap-1 py-2.5 first:pt-0 last:pb-0"
+                  data-pa-plan-step={s.seq}
+                  data-pa-plan-step-state={word}
+                >
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <StepIcon word={word} />
+                    <button
+                      type="button"
+                      className="flex min-w-0 items-center gap-1 rounded-sm text-start transition-colors hover:text-foreground/80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                      onClick={() => toggle(s.seq)}
+                      aria-expanded={shown}
+                    >
+                      {shown ? (
+                        <ChevronDown className="size-3 shrink-0" aria-hidden />
+                      ) : (
+                        <ChevronRight className="size-3 shrink-0" aria-hidden />
+                      )}
+                      <span className="shrink-0 tabular-nums text-muted-foreground">
+                        {s.seq}.
+                      </span>
+                      <span className="truncate font-medium">{s.title}</span>
+                    </button>
+                    <span className="ms-auto flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                      {s.target_kind === "bot" ? (
+                        <BotAvatar
+                          avatar={faceAvatar(s.face)}
+                          name={s.target_name}
+                          size={14}
+                        />
+                      ) : (
+                        <ExecutorAvatar
+                          id={s.target_id}
+                          name={s.target_name}
+                          agentType={s.agent_type ?? null}
+                          size={14}
+                        />
+                      )}
+                      <span className="max-w-32 truncate">{s.target_name}</span>
+                      <span aria-hidden>·</span>
+                      <span
+                        data-pa-plan-step-status
+                        className={STATUS_TONE[word]}
+                      >
+                        {status}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 ps-5 text-xs text-muted-foreground">
+                    {s.target_kind === "assistant" && s.mode ? (
+                      <span>
+                        {tm(s.mode)}
+                        {s.project_name ? ` · ${s.project_name}` : ""}
+                        {s.kind ? ` · ${tk(s.kind)}` : ""}
+                      </span>
+                    ) : null}
+                    {s.depends_on.length > 0 ? (
+                      <span>
+                        {t("after", { steps: s.depends_on.join(t("sep")) })}
+                      </span>
+                    ) : null}
+                    {canOpenWork(target) ? (
                       <button
                         type="button"
-                        className="flex min-w-0 items-center gap-1 text-start"
-                        onClick={() => toggle(s.seq)}
-                        aria-expanded={shown}
+                        className="underline-offset-2 hover:underline"
+                        onClick={() => openWork(target)}
                       >
-                        {shown ? (
-                          <ChevronDown
-                            className="size-3 shrink-0"
-                            aria-hidden
-                          />
-                        ) : (
-                          <ChevronRight
-                            className="size-3 shrink-0"
-                            aria-hidden
-                          />
-                        )}
-                        <span className="shrink-0 tabular-nums text-muted-foreground">
-                          {s.seq}.
-                        </span>
-                        <span className="truncate font-medium">{s.title}</span>
+                        {t("act.open")}
                       </button>
-                      <span className="ms-auto flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                        {s.target_kind === "bot" ? (
-                          <BotAvatar
-                            avatar={faceAvatar(s.face)}
-                            name={s.target_name}
-                            size={14}
-                          />
-                        ) : (
-                          <ExecutorAvatar
-                            id={s.target_id}
-                            name={s.target_name}
-                            agentType={s.agent_type ?? null}
-                            size={14}
-                          />
-                        )}
-                        <span className="max-w-32 truncate">
-                          {s.target_name}
-                        </span>
-                        <span aria-hidden>·</span>
-                        <span data-pa-plan-step-status>{status}</span>
-                      </span>
-                    </div>
-                    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 ps-5 text-xs text-muted-foreground">
-                      {s.target_kind === "assistant" && s.mode ? (
-                        <span>
-                          {tm(s.mode)}
-                          {s.project_name ? ` · ${s.project_name}` : ""}
-                          {s.kind ? ` · ${tk(s.kind)}` : ""}
-                        </span>
-                      ) : null}
-                      {s.depends_on.length > 0 ? (
-                        <span>
-                          {t("after", { steps: s.depends_on.join(t("sep")) })}
-                        </span>
-                      ) : null}
-                      {canOpenWork(target) ? (
-                        <button
-                          type="button"
-                          className="underline-offset-2 hover:underline"
-                          onClick={() => openWork(target)}
-                        >
-                          {t("act.open")}
-                        </button>
-                      ) : null}
-                      {!readOnly && word === "confirm" && live
-                        ? button(
-                            `confirm:${s.seq}` as NoticeAction,
-                            t("act.confirm"),
-                            "secondary",
-                            true
-                          )
-                        : null}
-                      {!readOnly &&
-                      s.state === "running" &&
-                      plan.state === "stopped"
-                        ? button(
-                            `cancel_step:${s.seq}` as NoticeAction,
-                            t("act.cancelStep"),
-                            "ghost",
-                            true
-                          )
-                        : null}
-                    </div>
-                    {s.state === "done" && s.result ? (
-                      <p className="line-clamp-3 ps-5 text-xs break-words whitespace-pre-wrap">
-                        {s.result}
-                      </p>
                     ) : null}
-                    {(s.state === "failed" || s.state === "canceled") &&
-                    s.error ? (
-                      <p className="ps-5 text-xs break-words text-red-700 dark:text-red-400">
-                        {s.error}
+                    {!readOnly && word === "confirm" && live
+                      ? button(
+                          `confirm:${s.seq}` as NoticeAction,
+                          t("act.confirm"),
+                          "secondary",
+                          true
+                        )
+                      : null}
+                    {!readOnly &&
+                    s.state === "running" &&
+                    plan.state === "stopped"
+                      ? button(
+                          `cancel_step:${s.seq}` as NoticeAction,
+                          t("act.cancelStep"),
+                          "ghost",
+                          true
+                        )
+                      : null}
+                  </div>
+                  {s.state === "done" && s.result ? (
+                    <p className="ms-5 line-clamp-3 border-s-2 border-border ps-2.5 text-xs leading-5 break-words whitespace-pre-wrap text-foreground/80">
+                      {s.result}
+                    </p>
+                  ) : null}
+                  {(s.state === "failed" || s.state === "canceled") &&
+                  s.error ? (
+                    <p className="ps-5 text-xs break-words text-red-700 dark:text-red-400">
+                      {s.error}
+                    </p>
+                  ) : null}
+                  {shown ? (
+                    <div
+                      className="flex flex-col gap-1 ps-5 text-xs"
+                      data-pa-plan-step-detail
+                    >
+                      <p className="break-words whitespace-pre-wrap">
+                        {s.prompt}
                       </p>
-                    ) : null}
-                    {shown ? (
-                      <div
-                        className="flex flex-col gap-1 ps-5 text-xs"
-                        data-pa-plan-step-detail
-                      >
-                        <p className="break-words whitespace-pre-wrap">
-                          {s.prompt}
+                      {s.done_when ? (
+                        <p className="break-words whitespace-pre-wrap text-muted-foreground">
+                          <span className="font-medium">{t("doneWhen")}</span>{" "}
+                          {s.done_when}
                         </p>
-                        {s.done_when ? (
-                          <p className="break-words whitespace-pre-wrap text-muted-foreground">
-                            <span className="font-medium">{t("doneWhen")}</span>{" "}
-                            {s.done_when}
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </li>
-                )
-              })}
-            </ol>
-          </SheetPart>
-          {plan.changes.length > 0 ? (
-            <ChangeList
-              changes={plan.changes}
-              text={changeText}
-              readOnly={readOnly}
-              busy={busy}
-              onUndo={(i) => void act(`undo:${i}` as NoticeAction)}
-            />
-          ) : null}
-          {actions.length > 0 ? <SheetActions>{actions}</SheetActions> : null}
-        </PaSheet>
-        {failed ? (
-          <p className="text-xs text-red-700 dark:text-red-400">{failed}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </li>
+              )
+            })}
+          </ol>
+        </SheetPart>
+        {plan.changes.length > 0 ? (
+          <ChangeList
+            changes={plan.changes}
+            text={changeText}
+            readOnly={readOnly}
+            busy={busy}
+            onUndo={(i) => void act(`undo:${i}` as NoticeAction)}
+          />
         ) : null}
-      </div>
+        {actions.length > 0 ? <SheetActions>{actions}</SheetActions> : null}
+        {failed ? (
+          <SheetNote>
+            <p role="alert" className="break-words text-destructive">
+              {failed}
+            </p>
+          </SheetNote>
+        ) : null}
+      </CardMessage>
     </MessageRow>
   )
 }
@@ -496,7 +527,7 @@ function ChangeList({
   return (
     <SheetPart data-pa-plan-changes>
       <SheetLabel>{t("changes")}</SheetLabel>
-      <ul className="flex flex-col gap-1">
+      <ul className="flex flex-col gap-1.5">
         {changes.map((c) => (
           <li
             key={c.index}

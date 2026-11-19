@@ -80,6 +80,7 @@ export function useEnterClass(): string | false {
  *  to spare. */
 const GAP: Record<MessageGap, string> = {
   near: "mt-1",
+  card: "mt-3",
   side: "mt-8",
 }
 
@@ -161,6 +162,10 @@ export function MessageRow({
       className={cn(
         "relative min-w-0",
         side === "start" ? "max-w-[88%]" : "max-w-[80%]",
+        // A card that is the message (`CardMessage`, a reply that is one
+        // card) takes the frame's whole share: cards one under another line
+        // up at both edges, however much each says.
+        "has-[>[data-pa-card-message]]:w-full has-[>[data-pa-bare]]:w-full",
         // Against the row's width, which is the column's: a definite
         // share, unlike the bubble's own fit-to-content width.
         roomy &&

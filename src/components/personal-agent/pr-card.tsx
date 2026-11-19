@@ -19,6 +19,7 @@ import { useTranslations } from "next-intl"
 import {
   CircleCheck,
   CircleX,
+  GitCommitHorizontal,
   GitMerge,
   GitPullRequestClosed,
   GitPullRequestArrow,
@@ -43,12 +44,12 @@ import type {
 import { cn } from "@/lib/utils"
 
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
 import {
-  AGENT_SURFACE,
-  PaSheet,
+  CardMessage,
   SHEET_TITLE,
   SheetActions,
+  SheetNote,
   SheetPart,
   str,
   usePageScope,
@@ -187,31 +188,37 @@ function FixLine({ fix }: { fix: PrFixState }) {
     const rounds = fix.rounds ?? []
     return (
       <SheetPart className="text-xs" data-pa-pr-fix="gave_up">
-        <p className="font-medium text-red-700 dark:text-red-300">
+        <p className="flex items-center gap-1.5 font-medium text-red-700 dark:text-red-300">
+          <CircleX className="size-3.5 shrink-0" aria-hidden />
           {t("gaveUp", { n: rounds.length })}
         </p>
         {rounds.length > 0 ? (
-          <ol className="mt-1 flex flex-col gap-1" data-pa-pr-rounds>
+          <ol
+            className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 leading-5"
+            data-pa-pr-rounds
+          >
             {rounds.map((r) => (
-              <li key={`${r.n}-${r.dispatch_id}`} className="min-w-0">
-                <span className="font-medium tabular-nums">
+              <li key={`${r.n}-${r.dispatch_id}`} className="contents">
+                <span className="font-medium whitespace-nowrap tabular-nums">
                   {t("round", { n: r.n })}
-                </span>{" "}
-                <span className="text-muted-foreground">
-                  {t(`cause.${r.cause === "conflict" ? "conflict" : "checks"}`)}
-                  {r.files != null
-                    ? ` · ${t("lines", {
-                        files: r.files,
-                        added: r.additions ?? 0,
-                        removed: r.deletions ?? 0,
-                      })}`
-                    : ""}
                 </span>
-                {r.summary ? (
-                  <span className="block break-words text-muted-foreground">
-                    {r.summary}
+                <span className="min-w-0 break-words">
+                  <span className="text-muted-foreground">
+                    {t(
+                      `cause.${r.cause === "conflict" ? "conflict" : "checks"}`
+                    )}
+                    {r.files != null
+                      ? ` · ${t("lines", {
+                          files: r.files,
+                          added: r.additions ?? 0,
+                          removed: r.deletions ?? 0,
+                        })}`
+                      : ""}
                   </span>
-                ) : null}
+                  {r.summary ? (
+                    <span className="block break-words">{r.summary}</span>
+                  ) : null}
+                </span>
               </li>
             ))}
           </ol>
@@ -222,10 +229,17 @@ function FixLine({ fix }: { fix: PrFixState }) {
   if (!text) return null
   return (
     <SheetPart
-      className="flex items-start gap-1 text-xs text-muted-foreground"
+      className={cn(
+        "flex items-start gap-1.5 text-xs",
+        fix.state === "failed"
+          ? "text-red-700 dark:text-red-300"
+          : fix.state === "ask"
+            ? "font-medium text-foreground"
+            : "text-muted-foreground"
+      )}
       data-pa-pr-fix={fix.state}
     >
-      <Wrench className="mt-0.5 size-3 shrink-0" aria-hidden />
+      <Wrench className="mt-0.5 size-3.5 shrink-0" aria-hidden />
       <span className="min-w-0 break-words">{text}</span>
     </SheetPart>
   )
@@ -235,7 +249,10 @@ function FixLine({ fix }: { fix: PrFixState }) {
 function FeedbackList({ items }: { items: PrFeedbackShown[] }) {
   const t = useTranslations("PersonalAgent.pr.feedback")
   return (
-    <ul className="flex flex-col gap-1.5 text-xs" data-pa-pr-feedback>
+    <ul
+      className="flex flex-col divide-y divide-border/60 text-xs"
+      data-pa-pr-feedback
+    >
       {items.map((f) => {
         const where =
           f.path != null
@@ -252,7 +269,7 @@ function FeedbackList({ items }: { items: PrFeedbackShown[] }) {
               ? t("kind.line")
               : t("kind.comment")
         return (
-          <li key={f.id} className="min-w-0">
+          <li key={f.id} className="min-w-0 py-2 first:pt-0 last:pb-0">
             <p className="flex flex-wrap items-center gap-x-1.5 text-muted-foreground">
               <span className="font-medium text-foreground">
                 {f.author ?? t("someone")}
@@ -269,13 +286,15 @@ function FeedbackList({ items }: { items: PrFeedbackShown[] }) {
               f.url ? (
                 <button
                   type="button"
-                  className="mt-0.5 block text-start break-words underline-offset-2 hover:underline"
+                  className="mt-1 block border-s-2 border-border ps-3 text-start text-sm leading-5 break-words underline-offset-2 hover:underline"
                   onClick={() => void openUrl(f.url ?? "")}
                 >
                   {f.text}
                 </button>
               ) : (
-                <p className="mt-0.5 break-words">{f.text}</p>
+                <p className="mt-1 border-s-2 border-border ps-3 text-sm leading-5 break-words">
+                  {f.text}
+                </p>
               )
             ) : null}
           </li>
@@ -382,197 +401,198 @@ export function PrCard({ item }: { item: NoticeItem }) {
         at: row.created_at,
       }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-pr={event}
         data-pa-pr-state={state}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground",
-          !current && "opacity-80"
-        )}
+        // Moved on since: a step back, the newer card the one to read.
+        className={cn(!current && "opacity-80")}
+        head={
+          <span
+            className={cn("inline-flex items-center gap-1.5", toneOf(event))}
+          >
+            <Icon aria-hidden />
+            <span className="font-medium">{heading}</span>
+          </span>
+        }
       >
-        <p
-          className={cn(
-            "mb-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs",
-            toneOf(event)
-          )}
-        >
-          <Icon className="size-3.5 shrink-0" aria-hidden />
-          <span className="font-medium">{heading}</span>
-        </p>
-        <PaSheet>
-          {/* What the pull request is, how it stands, what came of it. */}
-          <SheetPart className="flex flex-col gap-1.5">
-            <p className={SHEET_TITLE} data-pa-pr-title>
-              <span dir="ltr">{target}</span>
-              {title ? (
-                <span className="font-normal text-muted-foreground">
-                  {" · "}
-                  {title}
-                </span>
-              ) : null}
+        {/* What the pull request is, how it stands, what came of it. */}
+        <SheetPart className="flex flex-col gap-1.5">
+          <p className={SHEET_TITLE} data-pa-pr-title>
+            <span dir="ltr" className="font-mono text-[0.8125rem]">
+              {target}
+            </span>
+            {title ? (
+              <span className="font-normal text-muted-foreground">
+                {" · "}
+                {title}
+              </span>
+            ) : null}
+          </p>
+          {facts.length > 0 ? (
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
+              <GitCommitHorizontal className="size-3.5 shrink-0" aria-hidden />
+              <span data-pa-pr-facts>{facts.join(" · ")}</span>
             </p>
-            {facts.length > 0 ? (
-              <p
-                className="text-xs text-muted-foreground tabular-nums"
-                data-pa-pr-facts
-              >
-                {facts.join(" · ")}
-              </p>
-            ) : null}
-            {mergeNote ? (
-              <p
-                className="text-xs break-words text-muted-foreground"
-                data-pa-pr-merge={mergeNote.state}
-              >
-                {mergeNote.state === "unread"
-                  ? t("merge.unread", { why: mergeNote.why })
-                  : t("merge.refused", { why: mergeNote.why })}
-              </p>
-            ) : null}
-            {event === "feedback" && forwarded ? (
-              <p className="text-xs text-muted-foreground" data-pa-pr-forwarded>
-                {forwarded.waiting
-                  ? t("feedback.waiting")
-                  : t("feedback.forwarded")}
-              </p>
-            ) : null}
-            {event === "no_conflict" ? (
-              <p className="text-xs text-muted-foreground">
-                {t("noConflictNote")}
-              </p>
-            ) : null}
-            {why ? (
-              <p className="text-xs text-muted-foreground" data-pa-pr-why>
-                {why}
-              </p>
-            ) : null}
-            {note ? (
-              <p className="text-xs text-muted-foreground" data-pa-pr-note>
-                {note}
-              </p>
-            ) : null}
-          </SheetPart>
-          {/* The checks that failed. */}
-          {event === "checks_failed" && failing.length > 0 ? (
-            <SheetPart>
-              <ul className="flex flex-col gap-0.5 text-xs" data-pa-pr-failing>
-                {failing.map((c, i) => (
-                  <li
-                    key={`${c.name}-${i}`}
-                    className="flex min-w-0 items-center gap-1"
-                  >
-                    <CircleX
-                      className="size-3 shrink-0 text-red-600 dark:text-red-400"
-                      aria-hidden
-                    />
+          ) : null}
+          {mergeNote ? (
+            <p
+              className="text-xs break-words text-muted-foreground"
+              data-pa-pr-merge={mergeNote.state}
+            >
+              {mergeNote.state === "unread"
+                ? t("merge.unread", { why: mergeNote.why })
+                : t("merge.refused", { why: mergeNote.why })}
+            </p>
+          ) : null}
+          {event === "feedback" && forwarded ? (
+            <p className="text-xs text-muted-foreground" data-pa-pr-forwarded>
+              {forwarded.waiting
+                ? t("feedback.waiting")
+                : t("feedback.forwarded")}
+            </p>
+          ) : null}
+          {event === "no_conflict" ? (
+            <p className="text-xs text-muted-foreground">
+              {t("noConflictNote")}
+            </p>
+          ) : null}
+          {why ? (
+            <p className="text-xs text-muted-foreground" data-pa-pr-why>
+              {why}
+            </p>
+          ) : null}
+          {note ? (
+            <p className="text-xs text-muted-foreground" data-pa-pr-note>
+              {note}
+            </p>
+          ) : null}
+        </SheetPart>
+        {/* The checks that failed. */}
+        {event === "checks_failed" && failing.length > 0 ? (
+          <SheetPart>
+            <ul
+              className="flex flex-col divide-y divide-border/60 text-xs"
+              data-pa-pr-failing
+            >
+              {failing.map((c, i) => (
+                <li
+                  key={`${c.name}-${i}`}
+                  className="flex min-w-0 items-start gap-2 py-1.5 first:pt-0 last:pb-0"
+                >
+                  <CircleX
+                    className="mt-0.5 size-3.5 shrink-0 text-red-600 dark:text-red-400"
+                    aria-hidden
+                  />
+                  <span className="flex min-w-0 flex-col">
                     {c.url ? (
                       <button
                         type="button"
-                        className="min-w-0 truncate text-start underline-offset-2 hover:underline"
+                        className="min-w-0 truncate text-start font-medium underline-offset-2 hover:underline"
                         onClick={() => void openUrl(c.url ?? "")}
                       >
                         {c.name}
                       </button>
                     ) : (
-                      <span className="min-w-0 truncate">{c.name}</span>
+                      <span className="min-w-0 truncate font-medium">
+                        {c.name}
+                      </span>
                     )}
                     {c.summary ? (
-                      <span className="min-w-0 truncate text-muted-foreground">
+                      <span className="min-w-0 break-words text-muted-foreground">
                         {c.summary}
                       </span>
                     ) : null}
-                  </li>
-                ))}
-                {more > 0 ? (
-                  <li className="text-muted-foreground">
-                    {t("more", { n: more })}
-                  </li>
-                ) : null}
-              </ul>
-            </SheetPart>
-          ) : null}
-          {/* The review's feedback. */}
-          {event === "feedback" && feedback.length > 0 ? (
-            <SheetPart>
-              <FeedbackList items={feedback} />
-            </SheetPart>
-          ) : null}
-          {/* Who is fixing it, or that nobody could. */}
-          {fix ? <FixLine fix={fix} /> : null}
-          {url || (current && !readOnly && !settles(event)) ? (
-            <SheetActions>
-              {url ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => void openUrl(url)}
-                  data-pa-pr-act="view"
-                >
-                  {t("view")}
-                </Button>
+                  </span>
+                </li>
+              ))}
+              {more > 0 ? (
+                <li className="py-1.5 ps-5.5 text-muted-foreground last:pb-0">
+                  {t("more", { n: more })}
+                </li>
               ) : null}
-              {asksFix && !readOnly ? (
+            </ul>
+          </SheetPart>
+        ) : null}
+        {/* The review's feedback. */}
+        {event === "feedback" && feedback.length > 0 ? (
+          <SheetPart>
+            <FeedbackList items={feedback} />
+          </SheetPart>
+        ) : null}
+        {/* Who is fixing it, or that nobody could. */}
+        {fix ? <FixLine fix={fix} /> : null}
+        {url || (current && !readOnly && !settles(event)) ? (
+          <SheetActions>
+            {asksFix && !readOnly ? (
+              <Button
+                size="sm"
+                disabled={busy != null}
+                onClick={() => void answer("fix")}
+                data-pa-pr-act="fix"
+              >
+                {spin("fix")}
+                {fix?.cause === "conflict"
+                  ? t("fix.doConflict")
+                  : t("fix.doChecks")}
+              </Button>
+            ) : null}
+            {asksForward && !readOnly ? (
+              <Button
+                size="sm"
+                disabled={busy != null}
+                onClick={() => void answer("forward")}
+                data-pa-pr-act="forward"
+              >
+                {spin("forward")}
+                {t("feedback.forward")}
+              </Button>
+            ) : null}
+            {url ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void openUrl(url)}
+                data-pa-pr-act="view"
+              >
+                {t("view")}
+              </Button>
+            ) : null}
+            {current && !readOnly && !settles(event) ? (
+              <>
                 <Button
                   size="sm"
+                  variant="ghost"
                   disabled={busy != null}
-                  onClick={() => void answer("fix")}
-                  data-pa-pr-act="fix"
+                  onClick={() => void answer("dismiss")}
+                  data-pa-pr-act="dismiss"
                 >
-                  {spin("fix")}
-                  {fix?.cause === "conflict"
-                    ? t("fix.doConflict")
-                    : t("fix.doChecks")}
+                  {spin("dismiss")}
+                  {asksForward ? t("feedback.skip") : t("gotIt")}
                 </Button>
-              ) : null}
-              {asksForward && !readOnly ? (
-                <Button
-                  size="sm"
-                  disabled={busy != null}
-                  onClick={() => void answer("forward")}
-                  data-pa-pr-act="forward"
-                >
-                  {spin("forward")}
-                  {t("feedback.forward")}
-                </Button>
-              ) : null}
-              {current && !readOnly && !settles(event) ? (
-                <>
+                {event !== "feedback" ? (
                   <Button
                     size="sm"
                     variant="ghost"
                     disabled={busy != null}
-                    onClick={() => void answer("dismiss")}
-                    data-pa-pr-act="dismiss"
+                    onClick={() => void answer("unwatch")}
+                    data-pa-pr-act="unwatch"
                   >
-                    {spin("dismiss")}
-                    {asksForward ? t("feedback.skip") : t("gotIt")}
+                    {spin("unwatch")}
+                    {t("unwatch")}
                   </Button>
-                  {event !== "feedback" ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={busy != null}
-                      onClick={() => void answer("unwatch")}
-                      data-pa-pr-act="unwatch"
-                    >
-                      {spin("unwatch")}
-                      {t("unwatch")}
-                    </Button>
-                  ) : null}
-                </>
-              ) : null}
-            </SheetActions>
-          ) : null}
-        </PaSheet>
-        {failed ? (
-          <p className="mt-1.5 text-xs break-words text-destructive">
-            {failed}
-          </p>
+                ) : null}
+              </>
+            ) : null}
+          </SheetActions>
         ) : null}
-      </div>
+        {failed ? (
+          <SheetNote>
+            <p role="alert" className="break-words text-destructive">
+              {failed}
+            </p>
+          </SheetNote>
+        ) : null}
+      </CardMessage>
     </MessageRow>
   )
 }

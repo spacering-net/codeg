@@ -160,6 +160,10 @@ describe("a forge card", () => {
     // Alone on the card: a button that looks one, on its last band.
     expect(open.getAttribute("data-variant")).toBe("secondary")
     expect(open.closest("[data-pa-sheet-actions]")).not.toBeNull()
+    // A card of its own: no bubble round it.
+    const card = open.closest("[data-pa-card-message]")!
+    expect(card).not.toBeNull()
+    expect(card.closest(".pa-agent-bubble")).toBeNull()
     fireEvent.click(open)
     expect(platform.openUrl).toHaveBeenCalledWith(
       "https://github.com/acme/app/pull/7#issuecomment-1"

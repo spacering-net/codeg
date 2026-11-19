@@ -244,7 +244,8 @@ describe("buildMessageItems", () => {
     ])
     expect(shape(items)).toEqual(["time", "owner:1", "reply:2[]", "notice:3"])
     const notice = items[3]
-    expect(notice.kind === "notice" && notice.gap).toBe("near")
+    // A card of its own: room enough over it not to join the bubble above.
+    expect(notice.kind === "notice" && notice.gap).toBe("card")
     expect(isUnseen(row(3, "notice"))).toBe(true)
     expect(
       isUnseen(row(3, "notice", { seen_at: "2026-11-07T00:00:00Z" }))
@@ -326,9 +327,9 @@ describe("buildMessageItems", () => {
       "near+tail",
       "side",
       "near",
-      // Another speaker on the same side sits as close: the news card is
-      // the last on the side, not the reply above it.
-      "near+tail",
+      // The news card is the last on the side, not the reply above it;
+      // a card of its own, it keeps a little more room over it.
+      "card+tail",
       "side+tail",
       // After a time line: its own room, and the last of all.
       "near+tail",
@@ -374,7 +375,7 @@ describe("buildMessageItems", () => {
       items.flatMap((i) =>
         i.kind === "time" ? [] : [`${i.gap}${i.tail ? "+tail" : ""}`]
       )
-    ).toEqual(["side", "near", "near", "near", "near+tail"])
+    ).toEqual(["side", "card", "card", "card", "card+tail"])
   })
 
   it("leaves out a quote of the message right above, but not the owner's", () => {

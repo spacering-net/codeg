@@ -141,6 +141,23 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe("the tidy-up's card", () => {
+  it("is a card of its own, a draft's note and an applied one on their tones", () => {
+    const draft = wrap(<MemoryCard item={item(tidy("draft"))} />)
+    const card = draft.container.querySelector("[data-pa-card-message]")!
+    expect(card.getAttribute("data-pa-tidy-card")).toBe("draft")
+    expect(card.closest(".pa-agent-bubble")).toBeNull()
+    expect(
+      card.querySelector("[data-pa-tidy-note]")?.getAttribute("data-pa-outcome")
+    ).toBe("info")
+    draft.unmount()
+    const applied = wrap(<MemoryCard item={item(tidy("applied"))} />)
+    expect(
+      applied.container
+        .querySelector("[data-pa-tidy-note]")
+        ?.getAttribute("data-pa-outcome")
+    ).toBe("done")
+  })
+
   it("says what the tidy-up did, and takes it back as a whole", () => {
     const { container } = wrap(<MemoryCard item={item(tidy("acted"))} />)
     expect(container.querySelector("[data-pa-tidy-card='acted']")).toBeTruthy()
@@ -310,7 +327,14 @@ describe("a process skill's card", () => {
         "I made “Release” a process skill: the next time you ask for it, I follow it."
       )
     ).toBeTruthy()
-    expect(screen.getByText("When: when the owner says release")).toBeTruthy()
+    // When it is for, as a fact: its label, then the words.
+    const when = screen.getByText("when the owner says release")
+    expect(when.tagName).toBe("DD")
+    expect(when.closest("dl")?.querySelector("dt")?.textContent).toBe("When")
+    // A card of its own, no bubble round it.
+    const card = when.closest("[data-pa-card-message]")!
+    expect(card.hasAttribute("data-pa-skill-card")).toBe(true)
+    expect(card.closest(".pa-agent-bubble")).toBeNull()
     expect(
       screen.getByText("Turn off").closest("[data-pa-sheet-actions]")
     ).not.toBeNull()

@@ -14,10 +14,16 @@
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import {
+  CircleAlert,
+  CircleCheck,
+  CircleDashed,
   CircleHelp,
   CircleX,
+  GitCommitHorizontal,
   GitMerge,
   MessageSquareText,
+  ShieldCheck,
+  TriangleAlert,
   type LucideIcon,
 } from "lucide-react"
 
@@ -37,13 +43,13 @@ import { cn } from "@/lib/utils"
 
 import { CollapsedText } from "./event-card"
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
 import { MutedNote, MuteKindButton } from "./mute-kind"
 import {
-  AGENT_SURFACE,
-  PaSheet,
+  CardMessage,
   SHEET_TITLE,
   SheetActions,
+  SheetNote,
   SheetPart,
   str,
   usePageScope,
@@ -91,6 +97,33 @@ function oneOf<T extends string>(list: readonly T[], v: unknown): T | null {
 export function forgeLabel(target: Partial<ForgeCardTarget>): string {
   const sigil = target.provider === "GitLab" && target.kind === "pr" ? "!" : "#"
   return `${target.repo ?? ""}${sigil}${target.number ?? ""}`
+}
+
+const GOOD = "text-emerald-700 dark:text-emerald-400"
+const CAUTION = "text-amber-700 dark:text-amber-400"
+const BAD = "text-red-700 dark:text-red-400"
+
+/** A merge's fact, led by its mark, on its tone. */
+function Fact({
+  icon: Icon,
+  tone,
+  children,
+}: {
+  icon: LucideIcon
+  tone?: string
+  children: React.ReactNode
+}) {
+  return (
+    <li
+      className={cn(
+        "flex min-w-0 items-start gap-1.5 break-words",
+        tone ?? "text-muted-foreground"
+      )}
+    >
+      <Icon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+      {children}
+    </li>
+  )
 }
 
 function shortSha(sha: string): string {
@@ -208,174 +241,208 @@ export function ForgeCard({ item }: { item: NoticeItem }) {
         at: row.created_at,
       }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-forge={state}
         data-pa-forge-action={action}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground"
-        )}
+        head={
+          <>
+            {state === "acting" ? (
+              <SyncedSpinner small className="size-3.5 shrink-0" />
+            ) : (
+              <Icon aria-hidden />
+            )}
+            <span className="font-medium">{heading}</span>
+            {who ? (
+              <span className="before:me-1.5 before:content-['·']">{who}</span>
+            ) : null}
+          </>
+        }
       >
-        <p className="mb-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
-          {state === "acting" ? (
-            <SyncedSpinner small className="size-3.5 shrink-0" />
-          ) : (
-            <Icon className="size-3.5 shrink-0" aria-hidden />
-          )}
-          <span className="font-medium">{heading}</span>
-          {who ? (
-            <span className="before:me-1.5 before:content-['·']">{who}</span>
+        {/* What it would do and where; for a merge, what vouches for it —
+            each a line led by its mark. */}
+        <SheetPart className="flex flex-col gap-2">
+          <p className={SHEET_TITLE} data-pa-forge-title>
+            {title}
+          </p>
+          {facts.length > 0 ||
+          checksLine ||
+          versionLine ||
+          (action === "merge" && !guaranteed) ||
+          (state === "done" && mergeCommit) ? (
+            <ul className="flex flex-col gap-1 text-xs leading-5">
+              {facts.length > 0 ? (
+                <Fact icon={GitCommitHorizontal}>
+                  <span
+                    className="font-mono text-muted-foreground"
+                    dir="ltr"
+                    data-pa-forge-head
+                  >
+                    {facts.join(" · ")}
+                  </span>
+                </Fact>
+              ) : null}
+              {checksLine ? (
+                <Fact
+                  icon={checks === "green" ? CircleCheck : CircleDashed}
+                  tone={checks === "green" ? GOOD : undefined}
+                >
+                  <span data-pa-forge-checks={checks ?? ""}>{checksLine}</span>
+                </Fact>
+              ) : null}
+              {versionLine ? (
+                <Fact icon={ShieldCheck} tone={GOOD}>
+                  <span data-pa-forge-version={version ?? ""}>
+                    {versionLine}
+                  </span>
+                </Fact>
+              ) : null}
+              {action === "merge" && !guaranteed ? (
+                <Fact icon={TriangleAlert} tone={CAUTION}>
+                  <span data-pa-forge-unguaranteed>
+                    {t("merge.unguaranteed")}
+                  </span>
+                </Fact>
+              ) : null}
+              {state === "done" && mergeCommit ? (
+                <Fact icon={GitMerge} tone={GOOD}>
+                  <span data-pa-forge-merge-commit>
+                    {t("merge.commit", { commit: shortSha(mergeCommit) })}
+                  </span>
+                </Fact>
+              ) : null}
+            </ul>
           ) : null}
-        </p>
-        <PaSheet>
-          {/* What it would do, where, and how it stands. */}
-          <SheetPart className="flex flex-col gap-1">
-            <p className={SHEET_TITLE} data-pa-forge-title>
-              {title}
-            </p>
-            {facts.length > 0 ? (
-              <p className="text-xs text-muted-foreground" data-pa-forge-head>
-                {facts.join(" · ")}
-              </p>
-            ) : null}
-            {checksLine ? (
-              <p
-                className="text-xs text-muted-foreground"
-                data-pa-forge-checks={checks ?? ""}
-              >
-                {checksLine}
-              </p>
-            ) : null}
-            {versionLine ? (
-              <p
-                className="text-xs text-muted-foreground"
-                data-pa-forge-version={version ?? ""}
-              >
-                {versionLine}
-              </p>
-            ) : null}
-            {action === "merge" && !guaranteed ? (
-              <p
-                data-pa-forge-unguaranteed
-                className="inline-flex h-5 w-fit items-center rounded-full bg-amber-500/15 px-2 text-[0.6875rem] font-medium text-amber-700 dark:text-amber-300"
-              >
-                {t("merge.unguaranteed")}
-              </p>
-            ) : null}
-            {state === "done" && mergeCommit ? (
-              <p
-                className="text-xs text-muted-foreground"
-                data-pa-forge-merge-commit
-              >
-                {t("merge.commit", { commit: shortSha(mergeCommit) })}
-              </p>
-            ) : null}
+        </SheetPart>
+        {/* Why it was not done, or would be: on its tone. */}
+        {problem || detail || reason ? (
+          <SheetPart className="flex flex-col gap-1.5 text-xs leading-5">
             {problem ? (
               <p
-                className="text-xs break-words text-amber-700 dark:text-amber-300"
-                data-pa-forge-problem={code ?? state}
+                className={cn(
+                  "flex items-start gap-1.5 break-words",
+                  state === "failed" ? BAD : CAUTION
+                )}
               >
-                {problem}
+                {state === "failed" ? (
+                  <CircleX className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+                ) : (
+                  <CircleAlert
+                    className="mt-0.5 size-3.5 shrink-0"
+                    aria-hidden
+                  />
+                )}
+                <span data-pa-forge-problem={code ?? state}>{problem}</span>
               </p>
             ) : null}
             {detail ? (
-              <p className="text-xs break-words text-muted-foreground">
-                {detail}
-              </p>
+              <p className="ps-5 break-words text-muted-foreground">{detail}</p>
             ) : null}
             {reason ? (
-              <p className="text-xs break-words text-muted-foreground">
+              <p className="border-s-2 border-border ps-3 break-words text-muted-foreground">
                 {t("reason", { reason })}
               </p>
             ) : null}
           </SheetPart>
-          {/* What it would say. */}
-          {body ? (
-            <SheetPart className="text-sm" data-pa-forge-body>
-              <CollapsedText text={body} />
-            </SheetPart>
-          ) : null}
-          {state === "open" || state === "unknown" || link ? (
-            <SheetActions>
-              {state === "open" ? (
-                <>
-                  <Button
-                    size="sm"
-                    disabled={disabled}
-                    onClick={() => void answer("accept")}
-                    data-pa-forge-act="accept"
-                  >
-                    {spin("accept")}
-                    {t("approve")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={disabled}
-                    onClick={() => void answer("dismiss")}
-                    data-pa-forge-act="dismiss"
-                  >
-                    {t("decline")}
-                  </Button>
-                  {why === "suggest" ? (
-                    <MuteKindButton noticeId={noticeId} disabled={disabled} />
-                  ) : null}
-                </>
-              ) : null}
-              {state === "unknown" ? (
-                <>
-                  {targetUrl ? (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void openUrl(targetUrl)}
-                      data-pa-forge-act="look"
-                    >
-                      {t("look")}
-                    </Button>
-                  ) : null}
-                  <Button
-                    size="sm"
-                    disabled={disabled}
-                    onClick={() => void answer("retry")}
-                    data-pa-forge-act="retry"
-                  >
-                    {spin("retry")}
-                    {t("again")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={disabled}
-                    onClick={() => void answer("dismiss")}
-                    data-pa-forge-act="dismiss"
-                  >
-                    {t("letBe")}
-                  </Button>
-                </>
-              ) : link ? (
-                // Alone on the card: a button that looks one.
+        ) : null}
+        {/* What it would say. */}
+        {body ? (
+          <SheetPart className="text-sm" data-pa-forge-body>
+            <CollapsedText text={body} />
+          </SheetPart>
+        ) : null}
+        {state === "open" || state === "unknown" || link ? (
+          <SheetActions>
+            {state === "open" ? (
+              <>
                 <Button
                   size="sm"
-                  variant="secondary"
-                  onClick={() => void openUrl(link)}
-                  data-pa-forge-act="open"
+                  disabled={disabled}
+                  onClick={() => void answer("accept")}
+                  data-pa-forge-act="accept"
                 >
-                  {t("open")}
+                  {spin("accept")}
+                  {t("approve")}
                 </Button>
-              ) : null}
-            </SheetActions>
-          ) : null}
-        </PaSheet>
-        <MutedNote data={data} />
-        {shownError ? (
-          <p role="alert" className="mt-2 text-xs break-words text-destructive">
-            {tn("failed", { error: shownError })}
-          </p>
+                {/* Where it would act, beside the call on it. */}
+                {link ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void openUrl(link)}
+                    data-pa-forge-act="open"
+                  >
+                    {t("open")}
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={disabled}
+                  onClick={() => void answer("dismiss")}
+                  data-pa-forge-act="dismiss"
+                >
+                  {t("decline")}
+                </Button>
+                {why === "suggest" ? (
+                  <MuteKindButton noticeId={noticeId} disabled={disabled} />
+                ) : null}
+              </>
+            ) : null}
+            {state === "unknown" ? (
+              <>
+                <Button
+                  size="sm"
+                  disabled={disabled}
+                  onClick={() => void answer("retry")}
+                  data-pa-forge-act="retry"
+                >
+                  {spin("retry")}
+                  {t("again")}
+                </Button>
+                {targetUrl ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void openUrl(targetUrl)}
+                    data-pa-forge-act="look"
+                  >
+                    {t("look")}
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={disabled}
+                  onClick={() => void answer("dismiss")}
+                  data-pa-forge-act="dismiss"
+                >
+                  {t("letBe")}
+                </Button>
+              </>
+            ) : link && state !== "open" ? (
+              // Alone on the card: a button that looks one.
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => void openUrl(link)}
+                data-pa-forge-act="open"
+              >
+                {t("open")}
+              </Button>
+            ) : null}
+          </SheetActions>
         ) : null}
-      </div>
+        {data.muted || shownError ? (
+          <SheetNote>
+            <MutedNote data={data} className="" />
+            {shownError ? (
+              <p role="alert" className="break-words text-destructive">
+                {tn("failed", { error: shownError })}
+              </p>
+            ) : null}
+          </SheetNote>
+        ) : null}
+      </CardMessage>
     </MessageRow>
   )
 }

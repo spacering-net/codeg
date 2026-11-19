@@ -14,7 +14,7 @@
 
 import { useState } from "react"
 import { useTranslations } from "next-intl"
-import { ClipboardCheck } from "lucide-react"
+import { CircleAlert, CircleCheck, ClipboardCheck, Undo2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
@@ -31,17 +31,17 @@ import { asVerdict, VerdictChip } from "./acceptance-bits"
 import { splitLine } from "./list-row"
 import { CollapsedText } from "./event-card"
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
 import {
-  AGENT_SURFACE,
   canOpenWork,
   num,
-  PaSheet,
+  CardMessage,
   SHEET_TITLE,
   SheetActions,
   SheetField,
   SheetFields,
   SheetLabel,
+  SheetNote,
   SheetPart,
   str,
   useOpenWork,
@@ -63,6 +63,28 @@ function against(decision: Decision | null, verdict: CheckVerdict | null) {
     (decision === "accept" && verdict === "fail") ||
     (decision === "revise" && verdict === "pass")
   )
+}
+
+/** What sending the work back says (or said): set in as a quote is. */
+const SENT_BACK =
+  "border-s-2 border-border ps-3 text-sm leading-5 break-words whitespace-pre-wrap text-foreground/90"
+
+/** How a round ended, on its tone: through green, sent back amber, void
+ *  or out of date quiet. */
+const ENDED_TONE: Partial<Record<AcceptanceState, string>> = {
+  accepted: "text-emerald-700 dark:text-emerald-400",
+  revised: "text-amber-700 dark:text-amber-400",
+  changed: "text-amber-700 dark:text-amber-400",
+}
+
+function EndedIcon({ phase }: { phase: AcceptanceState }) {
+  const Icon =
+    phase === "accepted"
+      ? CircleCheck
+      : phase === "revised"
+        ? Undo2
+        : CircleAlert
+  return <Icon className="mt-0.5 size-3.5 shrink-0" aria-hidden />
 }
 
 /** A label as a fact's: its own colon left to the layout. */
@@ -198,235 +220,240 @@ export function AcceptanceCard({ item }: { item: NoticeItem }) {
       roomy
       actions={{ rowId: row.id, text: row.body, at: row.created_at }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-acceptance={phase}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground"
-        )}
+        head={
+          <>
+            <ClipboardCheck aria-hidden />
+            <span className="font-medium">{head}</span>
+            {people ? (
+              <span className="before:me-1.5 before:content-['·']">
+                {people}
+              </span>
+            ) : null}
+          </>
+        }
       >
-        <p className="mb-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
-          <ClipboardCheck className="size-3.5 shrink-0" aria-hidden />
-          <span className="font-medium">{head}</span>
-          {people ? (
-            <span className="before:me-1.5 before:content-['·']">{people}</span>
-          ) : null}
-        </p>
-        <PaSheet>
-          {/* What it is and how it stands: the check, the conclusion and
+        {/* What it is and how it stands: the check, the conclusion and
               whose, how it ended. */}
-          <SheetPart>
-            <p className={SHEET_TITLE}>{title}</p>
-            <SheetFields className="mt-2">
-              {unchecked ? (
-                <p className="col-span-2 flex">
+        <SheetPart>
+          <p className={SHEET_TITLE}>{title}</p>
+          <SheetFields className="mt-2">
+            {unchecked ? (
+              <p className="col-span-2 flex">
+                <span
+                  data-pa-unchecked
+                  className="inline-flex h-5 items-center rounded-full bg-amber-500/15 px-2 font-medium text-amber-700 dark:text-amber-300"
+                >
+                  {t("unchecked")}
+                </span>
+              </p>
+            ) : (
+              <SheetField label={bare(t("check"))}>
+                <VerdictChip verdict={verdict} />
+                {phase === "accepted" && verdict === "unverified" ? (
+                  <NotVerified label={t("notVerified")} />
+                ) : null}
+              </SheetField>
+            )}
+            {conclusion ? (
+              conclusion.split ? (
+                <SheetField
+                  label={conclusion.split.head}
+                  data-pa-conclusion
+                  data-pa-against={against(decision, verdict) ? "" : undefined}
+                >
+                  {/* Against the check: on the caution's tone. */}
                   <span
-                    data-pa-unchecked
-                    className="inline-flex h-5 items-center rounded-full bg-amber-500/15 px-2 font-medium text-amber-700 dark:text-amber-300"
+                    className={cn(
+                      against(decision, verdict) &&
+                        "text-amber-700 dark:text-amber-300"
+                    )}
                   >
-                    {t("unchecked")}
+                    {conclusion.split.text}
                   </span>
-                </p>
-              ) : (
-                <SheetField label={bare(t("check"))}>
-                  <VerdictChip verdict={verdict} />
-                  {phase === "accepted" && verdict === "unverified" ? (
-                    <NotVerified label={t("notVerified")} />
-                  ) : null}
                 </SheetField>
-              )}
-              {conclusion ? (
-                conclusion.split ? (
-                  <SheetField
-                    label={conclusion.split.head}
-                    data-pa-conclusion
-                    data-pa-against={
-                      against(decision, verdict) ? "" : undefined
-                    }
-                  >
-                    {/* Against the check: on the caution's tone. */}
+              ) : (
+                <p
+                  data-pa-conclusion
+                  className="col-span-2 [overflow-wrap:anywhere] text-muted-foreground"
+                >
+                  {conclusion.line}
+                </p>
+              )
+            ) : null}
+            {ended ? (
+              <p
+                className={cn(
+                  "col-span-2 flex items-start gap-1.5 [overflow-wrap:anywhere]",
+                  ENDED_TONE[phase] ?? "text-muted-foreground"
+                )}
+              >
+                <EndedIcon phase={phase} />
+                <span>
+                  <span data-pa-accept-ended={phase}>
+                    {ended}
+                    {superseded && (phase === "void" || phase === "changed") ? (
+                      <span
+                        data-pa-superseded
+                        className="before:mx-1.5 before:content-['·']"
+                      >
+                        {t("superseded")}
+                      </span>
+                    ) : null}
+                  </span>
+                  {phase === "accepted" && mergeCommit ? (
                     <span
-                      className={cn(
-                        against(decision, verdict) &&
-                          "text-amber-700 dark:text-amber-300"
-                      )}
+                      className="text-muted-foreground before:mx-1.5 before:content-['·']"
+                      data-pa-merged
                     >
-                      {conclusion.split.text}
+                      {t("merged", { commit: mergeCommit.slice(0, 7) })}
                     </span>
+                  ) : null}
+                  {phase === "accepted" && deliveredHead && !mergeCommit ? (
+                    <span
+                      className="text-muted-foreground before:mx-1.5 before:content-['·']"
+                      data-pa-delivered
+                    >
+                      {t("delivered", { head: deliveredHead.slice(0, 7) })}
+                    </span>
+                  ) : null}
+                </span>
+              </p>
+            ) : null}
+          </SheetFields>
+        </SheetPart>
+        {/* What the check found. */}
+        {evidence ? (
+          <SheetPart className="text-xs" data-pa-evidence>
+            <CollapsedText text={evidence} />
+          </SheetPart>
+        ) : null}
+        {/* The owner's call: the question, what sending it back says. */}
+        {asked && (question || (max > 0 && round >= max) || message) ? (
+          <SheetPart className="flex flex-col gap-2">
+            {question ? (
+              <p
+                className="text-sm leading-5 font-medium break-words"
+                data-pa-question
+              >
+                {t("question", { question })}
+              </p>
+            ) : null}
+            {max > 0 && round >= max ? (
+              <p className="text-xs text-muted-foreground" data-pa-used-up>
+                {t("usedUp", { count: round })}
+              </p>
+            ) : null}
+            {message ? (
+              <div data-pa-revise-message>
+                <SheetLabel className="mb-1">{t("wouldSend")}</SheetLabel>
+                <p className={SENT_BACK}>{message}</p>
+              </div>
+            ) : null}
+          </SheetPart>
+        ) : null}
+        {phase === "revised" && message ? (
+          <SheetPart>
+            <p className={SENT_BACK}>{message}</p>
+          </SheetPart>
+        ) : null}
+        {asked || recheck || canOpen ? (
+          <SheetActions>
+            {asked && message ? (
+              <Button
+                size="sm"
+                disabled={disabled}
+                onClick={() => void answer("revise")}
+                data-pa-accept-act="revise"
+              >
+                {spin("revise")}
+                {t("revise")}
+              </Button>
+            ) : null}
+            {asked ? (
+              <Button
+                size="sm"
+                variant={message ? "secondary" : "default"}
+                disabled={disabled}
+                onClick={() => void answer("accept")}
+                data-pa-accept-act="accept"
+              >
+                {spin("accept")}
+                {t("accept")}
+              </Button>
+            ) : null}
+            {recheck ? (
+              <Button
+                size="sm"
+                disabled={disabled}
+                onClick={() => void answer("recheck")}
+                data-pa-accept-act="recheck"
+              >
+                {spin("recheck")}
+                {t("recheck")}
+              </Button>
+            ) : null}
+            {canOpen ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => openWork(target)}
+                data-pa-accept-act="open"
+              >
+                {t("openTask")}
+              </Button>
+            ) : null}
+          </SheetActions>
+        ) : null}
+        {/* The rounds before this one, each its round and how it went. */}
+        {history.length > 0 ? (
+          <SheetPart>
+            <SheetLabel>{t("history")}</SheetLabel>
+            <SheetFields className="text-muted-foreground">
+              {history.map((h) => {
+                const n = typeof h.round === "number" ? h.round : 0
+                const m = typeof h.message === "string" ? h.message : ""
+                const line =
+                  h.state === "revised"
+                    ? t("historyRevised", { round: n, message: m })
+                    : h.state === "accepted"
+                      ? t("historyAccepted", { round: n })
+                      : h.state === "changed"
+                        ? t("historyChanged", { round: n })
+                        : h.state === "asked"
+                          ? t("historyAsked", { round: n })
+                          : t("historyOpen", { round: n })
+                const split = splitLine(line)
+                return split ? (
+                  <SheetField
+                    key={`${n}-${h.state}`}
+                    label={split.head}
+                    data-pa-history={n}
+                  >
+                    <span className="text-foreground/80">{split.text}</span>
                   </SheetField>
                 ) : (
                   <p
-                    data-pa-conclusion
-                    className="col-span-2 [overflow-wrap:anywhere] text-muted-foreground"
+                    key={`${n}-${h.state}`}
+                    data-pa-history={n}
+                    className="col-span-2 [overflow-wrap:anywhere]"
                   >
-                    {conclusion.line}
+                    {line}
                   </p>
                 )
-              ) : null}
-              {ended ? (
-                <p
-                  className="col-span-2 text-muted-foreground"
-                  data-pa-accept-ended={phase}
-                >
-                  {ended}
-                  {superseded && (phase === "void" || phase === "changed") ? (
-                    <span
-                      data-pa-superseded
-                      className="before:mx-1.5 before:content-['·']"
-                    >
-                      {t("superseded")}
-                    </span>
-                  ) : null}
-                </p>
-              ) : null}
-              {phase === "accepted" && mergeCommit ? (
-                <p className="col-span-2 text-muted-foreground" data-pa-merged>
-                  {t("merged", { commit: mergeCommit.slice(0, 7) })}
-                </p>
-              ) : null}
-              {phase === "accepted" && deliveredHead && !mergeCommit ? (
-                <p
-                  className="col-span-2 text-muted-foreground"
-                  data-pa-delivered
-                >
-                  {t("delivered", { head: deliveredHead.slice(0, 7) })}
-                </p>
-              ) : null}
+              })}
             </SheetFields>
           </SheetPart>
-          {/* What the check found. */}
-          {evidence ? (
-            <SheetPart className="text-xs" data-pa-evidence>
-              <CollapsedText text={evidence} />
-            </SheetPart>
-          ) : null}
-          {/* The owner's call: the question, what sending it back says. */}
-          {asked && (question || (max > 0 && round >= max) || message) ? (
-            <SheetPart className="flex flex-col gap-2">
-              {question ? (
-                <p className="text-sm break-words" data-pa-question>
-                  {t("question", { question })}
-                </p>
-              ) : null}
-              {max > 0 && round >= max ? (
-                <p className="text-xs text-muted-foreground" data-pa-used-up>
-                  {t("usedUp", { count: round })}
-                </p>
-              ) : null}
-              {message ? (
-                <div data-pa-revise-message>
-                  <SheetLabel className="mb-1">{t("wouldSend")}</SheetLabel>
-                  <p className="text-sm break-words whitespace-pre-wrap">
-                    {message}
-                  </p>
-                </div>
-              ) : null}
-            </SheetPart>
-          ) : null}
-          {phase === "revised" && message ? (
-            <SheetPart>
-              <p className="text-sm break-words whitespace-pre-wrap">
-                {message}
-              </p>
-            </SheetPart>
-          ) : null}
-          {asked || recheck || canOpen ? (
-            <SheetActions>
-              {asked && message ? (
-                <Button
-                  size="sm"
-                  disabled={disabled}
-                  onClick={() => void answer("revise")}
-                  data-pa-accept-act="revise"
-                >
-                  {spin("revise")}
-                  {t("revise")}
-                </Button>
-              ) : null}
-              {asked ? (
-                <Button
-                  size="sm"
-                  variant={message ? "secondary" : "default"}
-                  disabled={disabled}
-                  onClick={() => void answer("accept")}
-                  data-pa-accept-act="accept"
-                >
-                  {spin("accept")}
-                  {t("accept")}
-                </Button>
-              ) : null}
-              {recheck ? (
-                <Button
-                  size="sm"
-                  disabled={disabled}
-                  onClick={() => void answer("recheck")}
-                  data-pa-accept-act="recheck"
-                >
-                  {spin("recheck")}
-                  {t("recheck")}
-                </Button>
-              ) : null}
-              {canOpen ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => openWork(target)}
-                  data-pa-accept-act="open"
-                >
-                  {t("openTask")}
-                </Button>
-              ) : null}
-            </SheetActions>
-          ) : null}
-          {/* The rounds before this one, each its round and how it went. */}
-          {history.length > 0 ? (
-            <SheetPart>
-              <SheetLabel>{t("history")}</SheetLabel>
-              <SheetFields className="text-muted-foreground">
-                {history.map((h) => {
-                  const n = typeof h.round === "number" ? h.round : 0
-                  const m = typeof h.message === "string" ? h.message : ""
-                  const line =
-                    h.state === "revised"
-                      ? t("historyRevised", { round: n, message: m })
-                      : h.state === "accepted"
-                        ? t("historyAccepted", { round: n })
-                        : h.state === "changed"
-                          ? t("historyChanged", { round: n })
-                          : h.state === "asked"
-                            ? t("historyAsked", { round: n })
-                            : t("historyOpen", { round: n })
-                  const split = splitLine(line)
-                  return split ? (
-                    <SheetField
-                      key={`${n}-${h.state}`}
-                      label={split.head}
-                      data-pa-history={n}
-                    >
-                      <span className="text-foreground/80">{split.text}</span>
-                    </SheetField>
-                  ) : (
-                    <p
-                      key={`${n}-${h.state}`}
-                      data-pa-history={n}
-                      className="col-span-2 [overflow-wrap:anywhere]"
-                    >
-                      {line}
-                    </p>
-                  )
-                })}
-              </SheetFields>
-            </SheetPart>
-          ) : null}
-        </PaSheet>
-        {failed ? (
-          <p role="alert" className="mt-2 text-xs break-words text-destructive">
-            {tn("failed", { error: failed })}
-          </p>
         ) : null}
-      </div>
+        {failed ? (
+          <SheetNote>
+            <p role="alert" className="break-words text-destructive">
+              {tn("failed", { error: failed })}
+            </p>
+          </SheetNote>
+        ) : null}
+      </CardMessage>
     </MessageRow>
   )
 }

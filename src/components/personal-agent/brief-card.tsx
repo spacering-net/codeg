@@ -8,13 +8,14 @@
  * loose ends, the owner's yesterday — each row opening what it is about, as
  * "today"'s rows do — and, once a week, the week's figures (6.6). Nothing is
  * settled from it but last night's tidy-ups, a line each with its own
- * buttons (7.7). Drawn as an assistant's brief is: its parts on one card
- * under the bubble's head, a part's title over it, each thing on it a row
- * as an assistant's list item is (`list-row`).
+ * buttons (7.7). Drawn as an assistant's brief is: its parts on one card —
+ * the card the message itself, no bubble round it — a part's title over
+ * it, each thing on it a row as an assistant's list item is (`list-row`).
  */
 
 import { useTranslations } from "next-intl"
 import {
+  CircleCheck,
   GitBranch,
   ListTodo,
   MessageSquare,
@@ -38,8 +39,8 @@ import { useRoster } from "@/stores/personal-agent-roster-store"
 import { BotAvatar } from "./bot-avatar"
 import { LIST_ROW, ROW_BODY, RowIcon, RowLines } from "./list-row"
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
-import { AGENT_SURFACE, useBotName } from "./shared"
+import { MessageRow } from "./message-row"
+import { CardMessage, SheetPart, useBotName } from "./shared"
 import { TidyLines, tidyRowsOf } from "./tidy-lines"
 import { BriefRows } from "./today-section"
 
@@ -454,30 +455,23 @@ export function BriefCard({ item }: { item: NoticeItem }) {
       roomy
       actions={{ rowId: row.id, text: row.body || null, at: row.created_at }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-brief-card
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "flex min-w-0 flex-col gap-3 p-3 text-sm text-foreground"
-        )}
-      >
-        <div className="flex flex-col gap-0.5">
-          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Newspaper className="size-3.5 shrink-0" aria-hidden />
+        head={
+          <>
+            <Newspaper aria-hidden />
             <span className="font-medium">{t("title")}</span>
-          </p>
-          <p className="text-[0.6875rem] leading-4 text-muted-foreground">
-            {t("byCodeg")}
-          </p>
-        </div>
+            <span className="basis-full text-[0.6875rem] leading-4">
+              {t("byCodeg")}
+            </span>
+          </>
+        }
+      >
         {shown ? (
-          // Its parts on one card, as an assistant's brief is drawn.
-          <div
+          // Its parts on the card, as an assistant's brief is drawn.
+          <SheetPart
             data-pa-brief-body
-            data-pa-surface
-            className="flex min-w-0 flex-col gap-5 rounded-xl border bg-card p-4 text-card-foreground"
+            className="flex flex-col gap-5 pt-3 pb-3.5"
           >
             {parts.map((p) => (
               <RowsPart
@@ -520,12 +514,20 @@ export function BriefCard({ item }: { item: NoticeItem }) {
               </Part>
             ) : null}
             {week ? <WeekPart week={week} /> : null}
-          </div>
+          </SheetPart>
         ) : null}
         {nothing ? (
-          <p className="text-xs text-muted-foreground">{t("nothing")}</p>
+          <SheetPart>
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <CircleCheck
+                className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                aria-hidden
+              />
+              {t("nothing")}
+            </p>
+          </SheetPart>
         ) : null}
-      </div>
+      </CardMessage>
     </MessageRow>
   )
 }

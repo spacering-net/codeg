@@ -4504,11 +4504,26 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   --pa-object-active: color-mix(in oklab, var(--foreground) 7%, var(--card));
   --pa-object-edge: color-mix(in oklab, var(--foreground) 10%, transparent);
 }
-.pa-agent-bubble :is([data-pa-surface], [data-slot="card"]) {
+/* A card in the conversation — on a bubble, or a message of its own with
+   no bubble round it (`CardMessage`, a reply that is one card, and what is
+   over and under that card: its quote): its own steps of the text's
+   colour, the things on it a wash of them, no line. */
+:is(.pa-agent-bubble, [data-pa-list])
+  :is([data-pa-surface], [data-slot="card"], [data-pa-bare]) {
+  --pa-inset: color-mix(in oklab, var(--foreground) 4%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--foreground) 7%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--foreground) 10%, transparent);
   --pa-object: var(--pa-inset);
   --pa-object-hover: var(--pa-inset-hover);
   --pa-object-active: var(--pa-inset-active);
   --pa-object-edge: transparent;
+}
+.dark
+  :is(.pa-agent-bubble, [data-pa-list])
+  :is([data-pa-surface], [data-slot="card"], [data-pa-bare]) {
+  --pa-inset: color-mix(in oklab, var(--foreground) 5%, transparent);
+  --pa-inset-hover: color-mix(in oklab, var(--foreground) 9%, transparent);
+  --pa-inset-active: color-mix(in oklab, var(--foreground) 12%, transparent);
 }
 [data-workspace-bg="on"] .pa-agent-bubble {
   background-color: color-mix(in oklab, var(--muted) 58%, transparent);
@@ -4517,26 +4532,40 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 /* Markdown's own surfaces, in the bubble, by the same steps: inline code, a
    code block and a diagram are the bubble a step deeper, instead of their
    own greys (one of them the bubble's own) and a code body of the page
-   colour — a white card on the grey; a code block's title bar and a
-   table's head a step deeper again, a table's body the bubble itself; and
-   no frame round a code block, as round nothing else in a bubble. A table
-   keeps its lines: they are its structure. */
-.pa-agent-bubble [data-streamdown="inline-code"],
-.pa-agent-bubble [data-streamdown="code-block"],
-.pa-agent-bubble [data-streamdown="mermaid-block"],
-.pa-agent-bubble [data-streamdown="code-block-header"],
-.pa-agent-bubble [data-streamdown="table-header"] {
+   colour — a white card on the grey; a code block's title bar a step
+   deeper again; and no frame round a code block, as round nothing else in
+   a bubble. The same on a card in the conversation, by its own steps. */
+:is(.pa-agent-bubble, [data-pa-surface])
+  :is(
+    [data-streamdown="inline-code"],
+    [data-streamdown="code-block"],
+    [data-streamdown="mermaid-block"],
+    [data-streamdown="code-block-header"]
+  ) {
   background-color: var(--pa-inset);
 }
-.pa-agent-bubble [data-streamdown="code-block-body"],
-.pa-agent-bubble [data-streamdown="table-body"] {
+:is(.pa-agent-bubble, [data-pa-surface]) [data-streamdown="code-block-body"] {
   background-color: transparent;
 }
-.pa-agent-bubble [data-streamdown="code-block"] {
+:is(.pa-agent-bubble, [data-pa-surface]) [data-streamdown="code-block"] {
   border-color: transparent;
 }
-.pa-agent-bubble [data-streamdown="code-block-header"] {
+:is(.pa-agent-bubble, [data-pa-surface]) [data-streamdown="code-block-header"] {
   box-shadow: none;
+}
+/* A table in the conversation has no colour of its own: its body is
+   whatever it sits on — a bubble's grey, a card's white, a workspace
+   image — and its head a step of the text's colour over that, see-through
+   (not the tints a table takes elsewhere, which are a colour of their own
+   and read white on a grey bubble). */
+[data-pa-list] [data-streamdown="table-body"] {
+  background-color: transparent;
+}
+[data-pa-list] [data-streamdown="table-header"] {
+  background-color: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+.dark [data-pa-list] [data-streamdown="table-header"] {
+  background-color: color-mix(in oklab, var(--foreground) 6%, transparent);
 }
 
 /* A button a menu or popover opens from carries its trigger's slot in

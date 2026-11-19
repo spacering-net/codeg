@@ -305,6 +305,24 @@ describe("one thing at once", () => {
     checks: ["lint"],
   }
 
+  it("is a card of its own, a lead handed over on its tone", () => {
+    const found = draw(
+      card({ notice: "starter", state: "found", lead, seen: [] })
+    )
+    const sheet = found.container.querySelector("[data-pa-card-message]")!
+    expect(sheet.getAttribute("data-pa-meet")).toBe("starter")
+    expect(sheet.closest(".pa-agent-bubble")).toBeNull()
+    found.unmount()
+    const handed = draw(
+      card({ notice: "starter", state: "handed", lead, seen: [] })
+    )
+    expect(
+      handed.container
+        .querySelector("[data-pa-starter-lead]")
+        ?.getAttribute("data-pa-outcome")
+    ).toBe("done")
+  })
+
   it("offers the lead, hands it over in the owner's words, moves on or lets it be", async () => {
     draw(card({ notice: "starter", state: "found", lead, seen: [] }))
     expect(
@@ -434,18 +452,22 @@ describe("what I'll do on my own", () => {
     )
   })
 
-  it("lays its switches out as the settings do, each group and its actions a card", () => {
+  it("lays its switches out as the settings do, each group a band of one card", () => {
     draw(open())
-    // The level and the switches, each group on one surface, a row each.
+    // The level and the switches, each group a band, a row each.
     const level = document.querySelector("[data-pa-meet-level]")!
     const promises = document.querySelector("[data-pa-meet-promises]")!
     expect(level.className).toContain("divide-y")
     expect(promises.className).toContain("divide-y")
     expect(promises.querySelectorAll("[data-pa-promise]")).toHaveLength(10)
-    // White cards on the bubble, their buttons their own colours.
-    for (const card of [level, promises]) {
-      expect(card.className).toContain("bg-card")
-      expect(card.hasAttribute("data-pa-surface")).toBe(true)
+    // One card — no bubble round it, no card in a card: the groups bands
+    // of it, their buttons their own colours.
+    const card = level.closest("[data-pa-card-message]")!
+    expect(card.closest(".pa-agent-bubble")).toBeNull()
+    for (const group of [level, promises]) {
+      expect(group.parentElement).toBe(card)
+      expect(group.className).toContain("bg-transparent")
+      expect(group.hasAttribute("data-pa-surface")).toBe(true)
     }
     // A row's title is its switch's label.
     const brief = promises.querySelector('[data-pa-promise="brief"]')!
@@ -455,10 +477,12 @@ describe("what I'll do on my own", () => {
     )
     // The level is one segmented control, a radio group.
     expect(level.querySelector('[role="radiogroup"]')).not.toBeNull()
-    // The ways on, secondary buttons, and [Done] at the end, on a card.
+    // The ways on, secondary buttons, and [Done] at the end: the card's
+    // last band.
     const actions = document.querySelector("[data-pa-meet-actions]")!
-    expect(actions.className).toContain("bg-card")
-    expect(actions.hasAttribute("data-pa-surface")).toBe(true)
+    expect(actions.hasAttribute("data-pa-sheet-actions")).toBe(true)
+    expect(actions.parentElement).toBe(card)
+    expect(card.lastElementChild).toBe(actions)
     const buttons = [...actions.querySelectorAll("button")]
     const last = buttons[buttons.length - 1]
     expect(last.hasAttribute("data-pa-meet-done")).toBe(true)

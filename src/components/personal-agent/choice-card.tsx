@@ -24,6 +24,7 @@ import {
   BriefcaseBusiness,
   ChevronDown,
   ChevronRight,
+  CircleCheck,
   PenLine,
   Send,
   type LucideIcon,
@@ -50,8 +51,15 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
-import { AGENT_SURFACE, INSET_SURFACE, str, usePageScope } from "./shared"
+import { MessageRow } from "./message-row"
+import {
+  CardMessage,
+  SheetLabel,
+  SheetNote,
+  SheetPart,
+  str,
+  usePageScope,
+} from "./shared"
 import { useBotTemplates } from "./use-templates"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
@@ -317,8 +325,7 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
       roomy
       actions={{ rowId: row.id, text: question, at: row.created_at }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-notice={answered ? "answered" : "open"}
         data-pa-choice-card
         tabIndex={answered ? undefined : 0}
@@ -334,47 +341,44 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
             setWriting(true)
           }
         }}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          // One width, whatever its words: its set-up opening under it
-          // does not widen it.
-          "w-md max-w-full min-w-0 p-3.5 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        )}
+        // One width, whatever its words: its set-up opening under it does
+        // not widen it.
+        className="w-md max-w-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {answered && !unfolded ? (
-          <button
-            type="button"
-            onClick={() => setUnfolded(true)}
-            className="flex w-full items-center gap-1.5 text-start text-sm"
-            data-pa-choice-answered
-          >
-            <ChevronRight
-              className="size-3.5 shrink-0 text-muted-foreground rtl:rotate-180"
-              aria-hidden
-            />
-            <span className="min-w-0 flex-1 break-words">{answerLine}</span>
-          </button>
+          <SheetPart>
+            <button
+              type="button"
+              onClick={() => setUnfolded(true)}
+              className="flex w-full items-center gap-2 text-start text-sm"
+              data-pa-choice-answered
+            >
+              <CircleCheck
+                className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                aria-hidden
+              />
+              <span className="min-w-0 flex-1 break-words">{answerLine}</span>
+              <ChevronRight
+                className="size-4 shrink-0 text-muted-foreground rtl:rotate-180"
+                aria-hidden
+              />
+            </button>
+          </SheetPart>
         ) : (
-          <>
+          <SheetPart className="py-3.5">
             {answered ? (
               <button
                 type="button"
                 onClick={() => setUnfolded(false)}
-                className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground"
+                className="mb-2.5 flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
                 <ChevronDown className="size-3.5" aria-hidden />
                 {answerLine}
               </button>
             ) : null}
             {body}
-          </>
+          </SheetPart>
         )}
-        {error ? (
-          <p role="alert" className="mt-2 text-xs break-words text-destructive">
-            {error}
-          </p>
-        ) : null}
         {starter ? (
           <StarterFoot
             data={data}
@@ -383,7 +387,14 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
             botId={botId}
           />
         ) : null}
-      </div>
+        {error ? (
+          <SheetNote>
+            <p role="alert" className="break-words text-destructive">
+              {error}
+            </p>
+          </SheetNote>
+        ) : null}
+      </CardMessage>
     </MessageRow>
   )
 }
@@ -446,13 +457,8 @@ function StarterFoot({
   }
 
   return (
-    <div
-      className={cn(INSET_SURFACE, "mt-4 rounded-xl px-3 pt-2.5 pb-2")}
-      data-pa-starter-foot
-    >
-      <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-        {t("setup")}
-      </p>
+    <SheetPart className="pb-2" data-pa-starter-foot>
+      <SheetLabel className="mb-1">{t("setup")}</SheetLabel>
       <dl className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1">
         <SetupLine
           icon={BriefcaseBusiness}
@@ -545,7 +551,7 @@ function StarterFoot({
           {error}
         </p>
       ) : null}
-    </div>
+    </SheetPart>
   )
 }
 

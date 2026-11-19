@@ -152,6 +152,16 @@ afterEach(() => {
 })
 
 describe("routine cards", () => {
+  it("is a card of its own, what it does set in as a quote", () => {
+    const { container } = draw(
+      row({ notice: "routine", what: "made", state: "made", routine: ROUTINE })
+    )
+    const card = container.querySelector("[data-pa-card-message]")!
+    expect(card.getAttribute("data-pa-routine-card")).toBe("made")
+    expect(card.closest(".pa-agent-bubble")).toBeNull()
+    expect(screen.getByText(ROUTINE.what).className).toContain("border-s-2")
+  })
+
   it("a routine made in words says what it is and can be undone or edited", async () => {
     draw(
       row({

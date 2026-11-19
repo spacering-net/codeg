@@ -121,6 +121,24 @@ describe("the check's card", () => {
     expect(opened).toHaveBeenCalledWith(77)
   })
 
+  it("keeps a title's own colon, and evidence as written", () => {
+    const { container } = wrap(
+      row({
+        state: "done",
+        verdict: "true",
+        conversation_title: "Build: Fix Linux jobs",
+        evidence: "Reproduced in <TaskStrip> (src/work.tsx:20), *not* bold.",
+      })
+    )
+    // The verdict comes off the line's end, not at the title's colon.
+    expect(container.querySelector("[data-pa-check-line]")?.textContent).toBe(
+      "Checked a message in “Build: Fix Linux jobs”"
+    )
+    expect(
+      container.querySelector("[data-pa-check-evidence]")?.textContent
+    ).toBe("Reproduced in <TaskStrip> (src/work.tsx:20), *not* bold.")
+  })
+
   it("when done, shows the verdict, its evidence and what was checked", () => {
     const { container } = wrap(
       row({
@@ -133,15 +151,29 @@ describe("the check's card", () => {
       container.querySelector("[data-pa-check-verdict='false']")
     ).toBeTruthy()
     expect(
-      screen.getByText("Checked a message in “Fix the build”: Not true")
+      screen.getByText("Checked a message in “Fix the build”")
     ).toBeTruthy()
-    expect(screen.getByText("- src/build.rs:3 still fails")).toBeTruthy()
+    // The verdict said once, on its chip at the title's end.
+    expect(
+      container.querySelector("[data-pa-check-chip='false']")?.textContent
+    ).toBe("Not true")
+    // The evidence as written.
+    expect(
+      container.querySelector("[data-pa-check-evidence]")?.textContent
+    ).toBe("- src/build.rs:3 still fails")
     expect(screen.getByText("It builds. The tests pass.")).toBeTruthy()
-    expect(screen.getByText("It answered: Does it build?")).toBeTruthy()
+    // What it answered, a fact: its label, then the question.
+    const asked = container.querySelector("[data-pa-check-asked]")!
+    expect(asked.querySelector("dt")?.textContent).toBe("It answered")
+    expect(asked.querySelector("dd")?.textContent).toBe("Does it build?")
     // In bands, no box in a box: what it found, what it checked, its
     // evidence, its buttons.
+    // A card of its own: its heading the first line, no bubble round it.
     const sheet = container.querySelector("[data-pa-surface]")!
-    const parts = [...sheet.children]
+    expect(sheet.hasAttribute("data-pa-card-message")).toBe(true)
+    expect(sheet.closest(".pa-agent-bubble")).toBeNull()
+    expect(sheet.children[0].hasAttribute("data-pa-sheet-head")).toBe(true)
+    const parts = [...sheet.children].slice(1)
     expect(parts).toHaveLength(4)
     expect(
       parts[2].contains(screen.getByText("- src/build.rs:3 still fails"))
@@ -181,7 +213,7 @@ describe("the check's card", () => {
       })
     )
     expect(
-      screen.getByText("Checked a sentence in a conversation: Partly true")
+      screen.getByText("Checked a sentence in a conversation")
     ).toBeTruthy()
     expect(screen.getByText("The tests pass.")).toBeTruthy()
     expect(screen.queryByText("It builds. The tests pass.")).toBeNull()

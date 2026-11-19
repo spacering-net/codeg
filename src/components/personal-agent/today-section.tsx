@@ -51,6 +51,7 @@ import {
   PanelGroup,
   PanelIcon,
   PanelItem,
+  PanelList,
   PanelMoreRow,
   PanelSection,
   useInPanelList,
@@ -671,8 +672,14 @@ function BriefRowList({
 }) {
   const now = useNow()
   const opener = useOpener({ dispatches }, false, openTask)
+  // On the brief's card, rows as its other parts' are: no surface of their
+  // own, a hairline over each and under the last, flush with the card's
+  // words.
   return (
-    <div className="flex flex-col gap-1.5">
+    <PanelList
+      data-pa-brief-rows
+      className="rounded-none border-0 bg-transparent [&>[role=listitem]]:border-t! [&>[role=listitem]]:border-t-border/60! [&>[role=listitem]]:border-b-0! [&>[role=listitem]]:px-0! [&>[role=listitem]]:py-3! [&>[role=listitem]:last-child]:border-b!"
+    >
       {rows.map((row) => (
         <TodayRowCard
           key={row.key}
@@ -682,6 +689,6 @@ function BriefRowList({
           readOnly
         />
       ))}
-    </div>
+    </PanelList>
   )
 }

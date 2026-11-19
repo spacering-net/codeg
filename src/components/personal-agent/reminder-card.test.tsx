@@ -97,6 +97,24 @@ afterEach(() => {
 })
 
 describe("a reminder card", () => {
+  it("is a card of its own, its ending on its tone where its buttons were", () => {
+    const open = draw(card({}))
+    const sheet = open.container.querySelector("[data-pa-card-message]")!
+    expect(sheet.getAttribute("data-pa-reminder")).toBe("notify")
+    expect(sheet.closest(".pa-agent-bubble")).toBeNull()
+    expect(sheet.querySelector("[data-pa-sheet-actions]")).not.toBeNull()
+    open.unmount()
+    const put = draw(
+      card({
+        state: "snoozed",
+        until: new Date(Date.now() + 3600_000).toISOString(),
+      })
+    )
+    const line = put.container.querySelector("[data-pa-reminder-state]")!
+    expect(line.getAttribute("data-pa-outcome")).toBe("later")
+    expect(put.container.querySelector("[data-pa-sheet-actions]")).toBeNull()
+  })
+
   it("shows the matter and answers each button as it says", async () => {
     api.personalAgentNoticeAct.mockResolvedValue(card({ state: "done" }))
     draw(card({}))

@@ -43,17 +43,18 @@ import { PROPOSAL_RULES } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
 import { BotDeleteDialog } from "./bot-delete-dialog"
 import { MutedNote, MuteKindButton } from "./mute-kind"
 import { useWhen } from "./routine-bits"
+import { OutcomeLine, type OutcomeTone } from "./outcome-line"
 import { useSessionLinkOpener } from "./session-link"
 import {
-  AGENT_SURFACE,
+  CardMessage,
   num,
-  PaSheet,
   SHEET_TITLE,
   SheetActions,
+  SheetNote,
   SheetPart,
   str,
   usePageScope,
@@ -333,6 +334,15 @@ export function RuleCard({ item }: { item: NoticeItem }) {
     return null
   })()
 
+  // How it ended, on its tone: done through, let be or gone quiet,
+  // taken back as such.
+  const stateTone: OutcomeTone =
+    state === "dismissed" || state === "expired" || state === "deleted"
+      ? "off"
+      : state === "undone"
+        ? "back"
+        : "done"
+
   return (
     <MessageRow
       rowId={row.id}
@@ -348,132 +358,129 @@ export function RuleCard({ item }: { item: NoticeItem }) {
         at: row.created_at,
       }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-rule-card={rule}
         data-pa-rule-card-state={state}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground",
-          !open && state !== "acting" && "opacity-80"
-        )}
+        head={
+          <>
+            {state === "acting" ? (
+              <SyncedSpinner small className="size-3.5 shrink-0" />
+            ) : (
+              <Icon aria-hidden />
+            )}
+            <span className="font-medium">
+              {t(`heading.${rule}` as "heading.failed")}
+            </span>
+            {since ? <span>· {t("since", { when: when(since) })}</span> : null}
+          </>
+        }
       >
-        <p className="mb-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
-          {state === "acting" ? (
-            <SyncedSpinner small className="size-3.5 shrink-0" />
-          ) : (
-            <Icon className="size-3.5 shrink-0" aria-hidden />
-          )}
-          <span className="font-medium">
-            {t(`heading.${rule}` as "heading.failed")}
-          </span>
-          {since ? <span>· {t("since", { when: when(since) })}</span> : null}
-        </p>
-        <PaSheet>
-          {/* What it is about, and how it stands. */}
-          {name ||
-          detail ||
-          (data.lowered === true && open) ||
-          stateNote ||
-          str(data, "muted") ? (
-            <SheetPart className="flex flex-col gap-1">
-              {name ? (
-                <p className={SHEET_TITLE} data-pa-rule-name>
-                  {name}
-                </p>
-              ) : null}
-              {detail ? (
-                <p className="line-clamp-3 text-xs break-words text-muted-foreground">
-                  {detail}
-                </p>
-              ) : null}
-              {data.lowered === true && open ? (
-                <p
-                  className="text-xs text-muted-foreground"
-                  data-pa-rule-lowered
-                >
-                  {t("lowered")}
-                </p>
-              ) : null}
-              {stateNote ? (
-                <p className="text-xs text-muted-foreground" data-pa-rule-note>
-                  {stateNote}
-                </p>
-              ) : null}
-              <MutedNote data={data} className="" />
-            </SheetPart>
-          ) : null}
-          {(open || switched) && !readOnly ? (
-            <SheetActions>
-              {open ? (
-                <>
-                  {(STEPS[rule] ?? []).map((a, i) => (
-                    <Button
-                      key={a}
-                      size="sm"
-                      variant={i === 0 ? "default" : "secondary"}
-                      disabled={busy != null}
-                      onClick={() => void act(a)}
-                      data-pa-rule-act={a}
-                    >
-                      {busy === a ? (
-                        <SyncedSpinner small className="size-3.5" />
-                      ) : null}
-                      {rule === "division"
-                        ? t("step.division.switch", { name: toName })
-                        : t(`step.${rule}.${a}` as "step.failed.retry")}
-                    </Button>
-                  ))}
-                  {rule === "pr_review" && str(facts, "url") ? (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => void openUrl(str(facts, "url") ?? "")}
-                      data-pa-rule-act="open_pr"
-                    >
-                      {t("openPr")}
-                    </Button>
-                  ) : null}
+        {/* What it is about, and how it stands. */}
+        {name || detail || (data.lowered === true && open) || stateNote ? (
+          <SheetPart className="flex flex-col gap-1.5">
+            {name ? (
+              <p className={SHEET_TITLE} data-pa-rule-name>
+                {name}
+              </p>
+            ) : null}
+            {detail ? (
+              <p
+                className={cn(
+                  "line-clamp-3 text-xs leading-5 break-words",
+                  rule === "failed"
+                    ? "text-red-700 dark:text-red-400"
+                    : "text-muted-foreground"
+                )}
+              >
+                {detail}
+              </p>
+            ) : null}
+            {data.lowered === true && open ? (
+              <OutcomeLine tone="info" data-pa-rule-lowered>
+                {t("lowered")}
+              </OutcomeLine>
+            ) : null}
+            {stateNote ? (
+              <OutcomeLine tone={stateTone} data-pa-rule-note>
+                {stateNote}
+              </OutcomeLine>
+            ) : null}
+          </SheetPart>
+        ) : null}
+        {(open || switched) && !readOnly ? (
+          <SheetActions>
+            {open ? (
+              <>
+                {(STEPS[rule] ?? []).map((a, i) => (
+                  <Button
+                    key={a}
+                    size="sm"
+                    variant={i === 0 ? "default" : "secondary"}
+                    disabled={busy != null}
+                    onClick={() => void act(a)}
+                    data-pa-rule-act={a}
+                  >
+                    {busy === a ? (
+                      <SyncedSpinner small className="size-3.5" />
+                    ) : null}
+                    {rule === "division"
+                      ? t("step.division.switch", { name: toName })
+                      : t(`step.${rule}.${a}` as "step.failed.retry")}
+                  </Button>
+                ))}
+                {rule === "pr_review" && str(facts, "url") ? (
                   <Button
                     size="sm"
-                    variant="ghost"
-                    disabled={busy != null}
-                    onClick={() => void act("dismiss")}
-                    data-pa-rule-act="dismiss"
+                    variant="secondary"
+                    onClick={() => void openUrl(str(facts, "url") ?? "")}
+                    data-pa-rule-act="open_pr"
                   >
-                    {t("notNow")}
+                    {t("openPr")}
                   </Button>
-                  <MuteKindButton
-                    noticeId={noticeId}
-                    disabled={busy != null}
-                    onFailed={setFailed}
-                  />
-                </>
-              ) : null}
-              {switched ? (
+                ) : null}
                 <Button
                   size="sm"
-                  variant="secondary"
+                  variant="ghost"
                   disabled={busy != null}
-                  onClick={() => void act("undo")}
-                  data-pa-rule-act="undo"
+                  onClick={() => void act("dismiss")}
+                  data-pa-rule-act="dismiss"
                 >
-                  {busy === "undo" ? (
-                    <SyncedSpinner small className="size-3.5" />
-                  ) : null}
-                  {t("undoSwitch")}
+                  {t("notNow")}
                 </Button>
-              ) : null}
-            </SheetActions>
-          ) : null}
-        </PaSheet>
-        {error ? (
-          <p role="alert" className="mt-2 text-xs break-words text-destructive">
-            {t("failed", { error })}
-          </p>
+                <MuteKindButton
+                  noticeId={noticeId}
+                  disabled={busy != null}
+                  onFailed={setFailed}
+                />
+              </>
+            ) : null}
+            {switched ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy != null}
+                onClick={() => void act("undo")}
+                data-pa-rule-act="undo"
+              >
+                {busy === "undo" ? (
+                  <SyncedSpinner small className="size-3.5" />
+                ) : null}
+                {t("undoSwitch")}
+              </Button>
+            ) : null}
+          </SheetActions>
         ) : null}
-      </div>
+        {str(data, "muted") || error ? (
+          <SheetNote>
+            <MutedNote data={data} className="" />
+            {error ? (
+              <p role="alert" className="break-words text-destructive">
+                {t("failed", { error })}
+              </p>
+            ) : null}
+          </SheetNote>
+        ) : null}
+      </CardMessage>
       {rule === "idle_bot" ? (
         <BotDeleteDialog
           botId={deleting}

@@ -153,6 +153,12 @@ describe("AskCard", () => {
         .getByRole("button", { name: "Open session" })
         .closest("[data-pa-sheet-actions]")
     ).not.toBeNull()
+    // A card of its own: no bubble round it.
+    const card = screen
+      .getByRole("button", { name: "Open session" })
+      .closest("[data-pa-card-message]")!
+    expect(card).not.toBeNull()
+    expect(card.closest(".pa-agent-bubble")).toBeNull()
   })
 
   it("lets the owner answer a forwarded question here, with the assistant's lean", async () => {

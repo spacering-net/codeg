@@ -108,7 +108,14 @@ describe("NoticeCard", () => {
     // On one sheet in parts: the work's row its head, what it is to do a
     // band of its own, its buttons the last.
     const sheet = screen.getByText("Research X").closest("[data-pa-surface]")
-    expect(sheet?.firstElementChild?.getAttribute("data-pa-work")).toBe("head")
+    // The card is the message, no bubble round it: its heading, then the
+    // work's row.
+    expect(sheet?.hasAttribute("data-pa-card-message")).toBe(true)
+    expect(sheet?.closest(".pa-agent-bubble")).toBeNull()
+    expect(sheet?.firstElementChild?.hasAttribute("data-pa-sheet-head")).toBe(
+      true
+    )
+    expect(sheet?.children[1]?.getAttribute("data-pa-work")).toBe("head")
     expect(
       screen.getByText("Find out X.").closest("[data-pa-sheet-part]")
     ).not.toBeNull()
@@ -279,6 +286,17 @@ describe("cards about assistants working together", () => {
     expect(screen.getByText("Let them go on")).toBeTruthy()
     expect(screen.getByText(/went round in a circle/)).toBeTruthy()
     expect(screen.queryByRole("button", { name: "I'll handle it" })).toBeNull()
+    // Settled: its heading says so on the done tone; the two it is between
+    // over what happened.
+    expect(
+      screen
+        .getByText("Let them go on")
+        .closest("[data-pa-settle]")
+        ?.getAttribute("data-pa-settle")
+    ).toBe("done")
+    expect(
+      document.querySelector("[data-pa-loop-between]")?.textContent
+    ).toContain("Review")
   })
 
   it("lists what a stop took with it, and stops what it could not on request", async () => {
@@ -296,7 +314,9 @@ describe("cards about assistants working together", () => {
     )
     expect(screen.getByText("Stopped, with what it set going")).toBeTruthy()
     expect(screen.getByText("Fix the login")).toBeTruthy()
-    expect(screen.getByText("To Dev: Fix it.")).toBeTruthy()
+    // A message taken back: whom it was to over what it said.
+    expect(screen.getByText("To Dev")).toBeTruthy()
+    expect(screen.getByText("Fix it.")).toBeTruthy()
     expect(screen.getByText("Review is on “Review it.”")).toBeTruthy()
     // Each group a band of its own on the sheet, its label over it.
     const parts = screen

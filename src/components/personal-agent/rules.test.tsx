@@ -258,6 +258,21 @@ describe("the weekly review's questions (2.11)", () => {
 })
 
 describe("a rule's card", () => {
+  it("is a card of its own, no bubble round it, its outcome on its tone", () => {
+    const open = draw(row(FAILED))
+    const card = open.container.querySelector("[data-pa-card-message]")!
+    expect(card.getAttribute("data-pa-rule-card")).toBe("failed")
+    expect(card.closest(".pa-agent-bubble")).toBeNull()
+    expect(card.querySelector("[data-pa-sheet-head]")?.textContent).toContain(
+      "Failed"
+    )
+    open.unmount()
+    const handed = draw(row({ ...FAILED, state: "handed" }))
+    const note = handed.container.querySelector("[data-pa-rule-note]")!
+    expect(note.getAttribute("data-pa-outcome")).toBe("done")
+    expect(handed.container.querySelector("[data-pa-sheet-actions]")).toBeNull()
+  })
+
   it("says what it found and does its next step", async () => {
     draw(row(FAILED))
     expect(screen.getByText("Failed, and nobody's on it")).toBeTruthy()

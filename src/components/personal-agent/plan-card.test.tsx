@@ -178,6 +178,12 @@ describe("the plan card", () => {
     expect(
       container.querySelectorAll("[data-pa-sheet-actions] [data-pa-plan-act]")
     ).toHaveLength(3)
+    // A card of its own: no bubble round it.
+    const sheet = screen.getByText("Start").closest("[data-pa-card-message]")!
+    expect(sheet).not.toBeNull()
+    expect(sheet.closest(".pa-agent-bubble")).toBeNull()
+    // How far it got, as a bar under its title.
+    expect(sheet.querySelector("[data-pa-plan-progress]")).not.toBeNull()
     fireEvent.click(screen.getByText("Start"))
     expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(9, "start", null)
     fireEvent.click(screen.getByText("Change"))

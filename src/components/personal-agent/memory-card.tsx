@@ -15,7 +15,7 @@
 
 import { useState } from "react"
 import { useTranslations } from "next-intl"
-import { Brain, Sparkles } from "lucide-react"
+import { Brain, ChevronDown, ChevronUp, Sparkles } from "lucide-react"
 
 import { CompactDiff } from "@/components/diff/compact-diff"
 import { Button } from "@/components/ui/button"
@@ -27,13 +27,18 @@ import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
 import {
-  AGENT_SURFACE,
-  PaSheet,
+  OutcomeLine,
+  ToneChip,
+  type ChipTone,
+  type OutcomeTone,
+} from "./outcome-line"
+import {
+  CardMessage,
+  SHEET_TITLE,
   SheetActions,
-  SheetField,
-  SheetFields,
+  SheetNote,
   SheetPart,
   str,
   usePageScope,
@@ -53,6 +58,20 @@ const TIDY_STATES = new Set([
   "stale",
 ])
 const TIDY_NOTES = new Set(["draft", "applied", "discarded", "stale"])
+/** A tidy-up's note on its tone: a draft a word, applied through, not used
+ *  let be, out of date a caution. */
+const TIDY_TONE: Record<string, OutcomeTone> = {
+  draft: "info",
+  applied: "done",
+  discarded: "off",
+  stale: "warn",
+}
+/** How a file changed, on its tone. */
+const STATUS_TONE: Record<MemoryFileChange["status"], ChipTone> = {
+  added: "emerald",
+  modified: "sky",
+  deleted: "red",
+}
 
 export function memoryFilesOf(v: unknown): MemoryFileChange[] {
   return Array.isArray(v)
@@ -161,148 +180,148 @@ export function MemoryCard({ item }: { item: NoticeItem }) {
       roomy
       actions={{ rowId: row.id, text: row.body || null, at: row.created_at }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-memory-card={tidy ? undefined : state}
         data-pa-tidy-card={tidy ? state : undefined}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "flex min-w-0 flex-col gap-2 p-3 text-sm text-foreground"
-        )}
+        head={
+          <>
+            {tidy ? <Sparkles aria-hidden /> : <Brain aria-hidden />}
+            <span className="font-medium">{title}</span>
+          </>
+        }
       >
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          {tidy ? (
-            <Sparkles className="size-3.5 shrink-0" aria-hidden />
-          ) : (
-            <Brain className="size-3.5 shrink-0" aria-hidden />
-          )}
-          <span className="font-medium">{title}</span>
-        </p>
-        <PaSheet>
-          {/* What changed, and what came of it. */}
-          <SheetPart className="flex flex-col gap-1.5">
-            <p className="text-sm break-words">{summary.join(t("sep"))}</p>
-            {state === "undone" && keptNames.length > 0 ? (
-              <p className="text-xs text-muted-foreground" data-pa-memory-kept>
-                {t("kept", { files: keptNames.join(t("listSep")) })}
-              </p>
-            ) : null}
-            {tidy && TIDY_NOTES.has(state) ? (
-              <p className="text-xs text-muted-foreground" data-pa-tidy-note>
-                {tt(`note.${state}` as "note.draft")}
-              </p>
-            ) : null}
-            {tidy && str(data, "not_aside") ? (
-              <p
-                className="text-xs text-muted-foreground"
-                data-pa-tidy-not-aside
-              >
-                {tt("note.notAside", { why: str(data, "not_aside") ?? "" })}
-              </p>
-            ) : null}
+        {/* What changed, and what came of it. */}
+        <SheetPart className="flex flex-col gap-1.5">
+          <p className={SHEET_TITLE}>{summary.join(t("sep"))}</p>
+          {state === "undone" && keptNames.length > 0 ? (
+            <OutcomeLine tone="warn" data-pa-memory-kept>
+              {t("kept", { files: keptNames.join(t("listSep")) })}
+            </OutcomeLine>
+          ) : null}
+          {tidy && TIDY_NOTES.has(state) ? (
+            <OutcomeLine tone={TIDY_TONE[state] ?? "info"} data-pa-tidy-note>
+              {tt(`note.${state}` as "note.draft")}
+            </OutcomeLine>
+          ) : null}
+          {tidy && str(data, "not_aside") ? (
+            <OutcomeLine tone="warn" data-pa-tidy-not-aside>
+              {tt("note.notAside", { why: str(data, "not_aside") ?? "" })}
+            </OutcomeLine>
+          ) : null}
+        </SheetPart>
+        {/* File by file: how it changed — on its tone — and which. */}
+        {shown.length > 0 ? (
+          <SheetPart>
+            <ul className="flex flex-col gap-1.5" data-pa-memory-files>
+              {shown.map((f) => (
+                <li
+                  key={f.path}
+                  className="flex min-w-0 items-center gap-2 text-xs leading-5"
+                  data-pa-memory-file={f.path}
+                >
+                  <ToneChip tone={STATUS_TONE[f.status]}>
+                    {t(`status.${f.status}` as "status.added")}
+                  </ToneChip>
+                  {f.status !== "deleted" &&
+                  state !== "undone" &&
+                  (!tidy || state === "acted" || state === "applied") ? (
+                    <button
+                      type="button"
+                      className="min-w-0 truncate rounded-sm text-start font-medium underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                      title={f.path}
+                      onClick={() => openBotPage("persona", { entry: f.path })}
+                    >
+                      {label(f)}
+                    </button>
+                  ) : (
+                    <span
+                      className={cn(
+                        "min-w-0 truncate font-medium",
+                        f.status === "deleted" &&
+                          "text-muted-foreground line-through decoration-muted-foreground/50"
+                      )}
+                      title={f.path}
+                    >
+                      {label(f)}
+                    </span>
+                  )}
+                  {f.kind === "entry" && f.title && f.title !== f.path ? (
+                    <span
+                      className="min-w-0 shrink truncate font-mono text-[0.6875rem] text-muted-foreground"
+                      dir="ltr"
+                    >
+                      {f.path}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
           </SheetPart>
-          {/* Entry by entry: how it changed, and which. */}
-          {shown.length > 0 ? (
-            <SheetPart>
-              <SheetFields
-                className="items-baseline gap-y-0.5"
-                data-pa-memory-files
-              >
-                {shown.map((f) => (
-                  <SheetField
-                    key={f.path}
-                    label={t(`status.${f.status}` as "status.added")}
-                    data-pa-memory-file={f.path}
-                  >
-                    {f.status !== "deleted" &&
-                    state !== "undone" &&
-                    (!tidy || state === "acted" || state === "applied") ? (
-                      <button
-                        type="button"
-                        className="min-w-0 truncate rounded-sm text-start font-medium underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                        title={f.path}
-                        onClick={() =>
-                          openBotPage("persona", { entry: f.path })
-                        }
-                      >
-                        {label(f)}
-                      </button>
-                    ) : (
-                      <span
-                        className="min-w-0 truncate font-medium"
-                        title={f.path}
-                      >
-                        {label(f)}
-                      </span>
-                    )}
-                  </SheetField>
-                ))}
-              </SheetFields>
-            </SheetPart>
-          ) : null}
-          {/* The diff, the width of the card. */}
-          {showDiff ? (
-            <div className="min-w-0" data-pa-memory-diff>
-              <CompactDiff diffText={diff} />
-              {cut ? (
-                <p className="border-t border-border/50 px-3.5 py-1.5 text-[0.6875rem] text-muted-foreground">
-                  {t("diffCut")}
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-          <SheetActions>
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-expanded={showDiff}
-              onClick={() => setShowDiff((v) => !v)}
-            >
-              {showDiff ? t("hideDiff") : t("showDiff")}
-            </Button>
-            {undoable ? (
+        ) : null}
+        {/* The diff, the width of the card. */}
+        {showDiff ? (
+          <div className="min-w-0" data-pa-memory-diff>
+            <CompactDiff diffText={diff} />
+            {cut ? (
+              <p className="border-t border-border/50 px-3.5 py-1.5 text-[0.6875rem] text-muted-foreground">
+                {t("diffCut")}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        <SheetActions>
+          {tidy && state === "draft" ? (
+            <>
               <Button
                 size="sm"
-                variant="secondary"
                 disabled={readOnly || busy}
-                onClick={() => void act("undo")}
-                data-pa-tidy-act={tidy ? "undo" : undefined}
+                onClick={() => void act("apply")}
+                data-pa-tidy-act="apply"
               >
                 {busy ? <SyncedSpinner small className="size-3.5" /> : null}
-                {tidy ? tt("undoAll") : t("undo")}
+                {tt("apply")}
               </Button>
-            ) : null}
-            {tidy && state === "draft" ? (
-              <>
-                <Button
-                  size="sm"
-                  disabled={readOnly || busy}
-                  onClick={() => void act("apply")}
-                  data-pa-tidy-act="apply"
-                >
-                  {busy ? <SyncedSpinner small className="size-3.5" /> : null}
-                  {tt("apply")}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={readOnly || busy}
-                  onClick={() => void act("dismiss")}
-                  data-pa-tidy-act="dismiss"
-                >
-                  {tt("dismiss")}
-                </Button>
-              </>
-            ) : null}
-          </SheetActions>
-        </PaSheet>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={readOnly || busy}
+                onClick={() => void act("dismiss")}
+                data-pa-tidy-act="dismiss"
+              >
+                {tt("dismiss")}
+              </Button>
+            </>
+          ) : null}
+          {undoable ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={readOnly || busy}
+              onClick={() => void act("undo")}
+              data-pa-tidy-act={tidy ? "undo" : undefined}
+            >
+              {busy ? <SyncedSpinner small className="size-3.5" /> : null}
+              {tidy ? tt("undoAll") : t("undo")}
+            </Button>
+          ) : null}
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-expanded={showDiff}
+            onClick={() => setShowDiff((v) => !v)}
+          >
+            {showDiff ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}
+            {showDiff ? t("hideDiff") : t("showDiff")}
+          </Button>
+        </SheetActions>
         {failed ? (
-          <p role="alert" className="text-xs break-words text-destructive">
-            {tn("failed", { error: failed })}
-          </p>
+          <SheetNote>
+            <p role="alert" className="break-words text-destructive">
+              {tn("failed", { error: failed })}
+            </p>
+          </SheetNote>
         ) : null}
-      </div>
+      </CardMessage>
     </MessageRow>
   )
 }

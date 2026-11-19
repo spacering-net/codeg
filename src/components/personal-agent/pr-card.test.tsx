@@ -274,6 +274,14 @@ describe("a PR card", () => {
         .getByRole("button", { name: "View PR" })
         .closest("[data-pa-sheet-actions]")
     ).not.toBeNull()
+    // A card of its own: no bubble round it.
+    const card = screen
+      .getByRole("button", { name: "View PR" })
+      .closest("[data-pa-card-message]")!
+    expect(card).not.toBeNull()
+    expect(card.closest(".pa-agent-bubble")).toBeNull()
+    // Moved on since: a step back.
+    expect(card.className).toContain("opacity-80")
   })
 
   it("never calls a PR whose checks it cannot read ready to merge", () => {

@@ -17,6 +17,8 @@ import {
   CalendarClock,
   CalendarPlus,
   CalendarX,
+  Clock3,
+  Play,
   Repeat,
   type LucideIcon,
 } from "lucide-react"
@@ -30,15 +32,16 @@ import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
 import { MutedNote, MuteKindButton } from "./mute-kind"
+import { OutcomeLine, type OutcomeTone } from "./outcome-line"
 import { asDraft, precheckWords, RoutineWhen } from "./routine-bits"
 import {
-  AGENT_SURFACE,
+  CardMessage,
   num,
-  PaSheet,
   SHEET_TITLE,
   SheetActions,
+  SheetNote,
   SheetPart,
   str,
   usePageScope,
@@ -150,6 +153,8 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
       return t("madeNote")
     return null
   })()
+  const stateTone: OutcomeTone =
+    state === "undone" ? "back" : state === "dismissed" ? "off" : "done"
   const precheck = r ? precheckWords(tr, r.precheck) : null
   const changeWord =
     what === "changed" || (what === "proposal" && routineId != null)
@@ -171,8 +176,7 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
     what === "paused" ||
     (what === "made" && num(data, "trial_run_id") != null) ||
     reason ||
-    stateNote ||
-    str(data, "muted")
+    stateNote
   const acts =
     !readOnly &&
     (((what === "made" || what === "changed") && state === "made") ||
@@ -191,224 +195,214 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
         at: row.created_at,
       }}
     >
-      <div
-        data-bubble
+      <CardMessage
         data-pa-routine-card={what}
         data-pa-routine-card-state={state}
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground",
-          !open && state !== "made" && "opacity-80"
-        )}
+        head={
+          <>
+            <Icon aria-hidden className={tone} />
+            <span className={cn("font-medium", tone)}>{heading}</span>
+            {changeWord ? <span>· {changeWord}</span> : null}
+          </>
+        }
       >
-        <p
-          className={cn(
-            "mb-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs",
-            tone
-          )}
-        >
-          <Icon className="size-3.5 shrink-0" aria-hidden />
-          <span className="font-medium">{heading}</span>
-          {changeWord ? (
-            <span className="text-muted-foreground">· {changeWord}</span>
-          ) : null}
-        </p>
-        <PaSheet>
-          {/* The routine: what it is called, and when it runs. */}
-          {r ? (
-            <SheetPart className="flex flex-col gap-1">
-              <p className={SHEET_TITLE} data-pa-routine-title>
-                {r.title}
-              </p>
-              <p className="text-xs break-words text-muted-foreground">
+        {/* The routine: what it is called, and when it runs. */}
+        {r ? (
+          <SheetPart className="flex flex-col gap-1">
+            <p className={SHEET_TITLE} data-pa-routine-title>
+              {r.title}
+            </p>
+            <p className="flex min-w-0 items-start gap-1.5 text-xs leading-5 break-words text-muted-foreground">
+              <Clock3
+                className="mt-[0.1875rem] size-3.5 shrink-0"
+                aria-hidden
+              />
+              <span className="min-w-0">
                 <RoutineWhen cron={r.cron} event={r.event} zone={r.timezone} />
                 {r.kind ? ` · ${tr(`kind.${r.kind}` as "kind.brain")}` : null}
                 {precheck ? ` · ${precheck}` : null}
+              </span>
+            </p>
+          </SheetPart>
+        ) : null}
+        {/* What it does, and what this news says of it. */}
+        {notes ? (
+          <SheetPart className="flex flex-col gap-2">
+            {r?.what && what !== "paused" ? (
+              <p className="line-clamp-4 border-s-2 border-border ps-3 text-sm leading-5 break-words whitespace-pre-wrap text-foreground/90">
+                {r.what}
               </p>
-            </SheetPart>
-          ) : null}
-          {/* What it does, and what this news says of it. */}
-          {notes ? (
-            <SheetPart className="flex flex-col gap-1.5">
-              {r?.what && what !== "paused" ? (
-                <p className="line-clamp-4 text-xs break-words whitespace-pre-wrap text-foreground/80">
-                  {r.what}
-                </p>
-              ) : null}
-              {what === "repeat" ? (
-                <p
-                  className="text-xs text-muted-foreground"
-                  data-pa-routine-repeat
+            ) : null}
+            {what === "repeat" ? (
+              <p
+                className="text-xs text-muted-foreground"
+                data-pa-routine-repeat
+              >
+                {t("repeatBody", { count: num(data, "count") ?? 3 })}
+              </p>
+            ) : null}
+            {what === "paused" ? (
+              <OutcomeLine tone="warn">
+                {pausedWhy === "executor"
+                  ? t("pausedExecutor")
+                  : t("pausedFailures")}
+                {str(data, "why") ? ` — ${str(data, "why")}` : null}
+              </OutcomeLine>
+            ) : null}
+            {what === "made" && num(data, "trial_run_id") != null ? (
+              <OutcomeLine tone="info" icon={Play}>
+                {t("trial")}
+              </OutcomeLine>
+            ) : null}
+            {reason && what !== "paused" ? (
+              <p className="text-xs break-words text-muted-foreground">
+                {t("reason", { reason })}
+              </p>
+            ) : null}
+            {stateNote ? (
+              <OutcomeLine tone={stateTone} data-pa-routine-note>
+                {stateNote}
+              </OutcomeLine>
+            ) : null}
+          </SheetPart>
+        ) : null}
+        {acts ? (
+          <SheetActions>
+            {(what === "made" || what === "changed") && state === "made" ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={busy != null}
+                  onClick={() => void answer("undo")}
+                  data-pa-routine-card-act="undo"
                 >
-                  {t("repeatBody", { count: num(data, "count") ?? 3 })}
-                </p>
-              ) : null}
-              {what === "paused" ? (
-                <p className="text-xs break-words text-amber-700 dark:text-amber-300">
-                  {pausedWhy === "executor"
-                    ? t("pausedExecutor")
-                    : t("pausedFailures")}
-                  {str(data, "why") ? ` — ${str(data, "why")}` : null}
-                </p>
-              ) : null}
-              {what === "made" && num(data, "trial_run_id") != null ? (
-                <p className="text-xs text-muted-foreground">{t("trial")}</p>
-              ) : null}
-              {reason && what !== "paused" ? (
-                <p className="text-xs break-words text-muted-foreground">
-                  {t("reason", { reason })}
-                </p>
-              ) : null}
-              {stateNote ? (
-                <p
-                  className="text-xs text-muted-foreground"
-                  data-pa-routine-note
-                >
-                  {stateNote}
-                </p>
-              ) : null}
-              <MutedNote data={data} className="" />
-            </SheetPart>
-          ) : null}
-          {acts ? (
-            <SheetActions>
-              {(what === "made" || what === "changed") && state === "made" ? (
-                <>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={busy != null}
-                    onClick={() => void answer("undo")}
-                    data-pa-routine-card-act="undo"
-                  >
-                    {spin("undo")}
-                    {t("undo")}
-                  </Button>
-                  {routineId != null ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        openEditor({
-                          botId,
-                          routineId,
-                          draft: null,
-                          noticeId: null,
-                        })
-                      }
-                      data-pa-routine-card-act="edit"
-                    >
-                      {t("edit")}
-                    </Button>
-                  ) : null}
-                </>
-              ) : null}
-              {what === "proposal" && open ? (
-                <>
-                  <Button
-                    size="sm"
-                    disabled={busy != null}
-                    onClick={() => void answer("accept")}
-                    data-pa-routine-card-act="accept"
-                  >
-                    {spin("accept")}
-                    {routineId != null ? t("acceptChange") : t("accept")}
-                  </Button>
+                  {spin("undo")}
+                  {t("undo")}
+                </Button>
+                {routineId != null ? (
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={busy != null}
-                    onClick={() => void answer("dismiss")}
-                    data-pa-routine-card-act="dismiss"
+                    onClick={() =>
+                      openEditor({
+                        botId,
+                        routineId,
+                        draft: null,
+                        noticeId: null,
+                      })
+                    }
+                    data-pa-routine-card-act="edit"
                   >
-                    {spin("dismiss")}
-                    {t("dismiss")}
+                    {t("edit")}
                   </Button>
-                  {confirm ? null : (
-                    <MuteKindButton
-                      noticeId={noticeId}
-                      disabled={busy != null}
-                    />
-                  )}
-                </>
-              ) : null}
-              {what === "repeat" && open ? (
-                <>
+                ) : null}
+              </>
+            ) : null}
+            {what === "proposal" && open ? (
+              <>
+                <Button
+                  size="sm"
+                  disabled={busy != null}
+                  onClick={() => void answer("accept")}
+                  data-pa-routine-card-act="accept"
+                >
+                  {spin("accept")}
+                  {routineId != null ? t("acceptChange") : t("accept")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy != null}
+                  onClick={() => void answer("dismiss")}
+                  data-pa-routine-card-act="dismiss"
+                >
+                  {spin("dismiss")}
+                  {t("dismiss")}
+                </Button>
+                {confirm ? null : (
+                  <MuteKindButton noticeId={noticeId} disabled={busy != null} />
+                )}
+              </>
+            ) : null}
+            {what === "repeat" && open ? (
+              <>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    openEditor({
+                      botId,
+                      routineId: null,
+                      draft,
+                      noticeId: Number.isFinite(noticeId) ? noticeId : null,
+                    })
+                  }
+                  data-pa-routine-card-act="make"
+                >
+                  {t("makeIt")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy != null}
+                  onClick={() => void answer("dismiss")}
+                  data-pa-routine-card-act="dismiss"
+                >
+                  {spin("dismiss")}
+                  {t("dismiss")}
+                </Button>
+                <MuteKindButton noticeId={noticeId} disabled={busy != null} />
+              </>
+            ) : null}
+            {what === "paused" && open ? (
+              <>
+                {pausedWhy === "executor" && routineId != null ? (
                   <Button
                     size="sm"
                     onClick={() =>
                       openEditor({
                         botId,
-                        routineId: null,
-                        draft,
+                        routineId,
+                        draft: null,
                         noticeId: Number.isFinite(noticeId) ? noticeId : null,
                       })
                     }
-                    data-pa-routine-card-act="make"
+                    data-pa-routine-card-act="another"
                   >
-                    {t("makeIt")}
+                    {t("useAnother")}
                   </Button>
+                ) : (
                   <Button
                     size="sm"
-                    variant="ghost"
                     disabled={busy != null}
-                    onClick={() => void answer("dismiss")}
-                    data-pa-routine-card-act="dismiss"
+                    onClick={() => void answer("resume")}
+                    data-pa-routine-card-act="resume"
                   >
-                    {spin("dismiss")}
-                    {t("dismiss")}
+                    {spin("resume")}
+                    {t("resume")}
                   </Button>
-                  <MuteKindButton noticeId={noticeId} disabled={busy != null} />
-                </>
-              ) : null}
-              {what === "paused" && open ? (
-                <>
-                  {pausedWhy === "executor" && routineId != null ? (
-                    <Button
-                      size="sm"
-                      onClick={() =>
-                        openEditor({
-                          botId,
-                          routineId,
-                          draft: null,
-                          noticeId: Number.isFinite(noticeId) ? noticeId : null,
-                        })
-                      }
-                      data-pa-routine-card-act="another"
-                    >
-                      {t("useAnother")}
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      disabled={busy != null}
-                      onClick={() => void answer("resume")}
-                      data-pa-routine-card-act="resume"
-                    >
-                      {spin("resume")}
-                      {t("resume")}
-                    </Button>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => showRoutines()}
-                    data-pa-routine-card-act="open"
-                  >
-                    {t("open")}
-                  </Button>
-                </>
-              ) : null}
-            </SheetActions>
-          ) : null}
-        </PaSheet>
-        {failed || error ? (
-          <p className="mt-1.5 text-xs break-words text-destructive">
-            {failed ?? error}
-          </p>
+                )}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => showRoutines()}
+                  data-pa-routine-card-act="open"
+                >
+                  {t("open")}
+                </Button>
+              </>
+            ) : null}
+          </SheetActions>
         ) : null}
-      </div>
+        {str(data, "muted") || failed || error ? (
+          <SheetNote>
+            <MutedNote data={data} className="" />
+            {failed || error ? (
+              <p className="break-words text-destructive">{failed ?? error}</p>
+            ) : null}
+          </SheetNote>
+        ) : null}
+      </CardMessage>
     </MessageRow>
   )
 }

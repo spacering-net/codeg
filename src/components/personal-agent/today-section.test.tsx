@@ -871,7 +871,7 @@ describe("the morning brief (6.4)", () => {
     expect(screen.queryByRole("button", { name: "Done" })).toBe(null)
   })
 
-  it("keeps a brief's rows soft cards of their own, what they say a note", () => {
+  it("draws a brief's rows as its card's other rows, what they say a note", () => {
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
         <BriefRows
@@ -890,7 +890,11 @@ describe("the morning brief (6.4)", () => {
     )
     const item = screen.getByText("Fix CI").closest("[data-slot='item']")!
     expect(item.hasAttribute("data-pa-shape")).toBe(false)
-    expect(item.getAttribute("data-variant")).toBe("muted")
+    // No surface of its own on the brief's card: a row of a list, a
+    // hairline over it.
+    expect(item.getAttribute("data-variant")).toBe("default")
+    expect(item.getAttribute("role")).toBe("listitem")
+    expect(item.parentElement?.hasAttribute("data-pa-brief-rows")).toBe(true)
     expect(document.querySelector("[data-pa-callout]")).toBeNull()
     expect(screen.getByText("it broke")).toBeTruthy()
   })

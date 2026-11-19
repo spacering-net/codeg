@@ -119,7 +119,15 @@ describe("the memory card", () => {
     const entry = container.querySelector(
       "[data-pa-memory-file='memory/release.md']"
     )
-    expect(entry?.textContent).toBe("NewRelease days")
+    // How it changed on its tone, its name, its path.
+    expect(entry?.textContent).toBe("NewRelease daysmemory/release.md")
+    expect(entry?.querySelector("span")?.className).toContain(
+      "bg-emerald-500/15"
+    )
+    // A card of its own, no bubble round it.
+    const sheet = container.querySelector("[data-pa-card-message]")!
+    expect(sheet.hasAttribute("data-pa-memory-card")).toBe(true)
+    expect(sheet.closest(".pa-agent-bubble")).toBeNull()
   })
 
   it("opens the entry it names on the persona page", () => {

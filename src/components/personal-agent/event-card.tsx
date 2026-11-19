@@ -29,10 +29,9 @@ import { cn } from "@/lib/utils"
 
 import { asVerdict, CheckLabel, VerdictChip } from "./acceptance-bits"
 import type { MessageItem } from "./message-items"
-import { bubbleCorners, MessageRow } from "./message-row"
+import { MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
 import {
-  AGENT_SURFACE,
   asDispatchState,
   asMode,
   BUBBLE_MARKDOWN,
@@ -40,7 +39,7 @@ import {
   DispatchStateChip,
   MARKDOWN_LIST_ROOM,
   num,
-  PaSheet,
+  CardMessage,
   SheetActions,
   SheetPart,
   str,
@@ -283,107 +282,102 @@ export function EventCard({ item }: { item: EventItem }) {
       }}
       aside={unread ? <UnreadMark /> : null}
     >
-      {/* A reply's padding, so the work's row and the text under it line up
-          with the reply's above. */}
-      <div
-        data-bubble
-        className={cn(
-          AGENT_SURFACE,
-          bubbleCorners("start", item.tail),
-          "min-w-0 p-3 text-sm text-foreground"
-        )}
+      {/* The work and its news one card, no bubble round it: the reply it
+          answers (when not the message above), the work its head, then
+          where it stands, what came of it and its buttons, a hairline
+          between. */}
+      <CardMessage
+        data-pa-event-card
+        head={
+          row.reply_to != null && !item.quotesPrevious ? (
+            <QuoteBar targetId={row.reply_to} tone="light" className="w-full" />
+          ) : null
+        }
       >
-        {row.reply_to != null && !item.quotesPrevious ? (
-          <QuoteBar targetId={row.reply_to} tone="light" className="mb-2" />
+        <WorkRow
+          flat
+          executorId={info?.executor.assistant_id ?? num(data, "executor_id")}
+          executor={executor}
+          agentType={agentType}
+          title={title}
+          meta={meta({
+            executor,
+            mode: info?.mode ?? asMode(data?.mode),
+            folder: info?.folder_name ?? null,
+          })}
+          chip={
+            newsLadder ? (
+              <LadderChip ladder={newsLadder} />
+            ) : (
+              <DispatchStateChip state={state} />
+            )
+          }
+          onOpen={canOpenWork(target) ? () => openWork(target) : null}
+        />
+        {/* Where it stands, what it said in passing, what a check found. */}
+        {facts ? (
+          <SheetPart className="flex flex-col gap-1.5" data-pa-event-facts>
+            {strip ? (
+              <TaskStrip d={strip} chip={newsLadder !== strip.ladder} />
+            ) : null}
+            {answered > 0 ? <AnsweredForYou count={answered} /> : null}
+            {note ? (
+              <p className="text-xs break-words text-muted-foreground">
+                {note}
+              </p>
+            ) : null}
+            {retry ? (
+              <p
+                className="text-xs break-words text-muted-foreground"
+                data-pa-retry
+              >
+                {retry}
+              </p>
+            ) : null}
+            {checkFor != null ? (
+              <div
+                className="flex flex-wrap items-center gap-1.5"
+                data-pa-check-result={verdict ?? ""}
+              >
+                <CheckLabel round={checkRound} via={null} />
+                {data?.verdict !== undefined && data?.verdict !== null ? (
+                  <VerdictChip verdict={verdict} />
+                ) : null}
+              </div>
+            ) : null}
+          </SheetPart>
         ) : null}
-        {/* The work and its news on one card: the work its head, then where
-            it stands, what came of it and its buttons, a hairline between. */}
-        <PaSheet data-pa-event-card>
-          <WorkRow
-            flat
-            executorId={info?.executor.assistant_id ?? num(data, "executor_id")}
-            executor={executor}
-            agentType={agentType}
-            title={title}
-            meta={meta({
-              executor,
-              mode: info?.mode ?? asMode(data?.mode),
-              folder: info?.folder_name ?? null,
-            })}
-            chip={
-              newsLadder ? (
-                <LadderChip ladder={newsLadder} />
-              ) : (
-                <DispatchStateChip state={state} />
-              )
-            }
-            onOpen={canOpenWork(target) ? () => openWork(target) : null}
-          />
-          {/* Where it stands, what it said in passing, what a check found. */}
-          {facts ? (
-            <SheetPart className="flex flex-col gap-1.5" data-pa-event-facts>
-              {strip ? (
-                <TaskStrip d={strip} chip={newsLadder !== strip.ladder} />
-              ) : null}
-              {answered > 0 ? <AnsweredForYou count={answered} /> : null}
-              {note ? (
-                <p className="text-xs break-words text-muted-foreground">
-                  {note}
-                </p>
-              ) : null}
-              {retry ? (
-                <p
-                  className="text-xs break-words text-muted-foreground"
-                  data-pa-retry
-                >
-                  {retry}
-                </p>
-              ) : null}
-              {checkFor != null ? (
-                <div
-                  className="flex flex-wrap items-center gap-1.5"
-                  data-pa-check-result={verdict ?? ""}
-                >
-                  <CheckLabel round={checkRound} via={null} />
-                  {data?.verdict !== undefined && data?.verdict !== null ? (
-                    <VerdictChip verdict={verdict} />
-                  ) : null}
-                </div>
-              ) : null}
-            </SheetPart>
-          ) : null}
-          {/* What came of it, as the message's text. */}
-          {shown ? (
-            <SheetPart>
-              <CollapsedText text={shown} />
-            </SheetPart>
-          ) : null}
-          {/* The task card's buttons; done, and not a routine's already:
+        {/* What came of it, as the message's text. */}
+        {shown ? (
+          <SheetPart>
+            <CollapsedText text={shown} />
+          </SheetPart>
+        ) : null}
+        {/* The task card's buttons; done, and not a routine's already:
               make it one (6.9). */}
-          {(strip && hasTaskActions(strip, readOnly)) || weekly ? (
-            <EventActions strip={strip}>
-              {weekly ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() =>
-                    openRoutineEditor({
-                      botId,
-                      routineId: null,
-                      draft: weeklyDraft(weekly),
-                      noticeId: null,
-                    })
-                  }
-                  data-pa-weekly
-                >
-                  <Repeat aria-hidden />
-                  {t("routines.weekly")}
-                </Button>
-              ) : null}
-            </EventActions>
-          ) : null}
-        </PaSheet>
-      </div>
+        {(strip && hasTaskActions(strip, readOnly)) || weekly ? (
+          <EventActions strip={strip}>
+            {weekly ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() =>
+                  openRoutineEditor({
+                    botId,
+                    routineId: null,
+                    draft: weeklyDraft(weekly),
+                    noticeId: null,
+                  })
+                }
+                data-pa-weekly
+              >
+                <Repeat aria-hidden />
+                {t("routines.weekly")}
+              </Button>
+            ) : null}
+          </EventActions>
+        ) : null}
+      </CardMessage>
     </MessageRow>
   )
 }
