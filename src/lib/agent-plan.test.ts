@@ -282,6 +282,13 @@ describe("extractLatestPlanEntriesFromMessages — Claude Code Task tools", () =
       { content: "Fixing the bug", status: "in_progress", priority: "medium" },
       { content: "Write docs", status: "pending", priority: "medium" },
     ])
+    // An update that states no status says nothing about an unseen task: it
+    // may well be done already.
+    expect(
+      extractLatestPlanEntriesFromMessages([
+        assistant("a40", update("1", { description: "More detail" })),
+      ])
+    ).toEqual([])
   })
 
   it("lets TaskList replace the accumulated list", () => {

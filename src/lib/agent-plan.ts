@@ -221,17 +221,17 @@ function applyTaskOp(state: TaskState, op: TaskOp) {
       return
     }
     const existing = state.get(op.id)
+    const status =
+      op.status && TASK_STATUSES.has(op.status) ? op.status : existing?.status
     // A task whose TaskCreate is not in the messages — a reopened long session
     // loads only its latest turns until older ones are paged in — still
-    // counts: named by what it is doing when the update says, else by its id,
-    // as Claude Code itself names it.
+    // counts once an update states its status: named by what it is doing when
+    // the update says, else by its id, as Claude Code itself names it.
+    if (!status) return
     const subject = op.subject ?? existing?.subject ?? `Task #${op.id}`
     state.set(op.id, {
       subject,
-      status:
-        op.status && TASK_STATUSES.has(op.status)
-          ? op.status
-          : (existing?.status ?? "pending"),
+      status,
       activeForm: op.activeForm ?? existing?.activeForm,
     })
     return
