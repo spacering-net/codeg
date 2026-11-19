@@ -44,7 +44,7 @@ import { cn } from "@/lib/utils"
 
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
-import { AGENT_SURFACE, str, usePageScope } from "./shared"
+import { AGENT_SURFACE, PaSheet, str, usePageScope } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -394,165 +394,167 @@ export function PrCard({ item }: { item: NoticeItem }) {
           <Icon className="size-3.5 shrink-0" aria-hidden />
           <span className="font-medium">{heading}</span>
         </p>
-        <p className="text-sm font-medium break-words" data-pa-pr-title>
-          <span dir="ltr">{target}</span>
-          {title ? (
-            <span className="font-normal text-muted-foreground">
-              {" · "}
-              {title}
-            </span>
+        <PaSheet>
+          <p className="text-sm font-medium break-words" data-pa-pr-title>
+            <span dir="ltr">{target}</span>
+            {title ? (
+              <span className="font-normal text-muted-foreground">
+                {" · "}
+                {title}
+              </span>
+            ) : null}
+          </p>
+          {facts.length > 0 ? (
+            <p
+              className="mt-1.5 text-xs text-muted-foreground tabular-nums"
+              data-pa-pr-facts
+            >
+              {facts.join(" · ")}
+            </p>
           ) : null}
-        </p>
-        {facts.length > 0 ? (
-          <p
-            className="mt-1.5 text-xs text-muted-foreground tabular-nums"
-            data-pa-pr-facts
-          >
-            {facts.join(" · ")}
-          </p>
-        ) : null}
-        {event === "checks_failed" && failing.length > 0 ? (
-          <ul
-            className="mt-1.5 flex flex-col gap-0.5 text-xs"
-            data-pa-pr-failing
-          >
-            {failing.map((c, i) => (
-              <li
-                key={`${c.name}-${i}`}
-                className="flex min-w-0 items-center gap-1"
-              >
-                <CircleX
-                  className="size-3 shrink-0 text-red-600 dark:text-red-400"
-                  aria-hidden
-                />
-                {c.url ? (
-                  <button
-                    type="button"
-                    className="min-w-0 truncate text-start underline-offset-2 hover:underline"
-                    onClick={() => void openUrl(c.url ?? "")}
-                  >
-                    {c.name}
-                  </button>
-                ) : (
-                  <span className="min-w-0 truncate">{c.name}</span>
-                )}
-                {c.summary ? (
-                  <span className="min-w-0 truncate text-muted-foreground">
-                    {c.summary}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-            {more > 0 ? (
-              <li className="text-muted-foreground">
-                {t("more", { n: more })}
-              </li>
-            ) : null}
-          </ul>
-        ) : null}
-        {event === "feedback" && feedback.length > 0 ? (
-          <FeedbackList items={feedback} />
-        ) : null}
-        {fix ? <FixLine fix={fix} /> : null}
-        {mergeNote ? (
-          <p
-            className="mt-1.5 text-xs break-words text-muted-foreground"
-            data-pa-pr-merge={mergeNote.state}
-          >
-            {mergeNote.state === "unread"
-              ? t("merge.unread", { why: mergeNote.why })
-              : t("merge.refused", { why: mergeNote.why })}
-          </p>
-        ) : null}
-        {event === "feedback" && forwarded ? (
-          <p
-            className="mt-1.5 text-xs text-muted-foreground"
-            data-pa-pr-forwarded
-          >
-            {forwarded.waiting
-              ? t("feedback.waiting")
-              : t("feedback.forwarded")}
-          </p>
-        ) : null}
-        {event === "no_conflict" ? (
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            {t("noConflictNote")}
-          </p>
-        ) : null}
-        {why ? (
-          <p className="mt-1.5 text-xs text-muted-foreground" data-pa-pr-why>
-            {why}
-          </p>
-        ) : null}
-        {note ? (
-          <p className="mt-1.5 text-xs text-muted-foreground" data-pa-pr-note>
-            {note}
-          </p>
-        ) : null}
-        {url || (current && !readOnly && !settles(event)) ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {url ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void openUrl(url)}
-                data-pa-pr-act="view"
-              >
-                {t("view")}
-              </Button>
-            ) : null}
-            {asksFix && !readOnly ? (
-              <Button
-                size="sm"
-                disabled={busy != null}
-                onClick={() => void answer("fix")}
-                data-pa-pr-act="fix"
-              >
-                {spin("fix")}
-                {fix?.cause === "conflict"
-                  ? t("fix.doConflict")
-                  : t("fix.doChecks")}
-              </Button>
-            ) : null}
-            {asksForward && !readOnly ? (
-              <Button
-                size="sm"
-                disabled={busy != null}
-                onClick={() => void answer("forward")}
-                data-pa-pr-act="forward"
-              >
-                {spin("forward")}
-                {t("feedback.forward")}
-              </Button>
-            ) : null}
-            {current && !readOnly && !settles(event) ? (
-              <>
+          {event === "checks_failed" && failing.length > 0 ? (
+            <ul
+              className="mt-1.5 flex flex-col gap-0.5 text-xs"
+              data-pa-pr-failing
+            >
+              {failing.map((c, i) => (
+                <li
+                  key={`${c.name}-${i}`}
+                  className="flex min-w-0 items-center gap-1"
+                >
+                  <CircleX
+                    className="size-3 shrink-0 text-red-600 dark:text-red-400"
+                    aria-hidden
+                  />
+                  {c.url ? (
+                    <button
+                      type="button"
+                      className="min-w-0 truncate text-start underline-offset-2 hover:underline"
+                      onClick={() => void openUrl(c.url ?? "")}
+                    >
+                      {c.name}
+                    </button>
+                  ) : (
+                    <span className="min-w-0 truncate">{c.name}</span>
+                  )}
+                  {c.summary ? (
+                    <span className="min-w-0 truncate text-muted-foreground">
+                      {c.summary}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+              {more > 0 ? (
+                <li className="text-muted-foreground">
+                  {t("more", { n: more })}
+                </li>
+              ) : null}
+            </ul>
+          ) : null}
+          {event === "feedback" && feedback.length > 0 ? (
+            <FeedbackList items={feedback} />
+          ) : null}
+          {fix ? <FixLine fix={fix} /> : null}
+          {mergeNote ? (
+            <p
+              className="mt-1.5 text-xs break-words text-muted-foreground"
+              data-pa-pr-merge={mergeNote.state}
+            >
+              {mergeNote.state === "unread"
+                ? t("merge.unread", { why: mergeNote.why })
+                : t("merge.refused", { why: mergeNote.why })}
+            </p>
+          ) : null}
+          {event === "feedback" && forwarded ? (
+            <p
+              className="mt-1.5 text-xs text-muted-foreground"
+              data-pa-pr-forwarded
+            >
+              {forwarded.waiting
+                ? t("feedback.waiting")
+                : t("feedback.forwarded")}
+            </p>
+          ) : null}
+          {event === "no_conflict" ? (
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {t("noConflictNote")}
+            </p>
+          ) : null}
+          {why ? (
+            <p className="mt-1.5 text-xs text-muted-foreground" data-pa-pr-why>
+              {why}
+            </p>
+          ) : null}
+          {note ? (
+            <p className="mt-1.5 text-xs text-muted-foreground" data-pa-pr-note>
+              {note}
+            </p>
+          ) : null}
+          {url || (current && !readOnly && !settles(event)) ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {url ? (
                 <Button
                   size="sm"
-                  variant="ghost"
-                  disabled={busy != null}
-                  onClick={() => void answer("dismiss")}
-                  data-pa-pr-act="dismiss"
+                  variant="secondary"
+                  onClick={() => void openUrl(url)}
+                  data-pa-pr-act="view"
                 >
-                  {spin("dismiss")}
-                  {asksForward ? t("feedback.skip") : t("gotIt")}
+                  {t("view")}
                 </Button>
-                {event !== "feedback" ? (
+              ) : null}
+              {asksFix && !readOnly ? (
+                <Button
+                  size="sm"
+                  disabled={busy != null}
+                  onClick={() => void answer("fix")}
+                  data-pa-pr-act="fix"
+                >
+                  {spin("fix")}
+                  {fix?.cause === "conflict"
+                    ? t("fix.doConflict")
+                    : t("fix.doChecks")}
+                </Button>
+              ) : null}
+              {asksForward && !readOnly ? (
+                <Button
+                  size="sm"
+                  disabled={busy != null}
+                  onClick={() => void answer("forward")}
+                  data-pa-pr-act="forward"
+                >
+                  {spin("forward")}
+                  {t("feedback.forward")}
+                </Button>
+              ) : null}
+              {current && !readOnly && !settles(event) ? (
+                <>
                   <Button
                     size="sm"
                     variant="ghost"
                     disabled={busy != null}
-                    onClick={() => void answer("unwatch")}
-                    data-pa-pr-act="unwatch"
+                    onClick={() => void answer("dismiss")}
+                    data-pa-pr-act="dismiss"
                   >
-                    {spin("unwatch")}
-                    {t("unwatch")}
+                    {spin("dismiss")}
+                    {asksForward ? t("feedback.skip") : t("gotIt")}
                   </Button>
-                ) : null}
-              </>
-            ) : null}
-          </div>
-        ) : null}
+                  {event !== "feedback" ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy != null}
+                      onClick={() => void answer("unwatch")}
+                      data-pa-pr-act="unwatch"
+                    >
+                      {spin("unwatch")}
+                      {t("unwatch")}
+                    </Button>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </PaSheet>
         {failed ? (
           <p className="mt-1.5 text-xs break-words text-destructive">
             {failed}

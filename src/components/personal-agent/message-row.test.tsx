@@ -948,12 +948,14 @@ describe("the bubbles", () => {
     )
     expect(head.textContent).toContain("Builder · Kanban task · my-app")
     expect(head.children[2].textContent).toBe("Done")
+    // On one card: the work its head, its result under a hairline.
     const result = news.container.querySelector("[data-pa-result]")!
-    expect(result.previousElementSibling).toBe(head.parentElement)
+    expect(result.parentElement?.previousElementSibling).toBe(head)
+    expect(head.parentElement?.hasAttribute("data-pa-surface")).toBe(true)
     expect(result.textContent).toBe("Added it.")
   })
 
-  it("tints the assistant's side with no border, and washes what sits inside a step deeper", () => {
+  it("tints the assistant's side with no border, and draws what sits on it as a card of its own", () => {
     expect(AGENT_SURFACE).toBe("pa-agent-bubble")
     pa.dispatchById = new Map([[5, dispatchInfo({ state: "running" })]])
     const { container } = draw(
@@ -975,13 +977,17 @@ describe("the bubbles", () => {
     const bubble = container.querySelector<HTMLElement>("[data-bubble]")!
     expect(bubble.classList.contains("pa-agent-bubble")).toBe(true)
     expect(bubble.className).not.toMatch(/(^|\s)border(\s|$)/)
-    // The well only clips; the row filling it is the surface, a step deeper
-    // under the pointer and when pressed.
+    // The news on a white card, the work its head: no surface of its own,
+    // a step deeper under the pointer and when pressed.
     const workRow = container.querySelector<HTMLElement>("[data-pa-work]")!
-    expect(workRow.parentElement!.className).toBe("overflow-hidden rounded-xl")
-    expect(workRow.className).toContain("bg-(--pa-inset)")
-    expect(workRow.className).toContain("hover:bg-(--pa-inset-hover)")
-    expect(workRow.className).toContain("active:bg-(--pa-inset-active)")
+    const sheet = workRow.parentElement!
+    expect(sheet.hasAttribute("data-pa-surface")).toBe(true)
+    expect(sheet.className).toContain("bg-card")
+    expect(sheet.className).toContain("overflow-hidden")
+    expect(workRow.getAttribute("data-pa-work")).toBe("head")
+    expect(workRow.className).not.toContain("bg-(--pa-object)")
+    expect(workRow.className).toContain("hover:bg-(--pa-object-hover)")
+    expect(workRow.className).toContain("active:bg-(--pa-object-active)")
     cleanup()
     const pills = draw(
       <DispatchAttachments
@@ -995,9 +1001,11 @@ describe("the bubbles", () => {
       />
     )
     const pill = pills.container.querySelector("[data-pa-work-pill]")!
-    expect(pill.className).toContain("bg-(--pa-inset)")
-    expect(pill.className).toContain("hover:bg-(--pa-inset-hover)")
-    expect(pill.className).toContain("active:bg-(--pa-inset-active)")
+    // A thing on the bubble: white with a hairline there, a wash on a card.
+    expect(pill.className).toContain("bg-(--pa-object)")
+    expect(pill.className).toContain("var(--pa-object-edge,transparent)")
+    expect(pill.className).toContain("hover:bg-(--pa-object-hover)")
+    expect(pill.className).toContain("active:bg-(--pa-object-active)")
   })
 
   it("holds a side's run together at its corners, and closes it round", () => {

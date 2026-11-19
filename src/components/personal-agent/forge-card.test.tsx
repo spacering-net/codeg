@@ -158,7 +158,7 @@ describe("a forge card", () => {
     expect(screen.getByText("GitHub · codeg-bot")).toBeInTheDocument()
     const open = screen.getByRole("button", { name: "Open" })
     // Alone on the card: a button that looks one.
-    expect(open.getAttribute("data-variant")).toBe("outline")
+    expect(open.getAttribute("data-variant")).toBe("secondary")
     fireEvent.click(open)
     expect(platform.openUrl).toHaveBeenCalledWith(
       "https://github.com/acme/app/pull/7#issuecomment-1"

@@ -22,7 +22,7 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
-import { AGENT_SURFACE, str, usePageScope } from "./shared"
+import { AGENT_SURFACE, PaSheet, str, usePageScope } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -122,170 +122,178 @@ export function SkillCard({ item }: { item: NoticeItem }) {
             )}
           </span>
         </p>
-        <p className="text-sm break-words" data-pa-skill-line>
-          {line}
-        </p>
-        {description ? (
-          <p className="text-xs break-words text-muted-foreground">
-            {t("when", { text: description })}
+        <PaSheet className="flex flex-col gap-2">
+          <p className="text-sm break-words" data-pa-skill-line>
+            {line}
           </p>
-        ) : null}
-        {str(data, "not_aside") ? (
-          <p className="text-xs text-muted-foreground" data-pa-skill-not-aside>
-            {t(off ? "note.notAside" : "note.notAsideOn", {
-              why: str(data, "not_aside") ?? "",
-            })}
-          </p>
-        ) : null}
-        {off && standing ? (
-          <p className="text-xs text-muted-foreground" data-pa-skill-note="off">
-            {t("note.off")}
-          </p>
-        ) : null}
-        {NOTES.has(state) ? (
-          <p
-            className="text-xs text-muted-foreground"
-            data-pa-skill-note={state}
-          >
-            {t(`note.${state}` as "note.draft")}
-          </p>
-        ) : null}
-        {shown === "content" && content ? (
-          <pre
-            className="field-scrollbar max-h-72 overflow-auto rounded-md border border-border/70 bg-background/60 p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap"
-            data-pa-skill-content
-          >
-            {content}
-          </pre>
-        ) : null}
-        {shown === "diff" ? (
-          <div
-            className="overflow-hidden rounded-md border border-border/70 bg-background/60"
-            data-pa-skill-diff
-          >
-            <CompactDiff diffText={diff} />
-            {data?.diff_cut === true ? (
-              <p className="border-t border-border/50 px-2 py-1 text-[0.6875rem] text-muted-foreground">
-                {tm("diffCut")}
-              </p>
+          {description ? (
+            <p className="text-xs break-words text-muted-foreground">
+              {t("when", { text: description })}
+            </p>
+          ) : null}
+          {str(data, "not_aside") ? (
+            <p
+              className="text-xs text-muted-foreground"
+              data-pa-skill-not-aside
+            >
+              {t(off ? "note.notAside" : "note.notAsideOn", {
+                why: str(data, "not_aside") ?? "",
+              })}
+            </p>
+          ) : null}
+          {off && standing ? (
+            <p
+              className="text-xs text-muted-foreground"
+              data-pa-skill-note="off"
+            >
+              {t("note.off")}
+            </p>
+          ) : null}
+          {NOTES.has(state) ? (
+            <p
+              className="text-xs text-muted-foreground"
+              data-pa-skill-note={state}
+            >
+              {t(`note.${state}` as "note.draft")}
+            </p>
+          ) : null}
+          {shown === "content" && content ? (
+            <pre
+              className="field-scrollbar max-h-72 overflow-auto rounded-md border border-border/70 bg-background/60 p-2 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap"
+              data-pa-skill-content
+            >
+              {content}
+            </pre>
+          ) : null}
+          {shown === "diff" ? (
+            <div
+              className="overflow-hidden rounded-md border border-border/70 bg-background/60"
+              data-pa-skill-diff
+            >
+              <CompactDiff diffText={diff} />
+              {data?.diff_cut === true ? (
+                <p className="border-t border-border/50 px-2 py-1 text-[0.6875rem] text-muted-foreground">
+                  {tm("diffCut")}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {content ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-expanded={shown === "content"}
+                onClick={() =>
+                  setShown((v) => (v === "content" ? null : "content"))
+                }
+              >
+                {shown === "content" ? t("hide") : t("show")}
+              </Button>
             ) : null}
-          </div>
-        ) : null}
-        <div className="flex flex-wrap items-center gap-2">
-          {content ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-expanded={shown === "content"}
-              onClick={() =>
-                setShown((v) => (v === "content" ? null : "content"))
-              }
-            >
-              {shown === "content" ? t("hide") : t("show")}
-            </Button>
-          ) : null}
-          {diff && status !== "added" ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-expanded={shown === "diff"}
-              onClick={() => setShown((v) => (v === "diff" ? null : "diff"))}
-            >
-              {shown === "diff" ? tm("hideDiff") : tm("showDiff")}
-            </Button>
-          ) : null}
-          {standing && status !== "deleted" && path ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => openBotPage("persona", { entry: path })}
-              data-pa-skill-act="view"
-            >
-              {t("view")}
-            </Button>
-          ) : null}
-          {standing && status !== "deleted" ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={readOnly || busy != null}
-              onClick={() => void act(off ? "enable" : "disable")}
-              data-pa-skill-act={off ? "enable" : "disable"}
-            >
-              {spinner(off ? "enable" : "disable")}
-              {off ? t("enable") : t("disable")}
-            </Button>
-          ) : null}
-          {standing ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={readOnly || busy != null}
-              onClick={() => void act("undo")}
-              data-pa-skill-act="undo"
-            >
-              {spinner("undo")}
-              {t("undo")}
-            </Button>
-          ) : null}
-          {standing && status !== "deleted" ? (
-            confirming ? (
+            {diff && status !== "added" ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-expanded={shown === "diff"}
+                onClick={() => setShown((v) => (v === "diff" ? null : "diff"))}
+              >
+                {shown === "diff" ? tm("hideDiff") : tm("showDiff")}
+              </Button>
+            ) : null}
+            {standing && status !== "deleted" && path ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => openBotPage("persona", { entry: path })}
+                data-pa-skill-act="view"
+              >
+                {t("view")}
+              </Button>
+            ) : null}
+            {standing && status !== "deleted" ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={readOnly || busy != null}
+                onClick={() => void act(off ? "enable" : "disable")}
+                data-pa-skill-act={off ? "enable" : "disable"}
+              >
+                {spinner(off ? "enable" : "disable")}
+                {off ? t("enable") : t("disable")}
+              </Button>
+            ) : null}
+            {standing ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={readOnly || busy != null}
+                onClick={() => void act("undo")}
+                data-pa-skill-act="undo"
+              >
+                {spinner("undo")}
+                {t("undo")}
+              </Button>
+            ) : null}
+            {standing && status !== "deleted" ? (
+              confirming ? (
+                <>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={readOnly || busy != null}
+                    onClick={() => void act("delete")}
+                    data-pa-skill-act="delete"
+                  >
+                    {spinner("delete")}
+                    {t("confirmDelete")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy != null}
+                    onClick={() => setConfirming(false)}
+                  >
+                    {t("cancel")}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-muted-foreground hover:text-destructive"
+                  disabled={readOnly || busy != null}
+                  onClick={() => setConfirming(true)}
+                  data-pa-skill-act="ask-delete"
+                >
+                  {t("delete")}
+                </Button>
+              )
+            ) : null}
+            {draft ? (
               <>
                 <Button
                   size="sm"
-                  variant="destructive"
                   disabled={readOnly || busy != null}
-                  onClick={() => void act("delete")}
-                  data-pa-skill-act="delete"
+                  onClick={() => void act("apply")}
+                  data-pa-skill-act="apply"
                 >
-                  {spinner("delete")}
-                  {t("confirmDelete")}
+                  {spinner("apply")}
+                  {t("install")}
                 </Button>
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={busy != null}
-                  onClick={() => setConfirming(false)}
+                  disabled={readOnly || busy != null}
+                  onClick={() => void act("dismiss")}
+                  data-pa-skill-act="dismiss"
                 >
-                  {t("cancel")}
+                  {t("dismiss")}
                 </Button>
               </>
-            ) : (
-              <Button
-                size="sm"
-                variant="ghost"
-                className="text-muted-foreground hover:text-destructive"
-                disabled={readOnly || busy != null}
-                onClick={() => setConfirming(true)}
-                data-pa-skill-act="ask-delete"
-              >
-                {t("delete")}
-              </Button>
-            )
-          ) : null}
-          {draft ? (
-            <>
-              <Button
-                size="sm"
-                disabled={readOnly || busy != null}
-                onClick={() => void act("apply")}
-                data-pa-skill-act="apply"
-              >
-                {spinner("apply")}
-                {t("install")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={readOnly || busy != null}
-                onClick={() => void act("dismiss")}
-                data-pa-skill-act="dismiss"
-              >
-                {t("dismiss")}
-              </Button>
-            </>
-          ) : null}
-        </div>
+            ) : null}
+          </div>
+        </PaSheet>
         {failed ? (
           <p role="alert" className="text-xs break-words text-destructive">
             {tn("failed", { error: failed })}

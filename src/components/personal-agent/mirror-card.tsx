@@ -31,7 +31,14 @@ import { BotAvatar } from "./bot-avatar"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { QuoteBar } from "./quote-bar"
-import { AGENT_SURFACE, num, str, useBotName, usePageScope } from "./shared"
+import {
+  AGENT_SURFACE,
+  num,
+  PaSheet,
+  str,
+  useBotName,
+  usePageScope,
+} from "./shared"
 
 type MirrorItem = Extract<MessageItem, { kind: "mirror" }>
 
@@ -92,46 +99,48 @@ export function MirrorCard({ item }: { item: MirrorItem }) {
           <BotAvatar avatar={avatar} name={name} size={16} />
           <span className="font-medium">{heading}</span>
         </p>
-        {forRow != null ? (
-          <QuoteBar targetId={forRow} tone="light" className="mb-2" />
-        ) : null}
-        {pending && !readOnly && refId ? (
-          row.kind === "permission" ? (
-            <PermissionDialog
-              permission={{
-                request_id: refId,
-                tool_call: data.tool_call ?? null,
-                options: (data.options as PermissionOptionInfo[]) ?? [],
-              }}
-              agentType={
-                (str(data, "agent_type") as AgentType) ?? "claude_code"
-              }
-              onRespond={(requestId, optionId) => {
-                personalAgentRespondPermission(
-                  requestId,
-                  optionId,
-                  botId
-                ).catch(fail)
-              }}
-            />
+        <PaSheet>
+          {forRow != null ? (
+            <QuoteBar targetId={forRow} tone="light" className="mb-2" />
+          ) : null}
+          {pending && !readOnly && refId ? (
+            row.kind === "permission" ? (
+              <PermissionDialog
+                permission={{
+                  request_id: refId,
+                  tool_call: data.tool_call ?? null,
+                  options: (data.options as PermissionOptionInfo[]) ?? [],
+                }}
+                agentType={
+                  (str(data, "agent_type") as AgentType) ?? "claude_code"
+                }
+                onRespond={(requestId, optionId) => {
+                  personalAgentRespondPermission(
+                    requestId,
+                    optionId,
+                    botId
+                  ).catch(fail)
+                }}
+              />
+            ) : (
+              <AskQuestionCard
+                question={{
+                  question_id: refId,
+                  questions: (data.questions as QuestionSpec[]) ?? [],
+                  created_at: row.created_at,
+                }}
+                onAnswer={(questionId, answer) =>
+                  personalAgentAnswerQuestion(questionId, answer, botId)
+                }
+              />
+            )
           ) : (
-            <AskQuestionCard
-              question={{
-                question_id: refId,
-                questions: (data.questions as QuestionSpec[]) ?? [],
-                created_at: row.created_at,
-              }}
-              onAnswer={(questionId, answer) =>
-                personalAgentAnswerQuestion(questionId, answer, botId)
-              }
-            />
-          )
-        ) : (
-          <p className="text-sm break-words">{row.body}</p>
-        )}
-        {settled ? (
-          <p className="mt-1.5 text-xs text-muted-foreground">{settled}</p>
-        ) : null}
+            <p className="text-sm break-words">{row.body}</p>
+          )}
+          {settled ? (
+            <p className="mt-1.5 text-xs text-muted-foreground">{settled}</p>
+          ) : null}
+        </PaSheet>
       </div>
     </MessageRow>
   )

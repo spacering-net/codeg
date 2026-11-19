@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { useSessionLinkOpener } from "./session-link"
-import { AGENT_SURFACE, num, str, usePageScope } from "./shared"
+import { AGENT_SURFACE, num, PaSheet, str, usePageScope } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -132,112 +132,114 @@ export function CheckCard({ item }: { item: NoticeItem }) {
           )}
           <span className="font-medium">{t(`heading.${state}`)}</span>
         </p>
-        <p className="text-sm break-words" data-pa-check-line>
-          {line}
-        </p>
-        {state === "done" && verdict ? (
-          <span
-            className={cn(
-              "inline-flex w-fit items-center gap-1 rounded-full border px-2 py-0.5 text-xs",
-              TONE[verdict]
-            )}
-          >
-            <ShieldCheck className="size-3" aria-hidden />
-            {word}
-          </span>
-        ) : null}
-        <div className="flex flex-col gap-1 rounded-md border border-border/70 bg-background/60 p-2 text-xs">
-          <p className="text-muted-foreground">
-            {t(sentence ? "checkedSentence" : "checkedMessage")}
+        <PaSheet className="flex flex-col gap-2">
+          <p className="text-sm break-words" data-pa-check-line>
+            {line}
           </p>
-          {sentence ? (
-            <p className="break-words font-medium" data-pa-check-quote>
-              {quote}
-            </p>
-          ) : null}
-          {message && (!sentence || whole) ? (
-            <p
+          {state === "done" && verdict ? (
+            <span
               className={cn(
-                "break-words whitespace-pre-wrap",
-                !whole && "line-clamp-4"
+                "inline-flex w-fit items-center gap-1 rounded-full border px-2 py-0.5 text-xs",
+                TONE[verdict]
               )}
-              data-pa-check-message
             >
-              {message}
+              <ShieldCheck className="size-3" aria-hidden />
+              {word}
+            </span>
+          ) : null}
+          <div className="flex flex-col gap-1 rounded-md border border-border/70 bg-background/60 p-2 text-xs">
+            <p className="text-muted-foreground">
+              {t(sentence ? "checkedSentence" : "checkedMessage")}
             </p>
-          ) : null}
-          {message ? (
-            <button
-              type="button"
-              className="w-fit text-[0.6875rem] text-muted-foreground underline-offset-2 hover:underline"
-              aria-expanded={whole}
-              onClick={() => setWhole((v) => !v)}
-            >
-              {whole ? t("collapse") : t("expand")}
-            </button>
-          ) : null}
-          {asked ? (
-            <p className="break-words text-muted-foreground">
-              {t("asked")}: {asked}
-            </p>
-          ) : null}
-        </div>
-        {state === "done" ? (
-          <div className="text-xs">
-            <p className="text-muted-foreground">{t("evidence")}</p>
-            {evidence ? (
-              <pre
-                className="field-scrollbar mt-0.5 max-h-72 overflow-auto rounded-md border border-border/70 bg-background/60 p-2 font-sans text-xs leading-relaxed whitespace-pre-wrap break-words"
-                data-pa-check-evidence
+            {sentence ? (
+              <p className="break-words font-medium" data-pa-check-quote>
+                {quote}
+              </p>
+            ) : null}
+            {message && (!sentence || whole) ? (
+              <p
+                className={cn(
+                  "break-words whitespace-pre-wrap",
+                  !whole && "line-clamp-4"
+                )}
+                data-pa-check-message
               >
-                {evidence}
-              </pre>
-            ) : (
-              <p className="mt-0.5">{t("noEvidence")}</p>
-            )}
+                {message}
+              </p>
+            ) : null}
+            {message ? (
+              <button
+                type="button"
+                className="w-fit text-[0.6875rem] text-muted-foreground underline-offset-2 hover:underline"
+                aria-expanded={whole}
+                onClick={() => setWhole((v) => !v)}
+              >
+                {whole ? t("collapse") : t("expand")}
+              </button>
+            ) : null}
+            {asked ? (
+              <p className="break-words text-muted-foreground">
+                {t("asked")}: {asked}
+              </p>
+            ) : null}
           </div>
-        ) : null}
-        {note ? (
-          <p className="text-xs text-muted-foreground" data-pa-check-note>
-            {note}
-          </p>
-        ) : null}
-        {executor ? (
-          <p className="text-xs text-muted-foreground">
-            {t("by", { executor })}
-          </p>
-        ) : null}
-        <div className="flex flex-wrap items-center gap-2">
-          {conversationId != null ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => openSession(conversationId)}
-            >
-              {t("openConversation")}
-            </Button>
+          {state === "done" ? (
+            <div className="text-xs">
+              <p className="text-muted-foreground">{t("evidence")}</p>
+              {evidence ? (
+                <pre
+                  className="field-scrollbar mt-0.5 max-h-72 overflow-auto rounded-md border border-border/70 bg-background/60 p-2 font-sans text-xs leading-relaxed whitespace-pre-wrap break-words"
+                  data-pa-check-evidence
+                >
+                  {evidence}
+                </pre>
+              ) : (
+                <p className="mt-0.5">{t("noEvidence")}</p>
+              )}
+            </div>
           ) : null}
-          {/* First in the row without the conversation's: a button that
+          {note ? (
+            <p className="text-xs text-muted-foreground" data-pa-check-note>
+              {note}
+            </p>
+          ) : null}
+          {executor ? (
+            <p className="text-xs text-muted-foreground">
+              {t("by", { executor })}
+            </p>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {conversationId != null ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => openSession(conversationId)}
+              >
+                {t("openConversation")}
+              </Button>
+            ) : null}
+            {/* First in the row without the conversation's: a button that
               looks one, its edge on the text's. */}
-          <Button
-            size="sm"
-            variant={conversationId != null ? "ghost" : "outline"}
-            disabled={readOnly || busy || state === "checking"}
-            onClick={() => void recheck()}
-          >
-            {busy ? <SyncedSpinner small className="size-3.5" /> : null}
-            {t("again")}
-          </Button>
-          {processId != null ? (
             <Button
               size="sm"
-              variant="ghost"
-              onClick={() => openSession(processId)}
+              variant={conversationId != null ? "ghost" : "secondary"}
+              disabled={readOnly || busy || state === "checking"}
+              onClick={() => void recheck()}
             >
-              {t("process")}
+              {busy ? <SyncedSpinner small className="size-3.5" /> : null}
+              {t("again")}
             </Button>
-          ) : null}
-        </div>
+            {processId != null ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => openSession(processId)}
+              >
+                {t("process")}
+              </Button>
+            ) : null}
+          </div>
+        </PaSheet>
         {failed ? (
           <p className="text-xs text-destructive" role="alert">
             {failed}

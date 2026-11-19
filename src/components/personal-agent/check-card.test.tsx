@@ -157,7 +157,7 @@ describe("the check's card", () => {
       screen
         .getByRole("button", { name: "Check again" })
         .getAttribute("data-variant")
-    ).toBe("outline")
+    ).toBe("secondary")
   })
 
   it("for a sentence, shows the sentence first and the message on asking", () => {

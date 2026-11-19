@@ -28,7 +28,7 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
-import { AGENT_SURFACE, str, usePageScope } from "./shared"
+import { AGENT_SURFACE, PaSheet, str, usePageScope } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -170,108 +170,110 @@ export function MemoryCard({ item }: { item: NoticeItem }) {
           )}
           <span className="font-medium">{title}</span>
         </p>
-        <p className="text-sm break-words">{summary.join(t("sep"))}</p>
-        <ul className="flex flex-col gap-0.5" data-pa-memory-files>
-          {shown.map((f) => (
-            <li
-              key={f.path}
-              className="flex min-w-0 items-baseline gap-1.5 text-xs leading-5"
-              data-pa-memory-file={f.path}
-            >
-              <span className="shrink-0 text-muted-foreground">
-                {t(`status.${f.status}` as "status.added")}
-              </span>
-              {f.status !== "deleted" &&
-              state !== "undone" &&
-              (!tidy || state === "acted" || state === "applied") ? (
-                <button
-                  type="button"
-                  className="min-w-0 truncate text-start font-medium underline-offset-2 hover:underline"
-                  title={f.path}
-                  onClick={() => openBotPage("persona", { entry: f.path })}
-                >
-                  {label(f)}
-                </button>
-              ) : (
-                <span className="min-w-0 truncate font-medium" title={f.path}>
-                  {label(f)}
+        <PaSheet className="flex flex-col gap-2">
+          <p className="text-sm break-words">{summary.join(t("sep"))}</p>
+          <ul className="flex flex-col gap-0.5" data-pa-memory-files>
+            {shown.map((f) => (
+              <li
+                key={f.path}
+                className="flex min-w-0 items-baseline gap-1.5 text-xs leading-5"
+                data-pa-memory-file={f.path}
+              >
+                <span className="shrink-0 text-muted-foreground">
+                  {t(`status.${f.status}` as "status.added")}
                 </span>
-              )}
-            </li>
-          ))}
-        </ul>
-        {state === "undone" && keptNames.length > 0 ? (
-          <p className="text-xs text-muted-foreground" data-pa-memory-kept>
-            {t("kept", { files: keptNames.join(t("listSep")) })}
-          </p>
-        ) : null}
-        {tidy && TIDY_NOTES.has(state) ? (
-          <p className="text-xs text-muted-foreground" data-pa-tidy-note>
-            {tt(`note.${state}` as "note.draft")}
-          </p>
-        ) : null}
-        {tidy && str(data, "not_aside") ? (
-          <p className="text-xs text-muted-foreground" data-pa-tidy-not-aside>
-            {tt("note.notAside", { why: str(data, "not_aside") ?? "" })}
-          </p>
-        ) : null}
-        {showDiff ? (
-          <div
-            className="overflow-hidden rounded-md border border-border/70 bg-background/60"
-            data-pa-memory-diff
-          >
-            <CompactDiff diffText={diff} />
-            {cut ? (
-              <p className="border-t border-border/50 px-2 py-1 text-[0.6875rem] text-muted-foreground">
-                {t("diffCut")}
-              </p>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-expanded={showDiff}
-            onClick={() => setShowDiff((v) => !v)}
-          >
-            {showDiff ? t("hideDiff") : t("showDiff")}
-          </Button>
-          {undoable ? (
+                {f.status !== "deleted" &&
+                state !== "undone" &&
+                (!tidy || state === "acted" || state === "applied") ? (
+                  <button
+                    type="button"
+                    className="min-w-0 truncate text-start font-medium underline-offset-2 hover:underline"
+                    title={f.path}
+                    onClick={() => openBotPage("persona", { entry: f.path })}
+                  >
+                    {label(f)}
+                  </button>
+                ) : (
+                  <span className="min-w-0 truncate font-medium" title={f.path}>
+                    {label(f)}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+          {state === "undone" && keptNames.length > 0 ? (
+            <p className="text-xs text-muted-foreground" data-pa-memory-kept>
+              {t("kept", { files: keptNames.join(t("listSep")) })}
+            </p>
+          ) : null}
+          {tidy && TIDY_NOTES.has(state) ? (
+            <p className="text-xs text-muted-foreground" data-pa-tidy-note>
+              {tt(`note.${state}` as "note.draft")}
+            </p>
+          ) : null}
+          {tidy && str(data, "not_aside") ? (
+            <p className="text-xs text-muted-foreground" data-pa-tidy-not-aside>
+              {tt("note.notAside", { why: str(data, "not_aside") ?? "" })}
+            </p>
+          ) : null}
+          {showDiff ? (
+            <div
+              className="overflow-hidden rounded-md border border-border/70 bg-background/60"
+              data-pa-memory-diff
+            >
+              <CompactDiff diffText={diff} />
+              {cut ? (
+                <p className="border-t border-border/50 px-2 py-1 text-[0.6875rem] text-muted-foreground">
+                  {t("diffCut")}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              variant="outline"
-              disabled={readOnly || busy}
-              onClick={() => void act("undo")}
-              data-pa-tidy-act={tidy ? "undo" : undefined}
+              variant="ghost"
+              aria-expanded={showDiff}
+              onClick={() => setShowDiff((v) => !v)}
             >
-              {busy ? <SyncedSpinner small className="size-3.5" /> : null}
-              {tidy ? tt("undoAll") : t("undo")}
+              {showDiff ? t("hideDiff") : t("showDiff")}
             </Button>
-          ) : null}
-          {tidy && state === "draft" ? (
-            <>
+            {undoable ? (
               <Button
                 size="sm"
+                variant="secondary"
                 disabled={readOnly || busy}
-                onClick={() => void act("apply")}
-                data-pa-tidy-act="apply"
+                onClick={() => void act("undo")}
+                data-pa-tidy-act={tidy ? "undo" : undefined}
               >
                 {busy ? <SyncedSpinner small className="size-3.5" /> : null}
-                {tt("apply")}
+                {tidy ? tt("undoAll") : t("undo")}
               </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={readOnly || busy}
-                onClick={() => void act("dismiss")}
-                data-pa-tidy-act="dismiss"
-              >
-                {tt("dismiss")}
-              </Button>
-            </>
-          ) : null}
-        </div>
+            ) : null}
+            {tidy && state === "draft" ? (
+              <>
+                <Button
+                  size="sm"
+                  disabled={readOnly || busy}
+                  onClick={() => void act("apply")}
+                  data-pa-tidy-act="apply"
+                >
+                  {busy ? <SyncedSpinner small className="size-3.5" /> : null}
+                  {tt("apply")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={readOnly || busy}
+                  onClick={() => void act("dismiss")}
+                  data-pa-tidy-act="dismiss"
+                >
+                  {tt("dismiss")}
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </PaSheet>
         {failed ? (
           <p role="alert" className="text-xs break-words text-destructive">
             {tn("failed", { error: failed })}

@@ -33,7 +33,7 @@ import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { MutedNote, MuteKindButton } from "./mute-kind"
 import { asDraft, precheckWords, RoutineWhen } from "./routine-bits"
-import { AGENT_SURFACE, num, str, usePageScope } from "./shared"
+import { AGENT_SURFACE, num, PaSheet, str, usePageScope } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -192,187 +192,192 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
             <span className="text-muted-foreground">· {changeWord}</span>
           ) : null}
         </p>
-        {r ? (
-          <>
-            <p
-              className="text-sm font-medium break-words"
-              data-pa-routine-title
-            >
-              {r.title}
-            </p>
-            <p className="mt-1 text-xs break-words text-muted-foreground">
-              <RoutineWhen cron={r.cron} event={r.event} zone={r.timezone} />
-              {r.kind ? ` · ${tr(`kind.${r.kind}` as "kind.brain")}` : null}
-              {precheck ? ` · ${precheck}` : null}
-            </p>
-            {r.what && what !== "paused" ? (
-              <p className="mt-1.5 line-clamp-4 text-xs break-words whitespace-pre-wrap text-foreground/80">
-                {r.what}
+        <PaSheet>
+          {r ? (
+            <>
+              <p
+                className="text-sm font-medium break-words"
+                data-pa-routine-title
+              >
+                {r.title}
               </p>
-            ) : null}
-          </>
-        ) : null}
-        {what === "repeat" ? (
-          <p
-            className="mt-1.5 text-xs text-muted-foreground"
-            data-pa-routine-repeat
-          >
-            {t("repeatBody", { count: num(data, "count") ?? 3 })}
-          </p>
-        ) : null}
-        {what === "paused" ? (
-          <p className="mt-1.5 text-xs break-words text-amber-700 dark:text-amber-300">
-            {pausedWhy === "executor"
-              ? t("pausedExecutor")
-              : t("pausedFailures")}
-            {str(data, "why") ? ` — ${str(data, "why")}` : null}
-          </p>
-        ) : null}
-        {what === "made" && num(data, "trial_run_id") != null ? (
-          <p className="mt-1.5 text-xs text-muted-foreground">{t("trial")}</p>
-        ) : null}
-        {reason && what !== "paused" ? (
-          <p className="mt-1.5 text-xs break-words text-muted-foreground">
-            {t("reason", { reason })}
-          </p>
-        ) : null}
-        {stateNote ? (
-          <p
-            className="mt-1.5 text-xs text-muted-foreground"
-            data-pa-routine-note
-          >
-            {stateNote}
-          </p>
-        ) : null}
-        <MutedNote data={data} />
-        {!readOnly ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {(what === "made" || what === "changed") && state === "made" ? (
-              <>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={busy != null}
-                  onClick={() => void answer("undo")}
-                  data-pa-routine-card-act="undo"
-                >
-                  {spin("undo")}
-                  {t("undo")}
-                </Button>
-                {routineId != null ? (
+              <p className="mt-1 text-xs break-words text-muted-foreground">
+                <RoutineWhen cron={r.cron} event={r.event} zone={r.timezone} />
+                {r.kind ? ` · ${tr(`kind.${r.kind}` as "kind.brain")}` : null}
+                {precheck ? ` · ${precheck}` : null}
+              </p>
+              {r.what && what !== "paused" ? (
+                <p className="mt-1.5 line-clamp-4 text-xs break-words whitespace-pre-wrap text-foreground/80">
+                  {r.what}
+                </p>
+              ) : null}
+            </>
+          ) : null}
+          {what === "repeat" ? (
+            <p
+              className="mt-1.5 text-xs text-muted-foreground"
+              data-pa-routine-repeat
+            >
+              {t("repeatBody", { count: num(data, "count") ?? 3 })}
+            </p>
+          ) : null}
+          {what === "paused" ? (
+            <p className="mt-1.5 text-xs break-words text-amber-700 dark:text-amber-300">
+              {pausedWhy === "executor"
+                ? t("pausedExecutor")
+                : t("pausedFailures")}
+              {str(data, "why") ? ` — ${str(data, "why")}` : null}
+            </p>
+          ) : null}
+          {what === "made" && num(data, "trial_run_id") != null ? (
+            <p className="mt-1.5 text-xs text-muted-foreground">{t("trial")}</p>
+          ) : null}
+          {reason && what !== "paused" ? (
+            <p className="mt-1.5 text-xs break-words text-muted-foreground">
+              {t("reason", { reason })}
+            </p>
+          ) : null}
+          {stateNote ? (
+            <p
+              className="mt-1.5 text-xs text-muted-foreground"
+              data-pa-routine-note
+            >
+              {stateNote}
+            </p>
+          ) : null}
+          <MutedNote data={data} />
+          {!readOnly ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {(what === "made" || what === "changed") && state === "made" ? (
+                <>
                   <Button
                     size="sm"
-                    variant="ghost"
-                    onClick={() =>
-                      openEditor({
-                        botId,
-                        routineId,
-                        draft: null,
-                        noticeId: null,
-                      })
-                    }
-                    data-pa-routine-card-act="edit"
+                    variant="secondary"
+                    disabled={busy != null}
+                    onClick={() => void answer("undo")}
+                    data-pa-routine-card-act="undo"
                   >
-                    {t("edit")}
+                    {spin("undo")}
+                    {t("undo")}
                   </Button>
-                ) : null}
-              </>
-            ) : null}
-            {what === "proposal" && open ? (
-              <>
-                <Button
-                  size="sm"
-                  disabled={busy != null}
-                  onClick={() => void answer("accept")}
-                  data-pa-routine-card-act="accept"
-                >
-                  {spin("accept")}
-                  {routineId != null ? t("acceptChange") : t("accept")}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy != null}
-                  onClick={() => void answer("dismiss")}
-                  data-pa-routine-card-act="dismiss"
-                >
-                  {spin("dismiss")}
-                  {t("dismiss")}
-                </Button>
-                {confirm ? null : (
-                  <MuteKindButton noticeId={noticeId} disabled={busy != null} />
-                )}
-              </>
-            ) : null}
-            {what === "repeat" && open ? (
-              <>
-                <Button
-                  size="sm"
-                  onClick={() =>
-                    openEditor({
-                      botId,
-                      routineId: null,
-                      draft,
-                      noticeId: Number.isFinite(noticeId) ? noticeId : null,
-                    })
-                  }
-                  data-pa-routine-card-act="make"
-                >
-                  {t("makeIt")}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy != null}
-                  onClick={() => void answer("dismiss")}
-                  data-pa-routine-card-act="dismiss"
-                >
-                  {spin("dismiss")}
-                  {t("dismiss")}
-                </Button>
-                <MuteKindButton noticeId={noticeId} disabled={busy != null} />
-              </>
-            ) : null}
-            {what === "paused" && open ? (
-              <>
-                {pausedWhy === "executor" && routineId != null ? (
-                  <Button
-                    size="sm"
-                    onClick={() =>
-                      openEditor({
-                        botId,
-                        routineId,
-                        draft: null,
-                        noticeId: Number.isFinite(noticeId) ? noticeId : null,
-                      })
-                    }
-                    data-pa-routine-card-act="another"
-                  >
-                    {t("useAnother")}
-                  </Button>
-                ) : (
+                  {routineId != null ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        openEditor({
+                          botId,
+                          routineId,
+                          draft: null,
+                          noticeId: null,
+                        })
+                      }
+                      data-pa-routine-card-act="edit"
+                    >
+                      {t("edit")}
+                    </Button>
+                  ) : null}
+                </>
+              ) : null}
+              {what === "proposal" && open ? (
+                <>
                   <Button
                     size="sm"
                     disabled={busy != null}
-                    onClick={() => void answer("resume")}
-                    data-pa-routine-card-act="resume"
+                    onClick={() => void answer("accept")}
+                    data-pa-routine-card-act="accept"
                   >
-                    {spin("resume")}
-                    {t("resume")}
+                    {spin("accept")}
+                    {routineId != null ? t("acceptChange") : t("accept")}
                   </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => showRoutines()}
-                  data-pa-routine-card-act="open"
-                >
-                  {t("open")}
-                </Button>
-              </>
-            ) : null}
-          </div>
-        ) : null}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy != null}
+                    onClick={() => void answer("dismiss")}
+                    data-pa-routine-card-act="dismiss"
+                  >
+                    {spin("dismiss")}
+                    {t("dismiss")}
+                  </Button>
+                  {confirm ? null : (
+                    <MuteKindButton
+                      noticeId={noticeId}
+                      disabled={busy != null}
+                    />
+                  )}
+                </>
+              ) : null}
+              {what === "repeat" && open ? (
+                <>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      openEditor({
+                        botId,
+                        routineId: null,
+                        draft,
+                        noticeId: Number.isFinite(noticeId) ? noticeId : null,
+                      })
+                    }
+                    data-pa-routine-card-act="make"
+                  >
+                    {t("makeIt")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={busy != null}
+                    onClick={() => void answer("dismiss")}
+                    data-pa-routine-card-act="dismiss"
+                  >
+                    {spin("dismiss")}
+                    {t("dismiss")}
+                  </Button>
+                  <MuteKindButton noticeId={noticeId} disabled={busy != null} />
+                </>
+              ) : null}
+              {what === "paused" && open ? (
+                <>
+                  {pausedWhy === "executor" && routineId != null ? (
+                    <Button
+                      size="sm"
+                      onClick={() =>
+                        openEditor({
+                          botId,
+                          routineId,
+                          draft: null,
+                          noticeId: Number.isFinite(noticeId) ? noticeId : null,
+                        })
+                      }
+                      data-pa-routine-card-act="another"
+                    >
+                      {t("useAnother")}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      disabled={busy != null}
+                      onClick={() => void answer("resume")}
+                      data-pa-routine-card-act="resume"
+                    >
+                      {spin("resume")}
+                      {t("resume")}
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => showRoutines()}
+                    data-pa-routine-card-act="open"
+                  >
+                    {t("open")}
+                  </Button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </PaSheet>
         {failed || error ? (
           <p className="mt-1.5 text-xs break-words text-destructive">
             {failed ?? error}

@@ -40,6 +40,7 @@ import {
   DispatchStateChip,
   MARKDOWN_LIST_ROOM,
   num,
+  PaSheet,
   str,
   UnreadMark,
   useOpenWork,
@@ -48,7 +49,7 @@ import {
   workTargetOf,
 } from "./shared"
 import { asLadder, LadderChip, TaskStrip } from "./task-strip"
-import { WORK_WELL, WorkRow } from "./work-card"
+import { WorkRow } from "./work-card"
 
 type EventItem = Extract<MessageItem, { kind: "event" }>
 
@@ -245,8 +246,11 @@ export function EventCard({ item }: { item: EventItem }) {
         {row.reply_to != null && !item.quotesPrevious ? (
           <QuoteBar targetId={row.reply_to} tone="light" className="mb-2" />
         ) : null}
-        <div className={WORK_WELL}>
+        {/* The work and its news on one card: the work its head, what came
+            of it under a hairline. */}
+        <PaSheet className="overflow-hidden p-0" data-pa-event-card>
           <WorkRow
+            flat
             executorId={info?.executor.assistant_id ?? num(data, "executor_id")}
             executor={executor}
             agentType={agentType}
@@ -265,67 +269,68 @@ export function EventCard({ item }: { item: EventItem }) {
             }
             onOpen={canOpenWork(target) ? () => openWork(target) : null}
           />
-        </div>
-        {/* The task card, on the latest news of its work: where it stands
+          <div className="border-t border-border/60 px-3 pt-2.5 pb-3 empty:hidden [&>:first-child]:mt-0">
+            {/* The task card, on the latest news of its work: where it stands
             now, said again on the strip when the row above says otherwise. */}
-        {item.latest && info?.task ? (
-          <TaskStrip d={info} chip={newsLadder !== info.ladder} />
-        ) : null}
-        {item.latest && info && info.answered_for_you > 0 ? (
-          <AnsweredForYou count={info.answered_for_you} className="mt-2" />
-        ) : null}
-        {note ? (
-          <p className="mt-2 text-xs break-words text-muted-foreground">
-            {note}
-          </p>
-        ) : null}
-        {retry ? (
-          <p
-            className="mt-1.5 text-xs break-words text-muted-foreground"
-            data-pa-retry
-          >
-            {retry}
-          </p>
-        ) : null}
-        {checkFor != null ? (
-          <div
-            className="mt-2 flex flex-wrap items-center gap-1.5"
-            data-pa-check-result={verdict ?? ""}
-          >
-            <CheckLabel round={checkRound} via={null} />
-            {data?.verdict !== undefined && data?.verdict !== null ? (
-              <VerdictChip verdict={verdict} />
+            {item.latest && info?.task ? (
+              <TaskStrip d={info} chip={newsLadder !== info.ladder} />
+            ) : null}
+            {item.latest && info && info.answered_for_you > 0 ? (
+              <AnsweredForYou count={info.answered_for_you} className="mt-2" />
+            ) : null}
+            {note ? (
+              <p className="mt-2 text-xs break-words text-muted-foreground">
+                {note}
+              </p>
+            ) : null}
+            {retry ? (
+              <p
+                className="mt-1.5 text-xs break-words text-muted-foreground"
+                data-pa-retry
+              >
+                {retry}
+              </p>
+            ) : null}
+            {checkFor != null ? (
+              <div
+                className="mt-2 flex flex-wrap items-center gap-1.5"
+                data-pa-check-result={verdict ?? ""}
+              >
+                <CheckLabel round={checkRound} via={null} />
+                {data?.verdict !== undefined && data?.verdict !== null ? (
+                  <VerdictChip verdict={verdict} />
+                ) : null}
+              </div>
+            ) : null}
+            {shown ? <CollapsedText text={shown} /> : null}
+            {/* Done, and not a routine's already: make it one (6.9). */}
+            {item.latest &&
+            info &&
+            info.state === "completed" &&
+            checkFor == null &&
+            info.routine_id == null &&
+            !readOnly ? (
+              <div className="mt-2">
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  onClick={() =>
+                    openRoutineEditor({
+                      botId,
+                      routineId: null,
+                      draft: weeklyDraft(info),
+                      noticeId: null,
+                    })
+                  }
+                  data-pa-weekly
+                >
+                  <Repeat aria-hidden />
+                  {t("routines.weekly")}
+                </Button>
+              </div>
             ) : null}
           </div>
-        ) : null}
-        {shown ? <CollapsedText text={shown} /> : null}
-        {/* Done, and not a routine's already: make it one (6.9). */}
-        {item.latest &&
-        info &&
-        info.state === "completed" &&
-        checkFor == null &&
-        info.routine_id == null &&
-        !readOnly ? (
-          <div className="mt-2">
-            <Button
-              size="xs"
-              variant="ghost"
-              className="text-muted-foreground"
-              onClick={() =>
-                openRoutineEditor({
-                  botId,
-                  routineId: null,
-                  draft: weeklyDraft(info),
-                  noticeId: null,
-                })
-              }
-              data-pa-weekly
-            >
-              <Repeat aria-hidden />
-              {t("routines.weekly")}
-            </Button>
-          </div>
-        ) : null}
+        </PaSheet>
       </div>
     </MessageRow>
   )

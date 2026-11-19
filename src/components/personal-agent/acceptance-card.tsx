@@ -35,6 +35,7 @@ import {
   AGENT_SURFACE,
   canOpenWork,
   num,
+  PaSheet,
   str,
   useOpenWork,
   usePageScope,
@@ -188,176 +189,178 @@ export function AcceptanceCard({ item }: { item: NoticeItem }) {
             <span className="before:me-1.5 before:content-['·']">{people}</span>
           ) : null}
         </p>
-        <p className="text-sm font-medium break-words">{title}</p>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
-          {unchecked ? (
-            <span
-              data-pa-unchecked
-              className="inline-flex h-5 items-center rounded-full bg-amber-500/15 px-2 font-medium text-amber-700 dark:text-amber-300"
-            >
-              {t("unchecked")}
-            </span>
-          ) : (
-            <>
-              <span className="text-muted-foreground">{t("check")}</span>
-              <VerdictChip verdict={verdict} />
-            </>
-          )}
-          {phase === "accepted" && !unchecked && verdict === "unverified" ? (
-            <span
-              data-pa-not-verified
-              className="inline-flex h-5 items-center rounded-full bg-amber-500/15 px-2 font-medium text-amber-700 dark:text-amber-300"
-            >
-              {t("notVerified")}
-            </span>
-          ) : null}
-        </div>
-        {conclusion ? (
-          <p
-            data-pa-conclusion
-            className="mt-1.5 text-xs break-words text-muted-foreground"
-          >
-            {conclusion}
-          </p>
-        ) : null}
-        {evidence ? (
-          <div className="text-xs" data-pa-evidence>
-            <CollapsedText text={evidence} />
-          </div>
-        ) : null}
-        {asked ? (
-          <div className="mt-2.5 space-y-2">
-            {question ? (
-              <p className="text-sm break-words" data-pa-question>
-                {t("question", { question })}
-              </p>
-            ) : null}
-            {max > 0 && round >= max ? (
-              <p className="text-xs text-muted-foreground" data-pa-used-up>
-                {t("usedUp", { count: round })}
-              </p>
-            ) : null}
-            {message ? (
-              <div data-pa-revise-message>
-                <p className="text-xs font-medium text-muted-foreground">
-                  {t("wouldSend")}
-                </p>
-                <p className="text-sm break-words whitespace-pre-wrap">
-                  {message}
-                </p>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        {phase === "revised" && message ? (
-          <p className="mt-1.5 text-sm break-words whitespace-pre-wrap">
-            {message}
-          </p>
-        ) : null}
-        {ended ? (
-          <p
-            className="mt-2 text-xs text-muted-foreground"
-            data-pa-accept-ended={phase}
-          >
-            {ended}
-            {superseded && (phase === "void" || phase === "changed") ? (
+        <PaSheet>
+          <p className="text-sm font-medium break-words">{title}</p>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+            {unchecked ? (
               <span
-                data-pa-superseded
-                className="before:mx-1.5 before:content-['·']"
+                data-pa-unchecked
+                className="inline-flex h-5 items-center rounded-full bg-amber-500/15 px-2 font-medium text-amber-700 dark:text-amber-300"
               >
-                {t("superseded")}
+                {t("unchecked")}
+              </span>
+            ) : (
+              <>
+                <span className="text-muted-foreground">{t("check")}</span>
+                <VerdictChip verdict={verdict} />
+              </>
+            )}
+            {phase === "accepted" && !unchecked && verdict === "unverified" ? (
+              <span
+                data-pa-not-verified
+                className="inline-flex h-5 items-center rounded-full bg-amber-500/15 px-2 font-medium text-amber-700 dark:text-amber-300"
+              >
+                {t("notVerified")}
               </span>
             ) : null}
-          </p>
-        ) : null}
-        {phase === "accepted" && mergeCommit ? (
-          <p className="mt-1 text-xs text-muted-foreground" data-pa-merged>
-            {t("merged", { commit: mergeCommit.slice(0, 7) })}
-          </p>
-        ) : null}
-        {phase === "accepted" && deliveredHead && !mergeCommit ? (
-          <p className="mt-1 text-xs text-muted-foreground" data-pa-delivered>
-            {t("delivered", { head: deliveredHead.slice(0, 7) })}
-          </p>
-        ) : null}
-        {asked || recheck || canOpen ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {asked && message ? (
-              <Button
-                size="sm"
-                disabled={disabled}
-                onClick={() => void answer("revise")}
-                data-pa-accept-act="revise"
-              >
-                {spin("revise")}
-                {t("revise")}
-              </Button>
-            ) : null}
-            {asked ? (
-              <Button
-                size="sm"
-                variant={message ? "outline" : "default"}
-                disabled={disabled}
-                onClick={() => void answer("accept")}
-                data-pa-accept-act="accept"
-              >
-                {spin("accept")}
-                {t("accept")}
-              </Button>
-            ) : null}
-            {recheck ? (
-              <Button
-                size="sm"
-                disabled={disabled}
-                onClick={() => void answer("recheck")}
-                data-pa-accept-act="recheck"
-              >
-                {spin("recheck")}
-                {t("recheck")}
-              </Button>
-            ) : null}
-            {/* A button that looks one — alone on a card settled, a ghost
-                one reads as text set in from the rest. */}
-            {canOpen ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => openWork(target)}
-                data-pa-accept-act="open"
-              >
-                {t("openTask")}
-              </Button>
-            ) : null}
           </div>
-        ) : null}
-        {history.length > 0 ? (
-          <div className="mt-2.5 border-t border-border/60 pt-2">
-            <p className="text-xs font-medium text-muted-foreground">
-              {t("history")}
+          {conclusion ? (
+            <p
+              data-pa-conclusion
+              className="mt-1.5 text-xs break-words text-muted-foreground"
+            >
+              {conclusion}
             </p>
-            <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
-              {history.map((h) => {
-                const n = typeof h.round === "number" ? h.round : 0
-                const m = typeof h.message === "string" ? h.message : ""
-                const line =
-                  h.state === "revised"
-                    ? t("historyRevised", { round: n, message: m })
-                    : h.state === "accepted"
-                      ? t("historyAccepted", { round: n })
-                      : h.state === "changed"
-                        ? t("historyChanged", { round: n })
-                        : h.state === "asked"
-                          ? t("historyAsked", { round: n })
-                          : t("historyOpen", { round: n })
-                return (
-                  <li key={`${n}-${h.state}`} data-pa-history={n}>
-                    {line}
-                  </li>
-                )
-              })}
-            </ul>
-          </div>
-        ) : null}
+          ) : null}
+          {evidence ? (
+            <div className="text-xs" data-pa-evidence>
+              <CollapsedText text={evidence} />
+            </div>
+          ) : null}
+          {asked ? (
+            <div className="mt-2.5 space-y-2">
+              {question ? (
+                <p className="text-sm break-words" data-pa-question>
+                  {t("question", { question })}
+                </p>
+              ) : null}
+              {max > 0 && round >= max ? (
+                <p className="text-xs text-muted-foreground" data-pa-used-up>
+                  {t("usedUp", { count: round })}
+                </p>
+              ) : null}
+              {message ? (
+                <div data-pa-revise-message>
+                  <p className="text-xs font-medium text-muted-foreground">
+                    {t("wouldSend")}
+                  </p>
+                  <p className="text-sm break-words whitespace-pre-wrap">
+                    {message}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {phase === "revised" && message ? (
+            <p className="mt-1.5 text-sm break-words whitespace-pre-wrap">
+              {message}
+            </p>
+          ) : null}
+          {ended ? (
+            <p
+              className="mt-2 text-xs text-muted-foreground"
+              data-pa-accept-ended={phase}
+            >
+              {ended}
+              {superseded && (phase === "void" || phase === "changed") ? (
+                <span
+                  data-pa-superseded
+                  className="before:mx-1.5 before:content-['·']"
+                >
+                  {t("superseded")}
+                </span>
+              ) : null}
+            </p>
+          ) : null}
+          {phase === "accepted" && mergeCommit ? (
+            <p className="mt-1 text-xs text-muted-foreground" data-pa-merged>
+              {t("merged", { commit: mergeCommit.slice(0, 7) })}
+            </p>
+          ) : null}
+          {phase === "accepted" && deliveredHead && !mergeCommit ? (
+            <p className="mt-1 text-xs text-muted-foreground" data-pa-delivered>
+              {t("delivered", { head: deliveredHead.slice(0, 7) })}
+            </p>
+          ) : null}
+          {asked || recheck || canOpen ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {asked && message ? (
+                <Button
+                  size="sm"
+                  disabled={disabled}
+                  onClick={() => void answer("revise")}
+                  data-pa-accept-act="revise"
+                >
+                  {spin("revise")}
+                  {t("revise")}
+                </Button>
+              ) : null}
+              {asked ? (
+                <Button
+                  size="sm"
+                  variant={message ? "secondary" : "default"}
+                  disabled={disabled}
+                  onClick={() => void answer("accept")}
+                  data-pa-accept-act="accept"
+                >
+                  {spin("accept")}
+                  {t("accept")}
+                </Button>
+              ) : null}
+              {recheck ? (
+                <Button
+                  size="sm"
+                  disabled={disabled}
+                  onClick={() => void answer("recheck")}
+                  data-pa-accept-act="recheck"
+                >
+                  {spin("recheck")}
+                  {t("recheck")}
+                </Button>
+              ) : null}
+              {/* A button that looks one — alone on a card settled, a ghost
+                one reads as text set in from the rest. */}
+              {canOpen ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => openWork(target)}
+                  data-pa-accept-act="open"
+                >
+                  {t("openTask")}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+          {history.length > 0 ? (
+            <div className="mt-2.5 border-t border-border/60 pt-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                {t("history")}
+              </p>
+              <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                {history.map((h) => {
+                  const n = typeof h.round === "number" ? h.round : 0
+                  const m = typeof h.message === "string" ? h.message : ""
+                  const line =
+                    h.state === "revised"
+                      ? t("historyRevised", { round: n, message: m })
+                      : h.state === "accepted"
+                        ? t("historyAccepted", { round: n })
+                        : h.state === "changed"
+                          ? t("historyChanged", { round: n })
+                          : h.state === "asked"
+                            ? t("historyAsked", { round: n })
+                            : t("historyOpen", { round: n })
+                  return (
+                    <li key={`${n}-${h.state}`} data-pa-history={n}>
+                      {line}
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          ) : null}
+        </PaSheet>
         {failed ? (
           <p role="alert" className="mt-2 text-xs break-words text-destructive">
             {tn("failed", { error: failed })}

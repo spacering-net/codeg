@@ -4449,6 +4449,12 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   --pa-inset: color-mix(in oklab, var(--pa-own-ink) 14%, transparent);
   --pa-inset-hover: color-mix(in oklab, var(--pa-own-ink) 20%, transparent);
   --pa-inset-active: color-mix(in oklab, var(--pa-own-ink) 26%, transparent);
+  /* A thing in it (a quote, `INSET_SURFACE`): that wash, no line — not the
+     white card it is on the assistant's grey. */
+  --pa-object: var(--pa-inset);
+  --pa-object-hover: var(--pa-inset-hover);
+  --pa-object-active: var(--pa-inset-active);
+  --pa-object-edge: transparent;
   background-color: var(--pa-own);
   color: var(--pa-own-ink);
 }
@@ -4487,6 +4493,26 @@ div.monaco-diff-editor.side-by-side .editor.modified {
     var(--background)
   );
 }
+/* A thing inside a bubble (`INSET_SURFACE`: a work row, a pill, a quote, a
+   choice's panel): a white card with a hairline on the bubble's grey — the
+   card's colour, as an assistant's own card — and, on such a card (codeg's
+   `data-pa-surface`, a json-render card), the card's colour a step deeper
+   with no line, as a list's item on it is. */
+.pa-agent-bubble {
+  --pa-object: var(--card);
+  --pa-object-hover: color-mix(in oklab, var(--foreground) 4%, var(--card));
+  --pa-object-active: color-mix(in oklab, var(--foreground) 7%, var(--card));
+  --pa-object-edge: color-mix(in oklab, var(--foreground) 10%, transparent);
+  /* A table's body: white on the grey, the card's own on a card. */
+  --pa-table: var(--card);
+}
+.pa-agent-bubble :is([data-pa-surface], [data-slot="card"]) {
+  --pa-object: var(--pa-inset);
+  --pa-object-hover: var(--pa-inset-hover);
+  --pa-object-active: var(--pa-inset-active);
+  --pa-object-edge: transparent;
+  --pa-table: transparent;
+}
 [data-workspace-bg="on"] .pa-agent-bubble {
   background-color: color-mix(in oklab, var(--muted) 58%, transparent);
   box-shadow: inset 0 0 0 1px var(--border);
@@ -4495,9 +4521,10 @@ div.monaco-diff-editor.side-by-side .editor.modified {
    code block and a diagram are the bubble a step deeper, instead of their
    own greys (one of them the bubble's own) and a code body of the page
    colour — a white card on the grey; a code block's title bar and a
-   table's head a step deeper again, a table's body the bubble itself; and
-   no frame round a code block, as round nothing else in a bubble. A table
-   keeps its lines: they are its structure. */
+   table's head a step deeper again; a table's body a white card on the
+   grey (`--pa-table`; on a card inside the bubble, that card); and no
+   frame round a code block. A table keeps its lines: they are its
+   structure. */
 .pa-agent-bubble [data-streamdown="inline-code"],
 .pa-agent-bubble [data-streamdown="code-block"],
 .pa-agent-bubble [data-streamdown="mermaid-block"],
@@ -4505,9 +4532,11 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 .pa-agent-bubble [data-streamdown="table-header"] {
   background-color: var(--pa-inset);
 }
-.pa-agent-bubble [data-streamdown="code-block-body"],
-.pa-agent-bubble [data-streamdown="table-body"] {
+.pa-agent-bubble [data-streamdown="code-block-body"] {
   background-color: transparent;
+}
+.pa-agent-bubble [data-streamdown="table-body"] {
+  background-color: var(--pa-table);
 }
 .pa-agent-bubble [data-streamdown="code-block"] {
   border-color: transparent;
@@ -4554,7 +4583,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   ):not([data-slot="card"] *, [data-pa-surface] *):hover {
   background-color: color-mix(
     in oklab,
-    var(--foreground) 3%,
+    var(--foreground) 7%,
     var(--background)
   );
 }
@@ -4586,7 +4615,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   ):not([data-slot="card"] *, [data-pa-surface] *):hover {
   background-color: color-mix(
     in oklab,
-    var(--foreground) 25%,
+    var(--foreground) 28%,
     var(--background)
   );
 }

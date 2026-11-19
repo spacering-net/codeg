@@ -31,7 +31,7 @@ import { useActivityTranslate } from "./activity-text"
 import { dueWhen, humanDuration, repeatText } from "./due-text"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
-import { AGENT_SURFACE, num, str, usePageScope } from "./shared"
+import { AGENT_SURFACE, num, PaSheet, str, usePageScope } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -161,55 +161,57 @@ export function ReminderCard({ item }: { item: NoticeItem }) {
             </span>
           ))}
         </p>
-        <p className="text-sm break-words whitespace-pre-wrap">{summary}</p>
-        {open ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              disabled={disabled}
-              onClick={() => void answer("done")}
-              data-pa-reminder-act="done"
-            >
-              {spin("done")}
-              {t("done")}
-            </Button>
-            {SNOOZES.map((s) => (
+        <PaSheet>
+          <p className="text-sm break-words whitespace-pre-wrap">{summary}</p>
+          {open ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <Button
-                key={s.action}
                 size="sm"
-                variant="outline"
                 disabled={disabled}
-                onClick={() => void answer(s.action)}
-                data-pa-reminder-act={s.attr}
+                onClick={() => void answer("done")}
+                data-pa-reminder-act="done"
               >
-                {spin(s.action)}
-                {t(s.label)}
+                {spin("done")}
+                {t("done")}
               </Button>
-            ))}
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={disabled}
-              onClick={() =>
-                void answer(
-                  "hand_over",
-                  t("handOverText", { id: itemId ?? "", summary })
-                )
-              }
-              data-pa-reminder-act="hand-over"
+              {SNOOZES.map((s) => (
+                <Button
+                  key={s.action}
+                  size="sm"
+                  variant="secondary"
+                  disabled={disabled}
+                  onClick={() => void answer(s.action)}
+                  data-pa-reminder-act={s.attr}
+                >
+                  {spin(s.action)}
+                  {t(s.label)}
+                </Button>
+              ))}
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={disabled}
+                onClick={() =>
+                  void answer(
+                    "hand_over",
+                    t("handOverText", { id: itemId ?? "", summary })
+                  )
+                }
+                data-pa-reminder-act="hand-over"
+              >
+                {spin("hand_over")}
+                {t("handOver")}
+              </Button>
+            </div>
+          ) : ended ? (
+            <p
+              className="mt-2 text-xs text-muted-foreground"
+              data-pa-reminder-state={act ? "woke" : state}
             >
-              {spin("hand_over")}
-              {t("handOver")}
-            </Button>
-          </div>
-        ) : ended ? (
-          <p
-            className="mt-2 text-xs text-muted-foreground"
-            data-pa-reminder-state={act ? "woke" : state}
-          >
-            {ended}
-          </p>
-        ) : null}
+              {ended}
+            </p>
+          ) : null}
+        </PaSheet>
         {shownError ? (
           <p role="alert" className="mt-2 text-xs break-words text-destructive">
             {tn("failed", { error: shownError })}

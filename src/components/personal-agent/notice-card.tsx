@@ -110,9 +110,10 @@ import {
   asMode,
   canOpenWork,
   num,
+  PaSheet,
   str,
-  useOpenWork,
   useBotName,
+  useOpenWork,
   usePageScope,
   useWorkMeta,
   workTargetOf,
@@ -329,104 +330,106 @@ function ActionCard({
           )}
           <span className="font-medium">{heading}</span>
         </p>
-        {hint ? <p className="mb-2.5 text-sm break-words">{hint}</p> : null}
-        {isMessage ? (
-          <p
-            className="mb-1 text-xs text-muted-foreground"
-            data-pa-confirm-message
-          >
-            {t("confirm.messageTo", { name: str(display, "to_name") ?? "" })}
-          </p>
-        ) : (
-          <div className={WORK_WELL}>
-            <WorkRow
-              executorId={num(display, "executor_id")}
-              executor={executor}
-              agentType={agentType}
-              title={
-                retry
-                  ? t("retryOf", { title: str(display, "title") ?? "" })
-                  : action === "followup"
-                    ? t("followupOf", { title: str(display, "title") ?? "" })
-                    : (str(display, "title") ?? row.body)
-              }
-              meta={meta({
-                executor,
-                mode,
-                folder: str(display, "project"),
-              })}
-              chip={null}
-              onOpen={openable ? () => openWork(target) : null}
-            />
-          </div>
-        )}
-        {action === "followup" && intent && INTENTS.has(intent) ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            {t(`intent.${intent}` as "intent.revise")}
-          </p>
-        ) : null}
-        {text ? <CollapsedText text={text} /> : null}
-        {tonight && state === "open" && data?.keep_awake === true ? (
-          <p
-            className="mt-2 text-xs text-muted-foreground"
-            data-pa-tonight-awake
-          >
-            {t("tonight.awake")}
-          </p>
-        ) : null}
-        {answerable ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {uncertain && openable ? (
+        <PaSheet>
+          {hint ? <p className="mb-2.5 text-sm break-words">{hint}</p> : null}
+          {isMessage ? (
+            <p
+              className="mb-1 text-xs text-muted-foreground"
+              data-pa-confirm-message
+            >
+              {t("confirm.messageTo", { name: str(display, "to_name") ?? "" })}
+            </p>
+          ) : (
+            <div className={WORK_WELL}>
+              <WorkRow
+                executorId={num(display, "executor_id")}
+                executor={executor}
+                agentType={agentType}
+                title={
+                  retry
+                    ? t("retryOf", { title: str(display, "title") ?? "" })
+                    : action === "followup"
+                      ? t("followupOf", { title: str(display, "title") ?? "" })
+                      : (str(display, "title") ?? row.body)
+                }
+                meta={meta({
+                  executor,
+                  mode,
+                  folder: str(display, "project"),
+                })}
+                chip={null}
+                onOpen={openable ? () => openWork(target) : null}
+              />
+            </div>
+          )}
+          {action === "followup" && intent && INTENTS.has(intent) ? (
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t(`intent.${intent}` as "intent.revise")}
+            </p>
+          ) : null}
+          {text ? <CollapsedText text={text} /> : null}
+          {tonight && state === "open" && data?.keep_awake === true ? (
+            <p
+              className="mt-2 text-xs text-muted-foreground"
+              data-pa-tonight-awake
+            >
+              {t("tonight.awake")}
+            </p>
+          ) : null}
+          {answerable ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {uncertain && openable ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => openWork(target)}
+                >
+                  {t("uncertain.look")}
+                </Button>
+              ) : null}
               <Button
                 size="sm"
-                variant="outline"
-                onClick={() => openWork(target)}
+                disabled={readOnly || busy != null}
+                onClick={() => void answer("accept")}
               >
-                {t("uncertain.look")}
+                {busy === "accept" ? (
+                  <SyncedSpinner small className="size-3.5" />
+                ) : null}
+                {uncertain
+                  ? t("uncertain.again")
+                  : state === "unknown"
+                    ? t("again")
+                    : confirm
+                      ? tc("accept")
+                      : tonight
+                        ? t("tonight.accept")
+                        : t("accept")}
               </Button>
-            ) : null}
-            <Button
-              size="sm"
-              disabled={readOnly || busy != null}
-              onClick={() => void answer("accept")}
-            >
-              {busy === "accept" ? (
-                <SyncedSpinner small className="size-3.5" />
-              ) : null}
-              {uncertain
-                ? t("uncertain.again")
-                : state === "unknown"
-                  ? t("again")
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={readOnly || busy != null}
+                onClick={() => void answer("dismiss")}
+              >
+                {uncertain
+                  ? t("uncertain.dismiss")
                   : confirm
-                    ? tc("accept")
+                    ? tc("dismiss")
                     : tonight
-                      ? t("tonight.accept")
-                      : t("accept")}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={readOnly || busy != null}
-              onClick={() => void answer("dismiss")}
-            >
-              {uncertain
-                ? t("uncertain.dismiss")
-                : confirm
-                  ? tc("dismiss")
-                  : tonight
-                    ? t("tonight.dismiss")
-                    : t("dismiss")}
-            </Button>
-            {/* The assistant's own suggestion (6.7); tonight's offer is
+                      ? t("tonight.dismiss")
+                      : t("dismiss")}
+              </Button>
+              {/* The assistant's own suggestion (6.7); tonight's offer is
                 the owner's "tonight I can do", not that. */}
-            {!uncertain && !confirm && !tonight && state === "open" ? (
-              <MuteKindButton
-                noticeId={Number(row.ref_id)}
-                disabled={busy != null}
-              />
-            ) : null}
-          </div>
-        ) : null}
+              {!uncertain && !confirm && !tonight && state === "open" ? (
+                <MuteKindButton
+                  noticeId={Number(row.ref_id)}
+                  disabled={busy != null}
+                />
+              ) : null}
+            </div>
+          ) : null}
+        </PaSheet>
         <MutedNote data={data} />
         {shownError ? (
           <p role="alert" className="mt-2 text-xs break-words text-destructive">
@@ -485,7 +488,7 @@ function CardFrame({
           <Icon className="size-3.5 shrink-0" aria-hidden />
           <span className="font-medium">{heading}</span>
         </p>
-        {children}
+        <PaSheet>{children}</PaSheet>
         {/* "Don't suggest these" was pressed on it (6.7). */}
         <MutedNote data={row.data} />
         {failed ? (
@@ -538,7 +541,7 @@ function LoopCard({ item }: { item: NoticeItem }) {
         {thread != null && a && b ? (
           <Button
             size="sm"
-            variant="outline"
+            variant="secondary"
             onClick={() =>
               setSheet({
                 ...row,
@@ -682,7 +685,7 @@ function StoppedCard({ item }: { item: NoticeItem }) {
                 ) : (
                   <Button
                     size="sm"
-                    variant="outline"
+                    variant="secondary"
                     disabled={readOnly || busy != null}
                     onClick={() => void answer(`stop:${h.id}`)}
                   >
@@ -882,7 +885,7 @@ function ChangedCard({ item }: { item: NoticeItem }) {
           ) : state === "applied" ? (
             <Button
               size="sm"
-              variant="outline"
+              variant="secondary"
               disabled={readOnly || busy != null}
               onClick={() => void answer("undo")}
             >
@@ -1100,7 +1103,7 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
                     {bots.length > 1 && state === "applied" ? (
                       <Button
                         size="xs"
-                        variant="outline"
+                        variant="secondary"
                         disabled={readOnly || busy != null}
                         onClick={() => void answer(`undo:${b.bot_id}`)}
                         data-pa-undo-bot={b.bot_id}
@@ -1170,7 +1173,7 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
         ) : state === "applied" && live.length > 0 ? (
           <Button
             size="sm"
-            variant="outline"
+            variant="secondary"
             disabled={readOnly || busy != null}
             onClick={() => void answer("undo")}
             data-pa-undo-bots
@@ -1379,7 +1382,7 @@ function AssistantChangedCard({ item }: { item: NoticeItem }) {
           <>
             <Button
               size="sm"
-              variant="outline"
+              variant="secondary"
               disabled={readOnly || busy != null}
               onClick={() => void answer("undo")}
               data-pa-assistant-act="undo"

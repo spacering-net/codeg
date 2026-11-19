@@ -208,13 +208,28 @@ export function useWorkMeta(): (parts: {
  *  (globals.css). */
 export const AGENT_SURFACE = "pa-agent-bubble"
 
-/** A surface inside a bubble — a work row, a work pill: the bubble's colour
- *  a step deeper; and, for one that can be clicked, a step deeper again
- *  under the pointer and when pressed. A control with no surface of its
- *  own (a text button) takes `INSET_HOVER` alone. */
-export const INSET_SURFACE = "bg-(--pa-inset)"
+/** A thing inside a bubble — a work row, a work pill, a quote, a choice's
+ *  panel: on the bubble's grey a white card with a hairline (the card's
+ *  colour), on a card inside it (`PA_SHEET`, a json-render card) that
+ *  card's colour a step deeper, no line (globals.css `--pa-object*`); and,
+ *  for one that can be clicked, a step deeper again under the pointer and
+ *  when pressed. A control with no surface of its own (a text button)
+ *  takes `INSET_HOVER` alone. */
+export const INSET_SURFACE =
+  "bg-(--pa-object) shadow-[inset_0_0_0_1px_var(--pa-object-edge,transparent)]"
 export const INSET_HOVER =
-  "hover:bg-(--pa-inset-hover) active:bg-(--pa-inset-active)"
+  "hover:bg-(--pa-object-hover) active:bg-(--pa-object-active)"
+
+/** A card's body on a bubble: what a native card says and its buttons on
+ *  one white sheet under its heading, as an assistant's own card is drawn —
+ *  its buttons their own colours (`data-pa-surface`), the things on it a
+ *  wash (`INSET_SURFACE`). */
+export const PA_SHEET =
+  "min-w-0 rounded-xl border border-border/70 bg-card p-3 text-card-foreground"
+
+export function PaSheet({ className, ...props }: React.ComponentProps<"div">) {
+  return <div data-pa-surface className={cn(PA_SHEET, className)} {...props} />
+}
 
 /** Markdown lists inside a bubble or a box that clips: room for the
  *  bullets and numbers, which hang outside the text (the conversation's

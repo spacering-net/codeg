@@ -75,7 +75,7 @@ import {
   PresetPicker,
 } from "./settings/pref-pages"
 import { useSettingsPatch } from "./settings/use-settings"
-import { AGENT_SURFACE, num, str, usePageScope } from "./shared"
+import { AGENT_SURFACE, num, PaSheet, str, usePageScope } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -90,6 +90,7 @@ function obj(v: unknown): Record<string, unknown> | null {
 /** A native card's bubble, with its heading. */
 function MeetFrame({
   item,
+  bare = false,
   icon: Icon,
   heading,
   text,
@@ -100,6 +101,8 @@ function MeetFrame({
   heading: string
   text: string
   children: React.ReactNode
+  /** Its own cards inside (the promises' groups): not on a sheet. */
+  bare?: boolean
 }) {
   const row = item.row
   return (
@@ -125,7 +128,7 @@ function MeetFrame({
           <Icon className="size-3.5 shrink-0" aria-hidden />
           <span className="font-medium">{heading}</span>
         </p>
-        {children}
+        {bare ? children : <PaSheet>{children}</PaSheet>}
       </div>
     </MessageRow>
   )
@@ -446,7 +449,7 @@ export function ConnectCard({ item }: { item: NoticeItem }) {
                     {p.provider && !p.account ? (
                       <Button
                         size="xs"
-                        variant="outline"
+                        variant="secondary"
                         disabled={readOnly}
                         data-pa-meet-connect-account
                         onClick={() =>
@@ -479,7 +482,7 @@ export function ConnectCard({ item }: { item: NoticeItem }) {
             </Button>
             <Button
               size="sm"
-              variant="outline"
+              variant="secondary"
               disabled={readOnly}
               onClick={() => setFolderDialog(true)}
               data-pa-meet-open-folder
@@ -620,7 +623,7 @@ export function StarterCard({ item }: { item: NoticeItem }) {
               </Button>
               <Button
                 size="sm"
-                variant="outline"
+                variant="secondary"
                 disabled={readOnly || busy != null}
                 onClick={() => void act("next")}
                 data-pa-starter-next
@@ -813,6 +816,7 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
       icon={Sparkles}
       heading={t("heading")}
       text={t("heading")}
+      bare
     >
       {done && !unfolded ? (
         <button

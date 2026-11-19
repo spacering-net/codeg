@@ -332,11 +332,15 @@ describe("an acceptance card", () => {
     expect(screen.getByText("第 1 轮：退回「Fix the tests.」")).toBeTruthy()
     expect(screen.queryByRole("button", { name: "算通过" })).toBeNull()
     expect(screen.queryByRole("button", { name: "重新检查" })).toBeNull()
-    // Alone on the settled card, the way to the task looks a button.
+    // Alone on the settled card, the way to the task looks a button: the
+    // secondary one, on the card's white sheet.
     expect(
       screen
         .getByRole("button", { name: "打开任务" })
         .getAttribute("data-variant")
-    ).toBe("outline")
+    ).toBe("secondary")
+    expect(
+      screen.getByText("之前几轮").closest("[data-pa-surface]")
+    ).not.toBeNull()
   })
 })

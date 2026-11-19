@@ -16,4 +16,31 @@ describe("the bubble's buttons", () => {
     expect(guards.length).toBeGreaterThanOrEqual(10)
     for (const g of guards) expect(g[1]).toMatch(/\[data-pa-surface\] \*/)
   })
+
+  it("draws a thing on the bubble white with a hairline, and on a card a wash", () => {
+    const bubble = css.indexOf(
+      ".pa-agent-bubble {\n  --pa-object: var(--card);"
+    )
+    expect(bubble).toBeGreaterThan(-1)
+    const onCard = css.slice(
+      css.indexOf(
+        '.pa-agent-bubble :is([data-pa-surface], [data-slot="card"]) {'
+      )
+    )
+    const body = onCard.slice(0, onCard.indexOf("}"))
+    expect(body).toContain("--pa-object: var(--pa-inset);")
+    expect(body).toContain("--pa-object-edge: transparent;")
+    expect(body).toContain("--pa-table: transparent;")
+    expect(css).toMatch(
+      /\.pa-agent-bubble \[data-streamdown="table-body"\] \{\s*background-color: var\(--pa-table\);/
+    )
+  })
+
+  it("keeps a quote in the owner's bubble its wash, no line", () => {
+    const own = css.slice(css.indexOf(".pa-owner-bubble {"))
+    const body = own.slice(0, own.indexOf("}"))
+    expect(body).toContain("--pa-object: var(--pa-inset);")
+    expect(body).toContain("--pa-object-hover: var(--pa-inset-hover);")
+    expect(body).toContain("--pa-object-edge: transparent;")
+  })
 })

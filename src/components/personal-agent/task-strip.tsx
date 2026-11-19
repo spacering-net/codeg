@@ -346,7 +346,7 @@ export function TaskStrip({
           {canOpen ? (
             <Button
               size="xs"
-              variant="ghost"
+              variant="secondary"
               data-pa-task-act="open"
               onClick={() => openWork(target)}
             >
@@ -356,10 +356,9 @@ export function TaskStrip({
           {live && !readOnly ? (
             <Button
               size="xs"
-              variant="ghost"
+              variant="destructive"
               data-pa-task-act="stop"
               disabled={stopping}
-              className="text-destructive hover:text-destructive"
               onClick={stop}
             >
               {t("stop")}

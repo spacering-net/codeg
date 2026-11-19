@@ -13,8 +13,10 @@
  *   and how long it has been going while it runs, and the same chevron — no
  *   more, as the news below says the rest.
  *
- * Both are the bubble's colour a step deeper (`INSET_SURFACE`), and a step
- * deeper again under the pointer and when pressed (`INSET_HOVER`).
+ * Both are a thing on the bubble (`INSET_SURFACE`: a white card on its
+ * grey, a wash on a card), a step deeper under the pointer and when pressed
+ * (`INSET_HOVER`); a row heading a card of its own (`flat`) is that card's
+ * head, no surface of its own.
  */
 
 import { useTranslations } from "next-intl"
@@ -60,6 +62,7 @@ export function WorkRow({
   meta,
   chip,
   onOpen,
+  flat = false,
 }: {
   executorId: number | null
   executor: string | null
@@ -71,17 +74,19 @@ export function WorkRow({
   chip: React.ReactNode
   /** Opens the work's session; none when there is nothing to open. */
   onOpen: (() => void) | null
+  /** The head of a card of its own (`PaSheet`): no surface of its own. */
+  flat?: boolean
 }) {
   const t = useTranslations("PersonalAgent")
   return (
     <button
       type="button"
-      data-pa-work
+      data-pa-work={flat ? "head" : ""}
       disabled={!onOpen}
       onClick={onOpen ?? undefined}
       className={cn(
-        "group/work flex w-full min-w-0 items-center gap-2.5 py-2.5 ps-2.5 pe-2 text-start transition-colors focus-visible:bg-(--pa-inset-hover) focus-visible:outline-none disabled:cursor-default",
-        INSET_SURFACE,
+        "group/work flex w-full min-w-0 items-center gap-2.5 py-2.5 ps-2.5 pe-2 text-start transition-colors focus-visible:bg-(--pa-object-hover) focus-visible:outline-none disabled:cursor-default",
+        !flat && INSET_SURFACE,
         onOpen && INSET_HOVER
       )}
       title={onOpen ? t("timeline.viewSession") : undefined}

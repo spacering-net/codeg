@@ -39,7 +39,7 @@ import { CollapsedText } from "./event-card"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
 import { MutedNote, MuteKindButton } from "./mute-kind"
-import { AGENT_SURFACE, str, usePageScope } from "./shared"
+import { AGENT_SURFACE, PaSheet, str, usePageScope } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -221,143 +221,145 @@ export function ForgeCard({ item }: { item: NoticeItem }) {
             <span className="before:me-1.5 before:content-['·']">{who}</span>
           ) : null}
         </p>
-        <p className="text-sm font-medium break-words" data-pa-forge-title>
-          {title}
-        </p>
-        {body ? (
-          <div className="text-sm" data-pa-forge-body>
-            <CollapsedText text={body} />
-          </div>
-        ) : null}
-        {facts.length > 0 ? (
-          <p
-            className="mt-1.5 text-xs text-muted-foreground"
-            data-pa-forge-head
-          >
-            {facts.join(" · ")}
+        <PaSheet>
+          <p className="text-sm font-medium break-words" data-pa-forge-title>
+            {title}
           </p>
-        ) : null}
-        {checksLine ? (
-          <p
-            className="mt-0.5 text-xs text-muted-foreground"
-            data-pa-forge-checks={checks ?? ""}
-          >
-            {checksLine}
-          </p>
-        ) : null}
-        {versionLine ? (
-          <p
-            className="mt-0.5 text-xs text-muted-foreground"
-            data-pa-forge-version={version ?? ""}
-          >
-            {versionLine}
-          </p>
-        ) : null}
-        {action === "merge" && !guaranteed ? (
-          <p
-            data-pa-forge-unguaranteed
-            className="mt-1.5 inline-flex rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300"
-          >
-            {t("merge.unguaranteed")}
-          </p>
-        ) : null}
-        {state === "done" && mergeCommit ? (
-          <p
-            className="mt-1 text-xs text-muted-foreground"
-            data-pa-forge-merge-commit
-          >
-            {t("merge.commit", { commit: shortSha(mergeCommit) })}
-          </p>
-        ) : null}
-        {problem ? (
-          <p
-            className="mt-1.5 text-xs break-words text-amber-700 dark:text-amber-300"
-            data-pa-forge-problem={code ?? state}
-          >
-            {problem}
-          </p>
-        ) : null}
-        {detail ? (
-          <p className="mt-0.5 text-xs break-words text-muted-foreground">
-            {detail}
-          </p>
-        ) : null}
-        {reason ? (
-          <p className="mt-1.5 text-xs break-words text-muted-foreground">
-            {t("reason", { reason })}
-          </p>
-        ) : null}
-        {state === "open" || state === "unknown" || link ? (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {state === "open" ? (
-              <>
-                <Button
-                  size="sm"
-                  disabled={disabled}
-                  onClick={() => void answer("accept")}
-                  data-pa-forge-act="accept"
-                >
-                  {spin("accept")}
-                  {t("approve")}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={disabled}
-                  onClick={() => void answer("dismiss")}
-                  data-pa-forge-act="dismiss"
-                >
-                  {t("decline")}
-                </Button>
-                {why === "suggest" ? (
-                  <MuteKindButton noticeId={noticeId} disabled={disabled} />
-                ) : null}
-              </>
-            ) : null}
-            {state === "unknown" ? (
-              <>
-                {targetUrl ? (
+          {body ? (
+            <div className="text-sm" data-pa-forge-body>
+              <CollapsedText text={body} />
+            </div>
+          ) : null}
+          {facts.length > 0 ? (
+            <p
+              className="mt-1.5 text-xs text-muted-foreground"
+              data-pa-forge-head
+            >
+              {facts.join(" · ")}
+            </p>
+          ) : null}
+          {checksLine ? (
+            <p
+              className="mt-0.5 text-xs text-muted-foreground"
+              data-pa-forge-checks={checks ?? ""}
+            >
+              {checksLine}
+            </p>
+          ) : null}
+          {versionLine ? (
+            <p
+              className="mt-0.5 text-xs text-muted-foreground"
+              data-pa-forge-version={version ?? ""}
+            >
+              {versionLine}
+            </p>
+          ) : null}
+          {action === "merge" && !guaranteed ? (
+            <p
+              data-pa-forge-unguaranteed
+              className="mt-1.5 inline-flex rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300"
+            >
+              {t("merge.unguaranteed")}
+            </p>
+          ) : null}
+          {state === "done" && mergeCommit ? (
+            <p
+              className="mt-1 text-xs text-muted-foreground"
+              data-pa-forge-merge-commit
+            >
+              {t("merge.commit", { commit: shortSha(mergeCommit) })}
+            </p>
+          ) : null}
+          {problem ? (
+            <p
+              className="mt-1.5 text-xs break-words text-amber-700 dark:text-amber-300"
+              data-pa-forge-problem={code ?? state}
+            >
+              {problem}
+            </p>
+          ) : null}
+          {detail ? (
+            <p className="mt-0.5 text-xs break-words text-muted-foreground">
+              {detail}
+            </p>
+          ) : null}
+          {reason ? (
+            <p className="mt-1.5 text-xs break-words text-muted-foreground">
+              {t("reason", { reason })}
+            </p>
+          ) : null}
+          {state === "open" || state === "unknown" || link ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {state === "open" ? (
+                <>
                   <Button
                     size="sm"
-                    variant="outline"
-                    onClick={() => void openUrl(targetUrl)}
-                    data-pa-forge-act="look"
+                    disabled={disabled}
+                    onClick={() => void answer("accept")}
+                    data-pa-forge-act="accept"
                   >
-                    {t("look")}
+                    {spin("accept")}
+                    {t("approve")}
                   </Button>
-                ) : null}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={disabled}
+                    onClick={() => void answer("dismiss")}
+                    data-pa-forge-act="dismiss"
+                  >
+                    {t("decline")}
+                  </Button>
+                  {why === "suggest" ? (
+                    <MuteKindButton noticeId={noticeId} disabled={disabled} />
+                  ) : null}
+                </>
+              ) : null}
+              {state === "unknown" ? (
+                <>
+                  {targetUrl ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => void openUrl(targetUrl)}
+                      data-pa-forge-act="look"
+                    >
+                      {t("look")}
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    disabled={disabled}
+                    onClick={() => void answer("retry")}
+                    data-pa-forge-act="retry"
+                  >
+                    {spin("retry")}
+                    {t("again")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={disabled}
+                    onClick={() => void answer("dismiss")}
+                    data-pa-forge-act="dismiss"
+                  >
+                    {t("letBe")}
+                  </Button>
+                </>
+              ) : link ? (
+                // Alone on the card: a button that looks one.
                 <Button
                   size="sm"
-                  disabled={disabled}
-                  onClick={() => void answer("retry")}
-                  data-pa-forge-act="retry"
+                  variant="secondary"
+                  onClick={() => void openUrl(link)}
+                  data-pa-forge-act="open"
                 >
-                  {spin("retry")}
-                  {t("again")}
+                  {t("open")}
                 </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={disabled}
-                  onClick={() => void answer("dismiss")}
-                  data-pa-forge-act="dismiss"
-                >
-                  {t("letBe")}
-                </Button>
-              </>
-            ) : link ? (
-              // Alone on the card: a button that looks one.
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void openUrl(link)}
-                data-pa-forge-act="open"
-              >
-                {t("open")}
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
+              ) : null}
+            </div>
+          ) : null}
+        </PaSheet>
         <MutedNote data={data} />
         {shownError ? (
           <p role="alert" className="mt-2 text-xs break-words text-destructive">
