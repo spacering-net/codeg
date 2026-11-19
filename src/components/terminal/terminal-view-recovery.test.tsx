@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   onData: null as ((data: string) => void) | null,
   onResize: null as ((size: { cols: number; rows: number }) => void) | null,
   handlers: new Map<string, (event: TerminalEvent) => void>(),
+  waitForRegistration: null as ((channel: string) => Promise<void>) | null,
   ready: null as (() => void) | null,
 }))
 
@@ -43,6 +44,7 @@ vi.mock("@/lib/api", () => ({
 vi.mock("@/lib/platform", () => ({
   subscribe: async (channel: string, cb: (event: TerminalEvent) => void) => {
     h.handlers.set(channel, cb)
+    if (h.waitForRegistration) await h.waitForRegistration(channel)
     return () => {
       h.handlers.delete(channel)
     }
@@ -188,6 +190,7 @@ describe("TerminalView recovery", () => {
     h.parsed.length = 0
     h.fontSize = 12
     h.handlers.clear()
+    h.waitForRegistration = null
     h.ready = null
   })
 
@@ -623,6 +626,61 @@ describe("TerminalView recovery", () => {
     view.unmount()
   })
 
+  it("disposes the view before a pending attach snapshot completes", async () => {
+    let finishSnapshot!: (value: TerminalSnapshot) => void
+    h.snapshot.mockImplementationOnce(
+      () =>
+        new Promise<TerminalSnapshot>((resolve) => (finishSnapshot = resolve))
+    )
+    const view = render(
+      <TerminalView {...props} attach spawnOnMissing={false} />
+    )
+    await waitFor(() => expect(h.snapshot).toHaveBeenCalledTimes(1))
+    expect(h.handlers.size).toBe(2)
+    expect(h.ready).not.toBeNull()
+    act(() => {
+      h.handlers.get("terminal://output/terminal-1")?.({
+        terminal_id: "terminal-1",
+        data: "buffered before disposal",
+        seq: 2,
+        generation: "new-generation",
+      })
+    })
+    view.unmount()
+
+    expect(h.handlers.size).toBe(0)
+    expect(h.ready).toBeNull()
+    expect(h.disposed).toBe(1)
+    await act(async () => {
+      finishSnapshot(snapshot("late snapshot", 1))
+    })
+    expect(h.writes).toEqual([])
+    expect(h.disposed).toBe(1)
+    expect(h.kill).not.toHaveBeenCalled()
+  })
+
+  it("releases a registration that completes after the view unmounts", async () => {
+    let finish!: () => void
+    const pendingRegistration = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const exit = "terminal://exit/terminal-1"
+    h.waitForRegistration = async (channel) => {
+      if (channel === exit) await pendingRegistration
+    }
+    const view = render(<TerminalView {...props} attach />)
+    await waitFor(() => expect(h.handlers.has(exit)).toBe(true))
+    view.unmount()
+
+    expect([...h.handlers.keys()]).toEqual([exit])
+    expect(h.disposed).toBe(1)
+    await act(async () => finish())
+    expect(h.handlers.size).toBe(0)
+    expect(h.snapshot).not.toHaveBeenCalled()
+    expect(h.spawn).not.toHaveBeenCalled()
+    expect(h.disposed).toBe(1)
+  })
+
   it("keeps an in-flight spawn alive through a view unmount and does not replay the command", async () => {
     h.snapshot.mockResolvedValueOnce({
       exists: false,
@@ -644,6 +702,8 @@ describe("TerminalView recovery", () => {
     )
     await waitFor(() => expect(h.spawn).toHaveBeenCalledTimes(1))
     view.unmount()
+    expect(h.handlers.size).toBe(0)
+    expect(h.disposed).toBe(1)
     await act(async () => {
       finishSpawn("terminal-1")
     })
