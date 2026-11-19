@@ -9694,6 +9694,7 @@
       "cancel": "取消",
       "confirm": "確定",
       "notFound": "找不到了",
+      "replyAssistant": "回覆助手",
       "reply": {
         "title": "傳送這則訊息？",
         "description": "卡片上的「{label}」會以你的名義送出這段話：",

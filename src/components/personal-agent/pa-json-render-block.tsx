@@ -43,7 +43,20 @@ import {
   type ReactNode,
 } from "react"
 import { useTranslations } from "next-intl"
-import { Check, ShieldOff } from "lucide-react"
+import {
+  Bot,
+  Check,
+  CircleDot,
+  Link2,
+  ListTodo,
+  MessageSquare,
+  MessagesSquare,
+  Repeat,
+  Send,
+  ShieldOff,
+  SquareKanban,
+  type LucideIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 import {
   ActionProvider,
@@ -119,11 +132,12 @@ import { cn } from "@/lib/utils"
 import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
+import { BotAvatar } from "./bot-avatar"
 import { ExchangeSheet } from "./exchange-sheet"
 import { usePaCardScope } from "./pa-card-scope"
 import { isOwnerGesture } from "./pa-gesture"
 import { useSessionLinkOpener } from "./session-link"
-import { usePageScope, useOpenWork, workTargetOf } from "./shared"
+import { useBotName, usePageScope, useOpenWork, workTargetOf } from "./shared"
 
 /** How long a click's credential waits for its handler. */
 const CREDENTIAL_MS = 1500
@@ -206,6 +220,8 @@ function useMarked(props: Record<string, unknown>) {
     !label.trim() ||
     !runtime.usable(action, params)
   return {
+    action,
+    params,
     done,
     busy,
     disabled,
@@ -230,14 +246,43 @@ const PlainButton = jsonRenderComponents.Button
 const PlainLink = jsonRenderComponents.Link
 const PlainCard = jsonRenderComponents.Card
 
-/** Inside a list item's card (`PaItemCard`): its buttons are smaller. */
+/** A word that says a button answers someone, in the languages codeg
+ *  speaks — a whole word where words are spaced, so "Verantwortung" is no
+ *  "antworten". */
+const REPLY_CUE =
+  /回复|回覆|答复|返信|答える|답장|답하|(?<!\p{L})(?:reply|answer|respond|responder|responda|antworte|antworten|beantworten|répondre|réponds|répondez|(?:ال)?رد)(?!\p{L})/iu
+
+/** A button's words that answer the assistant and name it — "回复研发",
+ *  "Reply to Dev" — not one that says something else about it ("Dev 的验收
+ *  事项", "Approve" for an assistant called A). */
+function repliesTo(label: string, name: string): boolean {
+  return label.includes(name) && REPLY_CUE.test(label)
+}
+
+/** Inside a list's row (`PaItemCard`): its buttons are smaller. */
 const InItemCard = createContext(false)
 
 function PaButton(ctx: BaseComponentProps<ShadcnProps<"Button">>) {
   const { props, emit } = ctx
+  const t = useTranslations("PersonalAgent.card")
   const marked = useMarked(props as Record<string, unknown>)
   const inItem = useContext(InItemCard)
+  const roster = usePersonalAgentRoster((s) => s.entries)
+  const botName = useBotName()
   if (!marked) return <PlainButton {...ctx} />
+  // On a list's row led by an assistant's face, a button to its
+  // conversation that names it ("Reply to Dev") says it the same on every
+  // row — the face already shows whose; one that says something else
+  // ("See the acceptance") keeps its words.
+  const to =
+    inItem && marked.action === PA_OPEN && marked.params.target === "bot"
+      ? roster?.find((e) => e.id === marked.params.id)
+      : undefined
+  const name = to ? botName(to).trim() : ""
+  const label =
+    name && typeof props.label === "string" && repliesTo(props.label, name)
+      ? t("replyAssistant")
+      : props.label
   const variant =
     props.variant === "danger"
       ? "destructive"
@@ -249,14 +294,8 @@ function PaButton(ctx: BaseComponentProps<ShadcnProps<"Button">>) {
       type="button"
       variant={variant}
       size={inItem ? "sm" : "default"}
-      // As wide as its words, alone in a column too; on an item's card, a
-      // grey one is raised off the card's grey as on a bubble.
-      className={cn(
-        "self-start",
-        inItem &&
-          variant === "secondary" &&
-          "bg-background shadow-[0_0_0_1px_color-mix(in_oklab,var(--foreground)_10%,transparent),0_1px_2px_color-mix(in_oklab,var(--foreground)_6%,transparent)] hover:bg-[color-mix(in_oklab,var(--foreground)_3%,var(--background))]"
-      )}
+      // As wide as its words, alone in a column too.
+      className="self-start"
       disabled={marked.disabled}
       data-pa-card-button={marked.done ? "done" : ""}
       aria-pressed={marked.done || undefined}
@@ -267,7 +306,7 @@ function PaButton(ctx: BaseComponentProps<ShadcnProps<"Button">>) {
       ) : marked.done ? (
         <Check aria-hidden />
       ) : null}
-      {props.label}
+      {label}
     </Button>
   )
 }
@@ -325,9 +364,53 @@ function PaCardBox(ctx: BaseComponentProps<ShadcnProps<"Card">>) {
   )
 }
 
-/** One item of a list on a card of its own (`itemizeRepeats`): what to
- *  read, and what to do about it at its end — under it when the card is
- *  too narrow for both on a line. */
+/** Where a list's row opens, by kind: its icon. */
+const LEAD_ICON: Partial<Record<PaOpenTarget, LucideIcon>> = {
+  task: SquareKanban,
+  dispatch: Send,
+  session: MessageSquare,
+  item: ListTodo,
+  routine: Repeat,
+  exchange: MessagesSquare,
+  url: Link2,
+}
+
+/** What leads a list's row: the face of the assistant it opens, or the
+ *  icon of the kind of place. */
+function ItemLead({ target, id }: { target: unknown; id: unknown }) {
+  const roster = usePersonalAgentRoster((s) => s.entries)
+  const botName = useBotName()
+  if (target === "bot") {
+    const entry = isId(id) ? roster?.find((e) => e.id === id) : undefined
+    if (entry) {
+      return (
+        <BotAvatar
+          avatar={entry.avatar}
+          name={botName(entry)}
+          size={32}
+          star={entry.kind === "primary"}
+        />
+      )
+    }
+  }
+  // Only a place an assistant's card may open; anything else a neutral
+  // mark, the row as tall as its neighbours.
+  const known = PA_OPEN_TARGETS.includes(target as PaOpenTarget)
+  const Icon =
+    target === "bot"
+      ? Bot
+      : ((known ? LEAD_ICON[target as PaOpenTarget] : undefined) ?? CircleDot)
+  return (
+    <span className="flex size-8 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+      <Icon className="size-4" aria-hidden />
+    </span>
+  )
+}
+
+/** One item of a list as a row of its own (`itemizeRepeats`): whom or what
+ *  it opens first, what to read, and what to do about it at its end —
+ *  under it when the row is too narrow for both; a hairline over every
+ *  row but the first, no surface of its own on the card. */
 const PaItemCard: ComponentRegistry[string] = ({ element, children }) => {
   const props = element.props as Partial<PaItemCardProps> | undefined
   const acting = new Set(Array.isArray(props?.actions) ? props.actions : [])
@@ -338,21 +421,25 @@ const PaItemCard: ComponentRegistry[string] = ({ element, children }) => {
     if (key != null && acting.has(key)) actions.push(child)
     else body.push(child)
   }
+  const lead = props?.lead
   return (
     <div
       data-pa-card-item
-      className="flex w-full min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl bg-(--pa-inset) px-3 py-2.5"
+      className="flex w-full min-w-0 items-start gap-3 border-t border-border/60 py-3 first:border-t-0 first:pt-1 last:pb-1"
     >
-      <div className="flex min-w-0 flex-[1_1_12rem] flex-col gap-1 break-words">
-        {body}
+      {lead ? <ItemLead target={lead.target} id={lead.id} /> : null}
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex min-h-8 min-w-0 flex-[1_1_12rem] flex-col justify-center gap-1 break-words">
+          {body}
+        </div>
+        {actions.length > 0 ? (
+          <InItemCard.Provider value>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {actions}
+            </div>
+          </InItemCard.Provider>
+        ) : null}
       </div>
-      {actions.length > 0 ? (
-        <InItemCard.Provider value>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            {actions}
-          </div>
-        </InItemCard.Provider>
-      ) : null}
     </div>
   )
 }

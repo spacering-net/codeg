@@ -9694,6 +9694,7 @@
       "cancel": "キャンセル",
       "confirm": "確認",
       "notFound": "見つかりません",
+      "replyAssistant": "アシスタントに返信",
       "reply": {
         "title": "このメッセージを送信しますか？",
         "description": "カードの「{label}」は次の内容をあなたのメッセージとして送ります：",

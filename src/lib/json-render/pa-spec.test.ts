@@ -241,7 +241,7 @@ describe("itemizeRepeats", () => {
     children,
   })
 
-  it("puts a repeated line and its button on a card of their own, keys and marks kept", () => {
+  it("puts a repeated line and its button on a row of their own, keys and marks kept", () => {
     const { spec: marked } = sanitizeAssistantSpec(
       spec({
         main: { type: "Card", props: {}, children: ["list"] },
@@ -251,13 +251,15 @@ describe("itemizeRepeats", () => {
       })
     )
     const out = itemizeRepeats(marked)
+    // The rows space themselves: the list's own gap goes.
     expect(out.elements.list).toMatchObject({
       repeat: { statePath: "/needs", key: "key" },
+      props: { className: "gap-0" },
       children: ["list~item"],
     })
     expect(out.elements["list~item"]).toEqual({
       type: PA_ITEM_CARD,
-      props: { actions: ["go"] },
+      props: { actions: ["go"], lead: null },
       children: ["line", "go"],
     })
     // The button as it was: its key, and the container it was written in.
@@ -287,7 +289,10 @@ describe("itemizeRepeats", () => {
       })
     )
     expect(out.elements.list.children).toEqual(["list~item~"])
-    expect(out.elements["list~item~"].props).toEqual({ actions: ["row"] })
+    expect(out.elements["list~item~"].props).toEqual({
+      actions: ["row"],
+      lead: null,
+    })
     expect(out.elements["list~item"]).toEqual(text("the spec's own"))
   })
 
@@ -319,5 +324,41 @@ describe("itemizeRepeats", () => {
       go: press("Go"),
     })
     expect(itemizeRepeats(plain)).toBe(plain)
+  })
+
+  it("leads a row with where its first pa.open goes, as the button's own parameters", () => {
+    const { spec: marked } = sanitizeAssistantSpec(
+      spec({
+        main: { type: "Stack", props: {}, children: ["list"] },
+        list: {
+          type: "Stack",
+          props: { gap: "md", className: "pt-1" },
+          repeat: { statePath: "/needs", key: "key" },
+          children: ["line", "ask", "open"],
+        },
+        line: text("x"),
+        ask: press("Hand it to you"),
+        open: {
+          type: "Button",
+          props: { label: { $item: "label" } },
+          on: {
+            press: {
+              action: "pa.open",
+              params: { target: { $item: "target" }, id: { $item: "id" } },
+            },
+          },
+          children: [],
+        },
+      })
+    )
+    const out = itemizeRepeats(marked)
+    expect(out.elements["list~item"].props).toEqual({
+      actions: ["ask", "open"],
+      lead: { target: { $item: "target" }, id: { $item: "id" } },
+    })
+    expect(out.elements.list.props).toEqual({
+      gap: "md",
+      className: "pt-1 gap-0",
+    })
   })
 })

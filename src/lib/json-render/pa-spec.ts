@@ -2,6 +2,7 @@ import type { Spec, UIElement } from "@json-render/core"
 
 import {
   isAssistantAction,
+  PA_OPEN,
   type AssistantActionName,
 } from "./assistant-actions"
 
@@ -214,9 +215,34 @@ export function sanitizeAssistantSpec(spec: Spec): SanitizedSpec {
 export const PA_ITEM_CARD = "__paItemCard"
 
 /** What `PA_ITEM_CARD` takes: its children's keys that act — buttons,
- *  links, a row of them — drawn at its end. */
+ *  links, a row of them — drawn at its end; and where its first `pa.open`
+ *  goes (`target`, `id`, as the button's own parameters — resolved against
+ *  the item as it renders), to lead it with that assistant's face or that
+ *  kind's icon. */
 export type PaItemCardProps = {
   actions: string[]
+  lead?: { target: unknown; id: unknown } | null
+}
+
+/** The parameters of the first `pa.open` button under `key`, as marked. */
+function openParams(
+  elements: Record<string, UIElement>,
+  key: string,
+  seen: Set<string>
+): Record<string, unknown> | null {
+  const el = elements[key]
+  if (!el || typeof el !== "object" || seen.has(key)) return null
+  seen.add(key)
+  const marks = el.props as PaMarks | undefined
+  if (marks?.__paAction === PA_OPEN && marks.__paParams) {
+    return marks.__paParams
+  }
+  for (const kid of Array.isArray(el.children) ? el.children : []) {
+    const found =
+      typeof kid === "string" ? openParams(elements, kid, seen) : null
+    if (found) return found
+  }
+  return null
 }
 
 /** A child that acts: a button or link, or a container of nothing else. */
@@ -241,10 +267,12 @@ function acts(
 }
 
 /**
- * An assistant's list drawn as cards: an element that repeats over a state
+ * An assistant's list drawn as one: an element that repeats over a state
  * array, whose item is something to read and something to do about it —
  * its line and its button, as a morning brief lists what needs the owner —
- * gets each item on a card of its own, the button at its end. Its children
+ * gets each item as a row of its own, led by whom or what it opens, the
+ * button at its end, a hairline between the rows (a Stack's own gap goes:
+ * the rows are spaced by themselves). Its children
  * move under one `PA_ITEM_CARD` element, still repeated: their keys, the
  * repeat's scope and so every button's id (`elementIdOf`) and container
  * (`__paParent`, read before this) stay as they were. An item that only
@@ -275,9 +303,32 @@ export function itemizeRepeats(spec: Spec): Spec {
     elements ??= { ...source }
     let wrap = `${key}~item`
     while (wrap in elements) wrap += "~"
-    const props: PaItemCardProps = { actions }
+    let lead: PaItemCardProps["lead"] = null
+    for (const a of actions) {
+      const params = openParams(source, a, new Set())
+      if (params) {
+        lead = { target: params.target, id: params.id }
+        break
+      }
+    }
+    const props: PaItemCardProps = { actions, lead }
     elements[wrap] = { type: PA_ITEM_CARD, props, children: [...kids] }
-    elements[key] = { ...el, children: [wrap] }
+    const own = (el.props ?? {}) as Record<string, unknown>
+    elements[key] = {
+      ...el,
+      ...(el.type === "Stack"
+        ? {
+            props: {
+              ...own,
+              className:
+                typeof own.className === "string"
+                  ? `${own.className} gap-0`
+                  : "gap-0",
+            },
+          }
+        : {}),
+      children: [wrap],
+    }
   }
   return elements ? { ...spec, elements } : spec
 }

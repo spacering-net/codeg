@@ -9694,6 +9694,7 @@
       "cancel": "Abbrechen",
       "confirm": "Bestätigen",
       "notFound": "Nicht mehr vorhanden",
+      "replyAssistant": "Dem Assistenten antworten",
       "reply": {
         "title": "Diese Nachricht senden?",
         "description": "„{label}“ auf der Karte sendet dies als deine Nachricht:",

@@ -9694,6 +9694,7 @@
       "cancel": "Cancelar",
       "confirm": "Confirmar",
       "notFound": "Ya no está disponible",
+      "replyAssistant": "Responder al asistente",
       "reply": {
         "title": "¿Enviar este mensaje?",
         "description": "«{label}» de la tarjeta envía esto como tu mensaje:",

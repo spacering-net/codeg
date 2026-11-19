@@ -9694,6 +9694,7 @@
       "cancel": "취소",
       "confirm": "확인",
       "notFound": "더 이상 없습니다",
+      "replyAssistant": "어시스턴트에게 답장",
       "reply": {
         "title": "이 메시지를 보낼까요?",
         "description": "카드의 \"{label}\"은(는) 다음 내용을 내 메시지로 보냅니다:",

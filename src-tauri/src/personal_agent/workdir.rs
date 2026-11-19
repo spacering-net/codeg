@@ -1887,7 +1887,7 @@ you write your first card: it is the format.
   tool, not a button — with `suggest` when you only propose it.
 - Things that each have a button (what needs the owner, matters, work) are a
   list: a state array repeated, each item its line and its button — codeg
-  draws each as a card. A Table past five rows of plain values; a chart only
+  draws each as a row, led by whom or what its `pa.open` opens. A Table past five rows of plain values; a chart only
   for a trend.
 - Keep a card compact: a few sections."#;
 

@@ -1398,12 +1398,12 @@ fn ask_text(m: &Material, cards: CardUse) -> String {
         CardUse::Never => "",
         _ => ", the card's last",
     };
-    // A part whose things each have a button, as codeg draws it: a card each.
+    // A part whose things each have a button, as codeg draws it: a row each.
     let list = match cards {
         CardUse::Never => "",
         _ => {
             " A part whose things each have a button is a list: a state array repeated, each item \
-              its line and its button — codeg draws each item as a card."
+              its line and its button — codeg draws each item as a row."
         }
     };
     let week = week_ask(m, cards);
@@ -1432,8 +1432,9 @@ fn ask_text(m: &Material, cards: CardUse) -> String {
         };
         format!(
             "Write the owner's morning brief now. {card}: needs you (each with a button: \
-             `pa.open` with the open it has — open it, go approve it — or `pa.reply` \"Hand it to \
-             you\" for one you can take), watching, done, today's schedule, suggestions, and a \
+             `pa.open` with the open it has — open it, go approve it; to an assistant that waits \
+             on the owner, \"Reply to the assistant\" in the owner's language, not its name — or \
+             `pa.reply` \"Hand it to you\" for one you can take), watching, done, today's schedule, suggestions, and a \
              last line that says that is all, in the owner's language (\"That's all.\"){end}. \
              Leave out a part with nothing in it.{list}{week} {suggest} Work you are sure the \
              owner wants done, dispatch; one that is only your idea, with `suggest: true`."
@@ -2664,6 +2665,12 @@ mod tests {
             "{ask}"
         );
         assert!(ask.contains("a state array repeated"), "{ask}");
+        // A button to an assistant says what it is for, not its name: its
+        // row already shows whose.
+        assert!(
+            ask.contains("\"Reply to the assistant\" in the owner's language"),
+            "{ask}"
+        );
         let plain = ask_text(
             &Material {
                 suggestions: 0,

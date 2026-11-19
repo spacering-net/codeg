@@ -13,7 +13,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import { cardIdOf } from "@/lib/json-render/pa-spec"
-import type { ItemInfo, TimelineRow } from "@/lib/types"
+import type { ItemInfo, RosterEntry, TimelineRow } from "@/lib/types"
+import {
+  __resetRosterForTests,
+  usePersonalAgentRoster,
+} from "@/stores/personal-agent-roster-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 const gesture = vi.hoisted(() => ({ trusted: true }))
@@ -576,5 +580,126 @@ describe("an assistant's card: a list", () => {
     expect(within(first).getByRole("button", { name: "No" })).toBeDisabled()
     expect(within(second).getByRole("button", { name: "Yes" })).toBeEnabled()
     expect(within(second).getByRole("button", { name: "No" })).toBeEnabled()
+  })
+
+  it("leads each row with the assistant it opens or its kind's icon, no surface of its own; a button to an assistant says so", () => {
+    __resetRosterForTests()
+    usePersonalAgentRoster.setState({
+      entries: [
+        {
+          id: 5,
+          kind: "worker",
+          name: "Dev",
+          avatar: { kind: "face", shape: "blob", color: "blue" },
+        } as unknown as RosterEntry,
+      ],
+    })
+    const src = [
+      line({ op: "add", path: "/root", value: "main" }),
+      el("main", { type: "Card", props: {}, children: ["list"] }),
+      el("list", {
+        type: "Stack",
+        props: { gap: "md" },
+        repeat: { statePath: "/needs", key: "key" },
+        children: ["line", "go"],
+      }),
+      el("line", {
+        type: "Text",
+        props: { text: { $item: "text" } },
+        children: [],
+      }),
+      el("go", {
+        type: "Button",
+        props: { label: { $item: "label" } },
+        on: {
+          press: {
+            action: "pa.open",
+            params: { target: { $item: "target" }, id: { $item: "id" } },
+          },
+        },
+        children: [],
+      }),
+      line({
+        op: "add",
+        path: "/state/needs",
+        value: [
+          {
+            key: "t4",
+            text: "Task 4 failed",
+            label: "Open task 4",
+            target: "task",
+            id: 4,
+          },
+          {
+            key: "b5",
+            text: "Dev waits",
+            label: "Reply Dev",
+            target: "bot",
+            id: 5,
+          },
+          {
+            key: "b6",
+            text: "Dev's page to accept",
+            label: "See the acceptance",
+            target: "bot",
+            id: 5,
+          },
+          {
+            key: "b7",
+            text: "Dev's page, again",
+            label: "See Dev's acceptance page",
+            target: "bot",
+            id: 5,
+          },
+          {
+            key: "b8",
+            text: "Dev's page, approved?",
+            label: "Verantwortungsbereich von Dev ansehen",
+            target: "bot",
+            id: 5,
+          },
+          {
+            key: "x",
+            text: "Somewhere odd",
+            label: "Go",
+            target: "constructor",
+            id: 1,
+          },
+        ],
+      }),
+    ].join("\n")
+    const { container } = draw(src)
+    const [task, bot, accept, again, approves, odd] = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-pa-card-item]")
+    )
+    // No wash of their own: rows on the card, a hairline between them.
+    expect(task.className).not.toContain("bg-")
+    expect(bot.className).toContain("border-t")
+    expect(task.parentElement?.className).toContain("gap-0")
+    expect(task.querySelector("svg.lucide-square-kanban")).not.toBeNull()
+    expect(within(task).getByRole("button")).toHaveAccessibleName("Open task 4")
+    expect(within(bot).getByRole("img", { name: "Dev" })).toBeTruthy()
+    expect(within(bot).getByRole("button")).toHaveAccessibleName(
+      "Reply to the assistant"
+    )
+    // One that says something else than the assistant's name keeps it —
+    // more than a word to it, the name in its middle too.
+    expect(within(accept).getByRole("button")).toHaveAccessibleName(
+      "See the acceptance"
+    )
+    expect(within(again).getByRole("button")).toHaveAccessibleName(
+      "See Dev's acceptance page"
+    )
+    // Its name and no word of answering — "antwort" inside another word is
+    // none: its own words.
+    expect(within(approves).getByRole("button")).toHaveAccessibleName(
+      "Verantwortungsbereich von Dev ansehen"
+    )
+    // A place a card cannot open: the row stays, a neutral mark, its button
+    // offered to no one.
+    expect(odd).toHaveTextContent("Somewhere odd")
+    expect(odd.querySelector("svg.lucide-circle-dot")).not.toBeNull()
+    expect(within(odd).getByRole("button", { name: "Go" })).toBeDisabled()
+    __resetRosterForTests()
   })
 })

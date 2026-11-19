@@ -9694,6 +9694,7 @@
       "cancel": "Cancel",
       "confirm": "Confirm",
       "notFound": "That is no longer there",
+      "replyAssistant": "Reply to the assistant",
       "reply": {
         "title": "Send this message?",
         "description": "The card's \"{label}\" sends this as your message:",
