@@ -780,7 +780,13 @@ describe("an assistant's card: a list", () => {
     )
     // Its title a band of its own, a hairline under it.
     expect(outer.className).toContain("[&>[data-slot=card-header]]:border-b")
-    expect(outer.className).toContain("[&>[data-slot=card-header]]:pb-3")
+    // The title centred in it: as much room over it as under it, the
+    // header a column (the library's two-row grid left a gap under it).
+    expect(outer.className).toContain("[&>[data-slot=card-header]]:py-3")
+    expect(outer.className).toContain("has-[>[data-slot=card-header]]:pt-0")
+    expect(outer.className.split(/\s+/)).toContain(
+      "[&>[data-slot=card-header]]:flex"
+    )
     // A part's heading half the card's gap over what it heads.
     expect(outer.className).toContain(
       "[&>[data-slot=card-content]>:is(h1,h2,h3,h4)+*]:-mt-1.5"

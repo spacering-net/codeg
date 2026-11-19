@@ -227,6 +227,13 @@ export const INSET_HOVER =
 export const SHEET_ROW_HOVER =
   "hover:bg-[color-mix(in_oklab,var(--foreground)_2.5%,transparent)] active:bg-[color-mix(in_oklab,var(--foreground)_4.5%,transparent)] focus-visible:bg-[color-mix(in_oklab,var(--foreground)_2.5%,transparent)] focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
 
+/** The title of a card under a brief (an assistant's brief, last night's
+ *  tidy-ups): a band of its own across the card, the title centred in it
+ *  — as much room over it as under it — a hairline under it. An
+ *  assistant's card draws its title so too (`OUTER_CARD`). */
+export const CARD_TITLE_BAND =
+  "flex min-w-0 items-center gap-1.5 border-b border-border/60 px-4 py-3 text-sm leading-5 font-semibold"
+
 /** A card's body on a bubble: what a native card says and its buttons on
  *  one white sheet under its heading, as an assistant's own card is drawn —
  *  its buttons their own colours (`data-pa-surface`), the things on it a

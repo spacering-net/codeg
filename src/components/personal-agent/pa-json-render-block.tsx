@@ -390,15 +390,22 @@ function PaLink(ctx: BaseComponentProps<ShadcnProps<"Link">>) {
 const CardDepth = createContext(0)
 
 /** The reply's card, as the bubble's other surfaces are spaced: its title
- *  its header — a band of its own, a hairline under it, as a native card's
- *  small heading is — then its parts: a part's heading set apart from the
+ *  its header — a band of its own, the title centred in it, a hairline
+ *  under it — then its parts: a part's heading set apart from the
  *  part before, none over the first, and close over what it heads (half
  *  the card's gap), so it reads as that part's. A card inside it is one
  *  thing on it: the list items' wash, tighter, with a smaller title. */
 const OUTER_CARD = cn(
   "gap-4 py-4",
   "[&>[data-slot=card-header]]:px-4 [&>[data-slot=card-content]]:px-4",
-  "[&>[data-slot=card-header]]:border-b [&>[data-slot=card-header]]:border-border/60 [&>[data-slot=card-header]]:pb-3",
+  // Its title band as `CARD_TITLE_BAND` draws one (a card under a brief,
+  // last night's tidy-ups): as much room over the title as under it — the
+  // header a column, not the library's two-row grid whose empty second
+  // row left a gap's height under a lone title.
+  "has-[>[data-slot=card-header]]:pt-0",
+  "[&>[data-slot=card-header]]:flex [&>[data-slot=card-header]]:flex-col [&>[data-slot=card-header]]:gap-1 [&>[data-slot=card-header]]:py-3",
+  "[&>[data-slot=card-header]]:border-b [&>[data-slot=card-header]]:border-border/60",
+  "[&>[data-slot=card-header]>[data-slot=card-title]]:text-sm [&>[data-slot=card-header]>[data-slot=card-title]]:leading-5",
   "[&_[data-slot=card-content]_:is(h1,h2,h3,h4)]:mt-0",
   "[&>[data-slot=card-content]>:is(h1,h2,h3,h4):not(:first-child)]:mt-2",
   "[&>[data-slot=card-content]>:is(h1,h2,h3,h4)+*]:-mt-1.5"

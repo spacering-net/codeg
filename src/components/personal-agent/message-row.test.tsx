@@ -748,6 +748,18 @@ describe("the bubbles", () => {
         expect(
           container.querySelector("[data-pa-tidy-line='acted']")
         ).toBeTruthy()
+        // A card of its own under the brief: its title a band across it,
+        // centred, a hairline under it — as an assistant's card's title.
+        const card = container.querySelector("[data-pa-brief-tidied]")!
+        const title = card.querySelector("h4")!
+        expect(title.className).toContain("py-3")
+        expect(title.className).toContain("border-b")
+        expect(card.className).toContain("overflow-hidden")
+        expect(card.className).not.toContain("pt-4")
+        // The band's hairline over the first row: none of the row's own.
+        expect(card.className).toContain(
+          "[&_[data-pa-tidy-line]:first-child]:border-t-0"
+        )
       }
       unmount()
     }

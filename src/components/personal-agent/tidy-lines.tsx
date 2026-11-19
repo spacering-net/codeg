@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils"
 import { BotAvatar } from "./bot-avatar"
 import { LIST_ROW, ROW_ACTIONS, ROW_BODY, ROW_MAIN, RowLines } from "./list-row"
 import { memoryFilesOf, useMemorySummary } from "./memory-card"
-import { str, useBotName, usePageScope } from "./shared"
+import { CARD_TITLE_BAND, str, useBotName, usePageScope } from "./shared"
 
 /** The tidy-up rows of a brief: those of kind `tidy`. */
 export function tidyRowsOf(v: unknown): TodayRow[] {
@@ -56,21 +56,30 @@ export function TidyLines({
       // A card of its own: its buttons their own colours, as a card's are.
       data-pa-surface={framed ? "" : undefined}
       className={cn(
-        "flex min-w-0 flex-col gap-2",
-        // On a card of their own its edge closes the rows: no hairline
-        // over it.
-        framed &&
-          "rounded-xl border bg-card px-4 pt-4 pb-1 text-card-foreground [&_[data-pa-tidy-line]:last-child]:border-b-0"
+        "flex min-w-0 flex-col",
+        // On a card of their own: its title a band across it, as an
+        // assistant's card's is; the band's hairline and the card's edge
+        // close the rows — none of their own over the first or under the
+        // last.
+        framed
+          ? "overflow-hidden rounded-xl border bg-card text-card-foreground [&_[data-pa-tidy-line]:first-child]:border-t-0 [&_[data-pa-tidy-line]:last-child]:border-b-0"
+          : "gap-2"
       )}
     >
-      <h4 className="flex items-center gap-1.5 text-sm leading-5 font-semibold">
+      <h4
+        className={
+          framed
+            ? CARD_TITLE_BAND
+            : "flex items-center gap-1.5 text-sm leading-5 font-semibold"
+        }
+      >
         <Sparkles
           className="size-3.5 shrink-0 text-muted-foreground"
           aria-hidden
         />
         {t("lines")}
       </h4>
-      <div className="flex min-w-0 flex-col">
+      <div className={cn("flex min-w-0 flex-col", framed && "px-4")}>
         {rows.map((r) => (
           <TidyLine key={r.key} row={r} />
         ))}
