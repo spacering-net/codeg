@@ -7049,6 +7049,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // "responding" with a dead Stop button. `false` means the backend has no
   // live connection under that id, which is exactly the condition to settle.
   useEffect(() => {
+    const pending = new Map<string, Set<string>>()
+    let disposed = false
     const timer = setInterval(() => {
       const currentActiveKey = storeRef.current.activeKey
       const currentOpenTabKeys = heldOpenKeys()
@@ -7069,13 +7071,26 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       if (currentActiveKey) consider(currentActiveKey)
       for (const contextKey of currentOpenTabKeys) consider(contextKey)
       for (const { contextKey, connectionId } of toTouch) {
-        void isConnectionLiveOnBackend(connectionId).then((live) => {
-          if (!live) markConnectionGone(contextKey, connectionId)
-        })
+        // A slow IPC must not leave another unresolved probe on every tick.
+        const contexts = pending.get(connectionId) ?? new Set<string>()
+        if (contexts.has(contextKey)) continue
+        contexts.add(contextKey)
+        pending.set(connectionId, contexts)
+        void isConnectionLiveOnBackend(connectionId)
+          .then((live) => {
+            if (!disposed && !live) markConnectionGone(contextKey, connectionId)
+          })
+          .finally(() => {
+            contexts.delete(contextKey)
+            if (contexts.size === 0) pending.delete(connectionId)
+          })
       }
     }, CONNECTION_KEEPALIVE_INTERVAL_MS)
 
-    return () => clearInterval(timer)
+    return () => {
+      disposed = true
+      clearInterval(timer)
+    }
   }, [heldOpenKeys, isConnectionLiveOnBackend, markConnectionGone])
 
   // ── Idle sweep timer ──
