@@ -410,21 +410,20 @@ describe("the details' routines", () => {
       lastRun.querySelector('[data-pa-routine-outcome="silent"]')
     ).toBeTruthy()
     expect(lastRun.textContent).toContain("3 runs in all")
-    // How it went sits on the line's baseline as the words round it do:
-    // inline, its dot on their middle.
+    // How it went a word on the line's baseline as the words round it are:
+    // inline, no dot before it.
     const outcome = lastRun.querySelector<HTMLElement>(
       "[data-pa-routine-outcome]"
     )!
     expect(outcome.className).not.toMatch(/(^| )(inline-)?flex( |$)/)
-    expect(outcome.firstElementChild!.className).toContain("align-middle")
-    // Its controls a pair of one size: the small switch, the menu's dots
-    // as tall as it.
-    const sw = screen.getByRole("switch", { name: "Runs" })
-    expect(sw.getAttribute("data-size")).toBe("sm")
-    expect(sw.className).toContain("h-4")
+    expect(outcome.children).toHaveLength(0)
+    expect(outcome.textContent).toBe("No change")
+    // One control at its end, its menu: no switch beside it.
+    expect(screen.queryByRole("switch")).toBeNull()
+    const row = part.querySelector<HTMLElement>("[data-pa-routine]")!
     expect(
-      part.querySelector("[data-pa-routine-menu] svg")!.getAttribute("class")
-    ).toContain("size-4")
+      row.querySelectorAll("button:not([data-pa-item-open])")
+    ).toHaveLength(1)
     expect(lastRun.textContent).toContain("no change")
     // Running: no pill saying it is paused.
     expect(part.querySelector("[data-pa-routine-state]")).toBeNull()
@@ -434,10 +433,10 @@ describe("the details' routines", () => {
     await waitFor(() =>
       expect(api.personalAgentRoutineAct).toHaveBeenCalledWith(7, 5, "run_now")
     )
-    // Its switch pauses it.
-    const on = screen.getByRole("switch", { name: "Runs" })
-    expect(on.getAttribute("aria-checked")).toBe("true")
-    fireEvent.click(on)
+    // Paused from its menu.
+    await user.click(screen.getByRole("button", { name: "More actions" }))
+    expect(screen.queryByRole("menuitem", { name: "Resume" })).toBeNull()
+    await user.click(await screen.findByRole("menuitem", { name: "Pause" }))
     await waitFor(() =>
       expect(api.personalAgentRoutineAct).toHaveBeenCalledWith(7, 5, "pause")
     )
@@ -471,9 +470,16 @@ describe("the details' routines", () => {
     expect(pill.className).toContain("text-amber-700")
     // Paused: no next run.
     expect(document.querySelector('[data-pa-routine-fact="next"]')).toBeNull()
-    const off = screen.getByRole("switch", { name: "启用" })
-    expect(off.getAttribute("aria-checked")).toBe("false")
-    fireEvent.click(off)
+    // Resumed from its menu, where it cannot be run now.
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "更多操作" }))
+    expect(
+      (await screen.findByRole("menuitem", { name: "立即跑" })).getAttribute(
+        "aria-disabled"
+      )
+    ).toBe("true")
+    expect(screen.queryByRole("menuitem", { name: "暂停" })).toBeNull()
+    await user.click(screen.getByRole("menuitem", { name: "恢复" }))
     await waitFor(() =>
       expect(api.personalAgentRoutineAct).toHaveBeenCalledWith(7, 5, "resume")
     )
@@ -488,9 +494,6 @@ describe("the details' routines", () => {
     // The name keeps its weight and colour: the head of its row.
     expect(name.className).toContain("font-semibold")
     expect(name.className).toContain("text-foreground")
-    expect(
-      screen.getByRole("switch", { name: "Runs" }).getAttribute("aria-checked")
-    ).toBe("false")
     const pill = document.querySelector<HTMLElement>("[data-pa-routine-state]")!
     expect(pill.textContent).toBe("Paused")
     expect(pill.className).not.toContain("text-amber")
@@ -557,12 +560,12 @@ describe("the details' routines", () => {
     ).toBe("false")
   })
 
-  it("read-only: no [+], no switch", async () => {
+  it("read-only: no [+], no menu", async () => {
     api.personalAgentRoutines.mockResolvedValue([routine()])
     wrap(<RoutinesSection title="Routines" readOnly />)
     await screen.findByText("Night CI")
     expect(document.querySelector("[data-pa-routine-new]")).toBeNull()
-    expect(screen.queryByRole("switch")).toBeNull()
+    expect(document.querySelector("[data-pa-routine-menu]")).toBeNull()
     expect(
       document.querySelector('[data-pa-routine-outcome="silent"]')
     ).toBeTruthy()

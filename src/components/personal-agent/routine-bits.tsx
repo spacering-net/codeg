@@ -95,43 +95,29 @@ export function precheckWords(
   }
 }
 
-/** A run's outcome's colour: a dot, and its word. */
-const OUTCOME_TONE: Record<RoutineRunOutcome, { dot: string; text: string }> = {
-  running: { dot: "bg-primary", text: "text-primary" },
-  asked: {
-    dot: "bg-amber-500",
-    text: "text-amber-700 dark:text-amber-300",
-  },
-  reported: {
-    dot: "bg-emerald-500",
-    text: "text-emerald-700 dark:text-emerald-300",
-  },
-  silent: { dot: "bg-muted-foreground/40", text: "" },
-  skipped: { dot: "bg-muted-foreground/40", text: "" },
-  missed: { dot: "bg-muted-foreground/40", text: "" },
-  declined: { dot: "bg-muted-foreground/40", text: "" },
-  stopped: { dot: "bg-muted-foreground/40", text: "" },
-  failed: { dot: "bg-red-500", text: "text-red-700 dark:text-red-300" },
+/** A run's outcome's colour: its word's, when it says something (a report,
+ *  a failure); the rest the line's own. */
+const OUTCOME_TONE: Record<RoutineRunOutcome, string> = {
+  running: "text-primary",
+  asked: "text-amber-700 dark:text-amber-300",
+  reported: "text-emerald-700 dark:text-emerald-300",
+  silent: "",
+  skipped: "",
+  missed: "",
+  declined: "",
+  stopped: "",
+  failed: "text-red-700 dark:text-red-300",
 }
 
-/** How a run went, in a word in a quiet line: a dot of its colour, the
- *  word in it when it says something (a report, a failure). Inline, as the
- *  words round it are: on their baseline, the dot on their middle. */
+/** How a run went, in a word in a quiet line, in its colour: inline, as the
+ *  words round it are, on their baseline. */
 export function OutcomeWord({ outcome }: { outcome: RoutineRunOutcome }) {
   const t = useTranslations("PersonalAgent.routines")
-  const tone = OUTCOME_TONE[outcome] ?? OUTCOME_TONE.silent
   return (
     <span
-      className={cn("whitespace-nowrap", tone.text)}
+      className={cn("whitespace-nowrap", OUTCOME_TONE[outcome] ?? "")}
       data-pa-routine-outcome={outcome}
     >
-      <span
-        aria-hidden
-        className={cn(
-          "me-1 inline-block size-1.5 rounded-full align-middle",
-          tone.dot
-        )}
-      />
       {t(`outcome.${outcome}` as "outcome.running")}
     </span>
   )

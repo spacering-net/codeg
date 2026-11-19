@@ -16,7 +16,9 @@ import { useEffect, useRef, useState, type RefObject } from "react"
 import { useTranslations } from "next-intl"
 import {
   CalendarClock,
+  CirclePlay,
   MoreHorizontal,
+  Pause,
   Pencil,
   Play,
   Plus,
@@ -44,7 +46,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentRoutineAct, personalAgentRoutines } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -289,18 +290,10 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
             ) : null}
           </div>
           {readOnly ? null : (
-            // A pair of one size: the small switch and the menu's dots each
-            // as tall as a line of small text, centred on the name's line.
-            <span className="relative z-10 -me-1.5 flex h-5 shrink-0 items-center gap-1">
-              <Switch
-                size="sm"
-                checked={r.enabled}
-                disabled={busy != null}
-                onCheckedChange={(on) => void act(on ? "resume" : "pause")}
-                aria-label={t("enabled")}
-                title={r.enabled ? t("pause") : t("resume")}
-                data-pa-routine-act={r.enabled ? "pause" : "resume"}
-              />
+            // One button at its end: what can be done with it — run it,
+            // pause or resume it, edit, delete — in its menu; whether it is
+            // paused the pill after its name says.
+            <span className="relative z-10 -me-1.5 flex h-5 shrink-0 items-center">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -323,6 +316,17 @@ function RoutineRow({ r, readOnly }: { r: Routine; readOnly: boolean }) {
                   >
                     <Play aria-hidden />
                     {t("runNow")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => void act(r.enabled ? "pause" : "resume")}
+                    data-pa-routine-act={r.enabled ? "pause" : "resume"}
+                  >
+                    {r.enabled ? (
+                      <Pause aria-hidden />
+                    ) : (
+                      <CirclePlay aria-hidden />
+                    )}
+                    {r.enabled ? t("pause") : t("resume")}
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={edit} data-pa-routine-act="edit">
                     <Pencil aria-hidden />
