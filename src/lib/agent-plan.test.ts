@@ -240,6 +240,50 @@ describe("extractLatestPlanEntriesFromMessages — Claude Code Task tools", () =
     ])
   })
 
+  it("ignores a TaskUpdate whose result is a refusal", () => {
+    const refused = (text: string) =>
+      call(
+        "TaskUpdate",
+        { taskId: "1", subject: "Renamed", status: "completed" },
+        text
+      )
+    const messages = [
+      assistant(
+        "a1",
+        create("1", "Original"),
+        // The CLI's `error || "Task #N not found"`: any refusal text.
+        refused("Task not found"),
+        refused("Finish the tests before completing this task."),
+        refused("Updated task #12 status"),
+        call(
+          "TaskUpdate",
+          { taskId: "7", subject: "Never saved" },
+          "Task not found"
+        )
+      ),
+    ]
+    expect(extractLatestPlanEntriesFromMessages(messages)).toEqual([
+      { content: "Original", status: "pending", priority: "medium" },
+    ])
+  })
+
+  it("keeps tasks whose TaskCreate is outside the loaded turns", () => {
+    // A reopened long session: the creates are in older, not-yet-loaded turns.
+    const messages = [
+      assistant("a40", create("3", "Write docs")),
+      assistant("a41", update("1", { status: "completed" })),
+      assistant(
+        "a42",
+        update("2", { status: "in_progress", activeForm: "Fixing the bug" })
+      ),
+    ]
+    expect(extractLatestPlanEntriesFromMessages(messages)).toEqual([
+      { content: "Task #1", status: "completed", priority: "medium" },
+      { content: "Fixing the bug", status: "in_progress", priority: "medium" },
+      { content: "Write docs", status: "pending", priority: "medium" },
+    ])
+  })
+
   it("lets TaskList replace the accumulated list", () => {
     const messages = [
       assistant("a1", create("1", "Stale")),

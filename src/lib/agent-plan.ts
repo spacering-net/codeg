@@ -183,10 +183,16 @@ function taskOpOf(part: AdaptedContentPart): TaskOp | null {
   if (name === "taskupdate") {
     const id = optionalString(input?.taskId)
     if (!id) return null
-    // Claude Code's refusals; anything else is a confirmed update.
-    if (/^Task #\S+ not found$/.test(output)) return null
-    if (output === "Failed to delete task") return null
-    if (!output) return null
+    // Only `Updated task #<id> <fields>` confirms the update. A refusal is
+    // the call's own `error` text (a hook's message, "Task not found", "Failed
+    // to delete task", …) or `Task #<id> not found`, so no other text counts.
+    const confirmed = output.split("\n", 1)[0]
+    if (
+      confirmed !== `Updated task #${id}` &&
+      !confirmed.startsWith(`Updated task #${id} `)
+    ) {
+      return null
+    }
     return {
       kind: "update",
       id,
@@ -215,8 +221,11 @@ function applyTaskOp(state: TaskState, op: TaskOp) {
       return
     }
     const existing = state.get(op.id)
-    const subject = op.subject ?? existing?.subject
-    if (!subject) return
+    // A task whose TaskCreate is not in the messages — a reopened long session
+    // loads only its latest turns until older ones are paged in — still
+    // counts: named by what it is doing when the update says, else by its id,
+    // as Claude Code itself names it.
+    const subject = op.subject ?? existing?.subject ?? `Task #${op.id}`
     state.set(op.id, {
       subject,
       status:
@@ -239,7 +248,13 @@ function applyTaskOp(state: TaskState, op: TaskOp) {
 }
 
 function taskStateToEntries(state: TaskState): PlanEntryInfo[] {
-  return Array.from(state.values()).map((task) => ({
+  const tasks = Array.from(state.entries())
+  // Claude Code numbers its tasks in creation order, which is the list's
+  // order; sorting by it puts a task first seen by an update in its place.
+  if (tasks.every(([id]) => /^\d+$/.test(id))) {
+    tasks.sort(([a], [b]) => Number(a) - Number(b))
+  }
+  return tasks.map(([, task]) => ({
     content:
       task.status === "in_progress" && task.activeForm
         ? task.activeForm
