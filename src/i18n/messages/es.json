@@ -6935,7 +6935,6 @@
     "placeholderBaseUrl": "Valor predeterminado del catálogo",
     "apiCatalogDefault": "Valor predeterminado del catálogo",
     "errorMissingId": "Cada ruta de proveedor necesita un proveedor.",
-    "errorBadId": "El id de ruta «{id}» debe ser minúsculas, dígitos y guiones, empezando por una letra.",
     "errorDuplicateId": "Dos rutas comparten el id «{id}».",
     "errorBadApiKeyEnv": "La referencia de clave de API de «{id}» debe ser un nombre de variable de entorno.",
     "errorBadApi": "El protocolo de «{id}» no es uno que el agente admita.",

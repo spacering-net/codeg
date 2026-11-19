@@ -6935,7 +6935,6 @@
     "placeholderBaseUrl": "目录默认值",
     "apiCatalogDefault": "目录默认值",
     "errorMissingId": "每条提供方路由都需要选择一个提供方。",
-    "errorBadId": "路由 id “{id}” 必须是以字母开头的小写字母、数字和连字符。",
     "errorDuplicateId": "两条路由使用了同一个 id “{id}”。",
     "errorBadApiKeyEnv": "“{id}” 的 API 密钥引用必须是环境变量名。",
     "errorBadApi": "“{id}” 的协议不在智能体支持的范围内。",

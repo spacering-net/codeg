@@ -37,18 +37,17 @@ export const DEEPSEEK_PROVIDER_APIS = [
   "openai-completions",
   "openai-responses",
   "anthropic-messages",
+  "google-generative-ai",
 ] as const
 
 type DeepSeekProviderApi = (typeof DEEPSEEK_PROVIDER_APIS)[number]
 
-const PROVIDER_ID = /^[a-z][a-z0-9-]*$/
 const CREDENTIAL_REF = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 /** Why a draft cannot be saved. Carries the row so the offending field can be
  *  marked, and the id so the message can name the route. */
 export type DeepSeekProviderRouteIssue =
   | { kind: "missingId"; index: number }
-  | { kind: "badId"; index: number; id: string }
   | { kind: "duplicateId"; index: number; id: string }
   | { kind: "badApiKeyEnv"; index: number; id: string }
   | { kind: "badApi"; index: number; id: string }
@@ -66,9 +65,10 @@ export function validateDeepSeekProviderRoutes(
   const seen = new Set<string>()
   for (const [index, route] of routes.entries()) {
     const id = route.id.trim()
+    // pi-ai takes any non-empty route key; only a stored sign-in needs the
+    // credential-key grammar, and a route outside it authenticates through
+    // `apiKeyEnv` instead — so a hand-declared gateway id is not refused.
     if (!id) return { kind: "missingId", index }
-    // The id is also a credential-key segment, so the grammar is the store's.
-    if (!PROVIDER_ID.test(id)) return { kind: "badId", index, id }
     if (seen.has(id)) return { kind: "duplicateId", index, id }
     seen.add(id)
 
@@ -245,8 +245,6 @@ export function DeepSeekProviderRoutesEditor() {
     switch (problem.kind) {
       case "missingId":
         return t("errorMissingId")
-      case "badId":
-        return t("errorBadId", { id: problem.id })
       case "duplicateId":
         return t("errorDuplicateId", { id: problem.id })
       case "badApiKeyEnv":

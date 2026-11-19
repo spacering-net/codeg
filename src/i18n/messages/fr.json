@@ -6935,7 +6935,6 @@
     "placeholderBaseUrl": "Valeur par défaut du catalogue",
     "apiCatalogDefault": "Valeur par défaut du catalogue",
     "errorMissingId": "Chaque route de fournisseur doit désigner un fournisseur.",
-    "errorBadId": "L'id de route « {id} » doit être en minuscules, chiffres et traits d'union, en commençant par une lettre.",
     "errorDuplicateId": "Deux routes partagent l'id « {id} ».",
     "errorBadApiKeyEnv": "La référence de clé API de « {id} » doit être un nom de variable d'environnement.",
     "errorBadApi": "Le protocole de « {id} » n'est pas pris en charge par l'agent.",

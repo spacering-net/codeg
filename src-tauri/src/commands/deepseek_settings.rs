@@ -86,16 +86,15 @@ const PI_PROTOCOLS: &[&str] = &[
     "openai-completions",
     "openai-responses",
     "anthropic-messages",
+    "google-generative-ai",
 ];
 
-/// A route id doubles as a credential-key segment (`isCredentialKeySegment` in
-/// `@deepseek-ai/dsh-credentials`), which is what makes a stored sign-in
-/// addressable at all.
-fn is_provider_id(value: &str) -> bool {
-    let mut chars = value.chars();
-    matches!(chars.next(), Some('a'..='z'))
-        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-}
+/// pi-ai 1.x renamed these built-in providers (old id → new id).
+/// `RENAMED_PROVIDERS` in the bridge's `composition/settings.ts`: it applies the
+/// rename while importing a legacy document, and an old id left in place turns
+/// into a broken hand-declared route with no models. The panel reads (and on
+/// the first save migrates) the same legacy section, so it renames the same way.
+const PI_RENAMED_PROVIDERS: &[(&str, &str)] = &[("azure-openai-responses", "azure")];
 
 /// The grammar `apiKeyEnv` must satisfy: `REF_PATTERN` in
 /// `@deepseek-ai/dsh-credentials`.
@@ -1444,15 +1443,13 @@ fn validate_provider_routes(
     };
 
     for route in routes {
+        // pi-ai takes any non-empty route key (`resolveProfiles`). Only a
+        // stored sign-in needs the credential-key grammar, and a route outside
+        // it authenticates through `apiKeyEnv` instead — so a hand-declared
+        // `my_gateway` is a working route, not one to refuse.
         let id = route.id.trim().to_string();
         if id.is_empty() {
             return Err("every provider route needs an id".to_string());
-        }
-        if !is_provider_id(&id) {
-            return Err(format!(
-                "provider route \"{id}\" must be a lowercase identifier of letters, digits and \
-                 hyphens, starting with a letter (it doubles as a credential-key segment)"
-            ));
         }
         if seen.iter().any(|prev| prev == &id) {
             return Err(format!("duplicate provider route \"{id}\""));
@@ -1571,7 +1568,7 @@ fn load_deepseek_provider_routes_at(
         // unreadable content there is skipped rather than blocking the panel,
         // exactly as the bridge's own importer does.
         let profiles = match read_pi_providers(&raw) {
-            Ok(Some(profiles)) => Some(profiles),
+            Ok(Some(profiles)) => Some(upgrade_legacy_profiles(profiles)),
             // An empty section still ends the search: the bridge imports this
             // file and never looks at the next one.
             Ok(None) if legacy_declares_pi_ai(&raw) => None,
@@ -1749,12 +1746,29 @@ fn legacy_pi_profiles(legacy: &[PathBuf]) -> Option<serde_yaml::Mapping> {
             continue;
         };
         match read_pi_providers(&raw) {
-            Ok(Some(profiles)) => return Some(profiles),
+            Ok(Some(profiles)) => return Some(upgrade_legacy_profiles(profiles)),
             Ok(None) if legacy_declares_pi_ai(&raw) => return None,
             _ => continue,
         }
     }
     None
+}
+
+/// Apply the bridge's legacy-import renames ([`PI_RENAMED_PROVIDERS`]) to a
+/// legacy `providers` mapping. When both the old and the new id are present
+/// the new one wins — it is the one configured on a current release — and the
+/// old one is dropped either way, exactly as `upgradeLegacySection` does.
+fn upgrade_legacy_profiles(mut profiles: serde_yaml::Mapping) -> serde_yaml::Mapping {
+    for (from, to) in PI_RENAMED_PROVIDERS {
+        let from = serde_yaml::Value::String((*from).to_string());
+        let to = serde_yaml::Value::String((*to).to_string());
+        if let Some(profile) = profiles.shift_remove(&from) {
+            if !profiles.contains_key(&to) {
+                profiles.insert(to, profile);
+            }
+        }
+    }
+    profiles
 }
 
 /// The fields this panel owns inside one provider profile.
@@ -3132,18 +3146,28 @@ llm-deepseek:
 
     #[test]
     fn validation_rejects_routes_the_agent_cannot_address() {
-        assert!(validate_provider_routes(&[route("OpenCode")]).is_err());
-        assert!(validate_provider_routes(&[route("1x")]).is_err());
-        assert!(validate_provider_routes(&[route("a b")]).is_err());
         assert!(validate_provider_routes(&[route("")]).is_err());
+        assert!(validate_provider_routes(&[route("  ")]).is_err());
         assert!(validate_provider_routes(&[route("dup"), route("dup")]).is_err());
+        // pi-ai takes any non-empty route key; only a stored sign-in needs the
+        // credential-key grammar, so a hand-declared gateway id is served.
+        assert!(validate_provider_routes(&[route("my_gateway")]).is_ok());
+        assert!(validate_provider_routes(&[route("OpenCode")]).is_ok());
 
         let mut bad = route("ok");
         bad.api_key_env = Some("not a ref".to_string());
         assert!(validate_provider_routes(std::slice::from_ref(&bad)).is_err());
         bad.api_key_env = None;
-        bad.api = Some("google-generative-ai".to_string());
+        bad.api = Some("bedrock-converse-stream".to_string());
         assert!(validate_provider_routes(std::slice::from_ref(&bad)).is_err());
+        // Every protocol `supportedProtocols()` lists is accepted.
+        for api in PI_PROTOCOLS {
+            bad.api = Some((*api).to_string());
+            assert!(
+                validate_provider_routes(std::slice::from_ref(&bad)).is_ok(),
+                "{api}"
+            );
+        }
         bad.api = Some("openai-completions".to_string());
         bad.base_url = Some("ftp://gateway/v1".to_string());
         assert!(validate_provider_routes(std::slice::from_ref(&bad)).is_err());
@@ -3159,6 +3183,51 @@ llm-deepseek:
         assert_eq!(valid[0].base_url.as_deref(), Some("https://gateway/v1"));
         assert_eq!(valid[0].display_name.as_deref(), Some("Gateway"));
         assert!(validate_provider_routes(&[route("ok")]).is_ok());
+    }
+
+    #[test]
+    fn legacy_routes_take_the_bridges_provider_renames() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bridge = dir.path().join("deepseek-acp").join("settings.yaml");
+        let legacy = dir.path().join("settings.yaml");
+        fs::write(
+            &legacy,
+            r#"llm-pi-ai:
+  providers:
+    azure-openai-responses:
+      apiKeyEnv: AZURE_OPENAI_API_KEY
+      headers:
+        x-team: platform
+    opencode-go:
+      apiKeyEnv: OPENCODE_API_KEY
+"#,
+        )
+        .expect("legacy");
+        let roots = std::slice::from_ref(&legacy);
+
+        // The panel shows the route under the id the bridge serves it as.
+        let view = load_deepseek_provider_routes_at(&bridge, roots);
+        let ids: Vec<&str> = view.routes.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, ["opencode-go", "azure"]);
+        assert!(view.invalid.is_none(), "{:?}", view.invalid);
+
+        // The first save carries the renamed profile's unmodelled fields over.
+        update_deepseek_provider_routes_at(&bridge, roots, Some(&view.routes)).expect("write");
+        let saved = fs::read_to_string(&bridge).expect("bridge document");
+        let doc: serde_yaml::Value = serde_yaml::from_str(&saved).expect("parses");
+        assert_eq!(
+            yaml_at(&doc, &["llm-pi-ai", "providers", "azure", "headers", "x-team"]).as_str(),
+            Some("platform")
+        );
+        assert!(!saved.contains("azure-openai-responses"), "{saved}");
+
+        // When both ids are present the new one wins and the old one is dropped.
+        let mut both = serde_yaml::Mapping::new();
+        both.insert("azure-openai-responses".into(), "old".into());
+        both.insert("azure".into(), "new".into());
+        let upgraded = upgrade_legacy_profiles(both);
+        assert_eq!(upgraded.len(), 1);
+        assert_eq!(upgraded.get("azure").and_then(|v| v.as_str()), Some("new"));
     }
 
     #[test]

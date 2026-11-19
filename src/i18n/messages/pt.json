@@ -6935,7 +6935,6 @@
     "placeholderBaseUrl": "Padrão do catálogo",
     "apiCatalogDefault": "Padrão do catálogo",
     "errorMissingId": "Cada rota de provedor precisa de um provedor.",
-    "errorBadId": "O id da rota “{id}” deve usar minúsculas, dígitos e hífens, começando por uma letra.",
     "errorDuplicateId": "Duas rotas compartilham o id “{id}”.",
     "errorBadApiKeyEnv": "A referência da chave de API de “{id}” deve ser um nome de variável de ambiente.",
     "errorBadApi": "O protocolo de “{id}” não é suportado pelo agente.",

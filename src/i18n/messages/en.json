@@ -6935,7 +6935,6 @@
     "placeholderBaseUrl": "Catalog default",
     "apiCatalogDefault": "Catalog default",
     "errorMissingId": "Every provider route needs a provider.",
-    "errorBadId": "The route id “{id}” must be lowercase letters, digits and hyphens, starting with a letter.",
     "errorDuplicateId": "Two routes share the id “{id}”.",
     "errorBadApiKeyEnv": "The API key reference of “{id}” must be an environment-variable name.",
     "errorBadApi": "The protocol of “{id}” is not one the agent serves.",

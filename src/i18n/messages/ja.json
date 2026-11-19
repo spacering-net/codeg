@@ -6935,7 +6935,6 @@
     "placeholderBaseUrl": "カタログの既定値",
     "apiCatalogDefault": "カタログの既定値",
     "errorMissingId": "すべてのプロバイダールートにプロバイダーが必要です。",
-    "errorBadId": "ルート id “{id}” は、英字で始まる小文字・数字・ハイフンでなければなりません。",
     "errorDuplicateId": "2 つのルートが同じ id “{id}” を使っています。",
     "errorBadApiKeyEnv": "“{id}” の API キー参照は環境変数名でなければなりません。",
     "errorBadApi": "“{id}” のプロトコルはエージェントが扱えるものではありません。",

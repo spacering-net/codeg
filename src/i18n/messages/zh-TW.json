@@ -6935,7 +6935,6 @@
     "placeholderBaseUrl": "目錄預設值",
     "apiCatalogDefault": "目錄預設值",
     "errorMissingId": "每條提供者路由都需要選擇一個提供者。",
-    "errorBadId": "路由 id “{id}” 必須是以字母開頭的小寫字母、數字和連字號。",
     "errorDuplicateId": "兩條路由使用了同一個 id “{id}”。",
     "errorBadApiKeyEnv": "“{id}” 的 API 金鑰參照必須是環境變數名稱。",
     "errorBadApi": "“{id}” 的協定不在代理程式支援的範圍內。",

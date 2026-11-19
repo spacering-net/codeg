@@ -6412,7 +6412,8 @@ export interface DeepSeekModelCatalog {
 /** One `llm-pi-ai` provider route: a provider a DeepSeek session may serve
  *  models from, keyed by the route id a request selects with. */
 export interface DeepSeekProviderRoute {
-  /** Route id (`[a-z][a-z0-9-]*`). Doubles as a credential-key segment. */
+  /** Route id (any non-empty key). A stored sign-in addresses it as a
+   *  credential-key segment, so catalog ids follow `[a-z][a-z0-9-]*`. */
   id: string
   /** Selector label; absent falls back to the provider's own name. */
   displayName?: string
@@ -6420,7 +6421,11 @@ export interface DeepSeekProviderRoute {
    *  absent defers to pi-ai's ambient environment discovery for the provider. */
   apiKeyEnv?: string
   /** Wire protocol override; absent takes the pi-ai catalog's protocol. */
-  api?: "openai-completions" | "openai-responses" | "anthropic-messages"
+  api?:
+    | "openai-completions"
+    | "openai-responses"
+    | "anthropic-messages"
+    | "google-generative-ai"
   /** Endpoint override; absent takes the pi-ai catalog's endpoint. */
   baseURL?: string
 }

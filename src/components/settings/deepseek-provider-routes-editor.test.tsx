@@ -9,6 +9,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
+  DEEPSEEK_PROVIDER_APIS,
   DeepSeekProviderRoutesEditor,
   isUsableBaseUrl,
   pruneRoute,
@@ -81,23 +82,30 @@ describe("validateDeepSeekProviderRoutes", () => {
     expect(validateDeepSeekProviderRoutes([route()])).toBeNull()
   })
 
-  it("judges the id by the credential-key grammar", () => {
+  it("takes any non-empty route id, as pi-ai does", () => {
     expect(validateDeepSeekProviderRoutes([route({ id: "" })])).toEqual({
       kind: "missingId",
       index: 0,
     })
-    expect(validateDeepSeekProviderRoutes([route({ id: "OpenCode" })])).toEqual(
-      { kind: "badId", index: 0, id: "OpenCode" }
-    )
-    expect(validateDeepSeekProviderRoutes([route({ id: "1x" })])).toEqual({
-      kind: "badId",
+    expect(validateDeepSeekProviderRoutes([route({ id: "  " })])).toEqual({
+      kind: "missingId",
       index: 0,
-      id: "1x",
     })
+    // A hand-declared gateway outside the credential-key grammar is served
+    // (it authenticates through apiKeyEnv), so it must not block a save.
+    expect(
+      validateDeepSeekProviderRoutes([route({ id: "my_gateway" })])
+    ).toBeNull()
     // Trailing whitespace is trimmed before the id is judged.
     expect(
       validateDeepSeekProviderRoutes([route({ id: " opencode-go " })])
     ).toBeNull()
+  })
+
+  it("accepts every protocol pi-ai serves", () => {
+    for (const api of DEEPSEEK_PROVIDER_APIS) {
+      expect(validateDeepSeekProviderRoutes([route({ api })])).toBeNull()
+    }
   })
 
   it("rejects duplicated ids, bad references, protocols and endpoints", () => {
@@ -111,7 +119,7 @@ describe("validateDeepSeekProviderRoutes", () => {
       validateDeepSeekProviderRoutes([
         // @ts-expect-error -- the UI only offers served protocols; a stored
         // document may carry anything, which is what this rejects.
-        route({ api: "google-generative-ai" }),
+        route({ api: "bedrock-converse-stream" }),
       ])
     ).toEqual({ kind: "badApi", index: 0, id: "opencode-go" })
     expect(

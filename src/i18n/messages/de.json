@@ -6935,7 +6935,6 @@
     "placeholderBaseUrl": "Katalogstandard",
     "apiCatalogDefault": "Katalogstandard",
     "errorMissingId": "Jede Anbieter-Route braucht einen Anbieter.",
-    "errorBadId": "Die Routen-ID „{id}“ muss aus Kleinbuchstaben, Ziffern und Bindestrichen bestehen und mit einem Buchstaben beginnen.",
     "errorDuplicateId": "Zwei Routen teilen sich die ID „{id}“.",
     "errorBadApiKeyEnv": "Die API-Schlüsselreferenz von „{id}“ muss ein Umgebungsvariablenname sein.",
     "errorBadApi": "Das Protokoll von „{id}“ wird vom Agenten nicht unterstützt.",
