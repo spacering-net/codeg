@@ -477,6 +477,10 @@
         "title": "新建会话",
         "description": "在当前文件夹中创建新的对话标签"
       },
+      "cycle_agent": {
+        "title": "切换 Agent",
+        "description": "在新建会话页切换到下一个可用 Agent"
+      },
       "open_folder": {
         "title": "打开文件夹",
         "description": "打开文件夹选择器并在工作区中打开该文件夹"

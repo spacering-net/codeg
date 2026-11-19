@@ -477,6 +477,10 @@
         "title": "Neue Konversation",
         "description": "Erstellt einen neuen Konversations-Tab im aktuellen Ordner"
       },
+      "cycle_agent": {
+        "title": "Agent wechseln",
+        "description": "Wechselt auf einer neuen Konversationsseite zum nächsten verfügbaren Agenten"
+      },
       "open_folder": {
         "title": "Ordner öffnen",
         "description": "Öffnet die Ordnerauswahl und den Ordner im Arbeitsbereich"

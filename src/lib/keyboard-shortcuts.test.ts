@@ -552,3 +552,27 @@ describe("a new default never steals a stored binding", () => {
     }
   })
 })
+
+describe("cycle agent shortcut", () => {
+  it("registers cycle_agent with a non-conflicting default", () => {
+    const ids = SHORTCUT_DEFINITIONS.map((definition) => definition.id)
+    expect(ids).toContain("cycle_agent")
+    expect(DEFAULT_SHORTCUTS.cycle_agent).toBe("mod+shift+a")
+    expect(
+      matchShortcutEvent(
+        keyEvent("a", { ctrlKey: true, shiftKey: true }),
+        DEFAULT_SHORTCUTS.cycle_agent
+      )
+    ).toBe(true)
+
+    for (const definition of SHORTCUT_DEFINITIONS) {
+      if (definition.id === "cycle_agent") continue
+      expect(
+        shortcutsConflict(
+          DEFAULT_SHORTCUTS.cycle_agent,
+          DEFAULT_SHORTCUTS[definition.id]
+        )
+      ).toBe(false)
+    }
+  })
+})

@@ -477,6 +477,10 @@
         "title": "New Conversation",
         "description": "Create a new conversation tab in current folder"
       },
+      "cycle_agent": {
+        "title": "Cycle Agent",
+        "description": "Switch to the next available agent on a new conversation page"
+      },
       "open_folder": {
         "title": "Open Folder",
         "description": "Open folder picker and open the folder in the workspace"

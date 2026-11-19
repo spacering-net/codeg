@@ -477,6 +477,10 @@
         "title": "Nueva conversación",
         "description": "Crea una nueva pestaña de conversación en la carpeta actual"
       },
+      "cycle_agent": {
+        "title": "Cambiar de agente",
+        "description": "Cambia al siguiente agente disponible en una página de conversación nueva"
+      },
       "open_folder": {
         "title": "Abrir carpeta",
         "description": "Abre el selector de carpetas y la carpeta en el espacio de trabajo"
