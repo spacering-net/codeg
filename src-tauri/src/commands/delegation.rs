@@ -125,13 +125,14 @@ impl DelegationSettings {
 /// for any missing or malformed value. Never errors hard — corrupt
 /// persistence is treated as "no preference yet."
 pub async fn load_delegation_settings(conn: &DatabaseConnection) -> DelegationSettings {
-    let mut settings = DelegationSettings::default();
-    settings.session_messaging_enabled =
-        app_metadata_service::get_value(conn, KEY_SESSION_MESSAGING_ENABLED)
+    let mut settings = DelegationSettings {
+        session_messaging_enabled: app_metadata_service::get_value(conn, KEY_SESSION_MESSAGING_ENABLED)
             .await
             .ok()
             .flatten()
-            .as_deref() == Some("true");
+            .as_deref() == Some("true"),
+        ..DelegationSettings::default()
+    };
     if let Ok(Some(raw)) = app_metadata_service::get_value(conn, KEY_DELEGATION_ENABLED).await {
         if let Ok(v) = raw.parse::<bool>() {
             settings.enabled = v;
