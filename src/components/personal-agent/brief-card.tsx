@@ -9,12 +9,18 @@
  * "today"'s rows do — and, once a week, the week's figures (6.6). Nothing is
  * settled from it but last night's tidy-ups, a line each with its own
  * buttons (7.7). Drawn as an assistant's brief is: its parts on one card
- * under the bubble's head, a part's title over it, each thing on it a card
- * of its own.
+ * under the bubble's head, a part's title over it, each thing on it a row
+ * as an assistant's list item is (`list-row`).
  */
 
 import { useTranslations } from "next-intl"
-import { Newspaper } from "lucide-react"
+import {
+  GitBranch,
+  ListTodo,
+  MessageSquare,
+  Newspaper,
+  type LucideIcon,
+} from "lucide-react"
 
 import type {
   BriefBotLine,
@@ -27,10 +33,13 @@ import type {
   TodayRow,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { useRoster } from "@/stores/personal-agent-roster-store"
 
+import { BotAvatar } from "./bot-avatar"
+import { LIST_ROW, ROW_BODY, RowIcon, RowLines } from "./list-row"
 import type { MessageItem } from "./message-items"
 import { bubbleCorners, MessageRow } from "./message-row"
-import { AGENT_SURFACE } from "./shared"
+import { AGENT_SURFACE, useBotName } from "./shared"
 import { TidyLines, tidyRowsOf } from "./tidy-lines"
 import { BriefRows } from "./today-section"
 
@@ -39,10 +48,24 @@ type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 /** Rows a part shows before "…and N more". */
 const PART_SHOWN = 8
 
-/** A line of a part on a card of its own, as an assistant's list item is
- *  (`PaItemCard`): the bubble's inset wash. */
-const LINE_CARD =
-  "rounded-xl bg-(--pa-inset) px-3 py-2 text-xs leading-5 break-words"
+/** A thing of a part as a row, as an assistant's list item is
+ *  (`PaItemCard`): no surface of its own, a hairline over and under it. */
+const LINE_ROW = cn(LIST_ROW, "items-center")
+
+/** An assistant's face, to lead its row. */
+function Face({ botId }: { botId: number }) {
+  const entries = useRoster()
+  const botName = useBotName()
+  const entry = entries?.find((e) => e.id === botId)
+  return (
+    <BotAvatar
+      avatar={entry?.avatar}
+      name={botName(entry ?? { id: botId, kind: "worker" })}
+      size={32}
+      star={entry?.kind === "primary"}
+    />
+  )
+}
 
 function materialOf(v: unknown): BriefMaterial | null {
   return v && typeof v === "object" && (v as { kind?: unknown }).kind
@@ -103,23 +126,29 @@ function RowsPart({
         </p>
       ) : null}
       {messages.length > 0 ? (
-        <ul className="flex flex-col gap-1.5">
+        <ul className="flex flex-col">
           {messages.map((msg) => (
             <li
               key={msg.id}
-              className={LINE_CARD}
+              className={LINE_ROW}
               data-pa-brief-message={msg.id}
             >
-              <span className="font-medium">
-                {t("message.to", { name: msg.to_name })}
-              </span>
-              <span className="text-muted-foreground">
-                {" "}
-                {msg.text} —{" "}
-                {msg.reply
-                  ? t("message.answered", { text: msg.reply })
-                  : t("message.open")}
-              </span>
+              <Face botId={msg.to_bot_id} />
+              <div className={ROW_BODY}>
+                <RowLines
+                  // "To Dev:" over the message: the colon goes.
+                  head={t("message.to", { name: msg.to_name }).replace(
+                    /\s*[:：]\s*$/u,
+                    ""
+                  )}
+                  text={msg.text}
+                />
+                <p className="text-xs leading-4 text-muted-foreground">
+                  {msg.reply
+                    ? t("message.answered", { text: msg.reply })
+                    : t("message.open")}
+                </p>
+              </div>
             </li>
           ))}
         </ul>
@@ -138,11 +167,20 @@ function BotLine({ line }: { line: BriefBotLine }) {
     line.stuck > 0 ? t("stuck", { count: line.stuck }) : null,
   ].filter(Boolean)
   return (
-    <li className={LINE_CARD} data-pa-brief-bot={line.bot_id}>
-      <span className="font-medium">{line.name}</span>
-      <span className="text-muted-foreground"> — {parts.join(" · ")}</span>
+    <li className={LINE_ROW} data-pa-brief-bot={line.bot_id}>
+      <Face botId={line.bot_id} />
+      <div className={ROW_BODY}>
+        <RowLines head={line.name} text={parts.join(" · ")} />
+      </div>
     </li>
   )
+}
+
+/** A loose end's kind: its icon. */
+const LOOSE_ICON: Record<string, LucideIcon> = {
+  item: ListTodo,
+  worktree: GitBranch,
+  session: MessageSquare,
 }
 
 function LooseLine({ loose, at }: { loose: BriefLoose; at: string }) {
@@ -158,12 +196,20 @@ function LooseLine({ loose, at }: { loose: BriefLoose; at: string }) {
         ? t("worktree", { days })
         : t("session")
   return (
-    <li className={LINE_CARD} data-pa-brief-loose={loose.kind}>
-      <span className="font-medium">{loose.title}</span>
-      {loose.project ? (
-        <span className="text-muted-foreground"> · {loose.project}</span>
-      ) : null}
-      <span className="text-muted-foreground"> — {what}</span>
+    <li className={LINE_ROW} data-pa-brief-loose={loose.kind}>
+      <RowIcon
+        icon={
+          Object.prototype.hasOwnProperty.call(LOOSE_ICON, loose.kind)
+            ? LOOSE_ICON[loose.kind]
+            : ListTodo
+        }
+      />
+      <div className={ROW_BODY}>
+        <RowLines
+          head={[loose.title, loose.project].filter(Boolean).join(" · ")}
+          text={what}
+        />
+      </div>
     </li>
   )
 }
@@ -444,7 +490,7 @@ export function BriefCard({ item }: { item: NoticeItem }) {
             <TidyLines rows={tidied} />
             {bots.length > 0 ? (
               <Part name="bots" title={t("part.bots")}>
-                <ul className="flex flex-col gap-1.5">
+                <ul className="flex flex-col">
                   {bots.map((b) => (
                     <BotLine key={b.bot_id} line={b} />
                   ))}
@@ -453,7 +499,7 @@ export function BriefCard({ item }: { item: NoticeItem }) {
             ) : null}
             {loose.length > 0 && m ? (
               <Part name="loose" title={t("part.loose")}>
-                <ul className="flex flex-col gap-1.5">
+                <ul className="flex flex-col">
                   {loose.map((l) => (
                     <LooseLine key={`${l.kind}:${l.id}`} loose={l} at={m.at} />
                   ))}

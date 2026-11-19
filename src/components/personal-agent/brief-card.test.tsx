@@ -160,14 +160,26 @@ describe("the brief codeg wrote itself", () => {
     ).toBeTruthy()
     expect(screen.getByText("Needs you")).toBeTruthy()
     expect(screen.getByText("Windows build")).toBeTruthy()
+    // A row each, as an assistant's list is drawn: who or what over what
+    // about it, a face or an icon first — no card of its own.
+    const lines = (sel: string) =>
+      [...(container.querySelector(sel)?.querySelectorAll("p") ?? [])].map(
+        (p) => p.textContent
+      )
     const bot = container.querySelector("[data-pa-brief-bot='2']")
-    expect(bot?.textContent).toBe(
-      "Dev — finished 2 (Bump deps; Fix lint) · 1 waiting on you"
-    )
-    const loose = container.querySelector("[data-pa-brief-loose='item']")
-    expect(loose?.textContent).toBe(
-      "Look at the flaky test — untouched for 9 days"
-    )
+    expect(lines("[data-pa-brief-bot='2']")).toEqual([
+      "Dev",
+      "finished 2 (Bump deps; Fix lint) · 1 waiting on you",
+    ])
+    expect(bot?.className).toContain("border-t")
+    expect(bot?.className).not.toContain("bg-")
+    expect(lines("[data-pa-brief-loose='item']")).toEqual([
+      "Look at the flaky test",
+      "untouched for 9 days",
+    ])
+    expect(
+      container.querySelector("[data-pa-brief-loose='item'] svg")
+    ).toBeTruthy()
     expect(screen.getByText("5 sessions · codeg 3")).toBeTruthy()
     expect(container.querySelector("[data-pa-brief-part='night']")).toBe(null)
   })
@@ -191,9 +203,14 @@ describe("the brief codeg wrote itself", () => {
       )
     )
     const line = container.querySelector("[data-pa-brief-message='12']")
-    expect(line?.textContent).toBe(
-      "To Ops: Retry the build tonight — answered: Retried: all green"
-    )
+    // "To Ops:" over the message, its colon gone; what came back under it.
+    expect(
+      [...(line?.querySelectorAll("p") ?? [])].map((p) => p.textContent)
+    ).toEqual([
+      "To Ops",
+      "Retry the build tonight",
+      "answered: Retried: all green",
+    ])
     expect(screen.getByText("Last night's work")).toBeTruthy()
   })
 

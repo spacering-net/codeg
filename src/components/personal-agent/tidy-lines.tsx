@@ -1,11 +1,13 @@
 "use client"
 
 /**
- * Last night's tidy-ups under the morning brief (7.7): a line for each
- * assistant that tidied its memory — what it did, [View] (its card, in its
- * conversation) and [Undo all]; a draft, [Apply] and [Not this one]. Each
- * line reads its card as it stands now, so what was answered there, or
- * here, says so.
+ * Last night's tidy-ups under the morning brief (7.7): a row for each
+ * assistant that tidied its memory, as the brief's lists are drawn
+ * (`list-row`) — its face, who tidied over what it did, [View] (its card,
+ * in its conversation) and [Undo all]; a draft, [Apply] and [Not this
+ * one]. Each row reads its card as it stands now, so what was answered
+ * there, or here, says so. Under an assistant's brief they are a card of
+ * their own, as its brief is; on the brief codeg writes, a part of it.
  */
 
 import { useEffect, useState } from "react"
@@ -18,8 +20,10 @@ import { personalAgentNoticeAct, personalAgentTimelineRows } from "@/lib/api"
 import type { TimelineRow, TodayRow } from "@/lib/types"
 import { useRoster } from "@/stores/personal-agent-roster-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+import { cn } from "@/lib/utils"
 
 import { BotAvatar } from "./bot-avatar"
+import { LIST_ROW, ROW_ACTIONS, ROW_BODY, ROW_MAIN, RowLines } from "./list-row"
 import { memoryFilesOf, useMemorySummary } from "./memory-card"
 import { str, useBotName, usePageScope } from "./shared"
 
@@ -36,16 +40,35 @@ export function tidyRowsOf(v: unknown): TodayRow[] {
     : []
 }
 
-export function TidyLines({ rows }: { rows: TodayRow[] }) {
+export function TidyLines({
+  rows,
+  framed = false,
+}: {
+  rows: TodayRow[]
+  /** A card of their own (under an assistant's brief), not a part of one. */
+  framed?: boolean
+}) {
   const t = useTranslations("PersonalAgent.tidy")
   if (rows.length === 0) return null
   return (
-    <section data-pa-brief-tidied className="flex flex-col gap-1.5">
-      <h4 className="flex items-center gap-1 text-xs font-semibold text-muted-foreground">
-        <Sparkles className="size-3 shrink-0" aria-hidden />
+    <section
+      data-pa-brief-tidied
+      className={cn(
+        "flex min-w-0 flex-col gap-2",
+        // On a card of their own its edge closes the rows: no hairline
+        // over it.
+        framed &&
+          "rounded-xl border bg-card px-4 pt-4 pb-1 text-card-foreground [&_[data-pa-tidy-line]:last-child]:border-b-0"
+      )}
+    >
+      <h4 className="flex items-center gap-1.5 text-sm leading-5 font-semibold">
+        <Sparkles
+          className="size-3.5 shrink-0 text-muted-foreground"
+          aria-hidden
+        />
         {t("lines")}
       </h4>
-      <div className="flex flex-col gap-1">
+      <div className="flex min-w-0 flex-col">
         {rows.map((r) => (
           <TidyLine key={r.key} row={r} />
         ))}
@@ -108,83 +131,82 @@ function TidyLine({ row }: { row: TodayRow }) {
       row.row_id != null ? { bot: row.bot_id, row: row.row_id } : null
     )
   }
+  const draft = state === "draft"
   return (
-    <div
-      className="flex min-w-0 flex-col gap-1 rounded-lg border border-foreground/10 bg-card px-2.5 py-2"
-      data-pa-tidy-line={state}
-      data-key={row.key}
-    >
-      <div className="flex min-w-0 items-center gap-2">
-        <BotAvatar
-          avatar={entry?.avatar}
-          name={name}
-          size={18}
-          star={entry?.kind === "primary"}
-        />
-        <span className="min-w-0 flex-1 text-[0.8125rem] leading-snug break-words">
-          {t(`line.${state === "draft" ? "draft" : "done"}` as "line.done", {
-            name,
-            text,
-          })}
-        </span>
-      </div>
-      {state !== "acted" && state !== "draft" ? (
-        <p className="ps-[1.625rem] text-[0.6875rem] text-muted-foreground">
-          {t(`state.${state}` as "state.undone")}
-        </p>
-      ) : null}
-      <div className="flex flex-wrap items-center gap-1.5 ps-[1.625rem]">
-        <Button
-          size="xs"
-          variant="ghost"
-          onClick={view}
-          data-pa-tidy-line-act="view"
-        >
-          {t("view")}
-        </Button>
-        {!readOnly && (state === "acted" || state === "applied") ? (
+    <div className={LIST_ROW} data-pa-tidy-line={state} data-key={row.key}>
+      <BotAvatar
+        avatar={entry?.avatar}
+        name={name}
+        size={32}
+        star={entry?.kind === "primary"}
+      />
+      <div className={ROW_MAIN}>
+        <div className={ROW_BODY}>
+          <RowLines
+            head={t(`line.${draft ? "draft" : "done"}` as "line.done", {
+              name,
+            })}
+            text={text}
+          />
+          {state !== "acted" && !draft ? (
+            <p className="text-xs leading-4 text-muted-foreground">
+              {t(`state.${state}` as "state.undone")}
+            </p>
+          ) : null}
+          {failed ? (
+            <p
+              role="alert"
+              className="text-xs leading-4 break-words text-destructive"
+            >
+              {tn("failed", { error: failed })}
+            </p>
+          ) : null}
+        </div>
+        <div className={ROW_ACTIONS}>
           <Button
-            size="xs"
-            variant="outline"
-            disabled={busy}
-            onClick={() => void act("undo")}
-            data-pa-tidy-line-act="undo"
+            size="sm"
+            variant="secondary"
+            onClick={view}
+            data-pa-tidy-line-act="view"
           >
-            {busy ? <SyncedSpinner small className="size-3" /> : null}
-            {t("undoAll")}
+            {t("view")}
           </Button>
-        ) : null}
-        {!readOnly && state === "draft" ? (
-          <>
+          {!readOnly && (state === "acted" || state === "applied") ? (
             <Button
-              size="xs"
+              size="sm"
+              variant="outline"
               disabled={busy}
-              onClick={() => void act("apply")}
-              data-pa-tidy-line-act="apply"
+              onClick={() => void act("undo")}
+              data-pa-tidy-line-act="undo"
             >
-              {busy ? <SyncedSpinner small className="size-3" /> : null}
-              {t("apply")}
+              {busy ? <SyncedSpinner small /> : null}
+              {t("undoAll")}
             </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={busy}
-              onClick={() => void act("dismiss")}
-              data-pa-tidy-line-act="dismiss"
-            >
-              {t("dismiss")}
-            </Button>
-          </>
-        ) : null}
+          ) : null}
+          {!readOnly && draft ? (
+            <>
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => void act("apply")}
+                data-pa-tidy-line-act="apply"
+              >
+                {busy ? <SyncedSpinner small /> : null}
+                {t("apply")}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => void act("dismiss")}
+                data-pa-tidy-line-act="dismiss"
+              >
+                {t("dismiss")}
+              </Button>
+            </>
+          ) : null}
+        </div>
       </div>
-      {failed ? (
-        <p
-          role="alert"
-          className="ps-[1.625rem] text-xs break-words text-destructive"
-        >
-          {tn("failed", { error: failed })}
-        </p>
-      ) : null}
     </div>
   )
 }

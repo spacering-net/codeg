@@ -6,6 +6,7 @@ import {
   elementIdOf,
   itemizeRepeats,
   PA_ITEM_CARD,
+  PA_LINE,
   parseElementId,
   sanitizeAssistantSpec,
 } from "./pa-spec"
@@ -268,6 +269,9 @@ describe("itemizeRepeats", () => {
       __paKey: "go",
       __paParent: "list",
     })
+    // Its lone line marked as the item's, to set its subject over it.
+    expect(out.elements.line.props).toEqual({ text: "x", [PA_LINE]: true })
+    expect(marked.elements.line.props).toEqual({ text: "x" })
     // Once is enough: the list now repeats one card.
     expect(itemizeRepeats(out)).toBe(out)
   })
@@ -294,6 +298,30 @@ describe("itemizeRepeats", () => {
       lead: null,
     })
     expect(out.elements["list~item"]).toEqual(text("the spec's own"))
+  })
+
+  it("marks only an item's lone Text as its line, not one inside its words", () => {
+    const out = itemizeRepeats(
+      spec({
+        main: { type: "Stack", props: {}, children: ["list", "two"] },
+        list: list(["words", "go"]),
+        words: { type: "Stack", props: {}, children: ["a", "b"] },
+        a: text("Dev: waits"),
+        b: text("Ops: waits"),
+        go: press("Go"),
+        two: {
+          ...list(["c", "d", "go2"]),
+          repeat: { statePath: "/two", key: "key" },
+        },
+        c: text("Dev: waits"),
+        d: text("since Monday"),
+        go2: press("Go"),
+      })
+    )
+    for (const k of ["words", "a", "b", "c", "d"]) {
+      expect(out.elements[k].props).not.toHaveProperty(PA_LINE)
+    }
+    expect(out.elements["list~item"].type).toBe(PA_ITEM_CARD)
   })
 
   it("leaves a list that only reads, one that only acts, and one still arriving", () => {

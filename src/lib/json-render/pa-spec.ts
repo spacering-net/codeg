@@ -219,6 +219,10 @@ export const PA_ITEM_CARD = "__paItemCard"
  *  goes (`target`, `id`, as the button's own parameters — resolved against
  *  the item as it renders), to lead it with that assistant's face or that
  *  kind's icon. */
+/** The prop that marks an item's lone line (`itemizeRepeats`): set over
+ *  what about it, its subject (`splitLine`). */
+export const PA_LINE = "__paLine"
+
 export type PaItemCardProps = {
   actions: string[]
   lead?: { target: unknown; id: unknown } | null
@@ -277,7 +281,8 @@ function acts(
  * repeat's scope and so every button's id (`elementIdOf`) and container
  * (`__paParent`, read before this) stay as they were. An item that only
  * reads, or only acts (a row of choices), stays as written; so does one
- * whose children have not all arrived yet.
+ * whose children have not all arrived yet. An item whose words are one
+ * Text has it marked (`PA_LINE`): its line, split into subject and what.
  */
 export function itemizeRepeats(spec: Spec): Spec {
   const source = spec.elements ?? {}
@@ -313,6 +318,15 @@ export function itemizeRepeats(spec: Spec): Spec {
     }
     const props: PaItemCardProps = { actions, lead }
     elements[wrap] = { type: PA_ITEM_CARD, props, children: [...kids] }
+    // An item whose words are one Text: that line, marked as the item's.
+    const reads = kids.filter((k) => !actions.includes(k))
+    const only = reads.length === 1 ? elements[reads[0]] : undefined
+    if (only && only.type === "Text") {
+      elements[reads[0]] = {
+        ...only,
+        props: { ...(only.props ?? {}), [PA_LINE]: true },
+      }
+    }
     const own = (el.props ?? {}) as Record<string, unknown>
     elements[key] = {
       ...el,

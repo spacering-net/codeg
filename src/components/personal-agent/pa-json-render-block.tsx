@@ -122,6 +122,7 @@ import {
   elementIdOf,
   itemizeRepeats,
   PA_ITEM_CARD,
+  PA_LINE,
   parseElementId,
   sanitizeAssistantSpec,
   type PaItemCardProps,
@@ -135,6 +136,15 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { BotAvatar } from "./bot-avatar"
 import { ExchangeSheet } from "./exchange-sheet"
 import { usePaCardScope } from "./pa-card-scope"
+import {
+  LIST_ROW,
+  ROW_ACTIONS,
+  ROW_BODY,
+  ROW_MAIN,
+  RowIcon,
+  RowLines,
+  splitLine,
+} from "./list-row"
 import { isOwnerGesture } from "./pa-gesture"
 import { useSessionLinkOpener } from "./session-link"
 import { useBotName, usePageScope, useOpenWork, workTargetOf } from "./shared"
@@ -245,6 +255,7 @@ function useMarked(props: Record<string, unknown>) {
 const PlainButton = jsonRenderComponents.Button
 const PlainLink = jsonRenderComponents.Link
 const PlainCard = jsonRenderComponents.Card
+const PlainText = jsonRenderComponents.Text
 
 /** A word that says a button answers someone, in the languages codeg
  *  speaks — a whole word where words are spaced, so "Verantwortung" is no
@@ -400,17 +411,27 @@ function ItemLead({ target, id }: { target: unknown; id: unknown }) {
     target === "bot"
       ? Bot
       : ((known ? LEAD_ICON[target as PaOpenTarget] : undefined) ?? CircleDot)
-  return (
-    <span className="flex size-8 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-      <Icon className="size-4" aria-hidden />
-    </span>
-  )
+  return <RowIcon icon={Icon} />
 }
 
-/** One item of a list as a row of its own (`itemizeRepeats`): whom or what
- *  it opens first, what to read, and what to do about it at its end —
- *  under it when the row is too narrow for both; a hairline over every
- *  row but the first, no surface of its own on the card. */
+function PaText(ctx: BaseComponentProps<ShadcnProps<"Text">>) {
+  // An item's lone line (`PA_LINE`): its subject over what about it, when
+  // written so.
+  const { [PA_LINE]: line, ...props } = ctx.props as ShadcnProps<"Text"> &
+    Record<string, unknown>
+  const plain = props.variant == null || props.variant === "body"
+  const lines =
+    line === true && plain && typeof props.text === "string"
+      ? splitLine(props.text)
+      : null
+  if (!lines) return <PlainText {...ctx} props={props} />
+  return <RowLines head={lines.head} text={lines.text} />
+}
+
+/** One item of a list as a row of its own (`itemizeRepeats`, `LIST_ROW`):
+ *  whom or what it opens first, what to read — its lone line as its subject
+ *  over what about it, when written "subject: what" (`PaText`) — and what to do about
+ *  it at its end, under it when the row is too narrow for both. */
 const PaItemCard: ComponentRegistry[string] = ({ element, children }) => {
   const props = element.props as Partial<PaItemCardProps> | undefined
   const acting = new Set(Array.isArray(props?.actions) ? props.actions : [])
@@ -423,20 +444,13 @@ const PaItemCard: ComponentRegistry[string] = ({ element, children }) => {
   }
   const lead = props?.lead
   return (
-    <div
-      data-pa-card-item
-      className="flex w-full min-w-0 items-start gap-3 border-t border-border/60 py-3 first:border-t-0 first:pt-1 last:pb-1"
-    >
+    <div data-pa-card-item className={LIST_ROW}>
       {lead ? <ItemLead target={lead.target} id={lead.id} /> : null}
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-2">
-        <div className="flex min-h-8 min-w-0 flex-[1_1_12rem] flex-col justify-center gap-1 break-words">
-          {body}
-        </div>
+      <div className={ROW_MAIN}>
+        <div className={ROW_BODY}>{body}</div>
         {actions.length > 0 ? (
           <InItemCard.Provider value>
-            <div className="flex shrink-0 flex-wrap items-center gap-2">
-              {actions}
-            </div>
+            <div className={ROW_ACTIONS}>{actions}</div>
           </InItemCard.Provider>
         ) : null}
       </div>
@@ -451,6 +465,7 @@ const registry: ComponentRegistry = {
       Button: PaButton,
       Card: PaCardBox,
       Link: PaLink,
+      Text: PaText,
     },
   }).registry,
   [PA_ITEM_CARD]: PaItemCard,

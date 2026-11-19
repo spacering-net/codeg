@@ -10688,8 +10688,8 @@
       "lines": "昨晚整理",
       "view": "查看",
       "line": {
-        "done": "{name}整理了記憶：{text}",
-        "draft": "{name}整理了記憶（草稿）：{text}"
+        "done": "{name}整理了記憶",
+        "draft": "{name}整理了記憶（草稿）"
       },
       "state": {
         "applied": "已套用",

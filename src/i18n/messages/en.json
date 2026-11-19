@@ -10688,8 +10688,8 @@
       "lines": "Tidied up last night",
       "view": "View",
       "line": {
-        "done": "{name} tidied its memory: {text}",
-        "draft": "{name} tidied its memory, as a draft: {text}"
+        "done": "{name} tidied its memory",
+        "draft": "{name} tidied its memory, as a draft"
       },
       "state": {
         "applied": "Applied",

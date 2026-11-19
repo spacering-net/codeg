@@ -10688,8 +10688,8 @@
       "lines": "Organizado ontem à noite",
       "view": "Ver",
       "line": {
-        "done": "{name} organizou a memória: {text}",
-        "draft": "{name} organizou a memória, em rascunho: {text}"
+        "done": "{name} organizou a memória",
+        "draft": "{name} organizou a memória, em rascunho"
       },
       "state": {
         "applied": "Aplicado",

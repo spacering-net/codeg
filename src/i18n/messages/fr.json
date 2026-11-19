@@ -10688,8 +10688,8 @@
       "lines": "Rangé la nuit dernière",
       "view": "Voir",
       "line": {
-        "done": "{name} a rangé sa mémoire : {text}",
-        "draft": "{name} a rangé sa mémoire, en brouillon : {text}"
+        "done": "{name} a rangé sa mémoire",
+        "draft": "{name} a rangé sa mémoire, en brouillon"
       },
       "state": {
         "applied": "Appliqué",

@@ -10688,8 +10688,8 @@
       "lines": "Ordenado anoche",
       "view": "Ver",
       "line": {
-        "done": "{name} ordenó su memoria: {text}",
-        "draft": "{name} ordenó su memoria, en borrador: {text}"
+        "done": "{name} ordenó su memoria",
+        "draft": "{name} ordenó su memoria, en borrador"
       },
       "state": {
         "applied": "Aplicado",

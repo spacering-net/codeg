@@ -702,4 +702,78 @@ describe("an assistant's card: a list", () => {
     expect(within(odd).getByRole("button", { name: "Go" })).toBeDisabled()
     __resetRosterForTests()
   })
+
+  it("sets an item's subject over what about it, a hairline over and under each row", () => {
+    const src = [
+      line({ op: "add", path: "/root", value: "main" }),
+      el("main", {
+        type: "Card",
+        props: {},
+        children: ["list", "two", "three"],
+      }),
+      el("list", {
+        type: "Stack",
+        props: { gap: "md" },
+        repeat: { statePath: "/needs", key: "key" },
+        children: ["line", "go"],
+      }),
+      el("line", {
+        type: "Text",
+        props: { text: { $item: "text" } },
+        children: [],
+      }),
+      el("go", button("Open", { press: { action: "pa.reply" } })),
+      // An item of two lines of its own, one of words in a Stack: as
+      // written.
+      el("two", {
+        type: "Stack",
+        props: {},
+        repeat: { statePath: "/two", key: "key" },
+        children: ["a", "b", "go2"],
+      }),
+      el("three", {
+        type: "Stack",
+        props: {},
+        repeat: { statePath: "/two", key: "key" },
+        children: ["words", "go3"],
+      }),
+      el("words", { type: "Stack", props: {}, children: ["w1", "w2"] }),
+      el("w1", { type: "Text", props: { text: "Ops: one" }, children: [] }),
+      el("w2", { type: "Text", props: { text: "Ops: two" }, children: [] }),
+      el("go3", button("Go", { press: { action: "pa.reply" } })),
+      el("a", { type: "Text", props: { text: "Dev: waits" }, children: [] }),
+      el("b", { type: "Text", props: { text: "since Monday" }, children: [] }),
+      el("go2", button("Reply", { press: { action: "pa.reply" } })),
+      line({
+        op: "add",
+        path: "/state/needs",
+        value: [
+          { key: "a", text: "任务 #1 · 改标题：失败，等了 8 天" },
+          { key: "b", text: "Dev: waiting 3 days for you" },
+          { key: "c", text: "Build at 10:30 failed" },
+          { key: "d", text: "It failed. Look at it: now" },
+        ],
+      }),
+      line({ op: "add", path: "/state/two", value: [{ key: "k" }] }),
+    ].join("\n")
+    const { container } = draw(src)
+    const rows = Array.from(
+      container.querySelectorAll<HTMLElement>("[data-pa-card-item]")
+    )
+    const lines = (row: HTMLElement) =>
+      Array.from(row.querySelectorAll("p")).map((p) => p.textContent)
+    expect(lines(rows[0])).toEqual(["任务 #1 · 改标题", "失败，等了 8 天"])
+    expect(rows[0].querySelector("p")?.className).toContain(
+      "text-muted-foreground"
+    )
+    expect(lines(rows[1])).toEqual(["Dev", "waiting 3 days for you"])
+    // No colon of a subject's: one line as written.
+    expect(lines(rows[2])).toEqual(["Build at 10:30 failed"])
+    expect(lines(rows[3])).toEqual(["It failed. Look at it: now"])
+    expect(lines(rows[4])).toEqual(["Dev: waits", "since Monday"])
+    expect(lines(rows[5])).toEqual(["Ops: one", "Ops: two"])
+    // Each row the line over it; the last of a list the one under it too.
+    for (const r of rows) expect(r.className).toContain("border-t")
+    expect(rows[0].className).toContain("last:border-b")
+  })
 })

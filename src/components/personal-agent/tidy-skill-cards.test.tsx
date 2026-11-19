@@ -251,12 +251,18 @@ describe("the tidy-ups under the brief", () => {
   it("say what each assistant did, from its card as it stands, with its buttons", async () => {
     api.personalAgentTimelineRows.mockResolvedValueOnce([tidy("acted")])
     const { container } = wrap(<TidyLines rows={[line]} />)
+    // Who tidied over what it did, on a row of the brief's lists.
     await waitFor(() =>
       expect(
-        container.querySelector("[data-pa-tidy-line='acted']")?.textContent
-      ).toContain(
-        "tidied its memory: 1 entry updated · 1 entry removed · its rules changed"
-      )
+        [
+          ...(container
+            .querySelector("[data-pa-tidy-line='acted']")
+            ?.querySelectorAll("p") ?? []),
+        ].map((p) => p.textContent)
+      ).toEqual([
+        "#2 tidied its memory",
+        "1 entry updated · 1 entry removed · its rules changed",
+      ])
     )
     expect(api.personalAgentTimelineRows).toHaveBeenCalledWith([41], 2)
     api.personalAgentNoticeAct.mockResolvedValueOnce(tidy("undone"))

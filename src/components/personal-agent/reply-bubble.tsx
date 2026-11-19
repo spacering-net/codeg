@@ -347,6 +347,7 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
   const routine = routineOf(row?.data?.routine)
   // The morning brief or the wrap-up it is (6.4, 6.5).
   const brief = briefOf(row?.data?.brief)
+  const tidied = tidyRowsOf(tidiedOf(row?.data?.brief))
   const BriefIcon = brief === "wrap" ? Sunset : Newspaper
   const quote = (
     <>
@@ -404,9 +405,9 @@ export function ReplyBubble({ item }: { item: ReplyItem }) {
       {!view.running ? (
         <UsedMemory memories={memoriesOf(row?.data?.memories)} />
       ) : null}
-      {brief === "brief" && !view.running ? (
+      {brief === "brief" && !view.running && tidied.length > 0 ? (
         <div className="mt-3">
-          <TidyLines rows={tidyRowsOf(tidiedOf(row?.data?.brief))} />
+          <TidyLines framed rows={tidied} />
         </div>
       ) : null}
       {view.ending ? <Ending ending={view.ending} /> : null}

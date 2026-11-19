@@ -1403,7 +1403,9 @@ fn ask_text(m: &Material, cards: CardUse) -> String {
         CardUse::Never => "",
         _ => {
             " A part whose things each have a button is a list: a state array repeated, each item \
-              its line and its button — codeg draws each item as a row."
+              its line and its button — codeg draws each item as a row. Write an item's line as \
+              its subject, a colon, then what about it (\"Task #1 · Fix the title: failed 8 days \
+              ago\"): codeg sets the subject over it, smaller."
         }
     };
     let week = week_ask(m, cards);
@@ -1419,7 +1421,8 @@ fn ask_text(m: &Material, cards: CardUse) -> String {
                 .to_string()
         };
         format!(
-            "Write the owner's wrap-up of the day now. {card}: done today; still running (mark \
+            "Write the owner's wrap-up of the day now, all of it in the owner's language — what \
+             the materials say in English too (a state, \"waiting 3 days\"). {card}: done today; still running (mark \
              what will run overnight); what needs them tomorrow. Leave out a part with nothing in \
              it; no dispatch buttons on the card (9.3).{week} {tonight}"
         )
@@ -1431,7 +1434,8 @@ fn ask_text(m: &Material, cards: CardUse) -> String {
             ),
         };
         format!(
-            "Write the owner's morning brief now. {card}: needs you (each with a button: \
+            "Write the owner's morning brief now, all of it in the owner's language — what the \
+             materials say in English too (a state, \"waiting 3 days\"). {card}: needs you (each with a button: \
              `pa.open` with the open it has — open it, go approve it; to an assistant that waits \
              on the owner, \"Reply to the assistant\" in the owner's language, not its name — or \
              `pa.reply` \"Hand it to you\" for one you can take), watching, done, today's schedule, suggestions, and a \
@@ -2665,6 +2669,13 @@ mod tests {
             "{ask}"
         );
         assert!(ask.contains("a state array repeated"), "{ask}");
+        // An item's line its subject, a colon, what about it: codeg sets the
+        // subject over it. And the materials' English words in the owner's.
+        assert!(
+            ask.contains("its subject, a colon, then what about it"),
+            "{ask}"
+        );
+        assert!(ask.contains("all of it in the owner's language"), "{ask}");
         // A button to an assistant says what it is for, not its name: its
         // row already shows whose.
         assert!(
@@ -2685,6 +2696,10 @@ mod tests {
         );
         assert!(
             !plain.contains("card's last") && !plain.contains("state array"),
+            "{plain}"
+        );
+        assert!(
+            plain.contains("all of it in the owner's language"),
             "{plain}"
         );
         // Nothing waiting, nothing done, nothing on the schedule: nothing to say.

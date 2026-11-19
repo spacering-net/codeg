@@ -10688,8 +10688,8 @@
       "lines": "昨夜の整理",
       "view": "見る",
       "line": {
-        "done": "{name} が記憶を整理しました：{text}",
-        "draft": "{name} が記憶を整理しました（下書き）：{text}"
+        "done": "{name} が記憶を整理しました",
+        "draft": "{name} が記憶を整理しました（下書き）"
       },
       "state": {
         "applied": "適用済み",

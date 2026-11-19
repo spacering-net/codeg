@@ -10688,8 +10688,8 @@
       "lines": "Letzte Nacht aufgeräumt",
       "view": "Ansehen",
       "line": {
-        "done": "{name} hat sein Gedächtnis aufgeräumt: {text}",
-        "draft": "{name} hat sein Gedächtnis aufgeräumt, als Entwurf: {text}"
+        "done": "{name} hat sein Gedächtnis aufgeräumt",
+        "draft": "{name} hat sein Gedächtnis aufgeräumt, als Entwurf"
       },
       "state": {
         "applied": "Übernommen",

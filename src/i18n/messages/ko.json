@@ -10688,8 +10688,8 @@
       "lines": "어젯밤 정리",
       "view": "보기",
       "line": {
-        "done": "{name}이(가) 기억을 정리했어요: {text}",
-        "draft": "{name}이(가) 기억을 정리했어요(초안): {text}"
+        "done": "{name}이(가) 기억을 정리했어요",
+        "draft": "{name}이(가) 기억을 정리했어요(초안)"
       },
       "state": {
         "applied": "적용됨",
