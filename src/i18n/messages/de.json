@@ -783,6 +783,8 @@
     "generalConfigDescriptionClaude": "Unterstützt schnelle Konfiguration von API-URL, API-Key und Claude-Modellen und synchronisiert mit der nativen JSON-Konfiguration.",
     "generalConfigDescriptionDefault": "Unterstützt wichtige Konfigurationseingaben (API URL, API Key, Model) und native JSON-Konfigurationsverwaltung.",
     "multiAgent": {
+      "sessionMessaging": "Kommunikation zwischen Sitzungen",
+      "sessionMessagingHint": "Agenten dürfen eigenständige Sitzungen erstellen und Nachrichten austauschen. Verbinde bestehende Sitzungen erneut, um die Werkzeuge zu nutzen.",
       "title": "Multi-Agent-Zusammenarbeit",
       "description": "Erlaubt aktiven Agenten, Teilaufgaben an andere Agenten zu delegieren.",
       "enable": "Delegation aktivieren",

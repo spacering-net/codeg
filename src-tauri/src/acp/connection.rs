@@ -1396,6 +1396,7 @@ pub enum ConnectionCommand {
     /// so the oneshot can never hang.
     Steer {
         blocks: Vec<PromptInputBlock>,
+        message_result: Option<super::session_messages::TurnSender>,
         reply: tokio::sync::oneshot::Sender<Result<SteerOutcome, AcpError>>,
     },
     /// Stop one AIR async task (`_session/async_task/stop`; claude-agent-acp
@@ -2074,7 +2075,7 @@ async fn record_turn_end(
 /// boolean — see `config_option_already_holds`).
 ///
 /// Used to carry a session's selectors across a fork.
-fn current_config_option_values(
+pub(crate) fn current_config_option_values(
     opts: &[SessionConfigOptionInfo],
 ) -> BTreeMap<String, String> {
     opts.iter()
@@ -8294,6 +8295,7 @@ fn is_executable_file(path: &Path) -> bool {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct CompanionFeatureFlags {
     delegation: bool,
+    session_messaging: bool,
     feedback: bool,
     ask: bool,
     sessions: bool,
@@ -8336,6 +8338,9 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     let mut features: Vec<&str> = Vec::new();
     if flags.delegation {
         features.push("delegation");
+    }
+    if flags.session_messaging {
+        features.push("session_messaging");
     }
     if flags.feedback {
         features.push("feedback");
@@ -8455,7 +8460,8 @@ where
     // withholds this group too. The other groups stay: they surface codeg's own
     // state (feedback, ask, session info, task reporting), not arbitrary file
     // or command execution on the user's machine.
-    let delegation_configured = injection.broker.config_snapshot().await.enabled;
+    let config = injection.broker.config_snapshot().await;
+    let delegation_configured = config.enabled;
     let delegation_enabled = delegation_configured && host_tools.hosts_channels();
     if delegation_configured && !delegation_enabled {
         // The one combination that looks like a bug from the settings UI: the
@@ -8480,6 +8486,7 @@ where
     };
     let flags = CompanionFeatureFlags {
         delegation: delegation_enabled,
+        session_messaging: config.session_messaging_enabled && host_tools.hosts_channels(),
         feedback: feedback_enabled,
         ask: injection.ask.is_enabled().await,
         sessions: injection.sessions.is_enabled().await,
@@ -16174,7 +16181,7 @@ async fn run_conversation_loop(
                                         let _ = reply.send(landed);
                                     }
                                 }
-                                Some(ConnectionCommand::Steer { blocks, reply }) => {
+                                Some(ConnectionCommand::Steer { blocks, message_result, reply }) => {
                                     // Protocol round-trip only — the manager's
                                     // cancellation-shielded task records the
                                     // note + broadcasts `FeedbackSubmitted`
@@ -16205,6 +16212,15 @@ async fn run_conversation_loop(
                                     // decline beside the steer.
                                     if let Some(inj) = delegation_injection {
                                         inj.questions.cancel_questions_by_parent(conn_id).await;
+                                    }
+                                    if let Some(reply) = message_result {
+                                        let mut state = state.write().await;
+                                        let turn = state.turns_completed;
+                                        state.message_turns.push(super::session_messages::TurnWaiter {
+                                            prompt_id: None,
+                                            turn: Some(turn),
+                                            reply: Some(reply),
+                                        });
                                     }
                                     let outcome = send_steer_request(&cx, &sid, &blocks).await;
                                     // A steered message still lands in the
@@ -16544,7 +16560,7 @@ async fn run_conversation_loop(
                     let _ = reply.send(landed);
                 }
             }
-            Some(ConnectionCommand::Steer { blocks: _, reply }) => {
+            Some(ConnectionCommand::Steer { reply, .. }) => {
                 // Steering only means something for a RUNNING turn. Reply —
                 // never drop — so the manager's shielded task can't hang on
                 // the oneshot; the caller falls back to a normal prompt (the
@@ -46926,6 +46942,7 @@ mod tests {
         assert_eq!(
             companion_features_arg(CompanionFeatureFlags {
                 delegation: true,
+                session_messaging: false,
                 feedback: true,
                 ask: true,
                 sessions: true,
@@ -49285,6 +49302,7 @@ mod tests {
             let (reply, outcome) = oneshot::channel();
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
+                    message_result: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     reply,
                 })
@@ -50715,6 +50733,7 @@ mod tests {
             let (reply, outcome) = oneshot::channel();
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
+                    message_result: None,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     reply,
                 })

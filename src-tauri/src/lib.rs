@@ -1353,6 +1353,12 @@ mod tauri_app {
                     // accept-loop handle around, which is what lets the
                     // workspace status indicator report why the broker socket
                     // is down and rebind it without an app restart.
+                    let _ = listener.session_message_db.set(db_conn.clone());
+                    let _ = listener.session_creator.set(crate::acp::session_messages::SessionCreator {
+                        db: db_conn.clone(),
+                        manager: std::sync::Arc::new(cm_state.clone_ref()),
+                        data_dir: effective_data_dir.clone(),
+                    });
                     let service = crate::acp::delegation::service::DelegationService::new(
                         listener,
                         socket_path,
@@ -1379,11 +1385,18 @@ mod tauri_app {
                         .state::<std::sync::Arc<crate::acp::InternalEventBus>>()
                         .inner()
                         .clone();
+                    let message_db = db_conn.clone();
+                    let message_manager = std::sync::Arc::new(cm.clone_ref());
                     tauri::async_runtime::spawn(crate::acp::lifecycle_subscriber_task(
                         db_conn,
                         cm,
                         bus,
-                        Some(broker_for_lifecycle),
+                        Some(broker_for_lifecycle.clone()),
+                    ));
+                    tauri::async_runtime::spawn(crate::acp::session_messages::start(
+                        message_db,
+                        message_manager,
+                        broker_for_lifecycle,
                     ));
                 }
 

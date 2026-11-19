@@ -47,6 +47,88 @@
     }
   },
   {
+    "name": "create_session",
+    "description": "Create an independent Codeg conversation. Provide title and message. By default it uses the current conversation's agent type and folder. Use this when the user asks to create separate conversations, have multiple sessions chat, or take turns continuing a story. Returns conversation_id after starting the first message. The conversation has its own history and stays available after the creator finishes. The first answer is sent back automatically. Use send_to_session with reply=true for later messages. Finish your turn after creating or sending so the automatic answers can arrive as visible incoming messages and start the next turn; do not poll get_session_info for answers.",
+    "inputSchema": {
+      "type": "object",
+      "required": [
+        "title",
+        "message"
+      ],
+      "properties": {
+        "agent_type": {
+          "type": "string",
+          "description": "Omit to use the current conversation's agent type. Set only to choose a different agent, using its exact ID (for example, claude_code).",
+          "enum": [
+            "claude_code",
+            "codex",
+            "open_code",
+            "gemini",
+            "cline",
+            "open_claw",
+            "hermes",
+            "code_buddy",
+            "kimi_code",
+            "pi",
+            "grok",
+            "cursor",
+            "deepseek",
+            "qoder",
+            "antigravity",
+            "kiro",
+            "zcode",
+            "trae",
+            "command_code",
+            "minimax_code"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name displayed in the main conversation list, such as Conversation C."
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "description": "First message for the new conversation. Include the task, participants and their conversation IDs when needed."
+        },
+        "folder_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of a folder already registered in Codeg. The new conversation also uses it as its working directory. Omit to use the current conversation's folder."
+        },
+        "mode_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Permission mode ID offered by the target agent. A new session of the same agent type inherits the current session's mode. When choosing a different agent type, pass its mode ID to set its permissions explicitly. Examples: Codex read-only or agent-full-access; Claude Code bypassPermissions. An unavailable mode stops creation before the first message."
+        },
+        "config_values": {
+          "type": "object",
+          "propertyNames": { "enum": ["model", "reasoning_effort", "effort", "thought_level"] },
+          "additionalProperties": { "type": "string" },
+          "description": "Optional model and reasoning settings keyed by the selected agent's ACP option IDs. Set this when the user asks for a specific model or reasoning level. For Codex Luna Medium pass { \"model\": \"gpt-6-luna\", \"reasoning_effort\": \"medium\" }. The first message is sent only if all supplied settings take effect."
+        }
+      }
+    }
+  },
+  {
+    "name": "send_to_session",
+    "description": "Send a message to an existing Codeg conversation. Returns a message_id once queued. Put only your message in the body. Codeg adds the sender's conversation ID automatically. To follow up on an incoming message, use the sender ID in its Codeg header as the destination. For conversations chatting or taking turns, use reply=true, then finish your turn: the recipient's answer will arrive automatically as a visible incoming message and start your next turn. Do not poll get_session_info for the answer. Use reply=false only for a one-way notification or when explicitly sending an answer back. An offline conversation receives it next time it is opened.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["conversation_id", "message", "mode", "reply"],
+      "properties": {
+        "conversation_id": { "type": "integer", "minimum": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "mode": {
+          "enum": ["queue", "steer"],
+          "description": "Queue for the next available turn, or attempt native steering with queue fallback."
+        },
+        "reply": { "type": "boolean", "description": "Send the final answer back automatically." }
+      }
+    }
+  },
+  {
     "name": "get_delegation_status",
     "description": "Collect delegated task results — or check on them — by the task_ids from delegate_to_agent. Pass a single id in the array to poll one task, or many at once to poll a whole fan-out in a single call. The response is ALWAYS a JSON object {\"tasks\":[...]} with one entry per id, in the order you asked — one entry for a single id, several for a fan-out; every entry carries that task's task_id and status, so you can always tell which task it is and where it stands. The wait_ms argument picks the mode: omit it for a non-blocking snapshot (poll), or pass wait_ms to wait — wait_ms>0 blocks up to that many ms (capped at 60000; re-call to keep waiting), wait_ms=0 blocks with no timeout for as long as the sub-agent runs. When polling several, the wait returns as soon as ANY requested task reaches a terminal state, so re-call to keep collecting the rest. When you just need the results, prefer blocking over repeated polling. Each task reports its current state — running, or a terminal completed / failed / canceled (or unknown if the id isn't recognized); a finished task includes its full result text. A wait ALSO returns early when a sub-agent becomes blocked on the user: that entry stays status \"running\" but carries blocked_on, meaning the sub-agent is parked on a permission / question / plan approval in Codeg and will not progress until a human answers. Tell the user about it — that is the one case where speaking up mid-wait is right — then wait again; each distinct prompt wakes the wait exactly once, so re-calling is safe and will not spin. While tasks are still running and you are simply waiting, do NOT emit any user-facing message between calls — just call again silently. Skip status narration like \"still running\", \"not returned yet\", or \"continuing to wait\"; it fragments the conversation. Speak to the user only when there is a terminal result to report, a task is blocked_on them, or something genuinely needs their input.",
     "inputSchema": {

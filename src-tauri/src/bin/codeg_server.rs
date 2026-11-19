@@ -561,6 +561,12 @@ async fn async_main(
         // spawn: it keeps the bind error and the accept-loop handle around, so
         // the workspace status indicator can report why the broker socket is
         // down and rebind it without restarting the server.
+        let _ = listener.session_message_db.set(state.db.conn.clone());
+        let _ = listener.session_creator.set(codeg_lib::acp::session_messages::SessionCreator {
+            db: state.db.conn.clone(),
+            manager: Arc::new(state.connection_manager.clone_ref()),
+            data_dir: state.data_dir.clone(),
+        });
         let service = codeg_lib::acp::delegation::service::DelegationService::new(
             listener,
             delegation_socket_path.clone(),
@@ -603,6 +609,12 @@ async fn async_main(
         state.connection_manager.clone_ref(),
         state.acp_event_bus.clone(),
         Some(state.delegation_broker.clone()),
+    ));
+
+    tokio::spawn(codeg_lib::acp::session_messages::start(
+        state.db.conn.clone(),
+        Arc::new(state.connection_manager.clone_ref()),
+        state.delegation_broker.clone(),
     ));
 
     // Spawn the desktop pet state mapper so server-mode browsers viewing

@@ -94,6 +94,7 @@ export function DelegationSettingsSection() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [enabled, setEnabled] = useState(false)
+  const [sessionMessaging, setSessionMessaging] = useState(false)
   const [depth, setDepth] = useState<number>(1)
   const [cacheMb, setCacheMb] = useState<number>(DEFAULT_CACHE_MB)
   const [agentDefaults, setAgentDefaults] = useState<
@@ -108,6 +109,7 @@ export function DelegationSettingsSection() {
    * the broadcast below. `enabled !== baselineEnabledRef.current` is therefore
    * "the user moved this and hasn't saved yet". */
   const baselineEnabledRef = useRef(false)
+  const baselineSessionMessagingRef = useRef(false)
   /** Bumped by every broadcast, so a load or save reply can tell that a
    * broadcast landed while it was out — and leave the switch and the saved
    * record to it (see `persisted`). */
@@ -132,6 +134,9 @@ export function DelegationSettingsSection() {
         if (remoteGenRef.current === gen) {
           setEnabled(s.enabled)
           baselineEnabledRef.current = s.enabled
+          setSessionMessaging(s.session_messaging_enabled ?? false)
+          baselineSessionMessagingRef.current =
+            s.session_messaging_enabled ?? false
           setPersisted(s)
         }
         setDepth(s.depth_limit)
@@ -214,6 +219,12 @@ export function DelegationSettingsSection() {
         setEnabled((current) =>
           current === previousBaseline ? remote.enabled : current
         )
+        const previousMessaging = baselineSessionMessagingRef.current
+        const remoteMessaging = remote.session_messaging_enabled ?? false
+        baselineSessionMessagingRef.current = remoteMessaging
+        setSessionMessaging((current) =>
+          current === previousMessaging ? remoteMessaging : current
+        )
         setPersisted(remote)
       }
     )
@@ -233,6 +244,7 @@ export function DelegationSettingsSection() {
   const save = useCallback(async () => {
     const payload: DelegationSettings = {
       enabled,
+      session_messaging_enabled: sessionMessaging,
       depth_limit: clamp(depth, DEPTH_MIN, DEPTH_MAX),
       completed_cache_max_mb: clampCacheMb(cacheMb),
       agent_defaults: agentDefaults,
@@ -251,6 +263,9 @@ export function DelegationSettingsSection() {
         setPersisted(applied)
         setEnabled(applied.enabled)
         baselineEnabledRef.current = applied.enabled
+        setSessionMessaging(applied.session_messaging_enabled ?? false)
+        baselineSessionMessagingRef.current =
+          applied.session_messaging_enabled ?? false
       }
       // Mirror any server-side clamps / filter passes back into the UI so the
       // inputs reflect what was actually persisted.
@@ -265,11 +280,12 @@ export function DelegationSettingsSection() {
     } finally {
       setSaving(false)
     }
-  }, [enabled, depth, cacheMb, agentDefaults, t])
+  }, [enabled, sessionMessaging, depth, cacheMb, agentDefaults, t])
 
   const generalDirty =
     persisted !== null &&
     (enabled !== persisted.enabled ||
+      sessionMessaging !== (persisted.session_messaging_enabled ?? false) ||
       clamp(depth, DEPTH_MIN, DEPTH_MAX) !== persisted.depth_limit ||
       clampCacheMb(cacheMb) !== persisted.completed_cache_max_mb)
   const defaultsDirty =
@@ -383,6 +399,22 @@ export function DelegationSettingsSection() {
                   }}
                   disabled={loading || !enabled}
                   className="h-8 w-24 bg-background text-xs"
+                />
+              }
+            />
+          </SettingCard>
+          <SettingCard className="mt-3">
+            <SettingRow
+              icon={Power}
+              title={t("sessionMessaging")}
+              description={t("sessionMessagingHint")}
+              htmlFor="session-messaging-enabled"
+              control={
+                <Switch
+                  id="session-messaging-enabled"
+                  checked={sessionMessaging}
+                  onCheckedChange={setSessionMessaging}
+                  disabled={loading || saving}
                 />
               }
             />

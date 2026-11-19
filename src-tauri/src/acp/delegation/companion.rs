@@ -162,6 +162,7 @@ pub fn err(id: Value, code: i64, message: impl Into<String>) -> JsonRpcResponse 
 #[derive(Debug, Clone, Copy)]
 pub struct CompanionFeatures {
     pub delegation: bool,
+    pub session_messaging: bool,
     pub feedback: bool,
     pub ask: bool,
     pub sessions: bool,
@@ -227,6 +228,7 @@ impl CompanionFeatures {
         let Some(s) = raw else {
             return Self {
                 delegation: true,
+                session_messaging: false,
                 feedback: false,
                 ask: false,
                 sessions: false,
@@ -243,6 +245,7 @@ impl CompanionFeatures {
         };
         let mut f = Self {
             delegation: false,
+            session_messaging: false,
             feedback: false,
             ask: false,
             sessions: false,
@@ -259,6 +262,7 @@ impl CompanionFeatures {
         for tok in s.split(',').map(str::trim).filter(|t| !t.is_empty()) {
             match tok {
                 "delegation" => f.delegation = true,
+                "session_messaging" => f.session_messaging = true,
                 "feedback" => f.feedback = true,
                 "ask" => f.ask = true,
                 "sessions" => f.sessions = true,
@@ -319,6 +323,7 @@ impl CompanionFeatures {
             | "get_delegation_status"
             | "cancel_delegation"
             | "resume_delegation" => self.delegation,
+            "send_to_session" | "create_session" => self.session_messaging,
             _ => false,
         }
     }
@@ -1111,6 +1116,42 @@ async fn build_tools_call_spawn(
             let round_trip =
                 Box::pin(async move { client_session_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_session_result).await
+        }
+        "create_session" => {
+            let mut input = arguments.clone();
+            if let Some(object) = input.as_object_mut() {
+                object.insert("token".into(), Value::String(ctx.token.clone()));
+            }
+            let req =
+                match serde_json::from_value::<super::transport::BrokerCreateSessionRequest>(input) {
+                    Ok(req) => req,
+                    Err(error) => {
+                        return LineAction::Respond(err(id, -32602, format!("create_session: {error}")));
+                    }
+                };
+            if req.title.trim().is_empty() || req.message.trim().is_empty() {
+                return LineAction::Respond(err(id, -32602, "title and message must not be empty"));
+            }
+            let round_trip = Box::pin(async move {
+                super::transport::client_create_session_round_trip(&socket, req).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
+        }
+        "send_to_session" => {
+            let mut input = arguments.clone();
+            if let Some(object) = input.as_object_mut() {
+                object.insert("token".into(), Value::String(ctx.token.clone()));
+            }
+            let Ok(req) = serde_json::from_value::<super::transport::BrokerSessionMessageRequest>(input) else {
+                return LineAction::Respond(err(id, -32602, "send_to_session requires conversation_id, message, mode and reply"));
+            };
+            if req.conversation_id <= 0 || req.message.trim().is_empty() || !matches!(req.mode.as_str(), "queue" | "steer") {
+                return LineAction::Respond(err(id, -32602, "invalid conversation_id, message or mode"));
+            }
+            let round_trip = Box::pin(async move {
+                super::transport::client_session_message_round_trip(&socket, req).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
         }
         "browser_list_tabs" => {
             let req = BrokerBrowserTabsRequest {
@@ -4265,6 +4306,15 @@ fn parse_thread_replies(arguments: &Value) -> Vec<ThreadReply> {
 /// `{ recorded, note? }` ack) into an MCP `tools/call` result. A report that
 /// could not be attributed (no active work task for this session) is readable
 /// text with `isError: false` — the agent just carries on with its work.
+fn render_session_action(outcome: &Value) -> Value {
+    let error = outcome.get("error").and_then(Value::as_str);
+    json!({
+        "content": [{"type": "text", "text": error.map_or_else(|| outcome.to_string(), str::to_owned)}],
+        "isError": error.is_some(),
+        "structuredContent": outcome
+    })
+}
+
 pub fn render_task_ack(outcome: &Value) -> Value {
     let recorded = outcome
         .get("recorded")
@@ -4527,6 +4577,7 @@ mod tests {
         // keep seeing exactly the three delegation tools.
         ctx_with(CompanionFeatures {
             delegation: true,
+            session_messaging: false,
             feedback: false,
             ask: false,
             sessions: false,
@@ -4592,6 +4643,8 @@ mod tests {
         assert!(names.contains(&"get_delegation_status"));
         assert!(names.contains(&"cancel_delegation"));
         assert!(names.contains(&"resume_delegation"));
+        assert!(!names.contains(&"send_to_session"));
+        assert!(!names.contains(&"create_session"));
         // resume_delegation requires only task_id; reason is optional and
         // there is deliberately NO task-text parameter (no new iterations).
         let resume = tools
@@ -5158,6 +5211,7 @@ mod tests {
 
     const FEEDBACK_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: true,
         ask: false,
         sessions: false,
@@ -5173,6 +5227,7 @@ mod tests {
     };
     const BOTH: CompanionFeatures = CompanionFeatures {
         delegation: true,
+        session_messaging: false,
         feedback: true,
         ask: false,
         sessions: false,
@@ -5188,6 +5243,7 @@ mod tests {
     };
     const ASK_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: false,
         ask: true,
         sessions: false,
@@ -5203,6 +5259,7 @@ mod tests {
     };
     const SESSIONS_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: false,
         ask: false,
         sessions: true,
@@ -5359,6 +5416,48 @@ mod tests {
             assert_eq!(e.code, -32602);
             assert!(e.message.contains("task_id"));
         }
+    }
+
+    #[tokio::test]
+    async fn create_session_validates_required_fields_and_feature_gate() {
+        let features = CompanionFeatures::parse(Some("session_messaging"));
+        let names = list_tool_names(dispatch_with_features(
+            features, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+        ).await);
+        assert!(names.contains(&"create_session".into()));
+        assert!(names.contains(&"send_to_session".into()));
+        assert!(!names.contains(&"delegate_to_agent".into()));
+
+        let invalid = json!({
+            "jsonrpc": "2.0", "id": 41, "method": "tools/call",
+            "params": {"name": "create_session", "arguments": {
+                "agent_type": "claude_code", "title": "C"
+            }}
+        }).to_string();
+        let error = unwrap_respond(dispatch_with_features(features, &invalid).await).error.unwrap();
+        assert_eq!(error.code, -32602);
+
+        let valid = json!({
+            "jsonrpc": "2.0", "id": 42, "method": "tools/call",
+            "params": {"name": "create_session", "arguments": {
+                "title": "C", "message": "Continue the story."
+            }}
+        }).to_string();
+        assert!(matches!(
+            dispatch_with_features(features, &valid).await,
+            LineAction::Spawn(_)
+        ));
+        let invalid_agent = valid.replace(
+            "\"title\":\"C\"",
+            "\"agent_type\":\"claude\",\"title\":\"C\"",
+        );
+        let error = unwrap_respond(dispatch_with_features(features, &invalid_agent).await)
+            .error
+            .unwrap();
+        assert!(error.message.contains("unknown agent type: claude"));
+        let error = unwrap_respond(dispatch_with_features(FEEDBACK_ONLY, &valid).await).error.unwrap();
+        assert_eq!(error.code, -32602);
+        assert!(error.message.contains("unknown tool"));
     }
 
     #[tokio::test]
@@ -5694,6 +5793,7 @@ mod tests {
 
     const AUTOMATIONS_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: false,
         ask: false,
         sessions: false,
@@ -5709,6 +5809,7 @@ mod tests {
     };
     const TASKBOARD_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: false,
         ask: false,
         sessions: false,
@@ -6589,6 +6690,7 @@ mod tests {
 
     const BROWSER_ONLY: CompanionFeatures = CompanionFeatures {
         delegation: false,
+        session_messaging: false,
         feedback: false,
         ask: false,
         sessions: false,

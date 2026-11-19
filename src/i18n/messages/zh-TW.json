@@ -783,6 +783,8 @@
     "generalConfigDescriptionClaude": "支援 API URL、API Key 與 Claude 模型快捷配置，並與原生 JSON 配置聯動。",
     "generalConfigDescriptionDefault": "支援重要配置輸入（API URL、API Key、Model）和原生 JSON 配置管理。",
     "multiAgent": {
+      "sessionMessaging": "會話間通訊",
+      "sessionMessagingHint": "允許智慧體建立獨立會話並互傳訊息。已開啟的會話重新連線後就能使用這些工具。",
       "title": "多智慧體協同",
       "description": "允許活躍的智慧體將子任務委派給其他智慧體。",
       "enable": "啟用委派",

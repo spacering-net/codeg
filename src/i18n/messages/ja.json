@@ -783,6 +783,8 @@
     "generalConfigDescriptionClaude": "API URL、API Key、Claude モデルをすばやく設定でき、ネイティブ JSON 設定と同期します。",
     "generalConfigDescriptionDefault": "重要な設定入力（API URL、API Key、Model）とネイティブ JSON 設定管理をサポートします。",
     "multiAgent": {
+      "sessionMessaging": "セッション間通信",
+      "sessionMessagingHint": "エージェントが独立したセッションを作成してメッセージを交換できるようにします。既存のセッションでは再接続後にツールを利用できます。",
       "title": "マルチエージェント連携",
       "description": "アクティブなエージェントがサブタスクを他のエージェントに委任できるようにします。",
       "enable": "委任を有効化",

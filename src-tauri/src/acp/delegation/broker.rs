@@ -230,6 +230,7 @@ impl ChildStatusLookup for NoopChildStatusLookup {
 #[derive(Debug, Clone)]
 pub struct DelegationConfig {
     pub enabled: bool,
+    pub session_messaging_enabled: bool,
     /// Max chain depth a *new* delegation may exist at. With `depth_limit = 2`
     /// the chain root → child → grandchild is allowed; the grandchild trying
     /// to spawn a great-grandchild is rejected. See spec §5.
@@ -250,6 +251,7 @@ impl Default for DelegationConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            session_messaging_enabled: false,
             depth_limit: 1,
             agent_defaults: BTreeMap::new(),
             completed_cache_cap_bytes: DEFAULT_COMPLETED_CACHE_CAP_BYTES,
