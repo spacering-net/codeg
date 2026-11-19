@@ -53,6 +53,8 @@ export function TidyLines({
   return (
     <section
       data-pa-brief-tidied
+      // A card of its own: its buttons their own colours, as a card's are.
+      data-pa-surface={framed ? "" : undefined}
       className={cn(
         "flex min-w-0 flex-col gap-2",
         // On a card of their own its edge closes the rows: no hairline

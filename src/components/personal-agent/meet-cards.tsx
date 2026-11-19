@@ -75,14 +75,7 @@ import {
   PresetPicker,
 } from "./settings/pref-pages"
 import { useSettingsPatch } from "./settings/use-settings"
-import {
-  AGENT_SURFACE,
-  INSET_HOVER,
-  INSET_SURFACE,
-  num,
-  str,
-  usePageScope,
-} from "./shared"
+import { AGENT_SURFACE, num, str, usePageScope } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -677,6 +670,12 @@ export const PROMISES: ReadonlyArray<{
   { key: "presence", on: "on", off: "off" },
 ]
 
+/** A group of the card's on the bubble: the card's colour and its edge, as
+ *  an assistant's card is drawn — its buttons their own colours too
+ *  (`data-pa-surface`), not raised off the bubble's grey. */
+const MEET_CARD =
+  "rounded-xl border border-border/70 bg-card text-card-foreground"
+
 export function PromisesCard({ item }: { item: NoticeItem }) {
   const t = useTranslations("PersonalAgent.meet.promises")
   const tLevel = useTranslations("PersonalAgent.settings.prefs")
@@ -703,12 +702,12 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
   const level = account ? disturbOf(account) : "standard"
   const done = state === "done"
   // As the settings write them — a group's rows on one surface, a hairline
-  // between them, the switch on each row's end — on the bubble's own colour
-  // a step deeper rather than a card of their own.
-  const group = cn(INSET_SURFACE, "border-transparent")
+  // between them, the switch on each row's end — each group a card on the
+  // bubble, as an assistant's card is: white (the card's colour), its edge.
+  const group = MEET_CARD
   const body = account ? (
     <div className="flex flex-col gap-2">
-      <SettingCard className={group} data-pa-meet-level>
+      <SettingCard className={group} data-pa-surface data-pa-meet-level>
         <PresetPicker
           item="disturb_level"
           levels={["quiet", "standard", "more"] as const}
@@ -721,7 +720,7 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
           onPick={(l) => void patch([{ key: "prefs.disturb_level", value: l }])}
         />
       </SettingCard>
-      <SettingCard className={group} data-pa-meet-promises>
+      <SettingCard className={group} data-pa-surface data-pa-meet-promises>
         {PROMISES.map(({ key, on, off }) => {
           const id = `pa-meet-promise-${row.id}-${key}`
           const value = account.prefs[key] as unknown as string
@@ -753,18 +752,18 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
   ) : (
     <p className="text-xs text-muted-foreground">{t("unavailable")}</p>
   )
-  // Its actions under a hairline: the ways on — a team, the preferences,
-  // the desktop companion — as quiet buttons, and [Done] at the end.
-  const quiet = cn("text-foreground/80 hover:text-foreground", INSET_HOVER)
+  // Its actions on a card of their own under the groups: the ways on — a
+  // team, the preferences, the desktop companion — as secondary buttons,
+  // as a card's are, and [Done] at the end.
   const actions = account ? (
     <div
-      className="mt-3 flex flex-wrap items-center gap-1 border-t border-border/60 pt-3"
+      className={cn(MEET_CARD, "mt-2 flex flex-wrap items-center gap-2 p-2")}
+      data-pa-surface
       data-pa-meet-actions
     >
       <Button
         size="sm"
-        variant="ghost"
-        className={quiet}
+        variant="secondary"
         disabled={readOnly || busy != null || suggested}
         onClick={() => void act("team")}
         data-pa-meet-team
@@ -778,8 +777,7 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
       </Button>
       <Button
         size="sm"
-        variant="ghost"
-        className={quiet}
+        variant="secondary"
         onClick={() => openSettings("proactive")}
         data-pa-meet-prefs
       >
@@ -787,13 +785,7 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
         {t("prefs")}
       </Button>
       {desktop ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          className={quiet}
-          onClick={summon}
-          data-pa-meet-pet
-        >
+        <Button size="sm" variant="secondary" onClick={summon} data-pa-meet-pet>
           <PawPrint aria-hidden />
           {t("pet")}
         </Button>

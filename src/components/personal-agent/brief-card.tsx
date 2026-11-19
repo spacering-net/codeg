@@ -476,6 +476,7 @@ export function BriefCard({ item }: { item: NoticeItem }) {
           // Its parts on one card, as an assistant's brief is drawn.
           <div
             data-pa-brief-body
+            data-pa-surface
             className="flex min-w-0 flex-col gap-5 rounded-xl border bg-card p-4 text-card-foreground"
           >
             {parts.map((p) => (

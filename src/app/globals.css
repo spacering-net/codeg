@@ -4525,13 +4525,14 @@ div.monaco-diff-editor.side-by-side .editor.modified {
    colour the outline buttons wash themselves with elsewhere is the bubble's
    own grey, and left it a muddy patch. A ghost button takes the bubble's
    own step deeper under the pointer, not the page's grey (the bubble's).
-   Not one on a card of its own inside it (a json-render card), which has
-   its own surface; the focus ring keeps its shadow. */
+   Not one on a card of its own inside it (a json-render card, or one
+   codeg draws as such: `data-pa-surface`), which has its own surface and
+   its buttons their own colours; the focus ring keeps its shadow. */
 .pa-agent-bubble
   :is(
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
-  ):not([data-slot="card"] *) {
+  ):not([data-slot="card"] *, [data-pa-surface] *) {
   border-color: transparent;
   background-color: var(--background);
   /* Under its border too: no grey seam inside the hairline. */
@@ -4541,7 +4542,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   :is(
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
-  ):not([data-slot="card"] *):not(:focus-visible) {
+  ):not([data-slot="card"] *, [data-pa-surface] *):not(:focus-visible) {
   box-shadow:
     0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent),
     0 1px 2px color-mix(in oklab, var(--foreground) 6%, transparent);
@@ -4550,7 +4551,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   :is(
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
-  ):not([data-slot="card"] *):hover {
+  ):not([data-slot="card"] *, [data-pa-surface] *):hover {
   background-color: color-mix(
     in oklab,
     var(--foreground) 3%,
@@ -4562,7 +4563,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   :is(
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
-  ):not([data-slot="card"] *) {
+  ):not([data-slot="card"] *, [data-pa-surface] *) {
   background-color: color-mix(
     in oklab,
     var(--foreground) 20%,
@@ -4574,7 +4575,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   :is(
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
-  ):not([data-slot="card"] *):not(:focus-visible) {
+  ):not([data-slot="card"] *, [data-pa-surface] *):not(:focus-visible) {
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent);
 }
 .dark
@@ -4582,7 +4583,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   :is(
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="outline"],
     :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="secondary"]
-  ):not([data-slot="card"] *):hover {
+  ):not([data-slot="card"] *, [data-pa-surface] *):hover {
   background-color: color-mix(
     in oklab,
     var(--foreground) 25%,
@@ -4591,13 +4592,17 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 }
 .pa-agent-bubble
   :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="ghost"]:not(
-    [data-slot="card"] *
+    [data-slot="card"] *,
+    [data-pa-surface] *
   ):hover,
 .pa-agent-bubble
   :is(
     [data-slot="button"],
     [data-slot$="-trigger"]
-  )[data-variant="ghost"][aria-expanded="true"]:not([data-slot="card"] *) {
+  )[data-variant="ghost"][aria-expanded="true"]:not(
+    [data-slot="card"] *,
+    [data-pa-surface] *
+  ) {
   background-color: var(--pa-inset-hover);
 }
 /* Personal agent: a ghost button with words on an assistant's bubble — "not
@@ -4617,13 +4622,16 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 .pa-agent-bubble
   :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="ghost"]:not(
     [data-size^="icon"]
-  ):not([data-slot="card"] *) {
+  ):not([data-slot="card"] *, [data-pa-surface] *) {
   background-color: var(--pa-tonal);
 }
 .pa-agent-bubble
   :is([data-slot="button"], [data-slot$="-trigger"])[data-variant="ghost"]:not(
     [data-size^="icon"]
-  ):not([data-slot="card"] *):is(:hover, [aria-expanded="true"]) {
+  ):not([data-slot="card"] *, [data-pa-surface] *):is(
+    :hover,
+    [aria-expanded="true"]
+  ) {
   background-color: var(--pa-tonal-hover);
 }
 

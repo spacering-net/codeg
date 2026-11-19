@@ -423,7 +423,7 @@ describe("what I'll do on my own", () => {
     )
   })
 
-  it("lays its switches out as the settings do, its actions under a hairline", () => {
+  it("lays its switches out as the settings do, each group and its actions a card", () => {
     draw(open())
     // The level and the switches, each group on one surface, a row each.
     const level = document.querySelector("[data-pa-meet-level]")!
@@ -431,6 +431,11 @@ describe("what I'll do on my own", () => {
     expect(level.className).toContain("divide-y")
     expect(promises.className).toContain("divide-y")
     expect(promises.querySelectorAll("[data-pa-promise]")).toHaveLength(10)
+    // White cards on the bubble, their buttons their own colours.
+    for (const card of [level, promises]) {
+      expect(card.className).toContain("bg-card")
+      expect(card.hasAttribute("data-pa-surface")).toBe(true)
+    }
     // A row's title is its switch's label.
     const brief = promises.querySelector('[data-pa-promise="brief"]')!
     const label = brief.querySelector("label")!
@@ -439,15 +444,16 @@ describe("what I'll do on my own", () => {
     )
     // The level is one segmented control, a radio group.
     expect(level.querySelector('[role="radiogroup"]')).not.toBeNull()
-    // The ways on, quiet, and [Done] at the end, under a line.
+    // The ways on, secondary buttons, and [Done] at the end, on a card.
     const actions = document.querySelector("[data-pa-meet-actions]")!
-    expect(actions.className).toContain("border-t")
+    expect(actions.className).toContain("bg-card")
+    expect(actions.hasAttribute("data-pa-surface")).toBe(true)
     const buttons = [...actions.querySelectorAll("button")]
     const last = buttons[buttons.length - 1]
     expect(last.hasAttribute("data-pa-meet-done")).toBe(true)
     expect(last.className).toContain("ms-auto")
     expect(
-      buttons.filter((b) => b.getAttribute("data-variant") === "ghost")
+      buttons.filter((b) => b.getAttribute("data-variant") === "secondary")
     ).toHaveLength(buttons.length - 1)
   })
 
