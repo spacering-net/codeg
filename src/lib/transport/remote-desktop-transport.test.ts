@@ -65,7 +65,7 @@ function transport(overrides: Partial<RemoteTransportConfig> = {}) {
 }
 
 function emit(payload: unknown, id = config.id, target = defaultWebview.label) {
-  const event = `remote-ws-event-${id}`
+  const event = `remote-ws-event-${id}-${target}`
   const eventData = { event, id: 1, payload }
   for (const listenerTarget of [target, null]) {
     for (const handler of ipc.listeners.get(
@@ -302,7 +302,7 @@ describe("remote desktop event recovery", () => {
     expect(updateB.mock.calls).toEqual([["B"]])
   })
 
-  it("isolates same-connection frames and lifecycle events by Webview target", async () => {
+  it("uses distinct event names for two Webviews on the same connection", async () => {
     const webviewA = createWebview("remote-webview-a")
     const webviewB = createWebview("remote-webview-b")
     ipc.getCurrentWebview
@@ -317,11 +317,11 @@ describe("remote desktop event recovery", () => {
     await flush()
 
     expect(webviewA.listen).toHaveBeenCalledWith(
-      "remote-ws-event-7",
+      "remote-ws-event-7-remote-webview-a",
       expect.any(Function)
     )
     expect(webviewB.listen).toHaveBeenCalledWith(
-      "remote-ws-event-7",
+      "remote-ws-event-7-remote-webview-b",
       expect.any(Function)
     )
 
