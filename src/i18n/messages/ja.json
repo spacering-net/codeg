@@ -69,6 +69,9 @@
     }
   },
   "HostPlugins": {
+    "update": "{name} を更新",
+    "updated": "{name} を {version} に更新しました。",
+    "upToDate": "{name} に変更はありません。",
     "add": "プラグインを追加",
     "sourceDescription": "npm パッケージ名、GitHub リポジトリ、または接続先ホストの絶対ディレクトリパスを入力します。",
     "source": "プラグインのソース",

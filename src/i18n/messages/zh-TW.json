@@ -69,6 +69,9 @@
     }
   },
   "HostPlugins": {
+    "update": "更新 {name}",
+    "updated": "{name} 已更新至 {version}。",
+    "upToDate": "{name} 目前沒有更新。",
     "add": "新增外掛",
     "sourceDescription": "輸入 npm 套件名稱、GitHub 儲存庫網址，或已連線主機上的絕對目錄路徑。",
     "source": "外掛來源",

@@ -69,6 +69,9 @@
     }
   },
   "HostPlugins": {
+    "update": "Update {name}",
+    "updated": "{name} was updated to {version}.",
+    "upToDate": "No changes found for {name}.",
     "add": "Add Plugin",
     "sourceDescription": "Enter an npm package, a GitHub repository, or an absolute directory on the connected host.",
     "source": "Plugin source",

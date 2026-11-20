@@ -17,7 +17,7 @@ const MAX_ARCHIVE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_UNPACKED_BYTES: u64 = 32 * 1024 * 1024;
 const NPM_OFFICIAL: &str = crate::commands::acp::NPM_OFFICIAL_REGISTRY;
 
-#[derive(Clone, Copy, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Registry {
     #[default]
@@ -34,7 +34,7 @@ impl Registry {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum InstalledSource {
     Directory {
@@ -45,11 +45,52 @@ pub enum InstalledSource {
         commit: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         directory: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reference: Option<String>,
     },
     Npm {
         package: String,
         version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selector: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        registry: Option<Registry>,
     },
+}
+
+impl InstalledSource {
+    pub(super) async fn refresh(mut self) -> Result<(String, Self), AppCommandError> {
+        let manifest = match &mut self {
+            Self::Directory { path } => load_directory(directory_path(path)?).await?,
+            Self::GitHub {
+                repository,
+                commit,
+                directory,
+                reference,
+            } => {
+                let requested = reference.as_deref().unwrap_or(commit);
+                validate_github(repository, requested, directory)?;
+                let (manifest, resolved) =
+                    read_github(&client()?, repository, requested, directory).await?;
+                *commit = resolved;
+                manifest
+            }
+            Self::Npm {
+                package,
+                version,
+                selector,
+                registry,
+            } => {
+                let requested = selector.as_deref().unwrap_or(version);
+                validate_npm(package, requested)?;
+                let (manifest, resolved) =
+                    read_npm(&client()?, registry.unwrap_or_default(), package, requested).await?;
+                *version = resolved;
+                manifest
+            }
+        };
+        Ok((manifest, self))
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -71,19 +112,28 @@ pub async fn install(
     input: &str,
     registry: Registry,
 ) -> Result<Vec<InstalledPlugin>, AppCommandError> {
-    let (manifest, source) = match parse(input)? {
-        Source::Directory(path) => tokio::task::spawn_blocking(move || read_directory(path))
-            .await
-            .map_err(|_| invalid("Could not read the plugin directory"))??,
+    let source = match parse(input)? {
+        Source::Directory(path) => InstalledSource::Directory {
+            path: path.to_string_lossy().into_owned(),
+        },
         Source::GitHub {
             repository,
             reference,
             directory,
-        } => read_github(&client()?, repository, reference, directory).await?,
-        Source::Npm { package, selector } => {
-            read_npm(&client()?, registry, package, selector).await?
-        }
+        } => InstalledSource::GitHub {
+            repository: repository.to_owned(),
+            commit: String::new(),
+            directory: directory.to_owned(),
+            reference: Some(reference.to_owned()),
+        },
+        Source::Npm { package, selector } => InstalledSource::Npm {
+            package: package.to_owned(),
+            version: String::new(),
+            selector: Some(selector.to_owned()),
+            registry: Some(registry),
+        },
     };
+    let (manifest, source) = source.refresh().await?;
     plugins.apply_with_source(Mutation::Install { manifest }, Some(source))
 }
 
@@ -95,18 +145,7 @@ fn parse(input: &str) -> Result<Source<'_>, AppCommandError> {
         ));
     }
     if Path::new(input).is_absolute() {
-        let path = PathBuf::from(input);
-        #[cfg(windows)]
-        {
-            use std::path::{Component, Prefix};
-            if !matches!(path.components().next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
-            {
-                return Err(invalid(
-                    "Use a directory on a local drive of the connected host",
-                ));
-            }
-        }
-        return Ok(Source::Directory(path));
+        return directory_path(input).map(Source::Directory);
     }
     let github = input
         .strip_prefix("https://github.com/")
@@ -126,29 +165,12 @@ fn parse(input: &str) -> Result<Source<'_>, AppCommandError> {
             };
         let repository = repository.trim_end_matches('/');
         let repository = repository.strip_suffix(".git").unwrap_or(repository);
-        let valid_repository = repository.split_once('/').is_some_and(|(owner, name)| {
-            owner.len() <= 39
-                && name.len() <= 100
-                && valid_part(owner)
-                && valid_part(name)
-                && owner
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        validate_github(repository, reference, directory)?;
+        return Ok(Source::GitHub {
+            repository,
+            reference,
+            directory,
         });
-        if valid_repository
-            && reference.len() <= 255
-            && reference.split('/').all(valid_part)
-            && (directory.is_empty() || crate::harness::skills::package::safe_path(directory))
-        {
-            return Ok(Source::GitHub {
-                repository,
-                reference,
-                directory,
-            });
-        }
-        return Err(invalid(
-            "Use a GitHub repository such as owner/repo or https://github.com/owner/repo#ref",
-        ));
     }
     let npm = input.strip_prefix("npm:").unwrap_or(input);
     let (package, selector) = npm
@@ -158,6 +180,56 @@ fn parse(input: &str) -> Result<Source<'_>, AppCommandError> {
         .map_or((npm, "latest"), |(index, _)| {
             (&npm[..index], &npm[index + 1..])
         });
+    validate_npm(package, selector)?;
+    Ok(Source::Npm { package, selector })
+}
+
+fn directory_path(input: &str) -> Result<PathBuf, AppCommandError> {
+    let path = PathBuf::from(input);
+    if !path.is_absolute() || input.len() > 1024 || input.chars().any(char::is_control) {
+        return Err(invalid("Use an absolute directory on the connected host"));
+    }
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        if !matches!(path.components().next(), Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
+        {
+            return Err(invalid(
+                "Use a directory on a local drive of the connected host",
+            ));
+        }
+    }
+    Ok(path)
+}
+
+fn validate_github(
+    repository: &str,
+    reference: &str,
+    directory: &str,
+) -> Result<(), AppCommandError> {
+    let valid_repository = repository.split_once('/').is_some_and(|(owner, name)| {
+        owner.len() <= 39
+            && name.len() <= 100
+            && valid_part(owner)
+            && valid_part(name)
+            && owner
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    });
+    if valid_repository
+        && reference.len() <= 255
+        && reference.split('/').all(valid_part)
+        && directory.len() <= 1024
+        && (directory.is_empty() || crate::harness::skills::package::safe_path(directory))
+    {
+        return Ok(());
+    }
+    Err(invalid(
+        "Use a GitHub repository such as owner/repo or https://github.com/owner/repo#ref",
+    ))
+}
+
+fn validate_npm(package: &str, selector: &str) -> Result<(), AppCommandError> {
     let valid_name = if let Some(scoped) = package.strip_prefix('@') {
         scoped
             .split_once('/')
@@ -166,7 +238,7 @@ fn parse(input: &str) -> Result<Source<'_>, AppCommandError> {
         valid_part(package)
     };
     if valid_name && package.len() <= 214 && selector.len() <= 128 && valid_part(selector) {
-        return Ok(Source::Npm { package, selector });
+        return Ok(());
     }
     Err(invalid(
         "Use an npm package name with an optional version or dist-tag",
@@ -182,7 +254,13 @@ fn valid_part(part: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"._-+".contains(&byte))
 }
 
-fn read_directory(path: PathBuf) -> Result<(String, InstalledSource), AppCommandError> {
+async fn load_directory(path: PathBuf) -> Result<String, AppCommandError> {
+    tokio::task::spawn_blocking(move || read_directory(&path))
+        .await
+        .map_err(|_| invalid("Could not read the plugin directory"))?
+}
+
+fn read_directory(path: &Path) -> Result<String, AppCommandError> {
     let manifest = path.join(FILE_NAME);
     let metadata = std::fs::symlink_metadata(&manifest)
         .map_err(|_| invalid("The host directory does not contain codeg-plugin.json"))?;
@@ -191,12 +269,7 @@ fn read_directory(path: PathBuf) -> Result<(String, InstalledSource), AppCommand
     }
     let file =
         std::fs::File::open(manifest).map_err(|_| invalid("Could not open codeg-plugin.json"))?;
-    Ok((
-        read_manifest(file)?,
-        InstalledSource::Directory {
-            path: path.to_string_lossy().into_owned(),
-        },
-    ))
+    read_manifest(file)
 }
 
 fn read_manifest(reader: impl Read) -> Result<String, AppCommandError> {
@@ -270,7 +343,7 @@ async fn read_github(
     repository: &str,
     reference: &str,
     directory: &str,
-) -> Result<(String, InstalledSource), AppCommandError> {
+) -> Result<(String, String), AppCommandError> {
     #[derive(Deserialize)]
     struct Commit {
         sha: String,
@@ -291,14 +364,7 @@ async fn read_github(
     segments.push(FILE_NAME);
     let url = endpoint("https://raw.githubusercontent.com", &segments);
     let bytes = download(client, url, MAX_MANIFEST_BYTES).await?;
-    Ok((
-        read_manifest(bytes.as_slice())?,
-        InstalledSource::GitHub {
-            repository: repository.to_owned(),
-            commit: sha,
-            directory: directory.to_owned(),
-        },
-    ))
+    Ok((read_manifest(bytes.as_slice())?, sha))
 }
 
 async fn read_npm(
@@ -306,7 +372,7 @@ async fn read_npm(
     registry: Registry,
     package: &str,
     selector: &str,
-) -> Result<(String, InstalledSource), AppCommandError> {
+) -> Result<(String, String), AppCommandError> {
     #[derive(Deserialize)]
     struct Package {
         name: String,
@@ -352,13 +418,7 @@ async fn read_npm(
     let manifest = tokio::task::spawn_blocking(move || verified_manifest(&bytes, &expected))
         .await
         .map_err(|_| invalid("Could not read the plugin archive"))??;
-    Ok((
-        manifest,
-        InstalledSource::Npm {
-            package: package_info.name,
-            version: package_info.version,
-        },
-    ))
+    Ok((manifest, package_info.version))
 }
 
 fn verified_manifest(bytes: &[u8], expected: &[u8]) -> Result<String, AppCommandError> {
@@ -464,6 +524,17 @@ mod tests {
         assert!(
             matches!(&reopened[0].source, Some(InstalledSource::Directory { path: stored }) if stored == path)
         );
+    }
+
+    #[test]
+    fn previously_stored_sources_keep_their_resolved_values() {
+        for source in [
+            serde_json::json!({"type": "npm", "package": "example", "version": "1.0.0"}),
+            serde_json::json!({"type": "gitHub", "repository": "owner/example", "commit": "0".repeat(40)}),
+        ] {
+            let installed: InstalledSource = serde_json::from_value(source.clone()).unwrap();
+            assert_eq!(serde_json::to_value(installed).unwrap(), source);
+        }
     }
 
     #[test]

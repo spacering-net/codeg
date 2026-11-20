@@ -2494,6 +2494,7 @@ pub fn build_router_with_srn(
             "/host_plugins_install_source",
             post(handlers::host_plugins::install_source),
         )
+        .route("/host_plugins_update", post(handlers::host_plugins::update))
         .route(
             "/cli_access_status",
             post(handlers::cli_access::cli_access_status),
