@@ -16,8 +16,10 @@ interface PersistedDraftStateV2 {
 
 const STORAGE_PREFIX = "codeg:message-input-draft:v1"
 const STORAGE_PREFIX_V2 = "codeg:message-input-draft:v2"
-const draftTextCache = new Map<string, string>()
-const draftDocCache = new Map<string, JSONContent>()
+// Keep the latest draft in memory while it is queued or if storage fails.
+// A durable draft can be loaded from storage when its composer reopens.
+const unpersistedDraftTexts = new Map<string, string>()
+const unpersistedDraftDocs = new Map<string, JSONContent>()
 const pendingPersistDrafts = new Map<string, string>()
 const pendingPersistDocs = new Map<string, JSONContent>()
 let idlePersistHandle: number | null = null
@@ -63,8 +65,9 @@ function flushPendingDraftPersistence(): void {
         storageKeyForDraftKey(draftKey),
         JSON.stringify({ text })
       )
+      unpersistedDraftTexts.delete(draftKey)
     } catch {
-      // Ignore storage quota/permission failures.
+      // Keep the in-memory draft if storage is full or unavailable.
     }
   }
   for (const [draftKey, doc] of docEntries) {
@@ -80,7 +83,10 @@ function flushPendingDraftPersistence(): void {
       // (quota / permission / serialization), so the draft is not lost.
     }
     // Only retire the legacy v1 draft once the v2 document is durably written.
-    if (persisted) clearMessageInputDraft(draftKey)
+    if (persisted) {
+      unpersistedDraftDocs.delete(draftKey)
+      clearMessageInputDraft(draftKey)
+    }
   }
 }
 
@@ -148,7 +154,7 @@ export function buildNewConversationDraftStorageKey(tabId: string): string {
   return `${NEW_CONVERSATION_DRAFT_PREFIX}${tabId}`
 }
 
-/** Move a draft (v1 text + v2 doc + caches) from one key to another, e.g. when a
+/** Move a draft from one key to another, e.g. when a
  *  closing draft tab hands its unsent text to the replacement draft. No-op when
  *  the source has nothing. */
 export function moveMessageInputDraft(fromKey: string, toKey: string): void {
@@ -202,7 +208,7 @@ export function sweepOrphanDraftKeys(
   const run = () => {
     const liveDraftTabIds = getLiveDraftTabIds()
     // Track both halves: the storage key to remove and the draft key whose
-    // caches must go with it (they can't be derived from each other by string
+    // pending copies must go with it (they can't be derived from each other by string
     // search — the storage prefix itself contains "draft:").
     const stale: { storageKey: string; draftKey: string }[] = []
     try {
@@ -225,8 +231,8 @@ export function sweepOrphanDraftKeys(
       /* ignore storage access failures */
     }
     for (const { draftKey } of stale) {
-      draftTextCache.delete(draftKey)
-      draftDocCache.delete(draftKey)
+      unpersistedDraftTexts.delete(draftKey)
+      unpersistedDraftDocs.delete(draftKey)
       pendingPersistDrafts.delete(draftKey)
       pendingPersistDocs.delete(draftKey)
     }
@@ -239,8 +245,8 @@ export function sweepOrphanDraftKeys(
 }
 
 export function loadMessageInputDraft(draftKey: string): string | null {
-  const cached = draftTextCache.get(draftKey)
-  if (typeof cached === "string") return cached
+  const unpersisted = unpersistedDraftTexts.get(draftKey)
+  if (typeof unpersisted === "string") return unpersisted
   if (typeof window === "undefined") return null
 
   try {
@@ -248,7 +254,6 @@ export function loadMessageInputDraft(draftKey: string): string | null {
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<PersistedDraftState>
     if (typeof parsed.text !== "string") return null
-    draftTextCache.set(draftKey, parsed.text)
     return parsed.text
   } catch {
     return null
@@ -261,8 +266,8 @@ export function saveMessageInputDraft(draftKey: string, text: string): void {
     return
   }
 
-  if (draftTextCache.get(draftKey) === text) return
-  draftTextCache.set(draftKey, text)
+  if (unpersistedDraftTexts.get(draftKey) === text) return
+  unpersistedDraftTexts.set(draftKey, text)
   if (typeof window === "undefined") return
 
   pendingPersistDrafts.set(draftKey, text)
@@ -270,7 +275,7 @@ export function saveMessageInputDraft(draftKey: string, text: string): void {
 }
 
 export function clearMessageInputDraft(draftKey: string): void {
-  draftTextCache.delete(draftKey)
+  unpersistedDraftTexts.delete(draftKey)
   pendingPersistDrafts.delete(draftKey)
   if (typeof window === "undefined") return
 
@@ -298,8 +303,8 @@ export type LoadedDraftV2 =
  * so an unedited migration is never lost.
  */
 export function loadMessageInputDraftV2(draftKey: string): LoadedDraftV2 {
-  const cached = draftDocCache.get(draftKey)
-  if (cached) return { kind: "doc", doc: cached }
+  const unpersisted = unpersistedDraftDocs.get(draftKey)
+  if (unpersisted) return { kind: "doc", doc: unpersisted }
 
   if (typeof window !== "undefined") {
     try {
@@ -312,7 +317,6 @@ export function loadMessageInputDraftV2(draftKey: string): LoadedDraftV2 {
           // silently discard the WHOLE doc (losing the user's text and badges).
           // A draft already in the plain-text schema passes through untouched.
           const doc = sanitizeComposerDraftDoc(parsed.doc)
-          draftDocCache.set(draftKey, doc)
           return { kind: "doc", doc }
         }
       }
@@ -330,16 +334,15 @@ export function loadMessageInputDraftV2(draftKey: string): LoadedDraftV2 {
 
 /**
  * Persist the composer document for a key (v2). The host calls this only for a
- * non-empty document and {@link clearMessageInputDraftV2} otherwise. The in-memory
- * `draftDocCache` makes the v2 document win immediately; any legacy v1 text draft
- * is only removed once the v2 write is durably flushed (see the flush path), so a
- * deferred write that later fails cannot lose the draft.
+ * non-empty document and {@link clearMessageInputDraftV2} otherwise. The latest
+ * document is available in memory until its write succeeds. A successful
+ * write also retires any legacy v1 text draft.
  */
 export function saveMessageInputDraftV2(
   draftKey: string,
   doc: JSONContent
 ): void {
-  draftDocCache.set(draftKey, doc)
+  unpersistedDraftDocs.set(draftKey, doc)
   if (typeof window === "undefined") return
 
   pendingPersistDocs.set(draftKey, doc)
@@ -347,7 +350,7 @@ export function saveMessageInputDraftV2(
 }
 
 export function clearMessageInputDraftV2(draftKey: string): void {
-  draftDocCache.delete(draftKey)
+  unpersistedDraftDocs.delete(draftKey)
   pendingPersistDocs.delete(draftKey)
   // Also drop any legacy v1 draft so a cleared composer stays cleared.
   clearMessageInputDraft(draftKey)
