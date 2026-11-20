@@ -64,8 +64,32 @@
       "browser": "ブラウザ操作",
       "computer_use": "コンピューター操作",
       "quick_messages": "クイックメッセージ",
-      "logs": "実行ログ"
+      "logs": "実行ログ",
+      "plugins": "プラグイン"
     }
+  },
+  "HostPlugins": {
+    "add": "プラグインを追加",
+    "sourceDescription": "npm パッケージ名、GitHub リポジトリ、または接続先ホストの絶対ディレクトリパスを入力します。",
+    "source": "プラグインのソース",
+    "registry": "npm レジストリ",
+    "mirror": "中国のミラー",
+    "sourceHint": "Codeg は codeg-plugin.json をインストールします。プラグインは既定で無効です。",
+    "sourceUnsupported": "ソースからインストールするには接続先の Codeg を更新してください。",
+    "cancel": "キャンセル",
+    "install": "インストール",
+    "installing": "インストール中…",
+    "title": "プラグイン",
+    "import": "マニフェストをインポート",
+    "fileTooLarge": "プラグインのマニフェストが 64 KiB を超えています。",
+    "empty": "インストール済みのプラグインはありません。",
+    "loading": "読み込み中…",
+    "unsupported": "プラグインを管理するには、接続先の Codeg ホストを更新してください。",
+    "retry": "再試行",
+    "enable": "{name} を有効にする",
+    "remove": "{name} を削除",
+    "choosePanel": "プラグインパネル",
+    "noTurns": "このワークスペースにターンの記録はありません。"
   },
   "AppearanceSettings": {
     "sectionTitle": "テーマ外観",
