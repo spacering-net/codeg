@@ -1055,6 +1055,37 @@ async fn moving_the_workdir_starts_a_new_segment_and_leaves_the_old_one() {
     assert_eq!(row.pending_reason, Some(SegmentReason::Workdir));
 }
 
+/// A move refused — the directory is an ordinary project open in codeg,
+/// one that carries a working directory's marker (a backup, say) — leaves
+/// that project's git as it was: no hook, no `core.hooksPath`, its commits
+/// its own.
+#[tokio::test]
+async fn a_refused_move_leaves_the_projects_git_unguarded() {
+    let (engine, tmp) = configured().await;
+    let target = tmp.path().join("backup");
+    workdir::ensure_initialized(&target, crate::models::system::AppLocale::En)
+        .await
+        .unwrap();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&target)
+            .output()
+            .unwrap()
+    };
+    git(&["config", "--local", "--unset", "core.hooksPath"]);
+    std::fs::remove_file(target.join(".git/hooks/reference-transaction")).unwrap();
+    crate::db::service::folder_service::add_folder(&engine.db.conn, &target.to_string_lossy())
+        .await
+        .unwrap();
+    let refused = engine
+        .set_workdir(Some(target.to_string_lossy().to_string()), None)
+        .await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(git(&["config", "--local", "--get", "core.hooksPath"]).stdout.is_empty());
+    assert!(!target.join(".git/hooks/reference-transaction").exists());
+}
+
 /// The template files come in the owner's language: the UI's when the
 /// request carries it, else the one the settings remember from the last save.
 #[tokio::test]

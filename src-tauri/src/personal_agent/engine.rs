@@ -2206,6 +2206,9 @@ impl PersonalAgentEngine {
         .await
         .map_err(|e| e.to_string())?;
         let folder_id = self.ensure_folder(row, &workdir).await?;
+        // Only codeg commits here: whatever of the guard went missing since
+        // is put back before the assistant runs.
+        workdir::ensure_guard(&workdir).await;
 
         let seg = svc::open_segment(&self.db.conn, self.bot().await)
             .await
@@ -5028,6 +5031,8 @@ impl PersonalAgentEngine {
         svc::set_workdir(&self.db.conn, row.id, custom, Some(folder.id))
             .await
             .map_err(|e| e.to_string())?;
+        // The directory is the assistant's now, and only then guarded.
+        workdir::ensure_guard(&target).await;
         if let Ok(Some(seg)) = svc::open_segment(&self.db.conn, self.bot().await).await {
             let _ = svc::set_pending_reason(&self.db.conn, seg.id, Some(SegmentReason::Workdir)).await;
         }

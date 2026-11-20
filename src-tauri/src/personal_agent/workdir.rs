@@ -433,7 +433,12 @@ async fn init_workdir(path: &Path, files: &[(&str, String)]) -> Result<bool, Wor
         path.join(MARKER_FILE),
         serde_json::json!({ "version": 1, "created_at": chrono::Utc::now() }).to_string(),
     )?;
-    if git(path, &["init", "-q"]).await.is_ok() {
+    // `--initial-branch` is git 2.28's, as the hook is: an older git makes
+    // its own default branch, which the guard then records.
+    let made = git(path, &["init", "-q", "--initial-branch", BRANCH]).await.is_ok()
+        || git(path, &["init", "-q"]).await.is_ok();
+    if made {
+        ensure_guard(path).await;
         commit_all(path, "init: personal agent working directory").await;
     }
     Ok(true)
@@ -461,7 +466,21 @@ fn ignore_lines() -> String {
 /// the user's global setup that could block it: no signing (a passphrase
 /// prompt would hang), no hooks.
 async fn git(path: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    let out = crate::process::tokio_command("git")
+    git_on(path, None, args).await
+}
+
+/// [`git`] on index file `index` (`GIT_INDEX_FILE`) rather than the
+/// repository's own, when given.
+async fn git_on(
+    path: &Path,
+    index: Option<&Path>,
+    args: &[&str],
+) -> Result<std::process::Output, String> {
+    let mut cmd = crate::process::tokio_command("git");
+    if let Some(index) = index {
+        cmd.env("GIT_INDEX_FILE", index);
+    }
+    let out = cmd
         .args([
             "-c",
             "user.name=codeg personal agent",
@@ -495,6 +514,239 @@ async fn git(path: &Path, args: &[&str]) -> Result<std::process::Output, String>
 /// locked by another, and each commits only what is its own.
 static GIT_WRITE: std::sync::LazyLock<tokio::sync::Mutex<()>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+// ── only codeg moves the history ────────────────────────────────────────────
+
+/// The branch a new working directory's history is on.
+const BRANCH: &str = "main";
+
+/// The repository setting naming the branch codeg commits to.
+const BRANCH_KEY: &str = "codeg.branch";
+
+/// Where the guard's hook lives, as the repository's own `core.hooksPath`
+/// (relative: git runs hooks from the top of the working tree, and the path
+/// survives the directory being moved). The repository's setting outranks a
+/// global one (husky's, say), so a global hooks folder cannot unseat it.
+const HOOKS_DIR: &str = ".git/hooks";
+
+/// The repository's own folder: `.git`, or where a `.git` file points (a
+/// checkout made with `--separate-git-dir`).
+async fn git_dir(path: &Path) -> Option<PathBuf> {
+    let dot = path.join(".git");
+    if std::fs::symlink_metadata(&dot).is_ok_and(|m| m.is_dir()) {
+        return Some(dot);
+    }
+    if !dot.is_file() {
+        return None;
+    }
+    let out = git(path, &["rev-parse", "--absolute-git-dir"]).await.ok()?;
+    let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!dir.is_empty()).then(|| PathBuf::from(dir))
+}
+
+/// The guard: every change of a branch or any other ref fails, in the phase
+/// before it is made — an assistant's commit (with `-a`, `--no-verify` or
+/// `--amend`), its reset to another commit, a branch, a stash, an
+/// `update-ref`. A turn's changes then stay in the working tree until codeg
+/// commits them when the turn ends, so its memory card always shows them
+/// and they can be undone. codeg runs git with no hooks at all ([`git`]).
+const HOOK_SCRIPT: &str = "#!/bin/sh
+# codeg: this directory's history is written by codeg at the end of each turn.
+[ \"$1\" = prepared ] || exit 0
+echo \"codeg: commits in this directory are made by codeg at the end of each turn, and the owner sees them on a memory card; just edit the files\" >&2
+exit 1
+";
+
+/// Put the guard in place in `path`'s repository when any of it is
+/// missing: the hook, the repository's `core.hooksPath` pointing at it, and
+/// [`BRANCH_KEY`] — for a directory that has none (one made before this, or
+/// by an older git on its own default branch), the branch HEAD is on now,
+/// when that branch has commits. Best-effort, as every write of the
+/// history: a directory whose guard cannot be written still works as it
+/// did without one.
+///
+/// Only for a directory that is an assistant's: a new one gets it as it is
+/// made; one already there gets it when its session starts, once codeg has
+/// taken it as the assistant's — never one a move was refused, which may be
+/// an ordinary project of the owner's.
+pub async fn ensure_guard(path: &Path) {
+    let Some(repo) = git_dir(path).await else {
+        return;
+    };
+    // A worktree linked to a repository the owner checks out elsewhere
+    // shares that repository's settings: a guard here would turn away the
+    // owner's own commits there. Left unguarded, as before.
+    if is_linked_worktree(path, &repo).await {
+        tracing::warn!(
+            "[personal_agent] {} is a linked worktree; its commits are not guarded",
+            path.display()
+        );
+        return;
+    }
+    // `.git/hooks` relative, as git runs hooks from the top of the working
+    // tree; a repository elsewhere by its own path.
+    let (hooks, setting) = if repo == path.join(".git") {
+        (path.join(HOOKS_DIR), HOOKS_DIR.to_string())
+    } else {
+        let hooks = repo.join("hooks");
+        let setting = hooks.to_string_lossy().into_owned();
+        (hooks, setting)
+    };
+    let hook = hooks.join("reference-transaction");
+    if std::fs::read_to_string(&hook).ok().as_deref() != Some(HOOK_SCRIPT) {
+        let written =
+            std::fs::create_dir_all(&hooks).and_then(|()| std::fs::write(&hook, HOOK_SCRIPT));
+        if let Err(e) = written {
+            tracing::warn!("[personal_agent] the workdir's commit guard could not be written: {e}");
+            return;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&hook) {
+            if meta.permissions().mode() & 0o111 != 0o111 {
+                let _ = std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+    let local = |key: &'static str| async move {
+        git(path, &["config", "--local", "--get", key])
+            .await
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    if local("core.hooksPath").await.as_deref() != Some(setting.as_str()) {
+        if let Err(e) = git(path, &["config", "--local", "core.hooksPath", &setting]).await {
+            tracing::warn!("[personal_agent] the workdir's commit guard could not be set: {e}");
+        }
+    }
+    if local(BRANCH_KEY).await.is_none() {
+        let on = match git(path, &["symbolic-ref", "-q", "HEAD"]).await {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            Err(_) => String::new(),
+        };
+        let Some(name) = on.strip_prefix("refs/heads/").filter(|n| !n.is_empty()) else {
+            return;
+        };
+        // A branch with no commit yet only when the directory has none at
+        // all — a new one, about to make its first.
+        let usable = branch_exists(path, name).await || !has_branches(path).await;
+        if usable {
+            let _ = git(path, &["config", "--local", BRANCH_KEY, name]).await;
+        }
+    }
+}
+
+/// Whether `path` is a worktree linked to another checkout's repository
+/// (`git worktree add`): its own folder `repo` is not the repository's.
+async fn is_linked_worktree(path: &Path, repo: &Path) -> bool {
+    let Ok(out) = git(path, &["rev-parse", "--git-common-dir"]).await else {
+        return false;
+    };
+    let common = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+    let common = if common.is_absolute() { common } else { path.join(common) };
+    let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    !same(&common, repo)
+}
+
+/// Whether branch `name` is there, with a commit.
+async fn branch_exists(path: &Path, name: &str) -> bool {
+    git(
+        path,
+        &["rev-parse", "--verify", "-q", &format!("refs/heads/{name}^{{commit}}")],
+    )
+    .await
+    .is_ok()
+}
+
+/// Whether the repository has any branch at all.
+async fn has_branches(path: &Path) -> bool {
+    git(path, &["for-each-ref", "--count=1", "--format=x", "refs/heads"])
+        .await
+        .is_ok_and(|o| !o.stdout.is_empty())
+}
+
+/// Before codeg commits: HEAD back on codeg's branch when something moved
+/// it off — an older git (Debian Bookworm's 2.39) does not run the hook when
+/// HEAD switches branches, so `git checkout --orphan` still gets through.
+/// The working tree is left as it is: what differs from the branch goes into
+/// the commit about to be made, on top of the branch's own last commit.
+/// HEAD is never pointed at a branch that is not there — the next commit
+/// would start a history of its own.
+async fn reattach_head(path: &Path) {
+    let Ok(branch) = git(path, &["config", "--local", "--get", BRANCH_KEY]).await else {
+        return;
+    };
+    let branch = String::from_utf8_lossy(&branch.stdout).trim().to_string();
+    if branch.is_empty() {
+        return;
+    }
+    // A linked worktree reads the setting of the repository it shares —
+    // another checkout's branch, never this one's to move to.
+    match git_dir(path).await {
+        Some(repo) if !is_linked_worktree(path, &repo).await => {}
+        _ => return,
+    }
+    let want = format!("refs/heads/{branch}");
+    let on = git(path, &["symbolic-ref", "-q", "HEAD"])
+        .await
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if on == want || !branch_exists(path, &branch).await {
+        return;
+    }
+    tracing::warn!("[personal_agent] the workdir's HEAD was moved off {branch} ({on}); putting it back");
+    if let Err(e) = git(path, &["symbolic-ref", "HEAD", &want]).await {
+        tracing::warn!("[personal_agent] the workdir's HEAD could not be put back: {e}");
+    }
+}
+
+/// The commit HEAD is on: `Ok(None)` for a repository with no commit at all
+/// (its first is about to be made), `Err` when there are commits but HEAD
+/// names none of them — codeg then commits nothing rather than start a
+/// history of its own.
+async fn head_commit(path: &Path) -> Result<Option<String>, String> {
+    if let Ok(o) = git(path, &["rev-parse", "--verify", "-q", "HEAD^{commit}"]).await {
+        return Ok(Some(String::from_utf8_lossy(&o.stdout).trim().to_string()));
+    }
+    if has_branches(path).await {
+        return Err("HEAD names no commit, and the repository has some".into());
+    }
+    Ok(None)
+}
+
+/// Commit `tree` on top of `head` (none: the repository's first commit) and
+/// move HEAD to it, checked against `head` — never a merge, never a hook, a
+/// commit with one parent (or none) whatever state the repository is in.
+async fn commit_tree(
+    path: &Path,
+    head: Option<&str>,
+    tree: &str,
+    message: &str,
+) -> Result<String, String> {
+    let mut args = vec!["commit-tree", tree, "-m", message];
+    if let Some(head) = head {
+        args.extend(["-p", head]);
+    }
+    let out = git(path, &args).await?;
+    let new = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // The old value checked: "" asks that the branch not be there yet.
+    git(path, &["update-ref", "-m", message, "HEAD", &new, head.unwrap_or("")]).await?;
+    Ok(new)
+}
+
+/// The tree of commit `rev`.
+async fn tree_of(path: &Path, rev: &str) -> Option<String> {
+    let out = git(path, &["rev-parse", "--verify", "-q", &format!("{rev}^{{tree}}")])
+        .await
+        .ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
 
 /// Commit whatever changed in the working directory. Best-effort: a missing
 /// git or a broken repository costs the history, never the turn.
@@ -626,66 +878,123 @@ pub async fn delete_skill_for_owner(path: &Path, name: &str, message: &str) -> s
     Ok(())
 }
 
+/// Commit the working tree as it is — all of it, or only `only` (one
+/// deleted, as deleted) on top of HEAD as it is — with git's plumbing: the
+/// tree written, a commit with HEAD as its one parent, HEAD moved to it
+/// checked against what it was. Never `git commit`, which would conclude a
+/// merge an assistant left half done (two parents: a memory card listing
+/// nothing), run hooks, or read the owner's commit settings. `None` when
+/// nothing changed or nothing could be committed.
 async fn commit_locked(path: &Path, message: &str, only: Option<&[&str]>) -> Option<String> {
     if !path.join(".git").exists() {
         return None;
     }
-    // Pathspecs read literally: an entry's name may hold `[` or `]`.
-    let spec = |head: &[&str], names: &[&str]| -> Vec<String> {
-        let mut args: Vec<String> = ["--literal-pathspecs"]
-            .iter()
-            .chain(head)
-            .map(|s| s.to_string())
-            .collect();
-        if !names.is_empty() {
-            args.push("--".into());
-            args.extend(names.iter().map(|s| s.to_string()));
+    reattach_head(path).await;
+    let head = match head_commit(path).await {
+        Ok(head) => head,
+        Err(e) => {
+            tracing::warn!("[personal_agent] workdir not committed: {e}");
+            return None;
         }
-        args
     };
-    // A name git knows nothing of (gone, never committed) would fail the
-    // whole command: only the ones on disk or in the last commit.
-    let mut known: Vec<&str> = Vec::new();
-    for n in only.unwrap_or(&[]) {
-        if path.join(n).exists()
-            || git(path, &["cat-file", "-e", &format!("HEAD:{n}")])
-                .await
-                .is_ok()
-        {
+    let made = match only {
+        None => tree_of_worktree(path, head.as_deref())
+            .await
+            .map(|t| t.map(|t| (t, Vec::new()))),
+        Some(names) => tree_with(path, head.as_deref(), names).await,
+    };
+    let (tree, known) = match made {
+        Ok(Some(made)) => made,
+        Ok(None) => return None,
+        Err(e) => {
+            tracing::warn!("[personal_agent] workdir commit failed: {e}");
+            return None;
+        }
+    };
+    // Nothing changed: no empty commit per turn.
+    if let Some(head) = head.as_deref() {
+        if tree_of(path, head).await.as_deref() == Some(tree.as_str()) {
+            return None;
+        }
+    }
+    let new = match commit_tree(path, head.as_deref(), &tree, message).await {
+        Ok(new) => new,
+        Err(e) => {
+            tracing::warn!("[personal_agent] workdir commit failed: {e}");
+            return None;
+        }
+    };
+    if only.is_some() {
+        // The index follows for the files committed. Missing it costs
+        // nothing: a turn's commit takes the index back to HEAD before it
+        // adds.
+        let mut args = vec!["--literal-pathspecs", "reset", "-q", "HEAD", "--"];
+        args.extend(known.iter().copied());
+        let _ = git(path, &args).await;
+    }
+    Some(new)
+}
+
+/// The tree of the whole working tree. The index is first taken back to
+/// HEAD — with a path (`-- .`), so it is the index alone: `ORIG_HEAD` and a
+/// half-done merge's `MERGE_HEAD` stay — whatever an assistant did to it (a
+/// file added halfway, one taken out with `git rm --cached`): what is
+/// committed is the working tree as it is, a tracked file stays tracked
+/// even where an ignore rule now matches it. When that cannot be done (the
+/// index locked by another git) nothing is committed this time; the next
+/// turn's commit takes it all.
+async fn tree_of_worktree(path: &Path, head: Option<&str>) -> Result<Option<String>, String> {
+    match head {
+        Some(_) => git(path, &["reset", "-q", "HEAD", "--", "."]).await?,
+        None => git(path, &["read-tree", "--empty"]).await?,
+    };
+    git(path, &["add", "-A"]).await?;
+    let out = git(path, &["write-tree"]).await?;
+    Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string()))
+}
+
+/// The tree of HEAD with `names` as they are in the working tree, made on an
+/// index of its own: the repository's index, and whatever a turn has left
+/// in it, stays as it is. `None` when none of `names` is anything git
+/// knows (not on disk, not in HEAD).
+async fn tree_with<'a>(
+    path: &Path,
+    head: Option<&str>,
+    names: &[&'a str],
+) -> Result<Option<(String, Vec<&'a str>)>, String> {
+    // A name git knows nothing of would fail the whole `add`.
+    let mut known: Vec<&'a str> = Vec::new();
+    for n in names {
+        let in_head = match head {
+            Some(h) => git(path, &["cat-file", "-e", &format!("{h}:{n}")]).await.is_ok(),
+            None => false,
+        };
+        if path.join(n).exists() || in_head {
             known.push(n);
         }
     }
-    let names = known.as_slice();
-    if only.is_some() && names.is_empty() {
-        return None;
+    if known.is_empty() {
+        return Ok(None);
     }
-    let run = |args: Vec<String>| async move {
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        git(path, &refs).await
-    };
-    if run(spec(&["add", "-A"], names)).await.is_err() {
-        return None;
-    }
-    // Nothing staged: no empty commit per turn.
-    if run(spec(&["diff", "--cached", "--quiet"], names))
+    let index = git_dir(path)
         .await
-        .is_ok()
-    {
-        return None;
+        .ok_or("the working directory has no repository")?
+        .join("codeg-index");
+    let _ = std::fs::remove_file(&index);
+    let made = async {
+        match head {
+            Some(h) => git_on(path, Some(&index), &["read-tree", h]).await?,
+            None => git_on(path, Some(&index), &["read-tree", "--empty"]).await?,
+        };
+        let mut add = vec!["--literal-pathspecs", "add", "-A", "--"];
+        add.extend(known.iter().copied());
+        git_on(path, Some(&index), &add).await?;
+        let out = git_on(path, Some(&index), &["write-tree"]).await?;
+        Ok::<_, String>(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
-    let commit = match only {
-        None => spec(&["commit", "-q", "--no-verify", "-m", message], &[]),
-        Some(_) => spec(
-            &["commit", "-q", "--no-verify", "-m", message, "--only"],
-            names,
-        ),
-    };
-    if let Err(e) = run(commit).await {
-        tracing::warn!("[personal_agent] workdir commit failed: {e}");
-        return None;
-    }
-    let head = git(path, &["rev-parse", "HEAD"]).await.ok()?;
-    Some(String::from_utf8_lossy(&head.stdout).trim().to_string())
+    .await;
+    let _ = std::fs::remove_file(&index);
+    made.map(|tree| Some((tree, known)))
 }
 
 // ── the memory a commit changed (7.7) ───────────────────────────────────────
@@ -722,13 +1031,41 @@ async fn show_at(path: &Path, rev: &str, name: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// The commits commit `rev` was made on top of, as the commit itself names
+/// them — not as a shallow history's boundary would hide them. `None` when
+/// `rev` is not there.
+async fn parents_named(path: &Path, rev: &str) -> Option<Vec<String>> {
+    let out = git(path, &["cat-file", "commit", rev]).await.ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    Some(
+        text.lines()
+            .take_while(|l| !l.is_empty())
+            .filter_map(|l| l.strip_prefix("parent "))
+            .map(|p| p.trim().to_string())
+            .collect(),
+    )
+}
+
+/// Whether commit `rev` is in the repository, and every commit it was made
+/// on top of.
+async fn commit_is_whole(path: &Path, rev: &str) -> bool {
+    let Some(parents) = parents_named(path, rev).await else {
+        return false;
+    };
+    for parent in parents {
+        if git(path, &["cat-file", "-e", &format!("{parent}^{{commit}}")])
+            .await
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// The commit before `rev`; `None` for the first.
 async fn parent_of(path: &Path, rev: &str) -> Option<String> {
-    let out = git(path, &["rev-parse", "--verify", "-q", &format!("{rev}^")])
-        .await
-        .ok()?;
-    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!sha.is_empty()).then_some(sha)
+    parents_named(path, rev).await?.into_iter().next()
 }
 
 /// The files of the assistant's memory commit `rev` changed, in the
@@ -895,6 +1232,11 @@ async fn undo_change_locked(
 ) -> Result<MemoryUndo, String> {
     if !path.join(".git").exists() {
         return Err("the working directory has no history".into());
+    }
+    // A commit that is not there, or whose parent is not, reads as files
+    // that never were: an undo would delete them. Nothing is touched.
+    if !commit_is_whole(path, rev).await {
+        return Err(format!("commit {rev} or the one before it is no longer in the history"));
     }
     let parent = parent_of(path, rev).await;
     let mut undo = MemoryUndo::default();
@@ -3488,5 +3830,413 @@ mod tests {
             sync_process_skills(&dir, AgentType::ClaudeCode, &approved),
             vec!["ship"]
         );
+    }
+
+    // ── only codeg moves the history ────────────────────────────────────────
+
+    /// git as an assistant runs it in its working directory: none of codeg's
+    /// flags, and a global setup of its own — a global hooks folder (husky's,
+    /// say) that would let anything through.
+    struct AgentGit {
+        _home: tempfile::TempDir,
+        config: PathBuf,
+    }
+
+    impl AgentGit {
+        fn new() -> Self {
+            let home = tempfile::tempdir().unwrap();
+            let hooks = home.path().join("global-hooks");
+            std::fs::create_dir_all(&hooks).unwrap();
+            let config = home.path().join("gitconfig");
+            std::fs::write(
+                &config,
+                format!(
+                    "[core]\n\thooksPath = {}\n[user]\n\tname = agent\n\temail = agent@x\n[commit]\n\tgpgsign = false\n",
+                    // Forward slashes: git reads `\\` in a config value as
+                    // an escape, and a Windows path is full of them.
+                    hooks.display().to_string().replace('\\', "/")
+                ),
+            )
+            .unwrap();
+            Self { _home: home, config }
+        }
+
+        /// Whether the command succeeded, and what it said.
+        fn run(&self, dir: &Path, args: &[&str]) -> (bool, String) {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", &self.config)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .unwrap();
+            let said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            (out.status.success(), said)
+        }
+    }
+
+    async fn out(dir: &Path, args: &[&str]) -> String {
+        let o = git(dir, args).await.unwrap_or_else(|e| panic!("{args:?}: {e}"));
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    }
+
+    async fn head_of(dir: &Path) -> String {
+        out(dir, &["rev-parse", "HEAD"]).await
+    }
+
+    async fn parents_of(dir: &Path, rev: &str) -> Vec<String> {
+        out(dir, &["rev-list", "--parents", "-n", "1", rev])
+            .await
+            .split_whitespace()
+            .skip(1)
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// A new directory's history is guarded from the start: its first commit
+    /// has no parent and holds every template, it is on `main`, recorded as
+    /// codeg's branch, and the repository's own `core.hooksPath` points at
+    /// the hook.
+    #[tokio::test]
+    async fn a_new_directorys_history_starts_on_main_guarded() {
+        let (_tmp, dir) = memory_repo().await;
+        let first = head_of(&dir).await;
+        assert!(parents_of(&dir, &first).await.is_empty());
+        let files = out(&dir, &["ls-tree", "-r", "--name-only", "HEAD"]).await;
+        for f in [SOUL_FILE, RULES_FILE, USER_FILE, MEMORY_FILE, MARKER_FILE, ".gitignore"] {
+            assert!(files.lines().any(|l| l == f), "{f}: {files}");
+        }
+        assert_eq!(out(&dir, &["symbolic-ref", "HEAD"]).await, "refs/heads/main");
+        assert_eq!(out(&dir, &["config", "--local", BRANCH_KEY]).await, "main");
+        assert_eq!(out(&dir, &["config", "--local", "core.hooksPath"]).await, HOOKS_DIR);
+        let hook = dir.join(HOOKS_DIR).join("reference-transaction");
+        assert_eq!(std::fs::read_to_string(&hook).unwrap(), HOOK_SCRIPT);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&hook).unwrap().permissions().mode() & 0o111, 0o111);
+        }
+        // The next change is a commit on top of it, with its card.
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nI ship the releases.\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        assert_eq!(parents_of(&dir, &rev).await, vec![first]);
+        assert_eq!(memory_changes(&dir, &rev).await[0].path, SOUL_FILE);
+        let (diff, _) = memory_diff(&dir, &rev, &memory_changes(&dir, &rev).await).await;
+        assert!(diff.contains("+I ship the releases."), "{diff}");
+    }
+
+    /// Whatever an assistant tries, with a global hooks folder of its own,
+    /// it cannot move the history: every commit, amend, reset to another
+    /// commit, branch, stash and `update-ref` fails and HEAD stays — while
+    /// what it wrote is still there for the turn's commit, its memory card
+    /// and the undo.
+    #[tokio::test]
+    async fn an_assistant_cannot_commit_and_its_changes_still_reach_the_card() {
+        let (_tmp, dir) = memory_repo().await;
+        let agent = AgentGit::new();
+        std::fs::write(dir.join("NOTES.md"), "one\n").unwrap();
+        let base = commit(&dir, "turn 0").await.unwrap();
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nI answer to nobody.\n").unwrap();
+        assert!(agent.run(&dir, &["add", "-A"]).0, "adding still works");
+        for args in [
+            &["commit", "-qm", "mine"][..],
+            &["commit", "-qam", "mine"],
+            &["commit", "-q", "--no-verify", "-am", "mine"],
+            &["commit", "-q", "--amend", "-m", "mine"],
+            &["reset", "--hard", "HEAD~1"],
+            &["checkout", "-q", "-b", "elsewhere"],
+            &["branch", "elsewhere"],
+            &["tag", "mine"],
+            &["stash"],
+            &["update-ref", "refs/heads/main", "HEAD~1"],
+        ] {
+            let (ok, said) = agent.run(&dir, args);
+            assert!(!ok, "{args:?} got through: {said}");
+            assert_eq!(head_of(&dir).await, base, "{args:?}");
+        }
+        let (_, said) = agent.run(&dir, &["commit", "-qam", "mine"]);
+        assert!(said.contains("made by codeg at the end of each turn"), "{said}");
+        // `reset --hard` rewrote the tree before it failed; the persona is
+        // written again, as the assistant would.
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nI answer to nobody.\n").unwrap();
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        assert_eq!(parents_of(&dir, &rev).await, vec![base.clone()]);
+        let files = memory_changes(&dir, &rev).await;
+        assert_eq!(shape(&files), vec![("SOUL.md", "modified", "soul", "SOUL.md")]);
+        undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+        assert!(!read_text(&dir, SOUL_FILE).contains("nobody"));
+        assert!(out(&dir, &["status", "--porcelain"]).await.is_empty());
+    }
+
+    /// A guard taken away is put back the next time the directory is opened.
+    #[tokio::test]
+    async fn a_guard_taken_away_is_put_back() {
+        let (_tmp, dir) = memory_repo().await;
+        let agent = AgentGit::new();
+        std::fs::remove_file(dir.join(HOOKS_DIR).join("reference-transaction")).unwrap();
+        out(&dir, &["config", "--local", "--unset", "core.hooksPath"]).await;
+        out(&dir, &["config", "--local", "--unset", BRANCH_KEY]).await;
+        ensure_guard(&dir).await;
+        assert_eq!(out(&dir, &["config", "--local", BRANCH_KEY]).await, "main");
+        std::fs::write(dir.join("NOTES.md"), "x\n").unwrap();
+        let (ok, said) = agent.run(&dir, &["commit", "-qam", "mine"]);
+        assert!(!ok, "{said}");
+    }
+
+    /// HEAD moved off codeg's branch the ways an older git still lets
+    /// through (`checkout --orphan`, a detached checkout — done here past
+    /// the hook): codeg puts it back before it commits, on top of the
+    /// branch's own last commit, and the card lists only what changed.
+    #[tokio::test]
+    async fn head_moved_off_the_branch_is_put_back_before_a_commit() {
+        for how in ["orphan", "detached"] {
+            let (_tmp, dir) = memory_repo().await;
+            std::fs::write(dir.join("NOTES.md"), "one\n").unwrap();
+            let base = commit(&dir, "turn 0").await.unwrap();
+            match how {
+                "orphan" => out(&dir, &["checkout", "-q", "--orphan", "loose"]).await,
+                _ => out(&dir, &["checkout", "-q", "--detach", "HEAD"]).await,
+            };
+            std::fs::write(dir.join(SOUL_FILE), "# Persona\nMoved.\n").unwrap();
+            let rev = commit(&dir, "turn").await.expect(how);
+            assert_eq!(out(&dir, &["symbolic-ref", "HEAD"]).await, "refs/heads/main", "{how}");
+            assert_eq!(parents_of(&dir, &rev).await, vec![base], "{how}");
+            assert_eq!(head_of(&dir).await, rev, "{how}");
+            let files = memory_changes(&dir, &rev).await;
+            assert_eq!(shape(&files), vec![("SOUL.md", "modified", "soul", "SOUL.md")], "{how}");
+            undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+            assert!(!read_text(&dir, SOUL_FILE).contains("Moved."), "{how}");
+            assert!(out(&dir, &["status", "--porcelain"]).await.is_empty(), "{how}");
+        }
+    }
+
+    /// A directory from before the guard, its history on `master` with no
+    /// branch recorded, gets `master` recorded and goes on there; a recorded
+    /// branch that is not there leaves HEAD where it is.
+    #[tokio::test]
+    async fn an_older_directory_keeps_its_branch() {
+        let (_tmp, dir) = memory_repo().await;
+        out(&dir, &["branch", "-m", "main", "master"]).await;
+        out(&dir, &["config", "--local", "--unset", BRANCH_KEY]).await;
+        ensure_guard(&dir).await;
+        assert_eq!(out(&dir, &["config", "--local", BRANCH_KEY]).await, "master");
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nOld.\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        assert_eq!(out(&dir, &["rev-parse", "refs/heads/master"]).await, rev);
+
+        out(&dir, &["config", "--local", BRANCH_KEY, "gone"]).await;
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nOlder.\n").unwrap();
+        let next = commit(&dir, "turn 2").await.unwrap();
+        assert_eq!(out(&dir, &["symbolic-ref", "HEAD"]).await, "refs/heads/master");
+        assert_eq!(parents_of(&dir, &next).await, vec![rev]);
+    }
+
+    /// A merge an assistant left half done (`MERGE_HEAD`, a file in
+    /// conflict) is neither concluded nor lost: the turn's commit has one
+    /// parent and lists the persona it changed, the undo takes that back,
+    /// and `MERGE_HEAD` and `ORIG_HEAD` are still there after both.
+    #[tokio::test]
+    async fn a_half_done_merge_is_left_as_it_is() {
+        let (_tmp, dir) = memory_repo().await;
+        std::fs::write(dir.join("NOTES.md"), "base\n").unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        out(&dir, &["checkout", "-q", "-b", "side"]).await;
+        std::fs::write(dir.join("NOTES.md"), "side\n").unwrap();
+        out(&dir, &["commit", "-qam", "side"]).await;
+        out(&dir, &["checkout", "-q", "main"]).await;
+        std::fs::write(dir.join("NOTES.md"), "main\n").unwrap();
+        let base = commit(&dir, "turn 1").await.unwrap();
+        assert!(git(&dir, &["merge", "-q", "side"]).await.is_err(), "a conflict");
+        let merge_head = out(&dir, &["rev-parse", "MERGE_HEAD"]).await;
+        std::fs::write(dir.join(".git").join("ORIG_HEAD"), format!("{base}\n")).unwrap();
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nMid-merge.\n").unwrap();
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        assert_eq!(parents_of(&dir, &rev).await, vec![base.clone()]);
+        let files = memory_changes(&dir, &rev).await;
+        assert_eq!(shape(&files), vec![("SOUL.md", "modified", "soul", "SOUL.md")]);
+        assert_eq!(out(&dir, &["rev-parse", "MERGE_HEAD"]).await, merge_head);
+        undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+        assert!(!read_text(&dir, SOUL_FILE).contains("Mid-merge."));
+        assert_eq!(out(&dir, &["rev-parse", "MERGE_HEAD"]).await, merge_head);
+        assert_eq!(out(&dir, &["rev-parse", "ORIG_HEAD"]).await, base);
+        let undo = head_of(&dir).await;
+        assert_eq!(parents_of(&dir, &undo).await, vec![rev]);
+    }
+
+    /// An index an assistant left in any state does not change what the
+    /// turn commits — the working tree as it is: a file added halfway, one
+    /// taken out with `git rm --cached`, one an ignore rule matches now —
+    /// no deletion out of nowhere. A locked index commits nothing this time,
+    /// and all of it the next.
+    #[tokio::test]
+    async fn the_turns_commit_is_the_working_tree_whatever_the_index_says() {
+        let (_tmp, dir) = memory_repo().await;
+        let agent = AgentGit::new();
+        std::fs::write(dir.join("NOTES.md"), "notes\n").unwrap();
+        std::fs::write(dir.join("kept.md"), "kept\n").unwrap();
+        let base = commit(&dir, "turn 0").await.unwrap();
+        std::fs::write(dir.join(".git/info/exclude"), "kept.md\n").unwrap();
+        assert!(agent.run(&dir, &["rm", "-q", "--cached", "kept.md"]).0);
+        assert!(agent.run(&dir, &["rm", "-q", "--cached", "NOTES.md"]).0);
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nStaged.\n").unwrap();
+        assert!(agent.run(&dir, &["add", SOUL_FILE]).0);
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nStaged, then more.\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let changed = out(&dir, &["diff-tree", "-r", "--name-status", "--no-commit-id", &rev]).await;
+        assert_eq!(changed, "M\tSOUL.md");
+        assert_eq!(
+            out(&dir, &["show", &format!("{rev}:{SOUL_FILE}")]).await,
+            "# Persona\nStaged, then more."
+        );
+        assert_eq!(parents_of(&dir, &rev).await, vec![base]);
+
+        let lock = dir.join(".git/index.lock");
+        std::fs::write(&lock, "").unwrap();
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nLocked out.\n").unwrap();
+        assert!(commit(&dir, "turn 2").await.is_none());
+        assert_eq!(head_of(&dir).await, rev);
+        std::fs::remove_file(&lock).unwrap();
+        let next = commit(&dir, "turn 3").await.unwrap();
+        assert_eq!(memory_changes(&dir, &next).await[0].path, SOUL_FILE);
+    }
+
+    /// An undo of a commit that is not in the history touches nothing: the
+    /// files it would read as "not there before" are not deleted.
+    #[tokio::test]
+    async fn an_undo_of_a_commit_that_is_gone_touches_nothing() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "an entry\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        let gone = "0123456789abcdef0123456789abcdef01234567";
+        assert!(undo_memory(&dir, gone, &files, "owner: undo").await.is_err());
+        assert!(undo_whole(&dir, gone, &files, "owner: apply").await.is_err());
+        assert_eq!(read_text(&dir, "memory/x.md"), "an entry\n");
+        assert_eq!(head_of(&dir).await, rev);
+    }
+
+    /// Every commit codeg makes has one parent — the turn's, the owner's
+    /// own edit, an undo — and is the one HEAD is on.
+    #[tokio::test]
+    async fn every_commit_codeg_makes_has_one_parent() {
+        let (_tmp, dir) = memory_repo().await;
+        let mut last = head_of(&dir).await;
+        write_file(&dir, "memory/x.md", "an entry\n").unwrap();
+        let turn = commit(&dir, "turn").await.unwrap();
+        assert_eq!(parents_of(&dir, &turn).await, vec![last]);
+        last = turn.clone();
+        write_file(&dir, USER_FILE, "# The owner\nSam.\n").unwrap();
+        let mine = commit_only(&dir, "owner: edit", &[USER_FILE]).await.unwrap();
+        assert_eq!(parents_of(&dir, &mine).await, vec![last]);
+        let files = memory_changes(&dir, &turn).await;
+        let undo = undo_memory(&dir, &turn, &files, "owner: undo").await.unwrap();
+        let undone = undo.commit.expect("the undo's commit");
+        assert_eq!(parents_of(&dir, &undone).await, vec![mine]);
+        assert_eq!(head_of(&dir).await, undone);
+    }
+
+    /// A shallow history's last commit names a parent that is not there:
+    /// its undo touches nothing — the file is not read as one the change
+    /// added, and deleted.
+    #[tokio::test]
+    async fn an_undo_past_a_shallow_historys_edge_touches_nothing() {
+        let (tmp, dir) = memory_repo().await;
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nShallow.\n").unwrap();
+        commit(&dir, "turn").await.unwrap();
+        let shallow = tmp.path().join("shallow");
+        let url = format!("file://{}", dir.display().to_string().replace('\\', "/"));
+        let cloned = std::process::Command::new("git")
+            .args(["clone", "-q", "--depth", "1", &url])
+            .arg(&shallow)
+            .output()
+            .unwrap();
+        assert!(cloned.status.success(), "{cloned:?}");
+        let rev = head_of(&shallow).await;
+        let files = vec![MemoryFile {
+            path: SOUL_FILE.into(),
+            status: "modified".into(),
+            kind: "soul".into(),
+            title: SOUL_FILE.into(),
+        }];
+        // Bytes as the clone wrote them (an owner's `core.autocrlf` may
+        // have made them CRLF), the same after.
+        let before = std::fs::read(shallow.join(SOUL_FILE)).unwrap();
+        assert!(undo_memory(&shallow, &rev, &files, "owner: undo").await.is_err());
+        assert_eq!(std::fs::read(shallow.join(SOUL_FILE)).unwrap(), before);
+        assert_eq!(head_of(&shallow).await, rev);
+    }
+
+    /// A checkout whose `.git` is a file pointing at the repository
+    /// elsewhere: guarded there, and every commit — the turn's, the
+    /// owner's own — made as in any other.
+    #[tokio::test]
+    async fn a_checkout_with_its_repository_elsewhere_is_guarded_and_committed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (dir, repo) = (tmp.path().join("pa"), tmp.path().join("repo.git"));
+        let made = std::process::Command::new("git")
+            .args(["init", "-q", "--initial-branch", "main", "--separate-git-dir"])
+            .arg(&repo)
+            .arg(&dir)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\n").unwrap();
+        std::fs::write(dir.join(USER_FILE), "# The owner\n").unwrap();
+        let first = commit(&dir, "init").await.expect("the first commit");
+        assert!(parents_of(&dir, &first).await.is_empty());
+        ensure_guard(&dir).await;
+        assert!(repo.join("hooks/reference-transaction").is_file());
+        assert_eq!(out(&dir, &["config", "--local", BRANCH_KEY]).await, "main");
+        let agent = AgentGit::new();
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nMine.\n").unwrap();
+        let (ok, said) = agent.run(&dir, &["commit", "-qam", "mine"]);
+        assert!(!ok, "{said}");
+        std::fs::write(dir.join(USER_FILE), "# The owner\nSam.\n").unwrap();
+        let mine = commit_only(&dir, "owner: edit", &[USER_FILE]).await.expect("the owner's");
+        assert_eq!(
+            out(&dir, &["diff-tree", "-r", "--name-only", "--no-commit-id", &mine]).await,
+            USER_FILE
+        );
+        let turn = commit(&dir, "turn").await.expect("the turn's");
+        assert_eq!(memory_changes(&dir, &turn).await[0].path, SOUL_FILE);
+    }
+
+    /// A worktree linked to a checkout of the owner's is not guarded: the
+    /// settings are the repository's, and the owner's own commits in the
+    /// main checkout go on as before. codeg's commits there still work.
+    #[tokio::test]
+    async fn a_linked_worktree_is_not_guarded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (main, linked) = (tmp.path().join("main"), tmp.path().join("linked"));
+        let agent = AgentGit::new();
+        let run = |dir: &Path, args: &[&str]| {
+            let (ok, said) = agent.run(dir, args);
+            assert!(ok, "{args:?}: {said}");
+        };
+        std::fs::create_dir_all(&main).unwrap();
+        run(&main, &["init", "-q", "--initial-branch", "main"]);
+        std::fs::write(main.join("README.md"), "mine\n").unwrap();
+        run(&main, &["add", "-A"]);
+        run(&main, &["commit", "-qm", "first"]);
+        run(&main, &["worktree", "add", "-q", "-b", "pa", linked.to_str().unwrap()]);
+        ensure_guard(&linked).await;
+        assert!(git(&main, &["config", "--local", "--get", "core.hooksPath"]).await.is_err());
+        assert!(git(&main, &["config", "--local", "--get", BRANCH_KEY]).await.is_err());
+        std::fs::write(main.join("README.md"), "mine, again\n").unwrap();
+        run(&main, &["commit", "-qam", "the owner's own"]);
+        // The shared settings naming the main checkout's branch (it was a
+        // working directory once): the linked one's commit stays on its own.
+        run(&main, &["config", "--local", BRANCH_KEY, "main"]);
+        let main_tip = out(&main, &["rev-parse", "refs/heads/main"]).await;
+        std::fs::write(linked.join(SOUL_FILE), "# Persona\n").unwrap();
+        let rev = commit(&linked, "turn").await.expect("codeg's commit");
+        assert_eq!(out(&linked, &["rev-parse", "refs/heads/pa"]).await, rev);
+        assert_eq!(out(&linked, &["symbolic-ref", "HEAD"]).await, "refs/heads/pa");
+        assert_eq!(out(&main, &["rev-parse", "refs/heads/main"]).await, main_tip);
     }
 }
