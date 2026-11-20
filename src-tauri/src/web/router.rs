@@ -1231,6 +1231,7 @@ pub fn build_router_with_srn(
             "/acp_qoder_auth_status",
             post(handlers::acp::acp_qoder_auth_status),
         )
+        .route("/acp_qoder_quota", post(handlers::acp::acp_qoder_quota))
         .route(
             "/acp_update_claude_model_picker",
             post(handlers::acp::acp_update_claude_model_picker),
