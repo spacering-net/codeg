@@ -210,7 +210,11 @@ fn load_bundled_metadata_inner() -> Result<Vec<ScienceMetadata>, ScienceError> {
             bundled_hash,
         });
     }
-    out.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then_with(|| a.id.cmp(&b.id)));
+    out.sort_by(|a, b| {
+        a.sort_order
+            .cmp(&b.sort_order)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     Ok(out)
 }
 
@@ -435,6 +439,7 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: true,
+            model_env: None,
         };
         let agent = crate::models::agent::AgentType::custom("science-pack-agent").unwrap();
 
@@ -603,7 +608,10 @@ mod tests {
         // (they share the central store). Curation guarantees this; assert it.
         let science_ids: std::collections::HashSet<_> =
             bundled_metadata().iter().map(|m| m.id.as_str()).collect();
-        assert!(!science_ids.is_empty(), "science bundle should be non-empty");
+        assert!(
+            !science_ids.is_empty(),
+            "science bundle should be non-empty"
+        );
         // A representative experts id must not appear among science ids.
         assert!(!science_ids.contains("brainstorming"));
         assert!(!science_ids.contains("writing-plans"));

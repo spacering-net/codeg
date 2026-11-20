@@ -32,6 +32,25 @@ vi.mock("@/lib/api", async (importOriginal) => {
     ])
   )
 })
+vi.mock("@/lib/transport", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>()
+  // tjx's panel reaches the backend through the transport directly (the
+  // model-provider service store), not only through `@/lib/api`; answer those
+  // calls with an empty result so nothing here can reach the real transport.
+  const stub = () =>
+    new Proxy(
+      {},
+      {
+        get:
+          (_target, prop) =>
+          (..._args: unknown[]) =>
+            prop === "subscribe"
+              ? Promise.resolve(() => {})
+              : Promise.resolve([] as unknown[]),
+      }
+    )
+  return { ...actual, getTransport: stub, getShellTransport: stub }
+})
 vi.mock("next/navigation", () => {
   const params = new URLSearchParams()
   return { useSearchParams: () => params }
@@ -90,6 +109,8 @@ function grokAgent(settings: Partial<GrokSettings> = {}): AcpAgentInfo {
     cursor_cli_config_json: null,
     cursor_settings: null,
     model_provider_id: null,
+    model_source: "native",
+    model_provider_api_types: [],
     icon_url: null,
   }
 }
@@ -101,7 +122,11 @@ async function openPanel(agent: AcpAgentInfo) {
       <AcpAgentSettings />
     </NextIntlClientProvider>
   )
-  return screen.findByRole("group", { name: "Reasoning effort levels" })
+  return screen.findByRole(
+    "group",
+    { name: "Reasoning effort levels" },
+    { timeout: 5000 }
+  )
 }
 
 function chipStates(group: HTMLElement): Record<string, string | null> {

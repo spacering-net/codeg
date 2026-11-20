@@ -588,6 +588,10 @@ export interface DbConversationSummary {
   /** Mirrors `conversation.kind` — drives sidebar visibility and grouping. */
   kind: ConversationKind
   model: string | null
+  /** Shared Model Provider selection; null preserves legacy native runtime. */
+  model_source?: "native" | "provider" | null
+  model_provider_id?: string | null
+  model_provider_model_id?: string | null
   git_branch: string | null
   external_id: string | null
   message_count: number
@@ -4099,6 +4103,8 @@ export interface ConversationConnectionInfo {
 }
 
 // ACP agent info returned by acp_list_agents
+export type AgentModelSource = "native" | "provider"
+
 export interface AcpAgentInfo {
   agent_type: AgentType
   /**
@@ -4190,6 +4196,15 @@ export interface AcpAgentInfo {
    *  Claude Code only. */
   claude_model_picker?: string[] | null
   model_provider_id: number | null
+  model_source: AgentModelSource
+  /**
+   * API families the shared Model Provider source can offer this agent. Empty
+   * means "no shared provider source". For custom agents it is per-definition:
+   * a verified env contract pins what the CLI speaks (`glm-acp-agent` is Chat
+   * Completions only), a user declaration is permissive. Filters the provider
+   * lists so a provider the launch would refuse is never offered.
+   */
+  model_provider_api_types: string[]
   /** Display icon for a custom ACP agent — normally an inlined
    *  `data:image/…;base64,…` URL. Always null for built-ins, which ship
    *  hand-drawn marks in `agent-icon.tsx`. */

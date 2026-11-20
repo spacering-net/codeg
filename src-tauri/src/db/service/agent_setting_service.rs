@@ -10,7 +10,7 @@ use sea_orm::{
 
 use crate::db::entities::agent_setting;
 use crate::db::error::DbError;
-use crate::models::agent::AgentType;
+use crate::models::agent::{AgentModelSource, AgentType};
 use crate::parsers::{AgentEnv, AgentEnvs};
 
 #[derive(Debug, Clone)]
@@ -25,6 +25,7 @@ pub struct AgentSettingsUpdate {
     pub enabled: bool,
     pub env_json: Option<String>,
     pub model_provider_id: Option<i32>,
+    pub model_source: String,
 }
 
 fn default_enabled(agent_type: AgentType) -> bool {
@@ -87,6 +88,9 @@ pub async fn ensure_defaults(
             installed_version: Set(None),
             env_json: Set(None),
             model_provider_id: Set(None),
+            model_source: Set(default_model_source()),
+            catalog_provider_id: Set(None),
+            catalog_model_id: Set(None),
             created_at: Set(now),
             updated_at: Set(now),
         };
@@ -198,6 +202,41 @@ pub async fn update(
     active.enabled = Set(patch.enabled);
     active.env_json = Set(patch.env_json);
     active.model_provider_id = Set(patch.model_provider_id);
+    active.model_source = Set(normalize_model_source(&patch.model_source)?);
+    active.updated_at = Set(Utc::now());
+    active.update(conn).await?;
+    Ok(())
+}
+
+/// Remember the shared-catalog provider/model last applied to this agent's
+/// conversations.
+///
+/// Read by launch paths that have no conversation selection to resolve — the
+/// pre-bind session, or a conversation the user has not picked a provider for
+/// yet (see `build_session_runtime_env_with_conversation`). Written whenever a
+/// conversation selection is saved, so the memory is always something the user
+/// actually chose for this agent.
+pub async fn set_catalog_model_selection(
+    conn: &DatabaseConnection,
+    agent_type: AgentType,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<(), DbError> {
+    let agent_type_str = serde_json::to_string(&agent_type)
+        .map_err(|e| DbError::Migration(format!("agent_type serialize failed: {e}")))?;
+    let Some(model) = agent_setting::Entity::find()
+        .filter(agent_setting::Column::AgentType.eq(agent_type_str.clone()))
+        .one(conn)
+        .await?
+    else {
+        // A selection cannot be saved for an agent with no settings row, so
+        // this is unreachable in practice; degrade instead of failing the save.
+        return Ok(());
+    };
+
+    let mut active = model.into_active_model();
+    active.catalog_provider_id = Set(Some(provider_id.to_string()));
+    active.catalog_model_id = Set(Some(model_id.to_string()));
     active.updated_at = Set(Utc::now());
     active.update(conn).await?;
     Ok(())
@@ -303,6 +342,16 @@ pub async fn find_by_model_provider_id(
     Ok(rows)
 }
 
+fn default_model_source() -> String {
+    AgentModelSource::Native.as_str().to_string()
+}
+
+fn normalize_model_source(value: &str) -> Result<String, DbError> {
+    let parsed = AgentModelSource::parse(value)
+        .ok_or_else(|| DbError::Migration(format!("invalid agent model_source: {value}")))?;
+    Ok(parsed.as_str().to_string())
+}
+
 fn is_sqlite_full_error(err: &DbError) -> bool {
     let message = err.to_string();
     message.contains("database or disk is full") || message.contains("(code: 13)")
@@ -311,6 +360,64 @@ fn is_sqlite_full_error(err: &DbError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::test_helpers::fresh_in_memory_db;
+
+    #[tokio::test]
+    async fn agent_settings_default_to_native_source() {
+        let db = fresh_in_memory_db().await;
+        ensure_defaults(
+            &db.conn,
+            &[AgentDefaultInput {
+                agent_type: AgentType::Cline,
+                registry_id: "cline".to_string(),
+                default_sort_order: 0,
+            }],
+        )
+        .await
+        .expect("defaults");
+
+        let row = get_by_agent_type(&db.conn, AgentType::Cline)
+            .await
+            .expect("get")
+            .expect("row");
+        assert_eq!(row.model_source, "native");
+    }
+
+    #[tokio::test]
+    async fn update_persists_provider_source_without_other_fields() {
+        let db = fresh_in_memory_db().await;
+        ensure_defaults(
+            &db.conn,
+            &[AgentDefaultInput {
+                agent_type: AgentType::Cline,
+                registry_id: "cline".to_string(),
+                default_sort_order: 0,
+            }],
+        )
+        .await
+        .expect("defaults");
+
+        update(
+            &db.conn,
+            AgentType::Cline,
+            AgentSettingsUpdate {
+                enabled: true,
+                env_json: Some(r#"{"CLINE_API_KEY":"test"}"#.to_string()),
+                model_provider_id: Some(12),
+                model_source: "provider".to_string(),
+            },
+        )
+        .await
+        .expect("update");
+
+        let row = get_by_agent_type(&db.conn, AgentType::Cline)
+            .await
+            .expect("get")
+            .expect("row");
+        assert_eq!(row.model_source, "provider");
+        assert_eq!(row.model_provider_id, Some(12));
+        assert!(row.enabled);
+    }
 
     // Every built-in starts enabled. The match above has no catch-all arm for
     // "the rest", so a newly added agent missing from it silently ships

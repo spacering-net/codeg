@@ -686,7 +686,12 @@ pub(crate) async fn officecli_install_core(
         Some(version) => format!("OfficeCLI {version} installed successfully"),
         None => "OfficeCLI installed successfully".to_string(),
     };
-    emit_officecli_install_event(emitter, &task_id, OfficecliInstallEventKind::Completed, done);
+    emit_officecli_install_event(
+        emitter,
+        &task_id,
+        OfficecliInstallEventKind::Completed,
+        done,
+    );
     Ok(info)
 }
 
@@ -1053,7 +1058,10 @@ pub async fn officecli_sync_skills_core(
                 report.errors.push(msg);
             }
             Err(e) => {
-                tracing::warn!("[office] load_skill {} could not be spawned: {e}", def.load_id);
+                tracing::warn!(
+                    "[office] load_skill {} could not be spawned: {e}",
+                    def.load_id
+                );
                 report
                     .errors
                     .push(format!("{}: command error: {e}", def.id));
@@ -1421,6 +1429,7 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: true,
+            model_env: None,
         };
         let agent = crate::models::agent::AgentType::custom("office-pack-agent").unwrap();
 
@@ -1480,7 +1489,10 @@ mod tests {
         .expect("batch returns Ok");
         assert_eq!(results.len(), 2);
         // Unknown skills fail their own op without aborting the batch.
-        assert!(results.iter().all(|r| !r.ok && r.error.is_some()), "{results:?}");
+        assert!(
+            results.iter().all(|r| !r.ok && r.error.is_some()),
+            "{results:?}"
+        );
     }
 
     #[cfg(not(windows))] // a home of its own: `skills::tests::with_hermetic_home`
@@ -1599,7 +1611,10 @@ mod tests {
         let msg = officecli_run_failure_message("   ");
         assert!(!msg.is_empty());
         // No dangling "officecli error:" with nothing after it.
-        assert!(!msg.contains("officecli error:"), "no empty raw tail: {msg}");
+        assert!(
+            !msg.contains("officecli error:"),
+            "no empty raw tail: {msg}"
+        );
     }
 
     #[test]
@@ -1630,7 +1645,10 @@ mod tests {
             let github = script
                 .find("raw.githubusercontent.com")
                 .expect("github URL present");
-            assert!(mirror < github, "mirror must precede github for {os:?}: {script}");
+            assert!(
+                mirror < github,
+                "mirror must precede github for {os:?}: {script}"
+            );
         }
     }
 
@@ -1653,9 +1671,7 @@ mod tests {
 
         // The hardening preamble must run before the first network fetch, and
         // `$ProgressPreference` must also reach the vendor script run via `iex`.
-        let tls = win
-            .find("SecurityProtocol")
-            .expect("sets SecurityProtocol");
+        let tls = win.find("SecurityProtocol").expect("sets SecurityProtocol");
         let progress = win
             .find("$ProgressPreference")
             .expect("sets $ProgressPreference");
@@ -1703,17 +1719,24 @@ mod tests {
         // and `wait`s — so the tree outlives our short timeout.
         let child = tokio_command("sh")
             .arg("-c")
-            .arg(format!("sleep 30 & echo $! > '{}'; wait", pidfile.display()))
+            .arg(format!(
+                "sleep 30 & echo $! > '{}'; wait",
+                pidfile.display()
+            ))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn sh");
 
-        let (status, _stdout, _stderr) =
-            stream_install_or_kill_tree(child, Duration::from_millis(300), "test", &EventEmitter::Noop)
-                .await
-                .expect("no io error");
+        let (status, _stdout, _stderr) = stream_install_or_kill_tree(
+            child,
+            Duration::from_millis(300),
+            "test",
+            &EventEmitter::Noop,
+        )
+        .await
+        .expect("no io error");
         assert!(status.is_none(), "expected a timeout (no exit status)");
 
         // Grandchild pid is written almost immediately; poll briefly for it.
@@ -1761,5 +1784,4 @@ mod tests {
         assert!(tail.starts_with('…'));
         assert!(tail.chars().skip(1).all(|c| c == 'あ'));
     }
-
 }

@@ -208,9 +208,8 @@ mod tests {
         // the knob for codeg itself sets it for every agent whose own env_json
         // is silent — and those agents lose delegation with no warning if the
         // frontend only inspects `env`.
-        let agent_mode = |env: &BTreeMap<String, String>| {
-            !HostToolsPolicy::from_env(env).hosts_channels()
-        };
+        let agent_mode =
+            |env: &BTreeMap<String, String>| !HostToolsPolicy::from_env(env).hosts_channels();
         temp_env::with_var(HOST_TOOLS_ENV, Some("agent"), || {
             assert!(agent_mode(&BTreeMap::new()));
             assert!(!agent_mode(&runtime("default")));

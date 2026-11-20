@@ -572,6 +572,7 @@ async fn deepseek_model_catalog_is_readable_and_shaped_for_the_panel() {
     let (server, _data, _static) = build_test_server().await;
     let resp = server
         .post("/api/acp_load_deepseek_model_catalog")
+
         .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
         .json(&json!({}))
         .await;
@@ -595,6 +596,7 @@ async fn deepseek_model_catalog_requires_a_token() {
         .await;
     assert_eq!(resp.status_code(), 401);
 }
+// Shared models.json provider endpoints (web transport wire shape)
 
 #[tokio::test]
 async fn deepseek_provider_routes_are_readable_and_shaped_for_the_panel() {
@@ -633,6 +635,109 @@ async fn deepseek_provider_routes_require_a_token() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// The frontend transport service is shared with desktop Tauri, so it sends the
+// Tauri named-argument convention over HTTP too: `{ draft: … }` for create/
+// update, `{ params: … }` for probe, flat camelCase objects for the rest. These
+// tests pin the web handlers to that exact wire shape — a mismatch shows up as
+// a 422/501 regression exactly like the one the server mode hit at launch.
+
+fn provider_draft_json() -> Value {
+    json!({
+        "providerId": "acme",
+        "originalId": "",
+        "api": "openai-completions",
+        "baseUrl": "https://api.acme.example/v1",
+        "apiKey": "",
+        "authHeader": true,
+        "compatSupportsDeveloperRole": null,
+        "enabled": true,
+        "models": [
+            { "id": "acme-chat", "reasoning": false, "input": "text" },
+            { "id": "acme-reasoner", "reasoning": true, "input": "text-image" }
+        ]
+    })
+}
+
+#[tokio::test]
+async fn model_provider_list_returns_catalog_not_501() {
+    let (server, _data, _static) = build_test_server().await;
+    let resp = server
+        .post("/api/model_provider_list")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body, json!([]), "fresh catalog should be empty");
+}
+
+#[tokio::test]
+async fn model_provider_create_and_list_round_trip_wrapped_draft() {
+    let (server, _data, _static) = build_test_server().await;
+
+    // Create sends `{ draft: … }` (Tauri named-arg shape).
+    let resp = server
+        .post("/api/model_provider_create")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({ "draft": provider_draft_json() }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["record"]["providerId"], "acme");
+
+    // The row is visible through the list endpoint the settings page loads.
+    let resp = server
+        .post("/api/model_provider_list")
+
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body: Value = resp.json();
+    let providers = body.as_array().expect("array");
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0]["providerId"], "acme");
+    assert_eq!(providers[0]["models"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn model_provider_update_and_set_enabled_match_web_wire_shape() {
+    let (server, _data, _static) = build_test_server().await;
+    server
+        .post("/api/model_provider_create")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({ "draft": provider_draft_json() }))
+        .await;
+
+    // Update: wrapped draft again, disabling the provider (id unchanged, so
+    // originalId must match the created id — a rename is rejected by design).
+    let mut draft = provider_draft_json();
+    draft["originalId"] = json!("acme");
+    draft["enabled"] = json!(false);
+    let resp = server
+        .post("/api/model_provider_update")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({ "draft": draft }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Set enabled uses the flat camelCase params the transport sends.
+    let resp = server
+        .post("/api/model_provider_set_enabled")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({ "providerId": "acme", "enabled": true }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    let resp = server
+        .post("/api/model_provider_list")
+        .add_header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .json(&json!({}))
+        .await;
+    let body: Value = resp.json();
+    assert_eq!(body[0]["enabled"], true);
+}
+
 // Computer use
 //
 // Served only by a codeg-server its operator let share the screen it runs on

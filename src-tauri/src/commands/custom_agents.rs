@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::acp::custom_registry::{
     derive_command_name, CustomAgentDef, CustomAgentSpec, CustomDistributionKind,
+    ModelEnvDeclaration,
 };
 use crate::acp::error::AcpError;
 use crate::acp::remote_registry::{self, RegistryCatalogAgent};
@@ -52,6 +53,9 @@ pub struct CustomAgentInfo {
     /// Mirrors [`CustomAgentDef::supports_mcp`] — backs the settings toggle
     /// that decides whether codeg-mcp rides along on `session/new`.
     pub supports_mcp: bool,
+    /// Mirrors [`CustomAgentDef::model_env`] — the Model Provider env-var
+    /// name declaration, for the edit form to prefill.
+    pub model_env: Option<ModelEnvDeclaration>,
     /// False when the stored definition cannot produce launch metadata (e.g.
     /// a binary-only agent with no release for this platform). The row still
     /// lists, with the reason, instead of vanishing.
@@ -81,12 +85,15 @@ fn info_from_def(def: &CustomAgentDef) -> CustomAgentInfo {
         source: def.source.as_str().to_string(),
         version_probe: def.version_probe.clone(),
         supports_mcp: def.supports_mcp,
+        model_env: def.model_env.clone(),
         launchable: problem.is_none(),
         problem,
     }
 }
 
-pub async fn acp_list_custom_agents_core(db: &AppDatabase) -> Result<Vec<CustomAgentInfo>, AcpError> {
+pub async fn acp_list_custom_agents_core(
+    db: &AppDatabase,
+) -> Result<Vec<CustomAgentInfo>, AcpError> {
     let defs = custom_agent_service::list_defs(&db.conn)
         .await
         .map_err(|e| AcpError::protocol(e.to_string()))?;
@@ -198,14 +205,13 @@ pub async fn acp_add_registry_agent_core(
     let entry = catalog
         .iter()
         .find(|e| e.registry_id == registry_id)
-        .ok_or_else(|| {
-            AcpError::protocol(format!("{registry_id} is not in the ACP registry"))
-        })?;
+        .ok_or_else(|| AcpError::protocol(format!("{registry_id} is not in the ACP registry")))?;
 
     let kind = match distribution_kind.as_deref() {
-        Some(raw) => Some(CustomDistributionKind::parse(raw).ok_or_else(|| {
-            AcpError::protocol(format!("unknown distribution kind: {raw}"))
-        })?),
+        Some(raw) => Some(
+            CustomDistributionKind::parse(raw)
+                .ok_or_else(|| AcpError::protocol(format!("unknown distribution kind: {raw}")))?,
+        ),
         None => None,
     };
 
@@ -495,6 +501,15 @@ pub struct SaveCustomAgentParams {
     /// access.
     #[serde(default)]
     pub supports_mcp: Option<bool>,
+    /// See [`CustomAgentDef::model_env`]. `None` preserves the stored row's
+    /// declaration (or no declaration for a brand-new row), like
+    /// [`Self::supports_mcp`]: a caller that re-saves without knowing about
+    /// the projection must not silently strip it. To CLEAR a declaration the
+    /// form sends an explicit empty object. Resolved in
+    /// [`acp_save_custom_agent_params_core`], the only params path with DB
+    /// access.
+    #[serde(default)]
+    pub model_env: Option<ModelEnvDeclaration>,
 }
 
 impl SaveCustomAgentParams {
@@ -526,6 +541,9 @@ impl SaveCustomAgentParams {
                 .filter(|s| !s.is_empty())
                 .map(str::to_string),
             supports_mcp: true,
+            // Placeholder — `acp_save_custom_agent_params_core` resolves the
+            // real value (params override / stored row).
+            model_env: None,
         })
     }
 }
@@ -538,7 +556,8 @@ impl SaveCustomAgentParams {
 /// caller must not silently become "manual") and only a genuinely new row
 /// defaults to `Manual` — the params surface is the manual form; an absent
 /// `params.supports_mcp` likewise keeps the stored declaration, defaulting to
-/// on for a new row.
+/// on for a new row. An absent `params.model_env` keeps the stored projection
+/// declaration the same way.
 pub async fn acp_save_custom_agent_params_core(
     params: SaveCustomAgentParams,
     db: &AppDatabase,
@@ -550,9 +569,11 @@ pub async fn acp_save_custom_agent_params_core(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(custom_registry::CustomAgentSource::parse);
-    // One read backs both fallbacks, and is skipped entirely when the caller
-    // stated everything that could need it.
-    let stored = if explicit_source.is_none() || params.supports_mcp.is_none() {
+    // One read backs all the fallbacks, and is skipped entirely when the
+    // caller stated everything that could need it.
+    let needs_stored =
+        explicit_source.is_none() || params.supports_mcp.is_none() || params.model_env.is_none();
+    let stored = if needs_stored {
         custom_agent_service::get(&db.conn, params.registry_id.trim())
             .await
             .map_err(|e| AcpError::protocol(e.to_string()))?
@@ -571,6 +592,12 @@ pub async fn acp_save_custom_agent_params_core(
     let mut def = params.into_def()?;
     def.source = source;
     def.supports_mcp = supports_mcp;
+    if def.model_env.is_none() {
+        def.model_env = stored
+            .as_ref()
+            .and_then(|row| row.model_env.as_deref())
+            .and_then(|json| serde_json::from_str(json).ok());
+    }
     acp_save_custom_agent_core(def, db, emitter).await
 }
 
@@ -663,6 +690,7 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: None,
+            model_env: None,
         };
         assert!(params.into_def().is_err());
     }
@@ -682,6 +710,7 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: None,
+            model_env: None,
         };
         assert_eq!(params.into_def().unwrap().registry_id, "goose");
     }
@@ -707,6 +736,7 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: None,
+            model_env: None,
         }
     }
 
@@ -793,6 +823,7 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: true,
+            model_env: None,
         };
         let info = info_from_def(&def);
         assert!(!info.launchable);
@@ -849,11 +880,17 @@ mod tests {
             Some(uploaded.as_str())
         );
         // An oversized one is dropped rather than persisted.
-        let huge = format!("data:image/png;base64,{}", "A".repeat(MAX_ICON_DATA_URL_CHARS));
+        let huge = format!(
+            "data:image/png;base64,{}",
+            "A".repeat(MAX_ICON_DATA_URL_CHARS)
+        );
         assert_eq!(normalize_icon(Some(huge)).await, None);
         // Anything that is not http(s) is dropped, never fetched — notably
         // `file://`, which would otherwise read local disk.
-        assert_eq!(normalize_icon(Some("file:///etc/passwd".into())).await, None);
+        assert_eq!(
+            normalize_icon(Some("file:///etc/passwd".into())).await,
+            None
+        );
         assert_eq!(normalize_icon(Some("/local/path.svg".into())).await, None);
         assert_eq!(normalize_icon(Some("   ".into())).await, None);
         assert_eq!(normalize_icon(None).await, None);
@@ -893,8 +930,14 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await });
 
-        assert_eq!(inline_icon(&format!("http://{addr}/declared.png")).await, None);
-        assert_eq!(inline_icon(&format!("http://{addr}/chunked.png")).await, None);
+        assert_eq!(
+            inline_icon(&format!("http://{addr}/declared.png")).await,
+            None
+        );
+        assert_eq!(
+            inline_icon(&format!("http://{addr}/chunked.png")).await,
+            None
+        );
         // An icon within the cap still round-trips into a data URL.
         let small = inline_icon(&format!("http://{addr}/small.png"))
             .await
@@ -950,6 +993,7 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: true,
+            model_env: None,
         };
         let info = info_from_def(&def);
         assert!(info.launchable);

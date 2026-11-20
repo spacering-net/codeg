@@ -56,6 +56,14 @@ pub struct Model {
     pub status: ConversationStatus,
     pub kind: ConversationKind,
     pub model: Option<String>,
+    /// `NULL` preserves the pre-provider-mode runtime behavior. `provider`
+    /// requires the two provider columns and is validated before launch.
+    pub model_source: Option<String>,
+    /// Provider id from the shared `models.json` catalog. Stored as an
+    /// immutable string reference because the catalog is file-backed.
+    pub model_provider_id: Option<String>,
+    /// Upstream model id inside `model_provider_id`.
+    pub model_provider_model_id: Option<String>,
     pub git_branch: Option<String>,
     pub external_id: Option<String>,
     pub parent_id: Option<i32>,

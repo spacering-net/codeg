@@ -34,6 +34,9 @@ pub struct Model {
     /// Whether MCP servers may be forwarded to the agent over the ACP wire.
     /// See `CustomAgentDef::supports_mcp`.
     pub supports_mcp: bool,
+    /// Optional JSON declaration of the env-var names the agent reads for the
+    /// shared Model Provider projection. See `CustomAgentDef::model_env`.
+    pub model_env: Option<String>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

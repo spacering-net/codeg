@@ -57,6 +57,7 @@ pub async fn token_usage_sync(
         &state.db.conn,
         &state.emitter,
         params.mode.unwrap_or_default(),
+        &state.data_dir,
     )
     .await?;
     Ok(Json(result))

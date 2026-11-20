@@ -478,7 +478,7 @@ describe("RichComposer prompt-history Arrow routing", () => {
 
     const event = pressKey(dom, { key: "ArrowUp" })
 
-    expect(onHistoryKeyDown).toHaveBeenCalledWith("older", expect.anything())
+    expect(onHistoryKeyDown).toHaveBeenCalledWith("older")
     expect(event.defaultPrevented).toBe(true)
   })
 
@@ -491,7 +491,7 @@ describe("RichComposer prompt-history Arrow routing", () => {
 
     const event = pressKey(dom, { key: "ArrowDown" })
 
-    expect(onHistoryKeyDown).toHaveBeenCalledWith("newer", expect.anything())
+    expect(onHistoryKeyDown).toHaveBeenCalledWith("newer")
     expect(event.defaultPrevented).toBe(true)
   })
 
@@ -542,16 +542,10 @@ describe("RichComposer prompt-history Arrow routing", () => {
     // end of the last.
     act(() => editor?.commands.setTextSelection(1))
     pressKey(dom, { key: "ArrowUp" })
-    expect(onHistoryKeyDown).toHaveBeenLastCalledWith(
-      "older",
-      expect.anything()
-    )
+    expect(onHistoryKeyDown).toHaveBeenLastCalledWith("older")
     act(() => editor?.commands.setTextSelection(9))
     pressKey(dom, { key: "ArrowDown" })
-    expect(onHistoryKeyDown).toHaveBeenLastCalledWith(
-      "newer",
-      expect.anything()
-    )
+    expect(onHistoryKeyDown).toHaveBeenLastCalledWith("newer")
   })
 
   it("keeps Arrow keys for the IME while a composition is in flight", async () => {
@@ -594,7 +588,7 @@ describe("RichComposer prompt-history Arrow routing", () => {
 
     const event = pressKey(dom, { key: "ArrowUp" })
 
-    expect(onHistoryKeyDown).toHaveBeenCalledWith("older", expect.anything())
+    expect(onHistoryKeyDown).toHaveBeenCalledWith("older")
     expect(event.defaultPrevented).toBe(false)
   })
 

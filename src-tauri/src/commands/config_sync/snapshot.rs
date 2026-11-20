@@ -583,6 +583,9 @@ mod tests {
             installed_version: Set(Some("1.2.3-local".to_string())),
             env_json: Set(Some("{\"FOO\":\"bar\"}".to_string())),
             model_provider_id: Set(Some(provider.id)),
+            model_source: Set("native".to_string()),
+            catalog_provider_id: Set(None),
+            catalog_model_id: Set(None),
             created_at: Set(now),
             updated_at: Set(now),
         }
@@ -849,6 +852,7 @@ mod tests {
             source: Set("user".to_string()),
             version_probe: Set(None),
             supports_mcp: Set(false),
+            model_env: Set(None),
             created_at: Set(now),
             updated_at: Set(now),
         }

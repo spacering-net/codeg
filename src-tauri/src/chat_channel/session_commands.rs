@@ -2003,6 +2003,7 @@ mod tests {
                 enabled: false,
                 env_json: None,
                 model_provider_id: None,
+                model_source: "native".to_string(),
             },
         )
         .await
@@ -2173,6 +2174,7 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: true,
+            model_env: None,
         };
         crate::acp::custom_registry::hydrate(std::slice::from_ref(&def));
 

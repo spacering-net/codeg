@@ -15,14 +15,15 @@
 
 use std::sync::Arc;
 use std::time::Duration;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
 use crate::acp::session_info::{
-    SessionInfo, SessionInfoAccess, SessionInfoConfig, SessionInfoRuntimeConfig, SessionMessageItem,
-    SessionMessages, MAX_SESSION_MESSAGES,
+    SessionInfo, SessionInfoAccess, SessionInfoConfig, SessionInfoRuntimeConfig,
+    SessionMessageItem, SessionMessages, MAX_SESSION_MESSAGES,
 };
 use crate::app_error::AppCommandError;
 use crate::commands::conversations::get_folder_conversation_core;
@@ -74,6 +75,10 @@ const MAX_CONCURRENT_PARSES: usize = 4;
 /// transcript parses. Construct via [`DbSessionInfoLookup::new`].
 pub struct DbSessionInfoLookup {
     pub db: Arc<AppDatabase>,
+    /// Optional codeg data dir, so a shared-provider conversation's transcript
+    /// is read from its provider workspace (see
+    /// `build_workspace_agent_parser`). `None` reads the native home.
+    data_dir: Option<PathBuf>,
     /// Limits concurrent `get_folder_conversation_core` parses (see
     /// [`MAX_CONCURRENT_PARSES`]).
     parse_limit: Arc<tokio::sync::Semaphore>,
@@ -81,8 +86,13 @@ pub struct DbSessionInfoLookup {
 
 impl DbSessionInfoLookup {
     pub fn new(db: Arc<AppDatabase>) -> Self {
+        Self::with_data_dir(db, None)
+    }
+
+    pub fn with_data_dir(db: Arc<AppDatabase>, data_dir: Option<PathBuf>) -> Self {
         Self {
             db,
+            data_dir,
             parse_limit: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PARSES)),
         }
     }
@@ -137,8 +147,10 @@ impl SessionInfoAccess for DbSessionInfoLookup {
         // degrade to metadata-only with an explanatory note rather than failing the
         // whole tool call.
         let conn_owned = self.db.conn.clone();
-        let parse =
-            async move { get_folder_conversation_core(&conn_owned, session_id).await };
+        let data_dir = self.data_dir.clone();
+        let parse = async move {
+            get_folder_conversation_core(&conn_owned, session_id, data_dir.as_deref()).await
+        };
         match bounded_parse(self.parse_limit.clone(), PARSE_TIMEOUT, parse).await {
             ParseSlot::Ready(Ok((detail, parsed_title))) => {
                 if info.title.is_none() {
@@ -250,12 +262,8 @@ fn compact_turns(turns: &[MessageTurn], max: u32) -> SessionMessages {
         let item = compact_turn(turn);
         // Charge BOTH the text and the (bounded) tool names against the budget so
         // a turn can't smuggle an oversized payload through `tools`.
-        let cost = item.text.chars().count()
-            + item
-                .tools
-                .iter()
-                .map(|t| t.chars().count())
-                .sum::<usize>();
+        let cost =
+            item.text.chars().count() + item.tools.iter().map(|t| t.chars().count()).sum::<usize>();
         // Always keep the newest turn; stop once the budget can't fit the next.
         if !items.is_empty() && cost > budget {
             break;
@@ -437,8 +445,8 @@ pub async fn set_session_info_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use crate::models::message::ContentBlock;
+    use chrono::Utc;
 
     fn turn(role: TurnRole, blocks: Vec<ContentBlock>) -> MessageTurn {
         MessageTurn {
@@ -450,7 +458,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: None,
-        agent_message_id: None,
+            agent_message_id: None,
         }
     }
 
@@ -459,7 +467,9 @@ mod tests {
         let item = compact_turn(&turn(
             TurnRole::Assistant,
             vec![
-                ContentBlock::Text { text: "hello".into() },
+                ContentBlock::Text {
+                    text: "hello".into(),
+                },
                 ContentBlock::ToolUse {
                     tool_use_id: None,
                     tool_name: "Read".into(),
@@ -561,8 +571,7 @@ mod tests {
             .items
             .iter()
             .map(|i| {
-                i.text.chars().count()
-                    + i.tools.iter().map(|t| t.chars().count()).sum::<usize>()
+                i.text.chars().count() + i.tools.iter().map(|t| t.chars().count()).sum::<usize>()
             })
             .sum();
         assert!(total_chars <= OVERALL_CHARS + PER_TURN_CHARS);
@@ -574,7 +583,9 @@ mod tests {
     fn compact_turns_not_truncated_when_all_fit() {
         let turns = vec![turn(
             TurnRole::User,
-            vec![ContentBlock::Text { text: "only".into() }],
+            vec![ContentBlock::Text {
+                text: "only".into(),
+            }],
         )];
         let out = compact_turns(&turns, 20);
         assert_eq!(out.total, 1);
@@ -607,8 +618,7 @@ mod tests {
     async fn bounded_parse_reports_busy_when_no_slot_free() {
         // A semaphore with zero permits → no slot → Busy, work never starts.
         let sem = Arc::new(tokio::sync::Semaphore::new(0));
-        let out: ParseSlot<i32> =
-            bounded_parse(sem, Duration::from_secs(5), async { 1 }).await;
+        let out: ParseSlot<i32> = bounded_parse(sem, Duration::from_secs(5), async { 1 }).await;
         assert!(matches!(out, ParseSlot::Busy));
     }
 

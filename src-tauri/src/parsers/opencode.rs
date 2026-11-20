@@ -55,6 +55,13 @@ impl OpenCodeParser {
         }
     }
 
+    #[cfg(test)]
+    /// Read-only access to the directory holding the session database (the
+    /// parent of `db_path`, i.e. where `opencode.db` lives).
+    pub(crate) fn base_dir(&self) -> Option<&Path> {
+        self.db_path.as_deref().and_then(Path::parent)
+    }
+
     /// The database, when there is one on disk to read.
     fn existing_db(&self) -> Option<&Path> {
         self.db_path.as_deref().filter(|path| path.exists())

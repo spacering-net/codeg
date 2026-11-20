@@ -40,6 +40,11 @@ pub struct DbConversationSummary {
     /// (serialized as "regular" | "chat" | "loop" | "delegate").
     pub kind: ConversationKind,
     pub model: Option<String>,
+    /// `None` keeps legacy native runtime behavior; `"provider"` requires the
+    /// following two immutable catalog references.
+    pub model_source: Option<String>,
+    pub model_provider_id: Option<String>,
+    pub model_provider_model_id: Option<String>,
     pub git_branch: Option<String>,
     pub external_id: Option<String>,
     pub message_count: u32,

@@ -186,6 +186,13 @@ function acquireSharedSubscription(): () => void {
   }
 }
 
+/** Synchronous snapshot for imperative call sites that must not create a
+ *  React subscription. Returns the latest cached registry, which may be empty
+ *  before the shared hook has loaded. */
+export function getAcpAgentsSnapshot(): AcpAgentInfo[] {
+  return useAcpAgentsStore.getState().agents
+}
+
 /**
  * Subscribe to the ACP agent registry. Every hook instance shares ONE store,
  * ONE fetch, and ONE set of focus / `app://acp-agents-updated` / reconnect

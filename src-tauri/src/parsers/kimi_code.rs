@@ -42,6 +42,118 @@ fn resolve_kimi_code_home_from(
         .unwrap_or_else(|| home_dir.unwrap_or_default().join(".kimi-code"))
 }
 
+/// How far back from the end of a `wire.jsonl` to scan for a turn-failure
+/// record. The failure lands at the very end of the failed turn (followed only
+/// by bookkeeping records), so a bounded tail read keeps this off the multi-MB
+/// session files' hot path.
+const WIRE_FAILURE_TAIL_BYTES: u64 = 128 * 1024;
+/// Upper bound for the evidence string handed to the empty-turn details.
+const WIRE_FAILURE_MAX_CHARS: usize = 300;
+
+/// The most recent turn-failure message in a session's `wire.jsonl`, if any.
+///
+/// kimi-acp maps a failed model call (e.g. a provider 400) to a plain ACP
+/// `end_turn`: the error never crosses the protocol, so codeg sees a turn that
+/// "ended successfully" with no output. Kimi's own wire log does record the
+/// failure — `turn.step.interrupted` with the provider message, then
+/// `turn.ended` with `reason: "failed"` — and this walks the tail of that log
+/// for the latest such record so the empty-turn banner can say WHY.
+///
+/// "Latest record in the tail" (not "this turn's record"): the turn being
+/// diagnosed produced no output, so if kimi wrote a failure it is the last one
+/// in the file; a tail without one (or a missing/unreadable wire) degrades to
+/// `None` and the generic empty-turn evidence stands. The raw message may echo
+/// provider-side text — callers must redact before display.
+pub(crate) fn last_turn_failure_evidence(session_id: &str) -> Option<String> {
+    last_turn_failure_evidence_in(
+        &resolve_kimi_code_home_dir().join("sessions"),
+        session_id,
+    )
+}
+
+/// [`last_turn_failure_evidence`] against an explicit `sessions` root (tests,
+/// provider workspaces).
+fn last_turn_failure_evidence_in(sessions_dir: &Path, session_id: &str) -> Option<String> {
+    let wire = find_session_wire(sessions_dir, session_id)?;
+    let evidence = read_wire_failure_tail(&wire)?;
+    let message = evidence.trim();
+    if message.is_empty() {
+        None
+    } else {
+        Some(truncate_str(message, WIRE_FAILURE_MAX_CHARS))
+    }
+}
+
+/// Locate `<sessions_dir>/<workDirKey>/<sessionId>/agents/main/wire.jsonl` with
+/// the same two-shallow-levels walk the parser uses (session ids are unique
+/// across buckets, so no cwd disambiguation is needed).
+fn find_session_wire(sessions_dir: &Path, session_id: &str) -> Option<PathBuf> {
+    for bucket in read_subdirs(sessions_dir) {
+        let wire = bucket.join(session_id).join("agents").join("main").join("wire.jsonl");
+        if wire.is_file() {
+            return Some(wire);
+        }
+    }
+    None
+}
+
+/// Read the tail of a `wire.jsonl` and return the newest turn-failure message.
+///
+/// Reads at most [`WIRE_FAILURE_TAIL_BYTES`] from the end; the first (likely
+/// partial) line of a non-zero-offset read is skipped rather than parsed. Both
+/// failure shapes carry the same text — `turn.step.interrupted.message` and
+/// `turn.ended.error.message` — so whichever lands last in the file wins.
+fn read_wire_failure_tail(wire: &Path) -> Option<String> {
+    let file = fs::File::open(wire).ok()?;
+    let len = file.metadata().ok()?.len();
+    let offset = len.saturating_sub(WIRE_FAILURE_TAIL_BYTES);
+    let mut reader = BufReader::new(file);
+    if offset > 0 {
+        use std::io::Seek;
+        reader.seek(std::io::SeekFrom::Start(offset)).ok()?;
+    }
+
+    let mut newest: Option<String> = None;
+    for (index, line) in reader.lines().enumerate() {
+        let Ok(line) = line else { continue };
+        // A tail read that starts mid-file almost certainly begins inside a
+        // record; dropping that one whole line is cheaper than parsing half.
+        if offset > 0 && index == 0 {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(message) = wire_failure_message(&value) else {
+            continue;
+        };
+        newest = Some(message);
+    }
+    newest
+}
+
+/// The failure message carried by a wire record, if it is one:
+/// `turn.step.interrupted` (`message`) or `turn.ended` with
+/// `reason: "failed"` (`error.message`). Successes and other records → `None`.
+fn wire_failure_message(value: &Value) -> Option<String> {
+    let record_type = value.get("type").and_then(Value::as_str)?;
+    let message = match record_type {
+        "turn.step.interrupted" => value.get("message").and_then(Value::as_str),
+        "turn.ended" => {
+            if value.get("reason").and_then(Value::as_str) != Some("failed") {
+                return None;
+            }
+            value
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(Value::as_str)
+        }
+        _ => return None,
+    };
+    let message = message?.trim();
+    (!message.is_empty()).then(|| message.to_string())
+}
+
 /// Kimi Code (Moonshot AI) stores its session transcripts under a
 /// **directory-per-session** layout — a third archetype distinct from CodeBuddy
 /// (one JSONL file per session) and Hermes (a single SQLite DB):
@@ -111,11 +223,17 @@ impl KimiCodeParser {
         }
     }
 
-    /// Construct a parser pointed at an explicit `sessions` directory (test
-    /// fixtures).
-    #[cfg(any(test, feature = "test-utils"))]
+    /// Construct a parser pointed at an explicit `sessions` directory instead
+    /// of the env-resolved `$KIMI_CODE_HOME/sessions` — the provider
+    /// workspace's `sessions/` or a test fixture.
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self { base_dir }
+    }
+
+    #[cfg(test)]
+    /// Read-only access to the sessions directory this parser reads from.
+    pub(crate) fn base_dir(&self) -> &Path {
+        &self.base_dir
     }
 
     /// Load `session_index.jsonl` (sibling of `sessions/`) into a
@@ -587,7 +705,11 @@ fn parse_wire(path: &Path, agents_dir: Option<&Path>) -> WireParse {
         }
     }
 
-    flush_usage(&mut wp.messages, &mut pending_usage, &mut last_assistant_idx);
+    flush_usage(
+        &mut wp.messages,
+        &mut pending_usage,
+        &mut last_assistant_idx,
+    );
     wp
 }
 
@@ -1050,8 +1172,9 @@ fn parse_kimi_subagent_tool_calls(path: &Path) -> Vec<AgentToolCall> {
             "tool.result" => {
                 if let Some(id) = event.get("toolCallId").and_then(Value::as_str) {
                     let result = event.get("result");
-                    let output =
-                        result.and_then(tool_result_preview).map(|s| truncate_str(&s, 500));
+                    let output = result
+                        .and_then(tool_result_preview)
+                        .map(|s| truncate_str(&s, 500));
                     let is_error = result
                         .and_then(|r| r.get("isError"))
                         .and_then(Value::as_bool)
@@ -1179,12 +1302,7 @@ fn kimi_context_window_used_tokens_from_usage(usage: &TurnUsage) -> Option<u64> 
     (used > 0).then_some(used)
 }
 
-fn text_message(
-    id: String,
-    role: MessageRole,
-    text: String,
-    ts: DateTime<Utc>,
-) -> UnifiedMessage {
+fn text_message(id: String, role: MessageRole, text: String, ts: DateTime<Utc>) -> UnifiedMessage {
     block_message(id, role, ContentBlock::Text { text }, ts)
 }
 
@@ -1324,7 +1442,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
             i += 1;
         } else if matches!(msg.role, MessageRole::System) {
@@ -1337,7 +1455,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
             i += 1;
         } else {
@@ -1376,7 +1494,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms,
                 model: turn_model,
                 completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
         }
     }
@@ -1423,6 +1541,96 @@ mod tests {
             .is_empty());
     }
 
+    /// A failed kimi turn records `turn.step.interrupted` with the provider
+    /// message followed by `turn.ended` with the structured `error.message`;
+    /// the evidence reader returns the newest of them so an empty-turn banner
+    /// can quote the provider's own 400 text.
+    #[test]
+    fn wire_failure_evidence_reads_the_latest_failed_turn() {
+        let root = unique_root("failure-evidence");
+        let sid = "session_fail_001";
+        write_session(
+            &root,
+            "wd_codeg_9b0259b03e28",
+            sid,
+            &json!({"title":"hi","createdAt":"2026-09-05T12:38:20.000Z"}),
+            &[
+                json!({"type":"metadata","protocol_version":"1.5","created_at":1i64}),
+                json!({"type":"turn.prompt","input":[{"type":"text","text":"hi"}],"time":2i64}),
+                json!({"type":"context.append_loop_event","event":{"type":"step.begin","turnId":"0","step":1},"time":3i64}),
+                json!({"type":"context.append_loop_event","event":{"type":"step.end","turnId":"0","step":1,"finishReason":"error"},"time":4i64}),
+                json!({"type":"turn.step.interrupted","turnId":0,"step":1,"reason":"error","message":"[provider.api_error] 400 Model only support text input","time":5i64}),
+                json!({"type":"turn.ended","turnId":0,"reason":"failed","error":{"code":"provider.api_error","message":"[provider.api_error] 400 Model only support text input"},"time":6i64}),
+                json!({"type":"prompt.completed","reason":"failed","time":7i64}),
+            ],
+        );
+
+        let evidence = last_turn_failure_evidence_in(&root, sid).expect("evidence");
+        assert_eq!(
+            evidence,
+            "[provider.api_error] 400 Model only support text input"
+        );
+    }
+
+    /// Two failed turns in one session: the LATER one wins, so a retry that
+    /// fails differently reports its own cause rather than the first turn's.
+    #[test]
+    fn wire_failure_evidence_prefers_the_newest_record() {
+        let root = unique_root("failure-latest");
+        let sid = "session_fail_002";
+        write_session(
+            &root,
+            "wd_codeg_9b0259b03e28",
+            sid,
+            &json!({"title":"hi","createdAt":"2026-09-05T12:38:20.000Z"}),
+            &[
+                json!({"type":"turn.step.interrupted","turnId":0,"reason":"error","message":"[provider.api_error] 400 old failure","time":1i64}),
+                json!({"type":"turn.ended","turnId":0,"reason":"failed","error":{"message":"[provider.api_error] 400 old failure"},"time":2i64}),
+                json!({"type":"turn.step.interrupted","turnId":1,"reason":"error","message":"[provider.api_error] 400 The parameter `max_completion_tokens` are not valid","time":3i64}),
+                json!({"type":"turn.ended","turnId":1,"reason":"failed","error":{"message":"[provider.api_error] 400 The parameter `max_completion_tokens` are not valid"},"time":4i64}),
+            ],
+        );
+
+        let evidence = last_turn_failure_evidence_in(&root, sid).expect("evidence");
+        assert!(evidence.contains("max_completion_tokens"), "{evidence}");
+    }
+
+    /// A session whose turns all completed has no failure record — the reader
+    /// must return `None` so the generic empty-turn evidence stands.
+    #[test]
+    fn wire_failure_evidence_is_none_without_a_failure() {
+        let root = unique_root("failure-none");
+        let sid = "session_ok_003";
+        write_session(
+            &root,
+            "wd_codeg_9b0259b03e28",
+            sid,
+            &json!({"title":"hi","createdAt":"2026-09-05T12:38:20.000Z"}),
+            &sample_wire(),
+        );
+        assert!(last_turn_failure_evidence_in(&root, sid).is_none());
+    }
+
+    /// A `turn.ended` that is NOT a failure (normal completion) must not be
+    /// mistaken for one, and a missing wire/session degrades to `None`.
+    #[test]
+    fn wire_failure_evidence_ignores_successes_and_missing_sessions() {
+        let root = unique_root("failure-success");
+        let sid = "session_ok_004";
+        write_session(
+            &root,
+            "wd_codeg_9b0259b03e28",
+            sid,
+            &json!({"title":"hi","createdAt":"2026-09-05T12:38:20.000Z"}),
+            &[
+                json!({"type":"turn.ended","turnId":0,"reason":"completed","time":1i64}),
+                json!({"type":"turn.step.interrupted","turnId":0,"reason":"cancelled","time":2i64}),
+            ],
+        );
+        assert!(last_turn_failure_evidence_in(&root, sid).is_none());
+        assert!(last_turn_failure_evidence_in(&root, "session_absent").is_none());
+    }
+
     /// Write a session directory: `<sessions>/<bucket>/<sessionId>/` with a
     /// `state.json` and a `agents/main/wire.jsonl`. Returns the `sessions` root.
     fn write_session(
@@ -1442,8 +1650,12 @@ mod tests {
         .expect("write state.json");
         let mut file = std::fs::File::create(main.join("wire.jsonl")).expect("create wire.jsonl");
         for record in wire {
-            writeln!(file, "{}", serde_json::to_string(record).expect("serialize"))
-                .expect("write line");
+            writeln!(
+                file,
+                "{}",
+                serde_json::to_string(record).expect("serialize")
+            )
+            .expect("write line");
         }
     }
 
@@ -1502,10 +1714,7 @@ mod tests {
             &json!({"title":"执行一下pnpm build","createdAt":"2026-06-24T04:50:44.154Z"}),
             &sample_wire(),
         );
-        write_session_index(
-            &root,
-            &[(sid, "ignored", "/Users/demo/my-app")],
-        );
+        write_session_index(&root, &[(sid, "ignored", "/Users/demo/my-app")]);
 
         let parser = KimiCodeParser::with_base_dir(root.clone());
 
@@ -1523,9 +1732,9 @@ mod tests {
 
         let has_user = detail.turns.iter().any(|t| {
             matches!(t.role, TurnRole::User)
-                && t.blocks
-                    .iter()
-                    .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("pnpm build")))
+                && t.blocks.iter().any(
+                    |b| matches!(b, ContentBlock::Text { text } if text.contains("pnpm build")),
+                )
         });
         assert!(has_user, "turn.prompt becomes a User turn");
 
@@ -1548,13 +1757,19 @@ mod tests {
             t.blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { tool_name, input_preview, .. }
                 if tool_name == "Bash" && input_preview.as_deref().unwrap_or_default().contains("pnpm build")))
         });
-        assert!(has_tool_use, "tool.call becomes ToolUse with serialized args");
+        assert!(
+            has_tool_use,
+            "tool.call becomes ToolUse with serialized args"
+        );
 
         let has_tool_result = detail.turns.iter().any(|t| {
             t.blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { output_preview, is_error, .. }
                 if !*is_error && output_preview.as_deref().unwrap_or_default().contains("Compiled successfully")))
         });
-        assert!(has_tool_result, "tool.result becomes a successful ToolResult");
+        assert!(
+            has_tool_result,
+            "tool.result becomes a successful ToolResult"
+        );
 
         let has_assistant_text = detail.turns.iter().any(|t| {
             matches!(t.role, TurnRole::Assistant)
@@ -1562,7 +1777,10 @@ mod tests {
                     .iter()
                     .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("构建完成")))
         });
-        assert!(has_assistant_text, "content.part type=text becomes assistant Text");
+        assert!(
+            has_assistant_text,
+            "content.part type=text becomes assistant Text"
+        );
 
         // Per-step usage records are summed across the turn (37+36 output, etc.).
         let usage = detail
@@ -1658,9 +1876,11 @@ mod tests {
 
         let parser = KimiCodeParser::with_base_dir(root.clone());
         let detail = parser.get_conversation(sid).expect("detail");
-        let errored = detail.turns.iter().flat_map(|t| &t.blocks).any(
-            |b| matches!(b, ContentBlock::ToolResult { is_error, .. } if *is_error),
-        );
+        let errored = detail
+            .turns
+            .iter()
+            .flat_map(|t| &t.blocks)
+            .any(|b| matches!(b, ContentBlock::ToolResult { is_error, .. } if *is_error));
         assert!(errored, "result.isError=true must set is_error");
 
         // "New Session" placeholder title falls back to the first user prompt.
@@ -1821,8 +2041,12 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create subagent dir");
         let mut file = std::fs::File::create(dir.join("wire.jsonl")).expect("create wire.jsonl");
         for record in wire {
-            writeln!(file, "{}", serde_json::to_string(record).expect("serialize"))
-                .expect("write line");
+            writeln!(
+                file,
+                "{}",
+                serde_json::to_string(record).expect("serialize")
+            )
+            .expect("write line");
         }
     }
 
@@ -1918,7 +2142,10 @@ mod tests {
 
         let read = &stats.tool_calls[1];
         assert_eq!(read.tool_name, "Read");
-        assert!(read.is_error, "result.isError=true marks the nested Read failed");
+        assert!(
+            read.is_error,
+            "result.isError=true marks the nested Read failed"
+        );
 
         // A delegation whose transcript directory is missing degrades to no stats.
         let missing = results
@@ -1935,7 +2162,10 @@ mod tests {
             .iter()
             .find(|(id, _)| id.as_deref() == Some("Bash_0"))
             .expect("plain tool result");
-        assert!(plain.1.is_none(), "non-Agent results never carry agent_stats");
+        assert!(
+            plain.1.is_none(),
+            "non-Agent results never carry agent_stats"
+        );
 
         // A non-Agent result with a real `agent_id:` header is still gated out by
         // the call-side classification.

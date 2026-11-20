@@ -1241,6 +1241,12 @@
   font-size: 0.625rem; /* 10px @100% */
 }
 
+/* 保持 input type 为 text，用 WebKit 的 text-security 做密钥视觉遮蔽
+   （pios ModelConfigModal 同款；眼睛按钮只切换这个遮蔽类）。 */
+@utility masked-key {
+  -webkit-text-security: disc;
+}
+
 /* The chat column's max width: the user's dragged width (see
    `ChatWidthHandles`), else 48rem (= the old `max-w-3xl`). Capped at the parent
    minus `--chat-gutter` on each side — a relative ceiling, so it follows the

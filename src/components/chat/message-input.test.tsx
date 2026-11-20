@@ -29,6 +29,8 @@ import {
   emitAttachFileToSession,
   emitAttachPageToSession,
   emitAttachSessionToSession,
+  queuePendingSessionAttachment,
+  takePendingSessionAttachment,
 } from "@/lib/session-attachment-events"
 import type { DbConversationSummary } from "@/lib/types"
 
@@ -72,6 +74,31 @@ vi.mock("@/hooks/use-shortcut-settings", () => ({
 // scan mid-test; defaults to "no skills" for every other test in this file.
 const agentSkills = vi.hoisted(() => vi.fn(() => [] as unknown[]))
 vi.mock("@/hooks/use-agent-skills", () => ({ useAgentSkills: agentSkills }))
+const acpAgentsMock = vi.hoisted(() => ({
+  state: {
+    agents: [] as Array<{
+      agent_type: string
+      model_source: "native" | "provider"
+      model_provider_id?: number | null
+    }>,
+    fresh: false,
+    refresh: vi.fn(),
+  },
+}))
+vi.mock("@/hooks/use-acp-agents", () => ({
+  useAcpAgents: () => acpAgentsMock.state,
+}))
+vi.mock("./model-provider-picker", async () => {
+  const React = await import("react")
+  return {
+    ModelProviderPicker: () =>
+      React.createElement(
+        "button",
+        { type: "button", "aria-label": "Model provider" },
+        "Model provider"
+      ),
+  }
+})
 vi.mock("@/hooks/use-built-in-experts", () => ({ useBuiltInExperts: () => [] }))
 vi.mock("@/hooks/use-built-in-science", () => ({ useBuiltInScience: () => [] }))
 vi.mock("@/hooks/use-enabled-skill-ids", () => ({
@@ -1129,6 +1156,9 @@ describe("MessageInput session-mention attach", () => {
   afterEach(() => {
     cleanup()
     composerHandle.current = null
+    // Drain the "At in new conversation" handoff so a queued entry from one
+    // test can't bleed into the next composer mount.
+    takePendingSessionAttachment("tab-1")
   })
 
   function summary(id: number, title: string | null): DbConversationSummary {
@@ -1227,6 +1257,19 @@ describe("MessageInput session-mention attach", () => {
     })
     const text = serializeDocToText(editor.state.doc)
     expect(text.indexOf(link)).toBe(text.lastIndexOf(link))
+  })
+
+  it("applies a mention queued before the composer mounted", async () => {
+    // "At in new conversation" queues the mention before the target tab's
+    // composer exists (dispatchEvent would be lost); the fresh composer must
+    // pick it up once it is ready.
+    queuePendingSessionAttachment("tab-1", summary(123, "Queued session"))
+    const editor = await mountWithEditor()
+    await waitFor(() =>
+      expect(serializeDocToText(editor.state.doc)).toContain(
+        "[Queued session](codeg://session/123)"
+      )
+    )
   })
 })
 
@@ -1333,11 +1376,14 @@ describe("MessageInput file-tree drag-and-drop", () => {
   })
 })
 
-// The model / mode / config selectors are one chip — every current value joined
-// by "/" — opening one popover in which each setting is adjusted in place. A
-// pick applies at once and the popover stays open. Every control inside is a
-// plain button (or the Radix Switch): a nested Radix dismissable layer drops
-// the selection on WKWebView.
+// When the composer is narrow the model/config/mode selectors collapse behind a
+// cog button into a single Popover that renders a master–detail panel: the
+// settings on the left, the active setting's options (plain buttons) on the
+// right. This is the WebKit-safe replacement for the old nested dropdown/submenu
+// — a nested Radix dismissable layer drops the selection on WKWebView, so the
+// options are plain <button>s in the one popover layer. jsdom has no layout, so
+// the container-query-hidden wide row stays hidden and this collapsed path is
+// what renders here.
 const MODEL_OPTION: SessionConfigOptionInfo = {
   id: "model",
   name: "Model",
@@ -1355,10 +1401,11 @@ const MODEL_OPTION: SessionConfigOptionInfo = {
 }
 
 const MSGS = enMessages.Folder.chat.messageInput
-const SETTINGS = new RegExp(`^${MSGS.agentSettings}`)
 
 // Cline 3.0.50's `auto_approve` — the first boolean config option any pinned
-// agent ships.
+// agent ships. Both the wide inline row and the collapsed popover are always in
+// the DOM (a container query, which jsdom does not evaluate, picks one), so a
+// single render exercises both surfaces.
 const AUTO_APPROVE_OPTION: SessionConfigOptionInfo = {
   id: "auto_approve",
   name: "Auto-approve tools",
@@ -1367,15 +1414,88 @@ const AUTO_APPROVE_OPTION: SessionConfigOptionInfo = {
   kind: { type: "boolean", current_value: false },
 }
 
-async function openSettings(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: SETTINGS }))
-  return screen.findByRole("dialog", { name: MSGS.agentSettings })
-}
+describe("MessageInput shared model provider mode", () => {
+  afterEach(() => {
+    cleanup()
+    acpAgentsMock.state.agents = []
+    acpAgentsMock.state.fresh = false
+  })
+
+  it("shows the provider picker even when native config options are absent", async () => {
+    acpAgentsMock.state.agents = [
+      { agent_type: "codex", model_source: "provider" },
+    ]
+    acpAgentsMock.state.fresh = true
+    const { container } = renderInput({ agentType: "codex" })
+    await waitFor(() =>
+      expect(container.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+    expect(
+      screen.getAllByRole("button", { name: "Model provider" }).length
+    ).toBeGreaterThan(0)
+  })
+
+  it("shows the Claude picker when the shared provider source is on", async () => {
+    acpAgentsMock.state.agents = [
+      {
+        agent_type: "claude_code",
+        model_source: "provider",
+        model_provider_id: null,
+      },
+    ]
+    acpAgentsMock.state.fresh = true
+    const { container } = renderInput({ agentType: "claude_code" })
+    await waitFor(() =>
+      expect(container.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+    expect(
+      screen.getAllByRole("button", { name: "Model provider" }).length
+    ).toBeGreaterThan(0)
+  })
+
+  it("hides the Claude picker for a legacy provider binding only", async () => {
+    acpAgentsMock.state.agents = [
+      {
+        agent_type: "claude_code",
+        model_source: "native",
+        model_provider_id: 7,
+      },
+    ]
+    acpAgentsMock.state.fresh = true
+    const { container } = renderInput({ agentType: "claude_code" })
+    await waitFor(() =>
+      expect(container.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+    expect(screen.queryByRole("button", { name: "Model provider" })).toBeNull()
+  })
+
+  it("shows the provider picker alongside non-model config options", async () => {
+    acpAgentsMock.state.agents = [
+      { agent_type: "codex", model_source: "provider" },
+    ]
+    acpAgentsMock.state.fresh = true
+    const onConfigOptionChange = vi.fn()
+    const { container } = renderInput({
+      agentType: "codex",
+      configOptions: [AUTO_APPROVE_OPTION],
+      onConfigOptionChange,
+    })
+    await waitFor(() =>
+      expect(container.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+    expect(
+      screen.getAllByRole("button", { name: "Model provider" }).length
+    ).toBeGreaterThan(0)
+    expect(
+      screen.getByRole("button", { name: /Auto-approve tools/ })
+    ).toBeInTheDocument()
+  })
+})
 
 describe("MessageInput boolean config options", () => {
   afterEach(() => cleanup())
 
-  it("flips the option from a switch in the settings popover", async () => {
+  it("renders the inline chip as a toggle and flips it on click", async () => {
     const user = userEvent.setup()
     const onConfigOptionChange = vi.fn()
     const { container } = renderInput({
@@ -1386,16 +1506,38 @@ describe("MessageInput boolean config options", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
 
-    // Off, so the chip's label leaves it out — but its name still says it.
-    expect(screen.getByRole("button", { name: SETTINGS })).toHaveAccessibleName(
-      `${MSGS.agentSettings}: Auto-approve tools ${MSGS.toggleOff}`
-    )
-    const popover = await openSettings(user)
-    const toggle = within(popover).getByRole("switch", {
-      name: "Auto-approve tools",
+    const toggle = screen.getByRole("button", {
+      name: `Auto-approve tools: ${MSGS.toggleOff}`,
     })
-    expect(toggle).toHaveAttribute("aria-checked", "false")
+    expect(toggle).toHaveAttribute("aria-pressed", "false")
+
     await user.click(toggle)
+    expect(onConfigOptionChange).toHaveBeenCalledWith("auto_approve", "true")
+  })
+
+  it("offers On/Off rows in the collapsed cog popover", async () => {
+    const user = userEvent.setup()
+    const onConfigOptionChange = vi.fn()
+    const { container } = renderInput({
+      configOptions: [AUTO_APPROVE_OPTION],
+      onConfigOptionChange,
+    })
+    await waitFor(() =>
+      expect(container.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+
+    const settingsLabel = MSGS.agentSettings
+    await user.click(screen.getByRole("button", { name: settingsLabel }))
+    const popover = await screen.findByRole("dialog", { name: settingsLabel })
+
+    // The left rail summarizes the current state…
+    expect(
+      within(popover).getByRole("button", { name: /Auto-approve tools/ })
+    ).toBeInTheDocument()
+    // …and the detail pane is a plain two-item choice.
+    await user.click(
+      within(popover).getByRole("button", { name: MSGS.toggleOn })
+    )
     expect(onConfigOptionChange).toHaveBeenCalledWith("auto_approve", "true")
   })
 })
@@ -1405,7 +1547,8 @@ describe("MessageInput selector loading placeholder", () => {
 
   it("shows a visible placeholder in the selector row while the session comes up", async () => {
     // Opening a historical conversation spends seconds with no selectors known.
-    // The cue has to be in the row itself, where the chip will be.
+    // The cue has to be in the row itself — the cog popover's loading text is
+    // only reachable by a user who already suspects something is loading.
     const { container } = renderInput({
       configOptionsLoading: true,
       configOptions: [],
@@ -1439,9 +1582,7 @@ describe("MessageInput selector loading placeholder", () => {
       </NextIntlClientProvider>
     )
     expect(screen.queryByRole("status")).toBeNull()
-    expect(screen.getByRole("button", { name: SETTINGS })).toHaveTextContent(
-      "Default"
-    )
+    expect(screen.getByRole("button", { name: /Model/ })).toBeInTheDocument()
   })
 
   it("renders no selector affordance at all when nothing is loading or known", async () => {
@@ -1452,14 +1593,16 @@ describe("MessageInput selector loading placeholder", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
     expect(screen.queryByRole("status")).toBeNull()
-    expect(screen.queryByRole("button", { name: SETTINGS })).toBeNull()
+    expect(
+      screen.queryByRole("button", { name: MSGS.agentSettings })
+    ).toBeNull()
   })
 })
 
-describe("MessageInput settings popover", () => {
+describe("MessageInput collapsed selectors popover", () => {
   afterEach(() => cleanup())
 
-  it("selects a config option and stays open for the next change", async () => {
+  it("selects a config option from the cog Popover and closes it", async () => {
     const user = userEvent.setup()
     const onConfigOptionChange = vi.fn()
     const { container } = renderInput({
@@ -1470,15 +1613,26 @@ describe("MessageInput settings popover", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
 
-    const popover = await openSettings(user)
+    const settingsLabel = enMessages.Folder.chat.messageInput.agentSettings
+    await user.click(screen.getByRole("button", { name: settingsLabel }))
+
+    const popover = await screen.findByRole("dialog", { name: settingsLabel })
+    // The left rail shows the setting as a title + current value row.
+    expect(
+      within(popover).getByRole("button", { name: /Model/ })
+    ).toBeInTheDocument()
+
+    // Options are plain buttons (native clicks) — selecting fires the change.
     await user.click(within(popover).getByRole("button", { name: /Opus/ }))
     expect(onConfigOptionChange).toHaveBeenCalledWith("model", "opus")
-    expect(
-      screen.getByRole("dialog", { name: MSGS.agentSettings })
-    ).toBeInTheDocument()
+
+    // Selecting a value closes the controlled popover.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: settingsLabel })).toBeNull()
+    )
   })
 
-  it("groups model values by their provider prefix", async () => {
+  it("groups model values by their provider prefix in the cog Popover", async () => {
     const user = userEvent.setup()
     const onConfigOptionChange = vi.fn()
     const groupedModel: SessionConfigOptionInfo = {
@@ -1508,12 +1662,17 @@ describe("MessageInput settings popover", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
 
-    const popover = await openSettings(user)
-    // One header per provider namespace…
+    const settingsLabel = enMessages.Folder.chat.messageInput.agentSettings
+    await user.click(screen.getByRole("button", { name: settingsLabel }))
+    const popover = await screen.findByRole("dialog", { name: settingsLabel })
+
+    // The detail pane carries one header per provider namespace…
     expect(within(popover).getByText("anthropic")).toBeInTheDocument()
     expect(within(popover).getByText("openai")).toBeInTheDocument()
+
     // …and the option label drops the redundant `openai/` prefix, while the
-    // committed value stays the full id.
+    // committed value stays the full id. (Pick the non-current model so its
+    // label is unique to the detail pane, not echoed in the left-rail summary.)
     await user.click(within(popover).getByRole("button", { name: /gpt-4o/ }))
     expect(onConfigOptionChange).toHaveBeenCalledWith("model", "openai/gpt-4o")
   })
@@ -1546,8 +1705,11 @@ describe("MessageInput settings popover", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
 
-    const popover = await openSettings(user)
-    // A long list renders the searchable combobox, not plain rows.
+    const settingsLabel = enMessages.Folder.chat.messageInput.agentSettings
+    await user.click(screen.getByRole("button", { name: settingsLabel }))
+    const popover = await screen.findByRole("dialog", { name: settingsLabel })
+
+    // A long list (> threshold) renders the searchable combobox, not plain rows.
     const search = within(popover).getByRole("combobox")
     await user.type(search, "model-17")
     // Filtering narrows to the one match; the full id is committed on click.
@@ -1558,7 +1720,7 @@ describe("MessageInput settings popover", () => {
     )
   })
 
-  it("selects a legacy mode from the popover", async () => {
+  it("selects a mode from the cog Popover and closes it", async () => {
     const user = userEvent.setup()
     const onModeChange = vi.fn()
     const { container } = renderInput({
@@ -1573,12 +1735,16 @@ describe("MessageInput settings popover", () => {
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
     )
 
-    expect(screen.getByRole("button", { name: SETTINGS })).toHaveTextContent(
-      "Plan"
-    )
-    const popover = await openSettings(user)
-    await user.click(within(popover).getByRole("button", { name: "Act" }))
+    const settingsLabel = enMessages.Folder.chat.messageInput.agentSettings
+    await user.click(screen.getByRole("button", { name: settingsLabel }))
+
+    const popover = await screen.findByRole("dialog", { name: settingsLabel })
+    await user.click(within(popover).getByRole("button", { name: /Act/ }))
     expect(onModeChange).toHaveBeenCalledWith("act")
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: settingsLabel })).toBeNull()
+    )
   })
 })
 

@@ -16,6 +16,7 @@ import { ConversationMovedError } from "@/lib/conversation-moved"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { type AgentType, type PromptDraft } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
+import { useModelProviderDraftSelection } from "@/stores/model-provider-selection-store"
 
 interface UseConnectionLifecycleOptions {
   contextKey: string
@@ -55,6 +56,13 @@ interface UseConnectionLifecycleOptions {
    * connection under the same contextKey.
    */
   isTransientUnmount?: () => boolean
+  /**
+   * Composer tab whose Model Provider draft pick should re-arm the connect:
+   * picking a provider for a pre-bind session changes the launch credentials
+   * (the pick is remembered on the agent), and the connection that failed
+   * without them has to be retried.
+   */
+  tabId?: string
 }
 
 export interface UseConnectionLifecycleReturn {
@@ -142,6 +150,7 @@ export function useConnectionLifecycle({
   conversationId,
   preparing = false,
   isTransientUnmount,
+  tabId,
 }: UseConnectionLifecycleOptions): UseConnectionLifecycleReturn {
   const t = useTranslations("Folder.chat.connectionLifecycle")
   const { setActiveKey, releaseActiveKey, touchActivity } = useAcpActions()
@@ -252,6 +261,15 @@ export function useConnectionLifecycle({
     }
   }, [isActive, contextKey, setActiveKey, touchActivity])
 
+  // A Model Provider pick made in the pre-bind composer. It is remembered on
+  // the agent as well, so it changes what the next connect launches with — the
+  // auto-connect effect below keys on this so the pick re-arms a session that
+  // failed for lack of credentials.
+  const providerDraft = useModelProviderDraftSelection(tabId)
+  const providerDraftKey = providerDraft
+    ? `${providerDraft.providerId}/${providerDraft.modelId}`
+    : null
+
   // Auto-connect when tab becomes active and workingDir is available.
   // Depends on isActive + workingDir + agentType so that connections wait
   // for folder info to load (workingDir transitions from undefined →
@@ -260,6 +278,12 @@ export function useConnectionLifecycle({
   // same-param calls and disconnects+reconnects when workingDir or
   // agentType differs. Status changes must NOT re-trigger this to avoid
   // infinite reconnect loops on transient errors.
+  //
+  // `providerDraftKey` is the one state change that must re-arm a connect
+  // that already failed: a provider-sourced agent whose session was refused
+  // for missing credentials (Qwen Code) only becomes launchable once the
+  // composer's pick is remembered on the agent, and the retry has to happen
+  // without the user toggling an agent or folder to force it.
   useEffect(() => {
     if (!isActive) return
     if (!workingDir) return
@@ -291,7 +315,7 @@ export function useConnectionLifecycle({
     return () => {
       cancelled = true
     }
-  }, [isActive, workingDir, agentType])
+  }, [isActive, workingDir, agentType, providerDraftKey])
 
   // Status-bar task for the two legs that precede a usable session:
   //   "preparing"  — the caller is resolving what to connect to (see `preparing`)

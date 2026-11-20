@@ -623,7 +623,12 @@ pub async fn facet_folders(
 
     let mut out: Vec<(folder::Model, i64)> = rows
         .into_iter()
-        .filter_map(|r| by_id.get(&r.folder_id).cloned().map(|f| (f, r.tokens.unwrap_or(0))))
+        .filter_map(|r| {
+            by_id
+                .get(&r.folder_id)
+                .cloned()
+                .map(|f| (f, r.tokens.unwrap_or(0)))
+        })
         .collect();
     out.sort_by_key(|b| std::cmp::Reverse(b.1));
     Ok(out)
@@ -976,7 +981,9 @@ mod tests {
 
         // Marking an unstamped conversation is a no-op, not an error.
         let other = seed_conversation(&db, folder, AgentType::Codex).await;
-        mark_stale_for_reparse(&db.conn, other).await.expect("again");
+        mark_stale_for_reparse(&db.conn, other)
+            .await
+            .expect("again");
     }
 
     #[tokio::test]

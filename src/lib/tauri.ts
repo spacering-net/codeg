@@ -111,12 +111,14 @@ export async function getSidebarData(): Promise<SidebarData> {
 export async function acpConnect(
   agentType: AgentType,
   workingDir?: string,
-  sessionId?: string
+  sessionId?: string,
+  conversationId?: number | null
 ): Promise<string> {
   return invoke("acp_connect", {
     agentType,
     workingDir: workingDir ?? null,
     sessionId: sessionId ?? null,
+    conversationId: conversationId ?? null,
   })
 }
 

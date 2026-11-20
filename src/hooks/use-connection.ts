@@ -148,10 +148,15 @@ export interface UseConnectionReturn {
     conversationId?: number
   ) => Promise<void>
   disconnect: () => Promise<void>
-  /** Restart the session (disconnect + resume same sessionId) so it picks up
-   *  current agent/model settings. Returns `true` if it actually restarted,
-   *  `false` on a no-op (viewer / delegation child / no connection). */
-  reapplyConfig: () => Promise<boolean>
+  /** Restart the session so it picks up current agent/model settings. By
+   *  default it resumes the existing sessionId; `freshSession` omits that id
+   *  for a conversation whose prior session was never used. Returns `true` if
+   *  it actually restarted, `false` on a no-op (viewer / delegation child / no
+   *  connection). */
+  reapplyConfig: (
+    conversationIdOverride?: number,
+    options?: { freshSession?: boolean }
+  ) => Promise<boolean>
   /** Dismiss the stale banner for the current drift without restarting. */
   dismissConfigStale: () => void
   sendPrompt: (
@@ -394,7 +399,8 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   )
 
   const reapplyConfig = useCallback(
-    () => actions.reapplyConfig(contextKey),
+    (conversationIdOverride?: number, options?: { freshSession?: boolean }) =>
+      actions.reapplyConfig(contextKey, conversationIdOverride, options),
     [actions, contextKey]
   )
 

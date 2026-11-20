@@ -481,6 +481,13 @@ fn apply_agent_settings<'a>(
                         installed_version: Set(None),
                         env_json: Set(dto.env_json),
                         model_provider_id: Set(provider_id),
+                        // Device-local: the model source and remembered catalog
+                        // selection are per-machine state — a freshly imported
+                        // setting starts at the native default with no catalog
+                        // memory (see the catalog-selection migration).
+                        model_source: Set("native".to_string()),
+                        catalog_provider_id: Set(None),
+                        catalog_model_id: Set(None),
                         created_at: Set(now),
                         updated_at: Set(now),
                     }
@@ -598,6 +605,10 @@ fn apply_custom_agents<'a>(
                         source: Set(dto.source),
                         version_probe: Set(dto.version_probe),
                         supports_mcp: Set(dto.supports_mcp),
+                        // Device-local: no model-env declaration arrives with the
+                        // import, so the standard convention keys apply (the
+                        // same NULL the model-env migration leaves rows at).
+                        model_env: Set(None),
                         created_at: Set(now),
                         updated_at: Set(now),
                     }
