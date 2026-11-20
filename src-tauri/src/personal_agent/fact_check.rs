@@ -8,9 +8,8 @@
 //!   it answered, and the conversation's link (`get_session_info` reads
 //!   more). A conversation of a project is checked in a work session where
 //!   it is (its worktree, when it is in one); any other in a chat.
-//! - Who checks: the division's "check" pick (a work assistant's own
-//!   executor config) unless it runs the conversation's agent or cannot take
-//!   the check; else one that can, of another agent — else of the same.
+//! - Who checks: the primary, on what its work runs on now; nothing set for
+//!   it, and the owner is told to pick it in its settings.
 //! - Back: its last `VERDICT:` line decides — true, false, partly or unsure;
 //!   a verdict with no evidence is unsure. The card in the primary's
 //!   conversation says so, the message is marked, the owner hears it as a
@@ -37,11 +36,9 @@ use crate::db::entities::personal_agent_timeline::TimelineKind;
 use crate::db::service::personal_agent_check_service::{self as csvc, NewCheck, Settled};
 use crate::db::service::personal_agent_service::{self as svc, NewDispatch, NewNotice, NewRow};
 use crate::db::AppDatabase;
-use crate::models::agent::AgentType;
-use crate::models::assistant::AssistantInfo;
 use crate::models::conversation::DbConversationSummary;
 use crate::models::personal_agent::{
-    DispatchExecutorSnapshot, MessageCheckRequest, MessageCheckView, PersonalAgentChange,
+    MessageCheckRequest, MessageCheckView, PersonalAgentChange,
     TimelineRow,
 };
 
@@ -319,8 +316,6 @@ struct Subject {
     /// The work session's folder, for a conversation of a project; `None`:
     /// a chat.
     folder: Option<crate::models::FolderDetail>,
-    /// The project it belongs to (a worktree's is its root's).
-    project: Option<i32>,
 }
 
 /// The checks as the page shows them: who checked, its session, its card.
@@ -443,14 +438,8 @@ impl PersonalAgentEngine {
         } else {
             DispatchMode::Chat
         };
-        let checker = self
-            .pick_fact_checker(subject.conversation.agent_type, mode, subject.project)
-            .await
-            .ok_or_else(|| {
-                "no executor config can check it: none is enabled that the assistants may hand a \
-                 work session (or, for a chat, a chat) to here — add one, or allow one in its usage"
-                    .to_string()
-            })?;
+        // On what the primary runs its work on, as it is now.
+        let snapshot = self.work_snapshot().await.map_err(|e| self.for_the_owner(e))?;
         let agent = subject.conversation.agent_type.to_string();
         let prompt = check_prompt(&CheckInput {
             message: &ask.message,
@@ -461,16 +450,6 @@ impl PersonalAgentEngine {
             agent: &agent,
             cwd: subject.folder.as_ref().map(|f| f.path.as_str()),
         });
-        let via = self.checker_via(&checker).await;
-        let snapshot = DispatchExecutorSnapshot {
-            assistant_id: checker.id,
-            name: checker.name.clone(),
-            agent_type: checker.agent_type,
-            agent_options: checker.agent_options.clone(),
-            label_snapshot: Some(checker.label_snapshot.clone()),
-            instructions: checker.instructions.clone(),
-            dispatcher: Some(self.dispatcher_brief().await),
-        };
         let claim = ask.quote.as_deref().unwrap_or(&ask.message);
         let title = super::reach::check_title(self.locale_now().await, claim);
         ask.bot_id = bot;
@@ -480,7 +459,7 @@ impl PersonalAgentEngine {
             NewDispatch {
                 bot_id: bot,
                 mode,
-                executor_assistant_id: checker.id,
+                executor_assistant_id: snapshot.assistant_id,
                 executor_snapshot_json: serde_json::to_string(&snapshot)
                     .map_err(|e| e.to_string())?,
                 folder_id: subject.folder.as_ref().map(|f| f.id),
@@ -492,7 +471,7 @@ impl PersonalAgentEngine {
                 lineage: svc::Lineage::default(),
                 done_when: None,
                 pr_fix: None,
-                kind: Some("check".into()),
+                is_check: true,
             },
         )
         .await
@@ -503,7 +482,6 @@ impl PersonalAgentEngine {
             "executor": snapshot.name,
             "executor_id": snapshot.assistant_id,
             "agent_type": snapshot.agent_type,
-            "check_via": via,
         });
         self.raise_check_card(&check, card).await;
         self.emit(PersonalAgentChange::Dispatch { id: d.id });
@@ -532,51 +510,10 @@ impl PersonalAgentEngine {
         .await
         .map_err(|e| e.to_string())?
         .filter(|f| f.kind == FolderKind::Regular);
-        let project = folder.as_ref().map(|f| f.parent_id.unwrap_or(f.id));
         Ok(Subject {
             conversation,
             folder,
-            project,
         })
-    }
-
-    /// Who checks a message of a conversation run by `agent` (10.3): the
-    /// division's "check" pick unless it runs that agent or cannot take the
-    /// check; else one that can, of another agent — else of the same.
-    async fn pick_fact_checker(
-        &self,
-        agent: AgentType,
-        mode: DispatchMode,
-        project: Option<i32>,
-    ) -> Option<AssistantInfo> {
-        let team = self.account().await.team;
-        let assistants = crate::db::service::assistant_service::list_live_enabled(&self.db.conn)
-            .await
-            .unwrap_or_default();
-        let takes = |a: &AssistantInfo| {
-            let usage = team.usage_of(&a.uid);
-            usage.dispatch
-                && usage.modes.contains(&mode)
-                // A chat takes no project.
-                && (mode == DispatchMode::Chat
-                    || usage
-                        .projects
-                        .as_ref()
-                        .is_none_or(|p| project.is_some_and(|id| p.contains(&id))))
-        };
-        if let Some(a) = self
-            .division_check_pick(&team, &assistants)
-            .await
-            .filter(|a| takes(a) && a.agent_type != agent)
-        {
-            return Some(a.clone());
-        }
-        assistants
-            .iter()
-            .filter(|a| takes(a))
-            .find(|a| a.agent_type != agent)
-            .or_else(|| assistants.iter().find(|a| takes(a)))
-            .cloned()
     }
 
     /// A check's card on the primary's timeline: being checked, then what
@@ -762,7 +699,7 @@ impl PersonalAgentEngine {
         self.emit(PersonalAgentChange::Check {
             conversation_id: done.conversation_id,
         });
-        let told = self.tell_check(&done, d).await;
+        let told = self.tell_check(&done).await;
         if let Some(host) = self.host_ref() {
             let claim = done.quote.as_deref().unwrap_or(&done.message);
             host.tell(super::reach::News {
@@ -868,11 +805,7 @@ impl PersonalAgentEngine {
     async fn tell_check(
         &self,
         check: &check_entity::Model,
-        d: Option<&dispatch_entity::Model>,
     ) -> Result<(), String> {
-        let executor = d
-            .map(|d| super::dispatch::executor_of(d).name)
-            .unwrap_or_else(|| "an executor config".into());
         let found = match (check.state, check.verdict) {
             (FactCheckState::Done, Some(v)) => format!("it says {}", verdict_word(v)),
             _ => format!(
@@ -886,7 +819,7 @@ impl PersonalAgentEngine {
             "a message"
         };
         let mut summary = format!(
-            "At the owner's request codeg had {executor} check {what} of conversation \
+            "At the owner's request codeg checked {what} of conversation \
              codeg://session/{} (dispatch #{}, card #{}): {found}.",
             check.conversation_id,
             check.dispatch_id.unwrap_or(0),

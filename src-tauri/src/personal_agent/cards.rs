@@ -31,8 +31,8 @@ pub struct ItemLine {
     pub status: String,
     pub waits_for: Option<String>,
     pub summary: String,
-    /// `(mode, executor, state)` for a dispatch.
-    pub dispatch: Option<(String, String, String)>,
+    /// `(mode, state)` for a dispatch.
+    pub dispatch: Option<(String, String)>,
     /// When it is due and what happens then, in words (6.1).
     pub time: Option<String>,
 }
@@ -60,15 +60,6 @@ pub struct OwnerLine {
     pub text: String,
     /// What the message brought up (6.8), each a line codeg adds after it.
     pub notes: Vec<String>,
-}
-
-/// One role assistant, as the tool notes list it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AssistantLine {
-    pub id: i32,
-    pub name: String,
-    pub description: String,
-    pub agent: String,
 }
 
 /// Who the agent is and what it remembers, as the working directory holds
@@ -133,9 +124,10 @@ pub struct HandoffInput<'a> {
     pub identity: Identity<'a>,
     pub items: &'a [ItemLine],
     pub recent: &'a [RecentLine],
-    pub assistants: &'a [AssistantLine],
-    /// The owner's division of work, when they set one.
-    pub division: Option<&'a str>,
+    /// What it works with when it does a thing itself (`dispatch`), in
+    /// words: the agent and its options. `None` while it has nothing to work
+    /// with.
+    pub own_work: Option<&'a str>,
     pub budget_chars: usize,
     /// How the owner wants cards (9.3).
     pub cards: CardUse,
@@ -202,8 +194,8 @@ fn render_items(items: &[ItemLine]) -> String {
         .iter()
         .map(|i| {
             let mut line = format!("- #{} [{}] {}", i.id, i.kind, i.summary.trim());
-            if let Some((mode, executor, state)) = &i.dispatch {
-                line.push_str(&format!(" — {mode} · executor {executor} · {state}"));
+            if let Some((mode, state)) = &i.dispatch {
+                line.push_str(&format!(" — {mode} · {state}"));
             }
             line.push_str(&format!(" · {}", i.status));
             if let Some(w) = &i.waits_for {
@@ -229,30 +221,19 @@ fn render_recent(recent: &[RecentLine]) -> String {
         .join("\n\n")
 }
 
-fn render_assistants(assistants: &[AssistantLine]) -> String {
-    if assistants.is_empty() {
-        return "(none — tell the owner to add one on the assistants page, under Settings → \
-                Team → Executor configs)"
-            .to_string();
+fn own_work_line(own_work: Option<&str>) -> String {
+    match own_work {
+        Some(w) => format!("You do your own work (`dispatch`) with {w}."),
+        None => "You cannot do work yourself yet: the owner has not picked what you work with. \
+Tell them to pick it in your settings, or hand the work to another assistant with `bot_message`."
+            .to_string(),
     }
-    assistants
-        .iter()
-        .map(|a| {
-            let what = a.description.trim();
-            if what.is_empty() {
-                format!("- #{} {} ({})", a.id, a.name, a.agent)
-            } else {
-                format!("- #{} {} ({}) — {}", a.id, a.name, a.agent, what)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 const TOOL_NOTES: &str = "You hand work out with `dispatch` (modes: `task` for code changes in a \
 project's worktree, `chat` for work outside any project, `session` for investigating a project's \
 current checkout) and continue it with `dispatch_followup`. Both return at once; progress reaches \
-you later as a <codeg-events> block. `assistant_list` and `project_list` give the ids they take. \
+you later as a <codeg-events> block. `project_list` gives the project ids they take. \
 `item_list` / `item_read` / `item_update` keep your open matters; `timeline_read` pages back \
 through the timeline. Every turn starts with <codeg-now>: the owner's date, time, weekday and zone, \
 whether they are in codeg now — work out \"tomorrow at 3 pm\" from it. To remind the owner at a time, `item_update` with `due` \
@@ -268,7 +249,7 @@ change X?\"), search with `history_search` first and answer with the links it gi
 plan approval from a session you \
 dispatched reaches you as <codeg-ask>: answer it for the owner with `dispatch_answer`, or forward \
 it to them when you cannot settle it. Write what done looks like in `dispatch`'s `done_when`; code \
-work you dispatched is checked by another executor against it, and the check reaches you as \
+work you dispatched is checked against it in a separate read-only session, and the check reaches you as \
 <codeg-acceptance>: conclude it with `acceptance_decide` (accept, revise, ask_owner). codeg \
 watches the pull requests board tasks delivered and tells you what changes on them (checks failed, \
 a conflict, ready to merge, merged) as `pr` events; `pr_status` with `watch: true` watches any \
@@ -278,8 +259,8 @@ number as `[#ID]`; when you answer one that is not the newest, write `[[quote:#I
 answer (it is shown as a quote, not as text). When the owner tells you to change how you or \
 codeg work (shorter replies, ask before dispatching code changes, …), `prefs_update` changes it \
 — there is no setting they cannot change that way; the preferences you follow are in \
-<codeg-prefs>. When they ask for a new work assistant, `bot_create` makes it; `bot_update` and \
-`assistant_update` change the work assistants and the executor configs (or make one). \
+<codeg-prefs>. When they ask for a new work assistant, `bot_create` makes it; `bot_update` \
+changes one. \
 `forge_comment`, `issue_close` and `pr_merge` act on a forge — a merge only of the version that \
 should be merged, its checks passed. `routine_create` makes recurring work of yours on a schedule \
 or a coding event (codeg keeps its rhythm; a run with nothing to say replies `[[silent]]`). Big \
@@ -517,13 +498,9 @@ follow one when they ask for what it is for, and stop where it says to wait for 
         tools = section(
             "Tools",
             &format!(
-                "{TOOL_NOTES}\n{}\nExecutor configs you may dispatch to:\n{}{}",
+                "{TOOL_NOTES}\n{}\n{}",
                 card_notes(input.cards, input.skill),
-                render_assistants(input.assistants),
-                input
-                    .division
-                    .map(|d| format!("\n\n{d}"))
-                    .unwrap_or_default()
+                own_work_line(input.own_work)
             )
         ),
     );
@@ -809,7 +786,6 @@ mod tests {
     fn input<'a>(
         recent: &'a [RecentLine],
         items: &'a [ItemLine],
-        assistants: &'a [AssistantLine],
         budget: usize,
     ) -> HandoffInput<'a> {
         HandoffInput {
@@ -820,8 +796,7 @@ mod tests {
             identity: IDENTITY,
             items,
             recent,
-            assistants,
-            division: None,
+            own_work: Some("Claude Code · Model: Opus"),
             budget_chars: budget,
             cards: CardUse::Prefer,
             skill: true,
@@ -859,16 +834,10 @@ mod tests {
             status: "open".into(),
             waits_for: Some("external".into()),
             summary: "Fix the login bug".into(),
-            dispatch: Some(("task".into(), "Coder".into(), "running".into())),
+            dispatch: Some(("task".into(), "running".into())),
             time: None,
         }];
-        let assistants = [AssistantLine {
-            id: 1,
-            name: "Coder".into(),
-            description: "Code changes".into(),
-            agent: "Claude Code".into(),
-        }];
-        let card = handoff_card(&input(&recent, &items, &assistants, 32_000));
+        let card = handoff_card(&input(&recent, &items, 32_000));
         assert!(!card.trimmed);
         for needle in [
             "segment 3",
@@ -882,10 +851,10 @@ mod tests {
             "- [Answer first](memory/answer-first.md) — the answer before the steps",
             "## Memory\nYour working directory keeps your memory",
             "`type` (`lesson`, `fact` or `reference`)",
-            "#9 [dispatch] Fix the login bug — task · executor Coder · running",
+            "#9 [dispatch] Fix the login bug — task · running",
             "[#11] Owner: fix the login bug",
             "[#12] You: Dispatched it as task #4.",
-            "#1 Coder (Claude Code) — Code changes",
+            "You do your own work (`dispatch`) with Claude Code · Model: Opus.",
             "timeline_read",
         ] {
             assert!(
@@ -907,7 +876,7 @@ mod tests {
                 text: format!("message number {i}"),
             })
             .collect();
-        let card = handoff_card(&input(&recent, &[], &[], 4_000));
+        let card = handoff_card(&input(&recent, &[], 4_000));
         assert!(card.trimmed);
         assert!(card.text.contains("message number 199"));
         assert!(!card.text.contains("message number 0\n"));
@@ -916,7 +885,7 @@ mod tests {
 
     #[test]
     fn a_nameless_agent_is_not_told_a_name() {
-        let mut input = input(&[], &[], &[], 32_000);
+        let mut input = input(&[], &[], 32_000);
         input.identity.name = "  ";
         let card = handoff_card(&input);
         assert!(!card.text.contains("Your name is"), "{}", card.text);
@@ -934,7 +903,7 @@ mod tests {
                 )
             })
             .collect();
-        let mut input = input(&[], &[], &[], 32_000);
+        let mut input = input(&[], &[], 32_000);
         input.identity.memory = &memory;
         // Far past the index's own 26% share of the budget…
         assert!(memory.chars().count() > 32_000 * 26 / 100);
@@ -968,7 +937,7 @@ mod tests {
     #[test]
     fn an_index_past_its_loaded_head_says_so() {
         let memory: String = (0..250).map(|i| format!("- e{i}\n")).collect();
-        let mut input = input(&[], &[], &[], 200_000);
+        let mut input = input(&[], &[], 200_000);
         input.identity.memory = &memory;
         let card = handoff_card(&input);
         assert!(card.text.contains("- e199"));

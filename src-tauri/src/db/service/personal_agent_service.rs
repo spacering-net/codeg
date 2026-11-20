@@ -233,7 +233,7 @@ pub struct AgentWrite {
     /// part of codeg's — stay as they are. Wins over `settings_json` on an
     /// update; an insert takes `settings_json`.
     pub settings_patch: Option<serde_json::Value>,
-    /// A work assistant's executor config.
+    /// The executor config its work runs on.
     pub executor_assistant_id: Option<i32>,
 }
 
@@ -404,7 +404,7 @@ async fn insert_primary(
         updated_at: Set(now),
         kind: Set(BotKind::Primary),
         uid: Set(Some(new_bot_uid())),
-        executor_assistant_id: Set(None),
+        executor_assistant_id: Set(write.executor_assistant_id),
         sort_order: Set(0),
         pinned_at: Set(None),
         section: Set(None),
@@ -2710,8 +2710,8 @@ pub struct NewDispatch {
     pub done_when: Option<String>,
     /// A round codeg starts to fix a watched pull request (7.4), as JSON.
     pub pr_fix: Option<String>,
-    /// The kind of work it is (7.9).
-    pub kind: Option<String>,
+    /// codeg's own check of other work (7.5).
+    pub is_check: bool,
 }
 
 /// Where an input's chain started — an assistant and its timeline row (an
@@ -2776,7 +2776,7 @@ fn dispatch_active(new: NewDispatch) -> dispatch::ActiveModel {
         round_op_id: Set(None),
         done_when: Set(new.done_when),
         pr_fix: Set(new.pr_fix),
-        kind: Set(new.kind),
+        is_check: Set(new.is_check),
     }
 }
 

@@ -129,7 +129,7 @@ impl PersonalAgentEngine {
         v: ValidDispatch,
         auth: DispatchAuth,
     ) -> Result<Result<super::dispatch::DispatchMade, Confirming>, String> {
-        let key = ledger::dispatch_key(v.snapshot.assistant_id, v.mode, v.folder_id, &v.title);
+        let key = ledger::dispatch_key(v.mode, v.folder_id, &v.title);
         let subject = format!("confirm:{key}");
         // What the turn this delivery repeats did stands, whatever the
         // owner's setting says now: the card it raised (and what that card
@@ -335,10 +335,12 @@ impl PersonalAgentEngine {
                 .map(|f| f.alias.clone().unwrap_or(f.name.clone())),
             None => None,
         };
+        // Who is to do it, not what it runs on: that is taken when the owner
+        // says yes.
+        let me = self.agent_row().await;
         let display = json!({
-            "executor": v.snapshot.name,
-            "executor_id": v.snapshot.assistant_id,
-            "agent_type": v.snapshot.agent_type,
+            "by": me.as_ref().map(super::messages::display_name),
+            "bot_id": me.as_ref().map(|b| b.id),
             "mode": v.mode,
             "project": project,
             "title": v.title,
@@ -407,7 +409,7 @@ impl PersonalAgentEngine {
     /// as written, run only if the owner accepts. One like it open, or
     /// declined within the week, is not raised again.
     pub(super) async fn suggest_dispatch(&self, v: ValidDispatch, reason: String) -> super::tools::ToolOutcome {
-        let key = ledger::dispatch_key(v.snapshot.assistant_id, v.mode, v.folder_id, &v.title);
+        let key = ledger::dispatch_key(v.mode, v.folder_id, &v.title);
         let subject = format!("suggest:{key}");
         if let Some(o) = self.declined_lately(&subject).await {
             return o;
@@ -662,6 +664,7 @@ impl PersonalAgentEngine {
                 Ok(valid) => match self
                     .record_dispatch(valid, DispatchAuth::Card { notice_id })
                     .await
+                    .map_err(|e| self.for_the_owner(e))
                 {
                     Ok(made) => {
                         let result = json!({ "dispatch_id": made.dispatch.id });
@@ -769,6 +772,17 @@ impl PersonalAgentEngine {
                 Err(e)
             }
         }
+    }
+
+    /// What an assistant hears when it has nothing its work runs on, said to
+    /// the owner instead on a card they accepted; anything else as it is.
+    pub(super) fn for_the_owner(&self, e: String) -> String {
+        if e != super::dispatch::NO_EXECUTOR {
+            return e;
+        }
+        "nothing is set for this assistant's work to run on: pick it in the assistant's settings \
+         (Identity & brain), then try again"
+            .into()
     }
 
     /// A card's timeline row as it stands now.

@@ -1088,6 +1088,14 @@ impl PersonalAgentEngine {
                 "how": r.how,
                 "dispatch_id": r.dispatch_id,
             }),
+            // Nothing to run it on yet: the card asks, to be clicked once
+            // the assistant has something to work with.
+            Err(e) if e == super::dispatch::NO_EXECUTOR => json!({
+                "state": "ask",
+                "cause": cause,
+                "n": data["fix"]["n"].clone(),
+                "error": self.for_the_owner(e.clone()),
+            }),
             Err(e) => json!({ "state": "failed", "cause": cause, "error": e }),
         };
         let _ = svc::update_row_data(&self.db.conn, row_id, None, Some(data)).await;
@@ -1368,102 +1376,36 @@ impl PersonalAgentEngine {
                          branch."
                     }
                 };
-                let mut last_err = String::from("no executor config takes this work");
-                for assistant in self.fix_executors(w).await {
-                    let req = super::dispatch::DispatchRequest {
-                        mode: DispatchMode::Task,
-                        assistant_id: assistant,
-                        title: title.clone(),
-                        prompt: prompt.clone(),
-                        project_id: Some(folder),
-                        report: false,
-                        on_done: None,
-                        done_when: Some(done_when.into()),
-                        // The kind of work (7.9): red checks and a
-                        // conflict are keeping a PR green; feedback is
-                        // more code.
-                        kind: Some(
-                            match cause {
-                                Cause::Checks | Cause::Conflict => "fix_ci",
-                                Cause::Feedback => "code",
-                            }
-                            .into(),
-                        ),
-                        why: None,
-                    };
-                    let mut valid = match Box::pin(self.validate_dispatch(&req)).await {
-                        Ok(v) => v,
-                        Err(e) => {
-                            last_err = e;
-                            continue;
-                        }
-                    };
-                    valid.pr_fix = Some(fix.clone());
-                    let made = Box::pin(me.record_dispatch(
-                        valid,
-                        super::dispatch::DispatchAuth::Op {
-                            op_id: op_id.to_string(),
-                        },
-                    ))
-                    .await?;
-                    return Ok(Round {
-                        n,
-                        cause,
-                        head: head.to_string(),
-                        dispatch_id: made.dispatch.id,
-                        how: How::Task,
-                        at: Utc::now(),
-                    });
-                }
-                Err(last_err)
+                // On what the assistant now with the pull request runs its
+                // work on (7.4) — taken as the round goes out.
+                let req = super::dispatch::DispatchRequest {
+                    mode: DispatchMode::Task,
+                    title: title.clone(),
+                    prompt: prompt.clone(),
+                    project_id: Some(folder),
+                    report: false,
+                    on_done: None,
+                    done_when: Some(done_when.into()),
+                };
+                let mut valid = Box::pin(self.validate_dispatch(&req)).await?;
+                valid.pr_fix = Some(fix.clone());
+                let made = Box::pin(me.record_dispatch(
+                    valid,
+                    super::dispatch::DispatchAuth::Op {
+                        op_id: op_id.to_string(),
+                    },
+                ))
+                .await?;
+                Ok(Round {
+                    n,
+                    cause,
+                    head: head.to_string(),
+                    dispatch_id: made.dispatch.id,
+                    how: How::Task,
+                    at: Utc::now(),
+                })
             }
         }
-    }
-
-    /// The executor configs a new task on `w` may go to, in order: the one
-    /// that did the work, the division's for fixing CI, the assistant's own,
-    /// then any.
-    async fn fix_executors(&self, w: &watch_entity::Model) -> Vec<i32> {
-        let mut out: Vec<i32> = Vec::new();
-        let mut push = |id: i32| {
-            if !out.contains(&id) {
-                out.push(id);
-            }
-        };
-        if let Some(d) = w.dispatch_id {
-            if let Ok(Some(d)) = svc::get_dispatch(&self.db.conn, d).await {
-                push(d.executor_assistant_id);
-            }
-        }
-        let team = self.account().await.team;
-        let assistants = crate::db::service::assistant_service::list_live_enabled(&self.db.conn)
-            .await
-            .unwrap_or_default();
-        let bots = svc::list_bots(&self.db.conn).await.unwrap_or_default();
-        if let Some((what, uid)) = team.division.get("fix_ci").and_then(|p| p.split_once(':')) {
-            let picked = match what {
-                "bot" => bots
-                    .iter()
-                    .find(|b| b.uid.as_deref() == Some(uid))
-                    .and_then(|b| b.executor_assistant_id),
-                "assistant" => assistants.iter().find(|a| a.uid == uid).map(|a| a.id),
-                _ => None,
-            };
-            if let Some(id) = picked {
-                push(id);
-            }
-        }
-        if let Some(own) = bots
-            .iter()
-            .find(|b| b.id == w.bot_id)
-            .and_then(|b| b.executor_assistant_id)
-        {
-            push(own);
-        }
-        for a in &assistants {
-            push(a.id);
-        }
-        out
     }
 
     /// The source a new task on a pull request gets: its coordinates as the
@@ -2233,11 +2175,25 @@ impl PersonalAgentEngine {
             .as_i64()
             .and_then(|i| i32::try_from(i).ok())
             .ok_or("this card names no watch")?;
-        let _guard = self.watch_lock.lock().await;
+        let guard = self.watch_lock.lock().await;
         let w = wsvc::get(&self.db.conn, id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or("the watch is gone")?;
+        // Handed on since the card: whoever watches it now acts on it — its
+        // round goes out on what that assistant works with, under its lock.
+        if w.bot_id != self.bot().await {
+            drop(guard);
+            let owner = match self.host_ref() {
+                Some(h) => h.engine_for(Some(w.bot_id)).await,
+                None => None,
+            }
+            .ok_or("the assistant watching this pull request now is not running")?;
+            if !owner.serves(w.bot_id).await {
+                return Err("the assistant watching this pull request now is not running".into());
+            }
+            return Box::pin(owner.act_on_pr_ask(n, action)).await;
+        }
         let row = match n.timeline_id {
             Some(r) => svc::get_row(&self.db.conn, r).await.ok().flatten(),
             None => None,
@@ -2290,7 +2246,7 @@ impl PersonalAgentEngine {
                     )
                     .await;
                 }
-                started.map(|_| ())
+                started.map(|_| ()).map_err(|e| self.for_the_owner(e))
             }
             "forward" => {
                 if payload["ask"].as_str() != Some("forward") || n.state != NoticeState::Open {
@@ -2306,7 +2262,7 @@ impl PersonalAgentEngine {
                         self.keep_pending(&w, items).await;
                         data["forwarded"] = json!({ "waiting": true });
                     }
-                    Err(e) => return Err(e),
+                    Err(e) => return Err(self.for_the_owner(e)),
                 }
                 data["state"] = json!("acted");
                 if let Some(r) = row.as_ref() {
@@ -2321,7 +2277,14 @@ impl PersonalAgentEngine {
                     .await
                     .map_err(|e| e.to_string())?;
                     if let Ok(Some(r)) = svc::get_row(&self.db.conn, r.id).await {
-                        self.emit_rows(vec![svc::to_row(r)]);
+                        // The card's own timeline, which may be another
+                        // assistant's than the one watching now.
+                        self.emit_for(
+                            n.bot_id.unwrap_or(0),
+                            PersonalAgentChange::Timeline {
+                                rows: vec![svc::to_row(r)],
+                            },
+                        );
                     }
                 }
                 self.emit(PersonalAgentChange::Status);

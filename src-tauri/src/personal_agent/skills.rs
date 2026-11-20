@@ -4,9 +4,8 @@
 //!
 //! - **Learning one.** When the work handed out for one request of the
 //!   owner's went well — three pieces or more, all done; or two that went the
-//!   way two did before for a request like it — codeg asks the assistant it
-//!   was for (a release: the release work assistant, else the primary) to
-//!   look back at it, in an internal turn (trigger `reflect`) with codeg's
+//!   way two did before for a request like it — codeg asks the assistant that
+//!   led it to look back at it, in an internal turn (trigger `reflect`) with codeg's
 //!   own record of the chain. It writes `process-skills/<name>/SKILL.md` in its
 //!   working directory, or nothing when there is nothing to reuse. The owner
 //!   saying "from now on, do it like this" has it write one too (its skill
@@ -56,8 +55,6 @@ const CAME_BACK_CHARS: usize = 800;
 const REQUEST_CHARS: usize = 2_000;
 /// Most of a skill a card keeps to show.
 const CARD_SKILL_BYTES: usize = 16 * 1024;
-/// The kinds of work a chain does not count: codeg's own checks.
-const NOT_COUNTED: &[&str] = &["check"];
 
 /// When the host last looked for chains that went well.
 #[derive(Default)]
@@ -105,19 +102,13 @@ impl Chain {
                 .is_some_and(|t| now - t >= Duration::minutes(QUIET_MINUTES))
     }
 
-    /// The kinds of work it went through, in order.
+    /// The ways its pieces of work were handed out, in order (a task, a
+    /// chat, a work session).
     pub fn steps(&self) -> Vec<String> {
         self.work
             .iter()
-            .map(|d| d.kind.clone().unwrap_or_else(|| "?".into()))
+            .map(|d| super::engine::enum_str(&d.mode).to_string())
             .collect()
-    }
-
-    /// Whether it was a release.
-    pub fn is_release(&self) -> bool {
-        self.work
-            .iter()
-            .any(|d| d.kind.as_deref() == Some("release"))
     }
 
     /// The assistant that handed out most of it (the one it started with,
@@ -153,7 +144,7 @@ pub fn chains_of(work: &[dispatch_entity::Model]) -> Vec<Chain> {
     let mut by: std::collections::BTreeMap<(i32, i32), Vec<dispatch_entity::Model>> =
         Default::default();
     for d in work {
-        if d.pr_fix.is_some() || d.kind.as_deref().is_some_and(|k| NOT_COUNTED.contains(&k)) {
+        if d.pr_fix.is_some() || d.is_check {
             continue;
         }
         if let (Some(b), Some(r)) = (d.origin_bot_id, d.origin_row_id) {
@@ -324,7 +315,6 @@ impl EngineHost {
                         "origin_row": b.origin_row,
                         "work": b.work.iter().map(|d| d.id).collect::<Vec<_>>(),
                     })),
-                    "release": chain.is_release(),
                 })),
                 true,
             )
@@ -360,20 +350,25 @@ impl PersonalAgentEngine {
                 })
                 .unwrap_or_default()
         };
-        let names = self.executor_names().await;
+        // Who handed each piece out, by assistant — not what it ran on.
+        let names: std::collections::HashMap<i32, String> = svc::list_bots(&self.db.conn)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|b| (b.id, super::messages::display_name(b)))
+            .collect();
         let chain_text = |asked: Option<String>, work: Vec<dispatch_entity::Model>| {
             let mut lines = vec![asked.unwrap_or_else(|| "The owner's request is gone.".into())];
             for (i, d) in work.iter().enumerate() {
-                let who = names
-                    .get(&d.executor_assistant_id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("executor config #{}", d.executor_assistant_id));
+                let who = d
+                    .bot_id
+                    .and_then(|b| names.get(&b).cloned())
+                    .unwrap_or_else(|| "an assistant since deleted".into());
                 let rounds = d.turns.max(1);
                 lines.push(format!(
-                    "{}. \"{}\" — {} · {who} · {} · done in {rounds} round{}",
+                    "{}. \"{}\" — {who} · {} · done in {rounds} round{}",
                     i + 1,
                     cut(&d.title, 200),
-                    d.kind.as_deref().unwrap_or("?"),
                     super::engine::enum_str(&d.mode),
                     if rounds == 1 { "" } else { "s" },
                 ));
@@ -419,7 +414,6 @@ impl PersonalAgentEngine {
         reflect_text(&ReflectInput {
             count: work.len(),
             again,
-            release: p["release"].as_bool().unwrap_or(false),
             chains: &chains,
             skills: &skills,
         })
@@ -434,16 +428,6 @@ impl PersonalAgentEngine {
             r.created_at.with_timezone(&tz).format("%Y-%m-%d %H:%M"),
             cut(&r.body, REQUEST_CHARS)
         ))
-    }
-
-    /// Executor configs' names, by id.
-    async fn executor_names(&self) -> std::collections::HashMap<i32, String> {
-        crate::db::service::assistant_service::list_all(&self.db.conn)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|a| (a.id, a.name))
-            .collect()
     }
 
     /// The cards for the process skills a turn's commit (`rev`) changed,
@@ -1027,7 +1011,6 @@ impl PersonalAgentEngine {
 pub struct ReflectInput<'a> {
     pub count: usize,
     pub again: bool,
-    pub release: bool,
     pub chains: &'a [String],
     pub skills: &'a [workdir::ProcessSkill],
 }
@@ -1045,13 +1028,6 @@ pub fn reflect_text(i: &ReflectInput<'_>) -> String {
             "{} pieces of work handed out for one request of the owner's, all done",
             i.count
         )
-    };
-    let release = if i.release {
-        "This was a release: write it down as the owner's release process — the release notes, a \
-         release candidate, the CI on it, the Docker images and the installers — stopping for the \
-         owner before what cannot be taken back (the tag, publishing).\n"
-    } else {
-        ""
     };
     let skills = if i.skills.is_empty() {
         "(none yet)".to_string()
@@ -1091,7 +1067,6 @@ pub fn reflect_text(i: &ReflectInput<'_>) -> String {
 Look back at work that went well: {what}. If it is a way of doing something the owner will want \
 done again, write it down as a process skill, so that the next time they ask for it you follow \
 it.\n\
-{release}\
 \n\
 Write `process-skills/<name>/SKILL.md` in your working directory — <name> in lowercase letters, digits \
 and hyphens (say `release`) — with front matter giving `name: <name>` and `description:` when \
@@ -1154,14 +1129,19 @@ mod tests {
         id: i32,
         row: i32,
         bot: i32,
-        kind: &str,
+        // `task`, `chat` or `session`; `check`: codeg's own check (a session).
+        mode: &str,
         state: DispatchState,
         ago_min: i64,
     ) -> dispatch_entity::Model {
         let now = Utc::now();
         dispatch_entity::Model {
             id,
-            mode: DispatchMode::Chat,
+            mode: match mode {
+                "task" => DispatchMode::Task,
+                "chat" => DispatchMode::Chat,
+                _ => DispatchMode::Session,
+            },
             executor_assistant_id: 1,
             executor_snapshot: "{}".into(),
             folder_id: None,
@@ -1190,7 +1170,7 @@ mod tests {
             for_input: None,
             done_when: None,
             pr_fix: None,
-            kind: Some(kind.into()),
+            is_check: mode == "check",
         }
     }
 
@@ -1198,13 +1178,13 @@ mod tests {
     fn a_chain_went_well_once_all_of_it_is_done_and_quiet() {
         let now = Utc::now();
         let mut ws = vec![
-            work(1, 10, 1, "release", DispatchState::Completed, 60),
-            work(2, 10, 1, "fix_ci", DispatchState::Review, 50),
-            work(3, 10, 1, "release", DispatchState::Completed, 40),
+            work(1, 10, 1, "task", DispatchState::Completed, 60),
+            work(2, 10, 1, "session", DispatchState::Review, 50),
+            work(3, 10, 1, "chat", DispatchState::Completed, 40),
             // codeg's own check of it is no step.
             work(4, 10, 1, "check", DispatchState::Failed, 40),
             // Another request.
-            work(5, 11, 2, "code", DispatchState::Completed, 40),
+            work(5, 11, 2, "task", DispatchState::Completed, 40),
         ];
         let chains = chains_of(&ws);
         assert_eq!(chains.len(), 2);
@@ -1214,8 +1194,7 @@ mod tests {
             vec![1, 2, 3]
         );
         assert!(c.went_well(now));
-        assert!(c.is_release());
-        assert_eq!(c.steps(), vec!["release", "fix_ci", "release"]);
+        assert_eq!(c.steps(), vec!["task", "session", "chat"]);
         assert_eq!(c.key(), "reflect:1:10");
         // One still running, one failed, or one just done: not yet, or not.
         ws[1].state = DispatchState::Running;
@@ -1233,9 +1212,9 @@ mod tests {
             origin_bot: 1,
             origin_row: 9,
             work: vec![
-                work(1, 9, 3, "code", DispatchState::Completed, 60),
-                work(2, 9, 3, "test", DispatchState::Completed, 60),
-                work(3, 9, 1, "review", DispatchState::Completed, 60),
+                work(1, 9, 3, "task", DispatchState::Completed, 60),
+                work(2, 9, 3, "session", DispatchState::Completed, 60),
+                work(3, 9, 1, "chat", DispatchState::Completed, 60),
             ],
         };
         assert_eq!(c.lead(), 3);
@@ -1253,11 +1232,10 @@ mod tests {
             title: "Release".into(),
             description: "when the owner says release".into(),
         }];
-        let chains = vec!["The owner asked (#5, …): \"ship 1.2\"\n1. \"notes\" — release · Codex · chat · done in 1 round".to_string()];
+        let chains = vec!["The owner asked (#5, …): \"ship 1.2\"\n1. \"notes\" — Dev · chat · done in 1 round".to_string()];
         let text = reflect_text(&ReflectInput {
             count: 3,
             again: false,
-            release: true,
             chains: &chains,
             skills: &skills,
         });
@@ -1266,7 +1244,6 @@ mod tests {
             text.contains("3 pieces of work handed out for one request"),
             "{text}"
         );
-        assert!(text.contains("This was a release"), "{text}");
         assert!(text.contains("process-skills/<name>/SKILL.md"), "{text}");
         assert!(
             text.contains(
@@ -1279,13 +1256,11 @@ mod tests {
         let again = reflect_text(&ReflectInput {
             count: 2,
             again: true,
-            release: false,
             chains: &[chains[0].clone(), "earlier".into()],
             skills: &[],
         });
         assert!(again.contains("as they did before"), "{again}");
         assert!(again.contains("<codeg-chain earlier>\nearlier"), "{again}");
-        assert!(!again.contains("This was a release"), "{again}");
         assert!(again.contains("(none yet)"), "{again}");
     }
 

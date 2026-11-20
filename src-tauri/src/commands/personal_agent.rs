@@ -1037,12 +1037,7 @@ pub async fn personal_agent_executors_core(
     db: &AppDatabase,
 ) -> Result<Vec<crate::models::personal_agent::ExecutorView>, AppCommandError> {
     use crate::models::personal_agent::{ExecutorFailing, ExecutorView, ExecutorWork};
-    use crate::models::personal_agent_prefs::AccountView;
     let assistants = crate::db::service::assistant_service::list_all(&db.conn).await?;
-    let account = match svc::primary_bot(&db.conn).await? {
-        Some(p) => AccountView::from_settings(&p.settings),
-        None => AccountView::from_settings("{}"),
-    };
     let bots = svc::list_bots(&db.conn).await?;
     let recent = svc::dispatches_to_executors(&db.conn, 5_000).await?;
     let since = Utc::now() - Duration::days(14);
@@ -1095,13 +1090,6 @@ pub async fn personal_agent_executors_core(
             count: FAILING_RUN as u32,
         });
         let fortnight: Vec<_> = mine.iter().filter(|d| d.created_at >= since).collect();
-        let division = account
-            .team
-            .division
-            .iter()
-            .filter(|(_, pick)| pick.as_str() == format!("assistant:{}", a.uid))
-            .map(|(kind, _)| kind.clone())
-            .collect();
         out.push(ExecutorView {
             assistant_id: a.id,
             uid: a.uid.clone(),
@@ -1117,8 +1105,6 @@ pub async fn personal_agent_executors_core(
                 .filter(|b| b.executor_assistant_id == Some(a.id))
                 .map(bot_summary)
                 .collect(),
-            division,
-            usage: account.team.usage_of(&a.uid),
             grade: grades.get(&a.id).cloned().unwrap_or_default(),
             grade_cells: cells
                 .iter()

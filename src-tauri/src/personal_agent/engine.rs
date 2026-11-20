@@ -36,9 +36,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Notify};
 use tokio::time::MissedTickBehavior;
 
-use super::cards::{self, AssistantLine, ItemLine, OwnerLine, RecentLine};
+use super::cards::{self, ItemLine, OwnerLine, RecentLine};
 use super::compaction::{self, PreDelivery, Streaks};
-use super::dispatch::DispatchConn;
+use super::dispatch::{work_words, DispatchConn};
 use super::workdir;
 use super::{DISPATCH_OWNER_LABEL, OWNER_LABEL};
 use crate::acp::manager::ConnectionManager;
@@ -3113,10 +3113,10 @@ impl PersonalAgentEngine {
             use crate::models::personal_agent_prefs as p;
             match &seg_state.prefs_given {
                 Some(old) => {
-                    let mut changes = p::prefs_changes(old, &prefs_now, worker_bot);
+                    let mut changes = p::prefs_changes(old, &prefs_now);
                     // What it changed itself and the owner put back since.
                     if let Some(believed) = &seg_state.prefs_believed {
-                        for c in p::prefs_changes(believed, &prefs_now, worker_bot) {
+                        for c in p::prefs_changes(believed, &prefs_now) {
                             if !changes.contains(&c) {
                                 changes.push(c);
                             }
@@ -3629,18 +3629,11 @@ impl PersonalAgentEngine {
         let now = super::clock::now();
         for i in items.into_iter().rev() {
             let dispatch = match i.dispatch_id {
-                Some(id) => svc::get_dispatch(&self.db.conn, id).await.ok().flatten().map(|d| {
-                    let name = serde_json::from_str::<crate::models::personal_agent::DispatchExecutorSnapshot>(
-                        &d.executor_snapshot,
-                    )
-                    .map(|s| s.name)
-                    .unwrap_or_default();
-                    (
-                        enum_str(&d.mode),
-                        name,
-                        enum_str(&d.state),
-                    )
-                }),
+                Some(id) => svc::get_dispatch(&self.db.conn, id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|d| (enum_str(&d.mode), enum_str(&d.state))),
                 None => None,
             };
             lines.push(ItemLine {
@@ -3711,31 +3704,9 @@ impl PersonalAgentEngine {
                 },
             })
             .collect();
-        // The ones open to the assistants' dispatches, with how the owner
-        // lets them be used.
-        let team = self.account().await.team;
-        let mut assistants: Vec<AssistantLine> = Vec::new();
-        for a in crate::db::service::assistant_service::list_live_enabled(&self.db.conn)
-            .await
-            .unwrap_or_default()
-        {
-            let usage = team.usage_of(&a.uid);
-            if !usage.dispatch {
-                continue;
-            }
-            let description = match self.usage_note(&usage).await {
-                Some(n) if a.description.trim().is_empty() => format!("[{n}]"),
-                Some(n) => format!("{} [{n}]", a.description.trim()),
-                None => a.description,
-            };
-            assistants.push(AssistantLine {
-                id: a.id,
-                name: a.name,
-                description,
-                agent: a.label_snapshot.agent,
-            });
-        }
-        let division = self.division_text().await;
+        // What it works with when it does a thing itself, in words: never
+        // the executor config itself.
+        let own_work = self.work_snapshot().await.ok().map(|w| work_words(&w));
         let previous = svc::list_segments(&self.db.conn, self.bot().await)
             .await
             .unwrap_or_default()
@@ -3766,8 +3737,7 @@ impl PersonalAgentEngine {
             },
             items,
             recent: &recent,
-            assistants: &assistants,
-            division: division.as_deref(),
+            own_work: own_work.as_deref(),
             budget_chars: budget as usize,
             cards: self.prefs().await.cards,
             skill: settings_of(row).skill_enabled
@@ -4796,16 +4766,55 @@ impl PersonalAgentEngine {
             settings.compact_command_agent = effective_agent.map(|a| a.as_wire().into_owned());
         }
         let worker = existing.as_ref().is_some_and(|r| r.kind == BotKind::Worker);
+        // The executor config its work runs on: one the owner picked, or one
+        // made for it now — removed again when the save does not go through.
+        let mut made_executor: Option<i32> = None;
         if let Some(id) = draft.executor_assistant_id {
-            if !worker {
-                return Err("only a work assistant is bound to an executor config".into());
-            }
             crate::db::service::assistant_service::get(&self.db.conn, id)
                 .await
                 .map_err(|e| e.to_string())?
                 .filter(|a| a.is_live())
                 .ok_or_else(|| format!("no executor config #{id}"))?;
             write.executor_assistant_id = Some(id);
+        } else if draft.executor_config.is_some() || draft.executor_new {
+            let config = match draft.executor_config.clone() {
+                Some(c) => c,
+                None => {
+                    let agent_type = effective_agent
+                        .ok_or("pick the agent the personal agent runs on")?;
+                    self.fill_options(agent_type, &Default::default(), &[])
+                        .await
+                        .map_err(|e| match e {
+                            super::bots::FillError::Unavailable(why) => format!(
+                                "{}{why}",
+                                crate::models::personal_agent::EXECUTOR_OPTIONS_UNAVAILABLE
+                            ),
+                            super::bots::FillError::Refused(e) => e,
+                        })?
+                        .0
+                }
+            };
+            let name = write
+                .name
+                .clone()
+                .or_else(|| existing.as_ref().map(|r| r.name.clone()))
+                .filter(|n| !n.trim().is_empty())
+                .unwrap_or_else(|| "Personal agent".into());
+            let avatar = draft
+                .avatar
+                .clone()
+                .or_else(|| {
+                    existing
+                        .as_ref()
+                        .and_then(|r| serde_json::from_str::<BotAvatar>(&r.avatar).ok())
+                })
+                .unwrap_or(BotAvatar::Emoji {
+                    emoji: "🧭".into(),
+                    color: "violet".into(),
+                });
+            let made = self.make_executor(&name, &avatar, config).await?;
+            write.executor_assistant_id = Some(made.id);
+            made_executor = Some(made.id);
         }
         if worker {
             // The owner's language is the account's, on the primary's row.
@@ -4856,8 +4865,21 @@ impl PersonalAgentEngine {
             (Some(id), _) => svc::save_bot(&self.db.conn, id, write).await,
             (None, Some(row)) => svc::save_bot(&self.db.conn, row.id, write).await,
             (None, None) => svc::save_primary(&self.db.conn, write).await,
-        }
-        .map_err(|e| e.to_string())?;
+        };
+        let saved = match saved {
+            Ok(s) => s,
+            Err(e) => {
+                if let Some(id) = made_executor {
+                    let _ = crate::commands::assistants::assistant_delete_core(
+                        &self.emitter,
+                        &self.db,
+                        id,
+                    )
+                    .await;
+                }
+                return Err(e.to_string());
+            }
+        };
         if renamed {
             if let Ok(Some(seg)) = svc::open_segment(&self.db.conn, self.bot().await).await {
                 self.update_segment_state(seg.id, |s| s.persona_resend = true).await;

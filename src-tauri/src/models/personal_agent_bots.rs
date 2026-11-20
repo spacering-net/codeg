@@ -169,8 +169,6 @@ pub struct BotImpact {
     pub unanswered_messages: u32,
     /// The executor config it is bound to.
     pub executor: Option<ImpactExecutor>,
-    /// The kinds of work the division names it first for.
-    pub division: Vec<String>,
     /// Its plans still going: they stop (7.6).
     pub plans: Vec<ImpactPlan>,
     /// Steps of other assistants' plans handed to it, not done yet: their

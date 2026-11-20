@@ -255,11 +255,25 @@ pub struct PersonalAgentDraft {
     /// in the settings (`PersonalAgentSettings::locale`).
     #[serde(default)]
     pub locale: Option<String>,
-    /// A work assistant's executor config: the one it dispatches to by
-    /// default (4.4). Refused for the primary.
+    /// The executor config its work runs on, one the owner picked (the
+    /// primary's or a work assistant's alike).
     #[serde(default)]
     pub executor_assistant_id: Option<i32>,
+    /// Make it one with this complete selection (the editor's).
+    #[serde(default)]
+    pub executor_config: Option<AssistantAgentConfig>,
+    /// Make it one on the brain's agent, its options filled in as a new work
+    /// assistant's are — what setting the primary up does by default. When
+    /// the agent's options cannot be read nothing is saved and the answer
+    /// starts with `EXECUTOR_OPTIONS_UNAVAILABLE`: the page opens the editor
+    /// and saves again with `executor_config`.
+    #[serde(default)]
+    pub executor_new: bool,
 }
+
+/// How a save that was to make an executor config on the brain's agent
+/// answers when that agent's options cannot be read.
+pub const EXECUTOR_OPTIONS_UNAVAILABLE: &str = "executor options unavailable: ";
 
 /// One timeline row.
 #[derive(Debug, Clone, Serialize)]
@@ -696,10 +710,9 @@ pub struct ExecutorFailing {
     pub count: u32,
 }
 
-/// An executor config as the assistants use it (10.5, 补齐四 and 六): what
-/// it is running, whether it keeps failing, its last two weeks, which work
-/// assistants it is bound to, which kinds of work name it first, and how
-/// the assistants may use it.
+/// An executor config as the assistants' work runs on it (10.5, 补齐四 and
+/// 六): what it is running, whether it keeps failing, its last two weeks,
+/// and the assistants — the primary too — whose work runs on it.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecutorView {
     pub assistant_id: i32,
@@ -709,8 +722,6 @@ pub struct ExecutorView {
     pub dispatches_14d: u32,
     pub completed_14d: u32,
     pub workers: Vec<BotSummary>,
-    pub division: Vec<String>,
-    pub usage: super::personal_agent_prefs::ExecutorUsage,
     /// How its work went over the last 30 days (2.11).
     pub grade: crate::personal_agent::profile::Grade,
     /// And apart, by who handed it out and how (7.9), the most work first.

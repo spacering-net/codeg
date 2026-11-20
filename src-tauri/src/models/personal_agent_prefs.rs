@@ -1,6 +1,6 @@
-//! The owner's preferences and the team's division of work: the account's
-//! settings, the same for every assistant, kept on the primary's row (the
-//! `prefs` and `team` keys of its settings JSON).
+//! The owner's preferences: the account's settings, the same for every
+//! assistant, kept on the primary's row (the `prefs` key of its settings
+//! JSON).
 //!
 //! Every item defaults, and every one reads leniently: a value this build
 //! does not know (written by a newer one) reads as its default, without
@@ -16,7 +16,6 @@
 //!   answers with cards, what it does when unsure. codeg writes those into
 //!   the handoff card as `<codeg-prefs>` and tells the brain when they change.
 
-use std::collections::BTreeMap;
 
 use serde::de::{DeserializeOwned, Deserializer};
 use serde::{Deserialize, Serialize};
@@ -638,16 +637,6 @@ pub const NEWS: &[(&str, Level, &str)] = &[
     ),
 ];
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkerHandoff {
-    /// Write to the work assistant and let it see the work through.
-    #[default]
-    Message,
-    /// Dispatch to the work assistant's executor config directly.
-    Direct,
-}
-
 /// The owner's preferences.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Prefs {
@@ -667,8 +656,6 @@ pub struct Prefs {
     /// Messages to the other assistants (`bot_message`).
     #[serde(default, deserialize_with = "lenient")]
     pub messages: AskFirst,
-    #[serde(default, deserialize_with = "lenient")]
-    pub worker_handoff: WorkerHandoff,
     /// Rounds without progress before an exchange between two assistants is
     /// stopped; 0 is no limit.
     #[serde(default = "default_loop_rounds", deserialize_with = "lenient_rounds")]
@@ -887,10 +874,6 @@ pub struct Prefs {
     pub rule_new_project: OnOff,
     #[serde(default, deserialize_with = "lenient")]
     pub rule_behind: OnOff,
-    /// codeg's card when another executor config's record on a kind of
-    /// work is clearly better than the division's pick (7.9).
-    #[serde(default, deserialize_with = "lenient")]
-    pub rule_division: OnOff,
     #[serde(default, deserialize_with = "lenient")]
     pub rule_repeat: OnOff,
     #[serde(
@@ -979,7 +962,6 @@ impl Default for Prefs {
             confirm_dispatch: ConfirmDispatch::default(),
             followups: AskFirst::default(),
             messages: AskFirst::default(),
-            worker_handoff: WorkerHandoff::default(),
             loop_rounds: DEFAULT_LOOP_ROUNDS,
             interrupt_retry: AskFirst::default(),
             retry_rounds: DEFAULT_RETRY_ROUNDS,
@@ -1052,7 +1034,6 @@ impl Default for Prefs {
             rule_idle_days: RULE_IDLE_DAYS,
             rule_new_project: OnOff::On,
             rule_behind: OnOff::On,
-            rule_division: OnOff::On,
             rule_repeat: OnOff::On,
             rule_repeat_count: RULE_REPEAT_COUNT,
             rule_suggest: OnOff::On,
@@ -1142,11 +1123,6 @@ pub const PREFS: &[PrefSpec] = &[
         key: "messages",
         kind: PrefKind::Choice(&["auto", "ask"]),
         label: "messages to the other assistants",
-    },
-    PrefSpec {
-        key: "worker_handoff",
-        kind: PrefKind::Choice(&["message", "direct"]),
-        label: "handing work to a work assistant",
     },
     PrefSpec {
         key: "loop_rounds",
@@ -1530,11 +1506,6 @@ pub const PREFS: &[PrefSpec] = &[
         label: "codeg's card on a dispatched task's branch behind its target with conflicts",
     },
     PrefSpec {
-        key: "rule_division",
-        kind: PrefKind::Choice(&["on", "off"]),
-        label: "codeg's card when another executor config clearly does a kind of work better than its pick in the division",
-    },
-    PrefSpec {
         key: "rule_repeat",
         kind: PrefKind::Choice(&["on", "off"]),
         label: "codeg's offer to make a request the owner keeps making a routine",
@@ -1743,7 +1714,6 @@ fn rule_preset(level: &str) -> Vec<(&'static str, Value)> {
         ("rule_idle_days", time(RULE_IDLE_DAYS)),
         ("rule_new_project", on(!quiet)),
         ("rule_behind", on(!quiet)),
-        ("rule_division", on(!quiet)),
         ("rule_repeat", on(!quiet)),
     ]
 }
@@ -2030,7 +2000,6 @@ impl Prefs {
             "idle" => self.rule_idle,
             "new_project" => self.rule_new_project,
             "behind" => self.rule_behind,
-            "division" => self.rule_division,
             "repeat" => self.rule_repeat,
             "suggest" => self.rule_suggest,
             "undo" => self.rule_undo,
@@ -2102,12 +2071,6 @@ fn brain_value(key: &str, value: &Value) -> String {
         }
         ("followups" | "messages", "auto") => "sent directly".into(),
         ("followups" | "messages", "ask") => "go to the owner as a card first".into(),
-        ("worker_handoff", "message") => {
-            "write to the work assistant (bot_message) and let it see the work through".into()
-        }
-        ("worker_handoff", "direct") => {
-            "dispatch to the work assistant's executor config directly".into()
-        }
         ("loop_rounds", _) => match value.as_u64() {
             Some(0) => "no limit".into(),
             Some(n) => n.to_string(),
@@ -2347,7 +2310,6 @@ fn rules_line(prefs: &Prefs) -> String {
         "idle",
         "new_project",
         "behind",
-        "division",
         "repeat",
         "undo",
         "idle_bot",
@@ -2473,7 +2435,6 @@ pub fn prefs_block(prefs: &Prefs, worker: bool) -> String {
     let map = prefs.to_map();
     let mut lines: Vec<String> = PREFS
         .iter()
-        .filter(|s| !(worker && s.key == "worker_handoff"))
         .filter(|s| !s.key.starts_with("level_") && !s.key.starts_with("rule_"))
         .filter(|s| !is_brief_item(s.key) && !is_desktop_item(s.key))
         .map(|s| {
@@ -2498,11 +2459,10 @@ answer that something went to the owner first.\n\
 
 /// What changed between two sets of preferences, one line each
 /// ("replies → short: …").
-pub fn prefs_changes(old: &Prefs, new: &Prefs, worker: bool) -> Vec<String> {
+pub fn prefs_changes(old: &Prefs, new: &Prefs) -> Vec<String> {
     let (a, b) = (old.to_map(), new.to_map());
     PREFS
         .iter()
-        .filter(|s| !(worker && s.key == "worker_handoff"))
         .filter_map(|s| {
             let (from, to) = (a.get(s.key)?, b.get(s.key)?);
             (from != to).then(|| format!("{} → {}", s.label, brain_value(s.key, to)))
@@ -2523,170 +2483,10 @@ The owner changed their preferences: {}. These replace what you had.\n\
     )
 }
 
-// ── the team ────────────────────────────────────────────────────────────────
-
-/// The kinds of work the division assigns a first pick for (10.5).
-pub const DIVISION: &[&str] = &[
-    "code", "review", "test", "fix_ci", "docs", "release", "research", "check",
-];
-
-/// What the brain reads a kind of work as.
-pub fn division_label(category: &str) -> &'static str {
-    match category {
-        "code" => "writing code",
-        "review" => "review",
-        "test" => "testing",
-        "fix_ci" => "fixing CI",
-        "docs" => "docs",
-        "release" => "releases",
-        "research" => "research",
-        "check" => "checking finished work",
-        _ => "other",
-    }
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn all_modes() -> Vec<DispatchMode> {
-    vec![
-        DispatchMode::Task,
-        DispatchMode::Chat,
-        DispatchMode::Session,
-    ]
-}
-
-/// How the assistants may use an executor config (10.5, 补齐三). The
-/// owner's, set on the executor config, checked at `dispatch`. Not on the
-/// `assistant` table: @-delegation, codeg-cli and config sync never see it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExecutorUsage {
-    /// The assistants may dispatch to it at all. Off, it is still there to
-    /// @ in a conversation.
-    #[serde(default = "default_true")]
-    pub dispatch: bool,
-    /// The modes it takes.
-    #[serde(default = "all_modes")]
-    pub modes: Vec<DispatchMode>,
-    /// The projects it works on; `None` is every one. A chat takes no
-    /// project, so this never refuses one.
-    #[serde(default)]
-    pub projects: Option<Vec<i32>>,
-}
-
-impl Default for ExecutorUsage {
-    fn default() -> Self {
-        Self {
-            dispatch: true,
-            modes: all_modes(),
-            projects: None,
-        }
-    }
-}
-
-impl ExecutorUsage {
-    /// Checked as the editor submits it.
-    pub fn checked(mut self) -> Result<Self, String> {
-        let mut modes = Vec::new();
-        for m in all_modes() {
-            if self.modes.contains(&m) {
-                modes.push(m);
-            }
-        }
-        if modes.is_empty() {
-            return Err(
-                "an executor config the assistants dispatch to takes at least one mode".into(),
-            );
-        }
-        self.modes = modes;
-        if let Some(p) = self.projects.as_mut() {
-            p.sort_unstable();
-            p.dedup();
-            if p.is_empty() {
-                return Err("pick at least one project, or allow every project".into());
-            }
-        }
-        Ok(self)
-    }
-
-    pub fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
-}
-
-/// The team's settings: the division of work and how each executor config
-/// may be used. A division entry is `bot:<uid>` (a work assistant) or
-/// `assistant:<uid>` (an executor config); a kind of work left out is
-/// "auto".
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TeamSettings {
-    #[serde(default, deserialize_with = "lenient")]
-    pub division: BTreeMap<String, String>,
-    #[serde(default, deserialize_with = "lenient_usage")]
-    pub usage: BTreeMap<String, ExecutorUsage>,
-}
-
-/// Each executor config's usage on its own: one this build cannot read is
-/// the default, the others stay.
-fn lenient_usage<'de, D: Deserializer<'de>>(
-    d: D,
-) -> Result<BTreeMap<String, ExecutorUsage>, D::Error> {
-    let v = Value::deserialize(d)?;
-    let Value::Object(map) = v else {
-        return Ok(BTreeMap::new());
-    };
-    Ok(map
-        .into_iter()
-        .filter_map(|(k, v)| serde_json::from_value(v).ok().map(|u| (k, u)))
-        .collect())
-}
-
-impl TeamSettings {
-    pub fn parse(v: Option<&Value>) -> Self {
-        v.cloned()
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default()
-    }
-
-    /// How executor config `uid` may be used (the default when the owner
-    /// set nothing).
-    pub fn usage_of(&self, uid: &str) -> ExecutorUsage {
-        self.usage.get(uid).cloned().unwrap_or_default()
-    }
-}
-
-/// A division pick, checked: `auto` (as `None`), `bot:<uid>` or
-/// `assistant:<uid>`.
-pub fn check_division(category: &str, value: &Value) -> Result<Option<String>, String> {
-    if !DIVISION.contains(&category) {
-        return Err(format!(
-            "no kind of work `{category}`; one of: {}",
-            DIVISION.join(", ")
-        ));
-    }
-    match value {
-        Value::Null => Ok(None),
-        Value::String(s) if s == "auto" => Ok(None),
-        Value::String(s) => {
-            let ok = s
-                .split_once(':')
-                .is_some_and(|(k, uid)| matches!(k, "bot" | "assistant") && !uid.trim().is_empty());
-            if ok {
-                Ok(Some(s.clone()))
-            } else {
-                Err("a division pick is auto, bot:<uid> or assistant:<uid>".into())
-            }
-        }
-        _ => Err("a division pick is auto, bot:<uid> or assistant:<uid>".into()),
-    }
-}
-
-/// The account's preferences and team, as the page reads them.
+/// The account's preferences, as the page reads them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountView {
     pub prefs: Prefs,
-    pub team: TeamSettings,
     /// The automation level the preferences add up to.
     #[serde(default)]
     pub automation_level: String,
@@ -2704,7 +2504,6 @@ impl AccountView {
         let disturb_level = prefs.disturb_level().to_string();
         Self {
             prefs,
-            team: TeamSettings::parse(v.get("team")),
             automation_level,
             disturb_level,
         }
@@ -2872,63 +2671,13 @@ mod tests {
         let old = Prefs::default();
         let new = Prefs {
             reply_length: ReplyLength::Short,
-            worker_handoff: WorkerHandoff::Direct,
             ..Prefs::default()
         };
-        let lines = prefs_changes(&old, &new, false);
-        assert_eq!(lines.len(), 2);
+        let lines = prefs_changes(&old, &new);
+        assert_eq!(lines.len(), 1);
         assert!(lines[0].starts_with("replies → short"));
-        assert_eq!(
-            prefs_changes(&old, &new, true).len(),
-            1,
-            "a worker is not told the handoff"
-        );
         let block = prefs_block(&new, true);
         assert!(block.contains("<codeg-prefs>") && block.contains("replies: short"));
-        assert!(!block.contains("handing work"));
     }
 
-    #[test]
-    fn usage_and_division_check() {
-        let u = ExecutorUsage {
-            dispatch: true,
-            modes: vec![
-                DispatchMode::Session,
-                DispatchMode::Task,
-                DispatchMode::Task,
-            ],
-            projects: Some(vec![3, 1, 3]),
-        }
-        .checked()
-        .unwrap();
-        assert_eq!(u.modes, vec![DispatchMode::Task, DispatchMode::Session]);
-        assert_eq!(u.projects, Some(vec![1, 3]));
-        assert!(ExecutorUsage {
-            modes: vec![],
-            ..ExecutorUsage::default()
-        }
-        .checked()
-        .is_err());
-        assert_eq!(
-            check_division("review", &json!("bot:abc"))
-                .unwrap()
-                .as_deref(),
-            Some("bot:abc")
-        );
-        assert_eq!(check_division("review", &json!("auto")).unwrap(), None);
-        assert!(check_division("review", &json!("person:abc")).is_err());
-        assert!(check_division("cooking", &json!("auto")).is_err());
-        let team = TeamSettings::parse(Some(&json!({
-            "division": "junk",
-            "usage": { "u1": { "dispatch": false }, "u3": { "modes": "junk" } },
-        })));
-        assert!(team.division.is_empty());
-        assert!(!team.usage_of("u1").dispatch);
-        assert_eq!(team.usage_of("u1").modes.len(), 3);
-        assert!(team.usage_of("u2").is_default());
-        assert!(
-            team.usage_of("u3").is_default(),
-            "one unreadable entry leaves the others"
-        );
-    }
 }

@@ -1,10 +1,10 @@
-//! Acceptance (7.5): the assistant that dispatched code work accepts it; the
-//! hands-on check is dispatched to someone else.
+//! Acceptance (7.5): the assistant that dispatched code work accepts it,
+//! after a hands-on check of it.
 //!
 //! - A task the assistant dispatched that changed code enters review: codeg
-//!   (not the brain) sends a read-only check of its worktree to another
-//!   executor config — the division's "check" pick, else one of another
-//!   agent — once the task's preflight has run. Each round is bound to the
+//!   (not the brain) sends a read-only check of its worktree in a work
+//!   session of its own, on what the work's assistant's work runs on now
+//!   (D1: whose work, theirs to check) — once the task's preflight has run. Each round is bound to the
 //!   task's run generation and the worktree's fingerprint at the start.
 //! - The check comes back: codeg reads its verdict. The task moved on → the
 //!   round is stale; the worktree changed meanwhile → the round is void and
@@ -754,67 +754,20 @@ impl PersonalAgentEngine {
         }
     }
 
-    /// Who checks this work (7.5, 10.5): the division's "check" pick (a work
-    /// assistant's own executor config) unless it is the executor itself or
-    /// its usage does not take this check; else one the assistants may
-    /// dispatch to, that takes a work session on this project, of another
-    /// agent than the executor's — else of the same. `None`: nobody.
+    /// Who checks this work (7.5, D1): what the assistant the work is now
+    /// with runs its work on — the one that dispatched it, or the primary
+    /// it was handed to. `None`: nothing it can use.
     pub(super) async fn pick_checker(
         &self,
         d: &dispatch_entity::Model,
-        task: &work_task::Model,
+        _task: &work_task::Model,
     ) -> Option<crate::models::assistant::AssistantInfo> {
-        let team = self.account().await.team;
-        let executor = executor_of(d);
-        let assistants = crate::db::service::assistant_service::list_live_enabled(&self.db.conn)
+        let owner = svc::get_bot(&self.db.conn, d.bot_id?).await.ok().flatten()?;
+        let id = owner.executor_assistant_id?;
+        crate::db::service::assistant_service::get_live_enabled(&self.db.conn, id)
             .await
-            .unwrap_or_default();
-        let takes = |a: &crate::models::assistant::AssistantInfo| {
-            let usage = team.usage_of(&a.uid);
-            a.id != executor.assistant_id
-                && usage.dispatch
-                && usage.modes.contains(&DispatchMode::Session)
-                && usage
-                    .projects
-                    .as_ref()
-                    .is_none_or(|p| p.contains(&task.folder_id))
-        };
-        if let Some(a) = self
-            .division_check_pick(&team, &assistants)
-            .await
-            .filter(|a| takes(a))
-        {
-            return Some(a.clone());
-        }
-        assistants
-            .iter()
-            .filter(|a| takes(a))
-            .find(|a| a.agent_type != executor.agent_type)
-            .or_else(|| assistants.iter().find(|a| takes(a)))
-            .cloned()
-    }
-
-    /// The executor config the division picked to check work (10.5): a
-    /// work assistant's own, or one by itself; `None` for "auto", or a pick
-    /// that is not among `assistants` (gone, or turned off).
-    pub(super) async fn division_check_pick<'a>(
-        &self,
-        team: &crate::models::personal_agent_prefs::TeamSettings,
-        assistants: &'a [crate::models::assistant::AssistantInfo],
-    ) -> Option<&'a crate::models::assistant::AssistantInfo> {
-        let (what, uid) = team.division.get("check").and_then(|p| p.split_once(':'))?;
-        match what {
-            "bot" => {
-                let bots = svc::list_bots(&self.db.conn).await.unwrap_or_default();
-                let id = bots
-                    .iter()
-                    .find(|b| b.uid.as_deref() == Some(uid))
-                    .and_then(|b| b.executor_assistant_id)?;
-                assistants.iter().find(|a| a.id == id)
-            }
-            "assistant" => assistants.iter().find(|a| a.uid == uid),
-            _ => None,
-        }
+            .ok()
+            .flatten()
     }
 
     /// Send the check out: a work session in the task's worktree, as the
@@ -829,8 +782,6 @@ impl PersonalAgentEngine {
         checker: crate::models::assistant::AssistantInfo,
     ) -> Result<i32, String> {
         let prompt = self.check_prompt(d, task, wt, round).await;
-        // The division names a work assistant: the card says whose it is.
-        let via = self.checker_via(&checker).await;
         let snapshot = DispatchExecutorSnapshot {
             assistant_id: checker.id,
             name: checker.name.clone(),
@@ -862,7 +813,7 @@ impl PersonalAgentEngine {
                 },
                 done_when: None,
                 pr_fix: None,
-                kind: Some("check".into()),
+                is_check: true,
             },
         )
         .await
@@ -882,29 +833,11 @@ impl PersonalAgentEngine {
             "check_for": d.id,
             "check_round": round.round,
             "work_task_id": task.id,
-            "check_via": via,
         }));
         self.push_row(card).await;
         self.emit(PersonalAgentChange::Dispatch { id: row.id });
         self.kick_queue();
         Ok(row.id)
-    }
-
-    /// The work assistant whose executor config `checker` is, when the
-    /// division picked it that way.
-    pub(super) async fn checker_via(
-        &self,
-        checker: &crate::models::assistant::AssistantInfo,
-    ) -> Value {
-        let team = self.account().await.team;
-        let Some(("bot", uid)) = team.division.get("check").and_then(|p| p.split_once(':')) else {
-            return Value::Null;
-        };
-        let bots = svc::list_bots(&self.db.conn).await.unwrap_or_default();
-        bots.iter()
-            .find(|b| b.uid.as_deref() == Some(uid) && b.executor_assistant_id == Some(checker.id))
-            .map(|b| json!({ "bot_id": b.id, "name": super::messages::display_name(b) }))
-            .unwrap_or(Value::Null)
     }
 
     /// What the checker is asked: read only, criterion by criterion, a
@@ -917,7 +850,7 @@ impl PersonalAgentEngine {
         round: &round_entity::Model,
     ) -> String {
         let mut parts = vec![
-            "You are checking another executor's work before it is accepted. This is a READ-ONLY \
+            "You are checking a piece of work before it is accepted. This is a READ-ONLY \
              review: do not change, create, delete, stage or commit any file in this worktree, and \
              do not run anything that writes to it (formatters, code generators, `git add`, \
              `git commit`, `git checkout`, `git stash`…). Running the project's tests and builds is \
@@ -1189,15 +1122,14 @@ impl PersonalAgentEngine {
         let executor = executor_of(check);
         let body = match report {
             Some(r) => format!(
-                "Check of dispatch #{} (round {}) by {}: {}",
+                "Check of dispatch #{} (round {}): {}",
                 round.dispatch_id,
                 round.round,
-                executor.name,
                 verdict_word(r.verdict)
             ),
             None => format!(
-                "Check of dispatch #{} (round {}) by {} was interrupted; it is checked again.",
-                round.dispatch_id, round.round, executor.name
+                "Check of dispatch #{} (round {}) was interrupted; it is checked again.",
+                round.dispatch_id, round.round
             ),
         };
         let mut card = NewRow::new(TimelineKind::Result, body);
@@ -1322,13 +1254,11 @@ impl PersonalAgentEngine {
                 d.id, d.title, r.round
             );
         }
-        let executor = executor_of(&d);
         let max = self.prefs().await.accept_rounds;
         let mut lines = vec![format!(
-            "Dispatch #{} \"{}\" · executor {} · {} #{} · round {} of {}",
+            "Dispatch #{} \"{}\" · {} #{} · round {} of {}",
             d.id,
             d.title,
-            executor.name,
             mode_label(d.mode),
             task.id,
             r.round,
@@ -1374,23 +1304,14 @@ impl PersonalAgentEngine {
         }
         if r.unchecked {
             lines.push(
-                "Nobody else could check it: no executor config but the executor itself takes a \
-                 work session on this project. Judge it from the preflight and the executor's \
-                 summary; the card will say it was not checked independently."
+                "It could not be checked: you have nothing to work with right now, so no \
+                 read-only session could be opened for it. Judge it from the preflight and the \
+                 work session's summary; the card will say it was not checked independently."
                     .into(),
             );
         } else {
-            let checker = match r.check_dispatch_id {
-                Some(id) => svc::get_dispatch(&self.db.conn, id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|c| executor_of(&c).name),
-                None => None,
-            };
             lines.push(format!(
-                "The check{}: VERDICT {}",
-                checker.map(|c| format!(" (by {c})")).unwrap_or_default(),
+                "The check (a read-only session): VERDICT {}",
                 r.check_verdict.map(verdict_word).unwrap_or("UNVERIFIED")
             ));
             if let Some(ev) = r.check_evidence.as_deref().filter(|s| !s.trim().is_empty()) {

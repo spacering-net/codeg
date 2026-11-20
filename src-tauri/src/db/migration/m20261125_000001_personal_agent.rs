@@ -163,7 +163,7 @@ const TABLES: &[&str] = &[
         "for_input" text NULL,
         "done_when" text NULL,
         "pr_fix" text NULL,
-        "kind" text NULL
+        "is_check" boolean NOT NULL DEFAULT FALSE
     )"#,
     r#"CREATE TABLE "personal_agent_action" (
         "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -463,8 +463,7 @@ const TABLES: &[&str] = &[
         "started_at" timestamp_with_timezone_text NULL,
         "ended_at" timestamp_with_timezone_text NULL,
         "created_at" timestamp_with_timezone_text NOT NULL,
-        "updated_at" timestamp_with_timezone_text NOT NULL,
-        "kind" text NULL
+        "updated_at" timestamp_with_timezone_text NOT NULL
     )"#,
     r#"CREATE TABLE "personal_agent_check" (
         "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,

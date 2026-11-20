@@ -37,7 +37,7 @@ use crate::db::service::personal_agent_service as svc;
 use crate::db::service::personal_agent_service::{NewNotice, NewRow};
 use crate::models::personal_agent::{PersonalAgentChange, TimelineRow};
 use crate::models::personal_agent_prefs::{
-    self as prefs, check_division, check_pref, AccountView, ExecutorUsage, Prefs,
+    self as prefs, check_pref, AccountView, Prefs,
 };
 
 /// How long an item the owner said no to is not suggested again.
@@ -54,8 +54,7 @@ const OWN_ITEMS: &[&str] = &[
 ];
 
 /// One item to change: `prefs.<item>` (or `prefs.automation_level`, which
-/// sets several), `own.<item>`, `team.division.<kind of work>`,
-/// `team.usage.<executor config uid>`.
+/// sets several), `own.<item>`, or a work assistant's `bot.<uid>.<item>`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SettingChange {
     pub key: String,
@@ -63,8 +62,8 @@ pub struct SettingChange {
     pub value: Value,
 }
 
-/// One item as a change left it: what it was, what it is. `auto`, a
-/// default usage and an unset command are `null`.
+/// One item as a change left it: what it was, what it is. An unset command
+/// is `null`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Applied {
     pub key: String,
@@ -76,20 +75,9 @@ pub struct Applied {
     pub picked: Option<Vec<crate::models::personal_agent_bots::PickedOption>>,
 }
 
-/// What putting a switched division pick back came to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PutBack {
-    /// It is what it was again.
-    Done,
-    /// It already was: nothing to do.
-    Already,
-    /// It was changed again since: it stays.
-    ChangedSince,
-}
-
 /// Whether a key is the account's (on the primary's row).
 fn is_account(key: &str) -> bool {
-    key.starts_with("prefs.") || key.starts_with("team.")
+    key.starts_with("prefs.")
 }
 
 /// Whether a key is a work assistant's (10.5): the row itself, not a
@@ -132,12 +120,6 @@ fn check_own(item: &str, value: &Value) -> Result<Value, String> {
 /// preference by its name, an own setting by its name.
 fn tool_key(raw: &str) -> Option<String> {
     let k = raw.trim();
-    // A kind of work's first pick (10.5): `auto`, `bot:<uid>` or
-    // `assistant:<uid>` — what `bot_update` / `assistant_update` `roles`
-    // set by naming the assistant.
-    if let Some(kind) = k.strip_prefix("team.division.") {
-        return prefs::DIVISION.contains(&kind).then(|| k.to_string());
-    }
     let k = k.strip_prefix("prefs.").unwrap_or(k);
     if prefs::spec(k).is_some() || prefs::PRESETS.iter().any(|(key, _)| *key == k) {
         return Some(format!("prefs.{k}"));
@@ -155,12 +137,7 @@ fn tool_keys() -> String {
     keys.extend(prefs::PRESETS.iter().map(|(k, _)| *k));
     keys.extend(OWN_ITEMS);
     keys.push(BRAIN_ITEM);
-    let division = prefs::DIVISION
-        .iter()
-        .map(|k| format!("team.division.{k}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{}, {division}", keys.join(", "))
+    keys.join(", ")
 }
 
 /// Merge `value` into `patch` at the dotted `path`.
@@ -335,50 +312,6 @@ impl PersonalAgentEngine {
                 }
                 let to = check_own(item, &c.value)?;
                 (own_map.get(item).cloned().unwrap_or(Value::Null), to)
-            } else if let Some(kind) = c.key.strip_prefix("team.division.") {
-                let to = check_division(kind, &c.value)?;
-                if let Some(pick) = &to {
-                    self.check_pick(pick).await?;
-                }
-                (
-                    account
-                        .team
-                        .division
-                        .get(kind)
-                        .cloned()
-                        .map(Value::from)
-                        .unwrap_or(Value::Null),
-                    to.map(Value::from).unwrap_or(Value::Null),
-                )
-            } else if let Some(uid) = c.key.strip_prefix("team.usage.") {
-                let live = crate::db::service::assistant_service::list_all(&self.db.conn)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .into_iter()
-                    .any(|a| a.uid == uid && a.is_live());
-                if !live {
-                    return Err(format!("no executor config `{uid}`"));
-                }
-                let to = match &c.value {
-                    Value::Null => None,
-                    v => Some(
-                        serde_json::from_value::<ExecutorUsage>(v.clone())
-                            .map_err(|e| format!("not a usage: {e}"))?
-                            .checked()?,
-                    ),
-                };
-                let to = to
-                    .filter(|u| !u.is_default())
-                    .map(|u| serde_json::to_value(u).unwrap_or(Value::Null))
-                    .unwrap_or(Value::Null);
-                let from = account
-                    .team
-                    .usage
-                    .get(uid)
-                    .filter(|u| !u.is_default())
-                    .map(|u| serde_json::to_value(u).unwrap_or(Value::Null))
-                    .unwrap_or(Value::Null);
-                (from, to)
             } else {
                 return Err(format!("no setting `{}`", c.key));
             };
@@ -449,81 +382,6 @@ impl PersonalAgentEngine {
         Ok((config, picked))
     }
 
-    /// A division pick switched from a card (7.9), put back to what it was
-    /// — only while it still is what the switch made it: the check and the
-    /// write are one statement, so a pick the owner saved meanwhile stays.
-    pub(super) async fn put_division_back(&self, switched: &Applied) -> Result<PutBack, String> {
-        let Some(kind) = switched.key.strip_prefix("team.division.") else {
-            return Err("not a division pick".into());
-        };
-        if !crate::models::personal_agent_prefs::DIVISION.contains(&kind) {
-            return Err(format!("no kind of work `{kind}`"));
-        }
-        // What it was must still be there to go back to.
-        if let Some(pick) = switched.from.as_str() {
-            self.check_pick(pick)
-                .await
-                .map_err(|e| format!("{e}; the pick stays as it is"))?;
-        }
-        let primary = svc::primary_bot(&self.db.conn)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or("set the primary assistant up first")?;
-        let wrote = svc::patch_settings_if(
-            &self.db.conn,
-            primary.id,
-            &format!("$.team.division.{kind}"),
-            switched.to.as_str(),
-            &json!({ "team": { "division": { kind: switched.from } } }),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        if !wrote {
-            let now = self.account().await.team.division.get(kind).cloned();
-            let now = now.map(Value::from).unwrap_or(Value::Null);
-            return Ok(if now == switched.from {
-                PutBack::Already
-            } else {
-                PutBack::ChangedSince
-            });
-        }
-        for b in svc::list_bots(&self.db.conn).await.unwrap_or_default() {
-            self.emit_for(b.id, PersonalAgentChange::Agent);
-        }
-        Ok(PutBack::Done)
-    }
-
-    /// A division pick names someone who is there.
-    async fn check_pick(&self, pick: &str) -> Result<(), String> {
-        let Some((kind, uid)) = pick.split_once(':') else {
-            return Err("a division pick is auto, bot:<uid> or assistant:<uid>".into());
-        };
-        let found = match kind {
-            "bot" => svc::list_bots(&self.db.conn)
-                .await
-                .map_err(|e| e.to_string())?
-                .iter()
-                .any(|b| b.uid.as_deref() == Some(uid) && b.kind == BotKind::Worker),
-            _ => crate::db::service::assistant_service::list_all(&self.db.conn)
-                .await
-                .map_err(|e| e.to_string())?
-                .iter()
-                .any(|a| a.uid == uid && a.is_live()),
-        };
-        if found {
-            Ok(())
-        } else {
-            Err(format!(
-                "no {} `{uid}`",
-                if kind == "bot" {
-                    "work assistant"
-                } else {
-                    "executor config"
-                }
-            ))
-        }
-    }
-
     /// Write what a plan says each item is to be, and tell the pages.
     pub(super) async fn write_settings(&self, applied: &[Applied]) -> Result<(), String> {
         if applied.is_empty() {
@@ -591,11 +449,7 @@ impl PersonalAgentEngine {
             .iter()
             .filter(|a| a.key != brain_key && !is_team_row(&a.key))
         {
-            let path: Vec<&str> = if let Some(rest) = a.key.strip_prefix("team.usage.") {
-                vec!["team", "usage", rest]
-            } else {
-                a.key.splitn(3, '.').collect()
-            };
+            let path: Vec<&str> = a.key.splitn(3, '.').collect();
             match path.as_slice() {
                 ["own", item] => {
                     own.insert((*item).to_string(), a.to.clone());
@@ -765,7 +619,7 @@ impl PersonalAgentEngine {
     }
 
     /// A change from the conversation, of the settings (`prefs_update`) or
-    /// of the team (`bot_update`, `assistant_update`): the owner's words
+    /// of a work assistant (`bot_update`): the owner's words
     /// change it (at once, or on a card first when they asked to see such
     /// changes first); the assistant's own inference (`suggest`) only
     /// suggests it.
@@ -1386,180 +1240,21 @@ impl PersonalAgentEngine {
     }
 }
 
-// ── the team, as the brain reads it ──────────────────────────────────────────
-
-/// The modes, as the brain reads them.
-fn modes_text(modes: &[crate::db::entities::personal_agent_dispatch::DispatchMode]) -> String {
-    use crate::db::entities::personal_agent_dispatch::DispatchMode;
-    modes
-        .iter()
-        .map(|m| match m {
-            DispatchMode::Task => "task",
-            DispatchMode::Chat => "chat",
-            DispatchMode::Session => "session",
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-impl PersonalAgentEngine {
-    /// The project names, for a refusal or a note.
-    async fn project_names(&self, ids: &[i32]) -> String {
-        let mut names = Vec::new();
-        for id in ids {
-            let name = crate::db::service::folder_service::get_folder_by_id(&self.db.conn, *id)
-                .await
-                .ok()
-                .flatten()
-                .map(|f| f.alias.clone().unwrap_or(f.name.clone()))
-                .unwrap_or_else(|| "(gone)".into());
-            names.push(format!("#{id} {name}"));
-        }
-        names.join(", ")
-    }
-
-    /// How the owner lets the assistants use an executor config, one line:
-    /// `None` when they set nothing.
-    pub(super) async fn usage_note(&self, usage: &ExecutorUsage) -> Option<String> {
-        if usage.is_default() {
-            return None;
-        }
-        if !usage.dispatch {
-            return Some(
-                "not for your dispatches (the owner keeps it for @ in conversations)".into(),
-            );
-        }
-        let mut parts = Vec::new();
-        if usage.modes.len() < 3 {
-            parts.push(format!("takes only {}", modes_text(&usage.modes)));
-        }
-        if let Some(p) = &usage.projects {
-            parts.push(format!("only on projects {}", self.project_names(p).await));
-        }
-        Some(parts.join("; "))
-    }
-
-    /// Whether a dispatch fits how the owner lets the assistants use its
-    /// executor config (10.5, 补齐三): the reason when it does not.
-    pub(super) async fn check_usage(
-        &self,
-        assistant: &crate::models::assistant::AssistantInfo,
-        mode: crate::db::entities::personal_agent_dispatch::DispatchMode,
-        project: Option<i32>,
-    ) -> Result<(), String> {
-        let usage = self.account().await.team.usage_of(&assistant.uid);
-        if !usage.dispatch {
-            return Err(format!(
-                "the owner does not let the assistants dispatch to {} (they keep it for @ in \
-                 conversations); pick another with assistant_list",
-                assistant.name
-            ));
-        }
-        if !usage.modes.contains(&mode) {
-            return Err(format!(
-                "{} takes only {} dispatches; use one of those modes, or another executor config",
-                assistant.name,
-                modes_text(&usage.modes)
-            ));
-        }
-        if let (Some(allowed), Some(id)) = (&usage.projects, project) {
-            if !allowed.contains(&id) {
-                return Err(format!(
-                    "{} works only on projects {}; pick another executor config for this one",
-                    assistant.name,
-                    self.project_names(allowed).await
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// The owner's division of work, as the brain reads it: one line per
-    /// kind of work that has a first pick. `None` when every kind is auto.
-    pub(super) async fn division_text(&self) -> Option<String> {
-        let team = self.account().await.team;
-        if team.division.is_empty() {
-            return None;
-        }
-        let bots = svc::list_bots(&self.db.conn).await.unwrap_or_default();
-        let assistants = crate::db::service::assistant_service::list_all(&self.db.conn)
-            .await
-            .unwrap_or_default();
-        let mut lines = Vec::new();
-        for kind in prefs::DIVISION {
-            let Some(pick) = team.division.get(*kind) else {
-                continue;
-            };
-            let Some((what, uid)) = pick.split_once(':') else {
-                continue;
-            };
-            let who = match what {
-                "bot" => bots
-                    .iter()
-                    .find(|b| b.uid.as_deref() == Some(uid))
-                    .map(|b| {
-                        format!(
-                            "{} (work assistant {}: write to it with bot_message)",
-                            display_name(b),
-                            b.id
-                        )
-                    }),
-                _ => assistants
-                    .iter()
-                    .find(|a| a.uid == uid && a.is_live())
-                    .map(|a| format!("{} (executor config #{}: dispatch to it)", a.name, a.id)),
-            };
-            if let Some(who) = who {
-                lines.push(format!("- {} → {who}", prefs::division_label(kind)));
-            }
-        }
-        if lines.is_empty() {
-            return None;
-        }
-        Some(format!(
-            "The owner's division of work — give each kind of work to its first pick, unless the \
-             owner names someone else or the pick cannot take it now (then choose as you see \
-             fit); kinds not listed are yours to place:\n{}",
-            lines.join("\n")
-        ))
-    }
-}
-
-/// An executor config was deleted: the kinds of work that named it first
-/// are back to auto, and how the assistants used it is forgotten (10.5,
-/// 补齐六). The work it is running keeps running — it runs on its snapshot.
-pub async fn forget_executor(
+/// An executor config was deleted: the assistants it was bound to now have
+/// none to work with, which their settings pages show. The work it is
+/// running keeps running — it runs on its snapshot.
+pub async fn executor_gone(
     db: &crate::db::AppDatabase,
     emitter: &crate::web::event_bridge::EventEmitter,
-    uid: &str,
+    id: i32,
 ) {
-    let Ok(Some(primary)) = svc::primary_bot(&db.conn).await else {
-        return;
-    };
-    let team = AccountView::from_settings(&primary.settings).team;
-    let pick = format!("assistant:{uid}");
-    let mut division = Map::new();
-    for (kind, p) in &team.division {
-        if *p == pick {
-            division.insert(kind.clone(), Value::Null);
+    for b in svc::list_bots(&db.conn).await.unwrap_or_default() {
+        if b.executor_assistant_id == Some(id) {
+            crate::web::event_bridge::emit_event(
+                emitter,
+                super::engine::PERSONAL_AGENT_CHANGED_EVENT,
+                super::engine::change_payload(b.id, &PersonalAgentChange::Agent),
+            );
         }
-    }
-    if division.is_empty() && !team.usage.contains_key(uid) {
-        return;
-    }
-    let mut usage = Map::new();
-    usage.insert(uid.to_string(), Value::Null);
-    let patch = json!({ "team": { "division": division, "usage": usage } });
-    match svc::patch_settings(&db.conn, primary.id, &patch).await {
-        Ok(_) => {
-            for b in svc::list_bots(&db.conn).await.unwrap_or_default() {
-                crate::web::event_bridge::emit_event(
-                    emitter,
-                    super::engine::PERSONAL_AGENT_CHANGED_EVENT,
-                    super::engine::change_payload(b.id, &PersonalAgentChange::Agent),
-                );
-            }
-        }
-        Err(e) => tracing::warn!("[personal-agent] forgetting executor config {uid} failed: {e}"),
     }
 }

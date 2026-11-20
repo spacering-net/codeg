@@ -572,8 +572,7 @@ async fn task_signal(db: &crate::db::AppDatabase, t: &work_task::Model) {
 
 impl EngineHost {
     /// Whose a board task's pull request is: the assistant that dispatched
-    /// the work; else the work assistant the division picks for fixing CI;
-    /// else the primary. `None` with no assistant set up.
+    /// the work; else the primary. `None` with no assistant set up.
     pub(super) async fn watch_owner(&self, t: &work_task::Model) -> Option<i32> {
         if let Some(d) = t.personal_agent_dispatch_id {
             if let Ok(Some(d)) = svc::get_dispatch(&self.db.conn, d).await {
@@ -587,13 +586,6 @@ impl EngineHost {
                         return Some(bot);
                     }
                 }
-            }
-        }
-        let team = self.primary.account().await.team;
-        if let Some(("bot", uid)) = team.division.get("fix_ci").and_then(|p| p.split_once(':')) {
-            let bots = svc::list_bots(&self.db.conn).await.unwrap_or_default();
-            if let Some(b) = bots.iter().find(|b| b.uid.as_deref() == Some(uid)) {
-                return Some(b.id);
             }
         }
         svc::primary_bot(&self.db.conn)

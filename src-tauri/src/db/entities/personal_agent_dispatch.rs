@@ -111,11 +111,9 @@ pub struct Model {
     /// or a follow-up — codeg delivers it to the pull request once accepted.
     #[sea_orm(column_type = "Text", nullable)]
     pub pr_fix: Option<String>,
-    /// The kind of work it is (7.9), one of the division's: as the
-    /// assistant named it, or codeg for its own rounds (`fix_ci`, `check`).
-    /// Each executor's record is kept by it.
-    #[sea_orm(column_type = "Text", nullable)]
-    pub kind: Option<String>,
+    /// codeg's own check of other work (7.5): kept out of what the
+    /// assistants' work is compared by.
+    pub is_check: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -147,9 +147,6 @@ pub struct EventSpec {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DispatchTemplate {
-    /// Its executor config; none: the assistant's own.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub assistant_id: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<DispatchMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,13 +162,6 @@ pub struct DispatchTemplate {
     pub deliverable: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub done_when: Option<String>,
-    /// The kind of work it is (7.9).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    /// In a change: back to the assistant's own executor config, whatever
-    /// `assistant_id` was (an omitted one keeps what it was). Not kept.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub own_executor: bool,
 }
 
 /// What a run looks at before it wakes anyone.
@@ -351,25 +341,14 @@ pub fn spec_of(draft: &Draft, base: Option<&Draft>) -> Result<Spec, String> {
         (_, RoutineKind::Brain) => None,
         (Some(d), RoutineKind::Dispatch) => Some(match &base.dispatch {
             Some(b) => DispatchTemplate {
-                assistant_id: if d.own_executor {
-                    None
-                } else {
-                    d.assistant_id.or(b.assistant_id)
-                },
                 mode: d.mode.or(b.mode),
                 project_id: d.project_id.or(b.project_id),
                 title: d.title.clone().or_else(|| b.title.clone()),
                 prompt: d.prompt.clone().or_else(|| b.prompt.clone()),
                 deliverable: d.deliverable.clone().or_else(|| b.deliverable.clone()),
                 done_when: d.done_when.clone().or_else(|| b.done_when.clone()),
-                kind: d.kind.clone().or_else(|| b.kind.clone()),
-                own_executor: false,
             },
-            None => DispatchTemplate {
-                assistant_id: d.assistant_id.filter(|_| !d.own_executor),
-                own_executor: false,
-                ..d.clone()
-            },
+            None => d.clone(),
         }),
         (None, RoutineKind::Dispatch) => base.dispatch.clone(),
     };
@@ -1278,8 +1257,8 @@ impl PersonalAgentEngine {
         }
     }
 
-    /// A dispatch routine whose executor config can no longer be used by
-    /// the assistants is paused, with an urgent card.
+    /// A dispatch routine whose assistant has nothing its work runs on is
+    /// paused ahead of its time, with an urgent card.
     async fn check_executors(self: &Arc<Self>, bot: i32) {
         for r in rsvc::enabled_of(&self.db.conn, bot)
             .await
@@ -1294,24 +1273,15 @@ impl PersonalAgentEngine {
         }
     }
 
-    /// The executor config a dispatch routine hands its work to, checked:
-    /// there, on, and to be used so by the assistants.
-    async fn template_executor(&self, r: &routine_entity::Model) -> Result<i32, String> {
-        let t = template_of(r).ok_or("the routine has no work to hand out")?;
-        let id = match t.assistant_id {
-            Some(id) => id,
-            None => self.default_executor().await?,
-        };
-        let a = crate::db::service::assistant_service::get_live_enabled(&self.db.conn, id)
+    /// Whether a dispatch routine's work can go out: it has work to hand
+    /// out, and its assistant has something its work runs on now — what the
+    /// run takes when it goes.
+    async fn template_executor(&self, r: &routine_entity::Model) -> Result<(), String> {
+        template_of(r).ok_or("the routine has no work to hand out")?;
+        self.work_snapshot()
             .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("executor config #{id} is deleted or turned off"))?;
-        let mode = t.mode.unwrap_or(DispatchMode::Task);
-        let folder = (mode != DispatchMode::Chat)
-            .then_some(t.project_id)
-            .flatten();
-        self.check_usage(&a, mode, folder).await?;
-        Ok(id)
+            .map(|_| ())
+            .map_err(|e| self.for_the_owner(e))
     }
 
     // ── a run ───────────────────────────────────────────────────────────────
@@ -1640,8 +1610,8 @@ impl PersonalAgentEngine {
         run: &run_entity::Model,
         seq: i32,
     ) {
-        let assistant_id = match self.template_executor(r).await {
-            Ok(id) => id,
+        match self.template_executor(r).await {
+            Ok(()) => {}
             Err(e) => {
                 self.pause_routine(r, "executor", &e).await;
                 let _ = rsvc::update_run(
@@ -1668,7 +1638,6 @@ impl PersonalAgentEngine {
             .unwrap_or_else(|| r.what.clone());
         let req = DispatchRequest {
             mode,
-            assistant_id,
             title: t
                 .title
                 .clone()
@@ -1685,8 +1654,6 @@ impl PersonalAgentEngine {
             report: t.deliverable.as_deref() == Some("report"),
             on_done: None,
             done_when: t.done_when.clone(),
-            kind: t.kind.clone(),
-            why: None,
         };
         let valid = match self.validate_dispatch(&req).await {
             Ok(v) => v,
@@ -2068,15 +2035,11 @@ impl PersonalAgentEngine {
         for p in projects {
             self.project_path(p).await?;
         }
+        // The request itself only: what runs it is taken at each run.
         if let Some(t) = &spec.dispatch {
-            let assistant_id = match t.assistant_id {
-                Some(id) => id,
-                None => self.default_executor().await?,
-            };
             let mode = t.mode.unwrap_or(DispatchMode::Task);
             self.validate_dispatch(&DispatchRequest {
                 mode,
-                assistant_id,
                 title: spec.title.clone(),
                 prompt: t.prompt.clone().unwrap_or_else(|| spec.what.clone()),
                 project_id: (mode != DispatchMode::Chat)
@@ -2085,8 +2048,6 @@ impl PersonalAgentEngine {
                 report: t.deliverable.as_deref() == Some("report"),
                 on_done: None,
                 done_when: t.done_when.clone(),
-                kind: t.kind.clone(),
-                why: None,
             })
             .await?;
         }
@@ -2702,15 +2663,12 @@ impl PersonalAgentEngine {
             timezone: None,
             event: None,
             dispatch: Some(DispatchTemplate {
-                assistant_id: Some(d.executor_assistant_id),
                 mode: Some(d.mode),
                 project_id: d.folder_id,
                 title: None,
                 prompt: None,
                 deliverable: d.deliverable.clone(),
                 done_when: d.done_when.clone(),
-                kind: d.kind.clone(),
-                own_executor: false,
             }),
             precheck: None,
         };
@@ -3606,15 +3564,12 @@ mod tests {
             kind: Some(RoutineKind::Dispatch),
             cron: Some("0 9 * * 1".into()),
             dispatch: Some(DispatchTemplate {
-                assistant_id: Some(3),
                 mode: Some(DispatchMode::Task),
                 project_id: Some(2),
                 title: Some("Weekly deps".into()),
                 prompt: Some("Run cargo audit".into()),
                 deliverable: Some("report".into()),
                 done_when: Some("- every advisory listed".into()),
-                kind: Some("research".into()),
-                own_executor: false,
             }),
             ..Default::default()
         };
@@ -3622,7 +3577,6 @@ mod tests {
         let edited = Draft {
             cron: Some("0 10 * * 1".into()),
             dispatch: Some(DispatchTemplate {
-                assistant_id: Some(4),
                 mode: Some(DispatchMode::Task),
                 project_id: Some(2),
                 deliverable: Some("report".into()),
@@ -3632,25 +3586,10 @@ mod tests {
         };
         let s = spec_of(&edited, Some(&base)).unwrap();
         let t = s.dispatch.clone().unwrap();
-        assert_eq!(t.assistant_id, Some(4));
         assert_eq!(t.title.as_deref(), Some("Weekly deps"));
         assert_eq!(t.prompt.as_deref(), Some("Run cargo audit"));
         assert_eq!(t.done_when.as_deref(), Some("- every advisory listed"));
-        assert_eq!(t.kind.as_deref(), Some("research"));
         assert_eq!(s.cron.as_deref(), Some("0 10 * * 1"));
-        // Back to its own executor config: said so, not left out.
-        let own = Draft {
-            dispatch: Some(DispatchTemplate {
-                own_executor: true,
-                mode: Some(DispatchMode::Task),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let t = spec_of(&own, Some(&s.draft())).unwrap().dispatch.unwrap();
-        assert_eq!(t.assistant_id, None);
-        assert!(!t.own_executor);
-        assert_eq!(t.prompt.as_deref(), Some("Run cargo audit"));
         // A whole snapshot (undo) is itself, with nothing laid under it.
         let whole = spec_of(&base, None).unwrap();
         assert_eq!(whole.draft(), base.clone());

@@ -238,7 +238,6 @@ pub const MAX_ACT_DISPATCH: usize = 6_000;
 /// The fields a dispatch draft may have — the `dispatch` tool's.
 const DISPATCH_FIELDS: &[&str] = &[
     "mode",
-    "assistant_id",
     "title",
     "prompt",
     "project_id",
@@ -947,6 +946,10 @@ mod tests {
         let spec = parse_act_spec(&json!({"what": "release", "dispatch": {"mode": "task", "title": "Release", "prompt": "Tag v1"}})).unwrap();
         assert_eq!(spec.dispatch.unwrap()["mode"], "task");
         assert!(parse_act_spec(&json!({"what": "x", "dispatch": {"command": "rm"}})).is_err());
+        // No executor config in a draft: the dispatch it becomes takes none.
+        assert!(parse_act_spec(&json!({"what": "x", "dispatch": {"mode": "chat", "assistant_id": 3}}))
+            .unwrap_err()
+            .contains("`assistant_id` is not one"));
         assert!(parse_act_spec(&json!({"what": "  "})).is_err());
         assert!(parse_act_spec(&json!(3)).is_err());
     }

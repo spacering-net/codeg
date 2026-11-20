@@ -1715,10 +1715,9 @@ impl PersonalAgentEngine {
             return format!("- {}", e.summary);
         };
         let head = format!(
-            "Dispatch #{} \"{}\" · executor {} · {}",
+            "Dispatch #{} \"{}\" · {}",
             card.dispatch_id,
             card.title,
-            card.executor,
             card.mode.map(mode_label).unwrap_or("")
         );
         if card.state != "asking" {

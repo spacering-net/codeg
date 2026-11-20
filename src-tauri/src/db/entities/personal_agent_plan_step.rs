@@ -12,9 +12,11 @@ pub enum TargetKind {
     /// step's conclusion.
     #[sea_orm(string_value = "bot")]
     Bot,
-    /// An executor config: codeg dispatches the step to it.
-    #[sea_orm(string_value = "assistant")]
-    Assistant,
+    /// The plan's own assistant does it itself: codeg dispatches the step
+    /// on what its work runs on when the step comes up.
+    #[sea_orm(string_value = "own")]
+    #[serde(rename = "self")]
+    Own,
 }
 
 /// Where a step stands.
@@ -94,9 +96,6 @@ pub struct Model {
     pub ended_at: Option<DateTimeUtc>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
-    /// The kind of work it is (7.9), handed on to its dispatch.
-    #[sea_orm(column_type = "Text", nullable)]
-    pub kind: Option<String>,
 }
 
 impl Model {

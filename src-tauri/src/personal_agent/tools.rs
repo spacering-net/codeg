@@ -14,7 +14,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use super::dispatch::{executor_of, DispatchAuth, DispatchRequest, FollowupAuth};
+use super::dispatch::{DispatchAuth, DispatchRequest, FollowupAuth};
 use super::engine::{enum_str, PersonalAgentEngine};
 use super::mentions::{self, Mention};
 use super::messages::{MessageCall, Unnamed};
@@ -121,7 +121,7 @@ pub(super) fn without_executors(mut data: Value) -> Value {
     fn strip(v: &mut Value) {
         match v {
             Value::Object(map) => {
-                map.retain(|k, _| !k.starts_with("executor"));
+                map.retain(|k, _| !k.starts_with("executor") && !k.starts_with("checker"));
                 map.values_mut().for_each(strip);
             }
             Value::Array(items) => items.iter_mut().for_each(strip),
@@ -167,10 +167,10 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             ToolOutcome::ok(text, json!({ "projects": rows }))
         }
         "dispatch" => {
-            if args.get("agent_type").is_some() {
+            if args.get("agent_type").is_some() || args.get("assistant_id").is_some() {
                 return ToolOutcome::refused(
-                    "dispatch takes a role assistant (`assistant_id`, from assistant_list), never \
-                     an agent type",
+                    "dispatch starts work of your own: it runs on what your settings say. To \
+                     have another assistant do it, hand it over with `bot_message`",
                 );
             }
             let mode = match string(&args, "mode").as_deref() {
@@ -179,14 +179,6 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 Some("session") => DispatchMode::Session,
                 _ => return ToolOutcome::refused("`mode` must be task, chat or session"),
             };
-            // A work assistant's own executor config when it names none (4.4).
-            let assistant_id = match int(&args, "assistant_id").and_then(as_i32) {
-                Some(id) => id,
-                None => match engine.default_executor().await {
-                    Ok(id) => id,
-                    Err(e) => return ToolOutcome::refused(e),
-                },
-            };
             let report = match string(&args, "deliverable").as_deref() {
                 None | Some("change") => false,
                 Some("report") => true,
@@ -194,15 +186,12 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             };
             let req = DispatchRequest {
                 mode,
-                assistant_id,
                 title: string(&args, "title").unwrap_or_default(),
                 prompt: string(&args, "prompt").unwrap_or_default(),
                 project_id: int(&args, "project_id").and_then(as_i32),
                 report: report || (mode != DispatchMode::Task && args.get("deliverable").is_some()),
                 on_done: string(&args, "on_done"),
                 done_when: string(&args, "done_when"),
-                kind: string(&args, "kind"),
-                why: string(&args, "why"),
             };
             let mut valid = match engine.validate_dispatch(&req).await {
                 Ok(v) => v,
@@ -501,13 +490,11 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 }
             }
             let dispatch_json = dispatch.as_ref().map(|d| {
-                let executor = executor_of(d);
                 text.push_str(&format!(
-                    "\ndispatch #{}: {} · {} · executor {}",
+                    "\ndispatch #{}: {} · {}",
                     d.id,
                     enum_str(&d.mode),
                     enum_str(&d.state),
-                    executor.name
                 ));
                 if let Some(e) = &d.result_excerpt {
                     text.push_str(&format!("\nresult: {e}"));
@@ -520,7 +507,6 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     "mode": d.mode,
                     "state": d.state,
                     "title": d.title,
-                    "executor": executor.name,
                     "work_task_id": d.work_task_id,
                     "conversation_id": d.conversation_id,
                     "result_excerpt": d.result_excerpt,
@@ -886,12 +872,11 @@ fn dispatched(d: &crate::db::entities::personal_agent_dispatch::Model, earlier: 
         )
     } else {
         format!(
-            "Dispatched #{} \"{}\" as a {} to {}. It runs on its own; its progress comes back to \
-             you as events, and the owner already sees a card for it.",
+            "Dispatched #{} \"{}\" as a {}: a work session of yours does it on its own; its \
+             progress comes back to you as events, and the owner already sees a card for it.",
             d.id,
             d.title,
             enum_str(&d.mode),
-            executor_of(d).name
         )
     };
     ToolOutcome::ok(text, json!({ "dispatch_id": d.id, "state": d.state, "earlier": earlier }))

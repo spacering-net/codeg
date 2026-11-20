@@ -7,8 +7,7 @@
 //! first; what the assistant only infers (`suggest`) is a suggestion card.
 //! The items are keys like any other —
 //!
-//! - `bot.<uid>.{name, avatar, brain, notify, muted, hidden}`
-//! - and the team's own `team.usage.<uid>` and `team.division.<kind>`.
+//! - `bot.<uid>.{name, avatar, brain, notify, muted, hidden}`.
 //!
 //! A brain changed with only some of its options named has the rest filled
 //! in (10.5 "fill five"): this one's own choices on the same agent first,
@@ -26,7 +25,6 @@ use super::messages::display_name;
 use super::prefs::{Applied, SettingChange};
 use super::tools::ToolOutcome;
 use crate::db::entities::personal_agent::BotKind;
-use crate::db::service::assistant_service;
 use crate::db::service::personal_agent_service as svc;
 use crate::models::personal_agent::PersonalAgentChange;
 use crate::models::personal_agent_bots::{BotAvatar, PickedOption};
@@ -320,34 +318,10 @@ impl PersonalAgentEngine {
     pub(super) async fn team_names(&self, plan: &[Applied]) -> Value {
         let mut names = serde_json::Map::new();
         let bots = svc::list_bots(&self.db.conn).await.unwrap_or_default();
-        let assistants = assistant_service::list_all(&self.db.conn)
-            .await
-            .unwrap_or_default();
-        let mut name_of = |key: String, name: String| {
-            names.insert(key, json!(name));
-        };
         for a in plan {
             if let Some((uid, _)) = a.key.strip_prefix("bot.").and_then(|r| r.rsplit_once('.')) {
                 if let Some(b) = bots.iter().find(|b| b.uid.as_deref() == Some(uid)) {
-                    name_of(format!("bot:{uid}"), display_name(b));
-                }
-            }
-            if let Some(uid) = a.key.strip_prefix("team.usage.") {
-                if let Some(x) = assistants.iter().find(|x| x.uid == uid) {
-                    name_of(format!("assistant:{uid}"), x.name.clone());
-                }
-            }
-            for v in [&a.from, &a.to] {
-                if let Some(pick) = v.as_str() {
-                    if let Some(uid) = pick.strip_prefix("assistant:") {
-                        if let Some(x) = assistants.iter().find(|x| x.uid == uid) {
-                            name_of(pick.to_string(), x.name.clone());
-                        }
-                    } else if let Some(uid) = pick.strip_prefix("bot:") {
-                        if let Some(b) = bots.iter().find(|b| b.uid.as_deref() == Some(uid)) {
-                            name_of(pick.to_string(), display_name(b));
-                        }
-                    }
+                    names.insert(format!("bot:{uid}"), json!(display_name(b)));
                 }
             }
         }

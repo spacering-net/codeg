@@ -1432,7 +1432,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Hand a piece of work to a role assistant. ASYNCHRONOUS: returns at once with the dispatch id; progress reaches you later as events, and codeg puts a result card on the owner's timeline without waiting for you. Three modes: `task` — a kanban task in the project's own worktree, which lands as the board's settings say: merged on its own when the project has auto-merge on, by the owner otherwise (use it for any code change); `chat` — a chat conversation outside any project (research, writing, analysis); `session` — a conversation in the project's CURRENT checkout, for reading and investigating, or an in-place change the owner explicitly asked for. `task` and `session` need `project_id`. The executor runs with the assistant's own agent, options and standing instructions, frozen at dispatch. Write `prompt` so the executor can work without seeing this conversation. The answer tells you when work of yours is already running on the same branch of that project: more work on the same PR goes to `dispatch_followup` on that dispatch instead. When the owner asked to confirm dispatches first (their preferences say which), the dispatch goes to them as a card holding exactly this content, and runs once they confirm; the answer says so, and you hear how they answered — do not dispatch it again meanwhile.",
+    "description": "Do a piece of work yourself: codeg opens a work session for it. ASYNCHRONOUS: returns at once with the dispatch id; progress reaches you later as events, and codeg puts a result card on the owner's timeline without waiting for you. Three modes: `task` — a kanban task in the project's own worktree, which lands as the board's settings say: merged on its own when the project has auto-merge on, by the owner otherwise (use it for any code change); `chat` — a chat conversation outside any project (research, writing, analysis); `session` — a conversation in the project's CURRENT checkout, for reading and investigating, or an in-place change the owner explicitly asked for. `task` and `session` need `project_id`. It runs on what you work with (the agent and options set for you), frozen at dispatch. Write `prompt` so the session can work without seeing this conversation. For work another assistant should do, hand it to them with `bot_message` instead. The answer tells you when work of yours is already running on the same branch of that project: more work on the same PR goes to `dispatch_followup` on that dispatch instead. When the owner asked to confirm dispatches first (their preferences say which), the dispatch goes to them as a card holding exactly this content, and runs once they confirm; the answer says so, and you hear how they answered — do not dispatch it again meanwhile.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -1450,10 +1450,6 @@
           ],
           "description": "How the work runs: task, chat or session."
         },
-        "assistant_id": {
-          "type": "integer",
-          "description": "The executing role assistant's id, from assistant_list. A work assistant may leave it out: its own executor config runs it."
-        },
         "title": {
           "type": "string",
           "maxLength": 120,
@@ -1462,7 +1458,7 @@
         "prompt": {
           "type": "string",
           "maxLength": 20000,
-          "description": "The complete instructions for the executor."
+          "description": "The complete instructions for the work session."
         },
         "project_id": {
           "type": "integer",
@@ -1484,7 +1480,7 @@
         "done_when": {
           "type": "string",
           "maxLength": 4000,
-          "description": "What done looks like, criterion by criterion — e.g. '1. a cold start no longer shows a blank screen; 2. the existing tests pass; 3. the public API is unchanged'. The owner sees it on the dispatch card. For code work (task) codeg has another executor check the result against it, and you accept it with acceptance_decide; it also guides how you answer the executor's questions. Write it in the owner's language."
+          "description": "What done looks like, criterion by criterion — e.g. '1. a cold start no longer shows a blank screen; 2. the existing tests pass; 3. the public API is unchanged'. The owner sees it on the dispatch card. For code work (task) codeg checks the result against it in a separate read-only session, and you accept it with acceptance_decide; it also guides how you answer the work session's questions. Write it in the owner's language."
         },
         "for": {
           "type": "string",
@@ -1497,25 +1493,6 @@
         "reason": {
           "type": "string",
           "description": "With `suggest`: why you think it fits the owner."
-        },
-        "kind": {
-          "type": "string",
-          "enum": [
-            "code",
-            "review",
-            "test",
-            "fix_ci",
-            "docs",
-            "release",
-            "research",
-            "check"
-          ],
-          "description": "The kind of work it is, as the division names them: code, review, test, fix_ci, docs, release, research, check. Name it whenever one fits: each executor config's record (assistant_list) is kept by it, and codeg suggests a better pick for a kind to the owner when one does it clearly better."
-        },
-        "why": {
-          "type": "string",
-          "maxLength": 300,
-          "description": "Why this executor config, in a line, when you weighed it (its record on this kind of work, the division's pick, the owner's word): the owner sees it on the card."
         }
       }
     }
@@ -1537,7 +1514,7 @@
         "message": {
           "type": "string",
           "maxLength": 20000,
-          "description": "What the executor should do next."
+          "description": "What the work session should do next."
         },
         "intent": {
           "type": "string",
@@ -1636,7 +1613,7 @@
   },
   {
     "name": "acceptance_decide",
-    "description": "Conclude a round of acceptance of code work you dispatched — the <codeg-acceptance> block: the check another executor ran (read-only) against your acceptance criteria, and the facts of the work. `accept` when it does what the owner wanted: the owner is told it can be merged, and the board merges it when its settings say so. `revise` with `message` when something must change: write it from what the owner wanted — leave out points of the check that go against what they asked or do not matter, add what it missed that they care about; the task goes back to its executor and is checked again when ready. `ask_owner` with `question` when you cannot settle it (a trade-off nothing they said decides); put in `message` what you would send back, so they can do that with one click. You may disagree with the check's verdict — then say why in `reason`. The round is the one this delivery carried; a round whose task or worktree changed since its check is refused, and nothing is done.",
+    "description": "Conclude a round of acceptance of code work you dispatched — the <codeg-acceptance> block: the check run in a separate read-only session against your acceptance criteria, and the facts of the work. `accept` when it does what the owner wanted: the owner is told it can be merged, and the board merges it when its settings say so. `revise` with `message` when something must change: write it from what the owner wanted — leave out points of the check that go against what they asked or do not matter, add what it missed that they care about; the task goes back to its work session and is checked again when ready. `ask_owner` with `question` when you cannot settle it (a trade-off nothing they said decides); put in `message` what you would send back, so they can do that with one click. You may disagree with the check's verdict — then say why in `reason`. The round is the one this delivery carried; a round whose task or worktree changed since its check is refused, and nothing is done.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -1665,7 +1642,7 @@
         "message": {
           "type": "string",
           "maxLength": 4000,
-          "description": "revise: what the executor is to change (required). ask_owner: what sending it back would say."
+          "description": "revise: what the work is to change (required). ask_owner: what sending it back would say."
         },
         "question": {
           "type": "string",
@@ -1698,7 +1675,7 @@
   },
   {
     "name": "item_read",
-    "description": "Read one open matter in full, with its dispatch (state, executor, result excerpt) when it has one.",
+    "description": "Read one open matter in full, with its dispatch (state, result excerpt) when it has one.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -1816,7 +1793,7 @@
         },
         "act_spec": {
           "type": "object",
-          "description": "For `act`: what you will do then, and a draft of the dispatch to make if there is one (the dispatch tool's fields: mode, assistant_id, title, prompt, project_id, deliverable, on_done). Handed back to you when it comes due. Implies `at_due: act`.",
+          "description": "For `act`: what you will do then, and a draft of the dispatch to make if there is one (the dispatch tool's fields: mode, title, prompt, project_id, deliverable, on_done). Handed back to you when it comes due. Implies `at_due: act`.",
           "properties": {
             "what": {
               "type": "string",
@@ -1941,7 +1918,7 @@
   },
   {
     "name": "prefs_update",
-    "description": "Change one of the owner's settings from the conversation: their preferences (how you reply, cards, what you do when unsure, which actions go to them first, how assistants hand each other work, loop rounds, their time zone, whether codeg learns their hours, when and how codeg notifies them) or one of your own settings (auto-compaction, compact command, handoff budget, dispatch concurrency, the built-in skill, your brain). When the owner SAYS so (\"keep replies short\", \"ask me before you dispatch code changes\"), call it with `quote` — their words — and it is changed at once: codeg shows the owner a card with the old and new value that undoes it (or, when they asked to see such changes first, the card comes first and nothing changes until they confirm). There is no setting the owner cannot change this way. When you only INFER it would suit them (they keep asking for shorter answers), set `suggest: true` with a `reason`: it goes on a card, and changes only if they accept; one they declined is not to be suggested again for seven days. Values: reply_length short|medium|long; cards prefer|decisions|never; when_unsure assume|ask; chat_changes apply|show; confirm_dispatch never|code|always; followups auto|ask; messages auto|ask; worker_handoff message|direct; loop_rounds 0-1000 (0: no limit); interrupt_retry auto|ask (retrying a dispatch a restart interrupted: at once / ask first); retry_rounds 0-10 (automatic retries of one dispatch); exec_questions, exec_plans assistant|owner (questions and plan approvals from the sessions you dispatched: you answer them / they go to the owner); auto_accept on|off (codeg has another executor check the code work you dispatched, and you accept it); accept_revise auto|ask (sending work back after its check: at once / ask first); accept_rounds 0-10 (rounds of checks one piece of work gets); forge_comment, issue_close, pr_merge auto|ask (comments you post, issues you close and pull requests you merge on a forge: at once / approved by the owner first); routine_dispatch auto|ask (the work your dispatch routines hand out); plans auto|ask (the plans you lay out: started at once / shown to the owner first, started on their Start); tidy auto|draft|off (the nightly tidy-up of every assistant's memory, persona and rules, and the process skills learned from work that went well: made at once with a card that undoes it / kept as drafts the owner applies / not done); ci_failure fix|ask|tell (a watched pull request whose checks failed: its task fixes it / ask the owner on its card first / only tell them); pr_conflict auto|ask (one that conflicts with its base: its task merges the base in / ask first); review_feedback auto|ask (review feedback from those who can write to the repository: to the task word for word / ask first); outsider_comments auto|ask (comments from those who cannot: you judge whether the task has them / ask the owner); ci_rounds 0-10 (rounds codeg starts by itself to fix one pull request; 0: none); flush on|off (noting the day's points in your log before codeg compacts your context); time_zone system|a time zone name such as Europe/Berlin (system follows the computer's); presence on|off (whether codeg notes when the owner is in codeg, to learn their usual hours); proactive on|off (off: codeg notifies them only of their reminders); urgent_via system_attention|system|in_page; normal_via system|in_page|today (today: no notification); low_via today|digest; focus_wait 0-60 (minutes news of normal urgency waits after they stop typing; 0: not held); quiet_hours auto|fixed|none (auto: outside their usual hours); quiet_from, quiet_to HH:MM (with fixed); quiet_lets reminders|urgent (what still reaches them in quiet hours); morning hours|fixed and morning_at HH:MM (what \"tomorrow morning\" is in a reminder); level_reminder, level_forwarded, level_approval, level_waiting, level_question, level_confirm, level_stuck, level_done, level_reply, level_exchange, level_changed, level_answered urgent|normal|low (how urgent each kind of news is); level_acceptance, level_forge, level_pr_ready, level_pr, level_routine, level_routine_paused, level_used_up, level_memory, level_plan, level_plan_stuck urgent|normal|low (acceptance news, what was done on a forge, a watched pull request that can be merged, its other news, a routine's report, a paused routine, work sent back as many rounds as allowed, an assistant's memory changes, tidy-ups and process skills, a plan carried out to its end, a stuck plan); level_proposal, level_proposal_low urgent|normal|low (codeg's proposal cards); rule_failed, rule_review, rule_session, rule_pr_review, rule_uncommitted, rule_idle, rule_new_project, rule_behind, rule_division, rule_repeat on|off (codeg's proposal cards: work failed with nobody on it, a board task waiting long for review, a session waiting on them, a pull request waiting for their review, changes left uncommitted, a matter gone quiet, a new project, a dispatched task's branch behind with conflicts, another executor config clearly doing a kind of work better than its pick in the division, the offer to make a repeated request a routine); rule_failed_hours, rule_review_hours, rule_uncommitted_hours 0-720; rule_session_minutes 0-1440; rule_pr_review_days, rule_idle_days 0-90; rule_repeat_count 2-20 (the how-manyth alike request makes the offer); rule_suggest on|off (whether the owner takes the assistants' own suggestions); rule_undo on|off (the weekly review asking whether to show changes first when the owner undoes many of those made at their word); rule_idle_bot on|off (the weekly review asking whether to hide or delete a work assistant not woken for two weeks); brief on|off (the morning brief); brief_time hours|fixed and brief_at HH:MM (when it is prepared: a quarter of an hour before their usual start, or at the fixed time; it is brought to them when they show up); brief_needs, brief_night, brief_bots, brief_schedule, brief_loose, brief_yesterday on|off (its parts: what waits on them, what happened since the last one, a line per work assistant, the day's schedule, loose ends, their yesterday); brief_suggestions 0-5 (suggestions in it; 0: none); wrap auto|ask|off (the day's wrap-up: near the end of their usual day and when they ask / only when they ask / off); wrap_tonight on|off (\"tonight I can do\" in the wrap-up); weekly_review brief|wrap|off (the weekly review: in the first morning brief of each week about the week before / in Friday's wrap-up about the week so far / off); keep_awake on|off (keep the computer awake while work they chose for tonight runs; desktop); menubar on|off (the menu bar icon with the busy assistant's face, the count of assistants with unread and the recent ones; desktop); dock_badge on|off (the dock badge counting the assistants with unread; desktop); history_sessions on|off (history_search looks through every conversation in codeg; off, they leave the index); history_tasks on|off (history_search looks through the board's tasks); reactions on|off (codeg counts how the owner answers each kind of card and lowers a proposal rule whose cards they keep dismissing; off, nothing is lowered and what was lowered goes back); level_brief urgent|normal|low (how urgent the brief and the wrap-up are); automation_level standard|ask_more (sets confirm_dispatch, followups, messages and chat_changes at once); disturb_level quiet|standard|more (sets normal_via, low_via, focus_wait, wrap and the proposal rules at once); auto_compact_percent 0-100; compact_command a command or null; handoff_budget_chars 4000-200000; dispatch_concurrency 0-64; skill_enabled true|false; brain {agent_type, options: {option id: value}} — the agent you run on and its options: any option left out is filled in for the owner (your current choice on the same agent, else another executor config's, else the agent's own), and a switch of agent starts a new session of yours. The division: team.division.<kind> (code, review, test, fix_ci, docs, release, research, check) — \"auto\" puts that kind of work back to codeg's own pick; to make a work assistant or an executor config its first pick, use bot_update or assistant_update `roles`.",
+    "description": "Change one of the owner's settings from the conversation: their preferences (how you reply, cards, what you do when unsure, which actions go to them first, loop rounds, their time zone, whether codeg learns their hours, when and how codeg notifies them) or one of your own settings (auto-compaction, compact command, handoff budget, dispatch concurrency, the built-in skill, your brain). When the owner SAYS so (\"keep replies short\", \"ask me before you dispatch code changes\"), call it with `quote` — their words — and it is changed at once: codeg shows the owner a card with the old and new value that undoes it (or, when they asked to see such changes first, the card comes first and nothing changes until they confirm). There is no setting the owner cannot change this way. When you only INFER it would suit them (they keep asking for shorter answers), set `suggest: true` with a `reason`: it goes on a card, and changes only if they accept; one they declined is not to be suggested again for seven days. Values: reply_length short|medium|long; cards prefer|decisions|never; when_unsure assume|ask; chat_changes apply|show; confirm_dispatch never|code|always; followups auto|ask; messages auto|ask; loop_rounds 0-1000 (0: no limit); interrupt_retry auto|ask (retrying a dispatch a restart interrupted: at once / ask first); retry_rounds 0-10 (automatic retries of one dispatch); exec_questions, exec_plans assistant|owner (questions and plan approvals from the sessions you dispatched: you answer them / they go to the owner); auto_accept on|off (codeg checks the code work you dispatched in a separate read-only session, and you accept it); accept_revise auto|ask (sending work back after its check: at once / ask first); accept_rounds 0-10 (rounds of checks one piece of work gets); forge_comment, issue_close, pr_merge auto|ask (comments you post, issues you close and pull requests you merge on a forge: at once / approved by the owner first); routine_dispatch auto|ask (the work your dispatch routines hand out); plans auto|ask (the plans you lay out: started at once / shown to the owner first, started on their Start); tidy auto|draft|off (the nightly tidy-up of every assistant's memory, persona and rules, and the process skills learned from work that went well: made at once with a card that undoes it / kept as drafts the owner applies / not done); ci_failure fix|ask|tell (a watched pull request whose checks failed: its task fixes it / ask the owner on its card first / only tell them); pr_conflict auto|ask (one that conflicts with its base: its task merges the base in / ask first); review_feedback auto|ask (review feedback from those who can write to the repository: to the task word for word / ask first); outsider_comments auto|ask (comments from those who cannot: you judge whether the task has them / ask the owner); ci_rounds 0-10 (rounds codeg starts by itself to fix one pull request; 0: none); flush on|off (noting the day's points in your log before codeg compacts your context); time_zone system|a time zone name such as Europe/Berlin (system follows the computer's); presence on|off (whether codeg notes when the owner is in codeg, to learn their usual hours); proactive on|off (off: codeg notifies them only of their reminders); urgent_via system_attention|system|in_page; normal_via system|in_page|today (today: no notification); low_via today|digest; focus_wait 0-60 (minutes news of normal urgency waits after they stop typing; 0: not held); quiet_hours auto|fixed|none (auto: outside their usual hours); quiet_from, quiet_to HH:MM (with fixed); quiet_lets reminders|urgent (what still reaches them in quiet hours); morning hours|fixed and morning_at HH:MM (what \"tomorrow morning\" is in a reminder); level_reminder, level_forwarded, level_approval, level_waiting, level_question, level_confirm, level_stuck, level_done, level_reply, level_exchange, level_changed, level_answered urgent|normal|low (how urgent each kind of news is); level_acceptance, level_forge, level_pr_ready, level_pr, level_routine, level_routine_paused, level_used_up, level_memory, level_plan, level_plan_stuck urgent|normal|low (acceptance news, what was done on a forge, a watched pull request that can be merged, its other news, a routine's report, a paused routine, work sent back as many rounds as allowed, an assistant's memory changes, tidy-ups and process skills, a plan carried out to its end, a stuck plan); level_proposal, level_proposal_low urgent|normal|low (codeg's proposal cards); rule_failed, rule_review, rule_session, rule_pr_review, rule_uncommitted, rule_idle, rule_new_project, rule_behind, rule_repeat on|off (codeg's proposal cards: work failed with nobody on it, a board task waiting long for review, a session waiting on them, a pull request waiting for their review, changes left uncommitted, a matter gone quiet, a new project, a dispatched task's branch behind with conflicts, the offer to make a repeated request a routine); rule_failed_hours, rule_review_hours, rule_uncommitted_hours 0-720; rule_session_minutes 0-1440; rule_pr_review_days, rule_idle_days 0-90; rule_repeat_count 2-20 (the how-manyth alike request makes the offer); rule_suggest on|off (whether the owner takes the assistants' own suggestions); rule_undo on|off (the weekly review asking whether to show changes first when the owner undoes many of those made at their word); rule_idle_bot on|off (the weekly review asking whether to hide or delete a work assistant not woken for two weeks); brief on|off (the morning brief); brief_time hours|fixed and brief_at HH:MM (when it is prepared: a quarter of an hour before their usual start, or at the fixed time; it is brought to them when they show up); brief_needs, brief_night, brief_bots, brief_schedule, brief_loose, brief_yesterday on|off (its parts: what waits on them, what happened since the last one, a line per work assistant, the day's schedule, loose ends, their yesterday); brief_suggestions 0-5 (suggestions in it; 0: none); wrap auto|ask|off (the day's wrap-up: near the end of their usual day and when they ask / only when they ask / off); wrap_tonight on|off (\"tonight I can do\" in the wrap-up); weekly_review brief|wrap|off (the weekly review: in the first morning brief of each week about the week before / in Friday's wrap-up about the week so far / off); keep_awake on|off (keep the computer awake while work they chose for tonight runs; desktop); menubar on|off (the menu bar icon with the busy assistant's face, the count of assistants with unread and the recent ones; desktop); dock_badge on|off (the dock badge counting the assistants with unread; desktop); history_sessions on|off (history_search looks through every conversation in codeg; off, they leave the index); history_tasks on|off (history_search looks through the board's tasks); reactions on|off (codeg counts how the owner answers each kind of card and lowers a proposal rule whose cards they keep dismissing; off, nothing is lowered and what was lowered goes back); level_brief urgent|normal|low (how urgent the brief and the wrap-up are); automation_level standard|ask_more (sets confirm_dispatch, followups, messages and chat_changes at once); disturb_level quiet|standard|more (sets normal_via, low_via, focus_wait, wrap and the proposal rules at once); auto_compact_percent 0-100; compact_command a command or null; handoff_budget_chars 4000-200000; dispatch_concurrency 0-64; skill_enabled true|false; brain {agent_type, options: {option id: value}} — the agent you run on and its options: any option left out is filled in for the owner (your current choice on the same agent, else one made on that agent elsewhere in codeg, else the agent's own), and a switch of agent starts a new session of yours.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -2587,11 +2564,8 @@
         },
         "dispatch": {
           "type": "object",
-          "description": "For kind=dispatch: the work it hands out each run, as `dispatch` takes it. `assistant_id` left out: your own executor config. `title`/`prompt` left out: the routine's title and `what`.",
+          "description": "For kind=dispatch: the work it hands out each run, as `dispatch` takes it. It runs as your own work, on what you work with when it runs. `title`/`prompt` left out: the routine's title and `what`.",
           "properties": {
-            "assistant_id": {
-              "type": "integer"
-            },
             "mode": {
               "type": "string",
               "enum": [
@@ -2618,24 +2592,6 @@
             },
             "done_when": {
               "type": "string"
-            },
-            "own_executor": {
-              "type": "boolean",
-              "description": "routine_update: true switches it back to your own executor config (leaving `assistant_id` out keeps the one it names)."
-            },
-            "kind": {
-              "type": "string",
-              "enum": [
-                "code",
-                "review",
-                "test",
-                "fix_ci",
-                "docs",
-                "release",
-                "research",
-                "check"
-              ],
-              "description": "The kind of work, as `dispatch` takes it."
             }
           },
           "required": [
@@ -2793,11 +2749,8 @@
         },
         "dispatch": {
           "type": "object",
-          "description": "For kind=dispatch: the work it hands out each run, as `dispatch` takes it. `assistant_id` left out: your own executor config. `title`/`prompt` left out: the routine's title and `what`.",
+          "description": "For kind=dispatch: the work it hands out each run, as `dispatch` takes it. It runs as your own work, on what you work with when it runs. `title`/`prompt` left out: the routine's title and `what`.",
           "properties": {
-            "assistant_id": {
-              "type": "integer"
-            },
             "mode": {
               "type": "string",
               "enum": [
@@ -2824,24 +2777,6 @@
             },
             "done_when": {
               "type": "string"
-            },
-            "own_executor": {
-              "type": "boolean",
-              "description": "routine_update: true switches it back to your own executor config (leaving `assistant_id` out keeps the one it names)."
-            },
-            "kind": {
-              "type": "string",
-              "enum": [
-                "code",
-                "review",
-                "test",
-                "fix_ci",
-                "docs",
-                "release",
-                "research",
-                "check"
-              ],
-              "description": "The kind of work, as `dispatch` takes it."
             }
           },
           "required": [
@@ -2902,7 +2837,7 @@
   },
   {
     "name": "plan_create",
-    "description": "Lay out a plan for big work: its steps, who carries each out (a work assistant, or an executor config with a mode and a project), what each is to do, what done looks like and which steps it waits for. codeg then carries it out with no turn of yours: it hands out each step once the steps it depends on are done (code work once it landed — merged, after its acceptance when you accept code), passes along what those steps came to, wakes you when a step fails (retry it, hand it to another, or change the plan with plan_update) and tells the owner when the plan is done — you are then woken to write its summary card — or stuck. A native card shows the plan, its progress and the owner's [Stop] [Change]. Started at once — unless the owner asked to see plans first, or a step is one they confirm first: then it starts when they press [Start]. Do not dispatch or message its steps yourself.",
+    "description": "Lay out a plan for big work: its steps, who carries each out (another assistant, or you yourself with a mode and a project), what each is to do, what done looks like and which steps it waits for. codeg then carries it out with no turn of yours: it hands out each step once the steps it depends on are done (code work once it landed — merged, after its acceptance when you accept code), passes along what those steps came to, wakes you when a step fails (retry it, hand it to another, or change the plan with plan_update) and tells the owner when the plan is done — you are then woken to write its summary card — or stuck. A native card shows the plan, its progress and the owner's [Stop] [Change]. Started at once — unless the owner asked to see plans first, or a step is one they confirm first: then it starts when they press [Start]. Do not dispatch or message its steps yourself.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2923,16 +2858,12 @@
                 "type": "string",
                 "description": "A short name for the step, as the owner reads it."
               },
-              "bot": {
+              "to": {
                 "type": [
                   "integer",
                   "string"
                 ],
-                "description": "A work assistant (its id or name, from bot_list) to hand the step to: codeg writes it a message with the step, and its answer is the step's conclusion. Give `bot` or `assistant_id`."
-              },
-              "assistant_id": {
-                "type": "integer",
-                "description": "An executor config (from assistant_list) to dispatch the step to, with `mode` (and `project_id` for task and session). Left out with no `bot`: your own executor config."
+                "description": "Who carries the step out: \"self\" (you do it yourself, as `dispatch` does, with `mode` and — for task and session — `project_id`), or another assistant (its id or name, from bot_list): codeg writes it a message with the step, and its answer is the step's conclusion. Left out: you."
               },
               "mode": {
                 "type": "string",
@@ -2941,11 +2872,11 @@
                   "chat",
                   "session"
                 ],
-                "description": "For an executor config: as `dispatch` takes it."
+                "description": "For a step you do yourself: as `dispatch` takes it."
               },
               "project_id": {
                 "type": "integer",
-                "description": "For an executor config's task or session: the project (project_list)."
+                "description": "For a task or session you do yourself: the project (project_list)."
               },
               "deliverable": {
                 "type": "string",
@@ -2969,20 +2900,6 @@
                   "type": "integer"
                 },
                 "description": "The numbers of the steps it waits for: it is handed out once they are all done (code work once it landed). Left out: none."
-              },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "code",
-                  "review",
-                  "test",
-                  "fix_ci",
-                  "docs",
-                  "release",
-                  "research",
-                  "check"
-                ],
-                "description": "For an executor config: the kind of work, as `dispatch` takes it."
               }
             },
             "required": [
@@ -3005,7 +2922,7 @@
   },
   {
     "name": "plan_update",
-    "description": "Change one of your plans, at once: its title or goal; steps added (no `id`), changed or retried (`id`, the fields to change), removed (`id`, `remove: true`). Only steps not under way can change: one not started, failed or canceled (changing or retrying a failed one hands it out again). Use it when the owner asks for a change (they press [Change] on the card and say what), when a step fails or cannot be handed out (hand it to another by the division of work), or when what a step came to changes the rest. The card lists each change with a `reason`; the owner can take back a change to steps that have not started. `stop: true` stops the plan: no new step is handed out, those under way run on.",
+    "description": "Change one of your plans, at once: its title or goal; steps added (no `id`), changed or retried (`id`, the fields to change), removed (`id`, `remove: true`). Only steps not under way can change: one not started, failed or canceled (changing or retrying a failed one hands it out again). Use it when the owner asks for a change (they press [Change] on the card and say what), when a step fails or cannot be handed out (hand it to another assistant, or do it yourself), or when what a step came to changes the rest. The card lists each change with a `reason`; the owner can take back a change to steps that have not started. `stop: true` stops the plan: no new step is handed out, those under way run on.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -3035,16 +2952,12 @@
                 "type": "string",
                 "description": "A short name for the step, as the owner reads it."
               },
-              "bot": {
+              "to": {
                 "type": [
                   "integer",
                   "string"
                 ],
-                "description": "A work assistant (its id or name, from bot_list) to hand the step to: codeg writes it a message with the step, and its answer is the step's conclusion. Give `bot` or `assistant_id`."
-              },
-              "assistant_id": {
-                "type": "integer",
-                "description": "An executor config (from assistant_list) to dispatch the step to, with `mode` (and `project_id` for task and session). Left out with no `bot`: your own executor config."
+                "description": "Who carries the step out: \"self\" (you do it yourself, as `dispatch` does, with `mode` and — for task and session — `project_id`), or another assistant (its id or name, from bot_list): codeg writes it a message with the step, and its answer is the step's conclusion. Left out: who it has (for a new step, you)."
               },
               "mode": {
                 "type": "string",
@@ -3053,11 +2966,11 @@
                   "chat",
                   "session"
                 ],
-                "description": "For an executor config: as `dispatch` takes it."
+                "description": "For a step you do yourself: as `dispatch` takes it."
               },
               "project_id": {
                 "type": "integer",
-                "description": "For an executor config's task or session: the project (project_list)."
+                "description": "For a task or session you do yourself: the project (project_list)."
               },
               "deliverable": {
                 "type": "string",
@@ -3089,20 +3002,6 @@
               "retry": {
                 "type": "boolean",
                 "description": "plan_update: true hands a failed or canceled step out again as it is (give other fields to change it as well)."
-              },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "code",
-                  "review",
-                  "test",
-                  "fix_ci",
-                  "docs",
-                  "release",
-                  "research",
-                  "check"
-                ],
-                "description": "For an executor config: the kind of work, as `dispatch` takes it."
               }
             }
           },

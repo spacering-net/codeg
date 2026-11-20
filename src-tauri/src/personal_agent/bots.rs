@@ -377,17 +377,6 @@ impl PersonalAgentEngine {
         Ok(made)
     }
 
-    /// Patch the account's settings (on the primary's row), and say so.
-    async fn patch_account(&self, patch: Value) {
-        let Ok(Some(primary)) = svc::primary_bot(&self.db.conn).await else {
-            return;
-        };
-        if let Err(e) = svc::patch_settings(&self.db.conn, primary.id, &patch).await {
-            tracing::warn!("[personal-agent] the account's settings were not written: {e}");
-        }
-        self.emit_for(primary.id, PersonalAgentChange::Agent);
-    }
-
     /// An executor config's name not taken yet: `name`, or `name (2)`…
     pub(super) async fn free_executor_name(&self, name: &str) -> String {
         let taken: HashSet<String> = crate::db::service::assistant_service::list_all(&self.db.conn)
@@ -402,7 +391,7 @@ impl PersonalAgentEngine {
 
     /// Make the executor config a new work assistant is bound to: its name
     /// and face; no description, no standing instructions of codeg's.
-    async fn make_executor(
+    pub(super) async fn make_executor(
         &self,
         name: &str,
         avatar: &BotAvatar,
@@ -693,16 +682,6 @@ impl PersonalAgentEngine {
             },
             None => None,
         };
-        let me = format!("bot:{}", row.uid.clone().unwrap_or_default());
-        let division = self
-            .account()
-            .await
-            .team
-            .division
-            .into_iter()
-            .filter(|(_, v)| *v == me)
-            .map(|(k, _)| k)
-            .collect();
         let dir = workdir::workdir_of_bot(&self.data_dir, &row);
         // Its plans stop; steps of other plans handed to it are picked
         // again by their plans' assistants (7.6).
@@ -714,7 +693,6 @@ impl PersonalAgentEngine {
             running,
             unanswered_messages: unanswered,
             executor,
-            division,
             plans,
             plan_steps,
             workdir: dir.to_string_lossy().into_owned(),
@@ -724,7 +702,7 @@ impl PersonalAgentEngine {
 
     /// Delete work assistant `id` (4.14): its running work handed to the
     /// primary to follow (or stopped), the messages it has not answered sent
-    /// back to their senders, its place in the division back to auto, its
+    /// back to their senders, its
     /// engine stopped; its executor config and directory kept unless asked.
     /// `worker` is its engine when one runs.
     pub async fn delete_bot(
@@ -853,18 +831,6 @@ impl PersonalAgentEngine {
         .await;
         for m in &unanswered {
             self.return_to_sender(m, &name).await;
-        }
-        // Its place in the division is back to auto.
-        let me = format!("bot:{}", row.uid.clone().unwrap_or_default());
-        let mut division = serde_json::Map::new();
-        for (k, v) in self.account().await.team.division {
-            if v == me {
-                division.insert(k, Value::Null);
-            }
-        }
-        if !division.is_empty() {
-            self.patch_account(json!({ "team": { "division": division } }))
-                .await;
         }
         // The row read again, deleted and its directory removed in one hold
         // of the claim: the directory removed is the one it has now — not one
@@ -1610,25 +1576,6 @@ impl PersonalAgentEngine {
     }
 
     // ── dispatching ─────────────────────────────────────────────────────────
-
-    /// The executor config a dispatch goes to when it names none: a work
-    /// assistant's own (4.4).
-    pub(super) async fn default_executor(&self) -> Result<i32, String> {
-        let row = self.agent_row().await.ok_or("not set up")?;
-        let Some(id) = row
-            .executor_assistant_id
-            .filter(|_| row.kind == BotKind::Worker)
-        else {
-            return Err("`assistant_id` is required; use assistant_list".into());
-        };
-        match crate::db::service::assistant_service::get(&self.db.conn, id).await {
-            Ok(Some(a)) if a.is_live() => Ok(id),
-            _ => Err(format!(
-                "your executor config #{id} is gone (deleted); name another with `assistant_id` \
-                 (assistant_list), and the owner can bind a new one in your settings → Execution"
-            )),
-        }
-    }
 
     /// The "who handed this out" block an execution carries (4.4).
     pub(super) async fn dispatcher_brief(&self) -> String {

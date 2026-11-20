@@ -70,14 +70,9 @@ fn normalize_title(title: &str) -> String {
 /// The ledger key of a dispatch. The prompt is left out: a turn delivered
 /// again words it afresh, and the same work to the same executor in the same
 /// place under the same title is the same call.
-pub fn dispatch_key(
-    assistant_id: i32,
-    mode: DispatchMode,
-    project_id: Option<i32>,
-    title: &str,
-) -> String {
+pub fn dispatch_key(mode: DispatchMode, project_id: Option<i32>, title: &str) -> String {
     format!(
-        "dispatch|{assistant_id}|{}|{}|{}",
+        "dispatch|{}|{}|{}",
         enum_str(&mode),
         project_id.map(|p| p.to_string()).unwrap_or_default(),
         normalize_title(title)
@@ -869,20 +864,13 @@ mod tests {
 
     #[test]
     fn ledger_keys_ignore_spacing_and_case_but_not_the_target() {
-        let a = dispatch_key(1, DispatchMode::Task, Some(2), "Fix  the Login bug");
-        let b = dispatch_key(1, DispatchMode::Task, Some(2), "fix the login bug ");
+        let a = dispatch_key(DispatchMode::Task, Some(2), "Fix  the Login bug");
+        let b = dispatch_key(DispatchMode::Task, Some(2), "fix the login bug ");
         assert_eq!(a, b);
+        assert_ne!(a, dispatch_key(DispatchMode::Task, Some(3), "fix the login bug"));
         assert_ne!(
             a,
-            dispatch_key(1, DispatchMode::Task, Some(3), "fix the login bug")
-        );
-        assert_ne!(
-            a,
-            dispatch_key(2, DispatchMode::Task, Some(2), "fix the login bug")
-        );
-        assert_ne!(
-            a,
-            dispatch_key(1, DispatchMode::Session, Some(2), "fix the login bug")
+            dispatch_key(DispatchMode::Session, Some(2), "fix the login bug")
         );
         assert_eq!(
             followup_key(5, Some("revise")),

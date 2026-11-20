@@ -48,31 +48,30 @@ pub const MAX_TITLE_CHARS: usize = 120;
 pub const MAX_PROMPT_CHARS: usize = 20_000;
 /// Longest acceptance criteria (7.5).
 pub const MAX_DONE_WHEN_CHARS: usize = 4_000;
-/// Longest reason for the executor picked (7.9).
-pub const MAX_WHY_CHARS: usize = 300;
-
-/// A kind of work as a call names it (7.9): one of the division's, or the
-/// refusal that lists them.
-pub fn kind_of(v: Option<&serde_json::Value>) -> Result<String, String> {
-    check_kind(v.and_then(|x| x.as_str()).unwrap_or(""))
+/// What an assistant hears when it has nothing to do its work with.
+pub const NO_EXECUTOR: &str = "you cannot start work yourself yet: nothing is set for your work to run \
+     on. Ask the owner to pick it in your settings (Identity & brain); until then, hand the work to \
+     another assistant with `bot_message`, or tell the owner.";
+/// What an assistant works with, as it reads it: the agent, its mode and
+/// options — never the executor config's name or id.
+pub fn work_words(w: &DispatchExecutorSnapshot) -> String {
+    let Some(l) = &w.label_snapshot else {
+        return w.agent_type.to_string();
+    };
+    let mut parts = vec![l.agent.clone()];
+    parts.extend(l.mode.iter().map(|m| format!("mode {m}")));
+    parts.extend(
+        l.options
+            .iter()
+            .filter(|o| !o.value_label.trim().is_empty())
+            .map(|o| format!("{}: {}", o.name, o.value_label)),
+    );
+    parts.join(" · ")
 }
-
-/// `named`, when it is one of the division's kinds of work.
-pub fn check_kind(named: &str) -> Result<String, String> {
-    use crate::models::personal_agent_prefs::DIVISION;
-    let named = named.trim();
-    DIVISION
-        .iter()
-        .find(|k| **k == named)
-        .map(|k| k.to_string())
-        .ok_or_else(|| format!("`kind` is one of: {}", DIVISION.join(", ")))
-}
-
 /// A dispatch as the tool asked for it — and as a proposal card keeps it.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DispatchRequest {
     pub mode: DispatchMode,
-    pub assistant_id: i32,
     pub title: String,
     pub prompt: String,
     pub project_id: Option<i32>,
@@ -81,27 +80,23 @@ pub struct DispatchRequest {
     /// What done looks like, criterion by criterion (7.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_when: Option<String>,
-    /// The kind of work it is (7.9): one of the division's.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
-    /// Why this executor, as the assistant put it: on the card (7.9).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub why: Option<String>,
 }
 
-/// A dispatch checked against the roster and the projects, ready to record.
+/// A dispatch checked against the projects, ready to record. What runs it
+/// is not here: the executor config of the assistant that records it, as it
+/// is the moment it is recorded.
 #[derive(Debug, Clone)]
 pub struct ValidDispatch {
     pub mode: DispatchMode,
-    pub snapshot: DispatchExecutorSnapshot,
     pub folder_id: Option<i32>,
     pub title: String,
     pub prompt: String,
     pub report: bool,
     pub on_done: Option<String>,
     pub done_when: Option<String>,
-    pub kind: Option<String>,
-    pub why: Option<String>,
+    /// codeg's own check of other work (7.5), not work of the assistant's:
+    /// kept out of what the assistants' work is compared by.
+    pub is_check: bool,
     /// The input it is dispatched for, and the chain and thread it inherits
     /// from that input (`for`, 4.11); empty when nothing started it.
     pub lineage: svc::Lineage,
@@ -115,15 +110,12 @@ impl ValidDispatch {
     pub fn to_request(&self) -> DispatchRequest {
         DispatchRequest {
             mode: self.mode,
-            assistant_id: self.snapshot.assistant_id,
             title: self.title.clone(),
             prompt: self.prompt.clone(),
             project_id: self.folder_id,
             report: self.report,
             on_done: self.on_done.clone(),
             done_when: self.done_when.clone(),
-            kind: self.kind.clone(),
-            why: self.why.clone(),
         }
     }
 }
@@ -340,9 +332,9 @@ impl PersonalAgentEngine {
         Ok(self.record_dispatch(valid, DispatchAuth::Direct).await?.dispatch)
     }
 
-    /// Check a dispatch against the roster and the projects: the executor is
-    /// an enabled role assistant, the mode and project fit, the texts are in
-    /// bounds. Data checks only — nothing about who asked or when.
+    /// Check a dispatch's request: the mode and project fit, the texts are in
+    /// bounds. Data checks only — nothing about who asked or when, nor what
+    /// runs it (taken when it is recorded).
     pub async fn validate_dispatch(&self, req: &DispatchRequest) -> Result<ValidDispatch, String> {
         let title = cut(&req.title, MAX_TITLE_CHARS);
         if title.is_empty() {
@@ -355,18 +347,6 @@ impl PersonalAgentEngine {
         if prompt.chars().count() > MAX_PROMPT_CHARS {
             return Err(format!("`prompt` is longer than {MAX_PROMPT_CHARS} characters"));
         }
-        let assistant = crate::db::service::assistant_service::get_live_enabled(
-            &self.db.conn,
-            req.assistant_id,
-        )
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| {
-            format!(
-                "assistant #{} is not an enabled role assistant; use assistant_list",
-                req.assistant_id
-            )
-        })?;
         let folder_id = match (req.mode, req.project_id) {
             (DispatchMode::Chat, None) => None,
             (DispatchMode::Chat, Some(_)) => {
@@ -394,18 +374,6 @@ impl PersonalAgentEngine {
         if req.report && req.mode != DispatchMode::Task {
             return Err("`deliverable` applies to task dispatches only".into());
         }
-        // How the owner lets the assistants use it (a chat takes no project,
-        // so no project list refuses one).
-        self.check_usage(&assistant, req.mode, folder_id).await?;
-        let snapshot = DispatchExecutorSnapshot {
-            assistant_id: assistant.id,
-            name: assistant.name.clone(),
-            agent_type: assistant.agent_type,
-            agent_options: assistant.agent_options.clone(),
-            label_snapshot: Some(assistant.label_snapshot.clone()),
-            instructions: assistant.instructions.clone(),
-            dispatcher: Some(self.dispatcher_brief().await),
-        };
         let on_done = req
             .on_done
             .as_deref()
@@ -424,28 +392,41 @@ impl PersonalAgentEngine {
             }
             w => w.map(str::to_string),
         };
-        let kind = match req.kind.as_deref() {
-            Some(k) => Some(check_kind(k)?),
-            None => None,
-        };
-        let why = req
-            .why
-            .as_deref()
-            .map(|s| cut(s, MAX_WHY_CHARS))
-            .filter(|s| !s.is_empty());
         Ok(ValidDispatch {
             mode: req.mode,
-            snapshot,
             folder_id,
             title,
             prompt,
             report: req.report,
             on_done,
             done_when,
-            kind,
-            why,
+            is_check: false,
             lineage: svc::Lineage::default(),
             pr_fix: None,
+        })
+    }
+
+    /// What runs this assistant's work, as it is now: its executor config,
+    /// frozen into the dispatch with who handed it out. None it can use —
+    /// none bound, or the one bound deleted or switched off — is said so,
+    /// for the owner to set in its settings.
+    pub(super) async fn work_snapshot(&self) -> Result<DispatchExecutorSnapshot, String> {
+        let row = self.agent_row().await.ok_or("not set up")?;
+        let assistant = match row.executor_assistant_id {
+            Some(id) => crate::db::service::assistant_service::get_live_enabled(&self.db.conn, id)
+                .await
+                .map_err(|e| e.to_string())?,
+            None => None,
+        }
+        .ok_or(NO_EXECUTOR)?;
+        Ok(DispatchExecutorSnapshot {
+            assistant_id: assistant.id,
+            name: assistant.name.clone(),
+            agent_type: assistant.agent_type,
+            agent_options: assistant.agent_options.clone(),
+            label_snapshot: Some(assistant.label_snapshot.clone()),
+            instructions: assistant.instructions.clone(),
+            dispatcher: Some(self.dispatcher_brief().await),
         })
     }
 
@@ -460,33 +441,29 @@ impl PersonalAgentEngine {
     ) -> Result<DispatchMade, String> {
         let ValidDispatch {
             mode,
-            snapshot,
             folder_id,
             title,
             prompt,
             report,
             on_done,
             done_when,
-            kind,
-            why,
+            is_check,
             lineage,
             pr_fix,
         } = v;
         let thread = lineage.thread_id;
         let request = DispatchRequest {
             mode,
-            assistant_id: snapshot.assistant_id,
             title: title.clone(),
             prompt: prompt.clone(),
             project_id: folder_id,
             report,
             on_done: on_done.clone(),
             done_when: done_when.clone(),
-            kind: kind.clone(),
-            why: why.clone(),
         };
-        let key = ledger::dispatch_key(snapshot.assistant_id, mode, folder_id, &title);
-        // A repeat costs nothing to find before anything is written.
+        let key = ledger::dispatch_key(mode, folder_id, &title);
+        // A repeat costs nothing to find before anything is written — and is
+        // found whatever runs this assistant's work now.
         if let DispatchAuth::Ledgered { scope, .. } = &auth {
             let earlier = svc::ledger_entries(&self.db.conn, scope, &key)
                 .await
@@ -495,6 +472,25 @@ impl PersonalAgentEngine {
                 return self.earlier_dispatch(entry).await;
             }
         }
+        // The same for a card's, a routine run's or codeg's own step: found
+        // by its operation before anything is looked up for it.
+        let slot_op = match &auth {
+            DispatchAuth::Card { notice_id } => Some(ledger::card_op_id(*notice_id, 1)),
+            DispatchAuth::Routine { run_id, .. } => Some(format!("routine-run:{run_id}")),
+            DispatchAuth::Op { op_id } => Some(op_id.clone()),
+            DispatchAuth::Ledgered { .. } | DispatchAuth::Direct => None,
+        };
+        if let Some(op) = slot_op.as_deref() {
+            let earlier = svc::get_op(&self.db.conn, op)
+                .await
+                .map_err(|e| e.to_string())?
+                .filter(|e| e.state == ActionState::Committed);
+            if let Some(entry) = earlier {
+                return self.earlier_dispatch(&entry).await;
+            }
+        }
+        // What runs it: this assistant's own, as it is the moment it goes out.
+        let snapshot = self.work_snapshot().await?;
         let origin_batch_id = match &auth {
             DispatchAuth::Ledgered { batch_id, .. } => Some(*batch_id),
             DispatchAuth::Card { .. } | DispatchAuth::Routine { .. } | DispatchAuth::Op { .. } => {
@@ -524,7 +520,7 @@ impl PersonalAgentEngine {
             lineage,
             done_when: done_when.clone(),
             pr_fix: pr_fix.as_ref().and_then(|f| serde_json::to_string(f).ok()),
-            kind: kind.clone(),
+            is_check,
         };
         let payload = serde_json::to_value(&request).ok();
         let row = match &auth {
@@ -612,10 +608,6 @@ impl PersonalAgentEngine {
             "routine": routine_label,
             // The watched pull request it fixes, and why (7.4).
             "pr_fix": pr_fix,
-            // The kind of work, and why the assistant picked this executor
-            // (7.9).
-            "kind": kind,
-            "why": why,
         }));
         let card = self.push_row(card).await;
         // A round on a pull request belongs to the matter of the work that
@@ -1455,11 +1447,10 @@ impl PersonalAgentEngine {
         }
         let source_key = format!("dispatch:{}:{}:{}:{}", d.id, round, enum_str(&d.state), cause);
         let mut summary = format!(
-            "Dispatch #{} \"{}\" ({} · executor {}) {}.",
+            "Dispatch #{} \"{}\" ({}) {}.",
             d.id,
             d.title,
             mode_label(d.mode),
-            executor.name,
             state_sentence(d.state)
         );
         if let Some(e) = excerpt.as_deref().filter(|e| !e.trim().is_empty()) {

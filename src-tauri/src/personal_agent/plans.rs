@@ -194,16 +194,15 @@ fn wait_key(step: &step_entity::Model) -> String {
 pub struct StepArgs {
     pub id: Option<i32>,
     pub title: Option<String>,
-    pub assistant_id: Option<i32>,
-    pub bot: Option<String>,
+    /// Who does it: `self` (the plan's own assistant does it itself), or a
+    /// work assistant's id or name.
+    pub to: Option<String>,
     pub mode: Option<String>,
     pub project_id: Option<Option<i32>>,
     pub deliverable: Option<String>,
     pub prompt: Option<String>,
     pub done_when: Option<Option<String>>,
     pub depends_on: Option<Vec<i32>>,
-    /// The kind of work (7.9); `Some(None)` clears it.
-    pub kind: Option<Option<String>>,
     pub remove: bool,
     pub retry: bool,
 }
@@ -253,18 +252,31 @@ pub fn step_args(v: &Value) -> Result<StepArgs, String> {
             int_of(x).ok_or("`depends_on` lists step numbers, such as [1, 2]")?
         ]),
     };
-    let bot = match v.get("bot") {
+    // What an older plan named its executor by is no part of a step any
+    // more: refused, so it is not silently done by the plan's assistant.
+    for k in ["bot", "assistant_id", "kind"] {
+        if v.get(k).is_some() {
+            return Err(format!(
+                "a step has no `{k}`: `to` names who carries it out — \"self\" or an \
+                 assistant's id or name, from bot_list"
+            ));
+        }
+    }
+    let to = match v.get("to") {
         None | Some(Value::Null) => None,
         Some(Value::Number(n)) => Some(n.to_string()),
         Some(Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
-        Some(_) => return Err("`bot` takes a work assistant's id or name, from bot_list".into()),
+        Some(_) => {
+            return Err(
+                "`to` takes \"self\" or an assistant's id or name, from bot_list".into(),
+            )
+        }
     };
     let flag = |k: &str| v.get(k).and_then(|x| x.as_bool()) == Some(true);
     Ok(StepArgs {
         id: int_at(v, "id"),
         title: text_of(v, "title"),
-        assistant_id: int_at(v, "assistant_id"),
-        bot,
+        to,
         mode: text_of(v, "mode"),
         project_id: match v.get("project_id") {
             None => None,
@@ -279,11 +291,6 @@ pub fn step_args(v: &Value) -> Result<StepArgs, String> {
             Some(_) => Some(text_of(v, "done_when")),
         },
         depends_on,
-        kind: match v.get("kind") {
-            None => None,
-            Some(Value::Null) => Some(None),
-            Some(_) => Some(Some(super::dispatch::kind_of(v.get("kind"))?)),
-        },
         remove: flag("remove"),
         retry: flag("retry"),
     })
@@ -344,7 +351,7 @@ pub fn check_order(steps: &[(i32, Vec<i32>)]) -> Result<(), String> {
 /// confirm first, or a message they confirm first.
 pub fn needs_confirm(prefs: &Prefs, s: &NewStep) -> bool {
     match s.target_kind {
-        TargetKind::Assistant => match s.mode.as_deref().and_then(mode_of) {
+        TargetKind::Own => match s.mode.as_deref().and_then(mode_of) {
             Some(m) => prefs.confirms(m),
             None => false,
         },
@@ -388,9 +395,6 @@ fn fields_changed(a: &NewStep, b: &NewStep) -> Vec<String> {
     if a.depends_on != b.depends_on {
         out.push("depends_on".into());
     }
-    if a.kind != b.kind {
-        out.push("kind".into());
-    }
     out
 }
 
@@ -412,9 +416,6 @@ pub struct StepView {
     pub project_id: Option<i32>,
     pub project_name: Option<String>,
     pub deliverable: Option<String>,
-    /// The kind of work (7.9).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
     pub prompt: String,
     pub done_when: Option<String>,
     pub depends_on: Vec<i32>,
@@ -512,19 +513,13 @@ fn step_state_word(s: StepState) -> &'static str {
 fn who_of(s: &StepView) -> String {
     match s.target_kind {
         TargetKind::Bot => format!("work assistant {} (#{})", s.target_name, s.target_id),
-        TargetKind::Assistant => format!(
-            "executor config {} (#{}) · {}{}{}",
-            s.target_name,
-            s.target_id,
+        TargetKind::Own => format!(
+            "itself · {}{}",
             s.mode.as_deref().unwrap_or("?"),
             s.project_name
                 .as_deref()
                 .map(|p| format!(" in {p}"))
                 .unwrap_or_default(),
-            s.kind
-                .as_deref()
-                .map(|k| format!(" · {k}"))
-                .unwrap_or_default()
         ),
     }
 }
@@ -801,30 +796,45 @@ impl PersonalAgentEngine {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        // Who: what it names now, else what it had, else its own executor.
-        let named_target = a.bot.is_some() || a.assistant_id.is_some();
-        if a.bot.is_some() && a.assistant_id.is_some() {
-            return Err(at(
-                "give `bot` (a work assistant) or `assistant_id` (an executor config), not both"
-                    .into(),
-            ));
-        }
-        let mut step = if let Some(to) = &a.bot {
-            let me = self.bot().await;
-            let b = self.receiver(to).await.map_err(at)?;
-            if b.id == me {
-                return Err(at(
-                    "that is you; a step of yours is one you hand to an executor config".into(),
-                ));
+        // Who: what it names now, else what it had, else the plan's own
+        // assistant itself. `self` — or its own name — takes a step back.
+        let me = self.bot().await;
+        let named = match a.to.as_deref() {
+            None => None,
+            Some(t) if t.eq_ignore_ascii_case("self") => Some(None),
+            Some(t) => {
+                let b = self.receiver(t).await.map_err(at)?;
+                Some((b.id != me).then_some(b))
             }
-            if a.mode.is_some()
-                || matches!(a.project_id, Some(Some(_)))
-                || a.deliverable.is_some()
-                || matches!(a.kind, Some(Some(_)))
-            {
+        };
+        let base_bot = base.filter(|b| b.target_kind == TargetKind::Bot);
+        let to_bot = match &named {
+            Some(Some(b)) => Some(b.clone()),
+            Some(None) => None,
+            None => match base_bot {
+                // Who it had stays — and one gone is said, never taken for
+                // the plan's own assistant.
+                Some(b) => Some(
+                    svc::get_bot(&self.db.conn, b.target_id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .ok_or_else(|| {
+                            at(format!(
+                                "{} is gone: say who carries it out now with `to` (\"self\" or \
+                                 another assistant, from bot_list)",
+                                b.target_name
+                            ))
+                        })?,
+                ),
+                None => None,
+            },
+        };
+        let mut step = if let Some(b) = to_bot {
+            if a.mode.is_some() || matches!(a.project_id, Some(Some(_))) || a.deliverable.is_some() {
                 return Err(at(
-                    "a step for a work assistant takes no mode, project, deliverable or kind: \
-                     it decides how to do it"
+                    "a step for another assistant takes no mode, project or deliverable: it \
+                     decides how to do it. To do it yourself, give `to: \"self\"`"
                         .into(),
                 ));
             }
@@ -841,46 +851,18 @@ impl PersonalAgentEngine {
                 done_when,
                 depends_on,
                 confirmed: true,
-                kind: None,
             }
         } else {
-            let keep = base.filter(|b| !named_target && b.target_kind == TargetKind::Assistant);
-            let keep_bot = base.filter(|b| !named_target && b.target_kind == TargetKind::Bot);
-            if let Some(b) = keep_bot {
-                if a.mode.is_some()
-                    || matches!(a.project_id, Some(Some(_)))
-                    || a.deliverable.is_some()
-                    || matches!(a.kind, Some(Some(_)))
-                {
-                    return Err(at(
-                        "a step for a work assistant takes no mode, project, deliverable or \
-                         kind; to hand it to an executor config, give `assistant_id` too"
-                            .into(),
-                    ));
-                }
-                NewStep {
-                    seq,
-                    title,
-                    prompt,
-                    done_when,
-                    depends_on,
-                    ..b.clone()
-                }
-            } else {
-                let assistant_id = match (a.assistant_id, keep) {
-                    (Some(id), _) => id,
-                    (None, Some(b)) => b.target_id,
-                    (None, None) => self.default_executor().await.map_err(at)?,
-                };
+            // Its own: what it had, when it stays its own.
+            let keep = base.filter(|b| named.is_none() && b.target_kind == TargetKind::Own);
+            {
                 let mode = a
                     .mode
                     .clone()
                     .or_else(|| keep.and_then(|b| b.mode.clone()))
                     .ok_or_else(|| {
-                        at(
-                            "`mode` (task, chat or session) is required for an executor config"
-                                .into(),
-                        )
+                        at("`mode` (task, chat or session) is required for a step you do yourself"
+                            .into())
                     })?;
                 let dmode = mode_of(&mode)
                     .ok_or_else(|| at("`mode` must be task, chat or session".into()))?;
@@ -898,31 +880,25 @@ impl PersonalAgentEngine {
                         .and_then(|b| b.deliverable.clone())
                         .or_else(|| Some("change".into())),
                 };
-                let kind = match &a.kind {
-                    Some(k) => k.clone(),
-                    None => keep.and_then(|b| b.kind.clone()),
-                };
-                // Checked as the dispatch it becomes: the executor, the
-                // project, the usage the owner set (10.5).
+                // Checked as the dispatch it becomes: the project and the
+                // texts. What runs it is taken when the step comes up.
                 let req = DispatchRequest {
                     mode: dmode,
-                    assistant_id,
                     title: title.clone(),
                     prompt: prompt.clone(),
                     project_id,
                     report: deliverable.as_deref() == Some("report"),
                     on_done: None,
                     done_when: done_when.clone(),
-                    kind: kind.clone(),
-                    why: None,
                 };
-                let v = self.validate_dispatch(&req).await.map_err(at)?;
+                self.validate_dispatch(&req).await.map_err(at)?;
+                let own = self.agent_row().await;
                 NewStep {
                     seq,
                     title,
-                    target_kind: TargetKind::Assistant,
-                    target_id: assistant_id,
-                    target_name: v.snapshot.name.clone(),
+                    target_kind: TargetKind::Own,
+                    target_id: me,
+                    target_name: own.as_ref().map(display_name).unwrap_or_default(),
                     mode: Some(mode),
                     project_id,
                     deliverable,
@@ -930,7 +906,6 @@ impl PersonalAgentEngine {
                     done_when,
                     depends_on,
                     confirmed: true,
-                    kind,
                 }
             }
         };
@@ -1754,20 +1729,9 @@ impl PersonalAgentEngine {
 
     async fn step_view(&self, s: &step_entity::Model, done: &BTreeSet<i32>) -> StepView {
         let deps = s.deps();
-        let (mut agent_type, mut face) = (None, Value::Null);
-        match s.target_kind {
-            TargetKind::Assistant => {
-                if let Ok(Some(a)) =
-                    crate::db::service::assistant_service::get(&self.db.conn, s.target_id).await
-                {
-                    agent_type = Some(a.agent_type);
-                }
-            }
-            TargetKind::Bot => {
-                if let Ok(Some(b)) = svc::get_bot_any(&self.db.conn, s.target_id).await {
-                    face = super::messages::bot_face(&b);
-                }
-            }
+        let (agent_type, mut face) = (None, Value::Null);
+        if let Ok(Some(b)) = svc::get_bot_any(&self.db.conn, s.target_id).await {
+            face = super::messages::bot_face(&b);
         }
         let project_name = match s.project_id {
             Some(id) => crate::db::service::folder_service::get_folder_by_id(&self.db.conn, id)
@@ -1789,7 +1753,6 @@ impl PersonalAgentEngine {
             project_id: s.project_id,
             project_name,
             deliverable: s.deliverable.clone(),
-            kind: s.kind.clone(),
             prompt: s.prompt.clone(),
             done_when: s.done_when.clone(),
             depends_on: deps.clone(),
@@ -2088,7 +2051,7 @@ impl PersonalAgentEngine {
     /// What a running step's work came to.
     async fn step_outcome(&self, s: &step_entity::Model) -> Outcome {
         match s.target_kind {
-            TargetKind::Assistant => {
+            TargetKind::Own => {
                 let Some(did) = s.dispatch_id else {
                     return Outcome::Unsent;
                 };
@@ -2288,7 +2251,7 @@ impl PersonalAgentEngine {
             for_input: p.for_input.clone(),
         };
         let sent: Result<(Option<i32>, Option<i32>), String> = match s.target_kind {
-            TargetKind::Assistant => {
+            TargetKind::Own => {
                 let mode = s
                     .mode
                     .as_deref()
@@ -2296,15 +2259,12 @@ impl PersonalAgentEngine {
                     .unwrap_or(DispatchMode::Task);
                 let req = DispatchRequest {
                     mode,
-                    assistant_id: s.target_id,
                     title: s.title.clone(),
                     prompt: brief,
                     project_id: s.project_id,
                     report: s.deliverable.as_deref() == Some("report"),
                     on_done: None,
                     done_when: s.done_when.clone(),
-                    kind: s.kind.clone(),
-                    why: None,
                 };
                 match self.validate_dispatch(&req).await {
                     Ok(mut v) => {
@@ -3305,28 +3265,21 @@ mod tests {
     #[test]
     fn a_step_reads_numbers_written_either_way() {
         let a = step_args(&json!({
-            "id": "2", "title": " T ", "bot": 7, "depends_on": ["#1", 3],
+            "id": "2", "title": " T ", "to": 7, "depends_on": ["#1", 3],
             "done_when": null, "remove": true
         }))
         .unwrap();
         assert_eq!(a.id, Some(2));
         assert_eq!(a.title.as_deref(), Some("T"));
-        assert_eq!(a.bot.as_deref(), Some("7"));
+        assert_eq!(a.to.as_deref(), Some("7"));
         assert_eq!(a.depends_on, Some(vec![1, 3]));
         assert_eq!(a.done_when, Some(None));
         assert!(a.remove && !a.retry);
-        assert_eq!(a.kind, None);
         assert!(step_args(&json!({ "depends_on": ["x"] })).is_err());
-        // The kind of work is one of the division's, or cleared.
-        let k = step_args(&json!({ "kind": "research" })).unwrap();
-        assert_eq!(k.kind, Some(Some("research".into())));
-        assert_eq!(
-            step_args(&json!({ "kind": null })).unwrap().kind,
-            Some(None)
-        );
-        assert!(step_args(&json!({ "kind": "cooking" }))
-            .unwrap_err()
-            .contains("research"));
+        // What an older plan named its executor by is refused, not ignored.
+        for old in [json!({ "bot": 7 }), json!({ "assistant_id": 3 }), json!({ "kind": "code" })] {
+            assert!(step_args(&old).unwrap_err().contains("`to`"), "{old}");
+        }
         assert!(step_args(&json!("step")).is_err());
     }
 
@@ -3363,7 +3316,7 @@ mod tests {
             for_input: None,
             done_when: None,
             pr_fix: None,
-            kind: None,
+            is_check: false,
         }
     }
 
@@ -3496,7 +3449,6 @@ mod tests {
             ended_at: None,
             created_at: now,
             updated_at: now,
-            kind: None,
         };
         let c = Change {
             at: now,
