@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef, useState } from "react"
-import { FilePlus, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { AlertTriangle, FilePlus, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import {
@@ -283,6 +283,13 @@ function InstallSourceDialog({
             </select>
           </label>
           <p className="text-sm text-muted-foreground">{t("sourceHint")}</p>
+          <div
+            role="alert"
+            className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100"
+          >
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <span>{t("trustWarning")}</span>
+          </div>
           {failure && (
             <p role="alert" className="text-sm text-destructive">
               {failure}

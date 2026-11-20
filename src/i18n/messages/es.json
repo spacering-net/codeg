@@ -78,6 +78,7 @@
     "registry": "Registro npm",
     "mirror": "Servidor espejo de China",
     "sourceHint": "Codeg instala el manifiesto codeg-plugin.json. El complemento queda desactivado inicialmente.",
+    "trustWarning": "Este complemento se ejecuta en el host conectado con los permisos del usuario actual. Puede leer o modificar los archivos y datos disponibles para ese host. Instala solo fuentes de confianza.",
     "sourceUnsupported": "Actualiza el host de Codeg conectado para instalar desde un origen.",
     "cancel": "Cancelar",
     "install": "Instalar",

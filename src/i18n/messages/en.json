@@ -78,6 +78,7 @@
     "registry": "npm registry",
     "mirror": "China mirror",
     "sourceHint": "Codeg installs the codeg-plugin.json manifest and starts the plugin disabled.",
+    "trustWarning": "This plugin runs on the connected host with the current user’s permissions. It may read or modify files and data available to that host. Install only sources you trust.",
     "sourceUnsupported": "Update the connected Codeg host to install from a source.",
     "cancel": "Cancel",
     "install": "Install",
