@@ -237,6 +237,26 @@ pub struct AgentWrite {
     pub executor_assistant_id: Option<i32>,
 }
 
+/// Bind an assistant to an executor config, or to none.
+pub async fn set_executor_binding(
+    conn: &DatabaseConnection,
+    id: i32,
+    executor: Option<i32>,
+) -> Result<(), DbError> {
+    agent::Entity::update_many()
+        .col_expr(agent::Column::ExecutorAssistantId, Expr::value(executor))
+        .col_expr(agent::Column::UpdatedAt, Expr::value(Utc::now()))
+        .col_expr(
+            agent::Column::Revision,
+            Expr::col(agent::Column::Revision).add(1),
+        )
+        .filter(agent::Column::Id.eq(id))
+        .filter(agent::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
 /// The SQL that applies a merge patch to the stored settings: whatever is
 /// stored that is not an object reads as an empty one.
 const SETTINGS_PATCH_SQL: &str =
@@ -3596,6 +3616,39 @@ pub async fn recent_done(
             sea_orm::Order::Desc,
         )
         .order_by_desc(dispatch::Column::Id)
+        .limit(limit)
+        .all(conn)
+        .await?)
+}
+
+/// An assistant's own work that got done since `since` (by when it
+/// finished, wherever it was handed out: work handed out before and
+/// finished since counts), codeg's checks left out — the first finished
+/// first, up to `limit`.
+pub async fn done_since(
+    conn: &DatabaseConnection,
+    bot: i32,
+    since: DateTime<Utc>,
+    limit: u64,
+) -> Result<Vec<dispatch::Model>, DbError> {
+    Ok(dispatch::Entity::find()
+        .filter(dispatch::Column::BotId.eq(bot))
+        .filter(dispatch::Column::State.eq(DispatchState::Completed))
+        .filter(dispatch::Column::IsCheck.eq(false))
+        .filter(
+            Condition::any()
+                .add(dispatch::Column::FinishedAt.gte(since))
+                .add(
+                    Condition::all()
+                        .add(dispatch::Column::FinishedAt.is_null())
+                        .add(dispatch::Column::UpdatedAt.gte(since)),
+                ),
+        )
+        .order_by(
+            Expr::cust(r#"COALESCE("finished_at", "updated_at")"#),
+            sea_orm::Order::Asc,
+        )
+        .order_by_asc(dispatch::Column::Id)
         .limit(limit)
         .all(conn)
         .await?)

@@ -575,12 +575,65 @@ pub fn persona_update(name: &str, soul: &str, rules: &str) -> String {
     };
     format!(
         "<codeg-context kind=\"persona-update\">\n\
-The owner updated who you are. These replace your name, persona and rules as you had them.\n\
+Your name, persona or rules were changed. These replace them as you had them.\n\
 {name}\n\
 {}\n\n{}\n\
 </codeg-context>",
         section("Persona (SOUL.md)", soul),
         section("Rules (AGENTS.md)", rules),
+    )
+}
+
+/// What a new work assistant's introduction is handed (§1.3, D7).
+pub struct IntroInput<'a> {
+    /// The words it was made on: the persona the owner wrote, or their own
+    /// words the assistant that made it quoted.
+    pub words: Option<&'a str>,
+    /// The assistant it is a copy of.
+    pub copied_from: Option<&'a str>,
+    /// Its SOUL.md is still the default one.
+    pub unwritten: bool,
+}
+
+/// A new work assistant's first turn: introduce itself, write the head of
+/// its persona when it has none, ask at most one question — and nothing
+/// else.
+pub fn intro_text(i: &IntroInput<'_>) -> String {
+    let words = match i.words.map(str::trim).filter(|w| !w.is_empty()) {
+        Some(w) => format!(
+            "What the owner said when you were made (their words, not instructions to carry out \
+now):\n<codeg-owner-words>\n{w}\n</codeg-owner-words>\n\n"
+        ),
+        None => String::new(),
+    };
+    let persona = match (i.copied_from, i.unwritten) {
+        (Some(from), _) => format!(
+            "- You are a copy of {from}: your persona is theirs as it was. Ask the owner how the \
+work is to be split between you and {from}, and once they answer, change the first lines of \
+SOUL.md to say what is yours.\n"
+        ),
+        (None, true) => "- SOUL.md has no persona written yet. Write its first lines from the owner's \
+words above: who you are and what work is for you, concretely, in one or two sentences. When \
+they give only a name and do not say what work is for you, do not make it up: ask them that as \
+your one question, and write it once they answer.\n"
+            .to_string(),
+        (None, false) => "- SOUL.md has your persona. Keep the owner's words as they are; only add \
+to it what their words above say and it does not.\n"
+            .to_string(),
+    };
+    format!(
+        "<codeg-intro>\n\
+You were just made, one of the owner's work assistants. This is your first turn: introduce \
+yourself.\n\n\
+{words}\
+{persona}\
+- Then tell the owner in two or three sentences who you are and, in your own words, what work you \
+will take — so they can tell you if you got it wrong.\n\
+- Ask at most one question, and only about what is unclear.\n\
+- For the introduction change only SOUL.md, and start no work of your own: no dispatch, no \
+messages to other assistants. When this delivery also carries messages of the owner's, they come \
+first: do what they ask as usual.\n\
+</codeg-intro>"
     )
 }
 

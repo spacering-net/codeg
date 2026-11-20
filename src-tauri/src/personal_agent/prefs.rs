@@ -73,6 +73,29 @@ pub struct Applied {
     /// each (10.5 "fill five").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picked: Option<Vec<crate::models::personal_agent_bots::PickedOption>>,
+    /// For the agent an assistant's work runs on: the executor config it
+    /// was bound to when the change was planned — what an undo binds it to
+    /// again. The owner's; never in what an assistant reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor_before: Option<i32>,
+    /// Written by an undo: an assistant's work goes back onto
+    /// `executor_before`, when that one still is what it was.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub undo: bool,
+}
+
+impl Applied {
+    /// As an assistant reads it: no executor config in it.
+    pub(super) fn for_assistant(plan: &[Applied]) -> Vec<Applied> {
+        plan.iter()
+            .cloned()
+            .map(|mut a| {
+                a.executor_before = None;
+                a.undo = false;
+                a
+            })
+            .collect()
+    }
 }
 
 /// Whether a key is the account's (on the primary's row).
@@ -209,6 +232,14 @@ fn changes_text(changes: &[Applied]) -> String {
         .join("; ")
 }
 
+/// The owner's words a change card quotes: as they typed them this turn,
+/// or — not found there — only what the assistant said they said.
+#[derive(Debug, Clone, Default)]
+pub(super) struct Quoted {
+    pub quote: Option<String>,
+    pub unchecked: Option<String>,
+}
+
 /// Who changed it and why, as a card shows it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Why {
@@ -318,11 +349,20 @@ impl PersonalAgentEngine {
             if from == to || !seen.insert(c.key.clone()) {
                 continue;
             }
+            let executor_before = match c.key.strip_prefix("bot.") {
+                Some(rest) if rest.ends_with(".work_agent") => {
+                    self.bound_executor_of_uid(rest.trim_end_matches(".work_agent"))
+                        .await
+                }
+                _ => None,
+            };
             out.push(Applied {
                 key: c.key,
                 from,
                 to,
                 picked,
+                executor_before,
+                undo: false,
             });
         }
         if out.iter().any(|a| is_account(&a.key))
@@ -561,8 +601,14 @@ impl PersonalAgentEngine {
         let mut kept = Vec::new();
         for a in applied {
             match current.iter().find(|c| c.key == a.key) {
-                // Still what the change made it: back it goes.
-                Some(c) if c.from == a.to => back.push(c.clone()),
+                // Still what the change made it: back it goes — the agent
+                // an assistant's work runs on, onto the executor config it
+                // was bound to.
+                Some(c) if c.from == a.to => back.push(Applied {
+                    executor_before: a.executor_before,
+                    undo: true,
+                    ..c.clone()
+                }),
                 // Already back where it was: nothing to do.
                 None => {}
                 Some(_) => kept.push(a.key.clone()),
@@ -691,10 +737,17 @@ impl PersonalAgentEngine {
                 Err(e) => return ToolOutcome::refused(e.to_string()),
             }
         }
+        // The owner's words as they typed them this turn change it at once;
+        // words not found there go on a card for them to confirm first.
+        let unverified = match quote.as_deref() {
+            Some(q) if !suggest => !self.owner_typed_it(q).await,
+            _ => false,
+        };
         let outcome = self
             .prefs_update_run(
                 &changes,
                 suggest,
+                unverified,
                 quote,
                 reason,
                 args,
@@ -731,6 +784,7 @@ impl PersonalAgentEngine {
         &self,
         changes: &[SettingChange],
         suggest: bool,
+        unverified: bool,
         quote: Option<String>,
         reason: Option<String>,
         args: &Value,
@@ -760,7 +814,7 @@ impl PersonalAgentEngine {
         };
         let why = if suggest {
             Why::Suggest
-        } else if self.prefs().await.chat_changes == prefs::ChatChanges::Show {
+        } else if unverified || self.prefs().await.chat_changes == prefs::ChatChanges::Show {
             Why::Show
         } else {
             Why::Asked
@@ -776,11 +830,18 @@ impl PersonalAgentEngine {
             }
             self.note_prefs_believed(&plan).await;
         }
+        // Words not found in what the owner typed — or a suggestion's,
+        // never checked — are never shown as theirs.
+        let (quote, unchecked) = if unverified || suggest {
+            (None, quote)
+        } else {
+            (quote, None)
+        };
         let card = match self
             .raise_changed(
                 why,
                 &plan,
-                quote,
+                Quoted { quote, unchecked },
                 reason,
                 for_row,
                 Some(key.to_string()),
@@ -803,6 +864,11 @@ impl PersonalAgentEngine {
             Why::Asked => {
                 format!("Changed: {list}. The owner sees a card saying so, and can undo it there.")
             }
+            Why::Show if unverified => format!(
+                "On a card for the owner to confirm first: {list}. Your `quote` is not in what the \
+                 owner typed this turn, so it does not change anything by itself. Nothing is \
+                 changed yet; you will hear how they answered."
+            ),
             Why::Show => format!(
                 "On a card for the owner to confirm first (they asked to see such changes \
                  first): {list}. Nothing is changed yet; you will hear how they answered."
@@ -817,7 +883,7 @@ impl PersonalAgentEngine {
             json!({
                 "notice_id": card,
                 "state": if why == Why::Asked { "applied" } else { "open" },
-                "changes": plan,
+                "changes": Applied::for_assistant(&plan),
             }),
         )
     }
@@ -871,7 +937,7 @@ impl PersonalAgentEngine {
         &self,
         why: Why,
         plan: &[Applied],
-        quote: Option<String>,
+        quoted: Quoted,
         reason: Option<String>,
         for_row: Option<i32>,
         subject: Option<String>,
@@ -887,7 +953,8 @@ impl PersonalAgentEngine {
             "why": why.as_str(),
             "changes": plan,
             "names": self.team_names(plan).await,
-            "quote": quote,
+            "quote": quoted.quote,
+            "unchecked_quote": quoted.unchecked,
             "reason": reason,
             "for_row": for_row,
         }));

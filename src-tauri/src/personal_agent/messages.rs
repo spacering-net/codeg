@@ -123,6 +123,32 @@ pub enum Unnamed {
     Nothing,
 }
 
+/// The key on an owner's message row that marks it typed by them.
+pub const TYPED_KEY: &str = "typed";
+
+/// Whether an owner's message row is one they typed themselves.
+pub fn typed_row(row: &crate::db::entities::personal_agent_timeline::Model) -> bool {
+    row.kind == TimelineKind::Owner
+        && row
+            .data
+            .as_deref()
+            .and_then(|d| serde_json::from_str::<Value>(d).ok())
+            .and_then(|d| d.get(TYPED_KEY).and_then(|v| v.as_bool()))
+            .unwrap_or(false)
+}
+
+/// Text with its ends trimmed and every run of whitespace one space.
+fn folded(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Whether `quote` is in one of `typed` (the owner's own messages), their
+/// spacing aside.
+pub fn quote_in(quote: &str, typed: &[String]) -> bool {
+    let quote = folded(quote);
+    !quote.is_empty() && typed.iter().any(|t| folded(t).contains(&quote))
+}
+
 /// Parse a message reference: `m12`, `12`.
 fn message_ref(s: &str) -> Option<i32> {
     let s = s.trim();
@@ -464,6 +490,31 @@ impl PersonalAgentEngine {
                 }
             },
         }
+    }
+
+    /// Whether `quote` is the owner's own words in the turn in flight: in
+    /// a message of theirs this delivery carries that they typed
+    /// themselves — not one a card's button or a hand-over wrote for them.
+    /// Outside a delivery nothing is.
+    pub(super) async fn owner_typed_it(&self, quote: &str) -> bool {
+        #[cfg(test)]
+        if self
+            .quotes_trusted_for_test
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return true;
+        }
+        let Some(batch) = self.current_batch().await else {
+            return false;
+        };
+        let typed: Vec<String> = svc::owner_rows_of_batch(&self.db.conn, batch)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(typed_row)
+            .map(|r| r.body)
+            .collect();
+        quote_in(quote, &typed)
     }
 
     /// What an action for `input` inherits; with none, the chain starts at

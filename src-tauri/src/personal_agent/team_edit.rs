@@ -7,7 +7,14 @@
 //! first; what the assistant only infers (`suggest`) is a suggestion card.
 //! The items are keys like any other —
 //!
-//! - `bot.<uid>.{name, avatar, brain, notify, muted, hidden}`.
+//! - `bot.<uid>.{name, avatar, brain, notify, muted, hidden, persona,
+//!   work_agent}` — the primary's own `persona` and `work_agent` too.
+//!
+//! `persona` is the first paragraph of its persona (under the heading of
+//! its SOUL.md): replaced in the file as it is when the change is made, the
+//! rest left to the assistant. `work_agent` is the agent its work runs on:
+//! the executor config it is bound to changed in place when no other
+//! assistant is bound to it, else one made for it with the new agent (D2).
 //!
 //! A brain changed with only some of its options named has the rest filled
 //! in (10.5 "fill five"): this one's own choices on the same agent first,
@@ -24,13 +31,27 @@ use super::engine::{brain_of, PersonalAgentEngine};
 use super::messages::display_name;
 use super::prefs::{Applied, SettingChange};
 use super::tools::ToolOutcome;
+use super::workdir;
 use crate::db::entities::personal_agent::BotKind;
 use crate::db::service::personal_agent_service as svc;
 use crate::models::personal_agent::PersonalAgentChange;
 use crate::models::personal_agent_bots::{BotAvatar, PickedOption};
 
 /// A work assistant's items `bot_update` changes.
-const BOT_FIELDS: &[&str] = &["name", "avatar", "brain", "notify", "muted", "hidden"];
+const BOT_FIELDS: &[&str] = &[
+    "name",
+    "avatar",
+    "brain",
+    "notify",
+    "muted",
+    "hidden",
+    "persona",
+    "work_agent",
+];
+/// The primary's: the rest are its own settings' (`prefs_update`).
+const PRIMARY_FIELDS: &[&str] = &["persona", "work_agent"];
+/// Longest persona paragraph `bot_update` writes.
+const MAX_PERSONA_CHARS: usize = 1_000;
 /// One item as planned: what it is, what it would be, the options codeg
 /// picked for it.
 pub(super) type Planned = (Value, Value, Option<Vec<PickedOption>>);
@@ -77,9 +98,47 @@ impl PersonalAgentEngine {
             .await
             .map_err(|e| e.to_string())?
             .into_iter()
-            .find(|b| b.uid.as_deref() == Some(uid) && b.kind == BotKind::Worker)
-            .ok_or_else(|| format!("no work assistant `{uid}`"))?;
+            .find(|b| b.uid.as_deref() == Some(uid))
+            .ok_or_else(|| format!("no assistant `{uid}`"))?;
+        if bot.kind == BotKind::Primary && !PRIMARY_FIELDS.contains(&field) {
+            return Err(format!(
+                "the primary assistant's {field} is changed in its own settings, or with \
+                 prefs_update; bot_update changes its {}",
+                PRIMARY_FIELDS.join(" and ")
+            ));
+        }
         Ok(match field {
+            // What the tool asks for is checked there (`persona_given`): an
+            // undo puts back whatever was there, empty or long.
+            "persona" => {
+                let to = super::team::persona_lines(
+                    value.as_str().ok_or("`persona` takes text")?,
+                );
+                if to.lines().any(|l| l.starts_with('#')) {
+                    return Err("`persona` is plain lines, without a heading".into());
+                }
+                let soul = workdir::read_text(&self.workdir_of(&bot), workdir::SOUL_FILE);
+                (json!(super::team::persona_paragraph(&soul)), json!(to), None)
+            }
+            "work_agent" => {
+                let from = self.work_agent_of(&bot).await;
+                let from_json = from
+                    .as_ref()
+                    .map(|f| serde_json::to_value(f).unwrap_or(Value::Null))
+                    .unwrap_or(Value::Null);
+                // None to work with (an undo of one given to an assistant
+                // that had none): none again.
+                if value.is_null() {
+                    (from_json, Value::Null, None)
+                } else {
+                    let (to, picked) = self.plan_work_agent(&bot, from.as_ref(), value).await?;
+                    (
+                        from_json,
+                        serde_json::to_value(&to).map_err(|e| e.to_string())?,
+                        picked_some(picked),
+                    )
+                }
+            }
             "name" => {
                 let to = text_of("name", value, 40, false)?;
                 (json!(bot.name), to, None)
@@ -107,6 +166,175 @@ impl PersonalAgentEngine {
             "muted" => (json!(bot.muted), bool_of(field, value)?, None),
             _ => (json!(bot.hidden), bool_of(field, value)?, None),
         })
+    }
+
+    /// The executor config the assistant of `uid` is bound to, when it is
+    /// there to work with.
+    pub(super) async fn bound_executor_of_uid(&self, uid: &str) -> Option<i32> {
+        let bot = svc::list_bots(&self.db.conn)
+            .await
+            .ok()?
+            .into_iter()
+            .find(|b| b.uid.as_deref() == Some(uid))?;
+        let id = bot.executor_assistant_id?;
+        crate::db::service::assistant_service::get(&self.db.conn, id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|a| a.is_live())
+            .map(|a| a.id)
+    }
+
+    /// The agent and options `bot`'s work runs on: its executor config's,
+    /// when it has one to work with.
+    async fn work_agent_of(
+        &self,
+        bot: &crate::db::entities::personal_agent::Model,
+    ) -> Option<crate::models::AssistantAgentConfig> {
+        let id = bot.executor_assistant_id?;
+        crate::db::service::assistant_service::get(&self.db.conn, id)
+            .await
+            .ok()
+            .flatten()
+            .filter(|a| a.is_live())
+            .map(|a| crate::models::AssistantAgentConfig {
+                agent_type: a.agent_type,
+                agent_options: a.agent_options,
+                label_snapshot: a.label_snapshot,
+            })
+    }
+
+    /// What a change of the agent `bot`'s work runs on comes to: a whole
+    /// selection as given (an undo, a card's), or `{agent_type, options}`
+    /// with the rest filled in as a new assistant's are — its own choices
+    /// first when it stays on the same agent. No agent named: the one it
+    /// works with now, else its brain's.
+    async fn plan_work_agent(
+        &self,
+        bot: &crate::db::entities::personal_agent::Model,
+        current: Option<&crate::models::AssistantAgentConfig>,
+        value: &Value,
+    ) -> Result<(crate::models::AssistantAgentConfig, Vec<PickedOption>), String> {
+        if value.get("label_snapshot").is_some() {
+            let whole: crate::models::AssistantAgentConfig = serde_json::from_value(value.clone())
+                .map_err(|e| format!("not an agent and its options: {e}"))?;
+            crate::db::service::assistant_service::validate_agent_config(&whole)
+                .map_err(|e| e.to_string())?;
+            return Ok((whole, Vec::new()));
+        }
+        let agent_type = match value.get("agent_type").and_then(|a| a.as_str()) {
+            Some(a) => crate::models::AgentType::from_wire(a)
+                .ok_or_else(|| format!("no agent `{a}`"))?,
+            None => current
+                .map(|c| c.agent_type)
+                .or_else(|| brain_of(bot).map(|b| b.agent_type))
+                .ok_or("name the agent: `work_agent.agent_type`")?,
+        };
+        let given = super::options::Partial::from_json(value.get("options"))?;
+        let extra: Vec<_> = current
+            .filter(|c| c.agent_type == agent_type)
+            .map(|c| c.agent_options.clone())
+            .into_iter()
+            .collect();
+        let (config, picked) = self
+            .fill_options(agent_type, &given, &extra)
+            .await
+            .map_err(|e| match e {
+                super::bots::FillError::Unavailable(why) => format!(
+                    "codeg could not read the options of {} ({why}); name every option, or the \
+                     owner can pick it in this assistant's settings",
+                    crate::acp::registry::get_agent_meta(agent_type).name
+                ),
+                super::bots::FillError::Refused(e) => e,
+            })?;
+        crate::db::service::assistant_service::validate_agent_config(&config)
+            .map_err(|e| e.to_string())?;
+        Ok((config, picked))
+    }
+
+    /// Point `bot`'s work at `config`: its executor config changed in
+    /// place when it is the only assistant bound to it; else (shared, or
+    /// none to work with) one made for it now, through `save`.
+    async fn write_work_agent(
+        &self,
+        bot: &crate::db::entities::personal_agent::Model,
+        config: crate::models::AssistantAgentConfig,
+        draft: &mut crate::models::personal_agent::PersonalAgentDraft,
+    ) -> Result<(), String> {
+        // Whether another assistant is bound to it, and the change in place,
+        // in one hold with every binding of an existing executor config to
+        // a new assistant (made, copied): none comes between.
+        let _claim = workdir::WORKDIR_CLAIM.lock().await;
+        let bot = svc::get_bot(&self.db.conn, bot.id)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("the assistant is gone")?;
+        let live = match bot.executor_assistant_id {
+            Some(id) => crate::db::service::assistant_service::get(&self.db.conn, id)
+                .await
+                .map_err(|e| e.to_string())?
+                .filter(|a| a.is_live()),
+            None => None,
+        };
+        if let Some(a) = live {
+            let shared = svc::list_bots(&self.db.conn)
+                .await
+                .map_err(|e| e.to_string())?
+                .iter()
+                .any(|b| b.id != bot.id && b.executor_assistant_id == Some(a.id));
+            if !shared {
+                crate::commands::assistants::assistant_update_core(
+                    &self.emitter,
+                    &self.db,
+                    a.id,
+                    crate::models::assistant::AssistantPatch {
+                        agent_config: Some(config),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+        }
+        draft.executor_config = Some(config);
+        Ok(())
+    }
+
+    /// Bind `bot` back onto executor config `id` if it is still there and
+    /// still runs `config` — looked at and bound in the one hold every
+    /// change of who is bound to what, and every change in place, is made
+    /// in. Whether it was.
+    async fn bind_back(
+        &self,
+        bot: &crate::db::entities::personal_agent::Model,
+        id: i32,
+        config: &Value,
+    ) -> Result<bool, String> {
+        if config.is_null() {
+            return Ok(false);
+        }
+        let _claim = workdir::WORKDIR_CLAIM.lock().await;
+        let same = crate::db::service::assistant_service::get(&self.db.conn, id)
+            .await
+            .map_err(|e| e.to_string())?
+            .filter(|a| a.is_live())
+            .is_some_and(|a| {
+                serde_json::to_value(crate::models::AssistantAgentConfig {
+                    agent_type: a.agent_type,
+                    agent_options: a.agent_options,
+                    label_snapshot: a.label_snapshot,
+                })
+                .ok()
+                .as_ref()
+                    == Some(config)
+            });
+        if same {
+            svc::set_executor_binding(&self.db.conn, bot.id, Some(id))
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(same)
     }
 
     // ── writing ─────────────────────────────────────────────────────────────
@@ -137,13 +365,56 @@ impl PersonalAgentEngine {
                 .await
                 .map_err(|e| e.to_string())?
                 .into_iter()
-                .find(|b| b.uid.as_deref() == Some(uid.as_str()) && b.kind == BotKind::Worker)
-                .ok_or_else(|| format!("no work assistant `{uid}`"))?;
+                .find(|b| b.uid.as_deref() == Some(uid.as_str()))
+                .ok_or_else(|| format!("no assistant `{uid}`"))?;
             let mut draft = crate::models::personal_agent::PersonalAgentDraft::default();
             let mut roster = svc::RosterWrite::default();
             for item in items {
                 let field = item.key.rsplit('.').next().unwrap_or_default();
                 match field {
+                    "persona" => {
+                        let paragraph = item.to.as_str().unwrap_or_default().to_string();
+                        let update = move |now: Option<&str>| {
+                            Some(super::team::with_persona_paragraph(
+                                now.unwrap_or_default(),
+                                &paragraph,
+                            ))
+                        };
+                        workdir::write_for_owner(
+                            &self.workdir_of(&bot),
+                            &[(workdir::SOUL_FILE, &update)],
+                            &format!("owner: persona of {}", display_name(&bot)),
+                        )
+                        .await
+                        .map_err(|e| format!("{}'s persona was not written: {e}", display_name(&bot)))?;
+                        // Its next delivery hands the persona over, even when
+                        // the turn running now settles with it.
+                        if let Ok(Some(seg)) = svc::open_segment(&self.db.conn, bot.id).await {
+                            self.update_segment_state(seg.id, |s| s.persona_resend = true)
+                                .await;
+                        }
+                    }
+                    "work_agent" => {
+                        // An undo: back onto the executor config it was bound
+                        // to — when that is another, still there, and still
+                        // runs what the undo puts back.
+                        let back = match item
+                            .executor_before
+                            .filter(|b| item.undo && Some(*b) != bot.executor_assistant_id)
+                        {
+                            Some(b) => self.bind_back(&bot, b, &item.to).await?,
+                            None => false,
+                        };
+                        if item.to.is_null() {
+                            svc::set_executor_binding(&self.db.conn, bot.id, None)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                        } else if !back {
+                            let config = serde_json::from_value(item.to.clone())
+                                .map_err(|e| e.to_string())?;
+                            self.write_work_agent(&bot, config, &mut draft).await?;
+                        }
+                    }
                     "name" => draft.name = item.to.as_str().map(str::to_string),
                     "avatar" => {
                         draft.avatar = Some(
@@ -161,8 +432,10 @@ impl PersonalAgentEngine {
                     _ => {}
                 }
             }
-            let saves =
-                draft.name.is_some() || draft.avatar.is_some() || draft.agent_config.is_some();
+            let saves = draft.name.is_some()
+                || draft.avatar.is_some()
+                || draft.agent_config.is_some()
+                || draft.executor_config.is_some();
             if saves {
                 // Through its own engine: a brain switched there starts its
                 // next delivery in a new segment, with a handover card.
@@ -251,12 +524,6 @@ impl PersonalAgentEngine {
         }
         .cloned()
         .ok_or("no such assistant; bot_list gives them")?;
-        if found.kind != BotKind::Worker {
-            return Err(
-                "the primary assistant is changed in its own settings, or with prefs_update (`brain`)"
-                    .into(),
-            );
-        }
         Ok(found)
     }
 
@@ -269,6 +536,11 @@ impl PersonalAgentEngine {
         let Some(uid) = bot.uid.clone() else {
             return ToolOutcome::refused("this work assistant has no uid to change it by");
         };
+        if let Some(p) = args.get("persona").filter(|v| !v.is_null()) {
+            if let Err(e) = text_of("persona", p, MAX_PERSONA_CHARS, false) {
+                return ToolOutcome::refused(e);
+            }
+        }
         let mut changes = Vec::new();
         for field in BOT_FIELDS {
             if let Some(v) = args.get(*field).filter(|v| !v.is_null()) {
@@ -308,7 +580,8 @@ impl PersonalAgentEngine {
         }
         if changes.is_empty() {
             return ToolOutcome::refused(
-                "name what to change: name, shape, color, brain, notify, muted, hidden",
+                "name what to change: name, shape, color, brain, notify, muted, hidden, persona, \
+                 work_agent",
             );
         }
         self.change_settings_call("bot_update", changes, args).await

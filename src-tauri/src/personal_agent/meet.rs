@@ -923,7 +923,7 @@ impl PersonalAgentEngine {
                 let mut handed = data.clone();
                 handed["state"] = "handed".into();
                 // The message and the card's "handed" are written together.
-                self.queue_owner_message(text, Vec::new(), Some(row_id), None, None, Some(handed))
+                self.queue_owner_message(text, Vec::new(), Some(row_id), super::engine::Origin::Written, None, Some(handed))
                     .await?;
                 let _ = svc::move_notice(
                     &self.db.conn,

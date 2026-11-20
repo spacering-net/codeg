@@ -931,7 +931,7 @@ impl PersonalAgentEngine {
                 // The message and the card's "handed" are written together.
                 let data = Self::reminder_data(&card, "handed", None, None);
                 if let Err(e) = self
-                    .queue_owner_message(text, Vec::new(), Some(card_id), None, None, Some(data))
+                    .queue_owner_message(text, Vec::new(), Some(card_id), super::engine::Origin::Written, None, Some(data))
                     .await
                 {
                     let _ = self

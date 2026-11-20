@@ -249,6 +249,21 @@ enum Internal {
     Reflect { origin_row: Option<i32> },
 }
 
+/// Held while a segment's state is read, changed and written.
+static SEGMENT_STATE_WRITE: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Where an owner's message comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Origin {
+    /// They typed it (the input box, their own answer on a question card).
+    Typed,
+    /// codeg wrote it for them: a card's button, a hand-over.
+    Written,
+    /// It sends this interrupted message again, as that one was.
+    Resent(i32),
+}
+
 /// How a turn ended.
 #[derive(Debug, Clone)]
 enum TurnEnd {
@@ -456,6 +471,10 @@ pub struct PersonalAgentEngine {
     /// A push of the reply in flight is scheduled.
     reply_push_pending: AtomicBool,
     reply_push: Mutex<ReplyPush>,
+    /// Tests: a `quote` counts as the owner's typed words without a turn
+    /// in flight carrying them (the tests of the check itself turn it off).
+    #[cfg(test)]
+    pub(crate) quotes_trusted_for_test: AtomicBool,
     /// This engine, for what a `&self` path hands to a task of its own (a
     /// merge's later look, a dispatch it starts).
     me: std::sync::Weak<PersonalAgentEngine>,
@@ -504,6 +523,8 @@ impl PersonalAgentEngine {
             booted: AtomicBool::new(false),
             reply_push_pending: AtomicBool::new(false),
             reply_push: Mutex::new(ReplyPush::default()),
+            #[cfg(test)]
+            quotes_trusted_for_test: AtomicBool::new(true),
         })
     }
 
@@ -1994,6 +2015,10 @@ impl PersonalAgentEngine {
     // ── segment state ───────────────────────────────────────────────────────
 
     pub(super) async fn update_segment_state(&self, segment_id: i32, f: impl FnOnce(&mut SegmentState)) {
+        // One read-and-write at a time, whichever assistant's engine makes
+        // it: a flag another engine sets (a persona changed from outside) is
+        // never written over by an older copy.
+        let _held = SEGMENT_STATE_WRITE.lock().await;
         let Ok(Some(seg)) = svc::get_segment(&self.db.conn, segment_id).await else {
             return;
         };
@@ -3208,12 +3233,18 @@ impl PersonalAgentEngine {
                 e.kind != msvc::MESSAGE_EVENT
                     && e.kind != svc::ASK_EVENT
                     && e.kind != super::acceptance::ACCEPT_EVENT
+                    && !super::bots::is_intro_event(e)
                     && !super::brief::is_solo_event(e)
             })
             .cloned()
             .collect();
-        // The executors' questions and plan approvals, each in full (7.3.1).
+        // A new assistant's introduction (§1.3): what it was made on, and
+        // what to do — after the owner's messages, which come first.
         let mut asks = Vec::new();
+        for e in events.iter().filter(|e| super::bots::is_intro_event(e)) {
+            asks.push(self.intro_block(e).await);
+        }
+        // The executors' questions and plan approvals, each in full (7.3.1).
         for e in events.iter().filter(|e| e.kind == svc::ASK_EVENT) {
             asks.push(self.ask_block(e).await);
         }
@@ -3277,6 +3308,9 @@ impl PersonalAgentEngine {
                 BatchTrigger::Consolidate => "it is night: your memory is to be tidied up",
                 BatchTrigger::Reflect => {
                     "work you were responsible for went well: a look back at it"
+                }
+                _ if events.iter().any(super::bots::is_intro_event) => {
+                    "you were just made: introduce yourself to the owner"
                 }
                 _ => "news of work you dispatched or of your matters",
             };
@@ -4102,8 +4136,16 @@ impl PersonalAgentEngine {
             }
             let settings = settings_of(&row);
             let reading = self.context_reading(&turn.conn_id, seg.conversation_id).await;
-            let mut state = SegmentState::parse(&seg.state);
-            if state.streaks.after_turn(settings.auto_compact_percent, reading.map(|r| r.percent)) {
+            // Read and written in one hold: what changed in the state
+            // meanwhile stays.
+            let mut paused = false;
+            self.update_segment_state(seg.id, |state| {
+                paused = state
+                    .streaks
+                    .after_turn(settings.auto_compact_percent, reading.map(|r| r.percent));
+            })
+            .await;
+            if paused {
                 let _ = svc::set_segment_paused(&self.db.conn, seg.id, true).await;
                 self.marker(
                     Some(seg.id),
@@ -4113,9 +4155,6 @@ impl PersonalAgentEngine {
                     serde_json::json!({ "why": "ineffective" }),
                 )
                 .await;
-            }
-            if let Ok(json) = serde_json::to_string(&state) {
-                let _ = svc::set_segment_state(&self.db.conn, seg.id, json).await;
             }
             // Committed here, as the turn settles: the commit is this turn's
             // alone, and its memory card says what of it was memory (7.7) —
@@ -4302,7 +4341,7 @@ impl PersonalAgentEngine {
         blocks: Vec<PromptInputBlock>,
         reply_to: Option<i32>,
     ) -> Result<TimelineRow, String> {
-        self.queue_owner_message(text, blocks, reply_to, None, None, None).await
+        self.queue_owner_message(text, blocks, reply_to, Origin::Typed, None, None).await
     }
 
     /// An owner message from a button on the card in `reply_to` (9.2);
@@ -4320,24 +4359,25 @@ impl PersonalAgentEngine {
             text,
             Vec::new(),
             Some(reply_to),
-            None,
+            Origin::Written,
             Some(card_click),
             Some(reply_data),
         )
         .await
     }
 
-    /// Queue an owner message; `resent_from` is the interrupted message it
-    /// sends again, whose turn's ledger the delivery inherits. From a
-    /// card's button, `card_click` names the button and `reply_data` is the
-    /// quoted card's row with the press kept, written with the message in
-    /// one transaction.
+    /// Queue an owner message; `origin` says whether they typed it, codeg
+    /// wrote it for them, or it sends an interrupted message again (whose
+    /// turn's ledger the delivery inherits). From a card's button,
+    /// `card_click` names the button and `reply_data` is the quoted card's
+    /// row with the press kept, written with the message in one
+    /// transaction.
     pub(super) async fn queue_owner_message(
         &self,
         text: String,
         blocks: Vec<PromptInputBlock>,
         reply_to: Option<i32>,
-        resent_from: Option<i32>,
+        origin: Origin,
         card_click: Option<serde_json::Value>,
         reply_data: Option<serde_json::Value>,
     ) -> Result<TimelineRow, String> {
@@ -4357,8 +4397,24 @@ impl PersonalAgentEngine {
                 return Err("that message cannot be quoted".into());
             }
         }
-        // Typed, not a card's button nor a message sent again.
+        let resent_from = match origin {
+            Origin::Resent(from) => Some(from),
+            _ => None,
+        };
+        // Not a card's button nor a message sent again.
         let typed = card_click.is_none() && resent_from.is_none();
+        // What the owner typed themselves, recorded on the row: the words an
+        // assistant may quote as theirs to change something at once. One
+        // sent again is what its first copy was.
+        let typed_mark = match origin {
+            Origin::Typed => true,
+            Origin::Written => false,
+            Origin::Resent(from) => svc::get_row(&self.db.conn, from)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|first| super::messages::typed_row(&first)),
+        };
         // What it brings up (6.8): only the owner's own words — not a
         // hand-over a card wrote for them. One sent again carries what its
         // first copy brought up, counted then.
@@ -4390,6 +4446,9 @@ impl PersonalAgentEngine {
         }
         if let Some(click) = card_click {
             data.insert("card_click".into(), click);
+        }
+        if typed_mark {
+            data.insert(super::messages::TYPED_KEY.into(), true.into());
         }
         if !mentioned.is_empty() {
             data.insert(
@@ -4725,7 +4784,7 @@ impl PersonalAgentEngine {
                 .and_then(|d| d.get("card_click").cloned()),
         );
         let new = self
-            .queue_owner_message(row.body.clone(), blocks, reply_to, Some(row.id), card_click, None)
+            .queue_owner_message(row.body.clone(), blocks, reply_to, Origin::Resent(row.id), card_click, None)
             .await?;
         let mut data = row
             .data
@@ -4811,6 +4870,13 @@ impl PersonalAgentEngine {
         // The executor config its work runs on: one the owner picked, or one
         // made for it now — removed again when the save does not go through.
         let mut made_executor: Option<i32> = None;
+        // Binding one that is there: in the hold every check of who is bound
+        // to an executor config is made in (one changed in place for its
+        // only assistant), until the row is written.
+        let binding = match draft.executor_assistant_id {
+            Some(_) => Some(workdir::WORKDIR_CLAIM.lock().await),
+            None => None,
+        };
         if let Some(id) = draft.executor_assistant_id {
             crate::db::service::assistant_service::get(&self.db.conn, id)
                 .await
@@ -4908,6 +4974,7 @@ impl PersonalAgentEngine {
             (None, Some(row)) => svc::save_bot(&self.db.conn, row.id, write).await,
             (None, None) => svc::save_primary(&self.db.conn, write).await,
         };
+        drop(binding);
         let saved = match saved {
             Ok(s) => s,
             Err(e) => {

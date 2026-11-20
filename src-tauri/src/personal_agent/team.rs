@@ -38,6 +38,69 @@ pub fn unwritten(kind: BotKind, soul: &str) -> bool {
     kind == BotKind::Worker && super::templates::persona_unwritten(soul)
 }
 
+/// Where the persona's first paragraph is among `lines`: after a heading
+/// on the first line (blank lines before it skipped), the first paragraph
+/// under it; else the first paragraph. A paragraph ends at a blank line or
+/// a heading; one that is not there is empty, where it would be.
+fn paragraph_span(lines: &[&str]) -> (usize, usize) {
+    let blank = |l: &str| l.trim().is_empty();
+    let heading = |l: &str| l.trim_start().starts_with('#');
+    let mut i = 0;
+    while i < lines.len() && blank(lines[i]) {
+        i += 1;
+    }
+    if i < lines.len() && heading(lines[i]) {
+        i += 1;
+        while i < lines.len() && blank(lines[i]) {
+            i += 1;
+        }
+    }
+    let start = i;
+    while i < lines.len() && !blank(lines[i]) && !heading(lines[i]) {
+        i += 1;
+    }
+    (start, i)
+}
+
+/// A persona paragraph as written and compared: each line's ends trimmed,
+/// no blank lines.
+pub fn persona_lines(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The persona's first paragraph — what `bot_update`'s `persona` replaces.
+pub fn persona_paragraph(soul: &str) -> String {
+    let lines: Vec<&str> = soul.split_inclusive('\n').collect();
+    let (start, end) = paragraph_span(&lines);
+    persona_lines(&lines[start..end].concat())
+}
+
+/// `soul` with its first paragraph `paragraph` instead, all else as it is.
+pub fn with_persona_paragraph(soul: &str, paragraph: &str) -> String {
+    let paragraph = persona_lines(paragraph);
+    let lines: Vec<&str> = soul.split_inclusive('\n').collect();
+    let (start, end) = paragraph_span(&lines);
+    let mut out: String = lines[..start].concat();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !paragraph.is_empty() {
+        out.push_str(&paragraph);
+        out.push('\n');
+        // None was there and something follows at once: a blank line
+        // between them.
+        if start == end && end < lines.len() {
+            out.push('\n');
+        }
+    }
+    out.push_str(&lines[end..].concat());
+    out
+}
+
 /// One assistant of the team.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Member {
@@ -137,6 +200,39 @@ mod tests {
             head: head.into(),
             unwritten: false,
         }
+    }
+
+    #[test]
+    fn the_persona_paragraph_is_the_first_under_a_heading_and_only_it_is_replaced() {
+        let soul = "# Persona\n\nYou fix CI.\nNot releases.\n\n## How you work\n\n- Be brief.\n";
+        assert_eq!(persona_paragraph(soul), "You fix CI.\nNot releases.");
+        let new = with_persona_paragraph(soul, "  You review pull requests.  \n\n");
+        assert_eq!(
+            new,
+            "# Persona\n\nYou review pull requests.\n\n## How you work\n\n- Be brief.\n"
+        );
+        assert_eq!(persona_paragraph(&new), "You review pull requests.");
+        // Taken back, it is as it was.
+        assert_eq!(
+            with_persona_paragraph(&new, "You fix CI.\nNot releases."),
+            soul
+        );
+        // No heading: the first paragraph.
+        let plain = "You fix CI.\n\nMore.\n";
+        assert_eq!(persona_paragraph(plain), "You fix CI.");
+        assert_eq!(with_persona_paragraph(plain, "QA."), "QA.\n\nMore.\n");
+        // A heading with none under it, then another heading.
+        let bare = "# Persona\n## How you work\n- x\n";
+        assert_eq!(persona_paragraph(bare), "");
+        let filled = with_persona_paragraph(bare, "QA.");
+        assert_eq!(filled, "# Persona\nQA.\n\n## How you work\n- x\n");
+        assert_eq!(persona_paragraph(&filled), "QA.");
+        // Nothing at all, and a heading with no line end.
+        assert_eq!(with_persona_paragraph("", "QA."), "QA.\n");
+        assert_eq!(
+            with_persona_paragraph("# Persona", "QA."),
+            "# Persona\nQA.\n"
+        );
     }
 
     #[test]

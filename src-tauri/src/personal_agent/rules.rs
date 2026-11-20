@@ -1537,7 +1537,7 @@ impl PersonalAgentEngine {
         let mut handed = data_of_row(row.data.as_deref());
         handed["state"] = "handed".into();
         handed["error"] = Value::Null;
-        self.queue_owner_message(text, Vec::new(), Some(row_id), None, None, Some(handed))
+        self.queue_owner_message(text, Vec::new(), Some(row_id), super::engine::Origin::Written, None, Some(handed))
             .await?;
         Ok(("handed".into(), json!({})))
     }

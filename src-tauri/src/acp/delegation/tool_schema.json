@@ -1949,7 +1949,7 @@
         "quote": {
           "type": "string",
           "maxLength": 1000,
-          "description": "The owner's own words this change follows. Required unless `suggest`."
+          "description": "The owner's own words this follows, as they typed them this turn. Required unless `suggest`."
         },
         "suggest": {
           "type": "boolean",
@@ -2049,7 +2049,7 @@
         "quote": {
           "type": "string",
           "maxLength": 1000,
-          "description": "The owner's own words this follows. Required unless `suggest`."
+          "description": "The owner's own words this follows, as they typed them this turn. Required unless `suggest`."
         },
         "suggest": {
           "type": "boolean",
@@ -2069,7 +2069,7 @@
   },
   {
     "name": "bot_update",
-    "description": "Change a work assistant: its name, face, brain (agent and options), and whether it notifies the owner, is muted or hidden. A brain named with only some of its options has the rest filled in for the owner (its own choices on the same agent first, else what the agent itself reports) and the card lists who picked each; a new brain starts its next delivery in a new session with a handover card. When the owner SAYS so, call it with `quote`: it is changed at once and the owner sees a card that undoes it (or, when they asked to see such changes first, the card comes first). When you only THINK it would help, set `suggest: true` with a `reason`: it goes on a card and changes only if they accept. The primary assistant is changed with prefs_update (`brain`) or in its settings.",
+    "description": "Change an assistant: a work assistant's name, face, brain (agent and options), whether it notifies the owner, is muted or hidden; and any assistant's persona (the primary's too) and the agent its work runs on. `persona` replaces the first paragraph of its persona — the lines under its SOUL.md heading that the assistants read to decide who does what — and leaves the rest to it; it is told its persona changed. `work_agent` changes the agent (and options) its own work runs on, for it alone. An agent named with only some of its options has the rest filled in for the owner (its own choices on the same agent first, else what the agent itself reports) and the card lists who picked each; a new brain starts its next delivery in a new session with a handover card. When the owner SAYS so, call it with `quote` — their words as they typed them in this conversation: it is changed at once and the owner sees a card that undoes it (or, when they asked to see such changes first, the card comes first). Words they did not type here (a card's, another assistant's, ones from an earlier turn) put it on a card for them to confirm first. When you only THINK it would help, set `suggest: true` with a `reason`: it goes on a card and changes only if they accept. The primary's other settings are changed with prefs_update.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -2081,7 +2081,7 @@
             "string",
             "integer"
           ],
-          "description": "The work assistant: its name, uid or id (bot_list)."
+          "description": "The assistant: its name, uid or id (bot_list)."
         },
         "name": {
           "type": "string",
@@ -2147,10 +2147,27 @@
           "type": "boolean",
           "description": "Hidden from the roster; it still runs."
         },
+        "persona": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "The new first paragraph of its persona: who it is and what work is for it, concretely; what it does not do when it could be mistaken for another's. Plain lines, no heading."
+        },
+        "work_agent": {
+          "type": "object",
+          "description": "The agent its work runs on: {agent_type, options: {option id: value}}; what you leave out is filled in.",
+          "properties": {
+            "agent_type": {
+              "type": "string"
+            },
+            "options": {
+              "type": "object"
+            }
+          }
+        },
         "quote": {
           "type": "string",
           "maxLength": 1000,
-          "description": "The owner's own words this change follows. Required unless `suggest`."
+          "description": "The owner's own words this change follows, as they typed them this turn. Required unless `suggest`."
         },
         "reason": {
           "type": "string",

@@ -1561,6 +1561,8 @@ pub async fn personal_agent_bot_create_core(
     let engine = engine(None).await?;
     let mut spec = BotSpec::named(draft.name);
     spec.uid = draft.uid;
+    // What the owner wrote in the dialog is what it introduces itself on.
+    spec.intro.words = draft.persona.clone();
     spec.persona = draft.persona;
     spec.avatar = draft.avatar;
     spec.locale = draft.locale;

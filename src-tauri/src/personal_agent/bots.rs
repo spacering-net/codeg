@@ -77,6 +77,26 @@ pub struct BotSpec {
     pub settings: Option<PersonalAgentSettings>,
     pub files: Option<(String, String)>,
     pub notify: bool,
+    /// What its introduction carries (§1.3, D7).
+    pub intro: Intro,
+}
+
+/// What a new work assistant's introduction carries: the words it was made
+/// on — the persona the owner wrote in the dialog, or their own words the
+/// assistant that made it quoted, checked to be what they typed — and the
+/// one it was copied from.
+#[derive(Debug, Clone, Default)]
+pub struct Intro {
+    pub words: Option<String>,
+    pub copied_from: Option<String>,
+}
+
+/// The event that wakes a new work assistant to introduce itself.
+pub const INTRO_EVENT: &str = "intro";
+
+/// Whether an event is a new assistant's introduction.
+pub(super) fn is_intro_event(e: &crate::db::entities::personal_agent_event::Model) -> bool {
+    e.kind == INTRO_EVENT
 }
 
 impl BotSpec {
@@ -96,6 +116,7 @@ impl BotSpec {
             settings: None,
             files: None,
             notify: true,
+            intro: Intro::default(),
         }
     }
 }
@@ -374,7 +395,64 @@ impl PersonalAgentEngine {
         };
         self.emit_for(made.bot.id, PersonalAgentChange::Agent);
         self.emit_for(primary.id, PersonalAgentChange::Agent);
+        self.ask_to_introduce(&made.bot, &spec.intro).await;
         Ok(made)
+    }
+
+    /// Wake a new work assistant once to introduce itself (§1.3, D7): one
+    /// event per assistant, queued as any other — the owner's messages go
+    /// first in the turn that carries it.
+    async fn ask_to_introduce(&self, bot: &agent_entity::Model, intro: &Intro) {
+        let words = intro
+            .words
+            .as_deref()
+            .map(str::trim)
+            .filter(|w| !w.is_empty())
+            .map(|w| w.chars().take(2_000).collect::<String>());
+        let inserted = svc::insert_event(
+            &self.db.conn,
+            bot.id,
+            INTRO_EVENT,
+            INTRO_EVENT,
+            None,
+            "You were just made: introduce yourself to the owner.".into(),
+            Some(json!({ "words": words, "copied_from": intro.copied_from })),
+            true,
+        )
+        .await;
+        match inserted {
+            Ok(true) => {
+                if let Some(host) = self.host_ref() {
+                    if let Some(engine) = host.engine_for(Some(bot.id)).await {
+                        engine.nudge();
+                    }
+                }
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!(
+                "[personal-agent] {} was not asked to introduce itself: {e}",
+                display_name(bot)
+            ),
+        }
+    }
+
+    /// What a new assistant's introduction hands over: what it was made on,
+    /// and what to do (§1.3).
+    pub(super) async fn intro_block(&self, e: &crate::db::entities::personal_agent_event::Model) -> String {
+        let payload: Value = e
+            .payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str(p).ok())
+            .unwrap_or(Value::Null);
+        let soul = match self.agent_row().await {
+            Some(row) => workdir::read_text(&self.workdir_of(&row), workdir::SOUL_FILE),
+            None => String::new(),
+        };
+        super::cards::intro_text(&super::cards::IntroInput {
+            words: payload["words"].as_str(),
+            copied_from: payload["copied_from"].as_str(),
+            unwritten: super::templates::persona_unwritten(&soul),
+        })
     }
 
     /// An executor config's name not taken yet: `name`, or `name (2)`…
@@ -510,6 +588,13 @@ impl PersonalAgentEngine {
             .map(|k| k.trim().to_ascii_uppercase())
             .filter(|k| !k.is_empty());
         let other_key = ((b'A' + options.len() as u8) as char).to_string();
+        // Their own answer is theirs as typed; a choice's words are the
+        // assistant's.
+        let origin = if matches!((picked.as_deref(), own), (Some(k), _) if k != other_key) {
+            super::engine::Origin::Written
+        } else {
+            super::engine::Origin::Typed
+        };
         let (answer, message) = match (picked.as_deref(), own) {
             (Some(k), _) if k != other_key => {
                 let opt = options
@@ -559,7 +644,7 @@ impl PersonalAgentEngine {
             .await
             .map_err(|e| e.to_string())?;
         if let Err(e) = self
-            .send_owner_message(message, Vec::new(), Some(row_id))
+            .queue_owner_message(message, Vec::new(), Some(row_id), origin, None, None)
             .await
         {
             // Not taken: the card stays to answer.
@@ -630,6 +715,7 @@ impl PersonalAgentEngine {
             workdir::read_text(&dir, workdir::RULES_FILE),
         ));
         spec.notify = src.notify;
+        spec.intro.copied_from = Some(display_name(&src));
         self.create_bot(spec).await
     }
 
@@ -965,7 +1051,7 @@ impl PersonalAgentEngine {
         why: &str,
         made: &[Made],
         pending: Option<Value>,
-        quote: Option<String>,
+        quoted: super::prefs::Quoted,
         reason: Option<String>,
     ) -> Result<i32, String> {
         let bots: Vec<Value> = made.iter().map(made_json).collect();
@@ -1006,7 +1092,8 @@ impl PersonalAgentEngine {
             "why": why,
             "bots": bots,
             "pending": pending,
-            "quote": quote,
+            "quote": quoted.quote,
+            "unchecked_quote": quoted.unchecked,
             "reason": reason,
         }));
         let (notice, card) = svc::create_notice_with_row(
@@ -1163,7 +1250,9 @@ impl PersonalAgentEngine {
                 {
                     return Err("this card was answered already".into());
                 }
-                match self.create_from_call(&pending).await {
+                // What it was made on is the card the owner accepted — its
+                // persona — never words not checked to be theirs.
+                match self.create_from_call(&pending, None).await {
                     Ok(m) => {
                         let _ = svc::move_notice(
                             &self.db.conn,
@@ -1375,20 +1464,36 @@ impl PersonalAgentEngine {
                 return ToolOutcome::refused(e);
             }
         }
+        // The owner's words as they typed them this turn make it at once;
+        // words not found there go on a card for them to confirm first.
+        let unverified = match quote.as_deref() {
+            Some(q) if !suggest => !self.owner_typed_it(q).await,
+            _ => false,
+        };
         let why = if suggest {
             "suggest"
-        } else if self.prefs().await.chat_changes
-            == crate::models::personal_agent_prefs::ChatChanges::Show
+        } else if unverified
+            || self.prefs().await.chat_changes
+                == crate::models::personal_agent_prefs::ChatChanges::Show
         {
             "show"
         } else {
             "asked"
         };
         let outcome = if why == "asked" {
-            match self.create_from_call(&call).await {
+            match self.create_from_call(&call, quote.clone()).await {
                 Ok(m) => {
                     let card = match self
-                        .raise_bots_card("asked", std::slice::from_ref(&m), None, quote, None)
+                        .raise_bots_card(
+                            "asked",
+                            std::slice::from_ref(&m),
+                            None,
+                            super::prefs::Quoted {
+                                quote: quote.clone(),
+                                unchecked: None,
+                            },
+                            None,
+                        )
                         .await
                     {
                         Ok(id) => id,
@@ -1434,12 +1539,37 @@ impl PersonalAgentEngine {
                     return ToolOutcome::refused(refusal);
                 }
             }
+            // Words not found in what the owner typed — or a suggestion's,
+            // never checked — are never shown as theirs: not on the card,
+            // nor in the call it keeps.
+            let mut pending = call.clone();
+            let quoted = if unverified || suggest {
+                if let Some(map) = pending.as_object_mut() {
+                    map.remove("quote");
+                }
+                super::prefs::Quoted {
+                    quote: None,
+                    unchecked: quote.clone(),
+                }
+            } else {
+                super::prefs::Quoted {
+                    quote: quote.clone(),
+                    unchecked: None,
+                }
+            };
             match self
-                .raise_bots_card(why, &[], Some(call.clone()), quote, reason)
+                .raise_bots_card(why, &[], Some(pending), quoted, reason)
                 .await
             {
                 Ok(id) => ToolOutcome::ok(
-                    if why == "show" {
+                    if unverified {
+                        format!(
+                            "On a card for the owner to confirm first: make the work assistant \
+                             \"{name}\". Your `quote` is not in what the owner typed this turn, so \
+                             it does not make one by itself. Nothing is made yet; you will hear how \
+                             they answered."
+                        )
+                    } else if why == "show" {
                         format!(
                             "On a card for the owner to confirm first (they asked to see such changes \
                              first): make the work assistant \"{name}\". Nothing is made yet; you will \
@@ -1509,8 +1639,12 @@ impl PersonalAgentEngine {
     }
 
     /// Make a work assistant from a `bot_create` call as made.
-    pub(super) async fn create_from_call(&self, call: &Value) -> Result<Made, CreateError> {
-        self.create_from_call_as(call, None).await
+    pub(super) async fn create_from_call(
+        &self,
+        call: &Value,
+        words: Option<String>,
+    ) -> Result<Made, CreateError> {
+        self.create_from_call_as(call, None, words).await
     }
 
     /// [`Self::create_from_call`], under a uid chosen beforehand (a team's
@@ -1519,11 +1653,13 @@ impl PersonalAgentEngine {
         &self,
         call: &Value,
         uid: Option<String>,
+        words: Option<String>,
     ) -> Result<Made, CreateError> {
         let refused = CreateError::Refused;
         let s = |k: &str| call.get(k).and_then(|v| v.as_str()).map(str::to_string);
         let mut spec = BotSpec::named(s("name").unwrap_or_default());
         spec.uid = uid;
+        spec.intro.words = words;
         spec.persona = s("persona");
         if let (Some(shape), Some(color)) = (s("shape"), s("color")) {
             spec.avatar = Some(BotAvatar::Face { shape, color });
