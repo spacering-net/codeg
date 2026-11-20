@@ -64,8 +64,22 @@
       "browser": "Uso del navegador",
       "computer_use": "Uso del ordenador",
       "quick_messages": "Mensajes rápidos",
-      "logs": "Registros de ejecución"
+      "logs": "Registros de ejecución",
+      "plugins": "Complementos"
     }
+  },
+  "HostPlugins": {
+    "title": "Complementos",
+    "import": "Importar manifiesto",
+    "fileTooLarge": "El manifiesto del complemento supera los 64 KiB.",
+    "empty": "No hay complementos instalados.",
+    "loading": "Cargando…",
+    "unsupported": "Actualiza el host de Codeg conectado para gestionar complementos.",
+    "retry": "Reintentar",
+    "enable": "Activar {name}",
+    "remove": "Eliminar {name}",
+    "choosePanel": "Panel del complemento",
+    "noTurns": "No hay turnos registrados en este espacio de trabajo."
   },
   "AppearanceSettings": {
     "sectionTitle": "Apariencia del tema",
