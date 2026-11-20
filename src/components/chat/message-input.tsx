@@ -46,7 +46,6 @@ import {
 } from "@/components/ui/context-menu"
 import { cn, copyTextFromMenu } from "@/lib/utils"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
-import { useIsMobile } from "@/hooks/use-mobile"
 import { useIsCoarsePointer } from "@/hooks/use-is-coarse-pointer"
 import { useHistorySwipe } from "@/hooks/use-history-swipe"
 import { imageFilesFromClipboardApi } from "@/lib/clipboard-images"
@@ -387,7 +386,6 @@ export function MessageInput({
   tall = false,
 }: MessageInputProps) {
   const t = useTranslations("Folder.chat.messageInput")
-  const isMobile = useIsMobile()
   const isCoarsePointer = useIsCoarsePointer()
   const tQueue = useTranslations("Folder.chat.messageQueue")
   // Kept as a separate binding from `t` so its call sites — exclusively
