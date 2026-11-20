@@ -64,8 +64,36 @@
       "browser": "Utilisation du navigateur",
       "computer_use": "Utilisation de l'ordinateur",
       "quick_messages": "Messages rapides",
-      "logs": "Journaux d'exécution"
+      "logs": "Journaux d'exécution",
+      "plugins": "Extensions"
     }
+  },
+  "HostPlugins": {
+    "update": "Mettre à jour {name}",
+    "updated": "{name} a été mis à jour vers la version {version}.",
+    "upToDate": "Aucun changement pour {name}.",
+    "add": "Ajouter une extension",
+    "sourceDescription": "Saisissez un paquet npm, un dépôt GitHub ou un chemin de dossier absolu sur l’hôte connecté.",
+    "source": "Source de l’extension",
+    "registry": "Registre npm",
+    "mirror": "Miroir chinois",
+    "sourceHint": "Codeg installe le manifeste codeg-plugin.json. L’extension est désactivée par défaut.",
+    "trustWarning": "Cette extension s’exécute sur l’hôte connecté avec les permissions de l’utilisateur actuel. Elle peut lire ou modifier les fichiers et données accessibles à cet hôte. Installez uniquement des sources fiables.",
+    "sourceUnsupported": "Mettez à jour l’hôte Codeg connecté pour installer depuis une source.",
+    "cancel": "Annuler",
+    "install": "Installer",
+    "installing": "Installation…",
+    "title": "Extensions",
+    "import": "Importer un manifeste",
+    "fileTooLarge": "Le manifeste de l’extension dépasse 64 Kio.",
+    "empty": "Aucune extension installée.",
+    "loading": "Chargement…",
+    "unsupported": "Mettez à jour l’hôte Codeg connecté pour gérer les extensions.",
+    "retry": "Réessayer",
+    "enable": "Activer {name}",
+    "remove": "Supprimer {name}",
+    "choosePanel": "Panneau de l’extension",
+    "noTurns": "Aucun tour enregistré dans cet espace de travail."
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",
