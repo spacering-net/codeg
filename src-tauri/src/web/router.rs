@@ -925,8 +925,8 @@ pub fn build_router_with_srn(
             post(handlers::folder_commands::reorder_folder_commands),
         )
         .route(
-            "/bootstrap_folder_commands_from_package_json",
-            post(handlers::folder_commands::bootstrap_folder_commands_from_package_json),
+            "/sync_folder_commands_from_package_json",
+            post(handlers::folder_commands::sync_folder_commands_from_package_json),
         )
         // ─── MCP ───
         .route("/mcp_scan_local", post(handlers::mcp::mcp_scan_local))

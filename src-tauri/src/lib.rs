@@ -2289,7 +2289,7 @@ mod tauri_app {
                 folder_commands::update_folder_command,
                 folder_commands::delete_folder_command,
                 folder_commands::reorder_folder_commands,
-                folder_commands::bootstrap_folder_commands_from_package_json,
+                folder_commands::sync_folder_commands_from_package_json,
                 local_command::run_local_command,
                 quick_messages_commands::quick_messages_list,
                 quick_messages_commands::quick_messages_create,

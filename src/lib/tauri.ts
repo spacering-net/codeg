@@ -1158,11 +1158,11 @@ export async function reorderFolderCommands(
   return invoke("reorder_folder_commands", { folderId, ids })
 }
 
-export async function bootstrapFolderCommandsFromPackageJson(
+export async function syncFolderCommandsFromPackageJson(
   folderId: number,
   folderPath: string
 ): Promise<FolderCommand[]> {
-  return invoke("bootstrap_folder_commands_from_package_json", {
+  return invoke("sync_folder_commands_from_package_json", {
     folderId,
     folderPath,
   })
