@@ -197,6 +197,10 @@ struct ActiveTurn {
     owner_row_ids: Vec<i32>,
     compaction: Option<CompactionRun>,
     carried: Carried,
+    /// The team list this delivery carried (its digest): the session's once
+    /// the turn completes, not before — one that never reached the agent is
+    /// carried again.
+    team_digest: Option<String>,
     /// The agent reported a full context during the turn.
     overflow: bool,
     /// The last (non-terminal) error reported during the turn.
@@ -538,8 +542,8 @@ impl PersonalAgentEngine {
             .await
             .unwrap()
             .expect("an open segment");
-        let workdir = self.workdir_of(&row);
-        self.handoff_card(&row, &config, &seg, &workdir, &[], 32_000)
+        let team = super::team::team_text(&self.team().await, row.id);
+        self.handoff_card(&row, &config, &seg, &[], 32_000, &team)
             .await
             .text
     }
@@ -612,6 +616,7 @@ impl PersonalAgentEngine {
                 state_card,
                 ..Default::default()
             },
+            team_digest: None,
             overflow: false,
             error: None,
             usage_after: None,
@@ -658,6 +663,7 @@ impl PersonalAgentEngine {
             owner_row_ids: Vec::new(),
             compaction: None,
             carried: Carried::default(),
+            team_digest: None,
             overflow: false,
             error: None,
             usage_after: None,
@@ -2607,6 +2613,7 @@ impl PersonalAgentEngine {
                 owner_row_ids: Vec::new(),
                 compaction: None,
                 carried: Carried::default(),
+                team_digest: None,
                 overflow: false,
                 error: None,
                 usage_after: None,
@@ -2803,6 +2810,7 @@ impl PersonalAgentEngine {
                     notes,
                 }),
                 carried: Carried::default(),
+                team_digest: None,
                 overflow: false,
                 error: None,
                 usage_after: None,
@@ -3049,9 +3057,21 @@ impl PersonalAgentEngine {
         let mut carried = Carried::default();
         let mut owner_given = false;
         let items = self.item_lines().await;
+        // The team, as this delivery gives it, and what it is to this
+        // assistant.
+        let members = self.team().await;
+        let team_text = super::team::team_text(&members, row.id);
+        let team_digest = super::team::team_digest(&members, row.id);
         if seg_state.handoff_pending {
             let card = self
-                .handoff_card(row, &config, &session.segment, &workdir, &items, settings.handoff_budget_chars)
+                .handoff_card(
+                    row,
+                    &config,
+                    &session.segment,
+                    &items,
+                    settings.handoff_budget_chars,
+                    &team_text,
+                )
                 .await;
             let size = card.text.chars().count() as i32;
             let _ = svc::set_segment_handoff_size(&self.db.conn, session.segment.id, size).await;
@@ -3075,7 +3095,7 @@ impl PersonalAgentEngine {
                 memory: &memory,
                 worker: owner.is_some(),
             };
-            cards_text.push(cards::state_card(&identity, &items));
+            cards_text.push(cards::state_card(&identity, &items, &team_text));
             carried.state_card = true;
             owner_given = true;
         } else if seg_state.persona_resend || session.segment.persona_digest.as_deref() != Some(&digest)
@@ -3086,6 +3106,14 @@ impl PersonalAgentEngine {
                 cards_text.push(cards::persona_update(&row.name, &soul, &rules));
                 carried.persona = true;
             }
+        }
+        // The team changed since this session was last given it: the list
+        // anew, whole. (A handoff and a state card carry it.)
+        let team_given = carried.handoff
+            || carried.state_card
+            || session.segment.team_digest.as_deref() != Some(team_digest.as_str());
+        if team_given && !carried.handoff && !carried.state_card {
+            cards_text.push(super::team::team_update(&team_text));
         }
         // The primary changed the owner's profile since this worker last got
         // it: the new one, whole.
@@ -3461,6 +3489,7 @@ impl PersonalAgentEngine {
                 owner_row_ids: owner_ids.clone(),
                 compaction: None,
                 carried,
+                team_digest: team_given.then(|| team_digest.clone()),
                 overflow: false,
                 error: None,
                 usage_after: None,
@@ -3655,10 +3684,11 @@ impl PersonalAgentEngine {
         row: &agent_entity::Model,
         config: &AssistantAgentConfig,
         seg: &segment_entity::Model,
-        workdir: &std::path::Path,
         items: &[ItemLine],
         budget: u32,
+        team: &str,
     ) -> cards::Card {
+        let workdir = &self.workdir_of(row);
         let recent_rows = svc::recent_rows(
             &self.db.conn,
             self.bot().await,
@@ -3738,6 +3768,7 @@ impl PersonalAgentEngine {
             items,
             recent: &recent,
             own_work: own_work.as_deref(),
+            team,
             budget_chars: budget as usize,
             cards: self.prefs().await.cards,
             skill: settings_of(row).skill_enabled
@@ -3885,6 +3916,12 @@ impl PersonalAgentEngine {
             }
         }
 
+        // A team list it carried and did not see through: what the agent
+        // holds of the team is not known now — the next delivery gives it
+        // whole, whatever the team is by then.
+        if turn.team_digest.is_some() && (interrupted || turn.agent_compacted) {
+            let _ = svc::set_segment_team_digest(&self.db.conn, turn.segment_id, None).await;
+        }
         if interrupted {
             let _ = svc::finish_batch(
                 &self.db.conn,
@@ -3970,6 +4007,11 @@ impl PersonalAgentEngine {
             // state card anew.
             let carried = turn.carried;
             let kept = !turn.agent_compacted;
+            // The team list it carried is the session's now (kept, as the
+            // cards it rode with are).
+            if let (Some(d), true) = (turn.team_digest.clone(), kept) {
+                let _ = svc::set_segment_team_digest(&self.db.conn, turn.segment_id, Some(d)).await;
+            }
             self.update_segment_state(turn.segment_id, |s| {
                 if carried.handoff {
                     s.handoff_pending = false;

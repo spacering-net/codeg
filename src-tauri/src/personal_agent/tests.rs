@@ -985,6 +985,207 @@ async fn a_dispatch_waiting_on_a_permission_says_so_and_runs_on_once_answered() 
     assert_eq!(dispatch_state(&engine, id).await.state, DispatchState::Completed);
 }
 
+/// One delivery of an owner's message, answered and done: what it sent.
+async fn delivered_round(
+    engine: &Arc<PersonalAgentEngine>,
+    rx: &mut tokio::sync::mpsc::Receiver<ConnectionCommand>,
+    state: &State,
+    conn: &str,
+    text: &str,
+) -> String {
+    engine
+        .send_owner_message(text.into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (prompt, token) = take_prompt(rx);
+    start_prompt(state, Some(&token)).await;
+    emit(engine, state, conn, turn_complete("end_turn"), true).await;
+    prompt
+}
+
+/// The team comes with the handoff (or, a session given none, the first
+/// delivery); a delivery after it changed — another
+/// assistant made, renamed, hidden, its persona written — carries it anew,
+/// whole; its own persona changing is no team change.
+#[tokio::test]
+async fn the_team_comes_with_the_handoff_and_again_whole_once_it_changes() {
+    let (engine, tmp) = ready().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-team").await;
+    let first = delivered_round(&engine, &mut rx, &state, "pa-team", "hi").await;
+    let me = engine.bot().await;
+    // A session given no team yet (its handoff carries one: cards.rs) is
+    // given it whole.
+    assert!(first.contains("kind=\"team-update\""), "{first}");
+    assert!(first.contains(&format!("- #{me} ")) && first.contains(" (you) — "), "{first}");
+    // Nothing changed: nothing more.
+    let same = delivered_round(&engine, &mut rx, &state, "pa-team", "and?").await;
+    assert!(!same.contains("team-update"), "{same}");
+    // A work assistant made: the team anew, it marked as not written yet.
+    let made = engine.create_bot(BotSpec::named("Dev")).await.unwrap();
+    let grown = delivered_round(&engine, &mut rx, &state, "pa-team", "ok").await;
+    assert!(grown.contains("kind=\"team-update\""), "{grown}");
+    assert!(
+        grown.contains(&format!("- #{} Dev — (persona not written yet)", made.bot.id)),
+        "{grown}"
+    );
+    // Its persona written: the head, from the first line as it is.
+    let dir = workdir::workdir_of_bot(tmp.path(), &made.bot);
+    std::fs::write(dir.join(workdir::SOUL_FILE), "# Persona\n\nYou fix CI.\n").unwrap();
+    let written = delivered_round(&engine, &mut rx, &state, "pa-team", "and now?").await;
+    assert!(
+        written.contains(&format!("- #{} Dev — # Persona You fix CI.", made.bot.id)),
+        "{written}"
+    );
+    // Its own persona changing is the persona update's, not the team's.
+    engine.save_file(workdir::SOUL_FILE, "# Persona\n\nTerse.\n").await.unwrap();
+    let own = delivered_round(&engine, &mut rx, &state, "pa-team", "fine").await;
+    assert!(!own.contains("team-update"), "{own}");
+    // The work assistant's view of the team names the primary, not itself
+    // twice.
+    let members = engine.team().await;
+    let text = super::team::team_text(&members, made.bot.id);
+    assert!(text.contains(&format!("- #{} Dev (you) — # Persona You fix CI.", made.bot.id)), "{text}");
+    assert!(text.contains(&format!("- #{me} ")), "{text}");
+}
+
+/// A team list whose turn never completed (the connection went away) is
+/// not the session's: the next delivery carries it again.
+#[tokio::test]
+async fn a_team_update_whose_turn_never_completed_is_carried_again() {
+    let (engine, _tmp) = ready().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-tl1").await;
+    delivered_round(&engine, &mut rx, &state, "pa-tl1", "hi").await;
+    engine.create_bot(BotSpec::named("Dev")).await.unwrap();
+    engine
+        .send_owner_message("who is on the team?".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains("kind=\"team-update\""), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(
+        &engine,
+        &state,
+        "pa-tl1",
+        AcpEvent::StatusChanged {
+            status: ConnectionStatus::Disconnected,
+        },
+        true,
+    )
+    .await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-tl2").await;
+    let again = delivered_round(&engine, &mut rx, &state, "pa-tl2", "again?").await;
+    assert!(again.contains("kind=\"team-update\""), "{again}");
+    // Completed now: no more.
+    let after = delivered_round(&engine, &mut rx, &state, "pa-tl2", "thanks").await;
+    assert!(!after.contains("team-update"), "{after}");
+
+    // A turn that carried a changed team and was cut short, the team then
+    // back as it was before: the agent may have seen the change, so the
+    // team as it is comes again.
+    let other = engine.create_bot(BotSpec::named("QA")).await.unwrap();
+    engine
+        .send_owner_message("and now?".into(), Vec::new(), None)
+        .await
+        .unwrap();
+    engine.pump().await;
+    let (prompt, token) = take_prompt(&mut rx);
+    assert!(prompt.contains("QA"), "{prompt}");
+    start_prompt(&state, Some(&token)).await;
+    emit(
+        &engine,
+        &state,
+        "pa-tl2",
+        AcpEvent::StatusChanged {
+            status: ConnectionStatus::Disconnected,
+        },
+        true,
+    )
+    .await;
+    engine
+        .delete_bot(
+            other.bot.id,
+            &BotDeleteOptions::default(),
+            None,
+        )
+        .await
+        .unwrap();
+    let (mut rx, state) = live_connection(&engine, seg, "pa-tl3").await;
+    let back = delivered_round(&engine, &mut rx, &state, "pa-tl3", "who now?").await;
+    assert!(back.contains("kind=\"team-update\""), "{back}");
+    assert!(!back.contains("QA"), "{back}");
+}
+
+/// `bot_list`: each one's persona head from its first line, what it works
+/// with (or that it cannot work yet), and the last work it got done.
+#[tokio::test]
+async fn bot_list_reads_each_persona_from_its_first_line_with_what_it_works_with_and_did() {
+    let (engine, tmp) = ready().await;
+    let made = engine.create_bot(BotSpec::named("Dev")).await.unwrap();
+    let dir = workdir::workdir_of_bot(tmp.path(), &made.bot);
+    let out = call_tool(&engine, "bot_list", json!({})).await;
+    assert!(out.ok, "{}", out.text);
+    assert!(out.text.contains("Dev — (persona not written yet)"), "{}", out.text);
+    assert!(out.text.contains("cannot do work itself yet"), "the primary has none bound: {}", out.text);
+    assert!(!out.text.contains("executor"), "no executor config named: {}", out.text);
+    std::fs::write(dir.join(workdir::SOUL_FILE), "# Persona\n\nYou fix CI.\nNot releases.\n").unwrap();
+    let worker = engine_of(&engine, &tmp, made.bot.id);
+    let d = session_dispatch(&worker, DispatchState::Completed, "c-done").await;
+    let out = call_tool(&engine, "bot_list", json!({})).await;
+    assert!(out.text.contains("Dev — # Persona You fix CI. Not releases."), "{}", out.text);
+    assert!(out.text.contains("works with "), "{}", out.text);
+    assert!(out.text.contains("done lately: \"Investigate\""), "{}", out.text);
+    let line = out.data["assistants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == made.bot.id)
+        .unwrap()
+        .clone();
+    assert_eq!(line["persona_unwritten"], false);
+    assert_eq!(line["done_lately"][0]["dispatch_id"], d);
+    // The last finished first, whatever order they went out in; codeg's own
+    // checks, however many and however new, are none of it.
+    use sea_orm::{ActiveModelTrait, Set};
+    let finish = |id: i32, mins_ago: i64, check: bool| {
+        let engine = engine.clone();
+        async move {
+            let row = svc::get_dispatch(&engine.db.conn, id).await.unwrap().unwrap();
+            let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = row.into();
+            am.state = Set(DispatchState::Completed);
+            am.is_check = Set(check);
+            am.finished_at = Set(Some(chrono::Utc::now() - chrono::Duration::minutes(mins_ago)));
+            am.update(&engine.db.conn).await.unwrap();
+        }
+    };
+    finish(d, 5, false).await;
+    let newer = session_dispatch(&worker, DispatchState::Completed, "c-newer").await;
+    finish(newer, 60, false).await;
+    for i in 0..15 {
+        let c = session_dispatch(&worker, DispatchState::Completed, &format!("c-check{i}")).await;
+        finish(c, 1, true).await;
+    }
+    let out = call_tool(&engine, "bot_list", json!({})).await;
+    let line = out.data["assistants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == made.bot.id)
+        .unwrap()
+        .clone();
+    let ids: Vec<i64> = line["done_lately"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["dispatch_id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids, vec![d as i64, newer as i64], "{line}");
+}
+
 #[tokio::test]
 async fn saving_the_persona_on_the_page_owes_the_agent_an_update() {
     let (engine, _tmp) = configured().await;
@@ -3487,7 +3688,7 @@ async fn a_worker_is_given_the_primarys_owner_profile_and_cannot_write_it() {
         memory: "",
         worker: true,
     };
-    let state = super::cards::state_card(&id, &[]);
+    let state = super::cards::state_card(&id, &[], "");
     assert!(state.contains("kept by the primary assistant"));
     assert!(state.contains("<codeg-owner>"));
 }

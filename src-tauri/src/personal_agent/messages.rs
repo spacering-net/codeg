@@ -1136,16 +1136,6 @@ impl PersonalAgentEngine {
         }
     }
 
-    /// An assistant's role in one line: its persona's first line.
-    pub(super) fn role_line(&self, b: &agent_entity::Model) -> String {
-        let soul = super::workdir::read_text(&self.workdir_of(b), super::workdir::SOUL_FILE);
-        soul.lines()
-            .map(|l| l.trim().trim_start_matches('#').trim())
-            .find(|l| !l.is_empty())
-            .map(|l| first_line(l, 120))
-            .unwrap_or_default()
-    }
-
     // ── loop cards ──────────────────────────────────────────────────────────
 
     /// The owner's answer on a loop card: `accept` lets the exchange go on

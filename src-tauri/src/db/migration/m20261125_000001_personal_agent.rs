@@ -60,6 +60,7 @@ const TABLES: &[&str] = &[
         "compactions_agent" integer NOT NULL DEFAULT 0,
         "auto_compact_paused" boolean NOT NULL DEFAULT FALSE,
         "persona_digest" text NULL,
+        "team_digest" text NULL,
         "state" text NOT NULL DEFAULT '{}',
         "bot_id" integer NULL
     )"#,

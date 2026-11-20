@@ -55,8 +55,16 @@ pub const NO_EXECUTOR: &str = "you cannot start work yourself yet: nothing is se
 /// What an assistant works with, as it reads it: the agent, its mode and
 /// options — never the executor config's name or id.
 pub fn work_words(w: &DispatchExecutorSnapshot) -> String {
-    let Some(l) = &w.label_snapshot else {
-        return w.agent_type.to_string();
+    label_words(w.agent_type, w.label_snapshot.as_ref())
+}
+
+/// An agent and its picked mode and options, in words.
+pub fn label_words(
+    agent_type: crate::models::AgentType,
+    label: Option<&crate::models::AssistantLabelSnapshot>,
+) -> String {
+    let Some(l) = label else {
+        return agent_type.to_string();
     };
     let mut parts = vec![l.agent.clone()];
     parts.extend(l.mode.iter().map(|m| format!("mode {m}")));

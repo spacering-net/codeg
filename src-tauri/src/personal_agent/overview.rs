@@ -584,6 +584,9 @@ fn str_arg<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
         .filter(|s| !s.is_empty())
 }
 
+/// How many pieces of work each assistant's line lists as done lately.
+const RECENT_DONE: u64 = 3;
+
 // ── the tools ───────────────────────────────────────────────────────────────
 
 impl PersonalAgentEngine {
@@ -598,19 +601,41 @@ impl PersonalAgentEngine {
         // How each one's handed-out work went lately (5.1).
         let (grades, _) = super::profile::grades(&self.db, Utc::now()).await;
         for (row, live, needs) in all {
-            let role = self.role_line(row);
+            // Its persona's head, from the first line of its SOUL.md as it is.
+            let soul = super::workdir::read_text(&self.workdir_of(row), super::workdir::SOUL_FILE);
+            let unwritten = super::team::unwritten(row.kind, &soul);
+            let persona = super::team::persona_head(&soul, super::team::HEAD_LIST_CHARS);
             let you = if row.id == me { " (you)" } else { "" };
             let hidden = if row.hidden { " (hidden)" } else { "" };
+            let about = if unwritten {
+                "(persona not written yet)".to_string()
+            } else {
+                persona.clone()
+            };
             let mut parts = vec![format!(
                 "#{} {}{you}{hidden}{}",
                 row.id,
                 display_name(row),
-                if role.is_empty() {
+                if about.is_empty() {
                     String::new()
                 } else {
-                    format!(" — {role}")
+                    format!(" — {about}")
                 }
             )];
+            // What it works with when it does a thing itself — never the
+            // executor config itself.
+            let works_with = match row.executor_assistant_id {
+                Some(id) => crate::db::service::assistant_service::get_live_enabled(&self.db.conn, id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|a| super::dispatch::label_words(a.agent_type, Some(&a.label_snapshot))),
+                None => None,
+            };
+            parts.push(match &works_with {
+                Some(w) => format!("works with {w}"),
+                None => "cannot do work itself yet".into(),
+            });
             let busy = live.work == WorkState::Busy;
             let state = match (&live.activity, busy) {
                 (Some(a), true) => format!("working: {}", activity_phrase(a)),
@@ -652,12 +677,33 @@ impl PersonalAgentEngine {
             if let Some(g) = grades.get(&row.id).and_then(super::profile::grade_words) {
                 parts.push(format!("its handed-out work: {g}"));
             }
+            // What it did lately, as codeg recorded it: the last pieces of
+            // its own work that were done (codeg's checks left out).
+            let done = svc::recent_done(&self.db.conn, row.id, RECENT_DONE)
+                .await
+                .unwrap_or_default();
+            let now = Utc::now();
+            if !done.is_empty() {
+                let lines: Vec<String> = done
+                    .iter()
+                    .map(|d| {
+                        format!(
+                            "{} ({} ago)",
+                            quoted(&d.title),
+                            ago(d.finished_at.unwrap_or(d.updated_at), now)
+                        )
+                    })
+                    .collect();
+                parts.push(format!("done lately: {}", lines.join(", ")));
+            }
             text.push(parts.join(" · "));
             data.push(json!({
                 "id": row.id,
                 "name": row.name,
                 "kind": row.kind,
-                "role": role,
+                "persona": persona,
+                "persona_unwritten": unwritten,
+                "works_with": works_with,
                 "hidden": row.hidden,
                 "you": row.id == me,
                 "work": live.work,
@@ -675,6 +721,10 @@ impl PersonalAgentEngine {
                 "unread": live.unread,
                 "activity_known": live.activity_known,
                 "grade": grades.get(&row.id),
+                "done_lately": done.iter().map(|d| json!({
+                    "dispatch_id": d.id, "title": d.title, "mode": d.mode,
+                    "finished_at": d.finished_at.unwrap_or(d.updated_at),
+                })).collect::<Vec<_>>(),
             }));
         }
         (text, data)

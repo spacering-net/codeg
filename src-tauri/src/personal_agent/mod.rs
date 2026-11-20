@@ -63,6 +63,7 @@ pub mod routines;
 pub mod rules;
 pub mod skills;
 pub mod starter;
+pub mod team;
 pub mod team_edit;
 pub mod templates;
 pub mod tidy;

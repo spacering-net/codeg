@@ -64,6 +64,9 @@ pub struct Model {
     pub auto_compact_paused: bool,
     #[sea_orm(column_type = "Text", nullable)]
     pub persona_digest: Option<String>,
+    /// The team as this session was last given it (`team::team_digest`).
+    #[sea_orm(column_type = "Text", nullable)]
+    pub team_digest: Option<String>,
     /// JSON `SegmentState`.
     #[sea_orm(column_type = "Text")]
     pub state: String,

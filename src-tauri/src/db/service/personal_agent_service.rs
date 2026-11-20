@@ -555,6 +555,7 @@ pub async fn create_segment(
         compactions_agent: Set(0),
         auto_compact_paused: Set(false),
         persona_digest: Set(None),
+        team_digest: Set(None),
         state: Set("{}".to_string()),
         bot_id: Set(Some(bot)),
     };
@@ -659,6 +660,19 @@ pub async fn set_segment_persona_digest(
 ) -> Result<(), DbError> {
     segment::Entity::update_many()
         .col_expr(segment::Column::PersonaDigest, Expr::value(digest))
+        .filter(segment::Column::Id.eq(id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_segment_team_digest(
+    conn: &DatabaseConnection,
+    id: i32,
+    digest: Option<String>,
+) -> Result<(), DbError> {
+    segment::Entity::update_many()
+        .col_expr(segment::Column::TeamDigest, Expr::value(digest))
         .filter(segment::Column::Id.eq(id))
         .exec(conn)
         .await?;
@@ -3564,6 +3578,27 @@ pub async fn list_dispatches(
         query = query.filter(dispatch::Column::Mode.eq(m));
     }
     Ok(query.limit(limit).all(conn).await?)
+}
+
+/// An assistant's own work that got done, the last finished first (codeg's
+/// checks left out), up to `limit`.
+pub async fn recent_done(
+    conn: &DatabaseConnection,
+    bot: i32,
+    limit: u64,
+) -> Result<Vec<dispatch::Model>, DbError> {
+    Ok(dispatch::Entity::find()
+        .filter(dispatch::Column::BotId.eq(bot))
+        .filter(dispatch::Column::State.eq(DispatchState::Completed))
+        .filter(dispatch::Column::IsCheck.eq(false))
+        .order_by(
+            Expr::cust(r#"COALESCE("finished_at", "updated_at")"#),
+            sea_orm::Order::Desc,
+        )
+        .order_by_desc(dispatch::Column::Id)
+        .limit(limit)
+        .all(conn)
+        .await?)
 }
 
 /// Every assistant's dispatches, newest first, up to `limit`.
