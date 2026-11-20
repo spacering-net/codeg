@@ -515,8 +515,8 @@ describe("Folder-tabs scope repairs", () => {
     expect(
       useTabStore.getState().rawTabs.find((tab) => tab.id === draftA)
     ).toMatchObject({ isChat: true, folderId: 0 })
-    // The chat view's own blank draft would sit beside it: one is enough.
-    expect(draftIds()).toEqual([draftA])
+    // The chat view keeps its own blank draft: both blanks are allowed now.
+    expect(draftIds().sort()).toEqual([draftA, globalDraft].sort())
   })
 
   it("keeps the chat view's own draft when it holds text", () => {
@@ -573,8 +573,8 @@ describe("Folder-tabs scope repairs", () => {
     )
     expect(useFolderTabsStore.getState().scope).toBe(2)
     expect(useTabStore.getState().activeTabId).toBe(draftA)
-    // Folder 2's own blank draft would sit beside it: one is enough.
-    expect(draftIds()).toEqual([draftA])
+    // Folder 2 keeps its own blank draft; the moved one lands beside it.
+    expect(draftIds().sort()).toEqual([draftA, draftB].sort())
   })
 
   async function moveDraftIntoFolder2(
@@ -641,17 +641,17 @@ describe("Folder-tabs scope repairs", () => {
     expect(draftIds().sort()).toEqual([draftA, draftB].sort())
   })
 
-  it("closes the target folder's blank draft even when the user moved on", async () => {
-    const { draftA } = await moveDraftIntoFolder2(
+  it("keeps the target folder's blank draft even when the user moved on", async () => {
+    const { draftA, draftB } = await moveDraftIntoFolder2(
       () => {},
       // Off to another folder before the move lands: nothing follows it.
       () => useFolderTabsStore.getState().activateScope(3)
     )
     expect(useFolderTabsStore.getState().scope).toBe(3)
-    expect(draftIds()).toEqual([draftA])
+    expect(draftIds().sort()).toEqual([draftA, draftB].sort())
   })
 
-  it("turning the mode off leaves one blank draft per group, plus every draft with text", () => {
+  it("turning the mode off keeps every draft", () => {
     useFolderTabsStore.getState().setEnabled(true)
     useFolderTabsStore.getState().activateScope(1)
     const draftA = useTabStore
@@ -663,12 +663,14 @@ describe("Folder-tabs scope repairs", () => {
       .openNewConversationTab(2, "/repo2").tabId
     typeInto(draftB)
     useFolderTabsStore.getState().activateScope(3)
-    useTabStore.getState().openNewConversationTab(3, "/repo3")
+    const draft3 = useTabStore
+      .getState()
+      .openNewConversationTab(3, "/repo3").tabId
     useFolderTabsStore.getState().activateScope(1)
     expect(useTabStore.getState().activeTabId).toBe(draftA)
 
     useFolderTabsStore.getState().setEnabled(false)
-    expect(draftIds().sort()).toEqual([draftA, draftB].sort())
+    expect(draftIds().sort()).toEqual([draftA, draftB, draft3].sort())
     expect(useTabStore.getState().activeTabId).toBe(draftA)
   })
 
@@ -688,10 +690,8 @@ describe("Folder-tabs scope repairs", () => {
       .openNewConversationTab(3, "/repo3").tabId
 
     useFolderTabsStore.getState().setEnabled(false)
-    // Both new drafts land in the first group, which keeps the active one;
-    // the split group's own draft is alone in its group and stays.
-    expect(draftIds().sort()).toEqual([splitDraft, draft3].sort())
-    expect(draftIds()).not.toContain(draft2)
+    // Every draft survives the merge, in its own group and in the first group.
+    expect(draftIds().sort()).toEqual([splitDraft, draft2, draft3].sort())
   })
 })
 

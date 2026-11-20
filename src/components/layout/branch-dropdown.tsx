@@ -414,7 +414,7 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
       // Return to the conversation workspace if a route (e.g. Automations)
       // was covering the content region, else the new tab opens unseen.
       openConversations()
-      openNewConversationTab(detail.id, detail.path)
+      openNewConversationTab(detail.id, detail.path, { reuseBlankDraft: true })
     })
   }
 

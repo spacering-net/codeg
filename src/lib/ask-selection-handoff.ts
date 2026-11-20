@@ -9,11 +9,11 @@ import type { AgentType } from "@/lib/types"
  * rather than broadcast, for two reasons:
  *  - the target draft tab may still be mounting (a brand-new tab), so an event
  *    alone would fire before anyone is listening — the panel drains on mount;
- *  - each split group reuses ONE draft tab, so the target may equally be mounted
- *    already (inactive tabs stay mounted, hidden) — hence the event as the
- *    already-mounted fast path.
- * Keying by tab id is what keeps a second group's draft panel from swallowing a
- * prompt meant for the first.
+ *  - the open may adopt an existing draft (an auto-seeded blank), so the target
+ *    may equally be mounted already (inactive tabs stay mounted, hidden) —
+ *    hence the event as the already-mounted fast path.
+ * Keying by tab id is what keeps another draft's panel (in the same group or
+ * another) from swallowing a prompt meant for this one.
  */
 
 export const ASK_SELECTION_PARKED_EVENT = "codeg:ask-selection-parked"

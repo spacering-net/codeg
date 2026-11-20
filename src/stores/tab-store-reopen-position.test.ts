@@ -190,10 +190,9 @@ describe("where reopen-last-closed-tab puts the tab back", () => {
     expect(ids()).toEqual([tabId(1), tabId(2), tabId(3), draft])
   })
 
-  // The replacement draft a close-all spawns IS what a reopened draft entry
-  // resolves to (per-group draft singleton), so it has to take the closed
-  // draft's slot — otherwise the strip comes back with the draft shunted to
-  // the end.
+  // The replacement draft a close-all spawns is auto-seeded, so a reopened
+  // draft entry adopts it — and it has to take the closed draft's slot,
+  // otherwise the strip comes back with the draft shunted to the end.
   it("rebuilds a closed-all strip that held a draft", () => {
     seedTabs([conversationTab(1), draftTab("new-1"), conversationTab(3)])
     useTabStore.getState().closeAllTabs()
@@ -203,6 +202,43 @@ describe("where reopen-last-closed-tab puts the tab back", () => {
     reopenLast()
     reopenLast()
     expect(ids()).toEqual([tabId(1), draft, tabId(3)])
+  })
+
+  it("rebuilds a closed-all strip that held two drafts", () => {
+    seedTabs([
+      conversationTab(1),
+      draftTab("new-1"),
+      draftTab("new-2"),
+      conversationTab(4),
+    ])
+    useTabStore.getState().closeAllTabs()
+    const [replacement] = ids()
+
+    reopenLast()
+    reopenLast()
+    reopenLast()
+    reopenLast()
+    const { rawTabs } = useTabStore.getState()
+    // Only one closed draft adopts the replacement; the other gets its own tab
+    // back instead of moving the same replacement a second time.
+    expect(rawTabs.map((tab) => tab.conversationId)).toEqual([1, null, null, 4])
+    expect(ids()).toContain(replacement)
+    expect(new Set(ids()).size).toBe(4)
+  })
+
+  it("reopens a closed draft beside another draft without moving it", () => {
+    seedTabs([conversationTab(1), draftTab("new-1"), draftTab("new-2")])
+    useTabStore.getState().closeTab("new-1")
+    expect(ids()).toEqual([tabId(1), "new-2"])
+
+    reopenLast()
+    const { rawTabs, activeTabId } = useTabStore.getState()
+    // The draft the user opened is not the reopen's to take over: the closed
+    // draft comes back as a tab of its own, at its slot.
+    expect(rawTabs.map((tab) => tab.conversationId)).toEqual([1, null, null])
+    expect(rawTabs[2].id).toBe("new-2")
+    expect(rawTabs[1].id).not.toBe("new-2")
+    expect(activeTabId).toBe(rawTabs[1].id)
   })
 
   it("restores a closed draft at its slot", () => {

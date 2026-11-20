@@ -272,6 +272,8 @@ export interface TabContextValue {
       forceAgent?: TabItem["agentType"]
       /** See the tab store's `openNewConversationTab`. */
       retargetTabId?: string
+      /** See the tab store's `openNewConversationTab`. */
+      reuseBlankDraft?: boolean
     }
   ) => OpenedDraftTarget
   openChatModeTab: (options?: {

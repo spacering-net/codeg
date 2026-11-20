@@ -577,12 +577,12 @@ describe("TabProvider tab state transitions", () => {
     ).toBe(false)
   })
 
-  it("promises the retargeted identity when it reuses the group's draft", () => {
-    // Each group keeps a single draft, so the second open retargets the first
-    // tab rather than adding one — ASYNCHRONOUSLY. Callers that hand work to the
-    // returned tab (the "ask about this selection" hand-off) must be told the
-    // identity it is heading for, not the stale one it still has, or they would
-    // act on the tab while it is still the previous folder's agent.
+  it("promises the retargeted identity when a draft is moved", () => {
+    // A caller that moves a specific draft (`retargetTabId`, the composer's
+    // folder picker) gets that SAME tab retargeted ASYNCHRONOUSLY. Callers that
+    // hand work to the returned tab (the "ask about this selection" hand-off)
+    // must be told the identity it is heading for, not the stale one it still
+    // has, or they would act on the tab while it is still the previous agent.
     renderTabs()
     expect(latestContext).not.toBeNull()
 
@@ -596,6 +596,7 @@ describe("TabProvider tab state transitions", () => {
     act(() => {
       // A different agent — the retarget path, not the plain focus path.
       second = latestContext!.openNewConversationTab(1, "/repo", {
+        retargetTabId: (first as OpenedDraftTarget | null)?.tabId,
         forceAgent: "claude_code",
       })
     })
@@ -610,12 +611,10 @@ describe("TabProvider tab state transitions", () => {
     ).toHaveLength(1)
   })
 
-  it("re-points an existing chat draft at a forced agent", () => {
-    // A chat-mode draft is normally left alone when it is reopened — it keeps
-    // whatever agent it was on, because `inherit` is only a suggestion. A FORCED
-    // agent is not: asking about a selection in a codex chat must not have the
-    // question answered by whichever agent the group's chat draft happened to be
-    // sitting on.
+  it("re-points a chat draft at a forced agent when it is moved", () => {
+    // A moved chat draft is re-pointed instead of spawning a second tab, so an
+    // "ask about this selection" in a codex chat cannot be answered by whichever
+    // agent the draft happened to be sitting on.
     renderTabs()
     expect(latestContext).not.toBeNull()
 
@@ -629,7 +628,10 @@ describe("TabProvider tab state transitions", () => {
 
     let reopened: OpenedDraftTarget | null = null
     act(() => {
-      reopened = latestContext!.openChatModeTab({ forceAgent: "codex" })
+      reopened = latestContext!.openChatModeTab({
+        retargetTabId: chatDraftId,
+        forceAgent: "codex",
+      })
     })
 
     const target = reopened as OpenedDraftTarget | null
@@ -2303,7 +2305,7 @@ describe("TabProvider tab groups", () => {
     })
   })
 
-  it("per-group draft singleton: each group reuses its own draft", async () => {
+  it("adopts a synthesized draft but leaves user-opened drafts alone", async () => {
     await renderWithTabs([tabItem(1, 1, true)])
     const home = leaves()[0]
 
@@ -2313,7 +2315,9 @@ describe("TabProvider tab groups", () => {
     const g1 = newLeafBeside(home)
     const draftInG1 = store().rawTabs.find((t) => t.conversationId == null)!
 
-    // Focused group is g1 (the draft) — reuses that draft, no new tab.
+    // The split's own draft is synthesized, not explicitly requested — the next
+    // new-conversation open in that group adopts it instead of stacking a
+    // second blank beside it.
     act(() => {
       store().openNewConversationTab(1, "/repo")
     })
@@ -2322,13 +2326,54 @@ describe("TabProvider tab groups", () => {
     ).toHaveLength(1)
     expect(store().activeTabId).toBe(draftInG1.id)
 
-    // Explicitly targeting the home group creates a second, per-group draft.
+    // Explicitly targeting the home group adds that group's own draft.
     act(() => {
       store().openNewConversationTab(1, "/repo", { targetGroup: home })
     })
     const drafts = store().rawTabs.filter((t) => t.conversationId == null)
     expect(drafts).toHaveLength(2)
     expect(drafts.map((d) => groupOfId(d.id)).sort()).toEqual([home, g1].sort())
+  })
+
+  it("opens several blank conversations at once in the same group", async () => {
+    await renderWithTabs([tabItem(1, 1, true)])
+    const home = leaves()[0]
+
+    const opened: string[] = []
+    act(() => {
+      for (let i = 0; i < 3; i++) {
+        opened.push(store().openNewConversationTab(1, "/repo").tabId)
+      }
+    })
+
+    const drafts = store().rawTabs.filter((t) => t.conversationId == null)
+    expect(drafts.map((t) => t.id)).toEqual(opened)
+    expect(new Set(opened).size).toBe(3)
+    expect(drafts.every((t) => groupOfId(t.id) === home)).toBe(true)
+    expect(store().activeTabId).toBe(opened[2])
+  })
+
+  it("reuses a blank draft for a navigation open instead of adding one", async () => {
+    await renderWithTabs([tabItem(1, 1, true)])
+
+    let first = ""
+    act(() => {
+      first = store().openNewConversationTab(1, "/repo").tabId
+    })
+    // Switching branch / opening a folder re-runs the open as a side effect:
+    // with `reuseBlankDraft` it lands on the existing blank draft.
+    let second = ""
+    act(() => {
+      second = store().openNewConversationTab(1, "/repo", {
+        reuseBlankDraft: true,
+      }).tabId
+    })
+
+    expect(second).toBe(first)
+    expect(
+      store().rawTabs.filter((t) => t.conversationId == null)
+    ).toHaveLength(1)
+    expect(store().activeTabId).toBe(first)
   })
 
   it("persists the split layout and restores it across a restart", async () => {

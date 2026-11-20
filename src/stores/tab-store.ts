@@ -116,6 +116,15 @@ export interface TabItemInternal {
    * the "no-folder" chip.
    */
   isChat?: boolean
+  /**
+   * Marks a draft the store synthesized only so the workspace would not be
+   * blank (a replacement after the last tab closed, or post-hydration
+   * recovery) — not one the user asked for. A later "new conversation" may
+   * adopt such a draft instead of stacking a second blank beside it; the flag
+   * is cleared the moment it is adopted, so the NEXT explicit open adds a tab.
+   * Internal-only and never persisted.
+   */
+  autoSeeded?: boolean
 }
 
 export type TabItem = TabItemInternal
@@ -284,10 +293,16 @@ export interface TabStoreState {
        *  text came from), not merely suggest one. */
       forceAgent?: AgentType
       /** rawTabs slot for the draft (clamped); omitted = append / leave put.
-       *  Reopening a closed draft passes the slot it was closed from — and
-       *  since the per-group singleton may hand it the group's EXISTING draft
-       *  instead of a new tab, that draft is moved to the slot. */
+       *  Reopening a closed draft passes the slot it was closed from. When the
+       *  open adopts a draft instead of adding one (an auto-seeded blank — the
+       *  replacement a close-all spawned), that draft is moved to the slot so
+       *  a close-all walk-back restores the strip's shape. */
       index?: number
+      /** Adopt ANY blank draft in the target group instead of adding a tab.
+       *  For opens that are a side effect of navigating (switching branch,
+       *  opening a worktree or folder) rather than an explicit "new
+       *  conversation": repeating them must not pile up blank tabs. */
+      reuseBlankDraft?: boolean
       /** Move THIS unbound draft to the folder (the composer's folder picker)
        *  rather than resolving the target group's draft. Matters while tabs
        *  follow the folder, where the target folder may have a draft of its
@@ -522,9 +537,9 @@ function insertTab(
 
 /** `tabs` with the tab already at `tabId` moved to `index` (clamped) — the same
  *  array back when it is absent or already there, so callers can skip the write.
- *  Reopening a closed DRAFT lands here: the per-group draft singleton hands the
- *  reopen an existing draft instead of a new tab, and that draft still has to
- *  take the closed one's slot. */
+ *  Reopening a closed DRAFT can land here: when the reopen adopts the group's
+ *  auto-seeded replacement draft instead of adding a tab, that draft still has
+ *  to take the closed one's slot. */
 function moveTabToSlot(
   tabs: TabItemInternal[],
   tabId: string,
@@ -579,7 +594,9 @@ function permuteSlots(
  *  the `tabs` derivation: an item whose every field matches the previous derive
  *  keeps its old reference, so downstream `Object.is` gates (consumers' memos)
  *  can short-circuit. TabItemInternal is a closed shape — keep this list in sync
- *  when adding fields. */
+ *  when adding fields. `autoSeeded` is deliberately absent: it is store
+ *  bookkeeping that no consumer reads, so a change to it alone must not
+ *  invalidate every derived tab reference. */
 function sameDerivedTab(a: TabItemInternal, b: TabItemInternal): boolean {
   return (
     a.id === b.id &&
@@ -1319,59 +1336,30 @@ function isBlankDraft(tab: TabItemInternal): boolean {
   return loadMessageInputDraftV2(key) == null && !hasLiveComposerContent(key)
 }
 
-/**
- * One draft per group: close the blank drafts that share a group with
- * `keepId` in its own folder view (parked or on screen). While tabs follow
- * the folder, a draft moved into a folder can land beside that folder's own
- * draft; the moved one is what the user is typing in, so it stays. A draft
- * with content is kept too — two drafts beat a lost prompt — and so is the
- * one on screen, which the user may have just switched to.
- */
-function closeBlankDraftsBeside(keepId: string) {
-  const st = useTabStore.getState()
-  const kept = st.rawTabs.find((t) => t.id === keepId)
-  if (!kept || kept.conversationId != null) return
-  const scope = folderScope(kept.folderId)
-  const group = shellGroupOfTab(st, keepId)
-  for (const tab of st.rawTabs) {
-    if (
-      tab.id !== keepId &&
-      tab.id !== st.activeTabId &&
-      isBlankDraft(tab) &&
-      folderScope(tab.folderId) === scope &&
-      shellGroupOfTab(st, tab.id) === group
-    ) {
-      useTabStore.getState().closeTab(tab.id, { recordForReopen: false })
-    }
-  }
+/** Clear {@link TabItemInternal.autoSeeded} on the adopted tab, leaving every
+ *  other tab's identity untouched. */
+function adoptDraft(tabs: TabItemInternal[], tabId: string): TabItemInternal[] {
+  let changed = false
+  const next = tabs.map((tab) => {
+    if (tab.id !== tabId || tab.autoSeeded !== true) return tab
+    changed = true
+    return { ...tab, autoSeeded: false }
+  })
+  return changed ? next : tabs
 }
 
-/**
- * Turning the mode off puts every folder's drafts back in one layout, where a
- * group carries one draft: per group keep the active draft, else one with
- * content, else the first, and close the other blank ones (never one with
- * content).
- */
-function closeBlankDraftsPerGroup() {
+/** Mark the draft a recovery just opened as synthesized, so the next explicit
+ *  "new conversation" adopts it rather than leaving two blanks behind. */
+function markAutoSeeded(tabId: string | null) {
+  if (!tabId) return
   const st = useTabStore.getState()
-  const draftsByGroup = new Map<string, TabItemInternal[]>()
-  for (const tab of st.rawTabs) {
-    if (tab.conversationId != null) continue
-    const group = groupOfTab(st.groupOf, st.groupLayout, tab.id)
-    draftsByGroup.set(group, [...(draftsByGroup.get(group) ?? []), tab])
-  }
-  for (const drafts of draftsByGroup.values()) {
-    if (drafts.length < 2) continue
-    const keep =
-      drafts.find((draft) => draft.id === st.activeTabId) ??
-      drafts.find((draft) => !isBlankDraft(draft)) ??
-      drafts[0]
-    for (const draft of drafts) {
-      if (draft !== keep && isBlankDraft(draft)) {
-        useTabStore.getState().closeTab(draft.id, { recordForReopen: false })
-      }
-    }
-  }
+  const tab = st.rawTabs.find((t) => t.id === tabId)
+  if (!tab || !isBlankDraft(tab) || tab.autoSeeded === true) return
+  useTabStore.setState({
+    rawTabs: st.rawTabs.map((t) =>
+      t.id === tabId ? { ...t, autoSeeded: true } : t
+    ),
+  })
 }
 
 /**
@@ -1618,6 +1606,7 @@ function makeReplacementDraftTab(preferred?: TabItemInternal): TabItemInternal {
     isPinned: true,
     workingDir,
     agentTypeProvisional: provisional,
+    autoSeeded: true,
   }
 }
 
@@ -2056,6 +2045,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         workingDir: undefined,
         agentTypeProvisional: provisional,
         isChat: true,
+        autoSeeded: true,
       }
     } else {
       const { agentType, provisional } = resolveAgentForFolder(
@@ -2073,6 +2063,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         workingDir:
           tab.workingDir ?? folders.find((f) => f.id === tab.folderId)?.path,
         agentTypeProvisional: provisional,
+        autoSeeded: true,
       }
     }
     set({
@@ -2311,20 +2302,37 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
     const tabId = makeNewConversationTabId()
     const prevState = get()
-    // Per-group draft singleton: reuse the target group's existing draft tab
-    // (regardless of folder), so each group carries at most one draft.
+    // A draft explicitly moved here (`retargetTabId`) is always reused. Every
+    // other explicit "new conversation" open ADDS a tab: several blank
+    // conversations may be prepared at once, in the same group included.
+    //
+    // Two kinds of blank draft are adopted instead:
+    //  - one the store synthesized on its own (recovery, a split's seed, or the
+    //    replacement a close-all spawns) — so recovery never leaves a second
+    //    blank behind, and a REOPEN (`index`) moves the replacement back to the
+    //    closed draft's slot rather than leaving the strip with an extra tab.
+    //    A draft the user asked for is never auto-seeded, so neither repeated
+    //    clicks nor a reopen take over a draft the user opened;
+    //  - with `reuseBlankDraft` (navigation side effects), any blank draft, so
+    //    switching branches back and forth does not pile up blank tabs.
     const targetGroup = movingDraft
       ? groupOfTab(prevState.groupOf, prevState.groupLayout, movingDraft.id)
       : resolveTargetGroup(prevState, options?.targetGroup)
+    const adoptable = (t: TabItemInternal) =>
+      t.conversationId == null &&
+      isTabInScope(t) &&
+      groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
+        targetGroup &&
+      (options?.reuseBlankDraft === true || t.autoSeeded === true) &&
+      isBlankDraft(t)
+    const focusedTab = prevState.rawTabs.find(
+      (t) => t.id === prevState.activeTabId
+    )
     const existingTab =
       movingDraft ??
-      prevState.rawTabs.find(
-        (t) =>
-          t.conversationId == null &&
-          isTabInScope(t) &&
-          groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
-            targetGroup
-      )
+      (focusedTab && adoptable(focusedTab)
+        ? focusedTab
+        : prevState.rawTabs.find(adoptable))
 
     if (!existingTab) {
       const newTab: TabItemInternal = {
@@ -2354,20 +2362,25 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const provisionalChanged =
       (existingTab.agentTypeProvisional ?? false) !== provisional
 
-    // The singleton means a reopened draft resolves to THIS draft rather than a
-    // tab of its own, so the slot it was closed from has to move this one — a
-    // close-all walked back would otherwise leave the draft shunted to the end
-    // of the strip it is meant to rebuild. Only the reopen path passes an
+    // A reopen that adopted the close-all replacement resolves to THIS draft
+    // rather than a tab of its own, so the slot it was closed from has to move
+    // this one — a close-all walked back would otherwise leave the draft
+    // shunted to the end of the strip it is meant to rebuild. Only the reopen path passes an
     // index, and drafts never reach `buildPersistItems`, so no save fires.
+    //
+    // `adoptedTabs` clears the synthesized-draft mark as part of any branch
+    // below, so the adopt happens exactly once even when nothing else changes.
+    const adoptedTabs = adoptDraft(prevState.rawTabs, existingTab.id)
+    const adopted = adoptedTabs !== prevState.rawTabs
     const nextRawTabs =
       options?.index == null
-        ? prevState.rawTabs
-        : moveTabToSlot(prevState.rawTabs, existingTab.id, options.index)
+        ? adoptedTabs
+        : moveTabToSlot(adoptedTabs, existingTab.id, options.index)
     const moved = nextRawTabs !== prevState.rawTabs
 
     if (folderChanged || agentChanged) {
       set({
-        ...(moved ? { rawTabs: nextRawTabs } : {}),
+        ...(moved || adopted ? { rawTabs: nextRawTabs } : {}),
         draftRetargetRequests: [
           ...prevState.draftRetargetRequests,
           {
@@ -2381,7 +2394,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         ],
       })
       focusTab(existingTab.id)
-      if (moved) recomputeTabs()
+      if (moved || adopted) recomputeTabs()
     } else if (workingDirChanged || provisionalChanged) {
       set({
         rawTabs: nextRawTabs.map((tab) =>
@@ -2396,6 +2409,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       set({ rawTabs: nextRawTabs, activeTabId: existingTab.id })
       recomputeTabs()
     } else {
+      if (adopted) set({ rawTabs: adoptedTabs })
       focusTab(existingTab.id)
     }
     runtime.activateConversationPane()
@@ -2433,26 +2447,34 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         ? { agentType: options.forceAgent, provisional: false }
         : resolveAgentForFolder(0, inherit, null)
 
-    // Per-group draft singleton — all draft handling below is scoped to the
-    // target group. Capture its existing draft (if any) up front so a stale
-    // ACP session can be torn down after we flip it to chat mode.
+    // A draft explicitly moved into chat mode (`retargetTabId`), or a blank
+    // draft the store synthesized on its own (recovery / last-tab replacement),
+    // is adopted. A plain chat-mode open otherwise ADDS a draft, so several
+    // blank chats can be prepared at once — the same additive rule
+    // `openNewConversationTab` follows.
     const targetGroup = movingDraft
       ? groupOfTab(st.groupOf, st.groupLayout, movingDraft.id)
       : resolveTargetGroup(st, options?.targetGroup)
-    const inTargetGroup = (t: TabItemInternal) =>
-      groupOfTab(st.groupOf, st.groupLayout, t.id) === targetGroup
-    const isTargetDraft = (t: TabItemInternal) =>
-      movingDraft
-        ? t.id === movingDraft.id
-        : t.conversationId == null && isTabInScope(t) && inTargetGroup(t)
-    const existingDraft = st.rawTabs.find(isTargetDraft)
+    const prevState = get()
+    const existingTab =
+      movingDraft ??
+      prevState.rawTabs.find(
+        (t) =>
+          t.conversationId == null &&
+          isTabInScope(t) &&
+          t.autoSeeded === true &&
+          isBlankDraft(t) &&
+          groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
+            targetGroup
+      )
+    const adoptedTabs = existingTab
+      ? adoptDraft(prevState.rawTabs, existingTab.id)
+      : prevState.rawTabs
+    const adopted = adoptedTabs !== prevState.rawTabs
     const needsDisconnect =
-      existingDraft != null &&
-      !(existingDraft.isChat && existingDraft.folderId === 0)
+      existingTab != null && !(existingTab.isChat && existingTab.folderId === 0)
 
     const tabId = makeNewConversationTabId()
-    const prevState = get()
-    const existingTab = prevState.rawTabs.find(isTargetDraft)
 
     if (!existingTab) {
       const newTab: TabItemInternal = {
@@ -2488,7 +2510,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       ) {
         set({
           activeTabId: existingTab.id,
-          rawTabs: prevState.rawTabs.map((tab) =>
+          rawTabs: adoptedTabs.map((tab) =>
             tab.id === existingTab.id
               ? {
                   ...tab,
@@ -2500,6 +2522,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         })
         recomputeTabs()
       } else {
+        if (adopted) set({ rawTabs: adoptedTabs })
         focusTab(existingTab.id)
       }
     } else {
@@ -2509,7 +2532,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       // for chat mode (no folder default).
       set({
         activeTabId: existingTab.id,
-        rawTabs: prevState.rawTabs.map((tab) =>
+        rawTabs: adoptedTabs.map((tab) =>
           tab.id === existingTab.id
             ? {
                 ...tab,
@@ -2523,14 +2546,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         ),
       })
       recomputeTabs()
-      // A draft moved in from a folder can land beside the chat view's own.
-      if (movingDraft && useFolderTabsStore.getState().enabled) {
-        closeBlankDraftsBeside(existingTab.id)
-      }
     }
 
-    if (needsDisconnect && existingDraft) {
-      void runtime.acpDisconnect(existingDraft.id).catch((err) => {
+    if (needsDisconnect && existingTab) {
+      void runtime.acpDisconnect(existingTab.id).catch((err) => {
         console.error("[TabStore] disconnect chat-mode draft:", err)
       })
     }
@@ -3133,6 +3152,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const hint = loadLastActiveContext()
     if (hint?.isChat) {
       get().openChatModeTab()
+      markAutoSeeded(get().activeTabId)
       return
     }
     const folders = useAppWorkspaceStore.getState().folders
@@ -3140,15 +3160,18 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       const f = folders.find((x) => x.id === hint.folderId)
       if (f) {
         get().openNewConversationTab(f.id, f.path)
+        markAutoSeeded(get().activeTabId)
         return
       }
     }
     const first = folders[0]
     if (first) {
       get().openNewConversationTab(first.id, first.path)
+      markAutoSeeded(get().activeTabId)
       return
     }
     get().openChatModeTab()
+    markAutoSeeded(get().activeTabId)
   },
 
   consumePreviewReplaced: () => {
@@ -3226,9 +3249,6 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
             .getState()
             .activateScope(folderScope(request.folderId))
           focusTab(request.tabId)
-        }
-        if (useFolderTabsStore.getState().enabled) {
-          closeBlankDraftsBeside(request.tabId)
         }
       })()
     }
@@ -3689,7 +3709,6 @@ useFolderTabsStore.subscribe((next, previous) => {
     useTabStore.setState({ activeTabId: after.rawTabs[0]?.id ?? null })
   }
   applyGroupInvariants()
-  if (previous.enabled && !next.enabled) closeBlankDraftsPerGroup()
   useTabStore.getState().syncActiveFolderId()
 })
 
