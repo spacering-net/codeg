@@ -82,6 +82,7 @@
     "discover": "플러그인 찾기",
     "indexDescription": "신뢰할 수 있는 플러그인 인덱스의 HTTPS URL을 입력해 플러그인과 버전을 찾아보세요.",
     "indexUrl": "플러그인 인덱스 URL",
+    "savedIndexes": "저장된 인덱스",
     "loadIndex": "인덱스 불러오기",
     "version": "{name} 버전",
     "installed": "설치됨",

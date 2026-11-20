@@ -82,6 +82,7 @@
     "discover": "اكتشاف الإضافات",
     "indexDescription": "أدخل رابط HTTPS لفهرس إضافات موثوق لتصفح الإضافات وإصداراتها.",
     "indexUrl": "رابط فهرس الإضافات",
+    "savedIndexes": "الفهارس المحفوظة",
     "loadIndex": "تحميل الفهرس",
     "version": "إصدار {name}",
     "installed": "مثبت",

@@ -82,6 +82,7 @@
     "discover": "发现插件",
     "indexDescription": "输入受信任插件索引的 HTTPS 地址，浏览插件及其版本。",
     "indexUrl": "插件索引地址",
+    "savedIndexes": "已保存的索引",
     "loadIndex": "加载索引",
     "version": "{name} 版本",
     "installed": "已安装",

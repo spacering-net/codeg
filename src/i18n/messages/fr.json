@@ -82,6 +82,7 @@
     "discover": "Découvrir des extensions",
     "indexDescription": "Saisissez l’URL HTTPS d’un index d’extensions fiable pour parcourir les extensions et leurs versions.",
     "indexUrl": "URL de l’index d’extensions",
+    "savedIndexes": "Index enregistrés",
     "loadIndex": "Charger l’index",
     "version": "Version de {name}",
     "installed": "Installée",

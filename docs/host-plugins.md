@@ -109,3 +109,6 @@ use exact npm versions or GitHub references, while absolute host directories
 and floating npm selectors are rejected by the index validator.
 
 See the [example index](../examples/plugins/index.json) for a complete file.
+Codeg keeps up to eight successfully loaded index URLs in the browser profile so
+they can be selected again from **Saved indexes**. The index content is fetched
+again each time it is loaded.

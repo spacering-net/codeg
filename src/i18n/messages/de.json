@@ -82,6 +82,7 @@
     "discover": "Plugins entdecken",
     "indexDescription": "Geben Sie die HTTPS-URL eines vertrauenswürdigen Plugin-Index ein, um Plugins und Versionen zu durchsuchen.",
     "indexUrl": "URL des Plugin-Index",
+    "savedIndexes": "Gespeicherte Indizes",
     "loadIndex": "Index laden",
     "version": "Version von {name}",
     "installed": "Installiert",

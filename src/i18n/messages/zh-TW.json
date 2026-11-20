@@ -82,6 +82,7 @@
     "discover": "探索外掛",
     "indexDescription": "輸入信任的外掛索引 HTTPS 位址，瀏覽外掛及其版本。",
     "indexUrl": "外掛索引位址",
+    "savedIndexes": "已儲存的索引",
     "loadIndex": "載入索引",
     "version": "{name} 版本",
     "installed": "已安裝",

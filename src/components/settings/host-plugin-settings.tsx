@@ -214,6 +214,7 @@ function PluginIndexDialog({
   const t = useTranslations("HostPlugins")
   const [open, setOpen] = useState(false)
   const [url, setUrl] = useState("")
+  const [savedUrls, setSavedUrls] = useState(readSavedIndexUrls)
   const [index, setIndex] = useState<PluginIndex>()
   const [selectedVersions, setSelectedVersions] = useState<
     Record<string, string>
@@ -231,6 +232,18 @@ function PluginIndexDialog({
     try {
       const next = await fetchHostPluginIndex(url)
       setIndex(next)
+      const normalizedUrl = url.trim()
+      setSavedUrls((previous) => {
+        const updated = [
+          normalizedUrl,
+          ...previous.filter((item) => item !== normalizedUrl),
+        ].slice(0, 8)
+        window.localStorage.setItem(
+          "codeg.hostPlugins.indexUrls",
+          JSON.stringify(updated)
+        )
+        return updated
+      })
       setSelectedVersions(
         Object.fromEntries(
           next.plugins.map((plugin) => [plugin.id, plugin.versions[0].version])
@@ -288,6 +301,24 @@ function PluginIndexDialog({
         <form className="grid gap-4" onSubmit={load}>
           <label className="grid gap-2 text-sm">
             {t("indexUrl")}
+            {savedUrls.length > 0 && (
+              <select
+                className="h-9 rounded-md border bg-background px-2"
+                aria-label={t("savedIndexes")}
+                value=""
+                disabled={busy}
+                onChange={(event) => {
+                  if (event.target.value) setUrl(event.target.value)
+                }}
+              >
+                <option value="">{t("savedIndexes")}</option>
+                {savedUrls.map((savedUrl) => (
+                  <option key={savedUrl} value={savedUrl}>
+                    {savedUrl}
+                  </option>
+                ))}
+              </select>
+            )}
             <Input
               value={url}
               maxLength={2048}
@@ -385,6 +416,21 @@ function PluginIndexDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+function readSavedIndexUrls() {
+  if (typeof window === "undefined") return []
+  try {
+    const saved = JSON.parse(
+      window.localStorage.getItem("codeg.hostPlugins.indexUrls") ?? "[]"
+    )
+    return Array.isArray(saved) &&
+      saved.every((item): item is string => typeof item === "string")
+      ? saved.slice(0, 8)
+      : []
+  } catch {
+    return []
+  }
 }
 
 function sourceText(source: NonNullable<InstalledPlugin["source"]>) {
