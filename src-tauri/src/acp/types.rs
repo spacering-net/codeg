@@ -774,7 +774,9 @@ pub enum AcpEvent {
         /// (a transcript can't tell a live task from one whose CLI died).
         /// Every emission carries the producer's WHOLE current set, like
         /// `outstanding` — state, not a delta — so an absent field means none.
-        /// `outstanding` stays its length, for older readers.
+        /// `outstanding` is its length, for older readers — plus one for a
+        /// pending `ScheduleWakeup`, which the Claude transcript watcher counts
+        /// but does not list (it is not running and has no stop).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         outstanding_tasks: Vec<BackgroundOutstandingTask>,
         /// Tasks settled by `<task-notification>` records in this batch — the

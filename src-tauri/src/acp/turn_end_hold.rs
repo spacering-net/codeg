@@ -207,8 +207,8 @@ fn async_table_decides(state: &SessionState, agent_type: AgentType) -> bool {
 /// ([`async_table_is_complete`]) has published a row, that table decides
 /// for everything it carries: it holds an explicit terminal state per task,
 /// where the watcher infers its count from transcript records that can go
-/// missing. What the table never carries — a background sub-agent — the
-/// watcher still decides: a finished shell's row must not hide a sub-agent
+/// missing. What the table never carries — a background sub-agent, a pending
+/// `ScheduleWakeup` — the watcher still decides: a finished shell's row must not hide a sub-agent
 /// still running. Any other adapter — one that never published a row, or one
 /// whose table covers only part of its work — keeps the OR: a source that
 /// only one of them reports must not settle the run under work still running.
@@ -218,7 +218,9 @@ fn background_work_running(
     now: DateTime<Utc>,
 ) -> bool {
     if async_table_decides(state, agent_type) {
-        state.has_live_async_task(now) || state.has_outstanding_background_agent(now)
+        state.has_live_async_task(now)
+            || state.has_outstanding_background_agent(now)
+            || state.has_pending_scheduled_wakeup(now)
     } else {
         state.has_active_background_work(now)
     }
@@ -681,6 +683,31 @@ mod tests {
         assert_eq!(probe.running, vec!["background reviewer".to_string()]);
 
         apply(&manager, watcher_of(0, BackgroundTaskKind::Agent, "")).await;
+        assert!(should_hold(&manager, CONN, "end_turn").await.is_none());
+    }
+
+    /// A pending `ScheduleWakeup` is never in the async-task table, so a
+    /// finished row must not settle the run under it: ending the connection
+    /// would lose the wakeup, as it would for the idle sweep.
+    #[tokio::test]
+    async fn a_finished_async_row_does_not_hide_a_pending_wakeup() {
+        let manager = connection(AgentType::ClaudeCode).await;
+        let mut wakeup_only = watcher_of(1, BackgroundTaskKind::Shell, "");
+        if let AcpEvent::BackgroundActivity {
+            outstanding_tasks, ..
+        } = &mut wakeup_only
+        {
+            outstanding_tasks.clear();
+        }
+        apply(&manager, wakeup_only).await;
+        apply(&manager, delta("b1", "shell", "running", true)).await;
+        apply(&manager, delta("b1", "shell", "completed", false)).await;
+        let probe = should_hold(&manager, CONN, "end_turn")
+            .await
+            .expect("the wakeup is still pending");
+        assert_eq!(probe.blocker, Some(ConnectionBusy::BackgroundWork));
+
+        apply(&manager, watcher(0)).await;
         assert!(should_hold(&manager, CONN, "end_turn").await.is_none());
     }
 
