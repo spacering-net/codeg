@@ -2521,7 +2521,8 @@
         "title": "Schnellaktionen",
         "openProject": "Projekt öffnen",
         "browserTab": "Browser-Tab öffnen",
-        "showPet": "Pet anzeigen"
+        "showPet": "Pet anzeigen",
+        "hidePet": "Pet ausblenden"
       },
       "mcp": {
         "title": "codeg-mcp-Dienst",
@@ -5168,7 +5169,8 @@
         "deleteFailed": "Löschen fehlgeschlagen",
         "loadFailed": "Pet-Liste konnte nicht geladen werden",
         "setActiveFailed": "Aktivieren fehlgeschlagen",
-        "summonFailed": "Pet-Fenster konnte nicht geöffnet werden"
+        "summonFailed": "Pet-Fenster konnte nicht geöffnet werden",
+        "closeFailed": "Pet-Fenster konnte nicht geschlossen werden"
       }
     },
     "import": {
