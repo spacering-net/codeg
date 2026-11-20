@@ -3202,7 +3202,6 @@ async fn worker(
             agent_options_json: "{}".into(),
             label_snapshot_json: serde_json::to_string(&brain.label_snapshot).unwrap(),
             settings_json: "{}".into(),
-            template: Some("dev".into()),
             executor_assistant_id: None,
         },
     )
@@ -3271,7 +3270,6 @@ async fn a_second_primary_is_refused_by_the_database() {
         updated_at: Set(now),
         kind: Set(BotKind::Primary),
         uid: Set(Some(svc::new_bot_uid())),
-        template: Set(None),
         executor_assistant_id: Set(None),
         sort_order: Set(0),
         pinned_at: Set(None),
@@ -3555,7 +3553,6 @@ async fn worker_row(engine: &PersonalAgentEngine, name: &str) -> i32 {
             agent_options_json: "{}".into(),
             label_snapshot_json: serde_json::to_string(&brain.label_snapshot).unwrap(),
             settings_json: "{}".into(),
-            template: Some("dev".into()),
             executor_assistant_id: None,
         },
     )
@@ -5208,10 +5205,6 @@ async fn how_the_owner_lets_an_executor_config_be_used_is_checked_at_dispatch() 
     let err = engine.dispatch(request(DispatchMode::Task, reviewer, Some(a))).await.unwrap_err();
     assert!(err.contains("does not let the assistants dispatch"), "{err}");
     engine.dispatch(request(DispatchMode::Task, coder, Some(a))).await.unwrap();
-    let list = call_tool(&engine, "assistant_list", json!({})).await;
-    assert!(list.text.contains("[takes only task; only on projects"), "{}", list.text);
-    assert!(list.text.contains("Not for your dispatches"), "{}", list.text);
-    assert!(list.text.contains("- review → Coder (executor config"), "{}", list.text);
     // A pick must be someone who is there.
     assert!(engine.apply_settings(&[change("team.division.review", json!("bot:nobody"))]).await.is_err());
 
@@ -5376,61 +5369,58 @@ async fn executor(engine: &PersonalAgentEngine, id: i32) -> crate::models::Assis
     crate::db::service::assistant_service::get(&engine.db.conn, id).await.unwrap().unwrap()
 }
 
+/// A new work assistant: its persona — the one given, else the default
+/// sentence, written in no one's name — its brain the primary's, an executor
+/// config of its own with every option filled in and nothing of codeg's in
+/// it; no role guessed, no division taken, no opening card, nothing run.
 #[tokio::test]
-async fn a_name_alone_makes_a_work_assistant_with_its_role_brain_and_executor() {
+async fn a_new_work_assistant_has_its_persona_brain_and_executor() {
     let (engine, tmp) = ready().await;
-    let made = engine.create_bot(BotSpec::named("代码评审")).await.unwrap();
+    let mut spec = BotSpec::named("代码评审");
+    spec.persona = Some("Reviews pull requests; never changes code.".into());
+    let made = engine.create_bot(spec).await.unwrap();
     let bot = &made.bot;
     assert_eq!(bot.kind, BotKind::Worker);
-    assert_eq!(made.template, "review", "the role is read from the name");
-    assert_eq!(bot.template.as_deref(), Some("review"));
     // Its face is the default for its uid; its brain is the primary's.
     let uid = bot.uid.clone().unwrap();
     assert_eq!(BotAvatar::parse(&bot.avatar), BotAvatar::default_for(&uid));
     let primary = svc::primary_bot(&engine.db.conn).await.unwrap().unwrap();
     assert_eq!((bot.agent_type.as_str(), bot.agent_options.as_str()), (primary.agent_type.as_str(), primary.agent_options.as_str()));
-    // Its executor config, made with it: same name, its role's words, every
-    // option filled in from what the agent reports.
+    // Its executor config, made with it: same name, every option filled in
+    // from what the agent reports, no description or instructions of codeg's.
     let exec = executor(&engine, made.executor.id).await;
     assert_eq!(bot.executor_assistant_id, Some(exec.id));
     assert_eq!(exec.name, "代码评审");
     assert_eq!(exec.agent_type, AgentType::ClaudeCode);
-    assert_eq!(exec.instructions, super::bot_templates::instructions(crate::models::system::AppLocale::En, "review"));
+    assert_eq!((exec.description.as_str(), exec.instructions.as_str()), ("", ""));
     assert_eq!(exec.agent_options.config_values["model"], "sonnet");
     assert_eq!(made.picked.len(), 3);
     assert!(made.picked.iter().all(|p| p.from == PickedFrom::Agent));
-    // How the assistants use it, and the review is its to take first.
+    // Nothing of a role: no usage, no division.
     let team = engine.account().await.team;
-    assert_eq!(team.usage_of(&exec.uid).modes, vec![DispatchMode::Session]);
-    assert_eq!(team.division.get("review"), Some(&format!("bot:{uid}")));
-    // Its directory: its role's persona and rules, no owner file.
+    assert!(team.usage_of(&exec.uid).is_default());
+    assert!(team.division.is_empty());
+    // Its directory: its persona under the heading, its rules, no owner file.
     let dir = workdir::workdir_of_bot(tmp.path(), bot);
-    assert!(workdir::read_text(&dir, workdir::SOUL_FILE).contains("Your role: Reviewer."));
-    assert!(workdir::read_text(&dir, workdir::RULES_FILE).contains("read-only `session`"));
+    let locale = engine.locale_now().await;
+    assert_eq!(
+        workdir::read_text(&dir, workdir::SOUL_FILE),
+        super::templates::worker_soul(locale, Some("Reviews pull requests; never changes code."))
+    );
+    assert_eq!(workdir::read_text(&dir, workdir::RULES_FILE), super::templates::worker_rules(locale));
     assert!(!dir.join(workdir::USER_FILE).exists());
-    // Its first line: the role's opener, three choices and one of the
-    // owner's own, and what codeg made for it.
+    // No opening card; nothing ran.
     let worker = engine_of(&engine, &tmp, bot.id);
-    let card = last_card(&worker, "choice").await;
-    let data = data_of(&card);
-    assert_eq!(data["question"], "Send me a PR, a diff or a repository link.");
-    assert_eq!(data["options"].as_array().unwrap().len(), 3);
-    assert_eq!(data["options"][1]["label"], "Look at local changes");
-    assert_eq!(data["other"], "Other");
-    assert_eq!(data["made"]["brain"]["same_as_primary"], true);
-    assert_eq!(data["made"]["executor"]["picked"].as_array().unwrap().len(), 3);
-    // Nothing ran: no session, no delivery.
+    assert!(notice_rows(&worker).await.is_empty());
     assert!(svc::list_segments(&engine.db.conn, bot.id).await.unwrap().is_empty());
+    // Without a persona: the default sentence, read as none written.
+    let blank = engine.create_bot(BotSpec::named("Alfred")).await.unwrap();
+    let soul = workdir::read_text(&workdir::workdir_of_bot(tmp.path(), &blank.bot), workdir::SOUL_FILE);
+    assert!(super::templates::persona_unwritten(&soul), "{soul}");
+    assert!(!soul.contains("Alfred"), "no name in it: {soul}");
     // A second one of the same name gets an executor config of its own name.
     let again = engine.create_bot(BotSpec::named("代码评审")).await.unwrap();
     assert_eq!(executor(&engine, again.executor.id).await.name, "代码评审 (2)");
-    assert_eq!(
-        engine.account().await.team.division.get("review"),
-        Some(&format!("bot:{uid}")),
-        "the first pick stays the first"
-    );
-    // A name that says no role: blank.
-    assert_eq!(engine.create_bot(BotSpec::named("Alfred")).await.unwrap().template, "blank");
 }
 
 #[tokio::test]
@@ -5460,7 +5450,6 @@ async fn another_config_on_the_same_agent_lends_its_choices() {
     let made = engine.create_bot(BotSpec::named("Dev")).await.unwrap();
     let effort = made.picked.iter().find(|p| p.id == "effort").unwrap();
     assert_eq!((effort.value.as_str(), effort.from), ("high", PickedFrom::OtherConfig));
-    assert_eq!(made.template, "dev");
 }
 
 #[tokio::test]
@@ -5473,9 +5462,8 @@ async fn when_the_agents_options_cannot_be_read_nothing_is_made() {
         given: Default::default(),
     };
     match engine.create_bot(spec).await {
-        Err(CreateError::OptionsUnavailable { agent_type, template, .. }) => {
+        Err(CreateError::OptionsUnavailable { agent_type, .. }) => {
             assert_eq!(agent_type, AgentType::Gemini);
-            assert_eq!(template, "research", "the editor opens prefilled with the role");
         }
         other => panic!("{:?}", other.map(|m| m.bot.id)),
     }
@@ -5489,82 +5477,19 @@ async fn when_the_agents_options_cannot_be_read_nothing_is_made() {
 }
 
 #[tokio::test]
-async fn the_brain_first_wakes_when_the_owner_answers_the_opening_card() {
-    let (engine, tmp) = ready().await;
-    let made = engine.create_bot(BotSpec::named("Reviewer")).await.unwrap();
-    let worker = engine_of(&engine, &tmp, made.bot.id);
-    let card = last_card(&worker, "choice").await;
-    assert!(worker.answer_choice(card_id(&card), Some("Z"), None, None, None).await.is_err());
-    let row = worker.answer_choice(card_id(&card), Some("b"), None, None, None).await.unwrap();
-    let answered = row.data.clone().unwrap();
-    assert_eq!(answered["state"], "answered");
-    assert_eq!(answered["answer"]["key"], "B");
-    // It goes to the assistant as the owner's first message, quoting the card.
-    let queued = rows_of(&worker, made.bot.id, TimelineKind::Owner).await;
-    assert_eq!(queued.len(), 1);
-    assert_eq!(queued[0].body, "B. Look at local changes");
-    assert_eq!(queued[0].status, Some(OwnerStatus::Queued));
-    assert!(worker.answer_choice(card_id(&card), Some("A"), None, None, None).await.unwrap_err().contains("answered already"));
-    // Its first session is told it was just made, and what was picked.
-    let row = svc::get_bot(&engine.db.conn, made.bot.id).await.unwrap().unwrap();
-    let note = worker.new_bot_note(&row).await.unwrap();
-    assert!(note.contains("You were just made: your role is Reviewer"), "{note}");
-    assert!(note.contains("picked B. Look at local changes"), "{note}");
-
-    // A choice about a project needs one; one of the owner's own words goes as they are.
-    let dev = engine.create_bot(BotSpec::named("Developer")).await.unwrap();
-    let dw = engine_of(&engine, &tmp, dev.bot.id);
-    let card = last_card(&dw, "choice").await;
-    assert!(dw.answer_choice(card_id(&card), Some("C"), None, None, None).await.unwrap_err().contains("needs a project"));
-    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
-    dw.answer_choice(card_id(&card), Some("C"), None, Some(project), None).await.unwrap();
-    let sent = rows_of(&dw, dev.bot.id, TimelineKind::Owner).await;
-    assert!(sent[0].body.starts_with("C. Look at a project's to-dos first — app"), "{}", sent[0].body);
-    let other = engine.create_bot(BotSpec::named("Blank")).await.unwrap();
-    let ow = engine_of(&engine, &tmp, other.bot.id);
-    let card = last_card(&ow, "choice").await;
-    ow.answer_choice(card_id(&card), Some("D"), Some("watch my CI"), None, None).await.unwrap();
-    assert_eq!(rows_of(&ow, other.bot.id, TimelineKind::Owner).await[0].body, "watch my CI");
-}
-
-#[tokio::test]
-async fn changing_the_role_before_it_ran_rewrites_only_what_codeg_wrote() {
-    let (engine, tmp) = ready().await;
-    let made = engine.create_bot(BotSpec::named("Helper")).await.unwrap();
-    assert_eq!(made.template, "blank");
-    let worker = engine_of(&engine, &tmp, made.bot.id);
-    let dir = workdir::workdir_of_bot(tmp.path(), &made.bot);
-    // The owner wrote their own rules already: they stay.
-    workdir::write_file(&dir, workdir::RULES_FILE, "# Mine\n").unwrap();
-    let card = worker.set_bot_template("review").await.unwrap();
-    let data = card.data.unwrap();
-    assert_eq!(data["template"], "review");
-    assert_eq!(data["question"], "Send me a PR, a diff or a repository link.");
-    assert!(workdir::read_text(&dir, workdir::SOUL_FILE).contains("Your role: Reviewer."));
-    assert_eq!(workdir::read_text(&dir, workdir::RULES_FILE), "# Mine\n");
-    let exec = executor(&engine, made.executor.id).await;
-    assert_eq!(exec.instructions, super::bot_templates::instructions(crate::models::system::AppLocale::En, "review"));
-    let team = engine.account().await.team;
-    assert_eq!(team.usage_of(&exec.uid).modes, vec![DispatchMode::Session]);
-    assert_eq!(team.division.get("review"), Some(&format!("bot:{}", made.bot.uid.clone().unwrap())));
-    assert_eq!(svc::get_bot(&engine.db.conn, made.bot.id).await.unwrap().unwrap().template.as_deref(), Some("review"));
-    // Once it has started, its role is its files' to change.
-    let card = last_card(&worker, "choice").await;
-    worker.answer_choice(card_id(&card), Some("A"), None, None, None).await.unwrap();
-    assert!(worker.set_bot_template("dev").await.is_err());
-}
-
-#[tokio::test]
 async fn bot_create_on_the_owners_word_makes_it_and_the_card_undoes_it() {
     let (engine, _tmp) = ready().await;
-    let out = call_tool(&engine, "bot_create", json!({ "name": "CI fixer" })).await;
-    assert!(!out.ok && out.text.contains("quote"), "{}", out.text);
     let out = call_tool(&engine, "bot_create", json!({ "name": "CI fixer", "quote": "make one that fixes CI" })).await;
+    assert!(!out.ok && out.text.contains("persona"), "{}", out.text);
+    let out = call_tool(&engine, "bot_create", json!({ "name": "CI fixer", "persona": "Fixes failing CI." })).await;
+    assert!(!out.ok && out.text.contains("quote"), "{}", out.text);
+    let out = call_tool(&engine, "bot_create", json!({ "name": "CI fixer", "persona": "Fixes failing CI.", "quote": "make one that fixes CI" })).await;
     assert!(out.ok, "{}", out.text);
-    assert!(out.text.contains("role ci"), "{}", out.text);
+    // Nothing of an executor config in what the assistant reads back.
+    assert!(!out.text.contains("executor config") && out.data.get("executor_assistant_id").is_none(), "{}", out.text);
     assert!(out.text.contains("options codeg picked for the owner: Model = SONNET"), "{}", out.text);
     let bot = out.data["bot_id"].as_i64().unwrap() as i32;
-    let exec = out.data["executor_assistant_id"].as_i64().unwrap() as i32;
+    let exec = svc::get_bot(&engine.db.conn, out.data["bot_id"].as_i64().unwrap() as i32).await.unwrap().unwrap().executor_assistant_id.unwrap();
     let card = last_card(&engine, "changed").await;
     let data = data_of(&card);
     assert_eq!((data["what"].as_str(), data["state"].as_str()), (Some("bots"), Some("applied")));
@@ -5577,10 +5502,10 @@ async fn bot_create_on_the_owners_word_makes_it_and_the_card_undoes_it() {
     assert_eq!(data_of(&last_card(&engine, "changed").await)["state"], "undone");
 
     // Its own idea: a card that makes it when the owner accepts.
-    let out = call_tool(&engine, "bot_create", json!({ "name": "Night cleaner", "suggest": true })).await;
+    let out = call_tool(&engine, "bot_create", json!({ "name": "Night cleaner", "persona": "Cleans up.", "suggest": true })).await;
     assert!(!out.ok, "a suggestion needs a reason");
     let out = call_tool(&engine, "bot_create", json!({
-        "name": "Night cleaner", "suggest": true, "reason": "you keep asking for cleanups",
+        "name": "Night cleaner", "persona": "Cleans up.", "suggest": true, "reason": "you keep asking for cleanups",
     }))
     .await;
     assert!(out.ok && out.data["state"] == "open", "{}", out.text);
@@ -5588,17 +5513,17 @@ async fn bot_create_on_the_owners_word_makes_it_and_the_card_undoes_it() {
     let card = last_card(&engine, "changed").await;
     let row = engine.act_on_notice(card_id(&card), "accept").await.unwrap();
     let made = &row.data.unwrap()["bots"][0];
-    assert_eq!(made["template"], "cleanup");
+    assert_eq!(made["name"], "Night cleaner");
     assert_eq!(svc::list_bots(&engine.db.conn).await.unwrap().len(), 2);
     // A suggestion turned down is not made again for a week.
-    call_tool(&engine, "bot_create", json!({ "name": "Docs bot", "suggest": true, "reason": "r" })).await;
+    call_tool(&engine, "bot_create", json!({ "name": "Docs bot", "persona": "Writes docs.", "suggest": true, "reason": "r" })).await;
     let card = last_card(&engine, "changed").await;
     engine.act_on_notice(card_id(&card), "dismiss").await.unwrap();
-    let out = call_tool(&engine, "bot_create", json!({ "name": "docs bot", "suggest": true, "reason": "r" })).await;
+    let out = call_tool(&engine, "bot_create", json!({ "name": "docs bot", "persona": "Writes docs.", "suggest": true, "reason": "r" })).await;
     assert!(!out.ok && out.text.contains("declined"), "{}", out.text);
     // Shown first when the owner asked to see such changes first.
     engine.apply_settings(&[change("prefs.chat_changes", json!("show"))]).await.unwrap();
-    let out = call_tool(&engine, "bot_create", json!({ "name": "Tester", "quote": "a tester please" })).await;
+    let out = call_tool(&engine, "bot_create", json!({ "name": "Tester", "persona": "Tests.", "quote": "a tester please" })).await;
     assert!(out.ok && out.text.contains("confirm first"), "{}", out.text);
     assert_eq!(svc::list_bots(&engine.db.conn).await.unwrap().len(), 2);
 }
@@ -5609,48 +5534,12 @@ async fn a_replayed_bot_create_makes_nothing_twice() {
     let seg = open_segment(&engine).await;
     let owner = engine.send_owner_message("a reviewer please".into(), Vec::new(), None).await.unwrap();
     turn_with(&engine, seg, "c-bot-replay", &[owner.id], &[]).await;
-    let ask = json!({ "name": "Reviewer", "quote": "a reviewer please" });
+    let ask = json!({ "name": "Reviewer", "persona": "Reviews.", "quote": "a reviewer please" });
     let first = call_tool(&engine, "bot_create", ask.clone()).await;
     assert!(first.ok, "{}", first.text);
     let replay = call_tool(&engine, "bot_create", ask).await;
     assert!(replay.ok && replay.text.starts_with("Already done"), "{}", replay.text);
     assert_eq!(svc::list_bots(&engine.db.conn).await.unwrap().len(), 2, "one made");
-}
-
-#[tokio::test]
-async fn the_executor_configs_there_were_become_work_assistants_once() {
-    let (engine, _tmp) = engine().await;
-    let on = role_assistant(&engine, "Dev helper", true).await;
-    let _off = role_assistant(&engine, "Retired", false).await;
-    // The primary not set up: nothing yet.
-    assert_eq!(engine.make_workers_from_executors().await, 0);
-    engine
-        .save(PersonalAgentDraft {
-            agent_config: Some(brain(AgentType::ClaudeCode)),
-            locale: Some("en".into()),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(engine.make_workers_from_executors().await, 1, "only the one that is on");
-    let bots = svc::list_bots(&engine.db.conn).await.unwrap();
-    let w = bots.iter().find(|b| b.kind == BotKind::Worker).unwrap();
-    assert_eq!(w.executor_assistant_id, Some(on));
-    assert_eq!(w.name, "Dev helper");
-    assert_eq!(w.template.as_deref(), Some("dev"));
-    // Its avatar is the executor config's, as it was.
-    assert!(matches!(BotAvatar::parse(&w.avatar), BotAvatar::Monogram { .. }));
-    // No opening card: it waits until there is work.
-    assert!(notice_rows(&engine_of(&engine, &_tmp, w.id)).await.is_empty());
-    let card = last_card(&engine, "changed").await;
-    assert_eq!(data_of(&card)["why"], "made");
-    // Undo the one: the assistant goes, the executor config stays.
-    engine.act_on_notice(card_id(&card), &format!("undo:{}", w.id)).await.unwrap();
-    assert!(svc::get_bot(&engine.db.conn, w.id).await.unwrap().is_none());
-    assert!(executor(&engine, on).await.is_live());
-    // A restart makes none again.
-    assert_eq!(engine.make_workers_from_executors().await, 0);
-    assert_eq!(svc::list_bots(&engine.db.conn).await.unwrap().len(), 1);
 }
 
 #[tokio::test]
@@ -5664,12 +5553,13 @@ async fn copying_a_work_assistant_copies_its_setup_not_its_memory() {
     let cdir = workdir::workdir_of_bot(tmp.path(), &copy.bot);
     assert_eq!(workdir::read_text(&cdir, workdir::SOUL_FILE), "# Persona\n\nOnly the my-app repo.\n");
     assert!(workdir::list_entries(&cdir).is_empty(), "memory is not copied");
-    assert_ne!(copy.executor.id, made.executor.id, "an executor config of its own");
-    let (a, b) = (executor(&engine, made.executor.id).await, executor(&engine, copy.executor.id).await);
-    assert_eq!(a.agent_options, b.agent_options);
-    assert_eq!(a.instructions, b.instructions);
-    assert_eq!(engine.account().await.team.usage_of(&b.uid).modes, vec![DispatchMode::Task]);
-    assert_eq!(copy.template, "dev");
+    assert_eq!(copy.executor.id, made.executor.id, "the same executor config, shared");
+    assert!(!copy.executor_created);
+    // One whose executor config is gone gets one of its own.
+    crate::db::service::assistant_service::soft_delete(&engine.db.conn, made.executor.id).await.unwrap();
+    let again = engine.copy_bot(made.bot.id, "Developer 3", None).await.unwrap();
+    assert_ne!(again.executor.id, made.executor.id);
+    assert!(again.executor_created);
 }
 
 #[tokio::test]
@@ -5692,7 +5582,6 @@ async fn deleting_a_work_assistant_hands_its_work_on_and_returns_its_messages() 
     assert_eq!(impact.running.len(), 1);
     assert_eq!(impact.unanswered_messages, 1);
     assert_eq!(impact.executor.as_ref().unwrap().id, made.executor.id);
-    assert_eq!(impact.division, vec!["code".to_string()]);
     engine.delete_bot(w, &BotDeleteOptions { hand_over: true, ..Default::default() }, Some(worker.clone())).await.unwrap();
     assert!(svc::get_bot(&engine.db.conn, w).await.unwrap().is_none());
     // Its running work is the primary's to follow now.
@@ -5887,8 +5776,8 @@ async fn a_work_assistants_dispatch_runs_on_its_own_executor_and_says_who_sent_i
     let snap = super::dispatch::executor_of(&d);
     let brief = snap.dispatcher.clone().unwrap();
     assert!(brief.starts_with("<codeg-dispatcher>"), "{brief}");
-    assert!(brief.contains("handed out by Developer, one of the owner's work assistants (role: Developer)"), "{brief}");
-    assert!(brief.contains("dispatch_followup"), "its rules: {brief}");
+    assert!(brief.contains("handed out by Developer, one of the owner's work assistants"), "{brief}");
+    assert!(brief.contains("hand it over with `bot_message`"), "its rules: {brief}");
     assert!(brief.contains("Answer first](memory/answer-first.md) — the answer before the steps"), "its lessons: {brief}");
     assert!(brief.chars().count() <= workdir::DISPATCHER_BRIEF_CHARS);
     assert!(snap.brief_text().contains(&snap.instructions), "with the executor config's own");
@@ -5965,9 +5854,9 @@ async fn the_owners_words_switch_the_brain_with_its_options_filled_in() {
 #[tokio::test]
 async fn undoing_a_made_assistant_deletes_only_the_executor_config_made_with_it() {
     let (engine, tmp) = ready().await;
-    let out = call_tool(&engine, "bot_create", json!({ "name": "Developer", "quote": "a developer" })).await;
+    let out = call_tool(&engine, "bot_create", json!({ "name": "Developer", "persona": "Writes code.", "quote": "a developer" })).await;
     let bot = out.data["bot_id"].as_i64().unwrap() as i32;
-    let made = out.data["executor_assistant_id"].as_i64().unwrap() as i32;
+    let made = svc::get_bot(&engine.db.conn, out.data["bot_id"].as_i64().unwrap() as i32).await.unwrap().unwrap().executor_assistant_id.unwrap();
     // The owner binds it to an executor config there was before.
     let other = role_assistant(&engine, "Old coder", true).await;
     engine_of(&engine, &tmp, bot)
@@ -6028,23 +5917,6 @@ async fn an_inherited_model_is_read_again_for_the_options_that_hang_off_it() {
 }
 
 #[tokio::test]
-async fn two_runs_of_the_upgrade_at_once_make_each_assistant_once() {
-    let (engine, _tmp) = engine().await;
-    role_assistant(&engine, "Dev helper", true).await;
-    engine
-        .save(PersonalAgentDraft {
-            agent_config: Some(brain(AgentType::ClaudeCode)),
-            locale: Some("en".into()),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    let (a, b) = tokio::join!(engine.make_workers_from_executors(), engine.make_workers_from_executors());
-    assert_eq!(a + b, 1);
-    assert_eq!(svc::list_bots(&engine.db.conn).await.unwrap().len(), 2);
-}
-
-#[tokio::test]
 async fn a_session_still_starting_when_its_assistant_is_deleted_reports_to_the_primary() {
     super::options::test_support::install(AgentType::ClaudeCode);
     let (host, w, _tmp) = hosted().await;
@@ -6099,11 +5971,11 @@ async fn an_option_only_the_inherited_model_offers_can_be_named() {
     .unwrap();
     // Only the effort is said; it is one only opus offers.
     let out = call_tool(&engine, "bot_create", json!({
-        "name": "Developer", "quote": "a developer on xhigh", "executor": { "options": { "effort": "xhigh" } },
+        "name": "Developer", "persona": "Writes code.", "quote": "a developer on xhigh", "work_agent": { "options": { "effort": "xhigh" } },
     }))
     .await;
     assert!(out.ok, "{}", out.text);
-    let exec = executor(&engine, out.data["executor_assistant_id"].as_i64().unwrap() as i32).await;
+    let exec = executor(&engine, svc::get_bot(&engine.db.conn, out.data["bot_id"].as_i64().unwrap() as i32).await.unwrap().unwrap().executor_assistant_id.unwrap()).await;
     assert_eq!(exec.agent_options.config_values["model"], "opus");
     assert_eq!(exec.agent_options.config_values["effort"], "xhigh");
 }
@@ -9794,10 +9666,9 @@ async fn a_primary_set_up_now_asks_what_to_call_each_other_first() {
 }
 
 /// 1.15 ③ ④: skipped, it all still works — the projects card skipped,
-/// what the assistants do on their own comes, and [Build a team] suggests
-/// development, review and fixing CI, made as ticked.
+/// what the assistants do on their own comes; no team is suggested.
 #[tokio::test]
-async fn skipping_the_projects_still_shows_what_the_assistants_do_and_a_team_is_made_as_ticked() {
+async fn skipping_the_projects_still_shows_what_the_assistants_do() {
     let (engine, _tmp) = ready().await;
     engine.meet_after_save().await;
     let name = meet_card(&engine, "choice", "meet").await.unwrap();
@@ -9810,22 +9681,7 @@ async fn skipping_the_projects_still_shows_what_the_assistants_do_and_a_team_is_
     assert!(notice_rows(&engine).await.iter().all(|r| data_of(r)["notice"] != "starter"), "nothing to look in");
     let promises = meet_card(&engine, "onboarding", "promises").await.expect("what the assistants do");
 
-    engine.act_on_notice(card_id(&promises), "team").await.unwrap();
-    assert!(engine.act_on_notice(card_id(&promises), "team").await.unwrap_err().contains("already"));
-    let team = last_card(&engine, "changed").await;
-    let data = data_of(&team);
-    assert_eq!((data["what"].as_str(), data["why"].as_str()), (Some("bots"), Some("suggest")));
-    let templates: Vec<&str> = data["pending"]["team"].as_array().unwrap().iter().map(|m| m["template"].as_str().unwrap()).collect();
-    assert_eq!(templates, vec!["dev", "review", "ci"]);
-    assert_eq!(data_of(&meet_card(&engine, "onboarding", "promises").await.unwrap())["team"], card_id(&team));
-    assert!(engine.act_on_notice(card_id(&team), "accept:docs").await.is_err());
-    let row = engine.act_on_notice(card_id(&team), "accept:dev,ci").await.unwrap();
-    let data = row.data.unwrap();
-    assert_eq!(data["state"], "applied");
-    let made: Vec<&str> = data["bots"].as_array().unwrap().iter().map(|b| b["template"].as_str().unwrap()).collect();
-    assert_eq!(made, vec!["dev", "ci"]);
-    assert_eq!(svc::list_bots(&engine.db.conn).await.unwrap().len(), 3);
-
+    assert!(engine.act_on_notice(card_id(&promises), "team").await.is_err(), "no team to suggest");
     let row = engine.act_on_notice(card_id(&promises), "done").await.unwrap();
     assert_eq!(row.data.unwrap()["state"], "done");
 }
@@ -9891,23 +9747,6 @@ async fn a_connected_project_gets_one_thing_at_once_and_it_is_handed_over() {
     assert_eq!(data_of(&card)["state"], "none");
     assert!(fresh.act_on_notice(card_id(&card), "hand").await.is_err());
     let _ = quiet;
-}
-
-/// 1.15 ⑤: an owner from before this version is not asked what to call
-/// anyone; what the assistants do on their own comes, once.
-#[tokio::test]
-async fn an_owner_from_before_is_told_what_the_assistants_do_and_not_asked_names() {
-    let (engine, _tmp) = configured().await;
-    let primary = engine.bot().await;
-    svc::patch_settings(&engine.db.conn, primary, &json!({ MEET_KEY: null })).await.unwrap();
-    engine.meet_on_start().await;
-    assert_eq!(meet_record(&engine).await["from"], "upgrade");
-    engine.meet_on_start().await;
-    engine.meet_after_save().await;
-    let rows = notice_rows(&engine).await;
-    assert_eq!(rows.iter().filter(|r| data_of(r)["purpose"] == "promises").count(), 1);
-    assert!(rows.iter().all(|r| data_of(r)["purpose"] != "meet" && data_of(r)["purpose"] != "connect"));
-    assert!(rows.iter().all(|r| data_of(r)["notice"] != "starter"), "no project with a forge account");
 }
 
 /// The order a first thing is found in, through a forge that answers: a
@@ -10041,59 +9880,6 @@ async fn a_late_or_duplicate_look_never_overrides_the_cards_latest() {
     engine.settle_starter(id, 1, None).await;
     assert_eq!(data_of(&starter_settled(&engine).await)["state"], "found");
     assert_eq!(engine.act_on_notice_with(id, "hand", Some("Fix it".into())).await.unwrap().data.unwrap()["state"], "handed");
-}
-
-/// A team run cut off after making one member: answering again makes the
-/// rest, takes the one made as made — none twice — and [Undo] removes them.
-#[tokio::test]
-async fn a_team_cut_off_halfway_is_finished_by_answering_again_and_undone_whole() {
-    let (engine, _tmp) = ready().await;
-    engine.meet_after_save().await;
-    let name = meet_card(&engine, "choice", "meet").await.unwrap();
-    engine.answer_choice(card_id(&name), None, None, None, Some(&[])).await.unwrap();
-    let connect = meet_card(&engine, "onboarding", "connect").await.unwrap();
-    engine.act_on_notice(card_id(&connect), "skip").await.unwrap();
-    let promises = meet_card(&engine, "onboarding", "promises").await.unwrap();
-    engine.act_on_notice(card_id(&promises), "team").await.unwrap();
-    let team = last_card(&engine, "changed").await;
-    // Cut off: the developer was being made under the uid it was given,
-    // and was.
-    let uid = svc::new_bot_uid();
-    let mut data = data_of(&team);
-    data["making"] = json!({ "template": "dev", "uid": uid });
-    svc::update_row_data(&engine.db.conn, team.id, None, Some(data)).await.unwrap();
-    let mut spec = super::bots::BotSpec::named("Developer");
-    spec.template = Some("dev".into());
-    spec.uid = Some(uid.clone());
-    let half = engine.create_bot(spec).await.unwrap();
-    // Meanwhile the owner made a developer of their own, on an executor
-    // config that was there: not the team's.
-    let coder = role_assistant(&engine, "Coder", true).await;
-    let mut own = super::bots::BotSpec::named("My dev");
-    own.template = Some("dev".into());
-    own.executor = super::bots::ExecutorSpec::Existing(coder);
-    let own = engine.create_bot(own).await.unwrap();
-
-    let row = engine.act_on_notice(card_id(&team), "accept:dev,ci").await.unwrap();
-    let data = row.data.unwrap();
-    assert_eq!(data["state"], "applied");
-    assert!(data["making"].is_null());
-    let ids: Vec<i64> = data["bots"].as_array().unwrap().iter().map(|b| b["bot_id"].as_i64().unwrap()).collect();
-    assert_eq!(ids.len(), 2);
-    assert_eq!(ids[0], half.bot.id as i64, "the one made before is taken, not made again");
-    assert!(!ids.contains(&(own.bot.id as i64)), "the owner's own is not the team's");
-    assert_eq!(svc::list_bots(&engine.db.conn).await.unwrap().len(), 4);
-    assert!(engine.act_on_notice(card_id(&team), "accept:dev,ci").await.unwrap_err().contains("answered already"));
-    // Answered and recorded together, or neither.
-    let before = data_of(&last_card(&engine, "changed").await);
-    assert!(!svc::move_notice_with_data(&engine.db.conn, card_id(&team), &[NoticeState::Open], NoticeState::Acted, team.id, &json!({ "x": 1 })).await.unwrap());
-    assert_eq!(data_of(&last_card(&engine, "changed").await), before);
-    let row = engine.act_on_notice(card_id(&team), "undo").await.unwrap();
-    assert_eq!(row.data.unwrap()["state"], "undone");
-    let left: Vec<i32> = svc::list_bots(&engine.db.conn).await.unwrap().iter().map(|b| b.id).collect();
-    assert_eq!(left.len(), 2);
-    assert!(left.contains(&own.bot.id), "the owner's own stays");
-    assert_eq!(executor(&engine, coder).await.id, coder, "with its executor config");
 }
 
 // ── acceptance (7.5) ─────────────────────────────────────────────────────────
@@ -10672,243 +10458,6 @@ async fn the_owner_changes_a_work_assistant_in_words_and_the_card_undoes_it() {
     let primary = engine.bot().await;
     let out = call_tool(&engine, "bot_update", json!({ "bot": primary, "name": "X", "quote": "x" })).await;
     assert!(!out.ok && out.text.contains("prefs_update"), "{}", out.text);
-}
-
-#[tokio::test]
-async fn the_owner_names_a_kind_of_works_first_pick_in_words_and_puts_it_back_to_auto() {
-    let (host, w, _tmp) = hosted().await;
-    let engine = host.primary();
-    let uid = svc::get_bot(&engine.db.conn, w)
-        .await
-        .unwrap()
-        .unwrap()
-        .uid
-        .unwrap();
-    // A work assistant made the first pick for a kind of work, in words…
-    let picked = format!("bot:{uid}");
-    let out = call_tool(
-        &engine,
-        "bot_update",
-        json!({ "bot": w, "roles": ["review"], "quote": "Dev reviews from now on" }),
-    )
-    .await;
-    assert!(out.ok, "{}", out.text);
-    assert_eq!(
-        engine.account().await.team.division.get("review"),
-        Some(&picked)
-    );
-    let out = call_tool(
-        &engine,
-        "prefs_update",
-        json!({ "changes": [{ "key": "team.division.review", "value": "auto" }], "quote": "pick the reviewer yourself" }),
-    )
-    .await;
-    assert!(out.ok, "{}", out.text);
-    assert!(!engine.account().await.team.division.contains_key("review"));
-    // Undone: Dev reviews again.
-    engine
-        .act_on_notice(card_id(&last_card(&engine, "changed").await), "undo")
-        .await
-        .unwrap();
-    assert_eq!(
-        engine.account().await.team.division.get("review"),
-        Some(&picked)
-    );
-    let out = call_tool(
-        &engine,
-        "bot_update",
-        json!({ "bot": w, "roles": ["chores"], "quote": "x" }),
-    )
-    .await;
-    assert!(!out.ok && out.text.contains("kind of work"), "{}", out.text);
-    let out = call_tool(
-        &engine,
-        "prefs_update",
-        json!({ "changes": [{ "key": "team.division.chores", "value": "auto" }], "quote": "x" }),
-    )
-    .await;
-    assert!(!out.ok, "{}", out.text);
-}
-
-#[tokio::test]
-async fn an_executor_config_is_made_from_what_the_owner_said_and_the_rest_filled_in() {
-    let (engine, _tmp) = ready().await;
-    let out = call_tool(
-        &engine,
-        "assistant_update",
-        json!({ "name": "Docs writer", "agent_type": "claude_code", "template": "docs",
-                "quote": "add one for docs on Claude Code" }),
-    )
-    .await;
-    assert!(out.ok, "{}", out.text);
-    assert!(out.text.contains("options codeg picked for the owner"), "{}", out.text);
-    assert!(out.text.contains("first pick for: docs"), "{}", out.text);
-    let id = out.data["assistant_id"].as_i64().unwrap() as i32;
-    let uid = out.data["uid"].as_str().unwrap().to_string();
-    let made = executor(&engine, id).await;
-    assert_eq!(made.agent_type, AgentType::ClaudeCode);
-    assert_eq!(
-        made.instructions,
-        super::bot_templates::instructions(crate::models::system::AppLocale::En, "docs")
-    );
-    assert_eq!(engine.account().await.team.division.get("docs"), Some(&format!("assistant:{uid}")));
-    let card = last_card(&engine, "changed").await;
-    let data = data_of(&card);
-    assert_eq!((data["what"].as_str(), data["state"].as_str()), (Some("assistant"), Some("applied")));
-    assert!(data["made"]["picked"].as_array().is_some_and(|p| !p.is_empty()));
-    // A second one for docs does not take the first's place.
-    let out = call_tool(
-        &engine,
-        "assistant_update",
-        json!({ "name": "Docs two", "agent_type": "codex", "template": "docs", "quote": "another" }),
-    )
-    .await;
-    assert!(out.ok && !out.text.contains("first pick"), "{}", out.text);
-    // [Undo] of the first: deleted, and docs back to auto.
-    engine.act_on_notice(card_id(&card), "undo").await.unwrap();
-    assert!(!executor(&engine, id).await.is_live());
-    assert_eq!(engine.account().await.team.division.get("docs"), None);
-
-    // Changing one: its standing instructions, directly, with a card that undoes it.
-    let other = out.data["assistant_id"].as_i64().unwrap() as i32;
-    let out = call_tool(
-        &engine,
-        "assistant_update",
-        json!({ "assistant": other, "instructions": "Write for beginners.", "roles": ["research"], "quote": "make it write for beginners" }),
-    )
-    .await;
-    assert!(out.ok, "{}", out.text);
-    assert_eq!(executor(&engine, other).await.instructions, "Write for beginners.");
-    let other_uid = executor(&engine, other).await.uid;
-    assert_eq!(engine.account().await.team.division.get("research"), Some(&format!("assistant:{other_uid}")));
-    let card = last_card(&engine, "changed").await;
-    engine.act_on_notice(card_id(&card), "undo").await.unwrap();
-    assert_ne!(executor(&engine, other).await.instructions, "Write for beginners.");
-    assert_eq!(engine.account().await.team.division.get("research"), None);
-}
-
-#[tokio::test]
-async fn without_the_agents_options_nothing_is_made_and_the_editor_opens_prefilled() {
-    let (engine, _tmp) = ready().await;
-    // Gemini is not installed here: its options cannot be read.
-    let out = call_tool(
-        &engine,
-        "assistant_update",
-        json!({ "name": "Gem", "agent_type": "gemini", "instructions": "Be brief.", "quote": "add one on Gemini" }),
-    )
-    .await;
-    assert!(out.ok && out.data["state"] == "editor", "{}", out.text);
-    let live = crate::db::service::assistant_service::list_all(&engine.db.conn).await.unwrap();
-    assert!(!live.iter().any(|a| a.name == "Gem"), "nothing made");
-    let data = data_of(&last_card(&engine, "changed").await);
-    assert_eq!(data["state"], "editor");
-    assert_eq!(data["pending"]["name"], "Gem");
-    assert_eq!(data["pending"]["instructions"], "Be brief.");
-    assert_eq!(data["pending"]["agent_type"], "gemini");
-}
-
-#[tokio::test]
-async fn an_executor_config_cut_off_while_made_or_undone_is_finished_not_made_twice() {
-    let (engine, _tmp) = ready().await;
-    let out = call_tool(
-        &engine,
-        "assistant_update",
-        json!({ "name": "Docs writer", "agent_type": "claude_code", "template": "docs", "quote": "one for docs" }),
-    )
-    .await;
-    assert!(out.ok, "{}", out.text);
-    let id = out.data["assistant_id"].as_i64().unwrap() as i32;
-    let card = last_card(&engine, "changed").await;
-    let op = svc::ops_of_notice(&engine.db.conn, card_id(&card)).await.unwrap().pop().expect("its entry");
-    assert_eq!((op.kind.as_str(), op.state), ("assistant_create", ActionState::Committed));
-    assert!(op.target.as_deref().unwrap_or("").contains(&id.to_string()), "the entry records what it made");
-    // As a restart finds one cut off after the config was made: finished,
-    // the same config, nothing made again.
-    svc::op_settle(&engine.db.conn, op.op_id.as_deref().unwrap(), &[ActionState::Committed], ActionState::Prepared, None, None, None)
-        .await
-        .unwrap();
-    engine.boot_ledger().await;
-    let now = svc::get_op(&engine.db.conn, op.op_id.as_deref().unwrap()).await.unwrap().unwrap();
-    assert_eq!((now.state, now.ref_id.as_deref()), (ActionState::Committed, Some(id.to_string().as_str())));
-    let docs: Vec<_> = crate::db::service::assistant_service::list_all(&engine.db.conn)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|a| a.is_live() && a.name.starts_with("Docs writer"))
-        .collect();
-    assert_eq!(docs.len(), 1, "made once");
-    // An undo cut off before it finished: start-up finishes it.
-    use sea_orm::{ActiveModelTrait, Set};
-    let notice = svc::get_notice(&engine.db.conn, card_id(&card)).await.unwrap().unwrap();
-    let mut payload: serde_json::Value = serde_json::from_str(&notice.payload).unwrap();
-    payload["phase"] = json!("undoing");
-    let mut am: crate::db::entities::personal_agent_notice::ActiveModel = notice.into();
-    am.state = Set(NoticeState::Acting);
-    am.payload = Set(payload.to_string());
-    am.update(&engine.db.conn).await.unwrap();
-    engine.boot_ledger().await;
-    assert!(!executor(&engine, id).await.is_live(), "deleted");
-    assert_eq!(engine.account().await.team.division.get("docs"), None);
-    let notice = svc::get_notice(&engine.db.conn, card_id(&card)).await.unwrap().unwrap();
-    assert_eq!(notice.state, NoticeState::Undone);
-    // A making cut off before anything was made: not made, and said so.
-    set_pref(&engine, "chat_changes", json!("show")).await;
-    let out = call_tool(&engine, "assistant_update", json!({ "name": "Tester", "agent_type": "codex", "quote": "a tester" })).await;
-    assert!(out.ok && out.data["state"] == "open", "{}", out.text);
-    let card = last_card(&engine, "changed").await;
-    let notice = svc::get_notice(&engine.db.conn, card_id(&card)).await.unwrap().unwrap();
-    let mut am: crate::db::entities::personal_agent_notice::ActiveModel = notice.into();
-    am.state = Set(NoticeState::Acting);
-    am.update(&engine.db.conn).await.unwrap();
-    engine.boot_ledger().await;
-    let notice = svc::get_notice(&engine.db.conn, card_id(&card)).await.unwrap().unwrap();
-    assert_eq!(notice.state, NoticeState::Open, "open again: nothing was made");
-    assert!(!crate::db::service::assistant_service::list_all(&engine.db.conn).await.unwrap().iter().any(|a| a.name == "Tester"));
-    // Accepted now: made once.
-    engine.act_on_notice(card_id(&card), "accept").await.unwrap();
-    assert_eq!(
-        crate::db::service::assistant_service::list_all(&engine.db.conn).await.unwrap().iter().filter(|a| a.is_live() && a.name == "Tester").count(),
-        1
-    );
-}
-
-#[tokio::test]
-async fn an_executor_config_recovered_after_its_division_was_written_undoes_back_to_the_pick_before() {
-    use sea_orm::{ActiveModelTrait, Set};
-    let (engine, _tmp) = ready().await;
-    let old = role_assistant(&engine, "Old docs", true).await;
-    let old_uid = executor(&engine, old).await.uid;
-    engine
-        .apply_settings(&[change("team.division.docs", json!(format!("assistant:{old_uid}")))])
-        .await
-        .unwrap();
-    let out = call_tool(
-        &engine,
-        "assistant_update",
-        json!({ "name": "New docs", "agent_type": "claude_code", "roles": ["docs"], "quote": "the new one does docs" }),
-    )
-    .await;
-    assert!(out.ok, "{}", out.text);
-    let id = out.data["assistant_id"].as_i64().unwrap() as i32;
-    let uid = out.data["uid"].as_str().unwrap().to_string();
-    assert_eq!(engine.account().await.team.division.get("docs"), Some(&format!("assistant:{uid}")));
-    // As a restart finds it: made, its division written, but no card yet.
-    let card = last_card(&engine, "changed").await;
-    let op = svc::ops_of_notice(&engine.db.conn, card_id(&card)).await.unwrap().pop().unwrap();
-    let mut am: action_entity::ActiveModel = op.clone().into();
-    am.state = Set(ActionState::Prepared);
-    am.notice_id = Set(None);
-    am.update(&engine.db.conn).await.unwrap();
-    engine.boot_ledger().await;
-    let recovered = last_card(&engine, "changed").await;
-    assert_ne!(recovered.id, card.id, "the card it never had");
-    let data = data_of(&recovered);
-    assert_eq!((data["what"].as_str(), data["state"].as_str()), (Some("assistant"), Some("applied")));
-    assert_eq!(data["made"]["assistant"]["id"], id);
-    // Its undo puts back the pick there was before.
-    engine.act_on_notice(card_id(&recovered), "undo").await.unwrap();
-    assert!(!executor(&engine, id).await.is_live());
-    assert_eq!(engine.account().await.team.division.get("docs"), Some(&format!("assistant:{old_uid}")));
 }
 
 #[tokio::test]
@@ -13265,42 +12814,6 @@ async fn the_third_request_alike_in_a_month_is_offered_as_a_routine_once() {
     assert_eq!(saved.source, "card");
     let offers = routine_cards(&engine, "repeat").await;
     assert_eq!(data_of(&offers[1])["state"], "made");
-}
-
-#[tokio::test]
-async fn the_night_cleaner_comes_with_a_nightly_routine_that_goes_with_it() {
-    let (engine, tmp) = ready().await;
-    let made = engine.create_bot(BotSpec::named("Night cleaner")).await.unwrap();
-    assert_eq!(made.template, "cleanup");
-    let w = made.bot.id;
-    let list = rsvc::list_of(&engine.db.conn, w).await.unwrap();
-    assert_eq!(list.len(), 1);
-    assert_eq!(list[0].cron.as_deref(), Some(super::routines::NIGHTLY_CRON));
-    assert!(list[0].trial_pending && list[0].enabled);
-    // Its trial waits while its opening card asks for its scope.
-    let worker = engine_of(&engine, &tmp, w);
-    let asking = svc::notices_in_state(&engine.db.conn, w, crate::db::entities::personal_agent_notice::NoticeState::Open)
-        .await
-        .unwrap()
-        .into_iter()
-        .find(|n| n.kind == crate::db::entities::personal_agent_notice::NoticeKind::Choice);
-    if let Some(n) = asking {
-        worker.routine_tick(super::clock::now()).await;
-        assert!(rsvc::runs_of(&engine.db.conn, list[0].id, 5).await.unwrap().is_empty(), "waits for its scope");
-        svc::move_notice(&engine.db.conn, n.id, &[crate::db::entities::personal_agent_notice::NoticeState::Open], crate::db::entities::personal_agent_notice::NoticeState::Acted)
-            .await
-            .unwrap();
-    }
-    worker.routine_tick(super::clock::now()).await;
-    let runs = rsvc::runs_of(&engine.db.conn, list[0].id, 5).await.unwrap();
-    assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].trigger, "trial");
-    let r = rsvc::get(&engine.db.conn, list[0].id).await.unwrap().unwrap();
-    assert!(!r.trial_pending && r.next_run_at.is_some());
-    // Deleted with it.
-    engine.delete_bot(w, &BotDeleteOptions::default(), Some(worker.clone())).await.unwrap();
-    assert!(rsvc::list_of(&engine.db.conn, w).await.unwrap().is_empty());
-    assert!(rsvc::runs_of(&engine.db.conn, list[0].id, 5).await.unwrap().is_empty());
 }
 
 // ── 2.4, review round 1 regressions ─────────────────────────────────────────
@@ -18010,24 +17523,6 @@ async fn a_dispatch_names_its_kind_of_work_and_why_and_the_record_is_kept_by_it(
         kind_work(&engine, coder, "Coder", "research", passed).await;
     }
     kind_work(&engine, coder, "Coder", "code", true).await;
-    let list = call(&engine, "assistant_list", json!({})).await;
-    assert!(list.ok, "{}", list.text);
-    assert!(
-        list.text
-            .contains("by kind of work: research 1 of 2 first time, code 1 of 1 first time"),
-        "{}",
-        list.text
-    );
-    let row = list.data["assistants"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["id"] == coder)
-        .unwrap()
-        .clone();
-    assert_eq!(row["grade_by_kind"]["research"]["settled"], 2);
-    // The review handed out above counts once it ends.
-    assert!(row["grade_by_mode"]["chat"]["settled"].as_u64().unwrap() >= 3);
 }
 
 #[tokio::test]
@@ -18811,23 +18306,13 @@ async fn work_that_went_well_becomes_a_process_skill_installed_turned_off_change
         .any(|e| e.summary.contains("deleted your process skill release")));
 }
 
-/// A release is looked back at by the release work assistant; two pieces
-/// of work that went as two did before, for a request like it, are looked
-/// back at too; work that failed is not.
+/// A release is looked back at by the one that led it, as any work is; two
+/// pieces of work that went as two did before, for a request like it, are
+/// looked back at too; work that failed is not.
 #[tokio::test]
-async fn a_release_goes_to_the_release_assistant_and_the_same_steps_twice_are_looked_back_at() {
+async fn a_release_is_looked_back_at_by_its_lead_and_the_same_steps_twice_too() {
     let (host, _w, _tmp) = hosted().await;
     let primary = host.primary();
-    let release = worker_row(&primary, "Ship").await;
-    crate::db::entities::personal_agent::Entity::update_many()
-        .col_expr(
-            crate::db::entities::personal_agent::Column::Template,
-            sea_orm::sea_query::Expr::value("release"),
-        )
-        .filter(crate::db::entities::personal_agent::Column::Id.eq(release))
-        .exec(&host.db.conn)
-        .await
-        .unwrap();
     let exec = role_assistant(&primary, "Runner", true).await;
     let me = primary.bot().await;
     async fn chain(
@@ -18946,11 +18431,7 @@ async fn a_release_goes_to_the_release_assistant_and_the_same_steps_twice_are_lo
             .iter()
             .find(|e| super::skills::origin_of_event(e) == Some(row))
     };
-    assert_eq!(
-        of(r1).and_then(|e| e.bot_id),
-        Some(release),
-        "a release: the release assistant"
-    );
+    assert_eq!(of(r1).and_then(|e| e.bot_id), Some(me), "a release: its lead");
     assert!(of(r2).is_none(), "the first time: no");
     let again = of(r3).expect("the same steps again");
     assert_eq!(again.bot_id, Some(me));

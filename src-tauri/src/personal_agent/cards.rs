@@ -136,9 +136,6 @@ pub struct HandoffInput<'a> {
     pub assistants: &'a [AssistantLine],
     /// The owner's division of work, when they set one.
     pub division: Option<&'a str>,
-    /// A work assistant's first session: it was just made, as what, and
-    /// what the owner picked on its opening card (4.12).
-    pub new_bot: Option<&'a str>,
     pub budget_chars: usize,
     /// How the owner wants cards (9.3).
     pub cards: CardUse,
@@ -476,10 +473,6 @@ pub fn handoff_card(input: &HandoffInput<'_>) -> Card {
     let name = name_line(id.name)
         .map(|l| format!("{l}\n"))
         .unwrap_or_default();
-    let name = match input.new_bot {
-        Some(note) => format!("{name}{note}\n"),
-        None => name,
-    };
     let text = format!(
         "<codeg-context kind=\"handoff\">\n\
 {who}, continuing one long-running timeline. This is the \
@@ -829,7 +822,6 @@ mod tests {
             recent,
             assistants,
             division: None,
-            new_bot: None,
             budget_chars: budget,
             cards: CardUse::Prefer,
             skill: true,

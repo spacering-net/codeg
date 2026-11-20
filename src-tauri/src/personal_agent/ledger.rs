@@ -265,8 +265,6 @@ impl PersonalAgentEngine {
             "followup" => self.resolve_followup(op, &op_id).await,
             // On a forge: by what the forge shows (7.4).
             "forge" => self.resolve_forge_op(op).await,
-            // An executor config being made (10.5): by what was made.
-            "assistant_create" => self.resolve_executor_op(op).await,
             _ => OpOutcome::Pending,
         }
     }
@@ -779,15 +777,6 @@ impl PersonalAgentEngine {
             // A forge action's card settles by its own entry (7.4).
             if card.kind == NoticeKind::Forge {
                 self.settle_forge_card_at_boot(&card).await;
-                continue;
-            }
-            // A card about an executor config: its undo, or its making (10.5).
-            if card.kind == NoticeKind::Changed
-                && serde_json::from_str::<Value>(&card.payload)
-                    .ok()
-                    .is_some_and(|p| p["what"] == "assistant")
-            {
-                self.settle_assistant_card_at_boot(&card).await;
                 continue;
             }
             // Its own runs: an uncertain card also names the step it is

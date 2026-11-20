@@ -14,16 +14,12 @@
 //!    the owner's message, [Another one], [Not now]. With nothing to offer it
 //!    says it keeps an eye on them.
 //! 4. **What the assistants do on their own**: how much they may disturb
-//!    the owner and the switches of what they do unasked, with [Build a
-//!    team] (a suggestion of three work assistants), the preferences, and
-//!    the desktop companion.
-//!
-//! An owner coming up from v2.0 (a primary set up before it, with no record
-//! of this) is not asked what to call anyone: they get 4, and 3 for the
-//! projects whose forge has an account.
+//!    the owner and the switches of what they do unasked, with the
+//!    preferences and the desktop companion. A helper of their own is the
+//!    primary's to make when they ask it for one.
 //!
 //! The record lives on the primary's settings, under `meet`: how it began
-//! (`new` or `upgrade`) and the projects connected. Each card is raised once
+//! and the projects connected. Each card is raised once
 //! (by its subject).
 
 use std::collections::HashSet;
@@ -32,12 +28,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::bot_templates as templates;
 use super::engine::{brain_of, PersonalAgentEngine};
 use super::starter::{self, LiveForge, Project};
 use super::workdir;
 use crate::db::entities::folder::{self, FolderKind};
-use crate::db::entities::personal_agent::BotKind;
 use crate::db::entities::personal_agent_notice::{
     self as notice_entity, NoticeKind, NoticeLevel, NoticeState,
 };
@@ -58,25 +52,13 @@ const PROMISES_SUBJECT: &str = "meet:promises";
 /// Projects the connect card lists, and how many may be connected.
 const LIST_MAX: usize = 30;
 const CONNECT_MAX: usize = 10;
-/// Projects looked in on the way up from v2.0: the most recent ones whose
-/// forge has an account.
-const UPGRADE_PROJECTS: usize = 5;
 /// The longest a name for the owner may be.
 const CALL_MAX: usize = 60;
-/// The work assistants [Build a team] suggests (4.12), by template.
-const TEAM: [&str; 3] = ["dev", "review", "ci"];
-
-/// One at a time in this process: a card raised once, a starter moved once,
-/// a team made once.
+/// One at a time in this process: a card raised once, a starter moved once.
 static MEET: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// The looks on their way, by engine, card and look.
 static LOOKING: std::sync::LazyLock<std::sync::Mutex<HashSet<(usize, i32, i64)>>> =
     std::sync::LazyLock::new(Default::default);
-
-/// Held while a team card is answered (`bots.rs` dismisses under it too).
-pub(super) async fn team_guard() -> tokio::sync::MutexGuard<'static, ()> {
-    MEET.lock().await
-}
 
 /// A project the connect card lists: where its remote is, and whether an
 /// account serves that forge.
@@ -402,9 +384,8 @@ impl PersonalAgentEngine {
         }
     }
 
-    /// At start: a primary set up before this version, with no record of
-    /// getting to know the owner, gets what the assistants do on their own,
-    /// and one thing at once in its projects whose forge has an account.
+    /// At start: a card of one thing at once still looking where it left
+    /// off.
     pub async fn meet_on_start(self: &Arc<Self>) {
         let one = MEET.lock().await;
         let Some(primary) = svc::primary_bot(&self.db.conn).await.ok().flatten() else {
@@ -416,34 +397,6 @@ impl PersonalAgentEngine {
         if self.meet_record().await.is_some() {
             drop(one);
             self.resume_starter().await;
-            return;
-        }
-        self.patch_meet(json!({ "from": "upgrade" })).await;
-        let mut projects: Vec<Project> = Vec::new();
-        for p in meet_projects(&self.db).await {
-            if projects.len() >= UPGRADE_PROJECTS {
-                break;
-            }
-            if p.account {
-                projects.push(Project {
-                    id: p.id,
-                    name: p.name,
-                });
-            }
-        }
-        if !projects.is_empty() {
-            self.patch_meet(
-                json!({ "projects": projects.iter().map(|p| p.id).collect::<Vec<_>>() }),
-            )
-            .await;
-            if let Err(e) = self.raise_first_thing(projects).await {
-                tracing::warn!("[personal-agent] the first-thing card was not written: {e}");
-            }
-        }
-        if let Err(e) = self.raise_promises().await {
-            tracing::warn!(
-                "[personal-agent] the card of what the assistants do was not written: {e}"
-            );
         }
     }
 
@@ -715,7 +668,7 @@ impl PersonalAgentEngine {
     }
 
     /// The owner's answer on a card of getting to know them: `skip` on the
-    /// projects card; `done` and `team` on what the assistants do.
+    /// projects card; `done` on what the assistants do.
     pub(super) async fn act_on_onboarding(
         self: &Arc<Self>,
         notice: &notice_entity::Model,
@@ -764,26 +717,8 @@ impl PersonalAgentEngine {
                 self.set_card_data(notice, |d| d["state"] = "done".into())
                     .await
             }
-            ("promises", "team") => {
-                let row_id = notice.timeline_id.ok_or("the card's row is missing")?;
-                let row = svc::get_row(&self.db.conn, row_id)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .ok_or("the card's row is missing")?;
-                let data: Value = row
-                    .data
-                    .as_deref()
-                    .and_then(|d| serde_json::from_str(d).ok())
-                    .unwrap_or_default();
-                if data["team"].is_number() {
-                    return Err("the team was suggested already".into());
-                }
-                let card = self.suggest_team().await?;
-                self.set_card_data(notice, |d| d["team"] = card.into())
-                    .await
-            }
             ("connect", _) => Err("`action` must be skip".into()),
-            ("promises", _) => Err("`action` must be done or team".into()),
+            ("promises", _) => Err("`action` must be done".into()),
             _ => Err("this card has no such answer".into()),
         }
     }
@@ -1054,237 +989,9 @@ impl PersonalAgentEngine {
         .await
     }
 
-    /// [Build a team]: a suggestion card of the three work assistants a
-    /// coder starts with — development, review, fixing CI — for the projects
-    /// connected; the owner ticks which to make (4.12).
-    async fn suggest_team(&self) -> Result<i32, String> {
-        let primary = self
-            .agent_row()
-            .await
-            .ok_or("configure the personal agent first")?;
-        if primary.kind != BotKind::Primary {
-            return Err("only the primary assistant suggests a team".into());
-        }
-        let locale = self.owner_locale(&primary, None).await;
-        let projects: Vec<String> = {
-            let ids: Vec<i64> = self
-                .meet_record()
-                .await
-                .and_then(|m| m["projects"].as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(Value::as_i64)
-                .collect();
-            let mut names = Vec::new();
-            for id in ids {
-                if let Some(f) = folder_model(&self.db, id as i32).await {
-                    names.push(project_name(&f));
-                }
-            }
-            names
-        };
-        let team: Vec<Value> = TEAM
-            .iter()
-            .map(|id| {
-                json!({
-                    "name": templates::text(locale, id).map(|t| t.name.clone()).unwrap_or_else(|| (*id).to_string()),
-                    "template": id,
-                })
-            })
-            .collect();
-        self.raise_bots_card(
-            "suggest",
-            &[],
-            Some(json!({ "team": team, "projects": projects })),
-            None,
-            None,
-        )
-        .await
-    }
 }
 
 impl PersonalAgentEngine {
-    /// The owner made the team suggested: `accept` all of it, `accept:dev,ci`
-    /// the ones ticked. The card stays open while they are made and records
-    /// each as it is made — and the one being made — so a run cut off is
-    /// finished by answering again, without making any twice; then each
-    /// has its [Undo]. One that could not be made says why.
-    pub(super) async fn accept_team(
-        &self,
-        notice_id: i32,
-        row_id: i32,
-        action: &str,
-    ) -> Result<TimelineRow, String> {
-        let _one = MEET.lock().await;
-        let notice = svc::get_notice(&self.db.conn, notice_id)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or("no such card")?;
-        if notice.state != NoticeState::Open {
-            return Err("this card was answered already".into());
-        }
-        let row = svc::get_row(&self.db.conn, row_id)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or("the card's row is missing")?;
-        let mut data: Value = row
-            .data
-            .as_deref()
-            .and_then(|d| serde_json::from_str(d).ok())
-            .unwrap_or_else(|| json!({}));
-        let team: Vec<Value> = data["pending"]["team"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        let picked: Vec<Value> = match action.strip_prefix("accept:") {
-            None => team,
-            Some(list) => {
-                let want: Vec<&str> = list
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|k| !k.is_empty())
-                    .collect();
-                for k in &want {
-                    if !team.iter().any(|m| m["template"].as_str() == Some(*k)) {
-                        return Err(format!("the team has no `{k}`"));
-                    }
-                }
-                team.into_iter()
-                    .filter(|m| m["template"].as_str().is_some_and(|t| want.contains(&t)))
-                    .collect()
-            }
-        };
-        if picked.is_empty() {
-            return Err("tick at least one to make".into());
-        }
-        let locale = self.locale_now().await;
-        let mut bots: Vec<Value> = data["bots"].as_array().cloned().unwrap_or_default();
-        let has = |bots: &[Value], template: &str| {
-            bots.iter()
-                .any(|b| b["template"].as_str() == Some(template))
-        };
-        // The one being made when codeg stopped: the assistant made under
-        // the uid it was given, if it got that far.
-        if let Some(uid) = data["making"]["uid"].as_str().map(str::to_string) {
-            let known = bots.iter().any(|b| b["uid"].as_str() == Some(uid.as_str()));
-            if !known {
-                if let Some(found) = self.made_as(&uid, locale).await {
-                    bots.push(found);
-                }
-            }
-            data["making"] = Value::Null;
-        }
-        let mut errors: Vec<String> = Vec::new();
-        for member in &picked {
-            let template = member["template"].as_str().unwrap_or_default().to_string();
-            if has(&bots, &template) {
-                continue;
-            }
-            let uid = svc::new_bot_uid();
-            data["bots"] = json!(bots);
-            data["making"] = json!({ "template": template, "uid": uid });
-            svc::update_row_data(&self.db.conn, row_id, None, Some(data.clone()))
-                .await
-                .map_err(|e| e.to_string())?;
-            match self.create_from_call_as(member, Some(uid)).await {
-                Ok(m) => bots.push(super::bots::made_json(&m, locale)),
-                Err(e) => errors.push(format!(
-                    "{}: {}",
-                    member["name"].as_str().unwrap_or_default(),
-                    e.message()
-                )),
-            }
-            data["bots"] = json!(bots);
-            data["making"] = Value::Null;
-            svc::update_row_data(&self.db.conn, row_id, None, Some(data.clone()))
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-        if bots.is_empty() {
-            data["error"] = errors
-                .first()
-                .cloned()
-                .map(Value::from)
-                .unwrap_or(Value::Null);
-            let _ = self.write_card(row_id, data).await;
-            return Err(errors.join("; "));
-        }
-        data["state"] = "applied".into();
-        data["error"] = errors
-            .first()
-            .cloned()
-            .map(Value::from)
-            .unwrap_or(Value::Null);
-        // Answered and recorded together: a stop between the two would leave
-        // a card that can neither be answered again nor undone.
-        if !svc::move_notice_with_data(
-            &self.db.conn,
-            notice.id,
-            &[NoticeState::Open],
-            NoticeState::Acted,
-            row_id,
-            &data,
-        )
-        .await
-        .map_err(|e| e.to_string())?
-        {
-            return Err("this card was answered already".into());
-        }
-        let card = self.write_card(row_id, data).await?;
-        self.tell_bots(
-            &notice,
-            &format!(
-                "The owner made the work assistants {} from the team suggested on card #{}.",
-                bots.iter()
-                    .map(|b| format!(
-                        "{} (#{})",
-                        b["name"].as_str().unwrap_or_default(),
-                        b["bot_id"]
-                    ))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                notice.id
-            ),
-        )
-        .await;
-        Ok(card)
-    }
-
-    /// The work assistant made under `uid` — one a run cut off made — as
-    /// the card lists it. Its executor config was made with it (a team
-    /// member's always is) when it has one.
-    async fn made_as(&self, uid: &str, locale: AppLocale) -> Option<Value> {
-        let bot = svc::list_bots(&self.db.conn)
-            .await
-            .ok()?
-            .into_iter()
-            .find(|b| b.kind == BotKind::Worker && b.uid.as_deref() == Some(uid))?;
-        let template = bot.template.clone().unwrap_or_default();
-        let template = template.as_str();
-        let executor = match bot.executor_assistant_id {
-            Some(id) => crate::db::service::assistant_service::get(&self.db.conn, id)
-                .await
-                .ok()
-                .flatten(),
-            None => None,
-        };
-        Some(json!({
-            "bot_id": bot.id,
-            "uid": bot.uid,
-            "name": super::messages::display_name(&bot),
-            "face": super::messages::bot_face(&bot),
-            "template": template,
-            "template_name": templates::text(locale, template).map(|t| t.name.clone()),
-            "executor_id": executor.as_ref().map(|e| e.id),
-            "executor_name": executor.as_ref().map(|e| e.name.clone()),
-            "executor_agent": executor.as_ref().map(|e| e.label_snapshot.agent.clone()),
-            // A team member's executor config is made with it.
-            "executor_created": executor.is_some(),
-            "picked": [],
-            "brain_picked": [],
-            "state": "made",
-        }))
-    }
 }
 
 /// The projects a first-thing card looks in, and what it showed already.

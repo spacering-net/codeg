@@ -205,28 +205,11 @@ fn payload_of(raw: Option<&str>) -> Value {
         .unwrap_or(Value::Null)
 }
 
-/// Who looks back at a chain: a release, the release work assistant (the
-/// one the division hands releases to, else the first made from the release
-/// template), else the primary; any other chain, its lead — when it is still
-/// on the roster.
-fn chain_target(chain: &Chain, bots: &[agent_entity::Model], account: &AccountView) -> Option<i32> {
+/// Who looks back at a chain: its lead — when it is still on the roster —
+/// else the one that started it, else the primary.
+fn chain_target(chain: &Chain, bots: &[agent_entity::Model]) -> Option<i32> {
     let primary = bots.iter().find(|b| b.kind == BotKind::Primary)?.id;
     let on_roster = |id: i32| bots.iter().any(|b| b.id == id);
-    if chain.is_release() {
-        let picked = account
-            .team
-            .division
-            .get("release")
-            .and_then(|p| p.strip_prefix("bot:"))
-            .and_then(|uid| bots.iter().find(|b| b.uid.as_deref() == Some(uid)))
-            .map(|b| b.id);
-        let made = bots
-            .iter()
-            .filter(|b| b.kind == BotKind::Worker && b.template.as_deref() == Some("release"))
-            .min_by_key(|b| b.id)
-            .map(|b| b.id);
-        return Some(picked.or(made).unwrap_or(primary));
-    }
     let lead = chain.lead();
     if on_roster(lead) {
         return Some(lead);
@@ -314,7 +297,7 @@ impl EngineHost {
                     continue;
                 }
             }
-            let Some(target) = chain_target(chain, &bots, &account) else {
+            let Some(target) = chain_target(chain, &bots) else {
                 continue;
             };
             let Some(row) = bots.iter().find(|b| b.id == target) else {

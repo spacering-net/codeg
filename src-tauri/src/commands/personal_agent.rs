@@ -1020,7 +1020,6 @@ fn bot_summary(
             serde_json::from_str(r#"{"kind":"emoji","emoji":"🧭","color":"violet"}"#)
                 .expect("the default avatar")
         }),
-        template: b.template.clone(),
         executor_assistant_id: b.executor_assistant_id,
         created_at: b.created_at,
     }
@@ -1154,16 +1153,9 @@ pub async fn personal_agent_save_core(
 ) -> Result<PersonalAgentInfo, AppCommandError> {
     let engine = engine(bot_id).await?;
     let saved = engine.save(draft).await.map_err(refused)?;
-    // The primary set up: the executor configs there were become work
-    // assistants, if they have not yet (4.15) — before the save answers, so
-    // the page that set it up finds them.
+    // Set up just now: what to call each other comes first (5.4).
     if saved.kind == crate::db::entities::personal_agent::BotKind::Primary {
-        // Set up just now: what to call each other comes first (5.4).
         engine.meet_after_save().await;
-        let n = engine.make_workers_from_executors().await;
-        if n > 0 {
-            tracing::info!("[personal-agent] made {n} work assistants from the executor configs");
-        }
     }
     Ok(saved)
 }
@@ -1540,23 +1532,13 @@ pub async fn personal_agent_set_workdir_core(
 
 // ── work assistants (4.12–4.15) ─────────────────────────────────────────────
 
-/// The templates, in the owner's language (`locale`, the page's).
-pub async fn personal_agent_templates_core(
-    locale: Option<String>,
-) -> Result<Vec<crate::models::personal_agent_bots::TemplateView>, AppCommandError> {
-    let locale = crate::personal_agent::templates::template_locale(locale.as_deref().unwrap_or("en"));
-    Ok(crate::personal_agent::bot_templates::views(locale))
-}
-
 /// A work assistant made from the page.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct BotMade {
     pub bot: Option<crate::models::personal_agent::BotSummary>,
     pub executor_assistant_id: Option<i32>,
-    pub template: String,
     /// The agent's options could not be read: the page opens the executor
-    /// config editor, prefilled with the template, and makes it again with
-    /// the selection.
+    /// config editor and makes it again with the selection.
     pub options_unavailable: Option<OptionsUnavailable>,
 }
 
@@ -1574,17 +1556,11 @@ fn made_answer(
         Ok(m) => Ok(BotMade {
             bot: Some(bot_summary(&m.bot)),
             executor_assistant_id: Some(m.executor.id),
-            template: m.template.to_string(),
             options_unavailable: None,
         }),
-        Err(CreateError::OptionsUnavailable {
-            agent_type,
-            why,
-            template,
-        }) => Ok(BotMade {
+        Err(CreateError::OptionsUnavailable { agent_type, why }) => Ok(BotMade {
             bot: None,
             executor_assistant_id: None,
-            template: template.to_string(),
             options_unavailable: Some(OptionsUnavailable { agent_type, why }),
         }),
         Err(CreateError::Refused(e)) => Err(refused(e)),
@@ -1599,7 +1575,7 @@ pub async fn personal_agent_bot_create_core(
     let engine = engine(None).await?;
     let mut spec = BotSpec::named(draft.name);
     spec.uid = draft.uid;
-    spec.template = draft.template;
+    spec.persona = draft.persona;
     spec.avatar = draft.avatar;
     spec.locale = draft.locale;
     if let Some(id) = draft.executor_assistant_id {
@@ -1643,18 +1619,6 @@ pub async fn personal_agent_bot_delete_core(
     };
     primary
         .delete_bot(bot_id, &options, worker)
-        .await
-        .map_err(refused)
-}
-
-/// [Change role] on a new work assistant's opening card.
-pub async fn personal_agent_bot_set_template_core(
-    bot_id: i32,
-    template: String,
-) -> Result<TimelineRow, AppCommandError> {
-    engine(Some(bot_id))
-        .await?
-        .set_bot_template(&template)
         .await
         .map_err(refused)
 }
@@ -2294,14 +2258,6 @@ pub async fn personal_agent_set_workdir(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_templates(
-    locale: Option<String>,
-) -> Result<Vec<crate::models::personal_agent_bots::TemplateView>, AppCommandError> {
-    personal_agent_templates_core(locale).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_bot_create(
     draft: crate::models::personal_agent_bots::BotCreateDraft,
 ) -> Result<BotMade, AppCommandError> {
@@ -2333,15 +2289,6 @@ pub async fn personal_agent_bot_delete(
     options: crate::models::personal_agent_bots::BotDeleteOptions,
 ) -> Result<(), AppCommandError> {
     personal_agent_bot_delete_core(bot_id, options).await
-}
-
-#[cfg(feature = "tauri-runtime")]
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn personal_agent_bot_set_template(
-    bot_id: i32,
-    template: String,
-) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_bot_set_template_core(bot_id, template).await
 }
 
 #[cfg(feature = "tauri-runtime")]

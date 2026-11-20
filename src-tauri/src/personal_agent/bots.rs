@@ -1,9 +1,7 @@
-//! Work assistants come and go (4.12, 4.14, 4.15): made from a name alone —
-//! its role guessed from the name, its brain the primary's, an executor
-//! config made with it and its options filled in — copied, deleted, and
-//! made from the executor configs there were before. A new one opens with
-//! its role's line and a choice card, and its brain first wakes when the
-//! owner answers or writes to it.
+//! Work assistants come and go (4.12, 4.14): made from a name and, when
+//! given, a persona — its brain the primary's, an executor config made with
+//! it and its options filled in, or one already there — copied and deleted.
+//! Its brain first wakes when it has something to do.
 //!
 //! The assistants make them too (`bot_create`): on the owner's word at
 //! once, with a card that undoes it; on their own idea, as a card that
@@ -14,7 +12,6 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use super::bot_templates::{self as templates, BLANK};
 use super::engine::{brain_of, settings_of, text_digest, PersonalAgentEngine};
 use super::messages::{bot_face, display_name, Unnamed};
 use super::options::{self, Partial};
@@ -37,9 +34,6 @@ use crate::models::personal_agent_bots::{
 use crate::models::system::AppLocale;
 use crate::models::AgentType;
 
-/// The settings key, on the primary's row, recording which executor
-/// configs were made into work assistants on the way up from v2.0 (4.15).
-pub const MADE_KEY: &str = "workers_from_executors";
 /// Days a declined suggestion to make an assistant of a name stays declined.
 const SUGGEST_MUTE_DAYS: i64 = 7;
 /// Longest name.
@@ -56,10 +50,8 @@ pub enum ExecutorSpec {
     },
     /// Make one with this complete selection (the editor's).
     Config(AssistantAgentConfig),
-    /// Make a copy of this one — its selection, description, instructions
-    /// and usage (copying a work assistant, 4.14).
-    CopyOf(i32),
-    /// Bind this one (the executor configs there were before, 4.15).
+    /// Bind this one (one the owner picked, or the one a copied assistant
+    /// had: an executor config can serve several assistants).
     Existing(i32),
     /// Bind this one, made for the new assistant just now (in the editor):
     /// as one codeg made.
@@ -71,15 +63,15 @@ pub enum ExecutorSpec {
 pub struct BotSpec {
     pub name: String,
     pub uid: Option<String>,
-    pub template: Option<String>,
+    /// Its persona's first paragraph — who it is, what work is for it; the
+    /// default sentence when `None`.
+    pub persona: Option<String>,
     pub avatar: Option<BotAvatar>,
     /// Its brain; the primary's when `None`.
     pub brain: Option<AssistantAgentConfig>,
     /// The options picked for the brain, when codeg filled them in.
     pub brain_picked: Vec<PickedOption>,
     pub executor: ExecutorSpec,
-    /// Open with its role's line and the choice card.
-    pub opener: bool,
     pub locale: Option<String>,
     /// Its own settings to start from (a copy's), and its files.
     pub settings: Option<PersonalAgentSettings>,
@@ -92,7 +84,7 @@ impl BotSpec {
         Self {
             name: name.into(),
             uid: None,
-            template: None,
+            persona: None,
             avatar: None,
             brain: None,
             brain_picked: Vec::new(),
@@ -100,7 +92,6 @@ impl BotSpec {
                 agent_type: None,
                 given: Partial::default(),
             },
-            opener: true,
             locale: None,
             settings: None,
             files: None,
@@ -118,7 +109,6 @@ pub struct Made {
     /// What codeg picked for the owner on the executor config.
     pub picked: Vec<PickedOption>,
     pub brain_picked: Vec<PickedOption>,
-    pub template: &'static str,
 }
 
 /// Why it was not made.
@@ -127,11 +117,7 @@ pub enum CreateError {
     Refused(String),
     /// The agent's options could not be read: the page opens the editor,
     /// prefilled, instead.
-    OptionsUnavailable {
-        agent_type: AgentType,
-        why: String,
-        template: &'static str,
-    },
+    OptionsUnavailable { agent_type: AgentType, why: String },
 }
 
 impl CreateError {
@@ -220,12 +206,6 @@ impl PersonalAgentEngine {
             None => brain_of(&primary)
                 .ok_or_else(|| refused("set the primary assistant's brain up first".into()))?,
         };
-        let template: &'static str = match spec.template.as_deref() {
-            Some(t) => templates::spec(t)
-                .map(|s| s.id)
-                .ok_or_else(|| refused(format!("no template `{t}`")))?,
-            None => templates::infer(&name),
-        };
         let locale = self.owner_locale(&primary, spec.locale.as_deref()).await;
         let uid = match spec.uid.as_deref().filter(|u| uid_ok(u)) {
             Some(u) if !svc::uid_taken(&self.db.conn, u).await.unwrap_or(true) => u.to_string(),
@@ -238,7 +218,6 @@ impl PersonalAgentEngine {
             }
             None => BotAvatar::default_for(&uid),
         };
-        let words = templates::text(locale, template);
 
         // Its executor config.
         let (executor, created, picked) = match spec.executor.clone() {
@@ -256,50 +235,9 @@ impl PersonalAgentEngine {
             }
             ExecutorSpec::Config(config) => {
                 let a = self
-                    .make_executor(
-                        &name,
-                        &avatar,
-                        config,
-                        words.map(|w| w.description.clone()),
-                        locale,
-                        template,
-                    )
+                    .make_executor(&name, &avatar, config)
                     .await
                     .map_err(refused)?;
-                (a, true, Vec::new())
-            }
-            ExecutorSpec::CopyOf(id) => {
-                let src = crate::db::service::assistant_service::get(&self.db.conn, id)
-                    .await
-                    .map_err(|e| refused(e.to_string()))?
-                    .filter(|a| a.is_live())
-                    .ok_or_else(|| refused(format!("no executor config #{id} to copy")))?;
-                let config = AssistantAgentConfig {
-                    agent_type: src.agent_type,
-                    agent_options: src.agent_options.clone(),
-                    label_snapshot: src.label_snapshot.clone(),
-                };
-                let draft = AssistantDraft {
-                    name: self.free_executor_name(&name).await,
-                    description: src.description.clone(),
-                    avatar: avatar.as_assistant(),
-                    agent_config: config,
-                    instructions: src.instructions.clone(),
-                    enabled: true,
-                };
-                let a = crate::commands::assistants::assistant_create_core(
-                    &self.emitter,
-                    &self.db,
-                    draft,
-                )
-                .await
-                .map_err(|e| refused(e.to_string()))?;
-                // How the assistants may use it, as the original.
-                let usage = self.account().await.team.usage_of(&src.uid);
-                if !usage.is_default() {
-                    self.patch_account(json!({ "team": { "usage": { a.uid.clone(): usage } } }))
-                        .await;
-                }
                 (a, true, Vec::new())
             }
             ExecutorSpec::Fill { agent_type, given } => {
@@ -308,22 +246,13 @@ impl PersonalAgentEngine {
                     self.fill_options(agent_type, &given, &[])
                         .await
                         .map_err(|e| match e {
-                            FillError::Unavailable(why) => CreateError::OptionsUnavailable {
-                                agent_type,
-                                why,
-                                template,
-                            },
+                            FillError::Unavailable(why) => {
+                                CreateError::OptionsUnavailable { agent_type, why }
+                            }
                             FillError::Refused(e) => refused(e),
                         })?;
                 let a = self
-                    .make_executor(
-                        &name,
-                        &avatar,
-                        config,
-                        words.map(|w| w.description.clone()),
-                        locale,
-                        template,
-                    )
+                    .make_executor(&name, &avatar, config)
                     .await
                     .map_err(refused)?;
                 (a, true, picked)
@@ -357,7 +286,6 @@ impl PersonalAgentEngine {
             settings_json: crate::models::personal_agent::merge_settings_json(
                 "{}", &settings, false,
             ),
-            template: Some(template.to_string()),
             executor_assistant_id: Some(executor.id),
         };
         // Its directory looked at and taken in one hold, before the row is
@@ -373,6 +301,19 @@ impl PersonalAgentEngine {
             Ok(None) => None,
             Err(e) => Some(e),
         };
+        // An executor config it shares, still there in this hold — one
+        // deleted as unbound takes the same hold.
+        let gone = match spec.executor {
+            ExecutorSpec::Existing(id) | ExecutorSpec::Adopt(id) => {
+                !crate::db::service::assistant_service::get(&self.db.conn, id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|a| a.is_live())
+            }
+            _ => false,
+        };
+        let taken = taken.or_else(|| gone.then(|| format!("executor config #{} is gone", executor.id)));
         if let Some(why) = taken {
             drop(claim);
             if created && !adopted {
@@ -390,13 +331,18 @@ impl PersonalAgentEngine {
             }
         };
 
-        // Its working directory: its role's files.
-        let (soul, rules) = spec.files.clone().unwrap_or_else(|| {
-            (
-                templates::soul_md(locale, template),
-                templates::rules_md(locale, template),
-            )
-        });
+        // Its working directory: its own persona and rules — a copy's as
+        // the original has them, else the persona given (or the default
+        // sentence, until it writes its own).
+        // Each on its own: an empty or unreadable one is the default, the
+        // other kept as written.
+        let (given_soul, given_rules) = spec.files.clone().unwrap_or_default();
+        let soul = Some(given_soul)
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| super::templates::worker_soul(locale, spec.persona.as_deref()));
+        let rules = Some(given_rules)
+            .filter(|r| !r.trim().is_empty())
+            .unwrap_or_else(|| super::templates::worker_rules(locale));
         let made = workdir::ensure_role_workdir(&dir, locale, &soul, &rules)
             .await
             .map_err(|e| format!("its working directory could not be made: {e}"));
@@ -419,51 +365,13 @@ impl PersonalAgentEngine {
             &Default::default(),
         );
 
-        // How its executor config is used, and the kind of work it is first
-        // for — when no one is yet.
-        let spec_t = templates::spec(template);
-        let mut team = serde_json::Map::new();
-        if created && !matches!(spec.executor, ExecutorSpec::CopyOf(_)) {
-            if let Some(modes) = spec_t.and_then(|s| s.modes) {
-                team.insert(
-                    "usage".into(),
-                    json!({ executor.uid.clone(): { "dispatch": true, "modes": modes, "projects": null } }),
-                );
-            }
-        }
-        if let Some(kind) = spec_t.and_then(|s| s.division) {
-            if !self.account().await.team.division.contains_key(kind) {
-                team.insert("division".into(), json!({ kind: format!("bot:{uid}") }));
-            }
-        }
-        if !team.is_empty() {
-            self.patch_account(json!({ "team": team })).await;
-        }
-
-        // The night cleaner looks every night (4.13); its first run waits
-        // for the owner to tell it its scope.
-        if template == "cleanup" {
-            if let Some(w) = words {
-                if let Err(e) = super::routines::make_nightly(&self.db.conn, bot.id, w).await {
-                    tracing::warn!("[personal-agent] the nightly routine was not made: {e}");
-                }
-            }
-        }
         let made = Made {
             bot,
             executor,
             executor_created: created,
             picked,
             brain_picked: spec.brain_picked.clone(),
-            template,
         };
-        if spec.opener {
-            if let Err(e) = self.raise_starter(&made, locale, &primary).await {
-                tracing::warn!(
-                    "[personal-agent] the new assistant's opening card was not written: {e}"
-                );
-            }
-        }
         self.emit_for(made.bot.id, PersonalAgentChange::Agent);
         self.emit_for(primary.id, PersonalAgentChange::Agent);
         Ok(made)
@@ -493,29 +401,21 @@ impl PersonalAgentEngine {
     }
 
     /// Make the executor config a new work assistant is bound to: its name
-    /// and face, its role's description and standing instructions.
+    /// and face; no description, no standing instructions of codeg's.
     async fn make_executor(
         &self,
         name: &str,
         avatar: &BotAvatar,
         config: AssistantAgentConfig,
-        description: Option<String>,
-        locale: AppLocale,
-        template: &str,
     ) -> Result<AssistantInfo, String> {
         crate::db::service::assistant_service::validate_agent_config(&config)
             .map_err(|e| e.to_string())?;
-        let description: String = description
-            .unwrap_or_default()
-            .chars()
-            .take(crate::db::service::assistant_service::MAX_DESCRIPTION_CHARS)
-            .collect();
         let draft = AssistantDraft {
             name: self.free_executor_name(name).await,
-            description,
+            description: String::new(),
             avatar: avatar.as_assistant(),
             agent_config: config,
-            instructions: templates::instructions(locale, template),
+            instructions: String::new(),
             enabled: true,
         };
         crate::commands::assistants::assistant_create_core(&self.emitter, &self.db, draft)
@@ -578,42 +478,7 @@ impl PersonalAgentEngine {
             .map_err(FillError::Refused)
     }
 
-    // ── the opening card ────────────────────────────────────────────────────
-
-    /// The new assistant's first line: its role's opener with three choices
-    /// and one of the owner's own, and under it what codeg made for it.
-    async fn raise_starter(
-        &self,
-        made: &Made,
-        locale: AppLocale,
-        primary: &agent_entity::Model,
-    ) -> Result<(), String> {
-        let data = starter_data(made, locale, primary);
-        let body = data["question"].as_str().unwrap_or_default().to_string();
-        let mut row = NewRow::new(TimelineKind::Notice, body);
-        row.data = Some(data);
-        let (_, card) = svc::create_notice_with_row(
-            &self.db.conn,
-            made.bot.id,
-            NewNotice {
-                kind: NoticeKind::Choice,
-                subject_key: Some(format!("starter:{}", made.bot.id)),
-                level: NoticeLevel::Normal,
-                batch_id: None,
-                payload: json!({ "purpose": "starter", "bot": made.bot.id }),
-            },
-            row,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        self.emit_for(
-            made.bot.id,
-            PersonalAgentChange::Timeline {
-                rows: vec![svc::to_row(card)],
-            },
-        );
-        Ok(())
-    }
+    // ── choice cards ────────────────────────────────────────────────────────
 
     /// The owner answers a choice card: the card keeps the answer, and it
     /// goes to the assistant as the owner's message — a new assistant's
@@ -733,223 +598,11 @@ impl PersonalAgentEngine {
         Ok(row)
     }
 
-    /// The starter card of this assistant's, while the owner has not
-    /// answered it.
-    async fn open_starter(&self) -> Option<(notice_entity::Model, Value)> {
-        let bot = self.bot().await;
-        let n = svc::notice_of_subject(
-            &self.db.conn,
-            bot,
-            NoticeKind::Choice,
-            &format!("starter:{bot}"),
-        )
-        .await
-        .ok()
-        .flatten()?;
-        let row = svc::get_row(&self.db.conn, n.timeline_id?)
-            .await
-            .ok()
-            .flatten()?;
-        let data: Value = row
-            .data
-            .as_deref()
-            .and_then(|d| serde_json::from_str(d).ok())?;
-        Some((n, data))
-    }
-
-    /// What a work assistant's first session is told: it was just made,
-    /// as what, and what the owner picked on its opening card.
-    pub(super) async fn new_bot_note(&self, row: &agent_entity::Model) -> Option<String> {
-        let template = row.template.as_deref().unwrap_or(BLANK);
-        let primary = svc::primary_bot(&self.db.conn).await.ok().flatten()?;
-        let locale = self.owner_locale(&primary, None).await;
-        let role = templates::text(locale, template)
-            .map(|t| format!("{} — {}", t.name, t.job))
-            .unwrap_or_else(|| template.to_string());
-        let mut note = format!("You were just made: your role is {role}.");
-        if let Some((n, data)) = self.open_starter().await {
-            let question = data["question"].as_str().unwrap_or_default();
-            match (n.state, data.get("answer")) {
-                (NoticeState::Acted, Some(a)) => {
-                    let picked = match a["text"].as_str() {
-                        Some(t) => format!("wrote their own: \"{t}\""),
-                        None => {
-                            let mut p = format!(
-                                "picked {}. {}",
-                                a["key"].as_str().unwrap_or("?"),
-                                a["label"].as_str().unwrap_or_default()
-                            );
-                            if let Some(name) = a["project"]["name"].as_str() {
-                                p.push_str(&format!(" — project {name} (#{})", a["project"]["id"]));
-                            }
-                            p
-                        }
-                    };
-                    note.push_str(&format!(
-                        " On your opening card (\"{question}\") the owner {picked}; their message below says the same."
-                    ));
-                }
-                _ => note.push_str(&format!(
-                    " The owner wrote to you before answering your opening card (\"{question}\")."
-                )),
-            }
-        }
-        Some(note)
-    }
-
-    /// [Change role] on the opening card, before the assistant first ran:
-    /// its files, its executor config's description, instructions and
-    /// usage, and its place in the division follow the new role — each only
-    /// where it is still the old role's as codeg wrote it.
-    pub async fn set_bot_template(&self, template: &str) -> Result<TimelineRow, String> {
-        let row = self.agent_row().await.ok_or("no such assistant")?;
-        if row.kind != BotKind::Worker {
-            return Err("only a work assistant has a role to change".into());
-        }
-        let new = templates::spec(template).ok_or_else(|| format!("no template `{template}`"))?;
-        let old = row.template.clone().unwrap_or_else(|| BLANK.to_string());
-        if old == new.id {
-            return Err("it has that role already".into());
-        }
-        let (notice, mut data) = self
-            .open_starter()
-            .await
-            .ok_or("its role changes on its opening card")?;
-        if notice.state != NoticeState::Open
-            || !svc::list_segments(&self.db.conn, row.id)
-                .await
-                .unwrap_or_default()
-                .is_empty()
-        {
-            return Err(
-                "it has started on its work: change its files in its settings instead".into(),
-            );
-        }
-        let locale = data["locale"]
-            .as_str()
-            .map(super::templates::template_locale)
-            .unwrap_or(AppLocale::En);
-        let dir = self.workdir_of(&row);
-        // Each still the old role's template is the new role's: read and
-        // written under the directory's lock, with every other write of it.
-        let (soul_was, soul_now) = (
-            templates::soul_md(locale, &old),
-            templates::soul_md(locale, new.id),
-        );
-        let (rules_was, rules_now) = (
-            templates::rules_md(locale, &old),
-            templates::rules_md(locale, new.id),
-        );
-        workdir::write_for_owner(
-            &dir,
-            &[
-                (workdir::SOUL_FILE, &|now| {
-                    (now.unwrap_or_default() == soul_was).then(|| soul_now.clone())
-                }),
-                (workdir::RULES_FILE, &|now| {
-                    (now.unwrap_or_default() == rules_was).then(|| rules_now.clone())
-                }),
-            ],
-            "role changed on the opening card",
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        // Its executor config, where it is still the old role's.
-        if let Some(id) = row.executor_assistant_id {
-            if let Ok(Some(a)) = crate::db::service::assistant_service::get(&self.db.conn, id).await
-            {
-                let old_words = templates::text(locale, &old);
-                let new_words = templates::text(locale, new.id);
-                let mut patch = crate::models::assistant::AssistantPatch::default();
-                if a.instructions == templates::instructions(locale, &old) {
-                    patch.instructions = Some(templates::instructions(locale, new.id));
-                }
-                if old_words.is_some_and(|w| w.description == a.description) {
-                    patch.description = new_words.map(|w| w.description.clone());
-                }
-                if patch != Default::default() {
-                    let _ = crate::commands::assistants::assistant_update_core(
-                        &self.emitter,
-                        &self.db,
-                        id,
-                        patch,
-                    )
-                    .await;
-                }
-                let account = self.account().await;
-                let usage = account.team.usage_of(&a.uid);
-                let old_modes = templates::spec(&old).and_then(|s| s.modes);
-                let was_old = match old_modes {
-                    Some(m) => usage.dispatch && usage.projects.is_none() && usage.modes == m,
-                    None => usage.is_default(),
-                };
-                let mut team = serde_json::Map::new();
-                if was_old {
-                    team.insert(
-                        "usage".into(),
-                        json!({ a.uid.clone(): new.modes.map(|m| json!({ "dispatch": true, "modes": m, "projects": null })) }),
-                    );
-                }
-                let uid = row.uid.clone().unwrap_or_default();
-                let mut division = serde_json::Map::new();
-                if let Some(kind) = templates::spec(&old).and_then(|s| s.division) {
-                    if account.team.division.get(kind).map(String::as_str)
-                        == Some(&format!("bot:{uid}"))
-                    {
-                        division.insert(kind.into(), Value::Null);
-                    }
-                }
-                if let Some(kind) = new.division {
-                    if !account.team.division.contains_key(kind) || division.contains_key(kind) {
-                        division.insert(kind.into(), json!(format!("bot:{uid}")));
-                    }
-                }
-                if !division.is_empty() {
-                    team.insert("division".into(), Value::Object(division));
-                }
-                if !team.is_empty() {
-                    self.patch_account(json!({ "team": team })).await;
-                }
-            }
-        }
-        svc::set_bot_template(&self.db.conn, row.id, new.id)
-            .await
-            .map_err(|e| e.to_string())?;
-        // The card asks as the new role does.
-        let words = templates::text(locale, new.id).ok_or("no such template")?;
-        if let Some(map) = data.as_object_mut() {
-            map.insert("template".into(), new.id.into());
-            map.insert("template_name".into(), words.name.clone().into());
-            map.insert("question".into(), words.opener.clone().into());
-            map.insert(
-                "options".into(),
-                choice_options(&words.options, new.project_option),
-            );
-        }
-        let row_id = notice.timeline_id.ok_or("the card's row is missing")?;
-        svc::update_row_data(
-            &self.db.conn,
-            row_id,
-            Some(words.opener.clone()),
-            Some(data),
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        let updated = svc::get_row(&self.db.conn, row_id)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or("the card's row is missing")?;
-        let card = svc::to_row(updated);
-        self.emit_rows(vec![card.clone()]);
-        self.emit(PersonalAgentChange::Agent);
-        Ok(card)
-    }
-
     // ── copying one ─────────────────────────────────────────────────────────
 
-    /// Copy work assistant `id` (4.14): its brain, role, files and own
-    /// settings, a copy of its executor config; not its memory, sessions or
-    /// routines.
+    /// Copy work assistant `id` (4.14): its brain, persona, rules and own
+    /// settings, and the executor config it has (shared: one can serve
+    /// several); not its memory, sessions or routines.
     pub async fn copy_bot(
         &self,
         id: i32,
@@ -964,10 +617,18 @@ impl PersonalAgentEngine {
             .ok_or_else(|| refused("only a work assistant can be copied".into()))?;
         let dir = workdir::workdir_of_bot(&self.data_dir, &src);
         let mut spec = BotSpec::named(name);
-        spec.template = src.template.clone();
         spec.brain = brain_of(&src);
-        spec.executor = match src.executor_assistant_id {
-            Some(e) => ExecutorSpec::CopyOf(e),
+        let live = match src.executor_assistant_id {
+            Some(e) => crate::db::service::assistant_service::get(&self.db.conn, e)
+                .await
+                .ok()
+                .flatten()
+                .filter(|a| a.is_live())
+                .map(|a| a.id),
+            None => None,
+        };
+        spec.executor = match live {
+            Some(e) => ExecutorSpec::Existing(e),
             None => ExecutorSpec::Fill {
                 agent_type: None,
                 given: Partial::default(),
@@ -1262,6 +923,9 @@ impl PersonalAgentEngine {
     /// Delete executor config `id` unless a work assistant still on the
     /// roster is bound to it.
     async fn delete_executor_if_unbound(&self, id: i32) {
+        // In the claim's hold: a copy binding it meanwhile (it checks the
+        // config is there in the same hold) is never left bound to one gone.
+        let _claim = workdir::WORKDIR_CLAIM.lock().await;
         let bound = svc::list_bots(&self.db.conn)
             .await
             .unwrap_or_default()
@@ -1326,92 +990,6 @@ impl PersonalAgentEngine {
         }
     }
 
-    // ── on the way up from v2.0 ─────────────────────────────────────────────
-
-    /// Make each executor config that is on into a work assistant, once
-    /// (4.15): when the primary is set up — now, or when it first is. The
-    /// ones made, and the ones the owner undid, are recorded by uid, so a
-    /// restart makes none again. The primary's conversation gets a card
-    /// with an [Undo] for each.
-    pub async fn make_workers_from_executors(&self) -> usize {
-        // One run at a time in this process (startup and a save of the
-        // primary both start one): the second finds the first's record.
-        static RUNNING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-        let _one = RUNNING.lock().await;
-        let Some(primary) = svc::primary_bot(&self.db.conn).await.ok().flatten() else {
-            return 0;
-        };
-        if brain_of(&primary).is_none() {
-            return 0;
-        }
-        let record: Value = serde_json::from_str::<Value>(&primary.settings)
-            .ok()
-            .and_then(|s| s.get(MADE_KEY).cloned())
-            .unwrap_or(Value::Null);
-        if record["done"].as_bool() == Some(true) {
-            return 0;
-        }
-        let mut made_uids: Vec<String> = record["uids"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let bound: HashSet<i32> = svc::list_bots(&self.db.conn)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|b| b.executor_assistant_id)
-            .collect();
-        let mut made: Vec<Made> = Vec::new();
-        for a in crate::db::service::assistant_service::list_live_enabled(&self.db.conn)
-            .await
-            .unwrap_or_default()
-        {
-            if made_uids.contains(&a.uid) || bound.contains(&a.id) {
-                continue;
-            }
-            let mut spec = BotSpec::named(a.name.clone());
-            spec.avatar = Some(a.avatar.clone().into());
-            spec.executor = ExecutorSpec::Existing(a.id);
-            spec.opener = false;
-            match self.create_bot(spec).await {
-                Ok(m) => {
-                    made_uids.push(a.uid.clone());
-                    self.patch_account(json!({ MADE_KEY: { "uids": made_uids } }))
-                        .await;
-                    made.push(m);
-                }
-                Err(e) => tracing::warn!(
-                    "[personal-agent] {} was not made a work assistant: {}",
-                    a.name,
-                    e.message()
-                ),
-            }
-        }
-        self.patch_account(json!({ MADE_KEY: { "done": true, "uids": made_uids } }))
-            .await;
-        let n = made.len();
-        if n > 0 {
-            let to = self.host_ref().map(|h| h.primary());
-            let target: &PersonalAgentEngine = match to.as_deref() {
-                Some(p) => p,
-                None => self,
-            };
-            if let Err(e) = target
-                .raise_bots_card("made", &made, None, None, None)
-                .await
-            {
-                tracing::warn!(
-                    "[personal-agent] the card for the assistants made was not written: {e}"
-                );
-            }
-        }
-        n
-    }
-
     // ── the card that says so ───────────────────────────────────────────────
 
     /// A "changed" card about work assistants: made (`asked`, `made`), or
@@ -1424,12 +1002,7 @@ impl PersonalAgentEngine {
         quote: Option<String>,
         reason: Option<String>,
     ) -> Result<i32, String> {
-        let primary = svc::primary_bot(&self.db.conn).await.ok().flatten();
-        let locale = match primary.as_ref() {
-            Some(p) => self.owner_locale(p, None).await,
-            None => AppLocale::En,
-        };
-        let bots: Vec<Value> = made.iter().map(|m| made_json(m, locale)).collect();
+        let bots: Vec<Value> = made.iter().map(made_json).collect();
         let applied = why == "asked" || why == "made";
         let body = if applied {
             format!(
@@ -1610,17 +1183,6 @@ impl PersonalAgentEngine {
             }
             return Ok(card);
         }
-        // A team suggested (5.4): the ones ticked, made together — and let
-        // be only while none is being made.
-        let team = data["pending"]["team"].is_array();
-        if team && (action == "accept" || action.starts_with("accept:")) {
-            return self.accept_team(notice.id, row_id, action).await;
-        }
-        let _team = if team && action == "dismiss" {
-            Some(super::meet::team_guard().await)
-        } else {
-            None
-        };
         match action {
             "accept" => {
                 let pending = data["pending"].clone();
@@ -1644,21 +1206,17 @@ impl PersonalAgentEngine {
                             NoticeState::Acted,
                         )
                         .await;
-                        let locale = self.locale_now().await;
-                        data["bots"] = json!([made_json(&m, locale)]);
+                        data["bots"] = json!([made_json(&m)]);
                         data["state"] = "applied".into();
                         data["error"] = Value::Null;
                         let card = self.write_card(row_id, data).await?;
                         self.tell_bots(
                             notice,
                             &format!(
-                                "The owner accepted card #{}: made the work assistant {} (#{}), bound \
-                                 to the executor config {} (#{}).",
+                                "The owner accepted card #{}: made the work assistant {} (#{}).",
                                 notice.id,
                                 display_name(&m.bot),
                                 m.bot.id,
-                                m.executor.name,
-                                m.executor.id
                             ),
                         )
                         .await;
@@ -1673,14 +1231,8 @@ impl PersonalAgentEngine {
                         )
                         .await;
                         data["error"] = e.message().into();
-                        if let CreateError::OptionsUnavailable {
-                            agent_type,
-                            template,
-                            ..
-                        } = &e
-                        {
-                            data["editor"] =
-                                json!({ "agent_type": agent_type, "template": template });
+                        if let CreateError::OptionsUnavailable { agent_type, .. } = &e {
+                            data["editor"] = json!({ "agent_type": agent_type });
                         }
                         let _ = self.write_card(row_id, data).await;
                         Err(e.message())
@@ -1794,17 +1346,11 @@ impl PersonalAgentEngine {
                 "`name` is required: what the owner calls the new assistant",
             );
         };
-        if let Some(t) = text("template") {
-            if templates::spec(&t).is_none() {
-                return ToolOutcome::refused(format!(
-                    "no template `{t}`; the templates are: {}",
-                    templates::SPECS
-                        .iter()
-                        .map(|s| s.id)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
+        if text("persona").is_none() {
+            return ToolOutcome::refused(
+                "`persona` is required: who it is and what work is for it, concretely — the lines \
+                 the assistants read to decide who does what",
+            );
         }
         let suggest = args
             .get("suggest")
@@ -1888,34 +1434,29 @@ impl PersonalAgentEngine {
                     let picked = picked_text(&m.picked);
                     ToolOutcome::ok(
                         format!(
-                            "Made the work assistant {} (#{}), role {}, bound to the executor config {} \
-                             (#{}){}. Its brain is {}. It has an opening card in its own conversation and \
-                             wakes when the owner answers it or writes to it; message it with \
-                             `bot_message`. The owner sees a card saying so, and can undo it there.",
+                            "Made the work assistant {} (#{}). Its brain is {}; its work runs on {}{}. \
+                             Message it with `bot_message`. The owner sees a card saying so, and can \
+                             undo it there.",
                             display_name(&m.bot),
                             m.bot.id,
-                            m.template,
-                            m.executor.name,
-                            m.executor.id,
+                            m.bot.agent_type,
+                            m.executor.label_snapshot.agent,
                             if picked.is_empty() {
                                 String::new()
                             } else {
-                                format!("; options codeg picked for the owner: {picked}")
+                                format!(" (options codeg picked for the owner: {picked})")
                             },
-                            m.bot.agent_type,
                         ),
                         json!({
                             "notice_id": card,
                             "bot_id": m.bot.id,
-                            "executor_assistant_id": m.executor.id,
-                            "template": m.template,
                             "picked": picked_json(&m.picked),
                         }),
                     )
                 }
                 Err(CreateError::OptionsUnavailable { agent_type, why, .. }) => ToolOutcome::refused(format!(
                     "codeg could not read {}'s options ({why}), so it cannot fill them in. Name every \
-                     option (`executor.options`), pick another agent, or ask the owner to make it from \
+                     option (`work_agent.options`), pick another agent, or ask the owner to make it from \
                      the roster's [+], where codeg opens the editor for them.",
                     crate::acp::registry::get_agent_meta(agent_type).name
                 )),
@@ -2017,7 +1558,7 @@ impl PersonalAgentEngine {
         let s = |k: &str| call.get(k).and_then(|v| v.as_str()).map(str::to_string);
         let mut spec = BotSpec::named(s("name").unwrap_or_default());
         spec.uid = uid;
-        spec.template = s("template");
+        spec.persona = s("persona");
         if let (Some(shape), Some(color)) = (s("shape"), s("color")) {
             spec.avatar = Some(BotAvatar::Face { shape, color });
         }
@@ -2047,11 +1588,9 @@ impl PersonalAgentEngine {
                         .fill_options(agent_type, &given, &extra)
                         .await
                         .map_err(|e| match e {
-                            FillError::Unavailable(why) => CreateError::OptionsUnavailable {
-                                agent_type,
-                                why,
-                                template: BLANK,
-                            },
+                            FillError::Unavailable(why) => {
+                                CreateError::OptionsUnavailable { agent_type, why }
+                            }
                             FillError::Refused(e) => refused(e),
                         })?;
                     spec.brain = Some(config);
@@ -2059,15 +1598,13 @@ impl PersonalAgentEngine {
                 }
             }
         }
-        if let Some(e) = call.get("executor").filter(|e| !e.is_null()) {
-            if let Some(id) = e.get("assistant_id").and_then(|v| v.as_i64()) {
-                spec.executor = ExecutorSpec::Existing(id as i32);
-            } else {
-                spec.executor = ExecutorSpec::Fill {
-                    agent_type: agent(e)?,
-                    given: Partial::from_json(e.get("options")).map_err(refused)?,
-                };
-            }
+        // The agent its work runs on: an executor config made for it, never
+        // one named — the assistants do not know them.
+        if let Some(e) = call.get("work_agent").filter(|e| !e.is_null()) {
+            spec.executor = ExecutorSpec::Fill {
+                agent_type: agent(e)?,
+                given: Partial::from_json(e.get("options")).map_err(refused)?,
+            };
         }
         self.create_bot(spec).await
     }
@@ -2100,13 +1637,7 @@ impl PersonalAgentEngine {
         };
         let role = match row.kind {
             BotKind::Primary => "the owner's primary assistant".to_string(),
-            BotKind::Worker => {
-                let template = row.template.as_deref().unwrap_or(BLANK);
-                let name = templates::text(AppLocale::En, template)
-                    .map(|t| t.name.clone())
-                    .unwrap_or_else(|| template.to_string());
-                format!("one of the owner's work assistants (role: {name})")
-            }
+            BotKind::Worker => "one of the owner's work assistants".to_string(),
         };
         workdir::dispatcher_brief(&self.workdir_of(&row), &display_name(&row), &role)
     }
@@ -2175,32 +1706,13 @@ pub(super) enum FillError {
     Refused(String),
 }
 
-/// The three choices and their keys, and which asks for a project.
-fn choice_options(options: &[String], project: Option<usize>) -> Value {
-    Value::Array(
-        options
-            .iter()
-            .enumerate()
-            .map(|(i, label)| {
-                json!({
-                    "key": ((b'A' + i as u8) as char).to_string(),
-                    "label": label,
-                    "project": project == Some(i),
-                })
-            })
-            .collect(),
-    )
-}
-
 /// A made assistant as a card lists it.
-pub(super) fn made_json(m: &Made, locale: AppLocale) -> Value {
+pub(super) fn made_json(m: &Made) -> Value {
     json!({
         "bot_id": m.bot.id,
         "uid": m.bot.uid,
         "name": display_name(&m.bot),
         "face": bot_face(&m.bot),
-        "template": m.template,
-        "template_name": templates::text(locale, m.template).map(|t| t.name.clone()),
         "executor_id": m.executor.id,
         "executor_name": m.executor.name,
         "executor_agent": m.executor.label_snapshot.agent,
@@ -2211,55 +1723,3 @@ pub(super) fn made_json(m: &Made, locale: AppLocale) -> Value {
     })
 }
 
-/// A new assistant's opening card.
-fn starter_data(made: &Made, locale: AppLocale, primary: &agent_entity::Model) -> Value {
-    let words = templates::text(locale, made.template);
-    let spec = templates::spec(made.template);
-    let primary_brain = brain_of(primary);
-    let same = primary_brain.as_ref().is_some_and(|p| {
-        p.agent_type.as_wire() == made.bot.agent_type
-            && serde_json::to_string(&p.agent_options).ok().as_deref()
-                == Some(made.bot.agent_options.as_str())
-    });
-    let brain_agent = serde_json::from_str::<crate::models::assistant::AssistantLabelSnapshot>(
-        &made.bot.label_snapshot,
-    )
-    .map(|l| l.agent)
-    .unwrap_or_else(|_| made.bot.agent_type.clone());
-    json!({
-        "notice": "choice",
-        "purpose": "starter",
-        "state": "open",
-        "locale": locale_tag(locale),
-        "template": made.template,
-        "template_name": words.map(|w| w.name.clone()),
-        "question": words.map(|w| w.opener.clone()).unwrap_or_default(),
-        "options": choice_options(words.map(|w| w.options.as_slice()).unwrap_or(&[]), spec.and_then(|s| s.project_option)),
-        "other": templates::other_label(locale),
-        "made": {
-            "brain": { "agent": brain_agent, "same_as_primary": same, "picked": picked_json(&made.brain_picked) },
-            "executor": {
-                "id": made.executor.id,
-                "name": made.executor.name,
-                "agent": made.executor.label_snapshot.agent,
-                "created": made.executor_created,
-                "picked": picked_json(&made.picked),
-            },
-        },
-    })
-}
-
-fn locale_tag(l: AppLocale) -> &'static str {
-    match l {
-        AppLocale::En => "en",
-        AppLocale::ZhCn => "zh-CN",
-        AppLocale::ZhTw => "zh-TW",
-        AppLocale::Ja => "ja",
-        AppLocale::Ko => "ko",
-        AppLocale::Es => "es",
-        AppLocale::De => "de",
-        AppLocale::Fr => "fr",
-        AppLocale::Pt => "pt",
-        AppLocale::Ar => "ar",
-    }
-}

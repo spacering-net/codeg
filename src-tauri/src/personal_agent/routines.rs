@@ -3355,48 +3355,6 @@ fn run_id_of(e: &crate::db::entities::personal_agent_event::Model) -> Option<i32
     p["run_id"].as_i64().and_then(|i| i32::try_from(i).ok())
 }
 
-/// The night cleaner's routine (4.13): every night at 02:00 in the
-/// owner's zone, its assistant reads the code in its scope and hands out a
-/// cleanup per area worth it — or says nothing. Its trial run waits for the
-/// owner to answer its opening card.
-pub const NIGHTLY_CRON: &str = "0 2 * * *";
-
-pub async fn make_nightly(
-    conn: &sea_orm::DatabaseConnection,
-    bot: i32,
-    words: &super::bot_templates::TemplateText,
-) -> Result<routine_entity::Model, String> {
-    let mut what = words.job.trim().to_string();
-    for r in &words.rules {
-        what.push('\n');
-        what.push_str(r.trim());
-    }
-    rsvc::create(
-        conn,
-        NewRoutine {
-            bot_id: bot,
-            title: cut(&words.name, MAX_TITLE_CHARS),
-            what,
-            kind: RoutineKind::Brain,
-            trigger: RoutineTrigger::Schedule,
-            cron: Some(NIGHTLY_CRON.into()),
-            timezone: None,
-            // Worked out by the clock in the owner's zone.
-            zone_used: None,
-            event_kind: None,
-            event_filter: None,
-            dispatch: None,
-            precheck: None,
-            source: "template".into(),
-            next_run_at: None,
-            signal_cursor: 0,
-            trial_pending: true,
-        },
-    )
-    .await
-    .map_err(|e| e.to_string())
-}
-
 /// Every assistant's routines, for the page: one assistant's when `bot` is
 /// given. Read from the record, wherever the assistants run.
 pub async fn routines_of(

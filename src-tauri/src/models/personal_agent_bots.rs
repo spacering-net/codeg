@@ -158,26 +158,6 @@ pub struct PickedOption {
     pub from: PickedFrom,
 }
 
-/// A template as the pages read it, in the owner's language (4.13).
-#[derive(Debug, Clone, Serialize)]
-pub struct TemplateView {
-    pub id: String,
-    pub name: String,
-    pub job: String,
-    pub description: String,
-    /// The executor config's standing instructions.
-    pub instructions: String,
-    pub opener: String,
-    pub options: Vec<String>,
-    pub other: String,
-    /// How its executor config may be used; `None`: every way.
-    pub modes: Option<Vec<DispatchMode>>,
-    /// The kind of work it is first for, in the division (10.5 "fill two").
-    pub division: Option<String>,
-    /// The option (0-based) that asks for a project.
-    pub project_option: Option<usize>,
-}
-
 /// What deleting a work assistant touches, for the confirmation (4.14).
 #[derive(Debug, Clone, Serialize)]
 pub struct BotImpact {
@@ -257,8 +237,10 @@ pub struct BotCreateDraft {
     /// The uid the page previewed the default face with.
     #[serde(default)]
     pub uid: Option<String>,
+    /// Its persona's first paragraph — who it is, what work is for it;
+    /// empty: the default sentence, until it writes its own.
     #[serde(default)]
-    pub template: Option<String>,
+    pub persona: Option<String>,
     #[serde(default)]
     pub avatar: Option<BotAvatar>,
     /// A complete executor selection, from the editor the page opened when

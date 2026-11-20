@@ -634,7 +634,15 @@ pub async fn ensure_bot_workdir(
     worker: bool,
 ) -> Result<bool, WorkdirError> {
     let [soul, rules, user, memory] = super::templates::template_texts(locale);
-    let mut files = vec![(SOUL_FILE, soul.to_string()), (RULES_FILE, rules.to_string())];
+    // A worker's own persona and rules, never the primary's.
+    let mut files = if worker {
+        vec![
+            (SOUL_FILE, super::templates::worker_soul(locale, None)),
+            (RULES_FILE, super::templates::worker_rules(locale)),
+        ]
+    } else {
+        vec![(SOUL_FILE, soul.to_string()), (RULES_FILE, rules.to_string())]
+    };
     if !worker {
         files.push((USER_FILE, user.to_string()));
     }
@@ -642,9 +650,8 @@ pub async fn ensure_bot_workdir(
     init_workdir(path, &files).await
 }
 
-/// A work assistant's directory with its role's own persona and rules (a
-/// template's, or a copied assistant's), in `locale` for the rest; no
-/// `USER.md`.
+/// A work assistant's directory with its own persona and rules (written
+/// for it, or a copied assistant's), in `locale` for the rest; no `USER.md`.
 pub async fn ensure_role_workdir(
     path: &Path,
     locale: AppLocale,

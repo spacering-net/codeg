@@ -8,7 +8,7 @@
 //!   delivered and without a model, against every open one of every
 //!   assistant: a keyword in CJK script anywhere in it, any other at the
 //!   start of a word, a short one (three letters or fewer) as a whole word
-//!   (`bot_templates::matches`). A card's button, a hand-over written by a
+//!   (`matches`). A card's button, a hand-over written by a
 //!   card and a message sent again do not count; one sent again carries
 //!   what its first copy brought up.
 //! - **Then**: what it brought up is written on the message's row, once —
@@ -82,7 +82,7 @@ impl Mention {
         let hay = text.to_lowercase();
         self.keywords
             .iter()
-            .filter(|k| super::bot_templates::matches(&hay, &k.trim().to_lowercase()))
+            .filter(|k| matches(&hay, &k.trim().to_lowercase()))
             .max_by_key(|k| k.chars().count())
             .map(String::as_str)
     }
@@ -415,6 +415,39 @@ impl EngineHost {
             }
         }
     }
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3040..=0x30ff | 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xac00..=0xd7af | 0xf900..=0xfaff)
+}
+
+/// A letter or digit that joins a word, where CJK ones do not (they are
+/// written without spaces, so "修CI" holds the word "ci").
+fn joins(c: char) -> bool {
+    c.is_alphanumeric() && !is_cjk(c)
+}
+
+/// Whether `kw` is in `hay`: anywhere for a CJK keyword; for any other, at
+/// the start of a word — the whole word when it is short ("ci" is not in
+/// "city", "review" is in "reviewers").
+pub(crate) fn matches(hay: &str, kw: &str) -> bool {
+    if kw.chars().any(is_cjk) {
+        return hay.contains(kw);
+    }
+    let short = kw.chars().count() <= 3;
+    let mut from = 0;
+    while let Some(pos) = hay[from..].find(kw) {
+        let at = from + pos;
+        let end = at + kw.len();
+        let before_ok = hay[..at].chars().next_back().is_none_or(|c| !joins(c));
+        let after_ok = !short || hay[end..].chars().next().is_none_or(|c| !joins(c));
+        if before_ok && after_ok {
+            return true;
+        }
+        from = at + kw.chars().next().map(char::len_utf8).unwrap_or(1);
+    }
+    false
 }
 
 #[cfg(test)]

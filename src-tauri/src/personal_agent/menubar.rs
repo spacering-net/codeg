@@ -637,7 +637,6 @@ mod tests {
             updated_at: now,
             kind,
             uid: None,
-            template: None,
             executor_assistant_id: None,
             sort_order: 0,
             pinned_at: None,

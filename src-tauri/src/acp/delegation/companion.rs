@@ -295,8 +295,7 @@ impl CompanionFeatures {
             "submit_result" => self.result,
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
-            "assistant_list"
-            | "project_list"
+            "project_list"
             | "dispatch"
             | "dispatch_followup"
             | "dispatch_answer"
@@ -320,7 +319,6 @@ impl CompanionFeatures {
             | "issue_close"
             | "pr_merge"
             | "bot_update"
-            | "assistant_update"
             | "routine_list"
             | "routine_create"
             | "routine_update"
@@ -1543,8 +1541,7 @@ async fn build_tools_call_spawn(
                 Box::pin(async move { client_create_work_task_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_authoring_result).await
         }
-        "assistant_list"
-        | "project_list"
+        "project_list"
         | "dispatch"
         | "dispatch_followup"
         | "dispatch_answer"
@@ -1568,7 +1565,6 @@ async fn build_tools_call_spawn(
         | "issue_close"
         | "pr_merge"
         | "bot_update"
-        | "assistant_update"
         | "routine_list"
         | "routine_create"
         | "routine_update"
@@ -5939,8 +5935,7 @@ mod tests {
         computer_clipboard: false,
     };
 
-    const PERSONAL_AGENT_TOOLS: [&str; 35] = [
-        "assistant_list",
+    const PERSONAL_AGENT_TOOLS: [&str; 33] = [
         "project_list",
         "dispatch",
         "dispatch_followup",
@@ -5965,7 +5960,6 @@ mod tests {
         "issue_close",
         "pr_merge",
         "bot_update",
-        "assistant_update",
         "routine_list",
         "routine_create",
         "routine_update",

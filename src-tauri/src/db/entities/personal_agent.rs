@@ -45,9 +45,6 @@ pub struct Model {
     /// Stable; names a worker's working directory.
     #[sea_orm(column_type = "Text", nullable)]
     pub uid: Option<String>,
-    /// The template a worker was made from.
-    #[sea_orm(column_type = "Text", nullable)]
-    pub template: Option<String>,
     /// The executor profile a worker is bound to.
     pub executor_assistant_id: Option<i32>,
     pub sort_order: i32,

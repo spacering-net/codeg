@@ -92,10 +92,10 @@ fn is_account(key: &str) -> bool {
     key.starts_with("prefs.") || key.starts_with("team.")
 }
 
-/// Whether a key is a work assistant's or an executor config's (10.5): the
-/// rows themselves, not a settings blob.
+/// Whether a key is a work assistant's (10.5): the row itself, not a
+/// settings blob.
 fn is_team_row(key: &str) -> bool {
-    key.starts_with("bot.") || key.starts_with("assistant.")
+    key.starts_with("bot.")
 }
 
 /// An own item's value, checked.
@@ -315,10 +315,6 @@ impl PersonalAgentEngine {
                 (stored_prefs.get(item).cloned().unwrap_or(Value::Null), to)
             } else if let Some(rest) = c.key.strip_prefix("bot.") {
                 let (from, to, p) = self.plan_bot_item(rest, &c.value).await?;
-                picked = p;
-                (from, to)
-            } else if let Some(rest) = c.key.strip_prefix("assistant.") {
-                let (from, to, p) = self.plan_assistant_item(rest, &c.value).await?;
                 picked = p;
                 (from, to)
             } else if c.key == format!("own.{BRAIN_ITEM}") {
@@ -1174,10 +1170,6 @@ impl PersonalAgentEngine {
         // Work assistants made, or to make (4.12, 4.15).
         if payload.get("what").and_then(|w| w.as_str()) == Some("bots") {
             return self.act_on_bots_card(notice, action).await;
-        }
-        // An executor config made, or to make (10.5).
-        if payload.get("what").and_then(|w| w.as_str()) == Some("assistant") {
-            return self.act_on_assistant_card(notice, action).await;
         }
         let why = payload.get("why").and_then(|w| w.as_str()).unwrap_or("");
         if why == "line" {

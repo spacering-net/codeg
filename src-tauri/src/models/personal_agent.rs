@@ -234,8 +234,6 @@ pub struct PersonalAgentInfo {
     /// The primary assistant, or a worker.
     pub kind: crate::db::entities::personal_agent::BotKind,
     pub uid: Option<String>,
-    /// The template a worker was made from.
-    pub template: Option<String>,
     /// The executor profile a worker is bound to.
     pub executor_assistant_id: Option<i32>,
 }
@@ -672,7 +670,6 @@ pub struct BotSummary {
     pub uid: Option<String>,
     pub name: String,
     pub avatar: BotAvatar,
-    pub template: Option<String>,
     pub executor_assistant_id: Option<i32>,
     pub created_at: DateTime<Utc>,
 }

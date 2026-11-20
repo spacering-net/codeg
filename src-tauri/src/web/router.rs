@@ -518,10 +518,6 @@ pub fn build_router_with_proxy_auth(
             post(handlers::personal_agent::personal_agent_settings_patch),
         )
         .route(
-            "/personal_agent_templates",
-            post(handlers::personal_agent::personal_agent_templates),
-        )
-        .route(
             "/personal_agent_bot_create",
             post(handlers::personal_agent::personal_agent_bot_create),
         )
@@ -536,10 +532,6 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/personal_agent_bot_delete",
             post(handlers::personal_agent::personal_agent_bot_delete),
-        )
-        .route(
-            "/personal_agent_bot_set_template",
-            post(handlers::personal_agent::personal_agent_bot_set_template),
         )
         .route(
             "/personal_agent_choice_answer",

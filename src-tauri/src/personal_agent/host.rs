@@ -269,14 +269,8 @@ impl EngineHost {
                 driver.abort();
             }
         }
-        // On the way up from v2.0: the executor configs there were become
-        // work assistants, once (4.15) — when the primary is set up.
         let primary = self.primary.clone();
         tokio::spawn(async move {
-            let n = primary.make_workers_from_executors().await;
-            if n > 0 {
-                tracing::info!("[personal-agent] made {n} work assistants from the executor configs");
-            }
             // Getting to know the owner: one from before this version gets
             // what the assistants do on their own (5.4).
             primary.meet_on_start().await;

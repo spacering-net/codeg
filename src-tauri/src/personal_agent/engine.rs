@@ -3751,11 +3751,6 @@ impl PersonalAgentEngine {
             None => workdir::read_text(workdir, workdir::USER_FILE),
         };
         let memory = workdir::read_text(workdir, workdir::MEMORY_FILE);
-        let new_bot = if seg.seq == 1 && row.kind == BotKind::Worker {
-            self.new_bot_note(row).await
-        } else {
-            None
-        };
         cards::handoff_card(&cards::HandoffInput {
             segment_seq: seg.seq,
             reason: seg.start_reason,
@@ -3773,7 +3768,6 @@ impl PersonalAgentEngine {
             recent: &recent,
             assistants: &assistants,
             division: division.as_deref(),
-            new_bot: new_bot.as_deref(),
             budget_chars: budget as usize,
             cards: self.prefs().await.cards,
             skill: settings_of(row).skill_enabled
@@ -5459,7 +5453,6 @@ pub(super) fn to_info(row: &agent_entity::Model, workdir: &std::path::Path) -> O
         updated_at: row.updated_at,
         kind: row.kind,
         uid: row.uid.clone(),
-        template: row.template.clone(),
         executor_assistant_id: row.executor_assistant_id,
     })
 }

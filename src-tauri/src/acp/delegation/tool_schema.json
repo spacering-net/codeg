@@ -1423,14 +1423,6 @@
     }
   },
   {
-    "name": "assistant_list",
-    "description": "List the role assistants you may hand work to: id, name, when to use it, and the agent and model it runs on. These are the only executors `dispatch` accepts — never a bare agent type, never yourself. Each entry also says how the owner lets you use it (whether you may dispatch to it at all, the modes it takes, the projects it works on — dispatch refuses what does not fit) and the owner's division of work (who takes which kind of work first). Each entry's record over the last 30 days says how often its work passed the first time and how long it took — apart by mode and by the kind of work dispatches named: weigh it when you pick. An empty list means the owner has configured none: tell them to add one on the assistants page under Settings → Team → Executor configs.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {}
-    }
-  },
-  {
     "name": "project_list",
     "description": "List the project folders a `task` or `session` dispatch may target: id, name and path. Your own working directory and codeg's hidden folders are never targets.",
     "inputSchema": {
@@ -2000,11 +1992,12 @@
   },
   {
     "name": "bot_create",
-    "description": "Make a new work assistant: a long-running assistant with a role (developer, reviewer, tester, CI fixer, writer, release manager, night cleaner, researcher, or blank), its own memory and conversation, and an executor config of its own that its work runs on. Give it a `name`; its role is guessed from the name unless you name a `template`. Its brain is the primary assistant's unless you give `brain`, and its executor config runs on the same agent unless you give `executor`; any option you leave out is filled in for the owner (from another executor config on that agent, else the agent's own current value) and listed on the card. When the owner SAYS so (\"make me an assistant that fixes CI\"), call it with `quote` — their words — and it is made at once: the owner sees a card that undoes it (or, when they asked to see such changes first, the card comes first). When you only THINK one would help, set `suggest: true` with a `reason`: it goes on a card and is made only if they accept; a suggestion they declined is not to be made again for seven days. A role is worth an assistant when it is a lasting, clear job with results you can see; work that differs only in when or how it is written is a routine or a skill instead. The new assistant does not start until the owner answers its opening card or writes to it; talk to it with `bot_message`.",
+    "description": "Make a new work assistant: a long-running assistant with its own persona, memory and conversation, that does work itself and that you and the other assistants can hand work to. Look at the team first (it is in your handoff, and bot_list): when someone there fits, hand the work to them with `bot_message` instead. Make one when the same kind of work keeps coming and has rules or a rhythm of its own, or calls for experience built up in one kind of work; a one-off job is not worth an assistant, and work that differs only in when or how it is written is a routine or a skill instead. Give it a `name` and a `persona`: the first lines of who it is — what work is for it, concretely (and what is not, when it could be mistaken for another's) — as the assistants read it to decide who does what. Its brain is the primary assistant's unless you give `brain`, and its work runs on the same agent unless you give `work_agent`; any option you leave out is filled in for the owner and listed on the card. When the owner SAYS so (\"make me an assistant that fixes CI\"), call it with `quote` — their words — and it is made at once: the owner sees a card that undoes it (or, when they asked to see such changes first, the card comes first). When you only THINK one would help, set `suggest: true` with a `reason`: it goes on a card and is made only if they accept; a suggestion they declined is not to be made again for seven days. Suggest one at a time, and say you looked at the team. Talk to it with `bot_message`.",
     "inputSchema": {
       "type": "object",
       "required": [
-        "name"
+        "name",
+        "persona"
       ],
       "properties": {
         "name": {
@@ -2012,20 +2005,10 @@
           "maxLength": 40,
           "description": "What the owner calls it."
         },
-        "template": {
+        "persona": {
           "type": "string",
-          "enum": [
-            "dev",
-            "review",
-            "test",
-            "ci",
-            "docs",
-            "release",
-            "cleanup",
-            "research",
-            "blank"
-          ],
-          "description": "Its role, when the name does not say it."
+          "maxLength": 1000,
+          "description": "The first lines of its persona: who it is and what work is for it, concretely; what it does not do when it could be mistaken for another's. It keeps it up to date from there."
         },
         "shape": {
           "type": "string",
@@ -2074,18 +2057,15 @@
             }
           }
         },
-        "executor": {
+        "work_agent": {
           "type": "object",
-          "description": "Its executor config: {agent_type, options: {option id: value}} to make one, or {assistant_id} to bind an existing one (assistant_list).",
+          "description": "The agent its work runs on, when not its brain's: {agent_type, options: {option id: value}}.",
           "properties": {
             "agent_type": {
               "type": "string"
             },
             "options": {
               "type": "object"
-            },
-            "assistant_id": {
-              "type": "integer"
             }
           }
         },
@@ -2112,7 +2092,7 @@
   },
   {
     "name": "bot_update",
-    "description": "Change a work assistant: its name, face, role, brain (agent and options), the executor config it is bound to, the kinds of work it is the first pick for in the division (`roles`), and whether it notifies the owner, is muted or hidden. A brain named with only some of its options has the rest filled in for the owner (its own choices on the same agent first, else another executor config's, else the agent's own) and the card lists who picked each; a new brain starts its next delivery in a new session with a handover card. When the owner SAYS so, call it with `quote`: it is changed at once and the owner sees a card that undoes it (or, when they asked to see such changes first, the card comes first). When you only THINK it would help, set `suggest: true` with a `reason`: it goes on a card and changes only if they accept. The primary assistant is changed with prefs_update (`brain`) or in its settings.",
+    "description": "Change a work assistant: its name, face, brain (agent and options), and whether it notifies the owner, is muted or hidden. A brain named with only some of its options has the rest filled in for the owner (its own choices on the same agent first, else what the agent itself reports) and the card lists who picked each; a new brain starts its next delivery in a new session with a handover card. When the owner SAYS so, call it with `quote`: it is changed at once and the owner sees a card that undoes it (or, when they asked to see such changes first, the card comes first). When you only THINK it would help, set `suggest: true` with a `reason`: it goes on a card and changes only if they accept. The primary assistant is changed with prefs_update (`brain`) or in its settings.",
     "inputSchema": {
       "type": "object",
       "required": [
@@ -2166,21 +2146,6 @@
           ],
           "description": "Its avatar's colour, with `shape`."
         },
-        "template": {
-          "type": "string",
-          "enum": [
-            "dev",
-            "review",
-            "test",
-            "ci",
-            "docs",
-            "release",
-            "cleanup",
-            "research",
-            "blank"
-          ],
-          "description": "Its role as shown; its files stay as they are."
-        },
         "brain": {
           "type": "object",
           "description": "Its brain: {agent_type, options: {option id: value}}; what you leave out is filled in.",
@@ -2193,13 +2158,6 @@
             }
           }
         },
-        "executor": {
-          "type": [
-            "string",
-            "integer"
-          ],
-          "description": "The executor config it is bound to: its name, uid or id (assistant_list)."
-        },
         "notify": {
           "type": "boolean",
           "description": "Whether it tells the owner when it finishes or waits on them."
@@ -2211,143 +2169,6 @@
         "hidden": {
           "type": "boolean",
           "description": "Hidden from the roster; it still runs."
-        },
-        "roles": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": [
-              "code",
-              "review",
-              "test",
-              "fix_ci",
-              "docs",
-              "release",
-              "research",
-              "check"
-            ]
-          },
-          "description": "Kinds of work it becomes the first pick for."
-        },
-        "quote": {
-          "type": "string",
-          "maxLength": 1000,
-          "description": "The owner's own words this change follows. Required unless `suggest`."
-        },
-        "reason": {
-          "type": "string",
-          "maxLength": 1000,
-          "description": "With `suggest`: why you think it fits the owner."
-        },
-        "suggest": {
-          "type": "boolean",
-          "description": "true when you only infer the change: it becomes a suggestion card."
-        },
-        "for": {
-          "type": "string",
-          "description": "The owner's message this follows, as the delivery numbers it (#58), so the card quotes it. Needed only when the turn carries inputs from more than one source."
-        }
-      }
-    }
-  },
-  {
-    "name": "assistant_update",
-    "description": "Make or change an executor config — the agent, options and standing instructions work is dispatched to (also the assistants @-mentioned in conversations: a change shows there too). Name one with `assistant` to change it: its name, description, standing instructions, agent and options, whether it is enabled, how the assistants may use it (`usage`), and which kinds of work it is the first pick for (`roles`). Leave `assistant` out to make one: a `name` (or a `template`, whose description, instructions and usage it starts from; the template's kind of work gets it as first pick when that has none), an `agent_type` and any options; what you leave out is filled in for the owner (another executor config's choice on that agent, else the agent's own) and the card lists who picked each. When the agent's options cannot be read, nothing is made: the owner gets a card that opens the editor prefilled. When the owner SAYS so, call it with `quote`: it is done at once with a card that undoes it (or, when they asked to see such changes first, the card comes first); when you only THINK it would help, `suggest: true` with a `reason`.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "assistant": {
-          "type": [
-            "string",
-            "integer"
-          ],
-          "description": "The executor config to change: its name, uid or id (assistant_list). Leave out to make a new one."
-        },
-        "name": {
-          "type": "string",
-          "maxLength": 80,
-          "description": "Its name."
-        },
-        "description": {
-          "type": "string",
-          "description": "When to use it, in a line."
-        },
-        "instructions": {
-          "type": "string",
-          "description": "Its standing instructions."
-        },
-        "agent_type": {
-          "type": "string",
-          "description": "Its agent (`claude_code`, `codex`…)."
-        },
-        "options": {
-          "type": "object",
-          "description": "Its options: {option id: value}; what you leave out is filled in."
-        },
-        "template": {
-          "type": "string",
-          "enum": [
-            "dev",
-            "review",
-            "test",
-            "ci",
-            "docs",
-            "release",
-            "cleanup",
-            "research",
-            "blank"
-          ],
-          "description": "Making one: the role it starts from."
-        },
-        "enabled": {
-          "type": "boolean",
-          "description": "Whether it is enabled."
-        },
-        "usage": {
-          "type": "object",
-          "description": "How the assistants may use it: {dispatch: bool, modes: [task|chat|session], projects: [project id] or null for all}.",
-          "properties": {
-            "dispatch": {
-              "type": "boolean"
-            },
-            "modes": {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "task",
-                  "chat",
-                  "session"
-                ]
-              }
-            },
-            "projects": {
-              "type": [
-                "array",
-                "null"
-              ],
-              "items": {
-                "type": "integer"
-              }
-            }
-          }
-        },
-        "roles": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "enum": [
-              "code",
-              "review",
-              "test",
-              "fix_ci",
-              "docs",
-              "release",
-              "research",
-              "check"
-            ]
-          },
-          "description": "Kinds of work it becomes the first pick for."
         },
         "quote": {
           "type": "string",

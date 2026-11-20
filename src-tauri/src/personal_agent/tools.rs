@@ -114,137 +114,30 @@ pub async fn call(parent_connection_id: &str, tool: &str, args: Value) -> ToolOu
     answer(&engine, tool, args).await
 }
 
+/// A card's data as an assistant reads it: every field about an executor
+/// config taken out, however deep — they are the owner's, and the
+/// assistants know only who does the work.
+pub(super) fn without_executors(mut data: Value) -> Value {
+    fn strip(v: &mut Value) {
+        match v {
+            Value::Object(map) => {
+                map.retain(|k, _| !k.starts_with("executor"));
+                map.values_mut().for_each(strip);
+            }
+            Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    strip(&mut data);
+    data
+}
+
 /// Answer a call already known to come from the personal agent.
 async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> ToolOutcome {
     let db = &engine.db;
     // Whose records the call reads and writes: the calling assistant's only.
     let bot = engine.bot().await;
     match tool {
-        "assistant_list" => {
-            let assistants = crate::db::service::assistant_service::list_live_enabled(&db.conn)
-                .await
-                .unwrap_or_default();
-            if assistants.is_empty() {
-                return ToolOutcome::ok(
-                    "No executor configs are set up. Tell the owner to add one on the assistants \
-                     page, under Settings → Team → Executor configs.",
-                    json!({ "assistants": [] }),
-                );
-            }
-            let team = engine.account().await.team;
-            // Whose each one is: the work assistants bound to it (4.4).
-            let me = engine.bot().await;
-            let bots = svc::list_bots(&db.conn).await.unwrap_or_default();
-            // How each one's work went lately: who to hand work to (5.2),
-            // and apart by mode and by the kind of work (7.9).
-            let work = super::profile::graded_recent(db, crate::personal_agent::clock::now()).await;
-            let (_, grades) = super::profile::grades_of(&work);
-            let by_mode = super::profile::by_mode(&work);
-            let by_kind = super::profile::by_kind(&work);
-            let mut rows: Vec<Value> = Vec::new();
-            let mut open_lines = Vec::new();
-            let mut closed_lines = Vec::new();
-            for a in &assistants {
-                let owners: Vec<&crate::db::entities::personal_agent::Model> = bots
-                    .iter()
-                    .filter(|b| b.executor_assistant_id == Some(a.id))
-                    .collect();
-                let whose = if owners.iter().any(|b| b.id == me) {
-                    " [yours: your dispatches run here when you leave assistant_id out]".to_string()
-                } else if owners.is_empty() {
-                    String::new()
-                } else {
-                    format!(
-                        " [{}'s: message it to get work done here]",
-                        owners
-                            .iter()
-                            .map(|b| super::messages::display_name(b))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                let model = a
-                    .label_snapshot
-                    .options
-                    .iter()
-                    .find(|o| o.id == "model")
-                    .map(|o| o.value_label.clone());
-                let usage = team.usage_of(&a.uid);
-                let note = engine.usage_note(&usage).await;
-                rows.push(json!({
-                    "id": a.id,
-                    "name": a.name,
-                    "when_to_use": a.description,
-                    "agent": a.label_snapshot.agent,
-                    "agent_type": a.agent_type,
-                    "model": model,
-                    "dispatch": usage.dispatch,
-                    "modes": usage.modes,
-                    "projects": usage.projects,
-                    "bound_to": owners.iter().map(|b| b.id).collect::<Vec<_>>(),
-                    "grade": grades.get(&a.id),
-                    "grade_by_mode": by_mode
-                        .iter()
-                        .filter(|((e, _), _)| *e == a.id)
-                        .map(|((_, m), g)| (super::engine::enum_str(m), g))
-                        .collect::<std::collections::BTreeMap<_, _>>(),
-                    "grade_by_kind": by_kind
-                        .iter()
-                        .filter(|((e, _), _)| *e == a.id)
-                        .map(|((_, k), g)| (k.clone(), g))
-                        .collect::<std::collections::BTreeMap<_, _>>(),
-                }));
-                let what = if a.description.trim().is_empty() {
-                    String::new()
-                } else {
-                    format!(" — {}", a.description.trim())
-                };
-                let grade = grades
-                    .get(&a.id)
-                    .and_then(super::profile::grade_words)
-                    .map(
-                        |g| match super::profile::grade_apart_words(a.id, &by_mode, &by_kind) {
-                            Some(apart) => format!(" [{g}; {apart}]"),
-                            None => format!(" [{g}]"),
-                        },
-                    )
-                    .unwrap_or_default();
-                let line = format!(
-                    "#{} {} ({}){what}{}{grade}{whose}",
-                    a.id,
-                    a.name,
-                    a.label_snapshot.agent,
-                    note.as_deref()
-                        .filter(|_| usage.dispatch)
-                        .map(|n| format!(" [{n}]"))
-                        .unwrap_or_default()
-                );
-                if usage.dispatch {
-                    open_lines.push(line);
-                } else {
-                    closed_lines.push(line);
-                }
-            }
-            let mut text = if open_lines.is_empty() {
-                "None of the executor configs is open to your dispatches.".to_string()
-            } else {
-                open_lines.join("\n")
-            };
-            if !closed_lines.is_empty() {
-                text.push_str(&format!(
-                    "\n\nNot for your dispatches (the owner keeps these for @ in conversations):\n{}",
-                    closed_lines.join("\n")
-                ));
-            }
-            let division = engine.division_text().await;
-            if let Some(d) = &division {
-                text.push_str(&format!("\n\n{d}"));
-            }
-            ToolOutcome::ok(
-                text,
-                json!({ "assistants": rows, "division": team.division }),
-            )
-        }
         "project_list" => {
             let folders = crate::db::service::folder_service::list_all_folder_details(&db.conn)
                 .await
@@ -404,7 +297,6 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
         "prefs_update" => engine.prefs_update_call(&args).await,
         "bot_create" => engine.bot_create_call(&args).await,
         "bot_update" => engine.bot_update_call(&args).await,
-        "assistant_update" => engine.assistant_update_call(&args).await,
         "bot_list" => engine.bot_list_call().await,
         // Boxed, as the plan tools are: a routine's run hands out work, and
         // the futures down that way are deep (a test's 2 MB stack).
@@ -898,7 +790,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     "kind": row.kind,
                     "at": row.created_at,
                     "text": body,
-                    "data": row.data,
+                    "data": row.data.map(without_executors),
                 }));
             }
             let mut text = if lines.is_empty() {

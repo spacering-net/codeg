@@ -533,19 +533,6 @@ pub async fn personal_agent_settings_patch(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TemplatesParams {
-    #[serde(default)]
-    pub locale: Option<String>,
-}
-
-pub async fn personal_agent_templates(
-    Json(params): Json<TemplatesParams>,
-) -> Result<Json<Vec<crate::models::personal_agent_bots::TemplateView>>, AppCommandError> {
-    Ok(Json(pa::personal_agent_templates_core(params.locale).await?))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct BotCreateParams {
     pub draft: crate::models::personal_agent_bots::BotCreateDraft,
 }
@@ -598,21 +585,6 @@ pub async fn personal_agent_bot_delete(
 ) -> Result<Json<()>, AppCommandError> {
     pa::personal_agent_bot_delete_core(params.bot_id, params.options).await?;
     Ok(Json(()))
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BotTemplateParams {
-    pub bot_id: i32,
-    pub template: String,
-}
-
-pub async fn personal_agent_bot_set_template(
-    Json(params): Json<BotTemplateParams>,
-) -> Result<Json<TimelineRow>, AppCommandError> {
-    Ok(Json(
-        pa::personal_agent_bot_set_template_core(params.bot_id, params.template).await?,
-    ))
 }
 
 #[derive(Debug, Deserialize)]

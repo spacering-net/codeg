@@ -31,7 +31,6 @@ const TABLES: &[&str] = &[
         "updated_at" timestamp_with_timezone_text NOT NULL,
         "kind" text NOT NULL DEFAULT 'primary',
         "uid" text NULL,
-        "template" text NULL,
         "executor_assistant_id" integer NULL,
         "sort_order" integer NOT NULL DEFAULT 0,
         "pinned_at" timestamp_with_timezone_text NULL,

@@ -95,7 +95,6 @@ pub struct NewWorker {
     pub agent_options_json: String,
     pub label_snapshot_json: String,
     pub settings_json: String,
-    pub template: Option<String>,
     pub executor_assistant_id: Option<i32>,
 }
 
@@ -127,7 +126,6 @@ pub async fn create_worker(
         updated_at: Set(now),
         kind: Set(BotKind::Worker),
         uid: Set(Some(new.uid.unwrap_or_else(new_bot_uid))),
-        template: Set(new.template),
         executor_assistant_id: Set(new.executor_assistant_id),
         sort_order: Set(last + 1),
         pinned_at: Set(None),
@@ -148,26 +146,6 @@ pub async fn uid_taken(conn: &DatabaseConnection, uid: &str) -> Result<bool, DbE
         .count(conn)
         .await?
         > 0)
-}
-
-/// Set the template a worker is made from.
-pub async fn set_bot_template(
-    conn: &DatabaseConnection,
-    id: i32,
-    template: &str,
-) -> Result<(), DbError> {
-    agent::Entity::update_many()
-        .col_expr(agent::Column::Template, Expr::value(template))
-        .col_expr(agent::Column::UpdatedAt, Expr::value(Utc::now()))
-        .col_expr(
-            agent::Column::Revision,
-            Expr::col(agent::Column::Revision).add(1),
-        )
-        .filter(agent::Column::Id.eq(id))
-        .filter(agent::Column::DeletedAt.is_null())
-        .exec(conn)
-        .await?;
-    Ok(())
 }
 
 /// Hand dispatches, and the matters that follow them, to assistant `bot`
@@ -426,7 +404,6 @@ async fn insert_primary(
         updated_at: Set(now),
         kind: Set(BotKind::Primary),
         uid: Set(Some(new_bot_uid())),
-        template: Set(None),
         executor_assistant_id: Set(None),
         sort_order: Set(0),
         pinned_at: Set(None),
