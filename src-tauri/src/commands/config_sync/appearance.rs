@@ -68,6 +68,7 @@ pub const APPEARANCE_STORAGE_KEYS: &[&str] = &[
     "codeg-workspace-bg-panel-opacity",
     "codeg-custom-theme",
     "codeg-custom-theme-enabled",
+    "codeg-theme-preset",
     "codeg-custom-css",
     "codeg-custom-css-enabled",
 ];
@@ -148,6 +149,15 @@ pub async fn mirror_appearance_core(
         return Ok(());
     }
     write_mirror(conn, &values).await
+}
+
+/// The mirror, for a client that boots from the stored appearance rather than
+/// from its own `localStorage` (the desktop window's launch step; an embedding
+/// host's page).
+pub async fn read_appearance_mirror<C: sea_orm::ConnectionTrait>(
+    conn: &C,
+) -> AppearanceValues {
+    read_mirror(conn).await
 }
 
 // ─── the snapshot domain ──────────────────────────────────────────────

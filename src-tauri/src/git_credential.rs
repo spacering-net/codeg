@@ -277,20 +277,20 @@ fn parse_data_dir_arg<I: IntoIterator<Item = String>>(args: I) -> Option<std::pa
 
 /// Resolve the app data directory (same path Tauri uses).
 fn resolve_app_data_dir() -> Option<std::path::PathBuf> {
-    // On macOS: ~/Library/Application Support/app.codeg
-    // On Linux: ~/.local/share/app.codeg
-    // On Windows: %APPDATA%/app.codeg
+    // On macOS: ~/Library/Application Support/app.whcodeg
+    // On Linux: ~/.local/share/app.whcodeg
+    // On Windows: %APPDATA%/app.whcodeg
     #[cfg(target_os = "macos")]
     {
-        dirs::data_dir().map(|d| d.join("app.codeg"))
+        dirs::data_dir().map(|d| d.join("app.whcodeg"))
     }
     #[cfg(target_os = "linux")]
     {
-        dirs::data_dir().map(|d| d.join("app.codeg"))
+        dirs::data_dir().map(|d| d.join("app.whcodeg"))
     }
     #[cfg(target_os = "windows")]
     {
-        dirs::data_dir().map(|d| d.join("app.codeg"))
+        dirs::data_dir().map(|d| d.join("app.whcodeg"))
     }
 }
 
@@ -800,7 +800,7 @@ mod tests {
         let content = std::fs::read_to_string(&script_path).expect("read script");
 
         // Must invoke the embedded binary with both flags so server-mode
-        // deployments don't fall back to the hardcoded `app.codeg` path.
+        // deployments don't fall back to the hardcoded `app.whcodeg` path.
         // Paths are sh-single-quoted so spaces / `$` / backticks survive.
         assert!(content.contains("/usr/local/bin/codeg-server"));
         assert!(content.contains("--credential-helper"));

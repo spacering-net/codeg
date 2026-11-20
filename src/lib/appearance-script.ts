@@ -85,6 +85,12 @@ export const STORAGE_KEY_CUSTOM_CSS = "codeg-custom-css"
 export const STORAGE_KEY_CUSTOM_CSS_ENABLED = "codeg-custom-css-enabled"
 export const STORAGE_KEY_CUSTOM_STYLE_SUSPENDED = "codeg-custom-style-suspended"
 
+// 当前套用的主题预设库 id（`theme-preset-library.ts` 的 `entry.id`，空 = 没有套用
+// 任何预设）。真正的配色落在 CUSTOM_THEME 里，这里只是「用的是哪一套」的记录：
+// 设置页据此把对应卡片标成使用中，别的入口（另一个窗口、配置快照、嵌入宿主）
+// 也能看出当前外观对应哪个预设。丢了只是标记失灵，不影响渲染，故不进 inline 脚本。
+export const STORAGE_KEY_THEME_PRESET = "codeg-theme-preset"
+
 /**
  * 同步执行的 inline 脚本，由 layout.tsx 通过 dangerouslySetInnerHTML 注入。
  *

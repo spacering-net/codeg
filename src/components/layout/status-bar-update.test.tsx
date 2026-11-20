@@ -200,7 +200,7 @@ describe("StatusBarUpdate — popover", () => {
     })
     fireEvent.click(link)
     expect(openUrl).toHaveBeenCalledWith(
-      "https://github.com/spacering-net/codeg/releases/latest"
+      "https://github.com/Anfioo/codeg/releases/latest"
     )
     expect(startUpdate).not.toHaveBeenCalled()
   })

@@ -18,6 +18,7 @@
     "browser:agent:check": "node scripts/build-browser-agent.mjs --check",
     "browser:agent:types": "tsc -p browser-agent/tsconfig.json",
     "browser:agent:probe": "node browser-agent/probe.mjs",
+    "themes:fetch": "node scripts/fetch-theme-presets.mjs",
     "tauri:prepare-sidecars": "node src-tauri/scripts/prepare-sidecars.mjs",
     "tauri:before-dev": "pnpm tauri:prepare-sidecars && pnpm dev",
     "tauri:before-build": "pnpm build && pnpm tauri:prepare-sidecars",

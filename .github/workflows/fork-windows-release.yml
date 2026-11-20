@@ -1,0 +1,301 @@
+name: Fork Windows Release
+
+# Fork-only workflow: builds the Windows NSIS installer and publishes it as a
+# release in this fork, under this fork's own version numbering.
+#
+# Each release carries three things:
+#
+#   *_x64-setup.exe (+ the updater's .nsis.zip/.sig and latest.json)
+#       the desktop app. Its bundle holds the frontend export (tauri.conf.json
+#       maps `../out` to `web/`), but no `codeg-server`: that is a separate
+#       binary target with its own feature set, which the bundler cannot pack.
+#
+#   codeg-server-web-<tag>-windows-x64.zip
+#       `codeg-server.exe` beside the `web/` export it serves, unzipped into one
+#       folder. This is what a WingHarness-style host embeds: it starts the
+#       server on a loopback port and shows the export in a child webview. The
+#       two have to travel together and come from one commit — a server paired
+#       with a `web/` from another commit answers 404 for whatever they do not
+#       share, which is far harder to diagnose than a missing file.
+#
+#   server.json
+#       where to find that archive: version, tag, url, sha256, size. It lives in
+#       its own file rather than as an extra field of `latest.json` because
+#       `tauri-action` generates and rewrites `latest.json` on every release,
+#       and because describing a second, differently-shaped artifact inside the
+#       desktop updater's manifest would mean editing a file other tools parse
+#       under their own spec. Fixed name, no tag in it, so
+#       `releases/latest/download/server.json` always resolves.
+#
+# Manual only (`workflow_dispatch`), because a release carries two inputs that
+# no tag can express:
+#
+#   version — the upstream base version the tree is built from, e.g. 0.45.0.
+#             It must equal `src-tauri/tauri.conf.json`'s version, so a typo
+#             cannot ship a build labelled with code it does not contain.
+#   prefix  — this fork's own revision counter for that base, e.g. 01.
+#
+# Output numbering:
+#
+#   release tag / release name  wh.<prefix>.<version>   e.g. wh.01.0.45.0
+#   app version (semver)        <version>-wh<prefix>    e.g. 0.45.0-wh01
+#
+# The tag is the human-facing name and only has to be unique per release. The
+# app version is what the updater actually compares, and it has to parse as
+# semver (`tauri-plugin-updater` deserializes both the manifest version and the
+# running version as `semver::Version`) — `wh.01.0.45.0` is not, hence the two
+# spellings.
+#
+# Nothing in the tree is versioned for this: the version is stamped into the
+# runner's working copy of `src-tauri/tauri.conf.json` and never committed. That
+# one field feeds all three consumers — the bundler (installer filename), the
+# running app (`tauri-codegen` embeds it into `PackageInfo`, so `getVersion()`
+# and the updater's "current version" both see it), and latest.json.
+#
+# `productName` and `identifier` are this fork's own (`whcodeg`, `app.whcodeg`),
+# not upstream's, so this build can be installed beside the official Codeg
+# instead of on top of it. On Windows the pair names the install directory, the
+# uninstall/ARP entry, the Start Menu folder, the `Run` value of "launch at
+# login", the WebView2 user-data directory and the notification app id — the
+# last two are the identifier's, and sharing them would have two running builds
+# fight over one WebView2 profile. The binaries keep their `codeg*` names:
+# `mainBinaryName` defaults to the cargo output name, so only the bundle and
+# registry identity changes.
+#
+# Ordering notes:
+#   * `wh01` < `wh02` … < `wh99` — an alphanumeric prerelease identifier is
+#     compared byte-wise, so the prefix is zero-padded to two digits, or
+#     `wh9` would sort after `wh10`.
+#   * A prerelease sorts *below* its release: `0.45.0-wh01` < `0.45.0`. Moving
+#     an install from upstream 0.45.0 to this channel therefore needs one
+#     manual install; later wh bumps and base bumps update in place.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Base version; must equal tauri.conf.json version (e.g. 0.45.0)"
+        required: true
+        default: "0.45.0"
+      prefix:
+        description: "This fork's revision prefix for that base, 1-2 digits (e.g. 01)"
+        required: true
+        default: "01"
+
+env:
+  RUST_BACKTRACE: short
+  HUSKY: 0
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows x64 installer
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "pnpm"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          shared-key: x86_64-pc-windows-msvc
+
+      - name: Compute fork release version
+        id: version
+        shell: bash
+        env:
+          BASE_VERSION: ${{ inputs.version }}
+          PREFIX: ${{ inputs.prefix }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must look like 0.45.0, got '$BASE_VERSION'"
+            exit 1
+          fi
+          if [[ ! "$PREFIX" =~ ^[0-9]{1,2}$ ]]; then
+            echo "::error::prefix must be 1-2 digits, got '$PREFIX'"
+            exit 1
+          fi
+          # `10#` because a bare `01` would be read as octal, and `08`/`09`
+          # would then fail outright.
+          PADDED=$(printf "%02d" "$((10#$PREFIX))")
+          REPO_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [[ "$REPO_VERSION" != "$BASE_VERSION" ]]; then
+            echo "::error::version $BASE_VERSION does not match the tree's $REPO_VERSION"
+            exit 1
+          fi
+          echo "app_version=${BASE_VERSION}-wh${PADDED}" >> "$GITHUB_OUTPUT"
+          echo "tag=wh.${PADDED}.${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Ephemeral, runner-only: the working copy is thrown away, so the tree's
+      # version files never carry the fork numbering.
+      - name: Stamp fork version into the build
+        shell: bash
+        env:
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          node -e 'const fs = require("fs"); const p = "src-tauri/tauri.conf.json"; const c = JSON.parse(fs.readFileSync(p, "utf8")); c.version = process.env.APP_VERSION; fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n")'
+          node -e 'console.log("building", require("./src-tauri/tauri.conf.json").version)'
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Stage sidecars for Tauri bundle
+        shell: bash
+        run: pnpm tauri:prepare-sidecars --target x86_64-pc-windows-msvc
+
+      # Built before the installer is published, so a failure here stops the
+      # release instead of leaving one without the server bundle. Same target
+      # triple as the bundle: the cargo artifacts are then shared with the
+      # installer build that follows.
+      - name: Build codeg-server and the web export
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm build
+          test -f out/index.html || {
+            echo "::error::the web export produced no out/index.html"
+            exit 1
+          }
+          cargo build --release \
+            --target x86_64-pc-windows-msvc \
+            --no-default-features --features server-bin \
+            --bin codeg-server \
+            --manifest-path src-tauri/Cargo.toml
+
+      # `codeg-server` resolves `./web` next to where it runs, so the archive is
+      # the exe and the export side by side, with no wrapper folder: unzipping
+      # into the folder it will run from is the whole installation.
+      - name: Package codeg-server with its web export
+        shell: pwsh
+        run: |
+          $name = "codeg-server-web-${{ steps.version.outputs.tag }}-windows-x64"
+          $exe = "src-tauri/target/x86_64-pc-windows-msvc/release/codeg-server.exe"
+          if (-not (Test-Path $exe)) { throw "codeg-server.exe missing from the release build" }
+          if (-not (Test-Path "out/index.html")) { throw "the web export is missing out/index.html" }
+          $stage = Join-Path "dist" $name
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item $exe $stage
+          Copy-Item -Recurse "out" (Join-Path $stage "web")
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath "dist/$name.zip"
+          # Only the archive is kept; the staging copy is already inside it.
+          Remove-Item -Recurse -Force $stage
+          Get-Item "dist/$name.zip" | Format-List Name, Length
+
+      - name: Build installer and publish release
+        uses: tauri-apps/tauri-action@v0.6.1
+        env:
+          # Sidecars were staged for the matrix target above; keep
+          # beforeBuildCommand from rebuilding them for the host triple.
+          CODEG_SKIP_SIDECAR: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater artifact and latest.json. The public half lives in
+          # `src-tauri/tauri.conf.json` under `plugins.updater.pubkey`; without
+          # these secrets the bundle step fails, so a missing secret is loud
+          # rather than publishing an unsigned release the app would reject.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ steps.version.outputs.tag }}
+          releaseName: codeg ${{ steps.version.outputs.tag }}
+          releaseBody: |
+            Fork build. Windows x64. Base ${{ inputs.version }}, fork revision ${{ inputs.prefix }}.
+
+            - `whcodeg_*_x64-setup.exe` — the desktop app, NSIS installer.
+            - `*.nsis.zip`, `*.nsis.zip.sig`, `latest.json` — the updater's artifact,
+              its signature, and the manifest the app's update check reads.
+            - `codeg-server-web-${{ steps.version.outputs.tag }}-windows-x64.zip` —
+              `codeg-server.exe` with the `web/` export it serves. Unzip it into one
+              folder (`web/` has to sit beside the exe) and run the server from there,
+              or point a host app that embeds Codeg at that folder. It shares the data
+              directory the desktop app uses.
+            - `server.json` — where that archive is: version, tag, `url`, `sha256`,
+              `size`. Poll `releases/latest/download/server.json` for it.
+          releaseDraft: false
+          prerelease: false
+          tauriScript: pnpm tauri
+          # `updater` emits the signed .nsis.zip + .sig that latest.json points
+          # at, which is what the app's update check downloads.
+          args: --target x86_64-pc-windows-msvc --bundles nsis,updater
+          includeUpdaterJson: true
+          retryAttempts: 2
+
+      # After the action above, which is what creates the release — uploading
+      # before it would have nowhere to go. `--clobber` so a re-run of a failed
+      # job replaces the asset instead of refusing.
+      - name: Attach the server bundle to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh release upload "$TAG" "dist/codeg-server-web-$TAG-windows-x64.zip" --clobber
+
+      # Describes the archive attached above, so a host has one fixed URL to poll
+      # instead of knowing this release's tag. The key inside `platforms` is the
+      # updater's target spelling, so the same lookup the desktop manifest uses
+      # works here; the value deliberately carries `sha256`/`size` and no
+      # `signature` — the archive is unsigned, and an empty signature would
+      # invite a caller to "verify" nothing. Add the field when it is signed.
+      - name: Publish server.json
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+          ZIP: codeg-server-web-${{ steps.version.outputs.tag }}-windows-x64.zip
+        run: |
+          set -euo pipefail
+          path="dist/$ZIP"
+          test -f "$path" || {
+            echo "::error::$path is missing"
+            exit 1
+          }
+          # Absolute release URL: unlike `latest/download/<name>`, this keeps
+          # pointing at the archive even after a newer release exists, which is
+          # what a host that pinned a version needs.
+          URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$ZIP"
+          SHA256=$(sha256sum "$path" | cut -d' ' -f1)
+          SIZE=$(wc -c < "$path" | tr -d ' ')
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          export URL SHA256 SIZE PUB_DATE
+          node -e '
+            const manifest = {
+              version: process.env.APP_VERSION,
+              tag: process.env.TAG,
+              pub_date: process.env.PUB_DATE,
+              platforms: {
+                "windows-x86_64": {
+                  url: process.env.URL,
+                  sha256: process.env.SHA256,
+                  size: Number(process.env.SIZE),
+                },
+              },
+            };
+            require("fs").writeFileSync(
+              "dist/server.json",
+              JSON.stringify(manifest, null, 2) + "\n",
+            );
+          '
+          cat dist/server.json
+          gh release upload "$TAG" dist/server.json --clobber

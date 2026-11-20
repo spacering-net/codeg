@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
 #[cfg(target_os = "macos")]
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Mutex;
 
 use sea_orm::DatabaseConnection;
@@ -13,6 +13,7 @@ use tauri::{
 };
 
 use crate::app_error::AppCommandError;
+use crate::commands::appearance_mode;
 use crate::db::service::app_metadata_service;
 use crate::db::AppDatabase;
 use crate::models::FolderDetail;
@@ -80,30 +81,10 @@ pub async fn load_saved_zoom(conn: &DatabaseConnection) {
 // ---------------------------------------------------------------------------
 // Appearance mode persistence (dark / light / system)
 // ---------------------------------------------------------------------------
-
-const APPEARANCE_MODE_DB_KEY: &str = "appearance_mode";
-
-/// Encoded appearance mode: 0 = system (default), 1 = dark, 2 = light.
-static CACHED_APPEARANCE_MODE: AtomicU8 = AtomicU8::new(0);
-
-const MODE_SYSTEM: u8 = 0;
-const MODE_DARK: u8 = 1;
-const MODE_LIGHT: u8 = 2;
-
-fn mode_from_str(s: &str) -> u8 {
-    match s {
-        "dark" => MODE_DARK,
-        "light" => MODE_LIGHT,
-        _ => MODE_SYSTEM,
-    }
-}
-
-/// Load saved appearance mode from DB. Called once at startup.
-pub async fn load_saved_appearance_mode(conn: &DatabaseConnection) {
-    if let Ok(Some(raw)) = app_metadata_service::get_value(conn, APPEARANCE_MODE_DB_KEY).await {
-        CACHED_APPEARANCE_MODE.store(mode_from_str(&raw), AtomicOrdering::Relaxed);
-    }
-}
+//
+// The row, its cache and the decode live in `commands::appearance_mode`: the
+// web route records the same preference in server mode, where this module does
+// not exist. What stays here is what needs a window.
 
 pub struct SettingsWindowState {
     owner_by_settings_label: Mutex<HashMap<String, String>>,
@@ -220,9 +201,9 @@ fn is_system_dark_mode() -> bool {
 /// Determine whether the window should use a dark background, considering
 /// both the user's explicit preference (from DB) and the OS appearance.
 fn should_use_dark_background() -> bool {
-    match CACHED_APPEARANCE_MODE.load(AtomicOrdering::Relaxed) {
-        MODE_DARK => true,
-        MODE_LIGHT => false,
+    match appearance_mode::cached_mode() {
+        appearance_mode::MODE_DARK => true,
+        appearance_mode::MODE_LIGHT => false,
         _ => is_system_dark_mode(), // "system" or unknown — follow OS
     }
 }
@@ -1986,11 +1967,22 @@ pub async fn update_appearance_mode(
     db: tauri::State<'_, AppDatabase>,
     mode: String,
 ) -> Result<(), AppCommandError> {
-    CACHED_APPEARANCE_MODE.store(mode_from_str(&mode), AtomicOrdering::Relaxed);
+    appearance_mode::set_mode(&db.conn, &mode).await
+}
 
-    let _ = app_metadata_service::upsert_value(&db.conn, APPEARANCE_MODE_DB_KEY, &mode).await;
-
-    Ok(())
+/// The appearance as last mirrored to this data directory (the same row the
+/// `appearance` config-sync domain carries).
+///
+/// The desktop window's launch step prefers it over its own `localStorage`:
+/// a host app that embeds Codeg writes the appearance there (see
+/// `__CODEG_EMBEDDED__`), and this window would otherwise boot on whatever it
+/// last stored and mirror that back over it.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn get_appearance_settings(
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<crate::commands::config_sync::appearance::AppearanceValues, AppCommandError> {
+    Ok(crate::commands::config_sync::appearance::read_appearance_mirror(&db.conn).await)
 }
 
 // ─── System tray icon ──────────────────────────────────────────────────

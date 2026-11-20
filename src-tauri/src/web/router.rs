@@ -1114,6 +1114,14 @@ pub fn build_router_with_srn(
             "/update_system_terminal_settings",
             post(handlers::system_settings::update_system_terminal_settings),
         )
+        .route(
+            "/update_appearance_mode",
+            post(handlers::system_settings::update_appearance_mode),
+        )
+        .route(
+            "/get_appearance_settings",
+            post(handlers::system_settings::get_appearance_settings),
+        )
         // ─── Logging ───
         .route(
             "/get_log_settings",

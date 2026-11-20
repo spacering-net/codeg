@@ -34,7 +34,7 @@ Docker image.
 | --- | --- | --- |
 | Linux `.deb` / `.rpm` | `/usr/bin/codeg-cli` | Yes |
 | macOS app | `codeg.app/Contents/MacOS/codeg-cli` | Install command-line tool, below |
-| Windows installer | `%LOCALAPPDATA%\codeg\bin\codeg-cli.exe` | Install command-line tool, below |
+| Windows installer | `%LOCALAPPDATA%\whcodeg\bin\codeg-cli.exe` | Install command-line tool, below |
 | AppImage | Inside the image, copied out at every start | Install command-line tool, below |
 | `install.sh` / `install.ps1` | Next to `codeg-server` | Yes |
 | Docker image | `/usr/local/bin/codeg-cli` | Yes |
@@ -71,7 +71,7 @@ uninstaller beside it. Add that folder to your PATH once, then open a new
 terminal:
 
 ```powershell
-$bin = Join-Path $env:LOCALAPPDATA "codeg\bin"
+$bin = Join-Path $env:LOCALAPPDATA "whcodeg\bin"
 $path = [Environment]::GetEnvironmentVariable("Path", "User")
 [Environment]::SetEnvironmentVariable("Path", "$path;$bin", "User")
 ```
@@ -83,7 +83,7 @@ and a prompt reaches the agent exactly as you wrote it.
 **AppImage.** The release has one for x64; `tauri build` makes one for other
 machines. Its files are only there while it runs, so at every start the app
 copies its `codeg-cli` to `<data dir>/cli/bin/codeg-cli` —
-`~/.local/share/app.codeg` by default — over the copy it wrote before, never
+`~/.local/share/app.whcodeg` by default — over the copy it wrote before, never
 over a file you changed; Install command-line tool links that copy into
 `~/.local/bin`. Until the newer app first starts, the older copy keeps working
 with it. Or take it out of the image yourself:
@@ -133,7 +133,7 @@ for `codeg-cli`, and says where in a private file,
    whatever your shell profile exports.
 4. `CODEG_URL` with `CODEG_TOKEN`.
 5. `CODEG_DATA_DIR`.
-6. The default data directories of the desktop app (`app.codeg`) and of
+6. The default data directories of the desktop app (`app.whcodeg`) and of
    `codeg-server` (`codeg`), in the platform's data directory:
    `~/Library/Application Support` on macOS, `~/.local/share` on Linux,
    `%APPDATA%` on Windows.
