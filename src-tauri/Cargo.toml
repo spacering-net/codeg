@@ -22,6 +22,8 @@ crate-type = ["rlib"]
 
 [features]
 default = ["tauri-runtime", "browser-child"]
+# Numeric-only frontend lifecycle snapshots. Off in normal/release builds.
+memory-diagnostics = []
 tauri-runtime = [
     "dep:tauri",
     "dep:tauri-plugin-opener",

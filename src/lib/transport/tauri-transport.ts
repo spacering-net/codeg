@@ -22,7 +22,18 @@ export class TauriTransport implements Transport {
     // of the Transport contract for web-mode parity, ignored here.
     void options
     const { invoke } = await import("@tauri-apps/api/core")
-    return invoke(command, args)
+    if (process.env.NEXT_PUBLIC_CODEG_MEMORY_DIAGNOSTICS !== "1")
+      return invoke(command, args)
+    const { beginTauriMemoryCall } = await import("../frontend-memory-activity")
+    const finish = beginTauriMemoryCall(command)
+    try {
+      const value = await invoke<T>(command, args)
+      finish(false)
+      return value
+    } catch (error) {
+      finish(true)
+      throw error
+    }
   }
 
   // Tauri registers a callback before awaiting the native listener. The

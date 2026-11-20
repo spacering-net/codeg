@@ -22,6 +22,7 @@ import { WebConnectionGuard } from "@/components/connection/web-connection-guard
 import { WebVersionNotice } from "@/components/connection/web-version-notice"
 import { WindowResizeGrips } from "@/components/layout/window-resize-grips"
 import { CloseRequestDialog } from "@/components/workspace/close-request-dialog"
+import { FrontendMemoryBootstrap } from "@/components/workspace/frontend-memory-bootstrap"
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -102,6 +103,7 @@ export default async function RootLayout({
               enableSystem
               disableTransitionOnChange
             >
+              <FrontendMemoryBootstrap />
               <AppearanceProvider>
                 <OverlayScrollbarsInit />
                 <ClipboardFallbackInit />

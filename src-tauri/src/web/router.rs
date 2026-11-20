@@ -81,6 +81,15 @@ pub fn build_router_with_srn(
             "/debug/event_metrics",
             get(handlers::event_metrics::get_event_metrics),
         )
+        .route(
+            "/debug/frontend_memory",
+            get(handlers::frontend_memory::get_frontend_memory),
+        )
+        .route(
+            "/debug/frontend_memory/control",
+            get(handlers::frontend_memory::get_frontend_memory_control)
+                .post(handlers::frontend_memory::set_frontend_memory_control),
+        )
         // ─── Conversations ───
         .route(
             "/list_conversations",

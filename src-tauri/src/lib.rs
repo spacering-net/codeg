@@ -43,6 +43,8 @@ pub mod db;
 pub mod deep_link;
 pub mod folder_links;
 pub mod forge;
+pub mod frontend_memory;
+pub mod frontend_memory_control;
 pub mod git_credential;
 pub mod git_repo;
 /// The SpaceRing Harness catalog: the one client, cache and set of rules
@@ -52,6 +54,7 @@ pub mod intern;
 pub mod keyring_store;
 pub mod logging;
 pub mod models;
+pub mod native_ipc_memory;
 mod network;
 pub mod office_watch;
 pub mod parsers;
@@ -1814,7 +1817,7 @@ mod tauri_app {
                     }
                 }
             })
-            .invoke_handler(tauri::generate_handler![
+            .invoke_handler(crate::native_ipc_memory::generate_handler![
                 browser_commands::browser_capabilities,
                 browser_commands::browser_open_tab,
                 browser_commands::browser_close,
@@ -2050,6 +2053,10 @@ mod tauri_app {
                 windows::close_pet_panel,
                 windows::resize_pet_panel,
                 windows::focus_conversation,
+                crate::frontend_memory::report_frontend_memory,
+                crate::frontend_memory_control::get_frontend_memory_control,
+                crate::frontend_memory_control::set_frontend_memory_control,
+                crate::frontend_memory_control::ack_frontend_memory_control,
                 crate::deep_link::take_pending_deep_link,
                 crate::deep_link::take_pending_harness_link,
                 windows::update_traffic_light_position,
