@@ -78,6 +78,7 @@
     "registry": "Registre npm",
     "mirror": "Miroir chinois",
     "sourceHint": "Codeg installe le manifeste codeg-plugin.json. L’extension est désactivée par défaut.",
+    "trustWarning": "Cette extension s’exécute sur l’hôte connecté avec les permissions de l’utilisateur actuel. Elle peut lire ou modifier les fichiers et données accessibles à cet hôte. Installez uniquement des sources fiables.",
     "sourceUnsupported": "Mettez à jour l’hôte Codeg connecté pour installer depuis une source.",
     "cancel": "Annuler",
     "install": "Installer",

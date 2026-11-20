@@ -78,6 +78,7 @@
     "registry": "Registro npm",
     "mirror": "Espelho da China",
     "sourceHint": "O Codeg instala o manifesto codeg-plugin.json. O plugin fica desativado por padrão.",
+    "trustWarning": "Este plugin é executado no host conectado com as permissões do usuário atual. Ele pode ler ou alterar arquivos e dados disponíveis nesse host. Instale apenas fontes confiáveis.",
     "sourceUnsupported": "Atualize o host conectado do Codeg para instalar a partir de uma fonte.",
     "cancel": "Cancelar",
     "install": "Instalar",

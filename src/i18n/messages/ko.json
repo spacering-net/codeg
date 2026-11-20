@@ -78,6 +78,7 @@
     "registry": "npm 레지스트리",
     "mirror": "중국 미러",
     "sourceHint": "Codeg는 codeg-plugin.json 매니페스트를 설치합니다. 플러그인은 기본적으로 비활성화됩니다.",
+    "trustWarning": "이 플러그인은 현재 사용자의 권한으로 연결된 호스트에서 실행됩니다. 호스트가 접근할 수 있는 파일과 데이터를 읽거나 수정할 수 있습니다. 신뢰할 수 있는 소스만 설치하세요.",
     "sourceUnsupported": "소스에서 설치하려면 연결된 Codeg 호스트를 업데이트하세요.",
     "cancel": "취소",
     "install": "설치",

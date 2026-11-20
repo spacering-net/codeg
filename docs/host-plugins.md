@@ -49,6 +49,14 @@ For a file on the browser's machine, use **Import Manifest**. The catalog stores
 the manifest and its resolved source. Codeg starts each installed plugin
 disabled. Contributions run through the host APIs described above.
 
+## Trust and permissions
+
+Source-installed plugins are trusted code. They run on the connected Codeg host
+with the current user's permissions and may read or modify files and data that
+the host user can access. The Add Plugin dialog shows this warning before every
+source installation. Review the package, repository, or directory source before
+selecting **Install**.
+
 ## Update an installed plugin
 
 Use the update button next to a source-installed plugin in **Settings → Plugins**.
