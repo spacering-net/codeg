@@ -56,27 +56,9 @@ mod m20261017_000002_conversation_source;
 mod m20261020_000001_folder_command_run_local;
 mod m20261022_000001_tool_approval;
 mod m20261022_000001_work_task_delivery;
-mod m20261103_000001_personal_agent;
-mod m20261104_000001_personal_agent_chat;
 mod m20261106_000001_work_task_source_key;
-mod m20261107_000001_personal_agent_authority;
-mod m20261107_000002_personal_agent_ledger;
-mod m20261108_000001_personal_agent_bots;
-mod m20261111_000001_personal_agent_due;
-mod m20261112_000001_personal_agent_activity;
 mod m20261112_000001_work_task_writeback_drafts;
-mod m20261113_000001_personal_agent_verification;
-mod m20261114_000001_personal_agent_watch;
-mod m20261115_000001_personal_agent_routine;
-mod m20261116_000001_personal_agent_rule;
-mod m20261117_000001_personal_agent_mention;
-mod m20261118_000001_personal_agent_brief;
-mod m20261119_000001_personal_agent_history;
-mod m20261120_000001_personal_agent_profile;
-mod m20261121_000001_personal_agent_pr_auto;
-mod m20261122_000001_personal_agent_plan;
-mod m20261123_000001_personal_agent_work_kind;
-mod m20261124_000001_personal_agent_check;
+mod m20261125_000001_personal_agent;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -139,27 +121,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20261020_000001_folder_command_run_local::Migration),
             Box::new(m20261022_000001_tool_approval::Migration),
             Box::new(m20261022_000001_work_task_delivery::Migration),
-            Box::new(m20261103_000001_personal_agent::Migration),
-            Box::new(m20261104_000001_personal_agent_chat::Migration),
             Box::new(m20261106_000001_work_task_source_key::Migration),
-            Box::new(m20261107_000001_personal_agent_authority::Migration),
-            Box::new(m20261107_000002_personal_agent_ledger::Migration),
-            Box::new(m20261108_000001_personal_agent_bots::Migration),
-            Box::new(m20261111_000001_personal_agent_due::Migration),
-            Box::new(m20261112_000001_personal_agent_activity::Migration),
             Box::new(m20261112_000001_work_task_writeback_drafts::Migration),
-            Box::new(m20261113_000001_personal_agent_verification::Migration),
-            Box::new(m20261114_000001_personal_agent_watch::Migration),
-            Box::new(m20261115_000001_personal_agent_routine::Migration),
-            Box::new(m20261116_000001_personal_agent_rule::Migration),
-            Box::new(m20261117_000001_personal_agent_mention::Migration),
-            Box::new(m20261118_000001_personal_agent_brief::Migration),
-            Box::new(m20261119_000001_personal_agent_history::Migration),
-            Box::new(m20261120_000001_personal_agent_profile::Migration),
-            Box::new(m20261121_000001_personal_agent_pr_auto::Migration),
-            Box::new(m20261122_000001_personal_agent_plan::Migration),
-            Box::new(m20261123_000001_personal_agent_work_kind::Migration),
-            Box::new(m20261124_000001_personal_agent_check::Migration),
+            Box::new(m20261125_000001_personal_agent::Migration),
         ]
     }
 }

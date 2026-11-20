@@ -3502,47 +3502,6 @@ async fn the_owners_language_lives_on_the_primarys_row_only() {
     assert!(v.get("prefs").is_none(), "a worker's row carries no account keys");
 }
 
-/// The bots migration on a database as the ledger build left it: the one
-/// personal agent becomes the primary, its records are filed under it.
-#[tokio::test]
-async fn upgrading_files_the_existing_records_under_the_primary() {
-    use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
-    use sea_orm_migration::MigratorTrait;
-    let conn = Database::connect("sqlite::memory:").await.unwrap();
-    // Up to the bots migration, as the ledger build left it.
-    let before_bots = crate::db::migration::Migrator::migrations()
-        .iter()
-        .position(|m| m.name() == "m20261108_000001_personal_agent_bots")
-        .expect("the bots migration");
-    crate::db::migration::Migrator::up(&conn, Some(before_bots as u32)).await.unwrap();
-    for sql in [
-        "INSERT INTO personal_agent (name, avatar, agent_type, agent_options, label_snapshot, settings, revision, created_at, updated_at) \
-         VALUES ('Nova', '{}', 'claude_code', '{}', '{}', '{}', 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')",
-        "INSERT INTO personal_agent_segment (seq, agent_type, agent_options, start_reason, started_at, compactions_auto, compactions_manual, compactions_agent, auto_compact_paused, state) \
-         VALUES (1, 'claude_code', '{}', 'first', '2026-11-01T00:00:00Z', 0, 0, 0, 0, '{}')",
-        "INSERT INTO personal_agent_timeline (kind, body, created_at, updated_at) VALUES ('owner', 'hi', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')",
-        "INSERT INTO personal_agent_event (kind, source_key, summary, wake, state, requeues, created_at, updated_at) \
-         VALUES ('dispatch_status', 'dispatch:1:0:completed:turn', 'done', 1, 'pending', 0, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')",
-    ] {
-        conn.execute(Statement::from_string(DbBackend::Sqlite, sql.to_owned()))
-            .await
-            .unwrap_or_else(|e| panic!("{sql}: {e}"));
-    }
-    crate::db::migration::Migrator::up(&conn, None).await.unwrap();
-    let db = crate::db::AppDatabase { conn };
-    let primary = svc::primary_bot(&db.conn).await.unwrap().expect("the one row is the primary");
-    assert_eq!(primary.name, "Nova");
-    assert!(primary.uid.as_deref().is_some_and(|u| u.len() == 32));
-    assert!(svc::open_segment(&db.conn, primary.id).await.unwrap().is_some());
-    assert_eq!(svc::page(&db.conn, primary.id, None, 10).await.unwrap().0.len(), 1);
-    assert_eq!(svc::pending_events(&db.conn, primary.id).await.unwrap().len(), 1);
-    // Keys stay as they were: the primary's carry no prefix.
-    assert_eq!(
-        svc::scoped_source_key(&db.conn, primary.id, "k").await.unwrap(),
-        "k"
-    );
-}
-
 // ── 1.3: one engine per assistant ────────────────────────────────────────────
 
 use crate::acp::connection::SteerOutcome;

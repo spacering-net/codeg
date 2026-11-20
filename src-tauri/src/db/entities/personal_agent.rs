@@ -5,7 +5,7 @@ use sea_orm::entity::prelude::*;
 /// and its settings. The primary assistant — the personal agent there was
 /// first — is one row (`kind = primary`, at most one undeleted, by a partial
 /// unique index); workers are any number more. Not an `assistant` row on
-/// purpose — see `m20261103_000001_personal_agent`; a worker is bound to one
+/// purpose — see `m20261125_000001_personal_agent`; a worker is bound to one
 /// (`executor_assistant_id`), the executor profile its work runs as.
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "personal_agent")]
