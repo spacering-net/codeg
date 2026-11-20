@@ -41,6 +41,37 @@ describe("message-input-draft v2", () => {
     expect(JSON.parse(raw as string)).toEqual({ doc: DOC })
   })
 
+  it("restores durable drafts without retaining the editor's document", () => {
+    const key = "conv:541"
+    saveMessageInputDraftV2(key, DOC)
+
+    const first = loadMessageInputDraftV2(key)
+    expect(first).toEqual({ kind: "doc", doc: DOC })
+    if (first?.kind !== "doc") throw new Error("Expected a restored document")
+    expect(first.doc).not.toBe(DOC)
+
+    const second = loadMessageInputDraftV2(key)
+    expect(second).toEqual(first)
+    if (second?.kind !== "doc") throw new Error("Expected a restored document")
+    expect(second.doc).not.toBe(first.doc)
+  })
+
+  it("keeps the pending document until the idle write", () => {
+    const key = "conv:542"
+    const idle = vi.fn<(callback: () => void) => number>().mockReturnValue(1)
+    vi.stubGlobal("requestIdleCallback", idle)
+    try {
+      saveMessageInputDraftV2(key, DOC)
+      expect(localStorage.getItem(V2(key))).toBeNull()
+      expect(loadMessageInputDraftV2(key)).toEqual({ kind: "doc", doc: DOC })
+      idle.mock.calls[0][0]()
+      expect(JSON.parse(localStorage.getItem(V2(key))!)).toEqual({ doc: DOC })
+      expect(loadMessageInputDraftV2(key)).toEqual({ kind: "doc", doc: DOC })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it("returns null when there is no draft", () => {
     expect(loadMessageInputDraftV2("k-empty")).toBeNull()
   })
@@ -95,6 +126,10 @@ describe("message-input-draft v2", () => {
     }
     // v1 is still on disk because the v2 write never succeeded.
     expect(localStorage.getItem(V1("k-fail"))).not.toBeNull()
+    expect(loadMessageInputDraftV2("k-fail")).toEqual({
+      kind: "doc",
+      doc: DOC,
+    })
   })
 
   it("ignores a corrupt v2 payload and falls back to the legacy v1 draft", () => {
