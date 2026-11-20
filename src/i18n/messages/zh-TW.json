@@ -2521,7 +2521,8 @@
         "title": "快捷操作",
         "openProject": "開啟專案",
         "browserTab": "開啟瀏覽器",
-        "showPet": "顯示寵物"
+        "showPet": "顯示寵物",
+        "hidePet": "隱藏寵物"
       },
       "mcp": {
         "title": "codeg-mcp 服務",
@@ -5168,7 +5169,8 @@
         "deleteFailed": "刪除寵物失敗",
         "loadFailed": "載入寵物列表失敗",
         "setActiveFailed": "設定活躍寵物失敗",
-        "summonFailed": "召喚寵物視窗失敗"
+        "summonFailed": "召喚寵物視窗失敗",
+        "closeFailed": "關閉寵物視窗失敗"
       }
     },
     "import": {

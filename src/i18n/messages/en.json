@@ -2521,7 +2521,8 @@
         "title": "Quick actions",
         "openProject": "Open project",
         "browserTab": "Open browser tab",
-        "showPet": "Show pet"
+        "showPet": "Show pet",
+        "hidePet": "Hide pet"
       },
       "mcp": {
         "title": "codeg-mcp service",
@@ -5188,7 +5189,8 @@
         "deleteFailed": "Failed to delete pet",
         "loadFailed": "Failed to load pets",
         "setActiveFailed": "Failed to set active pet",
-        "summonFailed": "Failed to summon pet window"
+        "summonFailed": "Failed to summon pet window",
+        "closeFailed": "Failed to close pet window"
       }
     },
     "import": {

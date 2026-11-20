@@ -2521,7 +2521,8 @@
         "title": "クイック操作",
         "openProject": "プロジェクトを開く",
         "browserTab": "ブラウザータブを開く",
-        "showPet": "ペットを表示"
+        "showPet": "ペットを表示",
+        "hidePet": "ペットを隠す"
       },
       "mcp": {
         "title": "codeg-mcp サービス",
@@ -5168,7 +5169,8 @@
         "deleteFailed": "ペットの削除に失敗しました",
         "loadFailed": "ペット一覧の取得に失敗しました",
         "setActiveFailed": "アクティブなペットの設定に失敗しました",
-        "summonFailed": "ペットウィンドウの召喚に失敗しました"
+        "summonFailed": "ペットウィンドウの召喚に失敗しました",
+        "closeFailed": "ペットウィンドウを閉じられませんでした"
       }
     },
     "import": {

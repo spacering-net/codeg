@@ -2044,6 +2044,7 @@ mod tauri_app {
                 remote_proxy_commands::remote_ws_send_text,
                 windows::open_pet_window,
                 windows::close_pet_window,
+                windows::is_pet_window_open,
                 windows::pet_window_record_position,
                 windows::pet_show_context_menu,
                 windows::toggle_pet_panel,

@@ -150,6 +150,10 @@ export async function closePetWindow(): Promise<void> {
   return getTransport().call("close_pet_window")
 }
 
+export async function isPetWindowOpen(): Promise<boolean> {
+  return getTransport().call("is_pet_window_open")
+}
+
 export async function recordPetWindowPosition(
   x: number,
   y: number

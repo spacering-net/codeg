@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => {
     connections,
     openProjectBootWindow: vi.fn(() => Promise.resolve()),
     openPetWindow: vi.fn(() => Promise.resolve()),
+    closePetWindow: vi.fn(() => Promise.resolve()),
+    isPetWindowOpen: vi.fn(() => Promise.resolve(false)),
     openLocalWorkspace: vi.fn(() => Promise.resolve()),
     openRemoteWorkspace: vi.fn(() => Promise.resolve()),
     listRemoteWorkspaceConnections: vi.fn(() => Promise.resolve(connections)),
@@ -51,7 +53,11 @@ vi.mock("@/lib/api", () => ({
   openProjectBootWindow: mocks.openProjectBootWindow,
 }))
 
-vi.mock("@/lib/pet/api", () => ({ openPetWindow: mocks.openPetWindow }))
+vi.mock("@/lib/pet/api", () => ({
+  openPetWindow: mocks.openPetWindow,
+  closePetWindow: mocks.closePetWindow,
+  isPetWindowOpen: mocks.isPetWindowOpen,
+}))
 
 vi.mock("@/lib/remote-workspace", () => ({
   listRemoteWorkspaceConnections: mocks.listRemoteWorkspaceConnections,
@@ -193,6 +199,7 @@ beforeEach(() => {
   remoteWindow = false
   browserAvailable = true
   vi.clearAllMocks()
+  mocks.isPetWindowOpen.mockResolvedValue(false)
 })
 
 afterEach(() => {
@@ -523,6 +530,29 @@ describe("Quick actions, in the status bar's account menu", () => {
     await reopen()
     await clickItem("Show pet")
     expect(mocks.openPetWindow).toHaveBeenCalled()
+  })
+
+  it("switches to Hide pet and closes the pet window when it is already open", async () => {
+    mocks.isPetWindowOpen.mockResolvedValue(true)
+    await mountAndOpen()
+
+    await clickItem("Hide pet")
+    expect(mocks.closePetWindow).toHaveBeenCalledTimes(1)
+    expect(mocks.openPetWindow).not.toHaveBeenCalled()
+  })
+
+  it("reports a toast when closing the pet window fails", async () => {
+    mocks.isPetWindowOpen.mockResolvedValue(true)
+    mocks.closePetWindow.mockRejectedValueOnce(new Error("ipc down"))
+    await mountAndOpen()
+
+    await clickItem("Hide pet")
+    await vi.waitFor(() =>
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        "Failed to close pet window",
+        { description: "ipc down" }
+      )
+    )
   })
 
   it("lists every sidebar route, in the sidebar's own order", async () => {
