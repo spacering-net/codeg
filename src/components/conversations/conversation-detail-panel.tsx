@@ -2311,6 +2311,14 @@ const ConversationTabView = memo(function ConversationTabView({
     ]
   )
 
+  // Empty-composer Enter while queued items wait: steer the queue's head, the
+  // same item (and the same race fallbacks) as clicking that row's steer
+  // button. The gating lives at the prop below — this only picks the head.
+  const handleSteerQueueHead = useCallback(() => {
+    const head = msgQueue[0]
+    if (head) void handleQueueSteer(head.id)
+  }, [msgQueue, handleQueueSteer])
+
   return (
     <ConversationShell
       resizableWidth
@@ -2406,6 +2414,16 @@ const ConversationTabView = memo(function ConversationTabView({
       isEditingQueueItem={mqEditingItemId != null}
       onSaveQueueEdit={handleSaveQueueEdit}
       onCancelQueueEdit={handleQueueCancelEdit}
+      onSteerQueueHead={
+        // Same gate as the row-level steer, plus a non-empty queue: the head
+        // is what this sends, so without one the keypress should stay inert.
+        feedback.featureEnabled &&
+        feedback.steerAvailable &&
+        connStatus === "prompting" &&
+        msgQueue.length > 0
+          ? handleSteerQueueHead
+          : undefined
+      }
       onSteer={
         // Any working delivery channel, not just the native push: the pull
         // tool records a waiting note the agent reads on its next check, and
