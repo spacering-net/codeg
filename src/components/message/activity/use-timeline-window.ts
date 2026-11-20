@@ -237,12 +237,38 @@ function extentOf(elements: HTMLElement[]): number {
   )
 }
 
-/** Observe the drawn rows of `list` (observing one twice is a no-op). */
-function observeRows(list: HTMLElement | null, ro: ResizeObserver | null) {
-  if (!list || !ro) return
+type RowObservation = {
+  observer: ResizeObserver
+  sizes: Map<Element, number | undefined>
+}
+
+function isDrawnRow(element: Element, list: HTMLElement | null) {
+  return (
+    element instanceof HTMLElement &&
+    element.isConnected &&
+    element.parentElement === list &&
+    element.dataset.stepKey !== undefined
+  )
+}
+
+function observeRows(
+  list: HTMLElement | null,
+  observation: RowObservation | null
+) {
+  if (!observation) return
+  const { observer, sizes } = observation
+  // Removed rows may never deliver another resize observation.
+  for (const element of sizes.keys()) {
+    if (!isDrawnRow(element, list)) {
+      observer.unobserve(element)
+      sizes.delete(element)
+    }
+  }
+  if (!list) return
   for (const child of list.children) {
-    if (child instanceof HTMLElement && child.dataset.stepKey !== undefined) {
-      ro.observe(child)
+    if (isDrawnRow(child, list) && !sizes.has(child)) {
+      sizes.set(child, undefined)
+      observer.observe(child)
     }
   }
 }
@@ -517,10 +543,10 @@ export function useTimelineWindow<T extends WindowRow>({
   // Each drawn row's height, kept by its key; a drawn row above the view that
   // changes height moves the view by as much. Set up as the list is laid out,
   // so the rows it mounts with are observed without waiting for a commit.
-  const observer = useRef<ResizeObserver | null>(null)
+  const observer = useRef<RowObservation | null>(null)
   useLayoutEffect(() => {
     if (!windowed || typeof ResizeObserver === "undefined") return
-    const sizes = new Map<Element, number>()
+    const sizes: RowObservation["sizes"] = new Map()
     const ro = new ResizeObserver((entries) => {
       const list = listRef.current
       const { rows, start, end } = latest.current
@@ -529,7 +555,7 @@ export function useTimelineWindow<T extends WindowRow>({
       // nothing is to be measured or moved. Shown again, its rows report
       // their sizes afresh rather than as having changed.
       if (list.getBoundingClientRect().height === 0) {
-        sizes.clear()
+        for (const element of sizes.keys()) sizes.set(element, undefined)
         return
       }
       const port = scrollPortOf(list)
@@ -540,8 +566,9 @@ export function useTimelineWindow<T extends WindowRow>({
       const changed: { rect: DOMRect; was: number | undefined }[] = []
       for (const entry of entries) {
         const element = entry.target
+        if (!sizes.has(element)) continue
         // Gone with a stretch scrolled away: nothing of the view moved.
-        if (!element.isConnected || element.parentElement !== list) {
+        if (!isDrawnRow(element, list)) {
           ro.unobserve(element)
           sizes.delete(element)
           continue
@@ -571,10 +598,11 @@ export function useTimelineWindow<T extends WindowRow>({
         port.scrollTop += moved
       }
     })
-    observer.current = ro
-    observeRows(listRef.current, ro)
+    observer.current = { observer: ro, sizes }
+    observeRows(listRef.current, observer.current)
     return () => {
       ro.disconnect()
+      sizes.clear()
       observer.current = null
     }
   }, [windowed, listRef, scope])

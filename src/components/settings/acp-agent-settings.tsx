@@ -231,10 +231,10 @@ import {
   DeepSeekConfigPanel,
 } from "./deepseek-config-panel"
 import {
-  DeepSeekBuiltInCatalogNotice,
   DeepSeekModelListEditor,
   deepseekReadsHarnessCatalog,
 } from "./deepseek-model-list-editor"
+import { DeepSeekProviderRoutesEditor } from "./deepseek-provider-routes-editor"
 import { MiniMaxCodeConfigPanel } from "./minimax-code-config-panel"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
@@ -10080,8 +10080,7 @@ export function AcpAgentSettings() {
                                   event.target.value
                                 )
                               }}
-                              placeholder={`disable_response_storage = true
-model = "gpt-6-astra"
+                              placeholder={`model = "gpt-6.2-sol"
 model_reasoning_effort = "high"
 model_provider = "codeg"
 
@@ -15770,14 +15769,16 @@ supports_websockets = true`}
                         )
                       }
                     />
-                    {/* The deployment's model catalog. Through deepseek-acp
-                      0.9.0 it lives in the harness' own `settings.yaml`, not
-                      in the agent env, so it has its own section and its own
-                      save — and it is what the composer's per-session model
-                      selector gets to choose from. 0.10.0 builds it into the
-                      bridge and reads that file no more, so later releases
-                      get a notice instead of an editor that changes nothing.
-                      Judged on the installed release, else the pinned one. */}
+                    {/* What the composer's per-session model picker gets to
+                      choose from. Through deepseek-acp 0.9.0 that is an
+                      editable catalog in the harness' own `settings.yaml`
+                      (`llm-deepseek.models`), not the agent env, so it has its
+                      own section and its own save. 0.10.0 builds that catalog
+                      into the bridge and reads the file no more; the surface it
+                      does read is `llm-pi-ai.providers` in the bridge's own
+                      document, where each route adds a provider's catalog to
+                      the picker. Judged on the installed release, else the
+                      pinned one. */}
                     {deepseekReadsHarnessCatalog(
                       selectedAgent.installed_version ??
                         selectedAgent.registry_version
@@ -15795,7 +15796,7 @@ supports_websockets = true`}
                         }}
                       />
                     ) : (
-                      <DeepSeekBuiltInCatalogNotice />
+                      <DeepSeekProviderRoutesEditor />
                     )}
                   </>
                 ) : selectedAgent.agent_type === "qoder" ? (
@@ -17096,7 +17097,7 @@ supports_websockets = true`}
                                 event.target.value
                               )
                             }}
-                            placeholder="gpt-6-astra / claude-sonnet-5-5 / gemini-3.1-pro-preview"
+                            placeholder="gpt-6.2-sol / claude-sonnet-5-5 / gemini-3.1-pro-preview"
                           />
                         </div>
                       )
@@ -17114,7 +17115,7 @@ supports_websockets = true`}
                         placeholder={`{
   "apiBaseUrl": "https://api.example.com",
   "apiKey": "sk-...",
-  "model": "gpt-6-astra",
+  "model": "gpt-6.2-sol",
   "env": {
     "CUSTOM_KEY": "VALUE"
   }

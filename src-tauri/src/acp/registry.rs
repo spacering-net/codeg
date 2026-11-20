@@ -465,7 +465,7 @@ pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 /// for when the installed copy's own package.json cannot be read. A runtime
 /// resolved to this value is marked unconfirmed (`codex_runtime`), so it never
 /// counts as the version a catalog was checked against. Move it with the pin.
-pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.166.0";
+pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.170.0";
 
 /// The npm package the built-in Claude Code entry runs — and the name the
 /// adapter reports as `agentInfo.name` at `initialize`, which is its
@@ -3555,9 +3555,85 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     keeps a malformed Read or Edit path from failing the prompt.
             //     Each is a fix on paths codeg already takes, checked by the
             //     adapter's tests; not reproduced live.
+            //
+            // 0.108.1 (2026-11-18) and 0.109.0 (2026-11-19) move the ACP SDK to
+            // 2.8.0 (schema 1.33.0) and the Claude Agent SDK to 0.3.328
+            // (Claude Code 2.1.326 → 2.1.328); `engines.node` stays ">=22".
+            // Measured live with the same harness, 0.108.0 and 0.109.0 side by
+            // side: the twenty earlier scenarios match apart from what
+            // (wwwww) says, timing (a gateway reconnect in one run, request
+            // order), the CLI asking the fake gateway, which refuses titles,
+            // for a session title twice more, one more `last-prompt` record in
+            // an idle session's transcript, and `/code-review`'s reworded
+            // description. A new scenario ran a session with codeg's session
+            // meta (a `modelPicker` row in `options.settings`), with and
+            // without `promptSuggestions: false`, through `session/new`, three
+            // prompts on the picker's row and `session/resume`.
+            //
+            // (wwwww) **Four changes codeg gets with the bump, with no
+            // change.**
+            //   * #1669 sends a session's settings to Claude Code in the SDK's
+            //     initialize request, as #1647 did for MCP servers: Claude Code
+            //     starts with `--await-initialize --initialize-fields=settings`
+            //     and no `--settings`. The settings land in the same tier
+            //     (`flagSettings`). Measured: on 0.109.0 codeg's picker id is no
+            //     longer on the CLI's command line after `session/new` or
+            //     `session/resume`, the row is listed after both, and after
+            //     `session/new` it takes `set_config_option` and reaches the
+            //     gateway as the model. A CLI named by `CLAUDE_CODE_EXECUTABLE`
+            //     keeps `--settings`; codeg does not set it.
+            //   * #1666 sends the config options as model, effort, fast,
+            //     ultracode, mode (mode came first). codeg sets the order
+            //     itself where it matters: the composer ranks model, effort,
+            //     mode, then the rest (`rankOf` in `session-settings.ts`), and
+            //     a connect replays a saved model before the other saved
+            //     options (`order_preferred_config_values`). Only the agent
+            //     options editor, which keeps the agent's order after the
+            //     model, now shows Mode below Fast and Ultracode.
+            //   * #1659 files the Fast option under the `speed` category (it
+            //     was `model_config`, which `map_session_config_category`
+            //     reported as "unknown") and lists Off before On. codeg reads
+            //     only the `model`, `thought_level` and `mode` categories, and
+            //     `onOffValues` reads the on/off pair in either order.
+            //   * #1660 sends the predicted next prompt as ACP's unstable
+            //     `prompt_suggestions_update` to a client that declares
+            //     `session.promptSuggestions`, and asks Claude Code for a
+            //     prediction only for that client or AIR. codeg is an AIR
+            //     client, so it keeps getting `_meta.promptSuggestions`.
+            //     Measured: the same suggestion frames on 0.108.0 and 0.109.0,
+            //     and with `promptSuggestions: false` no prediction request on
+            //     either. codeg declares no capability for the standard update.
+            //     The schema crate (1.12.0) has no variant for it, and it gives
+            //     what the AIR form gives.
+            //
+            // (xxxxx) Nothing to change in codeg, each checked:
+            //   * #1506 checks a `providers/set` gateway's models, and codeg
+            //     never sends `providers/set`.
+            //   * #1603 ends a v1 turn at its result for a client in the
+            //     subagents RFD form, and #1656 answers -32602 to a request that
+            //     names a subagent's child session. codeg declares no
+            //     `subagents`, so it gets neither the RFD form nor child
+            //     session ids.
+            //   * #1604 closes a server tool call (the advisor's) whose reply
+            //     Claude Code gave up on at its stream idle timeout, as
+            //     `failed`, once the next reply starts. The v1 turn no longer
+            //     fails with `incomplete_tool_call` for it. codeg shows the
+            //     card's `failed` status as it shows any other.
+            //   * #1653 concerns MCP-over-ACP (`"type": "acp"`) servers, and
+            //     codeg declares none.
+            //   * ACP SDK 2.8.0 makes `session/fork` refuse a `cursorId`.
+            //     codeg's fork request names none (`fork::build_fork_request`).
+            //     The rest of 2.8.0 is v2.
+            //   * SDK 0.3.327 refuses session options that it cannot send to
+            //     Claude Code (a hook matcher without hooks). codeg sends no
+            //     `hooks` option.
+            //   * CLI 2.1.328 adds an `api-request-resumed` transcript record
+            //     to the `api-request` family. The parser skips it like the
+            //     others (pinned in `parsers::claude`). Its other changes that
+            //     reach an SDK host are fixes on paths codeg already takes.
             distribution: AgentDistribution::Npx {
-                version: "0.108.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.108.0",
+                version: "0.109.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.109.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -4995,9 +5071,64 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // codeg's monotonic merge (`SessionState::apply_event`) dropped
             // every one after the first.
             // v2's initial `configOptions` are ignored; codeg speaks v1.
+            //
+            // 2.8.0 moves `@openai/codex` ^0.166.0 → **^0.170.0** (a fresh
+            // install resolves 0.170.0, now `CODEX_NESTED_VERSION_FALLBACK`)
+            // and the inline `@agentclientprotocol/sdk` ~2.6.0 → ~2.8.0.
+            // `engines` is still absent, and the 20.3.0 floor stands: live on
+            // 20.3.0 a session runs a plain and a shell turn, and turns a hook
+            // blocks. Under codeg's exact `clientCapabilities` the 33-scenario
+            // harness replays as on 2.7.0 bar the order of `configOptions`
+            // (see (fff)), and live plain, shell, hook, async-question,
+            // permission-profile, steering and suggestion runs match 2.7.0's
+            // apart from the model list and `mcpCapabilities.acp`.
+            //
+            // (ddd) **codex 0.170's catalog: GPT-6.2 Sol and GPT-6.2 Astra.**
+            // GPT-6.2 Sol is the new default (priority 1, a 500K window), so
+            // a fresh `session/new` now opens on `gpt-6.2-sol` and the AIR
+            // `recommendedValue` follows; GPT-6.2 Astra (272K) is second, and
+            // GPT-6.1 Sol's window rises from 272K to 500K (its
+            // `model_context_window` reads 475000 live, as GPT-6.1 Terra's
+            // does). The offline snapshot is regenerated from the 0.170.0
+            // binary, the context-window fallback
+            // (`parsers::infer_context_window_max_tokens`) puts both Sols on
+            // 475K, and the catalog strictness is re-probed: one new strict
+            // enum, `web_search_provider` (`codex_model_catalog.rs`). The model
+            // placeholders in the settings follow.
+            //
+            // (eee) **codex 0.170 refuses a provider change in its own words.**
+            // Reopening a thread after the configured `model_provider` moved
+            // still answers `session/load` and `session/resume` with a bare
+            // -32603, but `data.details` is no longer the 0.166 sentence
+            // ("This chat uses fake, but your current provider is fake2. …"):
+            // it is the config-load error "failed to load configuration:
+            // Cannot change this thread's model provider from `fake` to
+            // `fake2` on resume.\n\nCheck … any CODEX_CONFIG override." (live).
+            // Unrecognized, that fell to the `session/new` fallback and rebound
+            // the row to an empty session on the new provider; now
+            // `codex_thread_provider_refused` reads it as `provider_mismatch`,
+            // and the banner quotes only the sentence naming both providers.
+            //
+            // (fff) Inert or not adopted. #778 lists session `configOptions`
+            // model, reasoning effort, mode, collaboration mode (2.7.0: mode,
+            // collaboration mode, model, effort); codeg ranks them itself
+            // (`src/lib/session-settings.ts`). #771 serves MCP over the ACP
+            // connection (`initialize` now says `mcpCapabilities.acp: true`
+            // once codex's `mcp_2026_07_28` feature checks out); codeg keeps
+            // codeg-mcp on stdio, which every agent shares, and the bridge
+            // takes only MCP 2026-07-28 servers. #777's background list and
+            // `terminal/cancel`, the replay boundaries and keyed prompt ids are
+            // ACP v2 only; so is the new `plan_removed` after an emptied
+            // checklist, which a v1 client still gets as a `plan` with no
+            // entries (codeg's plan card then draws nothing). #742 (deeply nested JSON) and per-thread
+            // `CODEX_CONFIG` MCP tables (now kept beside the session's servers)
+            // need nothing from codeg. In codex 0.170 itself the rollout gains
+            // only metadata (`history_sequence`, `account_scoped`, …) and a
+            // developer-message part, all ignored by the parser, and every
+            // `config.toml` key codeg writes keeps its shape.
             distribution: AgentDistribution::Npx {
-                version: "2.7.0",
-                package: "@agentclientprotocol/codex-acp@2.7.0",
+                version: "2.8.0",
+                package: "@agentclientprotocol/codex-acp@2.8.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -7972,7 +8103,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   同一份两条模型的 `llm-deepseek.models`，0.9.0 的模型下拉换成这两条，
             //   0.11.0 仍是内置的 `deepseek-flash` / `deepseek-v4-pro`，也没有任何环境
             //   变量能改这份目录。所以设置页只对低于 0.10.0 的安装显示目录编辑器
-            //   （`deepseekReadsHarnessCatalog`），其余显示一句说明，旧文件原样不动。
+            //   （`deepseekReadsHarnessCatalog`）。0.10.0 及以后显示的是
+            //   `commands::deepseek_settings` 的**路由编辑器**：它写
+            //   `$DSH_HOME/deepseek-acp/settings.yaml` 的 `llm-pi-ai.providers`，
+            //   每条路由把一个 pi-ai provider 的目录加进同一个模型下拉——那是这些
+            //   版本上唯一还能扩充可选模型的入口。codeg 不调用 `providers/*` 那套
+            //   UNSTABLE 协议面，只写同一个文档，行为一致而少一层依赖。
             // * **官方路由换了协议**：从 OpenAI Chat Completions
             //   （`{baseURL}/chat/completions`，默认 `https://api.deepseek.com`）换成
             //   DeepSeek 兼容 Anthropic 的 Messages API（`{root}/v1/messages`，路径
@@ -9569,8 +9705,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.108.0",
-            "@agentclientprotocol/claude-agent-acp@0.108.0",
+            "0.109.0",
+            "@agentclientprotocol/claude-agent-acp@0.109.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -9611,8 +9747,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.7.0",
-            "@agentclientprotocol/codex-acp@2.7.0",
+            "2.8.0",
+            "@agentclientprotocol/codex-acp@2.8.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));
