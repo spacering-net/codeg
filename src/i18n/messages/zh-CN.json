@@ -69,6 +69,9 @@
     }
   },
   "HostPlugins": {
+    "update": "更新 {name}",
+    "updated": "{name} 已更新至 {version}。",
+    "upToDate": "{name} 暂无更新。",
     "add": "添加插件",
     "sourceDescription": "输入 npm 包名、GitHub 仓库地址或已连接主机上的绝对目录路径。",
     "source": "插件来源",

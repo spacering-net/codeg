@@ -69,6 +69,9 @@
     }
   },
   "HostPlugins": {
+    "update": "Mettre à jour {name}",
+    "updated": "{name} a été mis à jour vers la version {version}.",
+    "upToDate": "Aucun changement pour {name}.",
     "add": "Ajouter une extension",
     "sourceDescription": "Saisissez un paquet npm, un dépôt GitHub ou un chemin de dossier absolu sur l’hôte connecté.",
     "source": "Source de l’extension",

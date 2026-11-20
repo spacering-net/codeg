@@ -133,6 +133,13 @@ export function installHostPluginSource(
   })
 }
 
+export function updateHostPlugin(pluginId: string) {
+  return getTransport().call<{ updated: boolean; version: string }>(
+    "host_plugins_update",
+    { pluginId }
+  )
+}
+
 export function usePluginActivity(pluginId: string, folderId: number) {
   const transport = typeof window === "undefined" ? null : getTransport()
   const load = useCallback(

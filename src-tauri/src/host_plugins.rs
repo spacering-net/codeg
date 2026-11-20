@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ const MAX_PLUGINS: usize = 32;
 const MAX_CONTRIBUTIONS: usize = 16;
 const MAX_TURNS: usize = 128;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Manifest {
     api_version: u32,
@@ -31,7 +31,7 @@ pub struct Manifest {
     contributes: Contributions,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Contributions {
     #[serde(default)]
@@ -42,7 +42,7 @@ struct Contributions {
     hooks: Vec<Hook>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct WorkspacePanel {
     id: String,
@@ -52,14 +52,14 @@ struct WorkspacePanel {
     text: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum PanelView {
     TurnActivity,
     Text,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PluginCommand {
     id: String,
@@ -67,7 +67,7 @@ struct PluginCommand {
     action: CommandAction,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -78,20 +78,20 @@ enum CommandAction {
     OpenWorkspacePanel { panel_id: String },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Hook {
     event: HookEvent,
     action: HookAction,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 enum HookEvent {
     #[serde(rename = "session.turnCompleted")]
     TurnCompleted,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum HookAction {
     RecordTurnActivity,
@@ -103,6 +103,16 @@ pub struct InstalledPlugin {
     enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source: Option<source::InstalledSource>,
+    /// An in-flight download may commit only to the installed definition it read.
+    /// Toggling the plugin does not replace its definition.
+    #[serde(skip)]
+    revision: Arc<()>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PluginUpdate {
+    pub updated: bool,
+    version: String,
 }
 
 #[derive(Deserialize)]
@@ -174,12 +184,7 @@ impl HostPlugins {
         let mut next = state.catalog.clone();
         let discard = match mutation {
             Mutation::Install { manifest } => {
-                if manifest.len() > MAX_MANIFEST_BYTES {
-                    return Err(invalid("Plugin manifest exceeds 64 KiB"));
-                }
-                let manifest: Manifest = serde_json::from_str(&manifest)
-                    .map_err(|error| invalid(format!("Invalid plugin manifest: {error}")))?;
-                manifest.validate().map_err(invalid)?;
+                let manifest = Manifest::parse(&manifest)?;
                 if next.contains_key(&manifest.id) {
                     return Err(invalid("A plugin with this ID is already installed"));
                 }
@@ -192,6 +197,7 @@ impl HostPlugins {
                         manifest,
                         enabled: false,
                         source,
+                        revision: Arc::new(()),
                     },
                 );
                 None
@@ -215,6 +221,77 @@ impl HostPlugins {
             state.turns.remove(&id);
         }
         Ok(state.catalog.values().cloned().collect())
+    }
+
+    pub async fn update(&self, id: &str) -> Result<PluginUpdate, AppCommandError> {
+        let (revision, source) = {
+            let guard = self.state.lock().expect("host plugin state lock");
+            let state = guard.as_ref().map_err(|error| catalog_error(error))?;
+            let plugin = state.catalog.get(id).ok_or_else(plugin_not_found)?;
+            let source = plugin
+                .source
+                .clone()
+                .ok_or_else(|| invalid("Install the plugin from a source to receive updates"))?;
+            (plugin.revision.clone(), source)
+        };
+        let (manifest, source) = source.refresh().await?;
+        self.replace(id, &revision, Manifest::parse(&manifest)?, source)
+    }
+
+    fn replace(
+        &self,
+        id: &str,
+        revision: &Arc<()>,
+        manifest: Manifest,
+        source: source::InstalledSource,
+    ) -> Result<PluginUpdate, AppCommandError> {
+        let mut guard = self.state.lock().expect("host plugin state lock");
+        let state = guard.as_mut().map_err(|error| catalog_error(error))?;
+        let current = state.catalog.get(id).ok_or_else(plugin_not_found)?;
+        if !Arc::ptr_eq(&current.revision, revision) {
+            return Err(invalid(
+                "The installed plugin changed while checking for an update. Try again.",
+            ));
+        }
+        if manifest.id != id {
+            return Err(invalid("The updated manifest has a different plugin ID"));
+        }
+        if older_version(&manifest.version, &current.manifest.version)
+            || matches!(
+                (&source, &current.source),
+                (source::InstalledSource::Npm { version: new, .. }, Some(source::InstalledSource::Npm { version: old, .. }))
+                    if older_version(new, old)
+            )
+        {
+            return Err(invalid("The source returned an older plugin version"));
+        }
+        let version = manifest.version.clone();
+        if current.manifest == manifest && current.source.as_ref() == Some(&source) {
+            return Ok(PluginUpdate {
+                updated: false,
+                version,
+            });
+        }
+        let discard_activity = manifest.contributes.hooks != current.manifest.contributes.hooks;
+        let mut next = state.catalog.clone();
+        next.insert(
+            id.to_owned(),
+            InstalledPlugin {
+                manifest,
+                enabled: current.enabled,
+                source: Some(source),
+                revision: Arc::new(()),
+            },
+        );
+        write_catalog(&self.path, &next)?;
+        state.catalog = next;
+        if discard_activity {
+            state.turns.remove(id);
+        }
+        Ok(PluginUpdate {
+            updated: true,
+            version,
+        })
     }
 
     pub fn activity(
@@ -307,6 +384,16 @@ impl HostPlugins {
 }
 
 impl Manifest {
+    fn parse(text: &str) -> Result<Self, AppCommandError> {
+        if text.len() > MAX_MANIFEST_BYTES {
+            return Err(invalid("Plugin manifest exceeds 64 KiB"));
+        }
+        let manifest: Self = serde_json::from_str(text)
+            .map_err(|error| invalid(format!("Invalid plugin manifest: {error}")))?;
+        manifest.validate().map_err(invalid)?;
+        Ok(manifest)
+    }
+
     fn validate(&self) -> Result<(), String> {
         if self.api_version != 1 {
             return Err(format!(
@@ -357,6 +444,16 @@ impl Manifest {
             }
         }
         Ok(())
+    }
+}
+
+fn older_version(candidate: &str, current: &str) -> bool {
+    match (
+        semver::Version::parse(candidate),
+        semver::Version::parse(current),
+    ) {
+        (Ok(candidate), Ok(current)) => candidate.cmp_precedence(&current).is_lt(),
+        _ => false,
     }
 }
 
@@ -519,6 +616,81 @@ mod tests {
             .is_err());
         assert!(host.list().unwrap()[0].enabled);
         assert_eq!(host.activity(ID, 12).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn directory_update_validates_before_replacing_the_enabled_plugin() {
+        let data = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("codeg-plugin.json");
+        std::fs::write(&path, SAMPLE).unwrap();
+        let host = HostPlugins::new(data.path());
+        source::install(
+            &host,
+            directory.path().to_str().unwrap(),
+            source::Registry::Npm,
+        )
+        .await
+        .unwrap();
+        set_enabled(&host, true);
+        assert!(host.record_turn(12, &turn()));
+        assert!(!host.update(ID).await.unwrap().updated);
+
+        for invalid in [
+            SAMPLE.replace(ID, "different-plugin"),
+            SAMPLE.replace("1.0.0", "0.9.0"),
+            SAMPLE.replace("\"apiVersion\": 1", "\"apiVersion\": 2"),
+        ] {
+            std::fs::write(&path, invalid).unwrap();
+            assert!(host.update(ID).await.is_err());
+            assert_eq!(host.list().unwrap()[0].manifest.version, "1.0.0");
+        }
+
+        let updated = SAMPLE.replace("1.0.0", "1.1.0");
+        std::fs::write(&path, updated).unwrap();
+        let result = host.update(ID).await.unwrap();
+        assert!(result.updated);
+        assert_eq!(result.version, "1.1.0");
+        assert_eq!(host.activity(ID, 12).unwrap().len(), 1);
+        let reopened = HostPlugins::new(data.path());
+        assert!(reopened.list().unwrap()[0].enabled);
+        assert!(!reopened.update(ID).await.unwrap().updated);
+
+        let text_panel = r#"{"apiVersion":1,"id":"codeg.turn-activity","name":"Activity","version":"1.2.0","contributes":{"workspacePanels":[{"id":"activity","title":"Activity","view":"text","text":"Updated"}]}}"#;
+        std::fs::write(&path, text_panel).unwrap();
+        std::fs::remove_file(&host.path).unwrap();
+        std::fs::create_dir(&host.path).unwrap();
+        assert!(host.update(ID).await.is_err());
+        assert_eq!(host.list().unwrap()[0].manifest.version, "1.1.0");
+        assert_eq!(host.activity(ID, 12).unwrap().len(), 1);
+
+        std::fs::remove_dir(&host.path).unwrap();
+        assert!(host.update(ID).await.unwrap().updated);
+        assert!(host.activity(ID, 12).unwrap().is_empty());
+    }
+
+    #[test]
+    fn update_preserves_a_concurrent_toggle_and_rejects_a_stale_definition() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = HostPlugins::new(dir.path());
+        let source = source::InstalledSource::Directory {
+            path: dir.path().to_str().unwrap().to_owned(),
+        };
+        let installed = host
+            .apply_with_source(
+                Mutation::Install {
+                    manifest: SAMPLE.into(),
+                },
+                Some(source.clone()),
+            )
+            .unwrap();
+        let revision = &installed[0].revision;
+        set_enabled(&host, true);
+        let updated = Manifest::parse(&SAMPLE.replace("1.0.0", "1.1.0")).unwrap();
+        host.replace(ID, revision, updated.clone(), source.clone())
+            .unwrap();
+        assert!(host.list().unwrap()[0].enabled);
+        assert!(host.replace(ID, revision, updated, source).is_err());
     }
 
     #[tokio::test]

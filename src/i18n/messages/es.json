@@ -69,6 +69,9 @@
     }
   },
   "HostPlugins": {
+    "update": "Actualizar {name}",
+    "updated": "{name} se ha actualizado a la versión {version}.",
+    "upToDate": "No se encontraron cambios en {name}.",
     "add": "Añadir complemento",
     "sourceDescription": "Introduce un paquete de npm, un repositorio de GitHub o una ruta absoluta del host conectado.",
     "source": "Origen del complemento",

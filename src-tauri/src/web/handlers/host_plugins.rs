@@ -6,7 +6,7 @@ use serde::Deserialize;
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::host_plugins::source::Registry;
-use crate::host_plugins::{InstalledPlugin, Mutation, TurnActivity};
+use crate::host_plugins::{InstalledPlugin, Mutation, PluginUpdate, TurnActivity};
 
 #[derive(Deserialize)]
 pub struct ApplyParams {
@@ -25,6 +25,12 @@ pub struct InstallSourceParams {
 pub struct ActivityParams {
     plugin_id: String,
     folder_id: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateParams {
+    plugin_id: String,
 }
 
 pub async fn list(
@@ -60,6 +66,19 @@ pub async fn install_source(
         &state.emitter,
         &params.input,
         params.registry,
+    )
+    .await
+    .map(Json)
+}
+
+pub async fn update(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<UpdateParams>,
+) -> Result<Json<PluginUpdate>, AppCommandError> {
+    crate::commands::host_plugins::update_core(
+        &state.host_plugins,
+        &state.emitter,
+        &params.plugin_id,
     )
     .await
     .map(Json)

@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef, useState } from "react"
-import { FilePlus, Plus, Trash2 } from "lucide-react"
+import { FilePlus, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import {
@@ -20,6 +20,7 @@ import { isUnsupportedCommandError } from "@/lib/harness/errors"
 import {
   applyHostPlugin,
   installHostPluginSource,
+  updateHostPlugin,
   useHostPlugins,
   type InstalledPlugin,
   type PluginMutation,
@@ -31,15 +32,15 @@ export function HostPluginSettings() {
   const fileInput = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string>()
+  const [notice, setNotice] = useState<string>()
   const unavailable = isUnsupportedCommandError(error)
 
-  const apply = async (
-    getMutation: () => PluginMutation | Promise<PluginMutation>
-  ) => {
+  const run = async (action: () => Promise<unknown>) => {
     setBusy(true)
     setFailure(undefined)
+    setNotice(undefined)
     try {
-      await applyHostPlugin(await getMutation())
+      await action()
       refresh()
     } catch (cause) {
       setFailure(toErrorMessage(cause))
@@ -48,12 +49,22 @@ export function HostPluginSettings() {
     }
   }
 
+  const apply = (getMutation: () => PluginMutation | Promise<PluginMutation>) =>
+    run(async () => applyHostPlugin(await getMutation()))
+
   return (
     <div className="mx-auto w-full max-w-3xl space-y-4 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-base font-semibold">{t("title")}</h1>
         <div className="flex flex-wrap gap-2">
-          <InstallSourceDialog disabled={busy || !data} onInstalled={refresh} />
+          <InstallSourceDialog
+            disabled={busy || !data}
+            onInstalled={() => {
+              setFailure(undefined)
+              setNotice(undefined)
+              refresh()
+            }}
+          />
           <Button
             size="sm"
             variant="outline"
@@ -83,6 +94,11 @@ export function HostPluginSettings() {
       {failure && (
         <p role="alert" className="text-sm text-destructive">
           {failure}
+        </p>
+      )}
+      {notice && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {notice}
         </p>
       )}
       {unavailable ? (
@@ -120,6 +136,31 @@ export function HostPluginSettings() {
                   </div>
                 )}
               </div>
+              {source && (
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  className="text-muted-foreground"
+                  title={t("update", { name: manifest.name })}
+                  aria-label={t("update", { name: manifest.name })}
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      const { updated, version } = await updateHostPlugin(
+                        manifest.id
+                      )
+                      setNotice(
+                        t(updated ? "updated" : "upToDate", {
+                          name: manifest.name,
+                          version,
+                        })
+                      )
+                    })
+                  }
+                >
+                  <RefreshCw />
+                </Button>
+              )}
               <Switch
                 aria-label={t("enable", { name: manifest.name })}
                 checked={enabled}

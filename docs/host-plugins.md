@@ -48,3 +48,21 @@ Open a workspace in Codeg to use the panel and command.
 For a file on the browser's machine, use **Import Manifest**. The catalog stores
 the manifest and its resolved source. Codeg starts each installed plugin
 disabled. Contributions run through the host APIs described above.
+
+## Update an installed plugin
+
+Use the update button next to a source-installed plugin in **Settings → Plugins**.
+Codeg reads the manifest from the same host directory, GitHub reference, or npm
+registry and version selector used at installation. An unqualified npm package
+follows `latest`. A GitHub repository without a reference follows its default
+branch. An exact npm version or GitHub commit stays pinned. Older catalog entries
+with only a resolved version or commit stay pinned to it. For older npm entries
+with no saved registry, Codeg uses the official npm registry.
+
+Codeg verifies the same plugin ID and rejects older manifest or npm package
+versions. A GitHub reference advancing to a new commit updates the stored source
+even if the manifest is identical. A successful update keeps the enabled state.
+An update that changes the turn hook clears the plugin's in-memory turn activity.
+Other connected clients receive a catalog change notification after the update.
+For plugins imported as standalone files, remove the plugin and import the new
+manifest to replace it.
