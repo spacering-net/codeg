@@ -82,6 +82,7 @@
     "discover": "Descubrir complementos",
     "indexDescription": "Introduce la URL HTTPS de un índice de complementos de confianza para explorar complementos y versiones.",
     "indexUrl": "URL del índice de complementos",
+    "savedIndexes": "Índices guardados",
     "loadIndex": "Cargar índice",
     "version": "Versión de {name}",
     "installed": "Instalado",
