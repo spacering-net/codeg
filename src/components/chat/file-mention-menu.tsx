@@ -1,8 +1,9 @@
 "use client"
 
 import { useEffect, useRef } from "react"
-import { File, Folder } from "lucide-react"
+import { Folder } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { FileTypeIcon } from "@/components/files/file-type-icon"
 import type { FlatFileEntry } from "@/hooks/use-file-tree"
 
 interface FileMentionMenuProps {
@@ -50,7 +51,10 @@ export function FileMentionMenu({
           {entry.kind === "dir" ? (
             <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           ) : (
-            <File className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <FileTypeIcon
+              filename={entry.relativePath}
+              className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+            />
           )}
           <span className="truncate font-mono text-xs">
             {entry.relativePath}

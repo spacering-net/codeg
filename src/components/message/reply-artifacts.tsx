@@ -1,13 +1,8 @@
 "use client"
 
 import { memo, useMemo, useState } from "react"
-import {
-  ChevronRight,
-  ExternalLink,
-  FileDiff,
-  FileIcon,
-  FilePlus,
-} from "lucide-react"
+import { ChevronRight, ExternalLink, FileDiff, FilePlus } from "lucide-react"
+import { FileTypeIcon } from "@/components/files/file-type-icon"
 import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useOpenFileTarget } from "@/hooks/use-open-file-target"
@@ -195,7 +190,10 @@ export const ReplyArtifacts = memo(function ReplyArtifacts({
                                   })}
                                   className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                                 >
-                                  <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                  <FileTypeIcon
+                                    filename={file.path}
+                                    className="h-4 w-4 shrink-0 text-muted-foreground"
+                                  />
                                   <span className="flex min-w-0 flex-1 flex-col">
                                     <span className="truncate text-xs font-medium text-foreground">
                                       {name}
@@ -308,7 +306,10 @@ export const ReplyArtifacts = memo(function ReplyArtifacts({
                               title={displayPath}
                               className="flex items-center gap-2 overflow-hidden rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2"
                             >
-                              <FileIcon className="h-4 w-4 shrink-0 text-destructive" />
+                              <FileTypeIcon
+                                filename={file.path}
+                                className="h-4 w-4 shrink-0 text-destructive"
+                              />
                               <span className="flex min-w-0 flex-1 flex-col">
                                 <span className="truncate text-xs font-medium text-destructive">
                                   {name}
@@ -342,7 +343,10 @@ export const ReplyArtifacts = memo(function ReplyArtifacts({
                                   })}
                                   className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 px-2.5 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
                                 >
-                                  <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                  <FileTypeIcon
+                                    filename={file.path}
+                                    className="h-4 w-4 shrink-0 text-muted-foreground"
+                                  />
                                   <span className="flex min-w-0 flex-1 flex-col">
                                     <span className="truncate text-xs font-medium text-foreground">
                                       {name}

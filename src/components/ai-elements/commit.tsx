@@ -24,6 +24,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { cn, copyTextToClipboard } from "@/lib/utils"
+import { FileTypeIcon } from "@/components/files/file-type-icon"
 
 export type CommitProps = ComponentProps<typeof Collapsible>
 
@@ -339,17 +340,32 @@ export const CommitFileStatus = ({
   </span>
 )
 
-export type CommitFileIconProps = ComponentProps<typeof FileIcon>
+export type CommitFileIconProps = ComponentProps<typeof FileIcon> & {
+  /** When provided, renders a file-type icon for this filename. */
+  filename?: string
+}
 
 export const CommitFileIcon = ({
+  filename,
   className,
   ...props
-}: CommitFileIconProps) => (
-  <FileIcon
-    className={cn("size-3.5 shrink-0 text-muted-foreground", className)}
-    {...props}
-  />
-)
+}: CommitFileIconProps) => {
+  if (filename) {
+    return (
+      <FileTypeIcon
+        filename={filename}
+        className={cn("size-3.5 shrink-0 text-muted-foreground", className)}
+        {...props}
+      />
+    )
+  }
+  return (
+    <FileIcon
+      className={cn("size-3.5 shrink-0 text-muted-foreground", className)}
+      {...props}
+    />
+  )
+}
 
 export type CommitFilePathProps = HTMLAttributes<HTMLSpanElement>
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   isHiddenPath,
+  isOpenFileViewable,
   isOfficeOwnerFile,
   isPdfFile,
   languageFromPath,
@@ -313,5 +314,74 @@ describe("isPdfFile", () => {
     expect(isPdfFile("")).toBe(false)
     expect(isPdfFile(null)).toBe(false)
     expect(isPdfFile(undefined)).toBe(false)
+  })
+})
+
+describe("isOpenFileViewable", () => {
+  it.each([
+    ["a.pdf"],
+    ["a.doc"],
+    ["a.ppt"],
+    ["a.xls"],
+    ["docs/report.odt"],
+    ["docs\\report.odt"],
+    ["C:\\Users\\me\\a.docx.zip"],
+    ["backup.tar.gz"],
+    ["invoice.eml"],
+    ["mail.msg"],
+    ["book.epub"],
+    ["design.psd"],
+    ["photo.heic"],
+    ["diagram.xmind"],
+    // Audio / video
+    ["song.mp3"],
+    ["voice.flac"],
+    ["clip.mov"],
+    ["movie.mkv"],
+    ["stream.m3u8"],
+    // Images beyond the base64 ImagePreview set
+    ["photo.avif"],
+    ["scan.tiff"],
+    ["art.jxl"],
+    // Diagrams / assets
+    ["schema.drawio"],
+    ["whiteboard.excalidraw"],
+    ["Inter.ttf"],
+    ["data.sqlite"],
+  ])("%s -> open-file-viewer preview", (path) => {
+    expect(isOpenFileViewable(path)).toBe(true)
+  })
+
+  it.each([
+    // Images render via the base64 ImagePreview.
+    ["a.png"],
+    ["a.jpg"],
+    ["logo.svg"],
+    ["a.webp"],
+    // OpenXML Office stays on the OfficeCLI watch preview.
+    ["a.docx"],
+    ["a.xlsx"],
+    ["a.pptx"],
+    // HTML has its own sandboxed preview.
+    ["a.html"],
+    ["a.htm"],
+    // Text-ish formats stay readable in the source view.
+    ["a.csv"],
+    ["a.tsv"],
+    ["notes.md"],
+    ["notes.rtf"],
+    ["main.ts"],
+    // No extension / no match falls back to the source view as before.
+    ["Makefile"],
+    ["a"],
+    ["a.unknownext"],
+  ])("%s -> not an open-file-viewer file", (path) => {
+    expect(isOpenFileViewable(path)).toBe(false)
+  })
+
+  it("treats empty and nullish input as not viewable", () => {
+    expect(isOpenFileViewable("")).toBe(false)
+    expect(isOpenFileViewable(null)).toBe(false)
+    expect(isOpenFileViewable(undefined)).toBe(false)
   })
 })

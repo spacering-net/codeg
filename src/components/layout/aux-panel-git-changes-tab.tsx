@@ -1361,7 +1361,7 @@ export function GitChangesTab() {
                   <CommitFileStatus status={mapStatus(file.status)}>
                     {file.status}
                   </CommitFileStatus>
-                  <CommitFileIcon />
+                  <CommitFileIcon filename={file.path} />
                   <CommitFilePath title={file.path}>{node.name}</CommitFilePath>
                 </CommitFileInfo>
                 <CommitFileChanges>
@@ -1542,7 +1542,7 @@ export function GitChangesTab() {
                     the leading glyph and lines up with a sibling folder's
                     chevron. See the tracked renderer above. */}
                 <CommitFileInfo className="flex-1 min-w-0 gap-1.5">
-                  <CommitFileIcon />
+                  <CommitFileIcon filename={file.path} />
                   <CommitFilePath title={file.path}>{node.name}</CommitFilePath>
                 </CommitFileInfo>
               </>

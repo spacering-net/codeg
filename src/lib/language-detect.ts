@@ -233,6 +233,144 @@ export function isOfficePreviewable(path: string | null | undefined): boolean {
   return ext === "docx" || ext === "xlsx" || ext === "pptx"
 }
 
+// Binary / document formats the client-side open-file-viewer bundle renders
+// (PDF, legacy Office, archives, email, e-books, …). Every extension here is
+// one the existing surfaces do NOT already handle: images (base64 preview),
+// OfficeCLI documents (docx/xlsx/pptx), HTML, markdown, and plain-text source
+// (csv/tsv/rtf stay readable as text; .svg is a text file with real diffs).
+// A matching tab is preview-only — its bytes are fetched as a data: URL and
+// never read as text.
+const OPEN_FILE_VIEWER_EXTENSIONS = new Set([
+  // PDF
+  "pdf",
+  // Legacy / non-OpenXML Office (docx/xlsx/pptx stay on OfficeCLI)
+  "doc",
+  "dot",
+  "docm",
+  "xls",
+  "xlt",
+  "xlsm",
+  "xlsb",
+  "ppt",
+  "pps",
+  "ppsx",
+  "pot",
+  "potx",
+  "odp",
+  "odt",
+  "ods",
+  "fodt",
+  "fods",
+  "fodp",
+  "numbers",
+  "key",
+  "wps",
+  "et",
+  "dps",
+  // Archives
+  "zip",
+  "rar",
+  "7z",
+  "tar",
+  "gz",
+  "tgz",
+  "bz2",
+  "xz",
+  // Email
+  "eml",
+  "msg",
+  // E-books / fixed layout
+  "epub",
+  "ofd",
+  "xps",
+  // Mind maps
+  "xmind",
+  // Audio (audioPlugin's set)
+  "mp3",
+  "wav",
+  "aif",
+  "aiff",
+  "aifc",
+  "ogg",
+  "oga",
+  "aac",
+  "m4a",
+  "flac",
+  "opus",
+  "weba",
+  "amr",
+  "mid",
+  "midi",
+  "caf",
+  "au",
+  "snd",
+  "wma",
+  // Video (videoPlugin's set)
+  "mp4",
+  "mpg",
+  "mpeg",
+  "mpe",
+  "mpv",
+  "webm",
+  "ogv",
+  "mov",
+  "m4v",
+  "avi",
+  "mkv",
+  "flv",
+  "wmv",
+  "3gp",
+  "3g2",
+  "m2ts",
+  "m3u8",
+  // Images beyond IMAGE_EXTENSIONS (imagePlugin's set — png/jpg/gif/webp/bmp/
+  // ico/svg stay on the base64 ImagePreview)
+  "avif",
+  "jxl",
+  "tif",
+  "tiff",
+  "jfif",
+  "cur",
+  "apng",
+  "psd",
+  "heic",
+  "heif",
+  // Diagrams (drawingPlugin)
+  "drawio",
+  "dio",
+  "excalidraw",
+  "tldraw",
+  // Fonts / design / data assets (assetPlugin)
+  "ttf",
+  "otf",
+  "woff",
+  "woff2",
+  "eot",
+  "psb",
+  "ai",
+  "eps",
+  "ps",
+  "webarchive",
+  "sqlite",
+  "sqlite3",
+  "db",
+  "wasm",
+  "parquet",
+  "avro",
+])
+
+export function isOpenFileViewable(path: string | null | undefined): boolean {
+  if (!path) return false
+  if (isImageFile(path)) return false
+  if (isOfficePreviewable(path)) return false
+  if (isHtmlPreviewable(path)) return false
+  const basename = path.toLowerCase().split(/[\\/]/).pop() ?? ""
+  const dot = basename.lastIndexOf(".")
+  if (dot === -1) return false
+  const ext = basename.slice(dot + 1)
+  return OPEN_FILE_VIEWER_EXTENSIONS.has(ext)
+}
+
 /**
  * True when the file name is a Microsoft Office / WPS *owner file* — the
  * `~$`-prefixed sidecar those suites drop beside a document the moment it is
