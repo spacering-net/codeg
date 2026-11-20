@@ -1301,14 +1301,14 @@ pub async fn open_project_boot_window(
 
 // ─── Desktop pet window ─────────────────────────────────────────────────
 
-const PET_WINDOW_LABEL: &str = "pet";
+pub const PET_WINDOW_LABEL: &str = "pet";
 const PET_HOVER_ENTER_EVENT: &str = "pet://hover-enter";
 const PET_HOVER_LEAVE_EVENT: &str = "pet://hover-leave";
 /// Single-frame logical pixel dimensions, locked to the Codex sprite-sheet
 /// contract. The window is sized as one frame × user scale, with no extra
 /// chrome — DPR handling lives inside the webview.
-const PET_BASE_WIDTH: f64 = 192.0;
-const PET_BASE_HEIGHT: f64 = 208.0;
+pub(crate) const PET_BASE_WIDTH: f64 = 192.0;
+pub(crate) const PET_BASE_HEIGHT: f64 = 208.0;
 
 /// Process-global "cursor is currently inside the pet window" flag, owned by
 /// the hover watcher but readable/writable by the context-menu command so
@@ -1348,6 +1348,57 @@ where
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SavedPetOrigin {
+    phys_x: f64,
+    phys_y: f64,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    scale_factor: f64,
+}
+
+/// Resolve a persisted physical `(x, y)` against live monitor geometries
+/// `(mon_x, mon_y, mon_w, mon_h, scale_factor)` and the pet's logical size.
+/// Returns the clamped physical origin and target monitor's scale factor when
+/// the saved position lands on an attached monitor, or `None` when the monitor
+/// is gone (or coords are invalid) so the caller falls back to centering.
+fn resolve_saved_pet_origin(
+    saved: Option<(f64, f64)>,
+    pet_w: f64,
+    pet_h: f64,
+    monitors: &[(i32, i32, u32, u32, f64)],
+) -> Option<SavedPetOrigin> {
+    let (x, y) = saved?;
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+
+    let &(mx, my, mw, mh, sf) = monitors.iter().find(|&&(mx, my, mw, mh, sf)| {
+        if !sf.is_finite() || sf <= 0.0 || mw == 0 || mh == 0 {
+            return false;
+        }
+        let mx = f64::from(mx);
+        let my = f64::from(my);
+        let mw = f64::from(mw);
+        let mh = f64::from(mh);
+        let cx = x + (pet_w * sf) / 2.0;
+        let cy = y + (pet_h * sf) / 2.0;
+        (x >= mx && x < mx + mw && y >= my && y < my + mh)
+            || (cx >= mx && cx < mx + mw && cy >= my && cy < my + mh)
+    })?;
+
+    let mx = f64::from(mx);
+    let my = f64::from(my);
+    let mw = f64::from(mw);
+    let mh = f64::from(mh);
+    let max_x = (mx + mw - pet_w * sf).max(mx);
+    let max_y = (my + mh - pet_h * sf).max(my);
+    Some(SavedPetOrigin {
+        phys_x: x.clamp(mx, max_x),
+        phys_y: y.clamp(my, max_y),
+        scale_factor: sf,
+    })
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_pet_window(
@@ -1369,15 +1420,19 @@ pub async fn open_pet_window(
             .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))??;
     }
 
+    let scale = config.scale.clamp(0.5, 3.0);
+    let pet_w = PET_BASE_WIDTH * scale;
+    let pet_h = PET_BASE_HEIGHT * scale;
+
     if let Some(existing) = app.get_webview_window(PET_WINDOW_LABEL) {
         let _ = existing.unminimize();
+        let _ = existing.set_size(LogicalSize::new(pet_w, pet_h));
         existing
             .set_focus()
             .map_err(|e| AppCommandError::window("Failed to focus pet window", e.to_string()))?;
         return Ok(());
     }
 
-    let scale = config.scale.clamp(0.5, 3.0);
     config.scale = scale;
     config.enabled = true;
     crate::commands::pet::pet_save_window_state_core(
@@ -1392,10 +1447,27 @@ pub async fn open_pet_window(
     )
     .await?;
 
+    let monitors: Vec<(i32, i32, u32, u32, f64)> = app
+        .available_monitors()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| {
+            let pos = m.position();
+            let size = m.size();
+            (pos.x, pos.y, size.width, size.height, m.scale_factor())
+        })
+        .collect();
+    let saved_origin = resolve_saved_pet_origin(
+        config.x.zip(config.y),
+        pet_w,
+        pet_h,
+        &monitors,
+    );
+
     let url = WebviewUrl::App(format!("pet?petId={pet_id}").into());
     let mut builder = WebviewWindowBuilder::new(&app, PET_WINDOW_LABEL, url)
         .title("codeg pet")
-        .inner_size(PET_BASE_WIDTH * scale, PET_BASE_HEIGHT * scale)
+        .inner_size(pet_w, pet_h)
         .min_inner_size(PET_BASE_WIDTH * 0.5, PET_BASE_HEIGHT * 0.5)
         .max_inner_size(PET_BASE_WIDTH * 3.0, PET_BASE_HEIGHT * 3.0)
         .resizable(false)
@@ -1410,11 +1482,42 @@ pub async fn open_pet_window(
         .focused(false)
         .accept_first_mouse(true);
 
-    builder = builder.center();
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(origin) = saved_origin {
+            builder = builder.position(
+                origin.phys_x / origin.scale_factor,
+                origin.phys_y / origin.scale_factor,
+            );
+        } else {
+            builder = builder.center();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        if saved_origin.is_none() {
+            builder = builder.center();
+        }
+    }
 
-    apply_pet_window_style(builder)
+    let window = apply_pet_window_style(builder)
         .build()
         .map_err(|e| AppCommandError::window("Failed to open pet window", e.to_string()))?;
+
+    #[cfg(not(target_os = "macos"))]
+    if let Some(saved) = saved_origin {
+        let origin = tauri::PhysicalPosition::new(
+            saved.phys_x.round() as i32,
+            saved.phys_y.round() as i32,
+        );
+        let _ = window.set_position(origin);
+        let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
+        let _ = window.set_position(origin);
+    }
+
+    // Re-assert exact logical dimensions after build/placement so mixed-DPI
+    // monitor transitions can never leave the window scaled by a stale factor.
+    let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
 
     spawn_pet_hover_watcher(app.clone());
 
@@ -2833,5 +2936,80 @@ mod macos_fullscreen_close_tests {
 
         release_macos_fullscreen_drain(second);
         assert!(!macos_fullscreen_drain_in_flight());
+    }
+}
+
+#[cfg(test)]
+mod pet_window_origin_tests {
+    use super::{resolve_saved_pet_origin, SavedPetOrigin, PET_BASE_HEIGHT, PET_BASE_WIDTH};
+
+    // Mixed-DPI setup: 2× primary Retina at (0, 0) + 1× external monitor to its left.
+    const MIXED_DPI_MONITORS: [(i32, i32, u32, u32, f64); 2] = [
+        (0, 0, 3024, 1964, 2.0),
+        (-1920, 0, 1920, 1080, 1.0),
+    ];
+
+    #[test]
+    fn resolves_saved_origin_on_secondary_1x_monitor_with_its_own_scale() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156
+
+        let origin = resolve_saved_pet_origin(
+            Some((-215.0, 708.0)),
+            pet_w,
+            pet_h,
+            &MIXED_DPI_MONITORS,
+        );
+        assert_eq!(
+            origin,
+            Some(SavedPetOrigin {
+                phys_x: -215.0,
+                phys_y: 708.0,
+                scale_factor: 1.0,
+            })
+        );
+    }
+
+    #[test]
+    fn resolves_saved_origin_on_primary_2x_monitor_and_clamps_to_edge() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144 logical -> 288 physical at 2×
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156 logical -> 312 physical at 2×
+
+        // Near bottom-right of primary Retina monitor: clamped so the whole pet stays visible.
+        let origin = resolve_saved_pet_origin(
+            Some((2950.0, 1900.0)),
+            pet_w,
+            pet_h,
+            &MIXED_DPI_MONITORS,
+        );
+        assert_eq!(
+            origin,
+            Some(SavedPetOrigin {
+                phys_x: 3024.0 - 288.0,
+                phys_y: 1964.0 - 312.0,
+                scale_factor: 2.0,
+            })
+        );
+    }
+
+    #[test]
+    fn falls_back_to_center_when_saved_monitor_is_disconnected_or_invalid() {
+        let pet_w = PET_BASE_WIDTH;
+        let pet_h = PET_BASE_HEIGHT;
+
+        // Saved on the external monitor, which is now unplugged.
+        let only_primary = [(0, 0, 3024, 1964, 2.0)];
+        assert_eq!(
+            resolve_saved_pet_origin(Some((-215.0, 708.0)), pet_w, pet_h, &only_primary),
+            None
+        );
+        assert_eq!(
+            resolve_saved_pet_origin(None, pet_w, pet_h, &MIXED_DPI_MONITORS),
+            None
+        );
+        assert_eq!(
+            resolve_saved_pet_origin(Some((f64::NAN, 100.0)), pet_w, pet_h, &MIXED_DPI_MONITORS),
+            None
+        );
     }
 }

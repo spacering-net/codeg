@@ -660,6 +660,16 @@ mod tauri_app {
             // Computer use's strip and action marker are placed by codeg each
             // time they are made and must never come back where (or as
             // visible as) a previous run left them.
+            //
+            // The desktop pet and its session panel also own their own
+            // geometry: `pet` derives its logical size strictly from
+            // `pet.config.scale` (192×208 × scale) and persists its own
+            // position in SQLite; `pet-panel` anchors to `pet` and resizes to
+            // its live content. Letting `tauri-plugin-window-state` restore
+            // saved physical pixels onto a window built on a different-DPI
+            // primary display halves or doubles `pet` (e.g. 144×157 saved on a
+            // 1× external display becomes 72×79 logical on a 2× Retina primary)
+            // and overrides scale changes.
             .plugin(
                 tauri_plugin_window_state::Builder::new()
                     .with_state_flags(
@@ -669,6 +679,8 @@ mod tauri_app {
                     .with_denylist(&[
                         crate::computer::indicator::INDICATOR_LABEL,
                         crate::computer::marker::MARKER_LABEL,
+                        windows::PET_WINDOW_LABEL,
+                        windows::PET_PANEL_LABEL,
                     ])
                     .build(),
             )

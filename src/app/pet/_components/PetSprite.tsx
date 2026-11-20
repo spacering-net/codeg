@@ -2,6 +2,8 @@
 
 import { useMemo } from "react"
 import {
+  SPRITE_FRAME_HEIGHT,
+  SPRITE_FRAME_WIDTH,
   backgroundPositionFor,
   spriteBackgroundSize,
   spriteRowsFromHeight,
@@ -17,9 +19,6 @@ export interface PetSpriteProps {
   /** Aria-label for screen readers. */
   label: string
 }
-
-const FRAME_WIDTH = 192
-const FRAME_HEIGHT = 208
 
 export function PetSprite({
   spritesheetUrl,
@@ -42,8 +41,13 @@ export function PetSprite({
       role="img"
       aria-label={label}
       style={{
-        width: `${FRAME_WIDTH * scale}px`,
-        height: `${FRAME_HEIGHT * scale}px`,
+        // Lock the 192:208 cell ratio and fit inside the viewport so a
+        // window/scale mismatch can never shrink only one axis (flex-shrink
+        // on an empty div with independent width + height compresses width
+        // while leaving height intact, squishing the sprite horizontally).
+        width: `min(${SPRITE_FRAME_WIDTH * scale}px, 100vw, calc(100vh * ${SPRITE_FRAME_WIDTH} / ${SPRITE_FRAME_HEIGHT}))`,
+        aspectRatio: `${SPRITE_FRAME_WIDTH} / ${SPRITE_FRAME_HEIGHT}`,
+        flexShrink: 0,
         backgroundImage,
         backgroundRepeat: "no-repeat",
         backgroundSize: spriteBackgroundSize(rows),
