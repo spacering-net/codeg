@@ -53,7 +53,7 @@ import type {
   SpanInfo,
   TargetDirective,
 } from "@/lib/types"
-import { applyLogBatch } from "./log-buffer"
+import { applyLogBatch, PendingLogBatch } from "./log-buffer"
 
 // Capture levels offered in the level dropdown (controls what the backend
 // records). `off` disables capture entirely.
@@ -299,10 +299,6 @@ export function LogsSettings() {
   // A search that merely filters every row out leaves `records` intact, so it
   // does NOT re-arm and a scrolled-up reader keeps their place.
   const didInitialScrollRef = useRef(false)
-  // Live-tail ingestion buffer, flushed once per animation frame.
-  const pendingRef = useRef<LogRecord[]>([])
-  const rafRef = useRef<number | null>(null)
-
   // Authoritative {level, targets}, updated synchronously by every save handler
   // so a queued write always reads the freshest combined state — a level save
   // and a target save can't clobber each other's field (the API persists the
@@ -412,26 +408,26 @@ export function LogsSettings() {
 
   // Live tail: coalesce incoming records via requestAnimationFrame so a burst of
   // events becomes one state update instead of one setState per record. The
-  // monotonic-seq de-dup and the display cap are applied once per flush in
-  // applyLogBatch.
+  // pending records are capped even when the next frame is delayed.
   useEffect(() => {
     if (!liveTail) return
     let disposed = false
     let unlisten: (() => void) | undefined
+    let frame: number | null = null
+    const pending = new PendingLogBatch(DISPLAY_LIMIT)
 
     const flush = () => {
-      rafRef.current = null
-      const batch = pendingRef.current
+      frame = null
+      const batch = pending.drain()
       if (batch.length === 0) return
-      pendingRef.current = []
       setRecords((prev) => applyLogBatch(prev, batch, DISPLAY_LIMIT))
     }
 
     void (async () => {
       const dispose = await subscribeLogAppended((record) => {
-        pendingRef.current.push(record)
-        if (rafRef.current == null) {
-          rafRef.current = requestAnimationFrame(flush)
+        if (disposed || !pending.append(record)) return
+        if (frame == null) {
+          frame = requestAnimationFrame(flush)
         }
       })
       if (disposed) dispose()
@@ -441,11 +437,8 @@ export function LogsSettings() {
     return () => {
       disposed = true
       unlisten?.()
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
-      pendingRef.current = []
+      if (frame != null) cancelAnimationFrame(frame)
+      pending.clear()
     }
   }, [liveTail])
 
