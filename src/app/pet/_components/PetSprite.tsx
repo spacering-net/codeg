@@ -20,6 +20,12 @@ export interface PetSpriteProps {
   label: string
 }
 
+/**
+ * Dedicated full-viewport sprite renderer for `PetWindow`. Sizes against the
+ * pet window viewport (`100vw` / `100vh`) while locking the 192:208 cell
+ * aspect ratio; reusable inline previews (settings thumbnails / action grids)
+ * use `PetSheetThumbnail` / `PetActionPreviewGrid` instead.
+ */
 export function PetSprite({
   spritesheetUrl,
   state,

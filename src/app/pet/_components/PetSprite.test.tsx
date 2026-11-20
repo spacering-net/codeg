@@ -14,6 +14,15 @@ vi.mock("../_hooks/usePetAnimator", () => ({
 
 import { PetSprite } from "./PetSprite"
 
+function expectViewportClampedWidth(width: string, targetPx: number) {
+  // jsdom's CSSOM simplifies `calc(100vh * 192 / 208)` into `92.30769...vh`.
+  const match = width.match(
+    new RegExp(`^min\\(${targetPx}px, 100vw, ([0-9.]+)vh\\)$`)
+  )
+  expect(match, `unexpected width expression: ${width}`).not.toBeNull()
+  expect(Number(match?.[1])).toBeCloseTo((100 * 192) / 208, 6)
+}
+
 describe("PetSprite", () => {
   beforeEach(() => {
     mockUseImageNaturalSize.mockReset()
@@ -32,9 +41,7 @@ describe("PetSprite", () => {
     )
 
     const sprite = screen.getByRole("img", { name: "RX-93" })
-    expect(sprite.style.width).toBe(
-      "min(144px, 100vw, calc(100vh * 192 / 208))"
-    )
+    expectViewportClampedWidth(sprite.style.width, 144)
     expect(sprite.style.height).toBe("")
     expect(sprite.style.aspectRatio).toBe("192 / 208")
     expect(sprite.style.flexShrink).toBe("0")
@@ -55,9 +62,7 @@ describe("PetSprite", () => {
     )
 
     const sprite = screen.getByRole("img", { name: "Ferris" })
-    expect(sprite.style.width).toBe(
-      "min(192px, 100vw, calc(100vh * 192 / 208))"
-    )
+    expectViewportClampedWidth(sprite.style.width, 192)
     expect(sprite.style.backgroundSize).toBe("800% 1100%")
     expect(sprite.style.backgroundPosition).toBe("0% 50%")
   })

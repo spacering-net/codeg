@@ -1350,18 +1350,93 @@ where
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct SavedPetOrigin {
-    phys_x: f64,
-    phys_y: f64,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    scale_factor: f64,
+    x: f64,
+    y: f64,
 }
 
-/// Resolve a persisted physical `(x, y)` against live monitor geometries
-/// `(mon_x, mon_y, mon_w, mon_h, scale_factor)` and the pet's logical size.
-/// Returns the clamped physical origin and target monitor's scale factor when
-/// the saved position lands on an attached monitor, or `None` when the monitor
-/// is gone (or coords are invalid) so the caller falls back to centering.
-fn resolve_saved_pet_origin(
+/// Resolve a persisted `(x, y)` (captured from `outer_position`) into a clamped
+/// Cocoa **logical** origin on macOS.
+///
+/// On macOS, `tao` scales each monitor's origin and size by *that monitor's
+/// own* scale factor, so a 1× display placed to the right of a 2× primary
+/// display overlaps in physical coordinates (e.g. primary `[0, 3024)` vs right
+/// `[1512, 3432)`). When `saved_scale_factor` is present we first convert
+/// `(x, y)` into unambiguous Cocoa logical points and match against the
+/// non-overlapping logical monitor rects; legacy rows without a stored scale
+/// factor fall back to physical rect matching.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn resolve_saved_pet_origin_macos(
+    saved: Option<(f64, f64)>,
+    saved_scale_factor: Option<f64>,
+    pet_w: f64,
+    pet_h: f64,
+    monitors: &[(i32, i32, u32, u32, f64)],
+) -> Option<SavedPetOrigin> {
+    let (x, y) = saved?;
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+
+    if let Some(saved_sf) = saved_scale_factor.filter(|sf| sf.is_finite() && *sf > 0.0) {
+        let lx = x / saved_sf;
+        let ly = y / saved_sf;
+        let &(mx, my, mw, mh, msf) = monitors.iter().find(|&&(mx, my, mw, mh, msf)| {
+            if !msf.is_finite() || msf <= 0.0 || mw == 0 || mh == 0 {
+                return false;
+            }
+            let mlx = f64::from(mx) / msf;
+            let mly = f64::from(my) / msf;
+            let mlw = f64::from(mw) / msf;
+            let mlh = f64::from(mh) / msf;
+            let cx = lx + pet_w / 2.0;
+            let cy = ly + pet_h / 2.0;
+            (lx >= mlx && lx < mlx + mlw && ly >= mly && ly < mly + mlh)
+                || (cx >= mlx && cx < mlx + mlw && cy >= mly && cy < mly + mlh)
+        })?;
+        let mlx = f64::from(mx) / msf;
+        let mly = f64::from(my) / msf;
+        let mlw = f64::from(mw) / msf;
+        let mlh = f64::from(mh) / msf;
+        let max_x = (mlx + mlw - pet_w).max(mlx);
+        let max_y = (mly + mlh - pet_h).max(mly);
+        return Some(SavedPetOrigin {
+            x: lx.clamp(mlx, max_x),
+            y: ly.clamp(mly, max_y),
+        });
+    }
+
+    // Legacy row (no recorded scale factor): match raw physical monitor rect
+    // and convert into that monitor's logical coordinates.
+    let &(mx, my, mw, mh, msf) = monitors.iter().find(|&&(mx, my, mw, mh, msf)| {
+        if !msf.is_finite() || msf <= 0.0 || mw == 0 || mh == 0 {
+            return false;
+        }
+        let mx = f64::from(mx);
+        let my = f64::from(my);
+        let mw = f64::from(mw);
+        let mh = f64::from(mh);
+        let cx = x + (pet_w * msf) / 2.0;
+        let cy = y + (pet_h * msf) / 2.0;
+        (x >= mx && x < mx + mw && y >= my && y < my + mh)
+            || (cx >= mx && cx < mx + mw && cy >= my && cy < my + mh)
+    })?;
+    let mlx = f64::from(mx) / msf;
+    let mly = f64::from(my) / msf;
+    let mlw = f64::from(mw) / msf;
+    let mlh = f64::from(mh) / msf;
+    let max_x = (mlx + mlw - pet_w).max(mlx);
+    let max_y = (mly + mlh - pet_h).max(mly);
+    Some(SavedPetOrigin {
+        x: (x / msf).clamp(mlx, max_x),
+        y: (y / msf).clamp(mly, max_y),
+    })
+}
+
+/// Resolve a persisted physical `(x, y)` against live monitor geometries on
+/// Windows / Linux, where physical desktop coordinates form one non-overlapping
+/// coordinate space. Returns clamped physical `(x, y)` or `None` to center.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn resolve_saved_pet_origin_physical(
     saved: Option<(f64, f64)>,
     pet_w: f64,
     pet_h: f64,
@@ -1393,9 +1468,8 @@ fn resolve_saved_pet_origin(
     let max_x = (mx + mw - pet_w * sf).max(mx);
     let max_y = (my + mh - pet_h * sf).max(my);
     Some(SavedPetOrigin {
-        phys_x: x.clamp(mx, max_x),
-        phys_y: y.clamp(my, max_y),
-        scale_factor: sf,
+        x: x.clamp(mx, max_x),
+        y: y.clamp(my, max_y),
     })
 }
 
@@ -1438,11 +1512,9 @@ pub async fn open_pet_window(
     crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
-            x: None,
-            y: None,
             scale: Some(scale),
-            always_on_top: None,
             enabled: Some(true),
+            ..Default::default()
         },
     )
     .await?;
@@ -1457,12 +1529,17 @@ pub async fn open_pet_window(
             (pos.x, pos.y, size.width, size.height, m.scale_factor())
         })
         .collect();
-    let saved_origin = resolve_saved_pet_origin(
+    #[cfg(target_os = "macos")]
+    let saved_origin = resolve_saved_pet_origin_macos(
         config.x.zip(config.y),
+        config.position_scale_factor,
         pet_w,
         pet_h,
         &monitors,
     );
+    #[cfg(not(target_os = "macos"))]
+    let saved_origin =
+        resolve_saved_pet_origin_physical(config.x.zip(config.y), pet_w, pet_h, &monitors);
 
     let url = WebviewUrl::App(format!("pet?petId={pet_id}").into());
     let mut builder = WebviewWindowBuilder::new(&app, PET_WINDOW_LABEL, url)
@@ -1485,10 +1562,7 @@ pub async fn open_pet_window(
     #[cfg(target_os = "macos")]
     {
         if let Some(origin) = saved_origin {
-            builder = builder.position(
-                origin.phys_x / origin.scale_factor,
-                origin.phys_y / origin.scale_factor,
-            );
+            builder = builder.position(origin.x, origin.y);
         } else {
             builder = builder.center();
         }
@@ -1506,10 +1580,7 @@ pub async fn open_pet_window(
 
     #[cfg(not(target_os = "macos"))]
     if let Some(saved) = saved_origin {
-        let origin = tauri::PhysicalPosition::new(
-            saved.phys_x.round() as i32,
-            saved.phys_y.round() as i32,
-        );
+        let origin = tauri::PhysicalPosition::new(saved.x.round() as i32, saved.y.round() as i32);
         let _ = window.set_position(origin);
         let _ = window.set_size(LogicalSize::new(pet_w, pet_h));
         let _ = window.set_position(origin);
@@ -1606,11 +1677,8 @@ pub async fn close_pet_window(
     let _ = crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
-            x: None,
-            y: None,
-            scale: None,
-            always_on_top: None,
             enabled: Some(false),
+            ..Default::default()
         },
     )
     .await?;
@@ -1622,18 +1690,22 @@ pub async fn close_pet_window(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn pet_window_record_position(
+    app: AppHandle,
     db: tauri::State<'_, AppDatabase>,
     x: f64,
     y: f64,
 ) -> Result<(), AppCommandError> {
+    let position_scale_factor = app
+        .get_webview_window(PET_WINDOW_LABEL)
+        .and_then(|w| w.scale_factor().ok())
+        .filter(|sf| sf.is_finite() && *sf > 0.0);
     crate::commands::pet::pet_save_window_state_core(
         &db.conn,
         crate::models::pet::PetWindowStatePatch {
             x: Some(x),
             y: Some(y),
-            scale: None,
-            always_on_top: None,
-            enabled: None,
+            position_scale_factor,
+            ..Default::default()
         },
     )
     .await?;
@@ -2941,74 +3013,120 @@ mod macos_fullscreen_close_tests {
 
 #[cfg(test)]
 mod pet_window_origin_tests {
-    use super::{resolve_saved_pet_origin, SavedPetOrigin, PET_BASE_HEIGHT, PET_BASE_WIDTH};
+    use super::{
+        resolve_saved_pet_origin_macos, resolve_saved_pet_origin_physical, SavedPetOrigin,
+        PET_BASE_HEIGHT, PET_BASE_WIDTH,
+    };
 
     // Mixed-DPI setup: 2× primary Retina at (0, 0) + 1× external monitor to its left.
-    const MIXED_DPI_MONITORS: [(i32, i32, u32, u32, f64); 2] = [
+    const MIXED_DPI_LEFT: [(i32, i32, u32, u32, f64); 2] = [
         (0, 0, 3024, 1964, 2.0),
         (-1920, 0, 1920, 1080, 1.0),
     ];
 
+    // Mixed-DPI setup where tao's physical rects overlap on macOS:
+    // 2× primary Retina `[0, 3024)` (logical `[0, 1512)`) + 1× display on its
+    // right `[1512, 3432)` (logical `[1512, 3432)`).
+    const MIXED_DPI_RIGHT: [(i32, i32, u32, u32, f64); 2] = [
+        (0, 0, 3024, 1964, 2.0),
+        (1512, 0, 1920, 1080, 1.0),
+    ];
+
     #[test]
-    fn resolves_saved_origin_on_secondary_1x_monitor_with_its_own_scale() {
+    fn macos_resolves_right_1x_monitor_without_colliding_with_2x_primary() {
         let pet_w = PET_BASE_WIDTH * 0.75; // 144
         let pet_h = PET_BASE_HEIGHT * 0.75; // 156
 
-        let origin = resolve_saved_pet_origin(
-            Some((-215.0, 708.0)),
+        // `x = 1800` lies inside BOTH `[0, 3024)` (2× primary physical) and
+        // `[1512, 3432)` (1× right). With `saved_scale_factor = 1.0`, it must
+        // map to logical `(1800, 500)` on the right 1× monitor — not `(900, 250)`.
+        let origin = resolve_saved_pet_origin_macos(
+            Some((1800.0, 500.0)),
+            Some(1.0),
             pet_w,
             pet_h,
-            &MIXED_DPI_MONITORS,
+            &MIXED_DPI_RIGHT,
         );
+        assert_eq!(origin, Some(SavedPetOrigin { x: 1800.0, y: 500.0 }));
+    }
+
+    #[test]
+    fn macos_resolves_left_1x_and_clamps_2x_primary_in_logical_points() {
+        let pet_w = PET_BASE_WIDTH * 0.75; // 144
+        let pet_h = PET_BASE_HEIGHT * 0.75; // 156
+
         assert_eq!(
-            origin,
+            resolve_saved_pet_origin_macos(
+                Some((-215.0, 708.0)),
+                None,
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
+            Some(SavedPetOrigin { x: -215.0, y: 708.0 })
+        );
+
+        // Near bottom-right of 2× primary (logical 1512×982): clamped in logical pts.
+        assert_eq!(
+            resolve_saved_pet_origin_macos(
+                Some((2950.0, 1900.0)),
+                Some(2.0),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
             Some(SavedPetOrigin {
-                phys_x: -215.0,
-                phys_y: 708.0,
-                scale_factor: 1.0,
+                x: 1512.0 - pet_w,
+                y: 982.0 - pet_h,
             })
         );
     }
 
     #[test]
-    fn resolves_saved_origin_on_primary_2x_monitor_and_clamps_to_edge() {
+    fn physical_origin_clamps_per_monitor_and_falls_back_when_disconnected() {
         let pet_w = PET_BASE_WIDTH * 0.75; // 144 logical -> 288 physical at 2×
         let pet_h = PET_BASE_HEIGHT * 0.75; // 156 logical -> 312 physical at 2×
 
-        // Near bottom-right of primary Retina monitor: clamped so the whole pet stays visible.
-        let origin = resolve_saved_pet_origin(
-            Some((2950.0, 1900.0)),
-            pet_w,
-            pet_h,
-            &MIXED_DPI_MONITORS,
-        );
         assert_eq!(
-            origin,
+            resolve_saved_pet_origin_physical(
+                Some((2950.0, 1900.0)),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
             Some(SavedPetOrigin {
-                phys_x: 3024.0 - 288.0,
-                phys_y: 1964.0 - 312.0,
-                scale_factor: 2.0,
+                x: 3024.0 - 288.0,
+                y: 1964.0 - 312.0,
             })
         );
-    }
 
-    #[test]
-    fn falls_back_to_center_when_saved_monitor_is_disconnected_or_invalid() {
-        let pet_w = PET_BASE_WIDTH;
-        let pet_h = PET_BASE_HEIGHT;
-
-        // Saved on the external monitor, which is now unplugged.
         let only_primary = [(0, 0, 3024, 1964, 2.0)];
         assert_eq!(
-            resolve_saved_pet_origin(Some((-215.0, 708.0)), pet_w, pet_h, &only_primary),
+            resolve_saved_pet_origin_macos(
+                Some((-215.0, 708.0)),
+                Some(1.0),
+                pet_w,
+                pet_h,
+                &only_primary,
+            ),
             None
         );
         assert_eq!(
-            resolve_saved_pet_origin(None, pet_w, pet_h, &MIXED_DPI_MONITORS),
+            resolve_saved_pet_origin_physical(
+                Some((-215.0, 708.0)),
+                pet_w,
+                pet_h,
+                &only_primary,
+            ),
             None
         );
         assert_eq!(
-            resolve_saved_pet_origin(Some((f64::NAN, 100.0)), pet_w, pet_h, &MIXED_DPI_MONITORS),
+            resolve_saved_pet_origin_physical(
+                Some((f64::NAN, 100.0)),
+                pet_w,
+                pet_h,
+                &MIXED_DPI_LEFT,
+            ),
             None
         );
     }

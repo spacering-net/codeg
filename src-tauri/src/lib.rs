@@ -211,11 +211,8 @@ mod tauri_app {
         let _ = crate::commands::pet::pet_save_window_state_core(
             conn,
             crate::models::pet::PetWindowStatePatch {
-                x: None,
-                y: None,
-                scale: None,
-                always_on_top: None,
                 enabled: Some(false),
+                ..Default::default()
             },
         )
         .await;

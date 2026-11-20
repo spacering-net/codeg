@@ -260,6 +260,11 @@ pub async fn pet_save_window_state_core(
     if let Some(y) = patch.y {
         config.y = Some(y);
     }
+    if let Some(sf) = patch.position_scale_factor {
+        if sf.is_finite() && sf > 0.0 {
+            config.position_scale_factor = Some(sf);
+        }
+    }
     if let Some(scale) = patch.scale {
         config.scale = scale.clamp(0.5, 3.0);
     }
@@ -527,6 +532,7 @@ pub async fn pet_save_window_state(
         PetWindowStatePatch {
             x,
             y,
+            position_scale_factor: None,
             scale,
             always_on_top,
             enabled,
@@ -575,7 +581,7 @@ mod tests {
             y: Some(99.0),
             scale: Some(1.5),
             always_on_top: Some(true),
-            enabled: None,
+            ..Default::default()
         };
         let cfg = pet_save_window_state_core(&db.conn, patch)
             .await
@@ -587,11 +593,8 @@ mod tests {
 
         // Subsequent partial patch leaves untouched fields alone.
         let patch2 = PetWindowStatePatch {
-            x: None,
-            y: None,
             scale: Some(2.0),
-            always_on_top: None,
-            enabled: None,
+            ..Default::default()
         };
         let cfg2 = pet_save_window_state_core(&db.conn, patch2)
             .await
@@ -604,11 +607,8 @@ mod tests {
     async fn pet_save_window_state_clamps_scale_to_valid_range() {
         let db = fresh_in_memory_db().await;
         let patch_too_large = PetWindowStatePatch {
-            x: None,
-            y: None,
             scale: Some(10.0),
-            always_on_top: None,
-            enabled: None,
+            ..Default::default()
         };
         let cfg = pet_save_window_state_core(&db.conn, patch_too_large)
             .await
@@ -616,11 +616,8 @@ mod tests {
         assert_eq!(cfg.scale, 3.0, "scale clamped to upper bound");
 
         let patch_too_small = PetWindowStatePatch {
-            x: None,
-            y: None,
             scale: Some(0.1),
-            always_on_top: None,
-            enabled: None,
+            ..Default::default()
         };
         let cfg2 = pet_save_window_state_core(&db.conn, patch_too_small)
             .await
