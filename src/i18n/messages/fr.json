@@ -69,6 +69,16 @@
     }
   },
   "HostPlugins": {
+    "add": "Ajouter une extension",
+    "sourceDescription": "Saisissez un paquet npm, un dépôt GitHub ou un chemin de dossier absolu sur l’hôte connecté.",
+    "source": "Source de l’extension",
+    "registry": "Registre npm",
+    "mirror": "Miroir chinois",
+    "sourceHint": "Codeg installe le manifeste codeg-plugin.json. L’extension est désactivée par défaut.",
+    "sourceUnsupported": "Mettez à jour l’hôte Codeg connecté pour installer depuis une source.",
+    "cancel": "Annuler",
+    "install": "Installer",
+    "installing": "Installation…",
     "title": "Extensions",
     "import": "Importer un manifeste",
     "fileTooLarge": "Le manifeste de l’extension dépasse 64 Kio.",

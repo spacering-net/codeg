@@ -69,6 +69,16 @@
     }
   },
   "HostPlugins": {
+    "add": "Adicionar plugin",
+    "sourceDescription": "Informe um pacote npm, um repositório GitHub ou um caminho absoluto no host conectado.",
+    "source": "Fonte do plugin",
+    "registry": "Registro npm",
+    "mirror": "Espelho da China",
+    "sourceHint": "O Codeg instala o manifesto codeg-plugin.json. O plugin fica desativado por padrão.",
+    "sourceUnsupported": "Atualize o host conectado do Codeg para instalar a partir de uma fonte.",
+    "cancel": "Cancelar",
+    "install": "Instalar",
+    "installing": "Instalando…",
     "title": "Plugins",
     "import": "Importar manifesto",
     "fileTooLarge": "O manifesto do plugin excede 64 KiB.",

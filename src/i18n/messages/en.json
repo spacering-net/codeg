@@ -69,6 +69,16 @@
     }
   },
   "HostPlugins": {
+    "add": "Add Plugin",
+    "sourceDescription": "Enter an npm package, a GitHub repository, or an absolute directory on the connected host.",
+    "source": "Plugin source",
+    "registry": "npm registry",
+    "mirror": "China mirror",
+    "sourceHint": "Codeg installs the codeg-plugin.json manifest and starts the plugin disabled.",
+    "sourceUnsupported": "Update the connected Codeg host to install from a source.",
+    "cancel": "Cancel",
+    "install": "Install",
+    "installing": "Installing…",
     "title": "Plugins",
     "import": "Import Manifest",
     "fileTooLarge": "The plugin manifest exceeds 64 KiB.",

@@ -69,6 +69,16 @@
     }
   },
   "HostPlugins": {
+    "add": "添加插件",
+    "sourceDescription": "输入 npm 包名、GitHub 仓库地址或已连接主机上的绝对目录路径。",
+    "source": "插件来源",
+    "registry": "npm 安装源",
+    "mirror": "中国大陆镜像源",
+    "sourceHint": "Codeg 会安装 codeg-plugin.json 清单，插件默认禁用。",
+    "sourceUnsupported": "请更新已连接的 Codeg 主机以从来源安装。",
+    "cancel": "取消",
+    "install": "安装",
+    "installing": "安装中…",
     "title": "插件",
     "import": "导入清单",
     "fileTooLarge": "插件清单超过 64 KiB。",

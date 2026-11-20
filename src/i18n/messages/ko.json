@@ -69,6 +69,16 @@
     }
   },
   "HostPlugins": {
+    "add": "플러그인 추가",
+    "sourceDescription": "npm 패키지, GitHub 저장소 또는 연결된 호스트의 절대 디렉터리 경로를 입력하세요.",
+    "source": "플러그인 소스",
+    "registry": "npm 레지스트리",
+    "mirror": "중국 미러",
+    "sourceHint": "Codeg는 codeg-plugin.json 매니페스트를 설치합니다. 플러그인은 기본적으로 비활성화됩니다.",
+    "sourceUnsupported": "소스에서 설치하려면 연결된 Codeg 호스트를 업데이트하세요.",
+    "cancel": "취소",
+    "install": "설치",
+    "installing": "설치 중…",
     "title": "플러그인",
     "import": "매니페스트 가져오기",
     "fileTooLarge": "플러그인 매니페스트가 64 KiB를 초과합니다.",

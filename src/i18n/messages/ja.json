@@ -69,6 +69,16 @@
     }
   },
   "HostPlugins": {
+    "add": "プラグインを追加",
+    "sourceDescription": "npm パッケージ名、GitHub リポジトリ、または接続先ホストの絶対ディレクトリパスを入力します。",
+    "source": "プラグインのソース",
+    "registry": "npm レジストリ",
+    "mirror": "中国のミラー",
+    "sourceHint": "Codeg は codeg-plugin.json をインストールします。プラグインは既定で無効です。",
+    "sourceUnsupported": "ソースからインストールするには接続先の Codeg を更新してください。",
+    "cancel": "キャンセル",
+    "install": "インストール",
+    "installing": "インストール中…",
     "title": "プラグイン",
     "import": "マニフェストをインポート",
     "fileTooLarge": "プラグインのマニフェストが 64 KiB を超えています。",

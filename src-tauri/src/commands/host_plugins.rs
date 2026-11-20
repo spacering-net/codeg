@@ -1,4 +1,5 @@
 use crate::app_error::AppCommandError;
+use crate::host_plugins::source::{self, Registry};
 use crate::host_plugins::{HostPlugins, InstalledPlugin, Mutation, CATALOG_CHANGED};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
@@ -8,6 +9,17 @@ pub fn apply_core(
     mutation: Mutation,
 ) -> Result<Vec<InstalledPlugin>, AppCommandError> {
     let catalog = plugins.apply(mutation)?;
+    emit_event(emitter, CATALOG_CHANGED, ());
+    Ok(catalog)
+}
+
+pub async fn install_source_core(
+    plugins: &HostPlugins,
+    emitter: &EventEmitter,
+    input: &str,
+    registry: Registry,
+) -> Result<Vec<InstalledPlugin>, AppCommandError> {
+    let catalog = source::install(plugins, input, registry).await?;
     emit_event(emitter, CATALOG_CHANGED, ());
     Ok(catalog)
 }
@@ -41,4 +53,16 @@ pub async fn host_plugins_activity(
     folder_id: i32,
 ) -> Result<Vec<crate::host_plugins::TurnActivity>, AppCommandError> {
     plugins.activity(&plugin_id, folder_id)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn host_plugins_install_source(
+    app: tauri::AppHandle,
+    plugins: tauri::State<'_, Arc<HostPlugins>>,
+    input: String,
+    registry: Option<Registry>,
+) -> Result<Vec<InstalledPlugin>, AppCommandError> {
+    let emitter = EventEmitter::from_app(&app);
+    install_source_core(&plugins, &emitter, &input, registry.unwrap_or_default()).await
 }

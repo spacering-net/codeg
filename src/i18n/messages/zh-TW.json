@@ -69,6 +69,16 @@
     }
   },
   "HostPlugins": {
+    "add": "新增外掛",
+    "sourceDescription": "輸入 npm 套件名稱、GitHub 儲存庫網址，或已連線主機上的絕對目錄路徑。",
+    "source": "外掛來源",
+    "registry": "npm 登錄檔",
+    "mirror": "中國大陸鏡像站",
+    "sourceHint": "Codeg 會安裝 codeg-plugin.json 資訊清單，外掛預設停用。",
+    "sourceUnsupported": "請更新已連線的 Codeg 主機以從來源安裝。",
+    "cancel": "取消",
+    "install": "安裝",
+    "installing": "安裝中…",
     "title": "外掛",
     "import": "匯入資訊清單",
     "fileTooLarge": "外掛資訊清單超過 64 KiB。",

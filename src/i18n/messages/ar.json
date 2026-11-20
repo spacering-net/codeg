@@ -69,6 +69,16 @@
     }
   },
   "HostPlugins": {
+    "add": "إضافة ملحق",
+    "sourceDescription": "أدخل اسم حزمة npm أو مستودع GitHub أو مسار مجلد مطلق على المضيف المتصل.",
+    "source": "مصدر الملحق",
+    "registry": "سجل npm",
+    "mirror": "مرآة الصين",
+    "sourceHint": "يثبت Codeg ملف البيان codeg-plugin.json ويترك الملحق معطّلًا افتراضيًا.",
+    "sourceUnsupported": "حدّث مضيف Codeg المتصل للتثبيت من مصدر.",
+    "cancel": "إلغاء",
+    "install": "تثبيت",
+    "installing": "جارٍ التثبيت…",
     "title": "الإضافات",
     "import": "استيراد ملف البيان",
     "fileTooLarge": "يتجاوز حجم ملف بيان الإضافة 64 كيبيبايت.",
