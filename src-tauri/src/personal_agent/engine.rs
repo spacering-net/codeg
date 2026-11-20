@@ -428,6 +428,14 @@ pub struct PersonalAgentEngine {
     /// Serializes carrying out the plans (7.6): one look at a plan at a
     /// time, so a step is started once and its news told once.
     pub(super) plan_lock: Mutex<()>,
+    /// Serializes bringing the installed process skills in line with the
+    /// settings: read, decided and written in one hold, so an older read of
+    /// a skill turned on never installs it after the owner turned it off.
+    pub(super) skill_sync_lock: Mutex<()>,
+    /// Serializes approving a process skill's version: a turn's approval,
+    /// checked against the history and written in one hold, never lands
+    /// after the owner's newer one.
+    pub(super) skill_approve_lock: Mutex<()>,
     /// Its assistant was deleted: nothing more is read or told.
     pub(super) retired: AtomicBool,
     /// The owner's zone at the clock's last look: a change moves the
@@ -481,6 +489,8 @@ impl PersonalAgentEngine {
             watch_lock: Mutex::new(()),
             watch_busy: AtomicBool::new(false),
             plan_lock: Mutex::new(()),
+            skill_sync_lock: Mutex::new(()),
+            skill_approve_lock: Mutex::new(()),
             retired: AtomicBool::new(false),
             clock_zone: std::sync::Mutex::new(None),
             routine_check_at: std::sync::Mutex::new(None),
@@ -4132,6 +4142,10 @@ impl PersonalAgentEngine {
                 self.skill_cards(&workdir, &done, Some(turn.batch_id), Some(seg.id))
                     .await;
             }
+            // Brought in line after every turn, changed skill or not: a skill
+            // approved while the turn had it changed loads once the turn's
+            // change is gone — set aside, or dropped by the assistant.
+            self.resync_skill().await;
         }
     }
 
@@ -4876,6 +4890,7 @@ impl PersonalAgentEngine {
     /// or its own skill switch changed (9.1). Sessions already running read
     /// the change from `<codeg-prefs>`; the next one loads the new files.
     pub(super) async fn resync_skill(&self) {
+        let _held = self.skill_sync_lock.lock().await;
         let Some(row) = self.agent_row().await else {
             return;
         };

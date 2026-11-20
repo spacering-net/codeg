@@ -488,8 +488,22 @@ impl PersonalAgentEngine {
         for f in &files {
             let taken_in = !done.aside_paths.contains(&f.path) && !done.not_aside.contains(&f.path);
             if let (true, Some(name)) = (taken_in, workdir::skill_name_of(&f.path)) {
-                let now = workdir::read_file(dir, &f.path).ok().flatten();
-                if let Err(e) = self.approve_skill(name, now.as_deref()).await {
+                // As committed, not as the file may be by now — and only
+                // while it is still that: the owner may have saved or
+                // installed a newer version since the turn's commit, and
+                // theirs is the one approved.
+                let _held = self.skill_approve_lock.lock().await;
+                let now = workdir::skill_at(dir, rev, name).await;
+                if workdir::skill_at(dir, "HEAD", name).await != now {
+                    continue;
+                }
+                // Gone in the turn's commit, yet a file there now — one the
+                // history does not hold (an ignore rule), saved since: that
+                // one's approval stands.
+                if now.is_none() && workdir::read_file(dir, &f.path).ok().flatten().is_some() {
+                    continue;
+                }
+                if let Err(e) = self.approve_skill_held(name, now.as_deref()).await {
                     tracing::warn!("[personal_agent] process skill {name} not approved: {e}");
                 }
             }
@@ -751,10 +765,13 @@ impl PersonalAgentEngine {
             )
             .await;
         }
-        // What is back is the owner's to have: it loads as it is now.
-        let now = workdir::read_file(&dir, &workdir::skill_path(name))
-            .ok()
-            .flatten();
+        // What is back is the owner's to have: it loads as committed — what
+        // the assistant's turn may be changing in the file right now is the
+        // turn's, not approved.
+        let now = match undo.commit.as_deref() {
+            Some(commit) => workdir::skill_at(&dir, commit, name).await,
+            None => workdir::skill_at(&dir, "HEAD", name).await,
+        };
         self.approve_skill(name, now.as_deref()).await?;
         self.resync_skill().await;
         let card = self
@@ -852,10 +869,10 @@ impl PersonalAgentEngine {
             NoticeState::Acted,
         )
         .await;
-        // Installed as the owner took it in.
-        let now = workdir::read_file(&dir, &workdir::skill_path(name))
-            .ok()
-            .flatten();
+        // Installed as the owner took it in: as committed — the file may
+        // still carry a change the assistant's turn is making, which is the
+        // turn's, not approved.
+        let now = workdir::skill_at(&dir, &commit, name).await;
         self.approve_skill(name, now.as_deref()).await?;
         self.resync_skill().await;
         let row = self
@@ -898,11 +915,16 @@ impl PersonalAgentEngine {
             .await
             .ok_or("configure the personal agent first")?;
         // On: the owner takes it as it is now — a change kept from them
-        // too.
+        // too — as committed: what the assistant's turn is changing right
+        // now is the turn's, not taken.
         if on {
-            let now = workdir::read_file(&self.workdir_of(&row), &workdir::skill_path(name))
-                .ok()
-                .flatten();
+            let dir = self.workdir_of(&row);
+            // A skill the history does not hold (one an ignore rule keeps
+            // out) is taken as the file is.
+            let now = match workdir::skill_at(&dir, "HEAD", name).await {
+                Some(committed) => Some(committed),
+                None => workdir::read_file(&dir, &workdir::skill_path(name)).ok().flatten(),
+            };
             self.approve_skill(name, now.as_deref()).await?;
         }
         let off = if on { Value::Null } else { json!(true) };
@@ -976,6 +998,12 @@ impl PersonalAgentEngine {
         name: &str,
         content: Option<&str>,
     ) -> Result<(), String> {
+        let _held = self.skill_approve_lock.lock().await;
+        self.approve_skill_held(name, content).await
+    }
+
+    /// [`Self::approve_skill`], with `skill_approve_lock` already held.
+    async fn approve_skill_held(&self, name: &str, content: Option<&str>) -> Result<(), String> {
         let row = self
             .agent_row()
             .await

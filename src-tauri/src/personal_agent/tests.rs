@@ -18881,6 +18881,190 @@ async fn a_skill_to_see_first_is_installed_only_when_the_owner_says() {
     );
 }
 
+/// A skill's draft installed while the assistant's turn has the same skill
+/// changed and not committed: what the owner approved is the draft as
+/// committed, so the turn's change — set aside as it settles — never makes
+/// the skill drop out; and the skill loads, exactly as approved, once that
+/// change is gone, whether set aside or dropped by the assistant itself.
+#[tokio::test]
+async fn a_skill_approved_mid_turn_is_the_committed_draft_and_loads_once_the_turn_is_done() {
+    for dropped in [false, true] {
+        let (engine, _tmp) = configured().await;
+        let seg = open_segment(&engine).await;
+        let (mut rx, state) = live_connection(&engine, seg, "pa-34m").await;
+        let dir = workdir_now(&engine).await;
+        let skill = "process-skills/release/SKILL.md";
+        let v1 = "---\nname: release\ndescription: releases\n---\n# Release\n\nstep one\n\nstep three\n";
+        let v2 = v1.replace("step one", "step ONE");
+        let v2c = v2.replace("step three", "step THREE");
+        owner_said(&engine, &mut rx, &state, "pa-34m", "Do releases like this", || {
+            workdir::write_file(&dir, skill, v1).unwrap();
+        })
+        .await;
+        assert!(workdir::skill_installed(&dir, AgentType::ClaudeCode, "release"));
+        set_pref(&engine, "tidy", json!("draft")).await;
+        owner_said(&engine, &mut rx, &state, "pa-34m", "Change step one", || {
+            workdir::write_file(&dir, skill, &v2).unwrap();
+        })
+        .await;
+        assert_eq!(workdir::read_text(&dir, skill), v1, "set aside");
+        let card = cards_of(&engine, "skill")
+            .await
+            .into_iter()
+            .find(|c| data_of(c)["state"] == "draft")
+            .expect("a draft");
+        // Mid-turn: the assistant changes another step of the same skill.
+        workdir::write_file(&dir, skill, &v1.replace("step three", "step THREE")).unwrap();
+        engine.act_on_notice(notice_id_of(&card), "apply").await.unwrap();
+        assert_eq!(workdir::read_text(&dir, skill), v2c, "the draft and the turn's change");
+        let row = engine.agent_row().await.unwrap();
+        assert_eq!(
+            super::engine::skill_switches(&row).approved.get("release"),
+            Some(&workdir::content_hash(&v2)),
+            "approved as committed"
+        );
+        // The turn settles: its change set aside (show me first), or
+        // dropped by the assistant before it ends.
+        owner_said(&engine, &mut rx, &state, "pa-34m", "ok", || {
+            if dropped {
+                workdir::write_file(&dir, skill, &v2).unwrap();
+            }
+        })
+        .await;
+        assert_eq!(workdir::read_text(&dir, skill), v2, "dropped: {dropped}");
+        assert!(
+            workdir::skill_installed(&dir, AgentType::ClaudeCode, "release"),
+            "dropped: {dropped}"
+        );
+        let installed = crate::commands::acp::preferred_scope_skill_dir(
+            AgentType::ClaudeCode,
+            crate::acp::types::AgentSkillScope::Project,
+            Some(&dir.to_string_lossy()),
+        )
+        .unwrap()
+        .join("release")
+        .join("SKILL.md");
+        assert_eq!(std::fs::read_to_string(installed).unwrap(), v2, "dropped: {dropped}");
+    }
+}
+
+/// A skill change undone while the assistant's turn has another line of
+/// the skill changed and not committed: what is approved is the undo as
+/// committed, not the turn's line with it.
+#[tokio::test]
+async fn a_skill_undone_mid_turn_is_approved_as_committed() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-34p").await;
+    let dir = workdir_now(&engine).await;
+    let skill = "process-skills/release/SKILL.md";
+    let v1 = "---\nname: release\ndescription: releases\n---\n# Release\n\nstep one\n\nstep three\n";
+    let v2 = v1.replace("step one", "step ONE");
+    owner_said(&engine, &mut rx, &state, "pa-34p", "Do releases like this", || {
+        workdir::write_file(&dir, skill, v1).unwrap();
+    })
+    .await;
+    owner_said(&engine, &mut rx, &state, "pa-34p", "Change step one", || {
+        workdir::write_file(&dir, skill, &v2).unwrap();
+    })
+    .await;
+    let card = cards_of(&engine, "skill")
+        .await
+        .into_iter()
+        .rfind(|c| data_of(c)["state"] == "acted")
+        .expect("the change's card");
+    workdir::write_file(&dir, skill, &v2.replace("step three", "step THREE")).unwrap();
+    engine.act_on_notice(notice_id_of(&card), "undo").await.unwrap();
+    assert_eq!(workdir::read_text(&dir, skill), v1.replace("step three", "step THREE"));
+    let row = engine.agent_row().await.unwrap();
+    assert_eq!(
+        super::engine::skill_switches(&row).approved.get("release"),
+        Some(&workdir::content_hash(v1)),
+        "the undo as committed"
+    );
+}
+
+/// The owner saves a skill between a turn's commit and its cards: the
+/// turn's version, older, is not approved over the owner's.
+#[tokio::test]
+async fn a_turns_skill_approval_never_overrides_a_newer_owner_save() {
+    let (engine, _tmp) = configured().await;
+    let dir = workdir_now(&engine).await;
+    let skill = "process-skills/release/SKILL.md";
+    let theirs = "---\nname: release\ndescription: releases\n---\n# Release\n\nthe turn's\n";
+    let mine = "---\nname: release\ndescription: releases\n---\n# Release\n\nthe owner's\n";
+    workdir::write_file(&dir, skill, theirs).unwrap();
+    let done = workdir::commit_turn(&dir, "turn", |_| false, "aside").await.unwrap();
+    engine.save_file(skill, mine).await.unwrap();
+    engine.skill_cards(&dir, &done, None, None).await;
+    let row = engine.agent_row().await.unwrap();
+    assert_eq!(
+        super::engine::skill_switches(&row).approved.get("release"),
+        Some(&workdir::content_hash(mine))
+    );
+    assert!(workdir::skill_installed(&dir, AgentType::ClaudeCode, "release"));
+}
+
+/// A skill the history does not hold (an ignore rule keeps it out), saved
+/// by the owner, turned off and on again: still approved as it is, still
+/// installed.
+#[tokio::test]
+async fn an_ignored_skill_turned_off_and_on_stays_approved() {
+    let (engine, _tmp) = configured().await;
+    let dir = workdir_now(&engine).await;
+    let ignore = format!("{}/process-skills/\n", workdir::read_text(&dir, ".gitignore"));
+    std::fs::write(dir.join(".gitignore"), ignore).unwrap();
+    let skill = "process-skills/release/SKILL.md";
+    let text = "---\nname: release\ndescription: releases\n---\n# Release\n";
+    engine.save_file(skill, text).await.unwrap();
+    assert!(workdir::skill_installed(&dir, AgentType::ClaudeCode, "release"));
+    engine.switch_skill("release", false).await.unwrap();
+    assert!(!workdir::skill_installed(&dir, AgentType::ClaudeCode, "release"));
+    engine.switch_skill("release", true).await.unwrap();
+    let row = engine.agent_row().await.unwrap();
+    assert_eq!(
+        super::engine::skill_switches(&row).approved.get("release"),
+        Some(&workdir::content_hash(text))
+    );
+    assert!(workdir::skill_installed(&dir, AgentType::ClaudeCode, "release"));
+}
+
+/// Bringing the installed skills in line reads the settings only once it
+/// holds the lock: one that was waiting while the owner turned a skill off
+/// does not put it back.
+#[tokio::test]
+async fn a_skill_sync_waiting_while_the_owner_turns_a_skill_off_leaves_it_off() {
+    let (engine, _tmp) = configured().await;
+    let seg = open_segment(&engine).await;
+    let (mut rx, state) = live_connection(&engine, seg, "pa-34n").await;
+    let dir = workdir_now(&engine).await;
+    owner_said(&engine, &mut rx, &state, "pa-34n", "Do releases like this", || {
+        workdir::write_file(
+            &dir,
+            "process-skills/release/SKILL.md",
+            "---\nname: release\ndescription: releases\n---\n# Release\n",
+        )
+        .unwrap();
+    })
+    .await;
+    assert!(workdir::skill_installed(&dir, AgentType::ClaudeCode, "release"));
+    let held = engine.skill_sync_lock.lock().await;
+    let e = engine.clone();
+    let sync = tokio::spawn(async move { e.resync_skill().await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let row = engine.agent_row().await.unwrap();
+    svc::patch_settings(
+        &engine.db.conn,
+        row.id,
+        &json!({ super::engine::SKILLS_OFF_KEY: { "release": true } }),
+    )
+    .await
+    .unwrap();
+    drop(held);
+    sync.await.unwrap();
+    assert!(!workdir::skill_installed(&dir, AgentType::ClaudeCode, "release"));
+}
+
 /// The owner's edit on the page waits for any other write of the
 /// directory — an undo, a draft applied, a turn's commit — and is written
 /// and committed in one hold of it: nothing written meanwhile writes over it.

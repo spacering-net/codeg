@@ -986,6 +986,17 @@ async fn commit_tree(
     tree: &str,
     message: &str,
 ) -> Result<String, String> {
+    commit_tree_on(path, "HEAD", head, tree, message).await
+}
+
+/// [`commit_tree`], moving `target` (a branch, or HEAD) rather than HEAD.
+async fn commit_tree_on(
+    path: &Path,
+    target: &str,
+    head: Option<&str>,
+    tree: &str,
+    message: &str,
+) -> Result<String, String> {
     let mut args = vec!["commit-tree", tree, "-m", message];
     if let Some(head) = head {
         args.extend(["-p", head]);
@@ -993,7 +1004,7 @@ async fn commit_tree(
     let out = git(path, &args).await?;
     let new = String::from_utf8_lossy(&out.stdout).trim().to_string();
     // The old value checked: "" asks that the branch not be there yet.
-    git(path, &["update-ref", "-m", message, "HEAD", &new, head.unwrap_or("")]).await?;
+    git(path, &["update-ref", "-m", message, target, &new, head.unwrap_or("")]).await?;
     Ok(new)
 }
 
@@ -1069,16 +1080,39 @@ pub async fn commit_turn(
     if files.is_empty() {
         return Some(done);
     }
+    // The files as the turn left them, the index too: what they stand as
+    // when the set-aside does not go through.
+    let mut touched: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+    if !touched.iter().any(|p| p == MEMORY_FILE) {
+        touched.push(MEMORY_FILE.to_string());
+    }
+    let left = as_left(path, &touched);
     let why = match undo_change_locked(path, &rev, &files, aside_message, true).await {
         Ok(u) if u.kept.is_empty() && u.commit.is_some() => {
             done.aside = u.commit;
             done.aside_paths = u.back;
             return Some(done);
         }
-        Ok(u) if !u.kept.is_empty() => format!("{} could not be taken back", u.kept.join(", ")),
-        Ok(_) => "the draft could not be committed".to_string(),
-        Err(e) => e,
+        Ok(u) if !u.kept.is_empty() => {
+            (format!("{} could not be taken back", u.kept.join(", ")), Vec::new())
+        }
+        Ok(_) => ("the draft could not be committed".to_string(), Vec::new()),
+        Err(e) => (e.to_string(), e.stuck),
     };
+    let (mut why, unsettled) = why;
+    // The files stand as the turn left them, as the card will say: the
+    // set-aside put back what it wrote; what it could not put back is tried
+    // again, from the files as the turn left them — and nothing else is
+    // touched (a file the assistant changed meanwhile, which stopped the
+    // set-aside, stays as it is now).
+    let left: Vec<_> = left.into_iter().filter(|(_, n, _)| unsettled.contains(n)).collect();
+    let stuck = put_back_left(path, left);
+    if !stuck.is_empty() {
+        why.push_str(&format!(
+            "; not as the turn left them, and could not be put back: {}",
+            stuck.join(", ")
+        ));
+    }
     tracing::warn!("[personal_agent] a draft could not be set aside: {why}");
     // A process skill among them stays unloaded all the same: it loads only
     // as a version the owner approved (`SkillSwitches`), and this one is not.
@@ -1087,42 +1121,586 @@ pub async fn commit_turn(
     Some(done)
 }
 
+/// Each of `names` as it is in the working tree now (`None`: no file of its
+/// own); a name that cannot be read is left out — nothing to put back.
+fn as_left(path: &Path, names: &[String]) -> Vec<(PathBuf, String, Option<Vec<u8>>)> {
+    names
+        .iter()
+        .filter_map(|name| {
+            let target = resolve(path, name).ok()?;
+            let bytes = read_plain_bytes(&target).ok()?;
+            Some((target, name.clone(), bytes))
+        })
+        .collect()
+}
+
+/// Put each file of [`as_left`] back as it was, when it is not — one by one,
+/// one failing never stopping the others. The names that could not be.
+fn put_back_left(path: &Path, left: Vec<(PathBuf, String, Option<Vec<u8>>)>) -> Vec<String> {
+    let mut stuck = Vec::new();
+    for (_, name, was) in left {
+        // Found again, through folders as they are now.
+        let Ok(target) = resolve(path, &name) else {
+            stuck.push(name);
+            continue;
+        };
+        let now = read_plain_bytes(&target).ok().flatten();
+        let gone = std::fs::symlink_metadata(&target).is_err();
+        if now == was && (was.is_some() || gone) {
+            continue;
+        }
+        if let Err(e) = put_file(&target, &name, was.as_deref()) {
+            tracing::warn!("[personal_agent] {name} could not be put back as the turn left it: {e}");
+            stuck.push(name);
+        }
+    }
+    stuck
+}
+
 /// How one file of [`write_for_owner`] changes: from what is there now (or
 /// `None` when there is nothing) to what to write, `None` to leave it.
 pub type OwnerUpdate<'a> = &'a (dyn Fn(Option<&str>) -> Option<String> + Sync);
 
 /// What codeg writes for the owner — their edit on the page, what to call
-/// them, a new role's template — one write of the directory at a time with
-/// every other (an undo, a draft applied, a turn's commit): each of `files`
-/// is read and rewritten under the lock (`update` returning `None` leaves it
-/// as it is), and only those are committed. The commit, when there was one.
+/// them, a persona a card changes — one write of the directory at a time
+/// with every other (an undo, a draft applied, a turn's commit): each of
+/// `files` is worked out under the lock (`update` returning `None` leaves it
+/// as it is) twice, from the file as the history has it — that is what is
+/// committed — and from the file as the working tree has it — that is what
+/// is written ([`OwnerChange`]); only those files are committed. The commit,
+/// when there was one.
 pub async fn write_for_owner(
     path: &Path,
     files: &[(&str, OwnerUpdate<'_>)],
     message: &str,
 ) -> std::io::Result<Option<String>> {
     let _held = GIT_WRITE.lock().await;
-    let mut written: Vec<&str> = Vec::new();
+    let base = owner_base(path).await.map_err(std::io::Error::other)?;
+    let mut changes: Vec<OwnerChange> = Vec::new();
     for (name, update) in files {
-        let now = read_file(path, name)?;
-        if let Some(content) = update(now.as_deref()) {
-            write_file(path, name, &content)?;
-            written.push(name);
+        let target = resolve(path, name)?;
+        let committed = committed_now(path, base.sha.as_deref(), name).await;
+        let seen = read_plain_bytes(&target)?;
+        let now = seen.as_deref().map(|b| String::from_utf8_lossy(b).into_owned());
+        // As the history has it, and as the working tree has it — the same
+        // unless the assistant's turn is changing the file right now.
+        let to_commit = update(committed.as_deref()).or_else(|| committed.clone());
+        let to_write = if same_text(now.as_deref(), committed.as_deref()) {
+            to_commit.clone()
+        } else {
+            update(now.as_deref()).or_else(|| now.clone())
+        };
+        for content in [&to_commit, &to_write].into_iter().flatten() {
+            if content.len() > MAX_FILE_BYTES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("{name} is larger than {} KiB", MAX_FILE_BYTES / 1024),
+                ));
+            }
         }
+        if to_commit == committed && to_write == now {
+            continue;
+        }
+        changes.push(OwnerChange {
+            name: name.to_string(),
+            commit: to_commit,
+            write: to_write,
+            seen,
+        });
     }
-    if written.is_empty() {
+    if changes.is_empty() {
         return Ok(None);
     }
-    Ok(commit_locked(path, message, Some(&written)).await)
+    apply_owner_locked(path, &base, message, &changes, false)
+        .await
+        .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 /// Delete an entry for the owner, with its index lines, and commit that —
-/// under the lock, as [`write_for_owner`].
+/// under the lock, as [`write_for_owner`]: what is committed is the history
+/// without it, what is written is the working tree without it.
 pub async fn delete_entry_for_owner(path: &Path, name: &str, message: &str) -> std::io::Result<()> {
     let _held = GIT_WRITE.lock().await;
-    delete_entry(path, name)?;
-    commit_locked(path, message, Some(&[name, MEMORY_FILE])).await;
-    Ok(())
+    let file = entry_file(name).ok_or_else(|| not_a_file(name))?;
+    let entry = resolve(path, name)?;
+    let base = owner_base(path).await.map_err(std::io::Error::other)?;
+    // `[Title](memory/x.md)` and `[Title](./memory/x.md)`.
+    let link = format!("{MEMORY_DIR}/{file})");
+    let without = |text: Option<String>| {
+        text.map(|text| {
+            let mut kept = text
+                .lines()
+                .filter(|l| !l.contains(&link))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if text.ends_with('\n') && !kept.is_empty() {
+                kept.push('\n');
+            }
+            kept
+        })
+    };
+    let index_committed = committed_now(path, base.sha.as_deref(), MEMORY_FILE).await;
+    let index_seen = read_plain_bytes(&path.join(MEMORY_FILE))?;
+    let index_now = index_seen
+        .as_deref()
+        .map(|b| String::from_utf8_lossy(b).into_owned());
+    let changes = [
+        OwnerChange {
+            name: name.to_string(),
+            commit: None,
+            write: None,
+            seen: read_plain_bytes(&entry)?,
+        },
+        OwnerChange {
+            name: MEMORY_FILE.to_string(),
+            commit: without(index_committed),
+            write: without(index_now),
+            seen: index_seen,
+        },
+    ];
+    apply_owner_locked(path, &base, message, &changes, false)
+        .await
+        .map(|_| ())
+        .map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+/// One file of a write codeg makes for the owner: what goes into the commit
+/// (worked out from the file as the history has it) and what goes into the
+/// working tree (worked out from the file as it is there) — `None` for no
+/// file. The two differ only when the assistant's turn is changing the file:
+/// its change stays in the working tree, its own to commit when the turn
+/// ends, and the owner's commit holds the owner's change alone.
+#[derive(Debug, Clone)]
+struct OwnerChange {
+    name: String,
+    commit: Option<String>,
+    write: Option<String>,
+    /// The file as it was when `write` was worked out from it: a file that
+    /// is not so any more when it is written was changed meanwhile, by the
+    /// assistant's turn, and the write would lose that.
+    seen: Option<Vec<u8>>,
+}
+
+/// The commit an owner's write is worked out from and made on top of, and
+/// the branch HEAD is on — HEAD put back on codeg's branch first, so the
+/// files read are the branch's, and the commit goes to that branch.
+struct Base {
+    sha: Option<String>,
+    on: Option<String>,
+}
+
+async fn owner_base(path: &Path) -> Result<Base, String> {
+    if !path.join(".git").exists() {
+        return Err("the working directory has no history".into());
+    }
+    reattach_head(path).await;
+    Ok(Base {
+        sha: head_commit(path).await?,
+        on: head_branch(path).await,
+    })
+}
+
+/// The ref HEAD points at (`refs/heads/…`); none when it is detached.
+async fn head_branch(path: &Path) -> Option<String> {
+    let out = git(path, &["symbolic-ref", "-q", "HEAD"]).await.ok()?;
+    let on = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!on.is_empty()).then_some(on)
+}
+
+/// A file as commit `base` has it — its content only when it is a file
+/// there; none when there is no commit at all.
+async fn committed_now(path: &Path, base: Option<&str>, name: &str) -> Option<String> {
+    as_content(recorded_at(path, base?, name).await)
+}
+
+/// What the owner's write says when the assistant's turn changed one of its
+/// files while it was being worked out.
+fn changed_meanwhile(name: &str) -> String {
+    format!("the assistant is changing {name} in the turn it is on; try again once that turn is done")
+}
+
+/// Make the owner's write: the working tree first — each file as it was
+/// noted, so a write that fails part way puts back what it had written and
+/// leaves HEAD alone — then the commit, made on an index of its own from
+/// HEAD and the files' committed versions, and HEAD moved to it checked
+/// against what it was: that move is the write. When it fails the working
+/// tree is put back too. Last the repository's index follows for these
+/// files; missing that costs nothing, as a turn's commit takes the index
+/// back to HEAD first. The commit, when the history changed.
+async fn apply_owner_locked(
+    path: &Path,
+    base: &Base,
+    message: &str,
+    changes: &[OwnerChange],
+    commit_required: bool,
+) -> Result<Option<String>, OwnerError> {
+    #[cfg(test)]
+    owner_fail::run_between();
+    // The commit the write was worked out from still HEAD, on the same
+    // branch.
+    let head = head_commit(path).await?;
+    if head != base.sha || head_branch(path).await != base.on {
+        return Err("the history moved while the change was worked out; try again".into());
+    }
+    // The commit's tree first: it is made from the history alone, and an
+    // undo or a draft whose commit would change nothing is not written at
+    // all (what it would write, an ignore rule keeps out of the history).
+    let tree = owner_tree(path, head.as_deref(), changes).await?;
+    let unchanged = match head.as_deref() {
+        Some(head) => tree_of(path, head).await.as_deref() == Some(tree.as_str()),
+        None => false,
+    };
+    if unchanged && commit_required {
+        let writes = changes.iter().any(|c| c.seen.as_deref() != c.write.as_deref().map(str::as_bytes));
+        if writes {
+            return Err("nothing of it could be committed".into());
+        }
+        return Ok(None);
+    }
+    // The working tree, each file as it was noted first.
+    let mut written: Vec<Written> = Vec::new();
+    for change in changes {
+        let target = match resolve(path, &change.name) {
+            Ok(target) => target,
+            Err(e) => return Err(put_back(path, written, e.to_string())),
+        };
+        if std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_dir()) {
+            return Err(put_back(path, written, a_folder(&target).to_string()));
+        }
+        let was = match read_plain_bytes(&target) {
+            Ok(was) => was,
+            Err(e) => return Err(put_back(path, written, e.to_string())),
+        };
+        if was != change.seen {
+            return Err(put_back(path, written, changed_meanwhile(&change.name)));
+        }
+        if was.as_deref() == change.write.as_deref().map(str::as_bytes) {
+            continue;
+        }
+        #[cfg(test)]
+        let done = match owner_fail::take_write() {
+            true => Err(std::io::Error::other("a write failed (test)")),
+            false => put_file(&target, &change.name, change.write.as_deref().map(str::as_bytes)),
+        };
+        #[cfg(not(test))]
+        let done = put_file(&target, &change.name, change.write.as_deref().map(str::as_bytes));
+        // Noted before it is known to have worked: a write that failed
+        // half way is put back all the same.
+        written.push(Written {
+            name: change.name.clone(),
+            was,
+            wrote: change.write.as_deref().map(|w| w.as_bytes().to_vec()),
+            failed: done.is_err(),
+        });
+        if let Err(e) = done {
+            return Err(put_back(path, written, e.to_string()));
+        }
+    }
+    if unchanged {
+        // Nothing for the history: the owner's save of a file it does not
+        // hold stands as written.
+        return Ok(None);
+    }
+    #[cfg(test)]
+    if owner_fail::take_commit() {
+        return Err(put_back(path, written, "HEAD could not be moved (test)".into()));
+    }
+    // The branch itself moved, checked against the commit it was on — not
+    // whatever HEAD may point at by then.
+    let target = base.on.as_deref().unwrap_or("HEAD");
+    let new = match commit_tree_on(path, target, head.as_deref(), &tree, message).await {
+        Ok(new) => new,
+        Err(e) => return Err(put_back(path, written, e)),
+    };
+    let mut args = vec!["--literal-pathspecs", "reset", "-q", "HEAD", "--"];
+    args.extend(changes.iter().map(|c| c.name.as_str()));
+    let _ = git(path, &args).await;
+    Ok(Some(new))
+}
+
+/// Failures a test sets up for the owner's next write on this thread: the
+/// `n`th file written failing, or HEAD not moving.
+#[cfg(test)]
+pub(crate) mod owner_fail {
+    use std::cell::{Cell, RefCell};
+    type Hook = Box<dyn FnOnce()>;
+    thread_local! {
+        static WRITE_AT: Cell<Option<usize>> = const { Cell::new(None) };
+        static COMMIT: Cell<bool> = const { Cell::new(false) };
+        static BETWEEN: RefCell<Option<Hook>> = const { RefCell::new(None) };
+        static ON_FAIL: RefCell<Option<Hook>> = const { RefCell::new(None) };
+    }
+    /// `f` runs once the write is worked out, before anything is written.
+    pub(crate) fn between(f: impl FnOnce() + 'static) {
+        BETWEEN.with(|b| *b.borrow_mut() = Some(Box::new(f)));
+    }
+    /// `f` runs when the failing write of [`write_at`] fails.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub(crate) fn on_fail(f: impl FnOnce() + 'static) {
+        ON_FAIL.with(|b| *b.borrow_mut() = Some(Box::new(f)));
+    }
+    pub(super) fn run_between() {
+        if let Some(f) = BETWEEN.with(|b| b.borrow_mut().take()) {
+            f();
+        }
+    }
+    /// The `n`th write (from 0) fails.
+    pub(crate) fn write_at(n: usize) {
+        WRITE_AT.with(|w| w.set(Some(n)));
+    }
+    /// HEAD does not move.
+    pub(crate) fn commit() {
+        COMMIT.with(|c| c.set(true));
+    }
+    pub(super) fn take_write() -> bool {
+        WRITE_AT.with(|w| match w.get() {
+            Some(0) => {
+                w.set(None);
+                if let Some(f) = ON_FAIL.with(|b| b.borrow_mut().take()) {
+                    f();
+                }
+                true
+            }
+            Some(n) => {
+                w.set(Some(n - 1));
+                false
+            }
+            None => false,
+        })
+    }
+    pub(super) fn take_commit() -> bool {
+        COMMIT.with(|c| c.replace(false))
+    }
+}
+
+/// Write one file of the working tree — `None` takes it away (a process
+/// skill's folder with it, when nothing else is in it).
+fn put_file(target: &Path, name: &str, content: Option<&[u8]>) -> std::io::Result<()> {
+    match content {
+        Some(content) => {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            write_plain(target, content)
+        }
+        None => {
+            remove_name(target)?;
+            if skill_name_of(name).is_some() {
+                if let Some(parent) = target.parent() {
+                    let _ = std::fs::remove_dir(parent);
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Put back what [`apply_owner_locked`] wrote, last first; `why` it had to,
+/// with the files that could not be put back named.
+fn put_back(path: &Path, written: Vec<Written>, why: String) -> OwnerError {
+    let mut stuck = Vec::new();
+    let mut changed = Vec::new();
+    for Written {
+        name,
+        was,
+        wrote,
+        failed,
+    } in written.into_iter().rev()
+    {
+        // Found again, through folders as they are now: one made a link
+        // meanwhile is not followed out of the directory. Only a file still
+        // as it was written goes back: one the assistant changed since is
+        // its own, left as it is and named.
+        let put = resolve(path, &name).and_then(|target| {
+            let now = read_plain_bytes(&target)?;
+            if now == was {
+                return Ok(true); // as it was: the write never reached it
+            }
+            // The write that failed may have left half of it: ours all the
+            // same, put back.
+            if now != wrote && !failed {
+                return Ok(false);
+            }
+            put_file(&target, &name, was.as_deref()).map(|()| true)
+        });
+        let put = match put {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                changed.push(name);
+                continue;
+            }
+            Err(e) => Err(e),
+        };
+        if let Err(e) = put {
+            tracing::warn!("[personal_agent] {name} could not be put back: {e}");
+            stuck.push(name);
+        }
+    }
+    OwnerError {
+        why,
+        stuck,
+        changed,
+    }
+}
+
+/// One file [`apply_owner_locked`] wrote: what was there, and what it wrote
+/// (`None`: it took the file away).
+struct Written {
+    name: String,
+    was: Option<Vec<u8>>,
+    wrote: Option<Vec<u8>>,
+    /// The write that failed.
+    failed: bool,
+}
+
+/// Why an owner's write did not go through, and the files it wrote and
+/// could not put back as they were.
+#[derive(Debug)]
+struct OwnerError {
+    why: String,
+    /// Not put back: writing them failed.
+    stuck: Vec<String>,
+    /// Not put back: the assistant changed them since — theirs, left as
+    /// they are.
+    changed: Vec<String>,
+}
+
+impl From<String> for OwnerError {
+    fn from(why: String) -> Self {
+        Self {
+            why,
+            stuck: Vec::new(),
+            changed: Vec::new(),
+        }
+    }
+}
+
+impl From<&str> for OwnerError {
+    fn from(why: &str) -> Self {
+        why.to_string().into()
+    }
+}
+
+impl std::fmt::Display for OwnerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.why)?;
+        if !self.stuck.is_empty() {
+            write!(f, "; not put back as they were: {}", self.stuck.join(", "))?;
+        }
+        if !self.changed.is_empty() {
+            write!(
+                f,
+                "; left as the assistant changed them since: {}",
+                self.changed.join(", ")
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// The tree of HEAD with `changes`' committed versions, on an index of its
+/// own.
+async fn owner_tree(path: &Path, head: Option<&str>, changes: &[OwnerChange]) -> Result<String, String> {
+    let index = git_dir(path)
+        .await
+        .ok_or("the working directory has no repository")?
+        .join("codeg-index");
+    let _ = std::fs::remove_file(&index);
+    let made = async {
+        match head {
+            Some(h) => git_on(path, Some(&index), &["read-tree", h]).await?,
+            None => git_on(path, Some(&index), &["read-tree", "--empty"]).await?,
+        };
+        let fixed: Vec<&str> = changes
+            .iter()
+            .map(|c| c.name.as_str())
+            .filter(|n| EDITABLE_FILES.contains(n))
+            .collect();
+        let fixed_tracked = drop_other_spellings(path, Some(&index), &fixed).await?;
+        for change in changes {
+            let tracked = match fixed.iter().position(|n| *n == change.name) {
+                Some(i) => fixed_tracked[i],
+                None => tracked_in(path, &index, &change.name).await,
+            };
+            // Not tracked, and an ignore rule says so: left out of the
+            // history, as `git add` would leave it.
+            if !tracked
+                && git_on(path, Some(&index), &["check-ignore", "-q", "--", &change.name])
+                    .await
+                    .is_ok()
+            {
+                continue;
+            }
+            match &change.commit {
+                Some(content) => {
+                    let out = git_input(
+                        path,
+                        Some(&index),
+                        &["hash-object", "-w", "--no-filters", "--stdin"],
+                        Input::Bytes(content.as_bytes().to_vec()),
+                    )
+                    .await?;
+                    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    // An executable bit the history gave it, kept.
+                    let mode = match head {
+                        Some(h) => mode_at(path, h, &change.name).await,
+                        None => None,
+                    };
+                    let mode = if mode.as_deref() == Some("100755") { "100755" } else { "100644" };
+                    let entry = format!("{mode},{sha},{}", change.name);
+                    git_on(
+                        path,
+                        Some(&index),
+                        &["update-index", "--add", "--replace", "--cacheinfo", &entry],
+                    )
+                    .await?;
+                }
+                None => {
+                    git_on(
+                        path,
+                        Some(&index),
+                        &["update-index", "--force-remove", "--", &change.name],
+                    )
+                    .await?;
+                }
+            }
+        }
+        let out = git_on(path, Some(&index), &["write-tree"]).await?;
+        Ok::<_, String>(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+    .await;
+    let _ = std::fs::remove_file(&index);
+    made
+}
+
+/// Whether index `index` tracks `name` — a fixed file in any spelling.
+async fn tracked_in(path: &Path, index: &Path, name: &str) -> bool {
+    if EDITABLE_FILES.iter().any(|f| f.eq_ignore_ascii_case(name)) {
+        return git_on(path, Some(index), &["ls-files", "-z"])
+            .await
+            .is_ok_and(|o| {
+                o.stdout
+                    .split(|b| *b == 0)
+                    .any(|e| e.eq_ignore_ascii_case(name.as_bytes()))
+            });
+    }
+    git_on(
+        path,
+        Some(index),
+        &["--literal-pathspecs", "ls-files", "--error-unmatch", "--", name],
+    )
+    .await
+    .is_ok()
+}
+
+/// The mode commit `rev` records `name` with.
+async fn mode_at(path: &Path, rev: &str, name: &str) -> Option<String> {
+    let out = git(path, &["--literal-pathspecs", "ls-tree", "-z", rev, "--", name])
+        .await
+        .ok()?;
+    let listed = String::from_utf8_lossy(&out.stdout).into_owned();
+    let (meta, at) = listed.trim_end_matches('\0').split_once('\t')?;
+    (at == name).then(|| meta.split(' ').next().unwrap_or_default().to_string())
 }
 
 /// Delete process skill `name` for the owner — its folder — and commit
@@ -1192,27 +1770,18 @@ async fn commit_locked(path: &Path, message: &str, only: Option<&[&str]>) -> Opt
     Some(new)
 }
 
-/// The fixed files as an index records them for a commit: what
-/// [`open_own`] reads. `git add` never reads them — it looks at what a name
-/// is before it opens it, so a link swapped in between would be followed.
-/// A fixed file that is not a file of its own (a link, a folder, a pipe) is
-/// committed as no file: its card says it went, and an undo puts it back as
-/// a file.
-async fn stage_own_fixed(path: &Path, index: Option<&Path>, names: &[&str]) -> Result<(), String> {
-    let fixed: Vec<&str> = names
-        .iter()
-        .copied()
-        .filter(|n| EDITABLE_FILES.contains(n))
-        .collect();
-    if fixed.is_empty() {
-        return Ok(());
-    }
-    // Every spelling of a fixed name is that name — on a volume that does
-    // not tell case apart it is the same file, and on one that does it is
-    // kept to the one spelling. What the index holds under one, besides the
-    // name itself (another spelling, anything inside a folder of the name),
-    // is what `git add` was kept off: gone, as the name is staged below from
-    // what it is now. Bytes, as git lists them: a name need not be UTF-8.
+/// What the index (`index`, the repository's own when `None`) holds under
+/// the fixed names `fixed` besides each name itself — another spelling of
+/// it, anything inside a folder of the name — taken out: every spelling of
+/// a fixed name is that name (on a volume that does not tell case apart it
+/// is the same file, and on one that does it is kept to the one spelling).
+/// Whether each name was tracked, in any spelling, before.
+async fn drop_other_spellings(
+    path: &Path,
+    index: Option<&Path>,
+    fixed: &[&str],
+) -> Result<Vec<bool>, String> {
+    // Bytes, as git lists them: a name need not be UTF-8.
     let held = git_on(path, index, &["ls-files", "-z"]).await?.stdout;
     let entries: Vec<&[u8]> = held.split(|b| *b == 0).filter(|e| !e.is_empty()).collect();
     let spelt = |entry: &[u8], name: &str| entry.eq_ignore_ascii_case(name.as_bytes());
@@ -1247,6 +1816,25 @@ async fn stage_own_fixed(path: &Path, index: Option<&Path>, names: &[&str]) -> R
         )
         .await?;
     }
+    Ok(tracked)
+}
+
+/// The fixed files as an index records them for a commit: what
+/// [`open_own`] reads. `git add` never reads them — it looks at what a name
+/// is before it opens it, so a link swapped in between would be followed.
+/// A fixed file that is not a file of its own (a link, a folder, a pipe) is
+/// committed as no file: its card says it went, and an undo puts it back as
+/// a file.
+async fn stage_own_fixed(path: &Path, index: Option<&Path>, names: &[&str]) -> Result<(), String> {
+    let fixed: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|n| EDITABLE_FILES.contains(n))
+        .collect();
+    if fixed.is_empty() {
+        return Ok(());
+    }
+    let tracked = drop_other_spellings(path, index, &fixed).await?;
     for (name, tracked) in fixed.into_iter().zip(tracked) {
         // Not tracked, and an ignore rule says so: not taken, as `git add`
         // would not take it.
@@ -1669,7 +2257,9 @@ async fn undo_change(
     whole: bool,
 ) -> Result<MemoryUndo, String> {
     let _held = GIT_WRITE.lock().await;
-    undo_change_locked(path, rev, files, message, whole).await
+    undo_change_locked(path, rev, files, message, whole)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// [`undo_change`], with the directory's write lock already held.
@@ -1679,23 +2269,27 @@ async fn undo_change_locked(
     files: &[MemoryFile],
     message: &str,
     whole: bool,
-) -> Result<MemoryUndo, String> {
+) -> Result<MemoryUndo, OwnerError> {
     if !path.join(".git").exists() {
         return Err("the working directory has no history".into());
     }
     // A commit that is not there, or whose parent is not, reads as files
     // that never were: an undo would delete them. Nothing is touched.
     if !commit_is_whole(path, rev).await {
-        return Err(format!("commit {rev} or the one before it is no longer in the history"));
+        return Err(format!("commit {rev} or the one before it is no longer in the history").into());
     }
     let parent = parent_of(path, rev).await;
+    let base = owner_base(path).await?;
     let mut undo = MemoryUndo::default();
+    // The files the assistant's turn is changing right now in a way the undo
+    // cannot be fitted into: nothing is undone until the turn is done.
+    let mut busy: Vec<String> = Vec::new();
     // The index last: its lines follow what became of the entries.
     let mut order: Vec<&MemoryFile> = files.iter().collect();
     order.sort_by_key(|f| f.kind == "index");
-    // Worked out first, written after: an undo that must be whole writes
-    // nothing when any file does not take it.
-    let mut puts: Vec<(PathBuf, &MemoryFile, Option<String>)> = Vec::new();
+    // Worked out first, written after — each file twice: from the history
+    // (what is committed) and from the working tree (what is written).
+    let mut puts: Vec<(&MemoryFile, Versions)> = Vec::new();
     for f in order {
         let target = resolve(path, &f.path).map_err(|e| e.to_string())?;
         // Both sides looked up whatever the card calls the change: a file
@@ -1717,131 +2311,198 @@ async fn undo_change_locked(
             },
             None => Recorded::Nothing,
         };
+        let committed = match base.sha.as_deref() {
+            Some(base) => recorded_at(path, base, &f.path).await,
+            None => Recorded::Nothing,
+        };
         // A change to or from a link or a folder is not one an undo takes
         // back: left as it is, whatever came of it since.
-        let (at, before) = match (at, before) {
-            (Recorded::Other, _) | (_, Recorded::Other) => {
+        let (at, before, committed) = match (at, before, committed) {
+            (Recorded::Other, _, _) | (_, Recorded::Other, _) | (_, _, Recorded::Other) => {
                 undo.kept.push(f.path.clone());
                 continue;
             }
-            (at, before) => (as_content(at), as_content(before)),
+            (at, before, committed) => (as_content(at), as_content(before), as_content(committed)),
         };
         // A folder where the file is fails here, before anything is
         // written.
         if std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_dir()) {
-            return Err(a_folder(&target).to_string());
+            return Err(a_folder(&target).to_string().into());
         }
-        let now = read_plain(&target).map_err(|e| e.to_string())?;
-        let put = match (now.as_deref(), at.as_deref(), before.as_deref()) {
-            // The index is a list of lines: the change's lines taken out and
-            // put back as lines, whatever was added around them since — but
-            // never the line of an entry left as it is, even when the index
-            // itself is still as the change left it.
-            (Some(n), Some(a), Some(b)) if f.kind == "index" => {
-                let kept = undo.kept.clone();
-                Some(Some(undo_lines(n, a, b, |line| !links_to(line, &kept))))
-            }
-            _ if same_text(now.as_deref(), at.as_deref()) => Some(before),
-            (Some(n), Some(a), Some(b)) => merge3(path, n, a, b).await.map(Some),
-            _ => None,
+        let seen = read_plain_bytes(&target).map_err(|e| e.to_string())?;
+        let now = seen.as_deref().map(|b| String::from_utf8_lossy(b).into_owned());
+        let kept = undo.kept.clone();
+        let Some(to_commit) =
+            undo_one(path, f, committed.as_deref(), at.as_deref(), before.as_deref(), &kept).await
+        else {
+            // Changed again since in the history itself: as before, left as
+            // it is.
+            undo.kept.push(f.path.clone());
+            continue;
         };
-        match put {
-            Some(content) => puts.push((target, f, content)),
-            None => undo.kept.push(f.path.clone()),
+        let to_write = if same_text(now.as_deref(), committed.as_deref()) {
+            Some(to_commit.clone())
+        } else {
+            undo_one(path, f, now.as_deref(), at.as_deref(), before.as_deref(), &kept).await
+        };
+        match to_write {
+            Some(to_write) => puts.push((
+                f,
+                Versions {
+                    commit: to_commit,
+                    write: to_write,
+                    seen,
+                },
+            )),
+            None => busy.push(f.path.clone()),
         }
+    }
+    if !busy.is_empty() {
+        return Err(format!(
+            "the assistant is changing {} in the turn it is on; try again once that turn is done",
+            busy.join(", ")
+        ).into());
     }
     if whole && !undo.kept.is_empty() {
         return Ok(undo);
     }
     // The index follows what becomes of the entries, whichever commit its
     // lines went in with (an edit of the owner's may have taken a turn's
-    // line): none for an entry taken out, one for an entry brought back.
-    // Worked out before anything is written, as all of it is.
+    // line): none for an entry taken out, one for an entry brought back —
+    // in what is committed and in what is written alike, both worked out
+    // before anything is written.
     let of = |status: &str| -> Vec<String> {
         puts.iter()
-            .filter(|(_, f, _)| f.kind == "entry" && f.status == status)
-            .map(|(_, f, _)| f.path.clone())
+            .filter(|(f, _)| f.kind == "entry" && f.status == status)
+            .map(|(f, _)| f.path.clone())
             .collect()
     };
     let (taken, brought) = (of("added"), of("deleted"));
-    let mut index_put: Option<String> = None;
+    let mut index_put: Option<Versions> = None;
     if !taken.is_empty() || !brought.is_empty() {
-        // The index as it will be once the files above are written.
-        let planned = puts
-            .iter()
-            .find(|(_, f, _)| f.path == MEMORY_FILE)
-            .map(|(_, _, c)| c.clone().unwrap_or_default());
-        let text = planned.unwrap_or_else(|| read_text(path, MEMORY_FILE));
-        let mut lines: Vec<String> = text
-            .lines()
-            .filter(|l| !links_to(l, &taken))
-            .map(str::to_string)
-            .collect();
         let was = match parent.as_deref() {
             Some(p) => show_at(path, p, MEMORY_FILE).await.unwrap_or_default(),
             None => String::new(),
         };
-        for name in &brought {
-            let one = std::slice::from_ref(name);
-            if lines.iter().any(|l| links_to(l, one)) {
-                continue;
+        let follow = |text: String| -> String {
+            let mut lines: Vec<String> = text
+                .lines()
+                .filter(|l| !links_to(l, &taken))
+                .map(str::to_string)
+                .collect();
+            for name in &brought {
+                let one = std::slice::from_ref(name);
+                if lines.iter().any(|l| links_to(l, one)) {
+                    continue;
+                }
+                if let Some(line) = was.lines().find(|l| links_to(l, one)) {
+                    lines.push(line.to_string());
+                }
             }
-            if let Some(line) = was.lines().find(|l| links_to(l, one)) {
-                lines.push(line.to_string());
+            let mut fixed = lines.join("\n");
+            if !fixed.is_empty() && (text.ends_with('\n') || text.is_empty()) {
+                fixed.push('\n');
             }
-        }
-        let mut fixed = lines.join("\n");
-        if !fixed.is_empty() && (text.ends_with('\n') || text.is_empty()) {
-            fixed.push('\n');
-        }
-        if fixed != text {
+            fixed
+        };
+        // The index as it will be once the files above are written.
+        let planned = puts.iter().find(|(f, _)| f.path == MEMORY_FILE);
+        let (committed, now, seen) = match planned {
+            Some((_, v)) => (v.commit.clone(), v.write.clone(), v.seen.clone()),
+            None => {
+                let seen =
+                    read_plain_bytes(&path.join(MEMORY_FILE)).map_err(|e| e.to_string())?;
+                (
+                    committed_now(path, base.sha.as_deref(), MEMORY_FILE).await,
+                    seen.as_deref().map(|b| String::from_utf8_lossy(b).into_owned()),
+                    seen,
+                )
+            }
+        };
+        let fixed_commit = follow(committed.clone().unwrap_or_default());
+        let fixed_write = follow(now.clone().unwrap_or_default());
+        let changes_commit = Some(&fixed_commit) != committed.as_ref()
+            && !(committed.is_none() && fixed_commit.is_empty());
+        let changes_write =
+            Some(&fixed_write) != now.as_ref() && !(now.is_none() && fixed_write.is_empty());
+        if changes_commit || changes_write {
             // A folder where the index is: nothing written at all.
             let index = path.join(MEMORY_FILE);
             if std::fs::symlink_metadata(&index).is_ok_and(|m| m.is_dir()) {
-                return Err(a_folder(&index).to_string());
+                return Err(a_folder(&index).to_string().into());
             }
-            index_put = Some(fixed);
+            index_put = Some(Versions {
+                commit: if changes_commit { Some(fixed_commit) } else { committed },
+                write: if changes_write { Some(fixed_write) } else { now },
+                seen,
+            });
         }
     }
-    for (target, f, content) in puts {
-        // The index written once, as the entries leave it.
-        let content = match (&index_put, f.path == MEMORY_FILE) {
-            (Some(fixed), true) => Some(fixed.clone()),
-            _ => content,
+    let mut changes: Vec<OwnerChange> = Vec::new();
+    for (f, v) in puts {
+        // The index once, as the entries leave it.
+        let (commit, write) = match (&index_put, f.path == MEMORY_FILE) {
+            (Some(index), true) => (index.commit.clone(), index.write.clone()),
+            _ => (v.commit, v.write),
         };
-        match content {
-            Some(content) => {
-                if let Some(parent) = target.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-                }
-                write_plain(&target, content.as_bytes()).map_err(|e| e.to_string())?;
-            }
-            None => {
-                match std::fs::remove_file(&target) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(e.to_string()),
-                }
-                // A process skill taken out takes its folder with it, when
-                // nothing else is in it.
-                if skill_name_of(&f.path).is_some() {
-                    if let Some(parent) = target.parent() {
-                        let _ = std::fs::remove_dir(parent);
-                    }
-                }
-            }
-        }
+        changes.push(OwnerChange {
+            name: f.path.clone(),
+            commit,
+            write,
+            seen: v.seen,
+        });
         undo.back.push(f.path.clone());
     }
-    if let Some(fixed) = index_put {
+    if let Some(index) = index_put {
         if !undo.back.iter().any(|p| p == MEMORY_FILE) {
-            write_plain(&path.join(MEMORY_FILE), fixed.as_bytes()).map_err(|e| e.to_string())?;
+            changes.push(OwnerChange {
+                name: MEMORY_FILE.to_string(),
+                commit: index.commit,
+                write: index.write,
+                seen: index.seen,
+            });
             undo.back.push(MEMORY_FILE.to_string());
         }
     }
-    let names: Vec<&str> = undo.back.iter().map(String::as_str).collect();
-    undo.commit = commit_locked(path, message, Some(&names)).await;
+    if changes.is_empty() {
+        return Ok(undo);
+    }
+    undo.commit = apply_owner_locked(path, &base, message, &changes, true).await?;
     Ok(undo)
+}
+
+/// One file of an undo as worked out: what it becomes in the commit and in
+/// the working tree, and the working tree's file it was worked out from.
+struct Versions {
+    commit: Option<String>,
+    write: Option<String>,
+    seen: Option<Vec<u8>>,
+}
+
+/// What an undo of the change (from `before` to `at`) makes of a file that
+/// is `now`: the file it becomes (`None`: no file) — or `None` when the
+/// change cannot be taken out of it. The index is a list of lines: the
+/// change's lines taken out and put back as lines, whatever was added
+/// around them since — never the line of an entry `kept` as it is, even
+/// when the index itself is still as the change left it. A file still as
+/// the change left it goes back as it was; one changed again since has the
+/// change taken out of it where git's three-way merge can.
+async fn undo_one(
+    path: &Path,
+    f: &MemoryFile,
+    now: Option<&str>,
+    at: Option<&str>,
+    before: Option<&str>,
+    kept: &[String],
+) -> Option<Option<String>> {
+    match (now, at, before) {
+        (Some(n), Some(a), Some(b)) if f.kind == "index" => {
+            Some(Some(undo_lines(n, a, b, |line| !links_to(line, kept))))
+        }
+        _ if same_text(now, at) => Some(before.map(str::to_string)),
+        (Some(n), Some(a), Some(b)) => merge3(path, n, a, b).await.map(Some),
+        _ => None,
+    }
 }
 
 /// Whether a file's content now is what a commit left, line endings aside
@@ -2547,7 +3208,10 @@ impl SkillSwitches {
 
 /// A file's content as an approval names it: its SHA-256, in hex.
 pub fn content_hash(content: &str) -> String {
-    let digest = Sha256::digest(content.as_bytes());
+    // Line endings aside: a repository's text attributes may commit LF for
+    // a file the working tree keeps with CRLF, and either is the version
+    // approved.
+    let digest = Sha256::digest(content.replace("\r\n", "\n").as_bytes());
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -5358,5 +6022,501 @@ mod tests {
                 assert!(std::fs::symlink_metadata(&entry).is_err(), "{way}: not made again");
             }
         }
+    }
+
+    // ── the owner's write, the owner's alone ────────────────────────────────
+
+    /// The diff of commit `rev` alone, as text.
+    async fn diff_of(dir: &Path, rev: &str) -> String {
+        out(dir, &["show", "--format=", "--no-color", rev]).await
+    }
+
+    const SOUL_BASE: &str = "# Persona\nline one\n\nmiddle\n\nline three\n";
+
+    /// A directory whose persona has three lines apart, committed.
+    async fn soul_repo() -> (tempfile::TempDir, PathBuf) {
+        let (tmp, dir) = memory_repo().await;
+        std::fs::write(dir.join(SOUL_FILE), SOUL_BASE).unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        (tmp, dir)
+    }
+
+    /// An undo while the assistant's turn is changing the same file
+    /// elsewhere: the undo's commit holds the undo alone, the assistant's
+    /// change stays in the working tree for its own card, and undoing has
+    /// not taken it.
+    #[tokio::test]
+    async fn an_undo_mid_turn_commits_the_undo_alone() {
+        let (_tmp, dir) = soul_repo().await;
+        std::fs::write(dir.join(SOUL_FILE), SOUL_BASE.replace("line one", "line ONE")).unwrap();
+        let rev = commit(&dir, "turn 1").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        // The next turn, mid-way: another line changed, not committed.
+        std::fs::write(
+            dir.join(SOUL_FILE),
+            SOUL_BASE.replace("line one", "line ONE").replace("line three", "line THREE"),
+        )
+        .unwrap();
+        let undo = undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+        let mine = undo.commit.expect("the undo's commit");
+        let diff = diff_of(&dir, &mine).await;
+        assert!(diff.contains("-line ONE") && diff.contains("+line one"), "{diff}");
+        assert!(!diff.contains("THREE"), "the assistant's line is not the owner's: {diff}");
+        assert_eq!(
+            read_text(&dir, SOUL_FILE),
+            SOUL_BASE.replace("line three", "line THREE"),
+            "the undo and the turn's change, both"
+        );
+        let turn = commit(&dir, "turn 2").await.expect("the turn's own commit");
+        let diff = diff_of(&dir, &turn).await;
+        assert!(diff.contains("+line THREE") && !diff.contains("line ONE"), "{diff}");
+    }
+
+    /// A draft applied while the turn changes the same file: the draft's
+    /// commit is the draft alone; undone later, the turn's change stays.
+    #[tokio::test]
+    async fn a_draft_applied_mid_turn_is_the_draft_alone() {
+        let (_tmp, dir) = soul_repo().await;
+        std::fs::write(dir.join(SOUL_FILE), SOUL_BASE.replace("line one", "tidied")).unwrap();
+        let done = commit_turn(&dir, "tidy", |f| f.kind == "soul", "aside").await.unwrap();
+        let aside = done.aside.expect("set aside");
+        assert_eq!(read_text(&dir, SOUL_FILE), SOUL_BASE);
+        let files = memory_changes(&dir, &aside).await;
+        std::fs::write(dir.join(SOUL_FILE), SOUL_BASE.replace("line three", "the turn's")).unwrap();
+        let applied = undo_whole(&dir, &aside, &files, "owner: apply").await.unwrap();
+        let commit_rev = applied.commit.expect("the draft's commit");
+        let diff = diff_of(&dir, &commit_rev).await;
+        assert!(diff.contains("+tidied") && !diff.contains("the turn's"), "{diff}");
+        assert_eq!(
+            read_text(&dir, SOUL_FILE),
+            SOUL_BASE.replace("line one", "tidied").replace("line three", "the turn's")
+        );
+        let back = memory_changes(&dir, &commit_rev).await;
+        undo_memory(&dir, &commit_rev, &back, "owner: undo").await.unwrap();
+        assert_eq!(read_text(&dir, SOUL_FILE), SOUL_BASE.replace("line three", "the turn's"));
+    }
+
+    /// An entry deleted, and what to call the owner changed, while the turn
+    /// has its own uncommitted lines in the same files: the owner's commits
+    /// hold the owner's change alone.
+    #[tokio::test]
+    async fn the_owners_delete_and_edit_mid_turn_are_theirs_alone() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/old.md", "old\n").unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [Old](memory/old.md)\n").unwrap();
+        write_file(&dir, USER_FILE, "# The owner\nName: Sam\n\nLikes: tea\n").unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        // Mid-turn: the assistant adds an index line and a line about the owner.
+        write_file(&dir, "memory/new.md", "new\n").unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [Old](memory/old.md)\n- [New](memory/new.md)\n").unwrap();
+        write_file(&dir, USER_FILE, "# The owner\nName: Sam\n\nLikes: tea, and jazz\n").unwrap();
+        delete_entry_for_owner(&dir, "memory/old.md", "owner: delete").await.unwrap();
+        let deleted = head_of(&dir).await;
+        let diff = diff_of(&dir, &deleted).await;
+        assert!(diff.contains("-- [Old](memory/old.md)") && !diff.contains("New"), "{diff}");
+        assert_eq!(read_text(&dir, MEMORY_FILE), "# Memory\n- [New](memory/new.md)\n");
+        let rename = |text: Option<&str>| text.map(|t| t.replace("Name: Sam", "Name: Sammy"));
+        let edited = write_for_owner(&dir, &[(USER_FILE, &rename)], "owner: name")
+            .await
+            .unwrap()
+            .expect("the owner's commit");
+        let diff = diff_of(&dir, &edited).await;
+        assert!(diff.contains("+Name: Sammy") && !diff.contains("jazz"), "{diff}");
+        assert_eq!(read_text(&dir, USER_FILE), "# The owner\nName: Sammy\n\nLikes: tea, and jazz\n");
+        let turn = commit(&dir, "turn 1").await.unwrap();
+        let files = memory_changes(&dir, &turn).await;
+        assert!(files.iter().any(|f| f.path == "memory/new.md"));
+        let diff = diff_of(&dir, &turn).await;
+        assert!(
+            diff.contains("+Likes: tea, and jazz")
+                && !diff.contains("+Name: Sammy")
+                && !diff.contains("-Name: Sam")
+                && !diff.contains("-- [Old]"),
+            "{diff}"
+        );
+    }
+
+    /// An undo that collides with the turn's uncommitted change in one file
+    /// of two: nothing is undone — neither file, no commit — and the reason
+    /// names the file; once the turn is committed, the undo goes through.
+    #[tokio::test]
+    async fn an_undo_that_collides_with_the_turn_waits_for_it() {
+        let (_tmp, dir) = soul_repo().await;
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        std::fs::write(dir.join(SOUL_FILE), SOUL_BASE.replace("line one", "line ONE")).unwrap();
+        let rev = commit(&dir, "turn 1").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        assert_eq!(files.len(), 2);
+        // The turn rewrites the very line the undo would put back.
+        std::fs::write(dir.join(SOUL_FILE), SOUL_BASE.replace("line one", "line 1!")).unwrap();
+        let head = head_of(&dir).await;
+        for whole in [false, true] {
+            let tried = if whole {
+                undo_whole(&dir, &rev, &files, "owner: apply").await
+            } else {
+                undo_memory(&dir, &rev, &files, "owner: undo").await
+            };
+            let why = tried.expect_err("waits for the turn");
+            assert!(why.contains("SOUL.md") && why.contains("turn"), "{why}");
+            assert_eq!(head_of(&dir).await, head);
+            assert_eq!(read_text(&dir, "memory/x.md"), "x\n");
+            assert_eq!(read_text(&dir, SOUL_FILE), SOUL_BASE.replace("line one", "line 1!"));
+        }
+        // The turn's own change committed: the undo now fits (or keeps what
+        // does not, as it always has).
+        commit(&dir, "turn 2").await.unwrap();
+        let undo = undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+        assert!(undo.back.contains(&"memory/x.md".to_string()), "{undo:?}");
+    }
+
+    /// A write that fails part way puts back what it had written and leaves
+    /// HEAD; one whose HEAD does not move puts the working tree back.
+    #[tokio::test]
+    async fn an_owners_write_that_fails_leaves_everything_as_it_was() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [X](memory/x.md)\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        let head = head_of(&dir).await;
+        for fail in ["the second write", "HEAD"] {
+            match fail {
+                "HEAD" => owner_fail::commit(),
+                _ => owner_fail::write_at(1),
+            }
+            assert!(undo_memory(&dir, &rev, &files, "owner: undo").await.is_err(), "{fail}");
+            assert_eq!(head_of(&dir).await, head, "{fail}");
+            assert_eq!(read_text(&dir, "memory/x.md"), "x\n", "{fail}");
+            assert_eq!(read_text(&dir, MEMORY_FILE), "# Memory\n- [X](memory/x.md)\n", "{fail}");
+            assert!(out(&dir, &["status", "--porcelain"]).await.is_empty(), "{fail}");
+        }
+        // Nothing left over: the undo goes through after.
+        undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+        assert!(!dir.join("memory/x.md").exists());
+    }
+
+    /// The repository's index locked when the owner's write ends: HEAD and
+    /// the working tree are the owner's already, and the next turn's commit
+    /// does not take the owner's change back — nor drop a file an ignore
+    /// rule now matches.
+    #[tokio::test]
+    async fn an_index_locked_after_the_owners_write_loses_nothing() {
+        let (_tmp, dir) = memory_repo().await;
+        std::fs::write(dir.join("notes.md"), "notes\n").unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        std::fs::write(dir.join(".git/info/exclude"), "notes.md\n").unwrap();
+        let lock = dir.join(".git/index.lock");
+        std::fs::write(&lock, "").unwrap();
+        let update = |_: Option<&str>| Some("# The owner\nSam.\n".to_string());
+        let mine = write_for_owner(&dir, &[(USER_FILE, &update)], "owner: edit")
+            .await
+            .unwrap()
+            .expect("committed");
+        assert_eq!(head_of(&dir).await, mine);
+        std::fs::remove_file(&lock).unwrap();
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nNext.\n").unwrap();
+        let turn = commit(&dir, "turn 1").await.unwrap();
+        let changed = out(&dir, &["diff-tree", "-r", "--name-status", "--no-commit-id", &turn]).await;
+        assert_eq!(changed, "M\tSOUL.md");
+        assert_eq!(read_text(&dir, USER_FILE), "# The owner\nSam.\n");
+    }
+
+    /// A set-aside that does not go through leaves the files as the turn
+    /// left them — the index it would have rewritten too — and says so.
+    #[tokio::test]
+    async fn a_set_aside_that_fails_leaves_the_turns_files() {
+        for fail in ["a write", "HEAD"] {
+            let (_tmp, dir) = memory_repo().await;
+            write_file(&dir, "memory/x.md", "x\n").unwrap();
+            write_file(&dir, MEMORY_FILE, "# Memory\n- [X](memory/x.md)\n").unwrap();
+            match fail {
+                "HEAD" => owner_fail::commit(),
+                _ => owner_fail::write_at(1),
+            }
+            let done = commit_turn(&dir, "tidy", |_| true, "aside").await.unwrap();
+            assert!(done.aside.is_none(), "{fail}");
+            assert!(done.not_aside_why.is_some(), "{fail}");
+            assert_eq!(read_text(&dir, "memory/x.md"), "x\n", "{fail}");
+            assert_eq!(read_text(&dir, MEMORY_FILE), "# Memory\n- [X](memory/x.md)\n", "{fail}");
+            // The next turn's card shows nothing the set-aside wrote.
+            assert!(commit(&dir, "turn 2").await.is_none(), "{fail}");
+        }
+    }
+
+    /// The owner's save of a whole file mid-turn commits that file alone:
+    /// the turn's card has none of it, and undoing the turn's card keeps it.
+    #[tokio::test]
+    async fn a_save_mid_turn_is_the_owners_alone() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "the turn's\n").unwrap();
+        let update = |_: Option<&str>| Some("# Persona\nThe owner's.\n".to_string());
+        let mine = write_for_owner(&dir, &[(SOUL_FILE, &update)], "owner: edit")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            out(&dir, &["diff-tree", "-r", "--name-only", "--no-commit-id", &mine]).await,
+            SOUL_FILE
+        );
+        let turn = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &turn).await;
+        assert_eq!(shape(&files), vec![("memory/x.md", "added", "entry", "x")]);
+        undo_memory(&dir, &turn, &files, "owner: undo").await.unwrap();
+        assert_eq!(read_text(&dir, SOUL_FILE), "# Persona\nThe owner's.\n");
+    }
+
+    /// The assistant's turn changes a file while the owner's write of it is
+    /// worked out: nothing is written, HEAD stays, the turn's line stays.
+    #[tokio::test]
+    async fn a_file_changed_while_the_owners_write_is_worked_out_is_not_written_over() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, USER_FILE, "# The owner\nName: Sam\n").unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        let head = head_of(&dir).await;
+        let d = dir.clone();
+        owner_fail::between(move || {
+            write_file(&d, USER_FILE, "# The owner\nName: Sam\nLikes: tea\n").unwrap();
+        });
+        let rename = |text: Option<&str>| text.map(|t| t.replace("Sam", "Sammy"));
+        let err = write_for_owner(&dir, &[(USER_FILE, &rename)], "owner: name")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("USER.md"), "{err}");
+        assert_eq!(read_text(&dir, USER_FILE), "# The owner\nName: Sam\nLikes: tea\n");
+        assert_eq!(head_of(&dir).await, head);
+    }
+
+    /// An owner's delete with HEAD moved off the branch (an older git's
+    /// `checkout --orphan`): worked out from the branch, so the index keeps
+    /// every other line.
+    #[tokio::test]
+    async fn an_owners_delete_off_the_branch_keeps_the_rest_of_the_index() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/a.md", "a\n").unwrap();
+        write_file(&dir, "memory/b.md", "b\n").unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [A](memory/a.md)\n- [B](memory/b.md)\n").unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        out(&dir, &["checkout", "-q", "--orphan", "loose"]).await;
+        delete_entry_for_owner(&dir, "memory/a.md", "owner: delete").await.unwrap();
+        assert_eq!(out(&dir, &["symbolic-ref", "HEAD"]).await, "refs/heads/main");
+        assert_eq!(
+            out(&dir, &["show", &format!("HEAD:{MEMORY_FILE}")]).await,
+            "# Memory\n- [B](memory/b.md)"
+        );
+        assert!(git(&dir, &["cat-file", "-e", "HEAD:memory/b.md"]).await.is_ok());
+    }
+
+    /// An owner's save of a file untracked and ignored: written, never
+    /// taken into the history.
+    #[tokio::test]
+    async fn an_owners_save_of_an_ignored_untracked_file_stays_out_of_the_history() {
+        let (_tmp, dir) = memory_repo().await;
+        std::fs::remove_file(dir.join(USER_FILE)).unwrap();
+        let ignore = format!("{}/{USER_FILE}\n", read_text(&dir, ".gitignore"));
+        std::fs::write(dir.join(".gitignore"), ignore).unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        let update = |_: Option<&str>| Some("# The owner\nPrivate.\n".to_string());
+        write_for_owner(&dir, &[(USER_FILE, &update)], "owner: edit").await.unwrap();
+        assert_eq!(read_text(&dir, USER_FILE), "# The owner\nPrivate.\n");
+        assert!(git(&dir, &["cat-file", "-e", &format!("HEAD:{USER_FILE}")]).await.is_err());
+    }
+
+    /// A write that fails, the entries' folder made a link out meanwhile:
+    /// putting back never follows it out of the directory.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn putting_back_never_follows_a_folder_made_a_link() {
+        let (tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [X](memory/x.md)\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("x.md"), "outside\n").unwrap();
+        let (d, o) = (dir.clone(), outside.clone());
+        owner_fail::write_at(1);
+        owner_fail::on_fail(move || {
+            std::fs::rename(d.join(MEMORY_DIR), d.join("memory.real")).unwrap();
+            std::os::unix::fs::symlink(&o, d.join(MEMORY_DIR)).unwrap();
+        });
+        let err = undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap_err();
+        assert!(err.contains("not put back"), "{err}");
+        assert_eq!(std::fs::read_to_string(outside.join("x.md")).unwrap(), "outside\n");
+    }
+
+    /// A skill approved as committed loads where the working tree keeps it
+    /// with other line endings.
+    #[test]
+    fn a_skill_approved_loads_whatever_its_line_endings() {
+        assert_eq!(content_hash("a\r\nb\r\n"), content_hash("a\nb\n"));
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let text = "---\nname: ship\ndescription: ship\n---\n# Ship\n";
+        write_file(dir, "process-skills/ship/SKILL.md", &text.replace('\n', "\r\n")).unwrap();
+        let approved = SkillSwitches {
+            off: Default::default(),
+            approved: [("ship".to_string(), content_hash(text))].into(),
+        };
+        assert!(loadable_skills(dir, &approved).contains("ship"));
+    }
+
+    /// HEAD switched to another branch on the same commit while the owner's
+    /// write is worked out: nothing is committed to either.
+    #[tokio::test]
+    async fn an_owners_write_never_lands_on_a_branch_head_was_switched_to() {
+        let (_tmp, dir) = memory_repo().await;
+        let head = head_of(&dir).await;
+        out(&dir, &["branch", "other"]).await;
+        let d = dir.clone();
+        owner_fail::between(move || {
+            let o = std::process::Command::new("git")
+                .args(["-c", "core.hooksPath=/dev/null", "symbolic-ref", "HEAD", "refs/heads/other"])
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert!(o.status.success());
+        });
+        let update = |_: Option<&str>| Some("# The owner\nSam.\n".to_string());
+        assert!(write_for_owner(&dir, &[(USER_FILE, &update)], "owner: edit").await.is_err());
+        assert_eq!(out(&dir, &["rev-parse", "refs/heads/main"]).await, head);
+        assert_eq!(out(&dir, &["rev-parse", "refs/heads/other"]).await, head);
+    }
+
+    /// The assistant changes a file while the set-aside is worked out: the
+    /// set-aside stops, and that change stays as it is — never put back to
+    /// what the turn left.
+    #[tokio::test]
+    async fn a_set_aside_stopped_by_the_turns_change_keeps_that_change() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [X](memory/x.md)\n").unwrap();
+        let d = dir.clone();
+        owner_fail::between(move || {
+            write_file(&d, "memory/x.md", "x, and more\n").unwrap();
+        });
+        let done = commit_turn(&dir, "tidy", |_| true, "aside").await.unwrap();
+        assert!(done.aside.is_none());
+        assert_eq!(read_text(&dir, "memory/x.md"), "x, and more\n");
+    }
+
+    /// The owner saves a fixed file tracked only in another spelling, its
+    /// name matched by an ignore rule: committed, under the one spelling.
+    #[tokio::test]
+    async fn an_owners_save_of_a_fixed_file_tracked_in_another_spelling_is_committed() {
+        let (_tmp, dir) = memory_repo().await;
+        out(&dir, &["rm", "-q", "--cached", SOUL_FILE]).await;
+        let blob = out(&dir, &["hash-object", "-w", SOUL_FILE]).await;
+        out(&dir, &["update-index", "--add", "--cacheinfo", &format!("100644,{blob},soul.md")]).await;
+        let ignore = format!("{}/{SOUL_FILE}\n", read_text(&dir, ".gitignore"));
+        std::fs::write(dir.join(".gitignore"), ignore).unwrap();
+        out(&dir, &["add", ".gitignore"]).await;
+        out(&dir, &["commit", "-qm", "another spelling, ignored"]).await;
+        let update = |_: Option<&str>| Some("# Persona\nThe owner's.\n".to_string());
+        let rev = write_for_owner(&dir, &[(SOUL_FILE, &update)], "owner: edit")
+            .await
+            .unwrap()
+            .expect("committed");
+        assert_eq!(out(&dir, &["show", &format!("{rev}:{SOUL_FILE}")]).await, "# Persona\nThe owner's.");
+        let tree = out(&dir, &["ls-tree", "--name-only", &rev]).await;
+        let spellings: Vec<&str> = tree.lines().filter(|l| l.eq_ignore_ascii_case(SOUL_FILE)).collect();
+        assert_eq!(spellings, vec![SOUL_FILE], "{tree}");
+    }
+
+    /// A set-aside that writes and yet makes no commit (what it would put
+    /// back, the history does not hold): every file goes back as the turn
+    /// left it.
+    #[tokio::test]
+    async fn a_set_aside_that_makes_no_commit_leaves_the_turns_files() {
+        let (_tmp, dir) = memory_repo().await;
+        let skill = "process-skills/ship/SKILL.md";
+        write_file(&dir, skill, "# Ship\n").unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        let ignore = format!("{}/process-skills/\n", read_text(&dir, ".gitignore"));
+        std::fs::write(dir.join(".gitignore"), ignore).unwrap();
+        commit(&dir, "turn 1").await.unwrap();
+        // The turn deletes the skill; setting that aside would bring back a
+        // file the history no longer takes.
+        std::fs::remove_file(dir.join(skill)).unwrap();
+        let head = head_of(&dir).await;
+        let done = commit_turn(&dir, "turn 2", |f| f.kind == "skill", "aside").await.unwrap();
+        assert!(done.aside.is_none(), "no commit set it aside: {done:?}");
+        assert_eq!(head_of(&dir).await, done.rev, "the turn's commit, nothing after");
+        assert_ne!(done.rev, head);
+        assert!(read_file(&dir, skill).unwrap().is_none(), "as the turn left it");
+    }
+
+    /// A set-aside of a skill alone that cannot be committed leaves the
+    /// index the assistant changed meanwhile as it is.
+    #[tokio::test]
+    async fn a_set_aside_that_cannot_commit_leaves_other_files_alone() {
+        let (_tmp, dir) = memory_repo().await;
+        let skill = "process-skills/ship/SKILL.md";
+        write_file(&dir, skill, "# Ship\n").unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        let ignore = format!("{}/process-skills/\n", read_text(&dir, ".gitignore"));
+        std::fs::write(dir.join(".gitignore"), ignore).unwrap();
+        commit(&dir, "turn 1").await.unwrap();
+        std::fs::remove_file(dir.join(skill)).unwrap();
+        let d = dir.clone();
+        owner_fail::between(move || {
+            write_file(&d, MEMORY_FILE, "# Memory\n- meanwhile\n").unwrap();
+        });
+        let done = commit_turn(&dir, "turn 2", |f| f.kind == "skill", "aside").await.unwrap();
+        assert!(done.aside.is_none());
+        assert_eq!(read_text(&dir, MEMORY_FILE), "# Memory\n- meanwhile\n");
+        assert!(read_file(&dir, skill).unwrap().is_none());
+    }
+
+    /// A file whose name holds ", " is put back like any other.
+    #[tokio::test]
+    async fn a_file_named_with_a_comma_is_put_back() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/a, b.md", "ab\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        owner_fail::commit();
+        assert!(undo_memory(&dir, &rev, &files, "owner: undo").await.is_err());
+        assert_eq!(read_text(&dir, "memory/a, b.md"), "ab\n");
+    }
+
+    /// Put back after a failed write, a file the assistant changed since it
+    /// was written stays as the assistant left it, and is named.
+    #[tokio::test]
+    async fn putting_back_leaves_a_file_changed_since_it_was_written() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [X](memory/x.md)\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        let d = dir.clone();
+        owner_fail::write_at(1);
+        owner_fail::on_fail(move || {
+            write_file(&d, "memory/x.md", "the assistant's, since\n").unwrap();
+        });
+        let err = undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap_err();
+        assert!(err.contains("memory/x.md"), "{err}");
+        assert_eq!(read_text(&dir, "memory/x.md"), "the assistant's, since\n");
+    }
+
+    /// A set-aside whose second write fails, a file it wrote changed by the
+    /// assistant at that moment: the assistant's change stays — not put
+    /// back from the files as the turn left them either — and the card
+    /// names it.
+    #[tokio::test]
+    async fn a_failed_set_aside_never_writes_over_the_assistants_change() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [X](memory/x.md)\n").unwrap();
+        let d = dir.clone();
+        owner_fail::write_at(1);
+        owner_fail::on_fail(move || {
+            write_file(&d, "memory/x.md", "the assistant's, since\n").unwrap();
+        });
+        let done = commit_turn(&dir, "tidy", |_| true, "aside").await.unwrap();
+        assert!(done.aside.is_none());
+        assert_eq!(read_text(&dir, "memory/x.md"), "the assistant's, since\n");
+        let why = done.not_aside_why.unwrap_or_default();
+        assert!(why.contains("memory/x.md"), "{why}");
     }
 }
