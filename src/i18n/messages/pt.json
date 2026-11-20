@@ -64,8 +64,22 @@
       "browser": "Uso do navegador",
       "computer_use": "Uso do computador",
       "quick_messages": "Mensagens rápidas",
-      "logs": "Registros de execução"
+      "logs": "Registros de execução",
+      "plugins": "Plugins"
     }
+  },
+  "HostPlugins": {
+    "title": "Plugins",
+    "import": "Importar manifesto",
+    "fileTooLarge": "O manifesto do plugin excede 64 KiB.",
+    "empty": "Nenhum plugin instalado.",
+    "loading": "Carregando…",
+    "unsupported": "Atualize o host conectado do Codeg para gerenciar plugins.",
+    "retry": "Tentar novamente",
+    "enable": "Ativar {name}",
+    "remove": "Remover {name}",
+    "choosePanel": "Painel do plugin",
+    "noTurns": "Nenhum turno registrado neste espaço de trabalho."
   },
   "AppearanceSettings": {
     "sectionTitle": "Aparência do tema",
