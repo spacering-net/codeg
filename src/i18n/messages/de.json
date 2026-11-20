@@ -64,8 +64,22 @@
       "browser": "Browsernutzung",
       "computer_use": "Computernutzung",
       "quick_messages": "Schnellnachrichten",
-      "logs": "Laufzeitprotokolle"
+      "logs": "Laufzeitprotokolle",
+      "plugins": "Plugins"
     }
+  },
+  "HostPlugins": {
+    "title": "Plugins",
+    "import": "Manifest importieren",
+    "fileTooLarge": "Das Plugin-Manifest überschreitet 64 KiB.",
+    "empty": "Keine Plugins installiert.",
+    "loading": "Wird geladen…",
+    "unsupported": "Aktualisiere den verbundenen Codeg-Host, um Plugins zu verwalten.",
+    "retry": "Erneut versuchen",
+    "enable": "{name} aktivieren",
+    "remove": "{name} entfernen",
+    "choosePanel": "Plugin-Bereich",
+    "noTurns": "In diesem Workspace wurden keine Runden erfasst."
   },
   "AppearanceSettings": {
     "sectionTitle": "Design-Erscheinungsbild",
