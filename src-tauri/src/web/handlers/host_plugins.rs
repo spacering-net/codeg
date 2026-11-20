@@ -33,6 +33,11 @@ pub struct UpdateParams {
     plugin_id: String,
 }
 
+#[derive(Deserialize)]
+pub struct FetchIndexParams {
+    url: String,
+}
+
 pub async fn list(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<Vec<InstalledPlugin>>, AppCommandError> {
@@ -82,4 +87,12 @@ pub async fn update(
     )
     .await
     .map(Json)
+}
+
+pub async fn fetch_index(
+    Json(params): Json<FetchIndexParams>,
+) -> Result<Json<crate::host_plugins::source::PluginIndex>, AppCommandError> {
+    crate::commands::host_plugins::fetch_index_core(&params.url)
+        .await
+        .map(Json)
 }

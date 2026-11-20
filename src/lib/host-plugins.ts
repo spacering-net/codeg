@@ -41,6 +41,24 @@ export interface PluginTurn {
   stopReason: string
 }
 
+export interface PluginIndex {
+  apiVersion: number
+  plugins: PluginIndexEntry[]
+}
+
+export interface PluginIndexEntry {
+  id: string
+  name: string
+  description: string
+  versions: PluginIndexVersion[]
+}
+
+export interface PluginIndexVersion {
+  version: string
+  source: string
+  registry: "npm" | "mirror"
+}
+
 const CATALOG_CHANGED = "host-plugins://changed"
 const ACTIVITY_CHANGED = "host-plugins://activity"
 
@@ -138,6 +156,10 @@ export function updateHostPlugin(pluginId: string) {
     "host_plugins_update",
     { pluginId }
   )
+}
+
+export function fetchHostPluginIndex(url: string) {
+  return getTransport().call<PluginIndex>("host_plugins_fetch_index", { url })
 }
 
 export function usePluginActivity(pluginId: string, folderId: number) {

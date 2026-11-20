@@ -74,3 +74,38 @@ An update that changes the turn hook clears the plugin's in-memory turn activity
 Other connected clients receive a catalog change notification after the update.
 For plugins imported as standalone files, remove the plugin and import the new
 manifest to replace it.
+
+## Discover plugins from an index
+
+Select **Discover Plugins** in **Settings → Plugins** and enter an HTTPS URL to
+a trusted index. Codeg validates the index before showing its entries. An index
+uses this shape:
+
+```json
+{
+  "apiVersion": 1,
+  "plugins": [
+    {
+      "id": "codeg.turn-activity",
+      "name": "Turn Activity",
+      "description": "Show completed agent turns.",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "source": "https://github.com/owner/repository#v1.0.0",
+          "registry": "npm"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Index metadata is third-party content. Codeg displays the selected source and
+the host-permission warning before installation. The normal source installer
+then resolves the source, verifies its archive or commit, validates the
+`codeg-plugin.json` manifest, and starts the plugin disabled. Index entries may
+use exact npm versions or GitHub references, while absolute host directories
+and floating npm selectors are rejected by the index validator.
+
+See the [example index](../examples/plugins/index.json) for a complete file.
