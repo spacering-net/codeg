@@ -157,6 +157,206 @@ fn is_symlink(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
 }
 
+/// What a name in the working directory turned out to be, opened without
+/// following a link.
+enum Opened {
+    /// A regular file of its own, opened.
+    Own(std::fs::File),
+    /// Nothing there.
+    Missing,
+    /// A folder.
+    Folder,
+    /// Anything else: a link (to a file outside the directory, say), a
+    /// pipe, a device.
+    Other,
+}
+
+/// Open a file of the working directory without following a link
+/// (`O_NOFOLLOW`; Windows' `FILE_FLAG_OPEN_REPARSE_POINT`, which opens a
+/// link as itself) and say what it is from what was opened — not from the
+/// path beforehand, so it cannot be swapped for a link in between. An
+/// assistant could have put a link to a file outside its directory there,
+/// one its sandbox keeps it from reading or writing; through codeg it would
+/// reach another assistant's handoff, the owner's page — or be written.
+fn open_own(target: &Path, write: bool) -> std::io::Result<Opened> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.read(true).write(write);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Non-blocking: opening a pipe would wait for the other end.
+        opts.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        opts.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = match opts.open(target) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Opened::Missing),
+        // A link refused (`ELOOP`), a folder (Windows will not open one
+        // as a file, Unix not to write): what is there says which. An
+        // error on a plain file is the error it is.
+        Err(e) => {
+            return match std::fs::symlink_metadata(target) {
+                Ok(m) if m.is_dir() => Ok(Opened::Folder),
+                Ok(m) if m.file_type().is_file() => Err(e),
+                Ok(_) => Ok(Opened::Other),
+                Err(m) if m.kind() == std::io::ErrorKind::NotFound => Ok(Opened::Missing),
+                Err(_) => Err(e),
+            };
+        }
+    };
+    let meta = match file.metadata() {
+        Ok(meta) => meta,
+        // Windows asks for a reparse point's tag along with the rest, and
+        // that can fail on a file read fine otherwise. The handle was opened
+        // without following anything and is no folder (it would not open as
+        // a file): read as the file it is.
+        #[cfg(windows)]
+        Err(_) => return Ok(Opened::Own(file)),
+        #[cfg(not(windows))]
+        Err(e) => return Err(e),
+    };
+    if meta.is_dir() {
+        return Ok(Opened::Folder);
+    }
+    // A second name of a file kept elsewhere (a hard link) is not told
+    // apart here: any name in the directory can be one, and the turn's
+    // commit reads every file (a follow-up of its own).
+    if !meta.file_type().is_file() || odd_reparse(&file) {
+        return Ok(Opened::Other);
+    }
+    Ok(Opened::Own(file))
+}
+
+/// Whether an opened file is a reparse point that is no plain file
+/// (Windows): a link of any kind (a name surrogate — what leads elsewhere),
+/// or one of WSL's or NFS's links, pipes, devices and sockets. Every other
+/// kind keeps the file's own content another way (a OneDrive placeholder,
+/// a deduplicated, compressed or tiered file) and is read as the file.
+fn odd_reparse(file: &std::fs::File) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileAttributeTagInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_REPARSE_POINT,
+            FILE_ATTRIBUTE_TAG_INFO,
+        };
+        const NAME_SURROGATE: u32 = 0x2000_0000;
+        // IO_REPARSE_TAG_NFS, _AF_UNIX, _LX_FIFO, _LX_CHR, _LX_BLK.
+        const SPECIAL: [u32; 5] = [0x8000_0014, 0x8000_0023, 0x8000_0024, 0x8000_0025, 0x8000_0026];
+        let mut info: FILE_ATTRIBUTE_TAG_INFO = unsafe { std::mem::zeroed() };
+        // SAFETY: a handle this process holds open, and a struct of the
+        // size given.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle() as _,
+                FileAttributeTagInfo,
+                &mut info as *mut _ as *mut _,
+                std::mem::size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+            )
+        };
+        if ok == 0 {
+            return false;
+        }
+        info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            && (info.ReparseTag & NAME_SURROGATE != 0 || SPECIAL.contains(&info.ReparseTag))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = file;
+        false
+    }
+}
+
+/// A file of the working directory as text — only a regular file of its
+/// own ([`open_own`]); anything else, a link above all, reads as no file.
+fn read_plain(target: &Path) -> std::io::Result<Option<String>> {
+    Ok(read_plain_bytes(target)?.map(|b| String::from_utf8_lossy(&b).into_owned()))
+}
+
+/// [`read_plain`], as bytes.
+fn read_plain_bytes(target: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read;
+    let Opened::Own(mut file) = open_own(target, false)? else {
+        return Ok(None);
+    };
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(Some(bytes))
+}
+
+/// The error for a folder where a file is written.
+fn a_folder(target: &Path) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("{} is a folder, not a file", target.display()),
+    )
+}
+
+/// Write a file of the working directory, never through a link: a regular
+/// file of its own is written in place (its permissions and ACL kept); a
+/// link or anything else there is replaced — the name taken
+/// away (never the file it leads to, which may be outside the directory,
+/// somewhere the assistant cannot write) and a new file made, exclusively,
+/// so nothing slipped in between is followed either; a folder there is not
+/// replaced, and the write fails.
+fn write_plain(target: &Path, content: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    for _ in 0..3 {
+        match open_own(target, true)? {
+            Opened::Own(mut file) => {
+                file.set_len(0)?;
+                file.write_all(content)?;
+                return file.sync_all();
+            }
+            Opened::Folder => return Err(a_folder(target)),
+            Opened::Other => remove_name(target)?,
+            Opened::Missing => {}
+        }
+        match create_own(target) {
+            Ok(mut file) => {
+                file.write_all(content)?;
+                return file.sync_all();
+            }
+            // Something else took the name in between: look again.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other(format!(
+        "{} kept changing while it was written",
+        target.display()
+    )))
+}
+
+/// Take away the name `target`, never what it leads to: a link to a folder
+/// — a Windows junction above all — goes as a folder does, by itself.
+fn remove_name(target: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(target) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => {
+            let is_link = std::fs::symlink_metadata(target).is_ok_and(|m| m.file_type().is_symlink());
+            if is_link && std::fs::remove_dir(target).is_ok() {
+                return Ok(());
+            }
+            Err(e)
+        }
+    }
+}
+
+/// A new file at `target`, made only when nothing is there — a link there,
+/// even one to nowhere, is not followed.
+fn create_own(target: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)
+}
+
 /// Where one of the editable files lives: a fixed file at the top of the
 /// working directory, or an entry in its own folder. An entry is reached
 /// only through a real folder and as a regular file — never through a link
@@ -419,7 +619,10 @@ async fn init_workdir(path: &Path, files: &[(&str, String)]) -> Result<bool, Wor
     }
     std::fs::create_dir_all(path.join("log"))?;
     for (name, text) in files {
-        std::fs::write(path.join(name), text)?;
+        // Made only where nothing is: a link slipped in since the directory
+        // was found empty is not written through.
+        use std::io::Write;
+        create_own(&path.join(name))?.write_all(text.as_bytes())?;
     }
     std::fs::write(path.join("log").join(".gitkeep"), "")?;
     // The memory folder exists from the start, so git keeps it and the agent
@@ -467,6 +670,60 @@ fn ignore_lines() -> String {
 /// prompt would hang), no hooks.
 async fn git(path: &Path, args: &[&str]) -> Result<std::process::Output, String> {
     git_on(path, None, args).await
+}
+
+/// What [`git_input`] gives git on its standard input.
+enum Input {
+    /// An open file, read by git as the file it is.
+    File(std::fs::File),
+    /// A few bytes, through a pipe.
+    Bytes(Vec<u8>),
+}
+
+/// [`git`] with `input` on its standard input.
+async fn git_input(
+    path: &Path,
+    index: Option<&Path>,
+    args: &[&str],
+    input: Input,
+) -> Result<std::process::Output, String> {
+    let mut cmd = crate::process::tokio_command("git");
+    if let Some(index) = index {
+        cmd.env("GIT_INDEX_FILE", index);
+    }
+    cmd.args(["-c", "core.hooksPath=/dev/null", "-c", "core.autocrlf=false"])
+        .args(args)
+        .current_dir(path)
+        .env("GIT_TERMINAL_PROMPT", "0");
+    let out = match input {
+        // The file itself as git's input, not a pipe: git reads a regular
+        // file as it streams one, where it would gather a pipe whole in
+        // memory.
+        Input::File(file) => cmd
+            .stdin(std::process::Stdio::from(file))
+            .output()
+            .await
+            .map_err(|e| e.to_string())?,
+        Input::Bytes(bytes) => {
+            use tokio::io::AsyncWriteExt;
+            let mut child = cmd
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(&bytes).await.map_err(|e| e.to_string())?;
+                drop(stdin);
+            }
+            child.wait_with_output().await.map_err(|e| e.to_string())?
+        }
+    };
+    if out.status.success() {
+        Ok(out)
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 /// [`git`] on index file `index` (`GIT_INDEX_FILE`) rather than the
@@ -935,6 +1192,105 @@ async fn commit_locked(path: &Path, message: &str, only: Option<&[&str]>) -> Opt
     Some(new)
 }
 
+/// The fixed files as an index records them for a commit: what
+/// [`open_own`] reads. `git add` never reads them — it looks at what a name
+/// is before it opens it, so a link swapped in between would be followed.
+/// A fixed file that is not a file of its own (a link, a folder, a pipe) is
+/// committed as no file: its card says it went, and an undo puts it back as
+/// a file.
+async fn stage_own_fixed(path: &Path, index: Option<&Path>, names: &[&str]) -> Result<(), String> {
+    let fixed: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|n| EDITABLE_FILES.contains(n))
+        .collect();
+    if fixed.is_empty() {
+        return Ok(());
+    }
+    // Every spelling of a fixed name is that name — on a volume that does
+    // not tell case apart it is the same file, and on one that does it is
+    // kept to the one spelling. What the index holds under one, besides the
+    // name itself (another spelling, anything inside a folder of the name),
+    // is what `git add` was kept off: gone, as the name is staged below from
+    // what it is now. Bytes, as git lists them: a name need not be UTF-8.
+    let held = git_on(path, index, &["ls-files", "-z"]).await?.stdout;
+    let entries: Vec<&[u8]> = held.split(|b| *b == 0).filter(|e| !e.is_empty()).collect();
+    let spelt = |entry: &[u8], name: &str| entry.eq_ignore_ascii_case(name.as_bytes());
+    let under = |entry: &[u8], name: &str| {
+        entry.len() > name.len()
+            && entry[..name.len()].eq_ignore_ascii_case(name.as_bytes())
+            && entry[name.len()] == b'/'
+    };
+    // Tracked in any spelling, before any of it goes: an ignore rule then
+    // does not keep it out (it does not for a tracked file).
+    let tracked: Vec<bool> = fixed
+        .iter()
+        .map(|name| entries.iter().any(|e| spelt(e, name)))
+        .collect();
+    let mut stale: Vec<u8> = Vec::new();
+    for entry in &entries {
+        if fixed
+            .iter()
+            .any(|name| under(entry, name) || (spelt(entry, name) && *entry != name.as_bytes()))
+        {
+            stale.extend_from_slice(entry);
+            stale.push(0);
+        }
+    }
+    if !stale.is_empty() {
+        // On standard input: however many, never too long a command line.
+        git_input(
+            path,
+            index,
+            &["update-index", "--force-remove", "-z", "--stdin"],
+            Input::Bytes(stale),
+        )
+        .await?;
+    }
+    for (name, tracked) in fixed.into_iter().zip(tracked) {
+        // Not tracked, and an ignore rule says so: not taken, as `git add`
+        // would not take it.
+        if !tracked && git_on(path, index, &["check-ignore", "-q", "--", name]).await.is_ok() {
+            continue;
+        }
+        match open_own(&path.join(name), false).map_err(|e| e.to_string())? {
+            Opened::Own(file) => {
+                // Streamed from the file opened: however large it has
+                // grown, it is never held whole in memory.
+                let out = git_input(
+                    path,
+                    index,
+                    // Past 1 MiB git streams it into a pack rather than map
+                    // it whole.
+                    &[
+                        "-c",
+                        "core.bigFileThreshold=1m",
+                        "hash-object",
+                        "-w",
+                        "--no-filters",
+                        "--stdin",
+                    ],
+                    Input::File(file),
+                )
+                .await?;
+                let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                let entry = format!("100644,{sha},{name}");
+                // `--replace`: a folder of that name tracked before goes.
+                git_on(
+                    path,
+                    index,
+                    &["update-index", "--add", "--replace", "--cacheinfo", &entry],
+                )
+                .await?;
+            }
+            Opened::Other | Opened::Missing | Opened::Folder => {
+                git_on(path, index, &["update-index", "--force-remove", "--", name]).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The tree of the whole working tree. The index is first taken back to
 /// HEAD — with a path (`-- .`), so it is the index alone: `ORIG_HEAD` and a
 /// half-done merge's `MERGE_HEAD` stay — whatever an assistant did to it (a
@@ -948,7 +1304,26 @@ async fn tree_of_worktree(path: &Path, head: Option<&str>) -> Result<Option<Stri
         Some(_) => git(path, &["reset", "-q", "HEAD", "--", "."]).await?,
         None => git(path, &["read-tree", "--empty"]).await?,
     };
-    git(path, &["add", "-A"]).await?;
+    let mut add = vec!["add", "-A", "--", "."];
+    // In any case (`soul.md` is the same file where the volume does not
+    // tell case apart, and kept to one spelling where it does), and
+    // whatever is inside a folder of the name. A pattern, not the name
+    // itself: `git add` refuses a pathspec naming a file an ignore rule
+    // matches, even one it is told to leave out.
+    let skip: Vec<String> = EDITABLE_FILES
+        .iter()
+        .flat_map(|n| {
+            let (stem, last) = n.split_at(n.len() - 1);
+            let pattern = format!("{stem}[{last}]");
+            [
+                format!(":(top,icase,exclude,glob){pattern}"),
+                format!(":(top,icase,exclude,glob){pattern}/**"),
+            ]
+        })
+        .collect();
+    add.extend(skip.iter().map(String::as_str));
+    git(path, &add).await?;
+    stage_own_fixed(path, None, EDITABLE_FILES).await?;
     let out = git(path, &["write-tree"]).await?;
     Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string()))
 }
@@ -969,7 +1344,13 @@ async fn tree_with<'a>(
             Some(h) => git(path, &["cat-file", "-e", &format!("{h}:{n}")]).await.is_ok(),
             None => false,
         };
-        if path.join(n).exists() || in_head {
+        // Never through a link: it could lead anywhere, a network share
+        // even, with every write of every directory waiting on it.
+        let on_disk = match std::fs::symlink_metadata(path.join(n)) {
+            Ok(_) => true,
+            Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+        };
+        if on_disk || in_head {
             known.push(n);
         }
     }
@@ -986,9 +1367,17 @@ async fn tree_with<'a>(
             Some(h) => git_on(path, Some(&index), &["read-tree", h]).await?,
             None => git_on(path, Some(&index), &["read-tree", "--empty"]).await?,
         };
-        let mut add = vec!["--literal-pathspecs", "add", "-A", "--"];
-        add.extend(known.iter().copied());
-        git_on(path, Some(&index), &add).await?;
+        let others: Vec<&str> = known
+            .iter()
+            .copied()
+            .filter(|n| !EDITABLE_FILES.iter().any(|f| f.eq_ignore_ascii_case(n)))
+            .collect();
+        if !others.is_empty() {
+            let mut add = vec!["--literal-pathspecs", "add", "-A", "--"];
+            add.extend(others);
+            git_on(path, Some(&index), &add).await?;
+        }
+        stage_own_fixed(path, Some(&index), &known).await?;
         let out = git_on(path, Some(&index), &["write-tree"]).await?;
         Ok::<_, String>(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
@@ -1046,6 +1435,31 @@ async fn parents_named(path: &Path, rev: &str) -> Option<Vec<String>> {
     )
 }
 
+/// The spelling of `name` other than its own (any ASCII case) that was a
+/// file at the top of commit `parent`'s tree and that commit `rev` took away
+/// — the name `rev` took it for — if there is one. A folder or a link of
+/// that spelling is no file; one `rev` kept is a file of its own.
+async fn spelt_otherwise(path: &Path, parent: &str, rev: &str, name: &str) -> Option<String> {
+    let out = git(path, &["ls-tree", "-z", parent]).await.ok()?;
+    for entry in out.stdout.split(|b| *b == 0) {
+        let Ok(entry) = std::str::from_utf8(entry) else {
+            continue;
+        };
+        let Some((meta, alias)) = entry.split_once('\t') else {
+            continue;
+        };
+        let mode = meta.split(' ').next().unwrap_or_default();
+        if alias == name || !alias.eq_ignore_ascii_case(name) || !matches!(mode, "100644" | "100755") {
+            continue;
+        }
+        let kept = git(path, &["cat-file", "-e", &format!("{rev}:{alias}")]).await.is_ok();
+        if !kept {
+            return Some(alias.to_string());
+        }
+    }
+    None
+}
+
 /// Whether commit `rev` is in the repository, and every commit it was made
 /// on top of.
 async fn commit_is_whole(path: &Path, rev: &str) -> bool {
@@ -1061,6 +1475,42 @@ async fn commit_is_whole(path: &Path, rev: &str) -> bool {
         }
     }
     true
+}
+
+/// What commit `rev` recorded at `name`.
+enum Recorded {
+    Nothing,
+    File(String),
+    /// A link (its target's name), a folder, a submodule — no content to put
+    /// back, nor a change an undo can take back.
+    Other,
+}
+
+/// A file's content, or none.
+fn as_content(recorded: Recorded) -> Option<String> {
+    match recorded {
+        Recorded::File(content) => Some(content),
+        Recorded::Nothing | Recorded::Other => None,
+    }
+}
+
+/// What commit `rev` has at `name`, as [`Recorded`].
+async fn recorded_at(path: &Path, rev: &str, name: &str) -> Recorded {
+    let Ok(out) = git(path, &["--literal-pathspecs", "ls-tree", "-z", rev, "--", name]).await else {
+        return Recorded::Other;
+    };
+    let listed = String::from_utf8_lossy(&out.stdout).into_owned();
+    let Some((meta, at)) = listed.trim_end_matches('\0').split_once('\t') else {
+        return Recorded::Nothing;
+    };
+    let mode = meta.split(' ').next().unwrap_or_default();
+    if at != name || !matches!(mode, "100644" | "100755") {
+        return Recorded::Other;
+    }
+    match show_at(path, rev, name).await {
+        Some(content) => Recorded::File(content),
+        None => Recorded::Other,
+    }
 }
 
 /// The commit before `rev`; `None` for the first.
@@ -1248,20 +1698,40 @@ async fn undo_change_locked(
     let mut puts: Vec<(PathBuf, &MemoryFile, Option<String>)> = Vec::new();
     for f in order {
         let target = resolve(path, &f.path).map_err(|e| e.to_string())?;
-        let at = if f.status == "deleted" {
-            None
-        } else {
-            show_at(path, rev, &f.path).await
-        };
+        // Both sides looked up whatever the card calls the change: a file
+        // that took a folder's place is "added" to git, one a folder took
+        // the place of "deleted".
+        let at = recorded_at(path, rev, &f.path).await;
         let before = match parent.as_deref() {
-            Some(p) if f.status != "added" => show_at(path, p, &f.path).await,
-            _ => None,
+            Some(p) => match recorded_at(path, p, &f.path).await {
+                // A fixed file the commit added may have been there before
+                // in another spelling, which the commit took for this one:
+                // that is what it was, not nothing.
+                Recorded::Nothing if EDITABLE_FILES.contains(&f.path.as_str()) => {
+                    match spelt_otherwise(path, p, rev, &f.path).await {
+                        Some(alias) => recorded_at(path, p, &alias).await,
+                        None => Recorded::Nothing,
+                    }
+                }
+                recorded => recorded,
+            },
+            None => Recorded::Nothing,
         };
-        let now = match std::fs::read(&target) {
-            Ok(b) => Some(String::from_utf8_lossy(&b).into_owned()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e.to_string()),
+        // A change to or from a link or a folder is not one an undo takes
+        // back: left as it is, whatever came of it since.
+        let (at, before) = match (at, before) {
+            (Recorded::Other, _) | (_, Recorded::Other) => {
+                undo.kept.push(f.path.clone());
+                continue;
+            }
+            (at, before) => (as_content(at), as_content(before)),
         };
+        // A folder where the file is fails here, before anything is
+        // written.
+        if std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_dir()) {
+            return Err(a_folder(&target).to_string());
+        }
+        let now = read_plain(&target).map_err(|e| e.to_string())?;
         let put = match (now.as_deref(), at.as_deref(), before.as_deref()) {
             // The index is a list of lines: the change's lines taken out and
             // put back as lines, whatever was added around them since — but
@@ -1283,44 +1753,25 @@ async fn undo_change_locked(
     if whole && !undo.kept.is_empty() {
         return Ok(undo);
     }
-    for (target, f, content) in puts {
-        match content {
-            Some(content) => {
-                if let Some(parent) = target.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-                }
-                std::fs::write(&target, content).map_err(|e| e.to_string())?;
-            }
-            None => {
-                match std::fs::remove_file(&target) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(e.to_string()),
-                }
-                // A process skill taken out takes its folder with it, when
-                // nothing else is in it.
-                if skill_name_of(&f.path).is_some() {
-                    if let Some(parent) = target.parent() {
-                        let _ = std::fs::remove_dir(parent);
-                    }
-                }
-            }
-        }
-        undo.back.push(f.path.clone());
-    }
-    // The index follows what became of the entries, whichever commit its
+    // The index follows what becomes of the entries, whichever commit its
     // lines went in with (an edit of the owner's may have taken a turn's
     // line): none for an entry taken out, one for an entry brought back.
+    // Worked out before anything is written, as all of it is.
     let of = |status: &str| -> Vec<String> {
-        files
-            .iter()
-            .filter(|f| f.kind == "entry" && f.status == status && undo.back.contains(&f.path))
-            .map(|f| f.path.clone())
+        puts.iter()
+            .filter(|(_, f, _)| f.kind == "entry" && f.status == status)
+            .map(|(_, f, _)| f.path.clone())
             .collect()
     };
     let (taken, brought) = (of("added"), of("deleted"));
+    let mut index_put: Option<String> = None;
     if !taken.is_empty() || !brought.is_empty() {
-        let text = read_text(path, MEMORY_FILE);
+        // The index as it will be once the files above are written.
+        let planned = puts
+            .iter()
+            .find(|(_, f, _)| f.path == MEMORY_FILE)
+            .map(|(_, _, c)| c.clone().unwrap_or_default());
+        let text = planned.unwrap_or_else(|| read_text(path, MEMORY_FILE));
         let mut lines: Vec<String> = text
             .lines()
             .filter(|l| !links_to(l, &taken))
@@ -1344,10 +1795,48 @@ async fn undo_change_locked(
             fixed.push('\n');
         }
         if fixed != text {
-            std::fs::write(path.join(MEMORY_FILE), &fixed).map_err(|e| e.to_string())?;
-            if !undo.back.iter().any(|p| p == MEMORY_FILE) {
-                undo.back.push(MEMORY_FILE.to_string());
+            // A folder where the index is: nothing written at all.
+            let index = path.join(MEMORY_FILE);
+            if std::fs::symlink_metadata(&index).is_ok_and(|m| m.is_dir()) {
+                return Err(a_folder(&index).to_string());
             }
+            index_put = Some(fixed);
+        }
+    }
+    for (target, f, content) in puts {
+        // The index written once, as the entries leave it.
+        let content = match (&index_put, f.path == MEMORY_FILE) {
+            (Some(fixed), true) => Some(fixed.clone()),
+            _ => content,
+        };
+        match content {
+            Some(content) => {
+                if let Some(parent) = target.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                write_plain(&target, content.as_bytes()).map_err(|e| e.to_string())?;
+            }
+            None => {
+                match std::fs::remove_file(&target) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.to_string()),
+                }
+                // A process skill taken out takes its folder with it, when
+                // nothing else is in it.
+                if skill_name_of(&f.path).is_some() {
+                    if let Some(parent) = target.parent() {
+                        let _ = std::fs::remove_dir(parent);
+                    }
+                }
+            }
+        }
+        undo.back.push(f.path.clone());
+    }
+    if let Some(fixed) = index_put {
+        if !undo.back.iter().any(|p| p == MEMORY_FILE) {
+            write_plain(&path.join(MEMORY_FILE), fixed.as_bytes()).map_err(|e| e.to_string())?;
+            undo.back.push(MEMORY_FILE.to_string());
         }
     }
     let names: Vec<&str> = undo.back.iter().map(String::as_str).collect();
@@ -1542,12 +2031,7 @@ pub const USED_MAX: usize = 8;
 /// Read one of the editable files, or an entry. `None` when it does not
 /// exist.
 pub fn read_file(path: &Path, name: &str) -> std::io::Result<Option<String>> {
-    let target = resolve(path, name)?;
-    match std::fs::read(target) {
-        Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
+    read_plain(&resolve(path, name)?)
 }
 
 /// Write one of the editable files, or an entry (its folder made when it is
@@ -1563,7 +2047,7 @@ pub fn write_file(path: &Path, name: &str, content: &str) -> std::io::Result<()>
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(target, content)
+    write_plain(&target, content.as_bytes())
 }
 
 /// Delete an entry, and the lines of the index that link to it — the index
@@ -1591,7 +2075,7 @@ pub fn delete_entry(path: &Path, name: &str) -> std::io::Result<()> {
     if text.ends_with('\n') {
         kept.push('\n');
     }
-    std::fs::write(path.join(MEMORY_FILE), kept)
+    write_plain(&path.join(MEMORY_FILE), kept.as_bytes())
 }
 
 /// The entries, as `memory/<name>.md`: regular markdown files directly in the
@@ -1648,9 +2132,7 @@ pub fn index_head(text: &str) -> (String, bool) {
 /// Read a file the agent's cards quote, as text; missing or unreadable is
 /// empty — a card is still worth sending without it.
 pub fn read_text(path: &Path, name: &str) -> String {
-    std::fs::read(path.join(name))
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .unwrap_or_default()
+    read_plain(&path.join(name)).ok().flatten().unwrap_or_default()
 }
 
 /// Longest "who handed this out" block a dispatch carries (4.4).
@@ -4238,5 +4720,643 @@ mod tests {
         assert_eq!(out(&linked, &["rev-parse", "refs/heads/pa"]).await, rev);
         assert_eq!(out(&linked, &["symbolic-ref", "HEAD"]).await, "refs/heads/pa");
         assert_eq!(out(&main, &["rev-parse", "refs/heads/main"]).await, main_tip);
+    }
+
+    // ── the fixed files, never through a link ──────────────────────────────
+
+    /// A fixed file an assistant made a link to a file outside its
+    /// directory reads as no file — wherever codeg reads it — and a write
+    /// for the owner replaces the link, not the file outside.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_fixed_file_made_a_link_out_is_neither_read_nor_written_through() {
+        let (tmp, dir) = memory_repo().await;
+        let outside = tmp.path().join("secret.md");
+        std::fs::write(&outside, "the owner's secret\n").unwrap();
+        for name in [SOUL_FILE, RULES_FILE, USER_FILE, MEMORY_FILE] {
+            std::fs::remove_file(dir.join(name)).unwrap();
+            std::os::unix::fs::symlink(&outside, dir.join(name)).unwrap();
+            assert_eq!(read_text(&dir, name), "", "{name}");
+            assert_eq!(read_file(&dir, name).unwrap(), None, "{name}");
+        }
+        assert!(!persona_digest(&dir, "Nova").contains("secret"));
+        assert!(!dispatcher_brief(&dir, "Nova", "dev").contains("secret"));
+        // The owner saves the persona: the link goes, a file takes its place.
+        let update = |_: Option<&str>| Some("# Persona\nMine.\n".to_string());
+        write_for_owner(&dir, &[(SOUL_FILE, &update)], "owner: edit").await.unwrap();
+        assert!(!is_symlink(&dir.join(SOUL_FILE)));
+        assert_eq!(read_text(&dir, SOUL_FILE), "# Persona\nMine.\n");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "the owner's secret\n");
+        // An entry deleted fixes up the index — the link replaced, not
+        // written through.
+        delete_entry(&dir, "memory/none.md").unwrap();
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        std::fs::remove_file(dir.join(MEMORY_FILE)).unwrap();
+        std::fs::write(&outside, "- [X](memory/x.md)\n").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join(MEMORY_FILE)).unwrap();
+        delete_entry(&dir, "memory/x.md").unwrap();
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "- [X](memory/x.md)\n");
+    }
+
+    /// An undo whose file is now a link out of the directory: what it reads
+    /// as the file now is no file, and what it writes replaces the link —
+    /// the file outside, and the index outside, stay as they are.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_undo_never_writes_through_a_link() {
+        let (tmp, dir) = memory_repo().await;
+        let outside = tmp.path().join("outside.md");
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [X](memory/x.md)\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        std::fs::write(&outside, "# Memory\n- [X](memory/x.md)\n").unwrap();
+        std::fs::remove_file(dir.join(MEMORY_FILE)).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join(MEMORY_FILE)).unwrap();
+        let _ = undo_memory(&dir, &rev, &files, "owner: undo").await;
+        assert_eq!(
+            std::fs::read_to_string(&outside).unwrap(),
+            "# Memory\n- [X](memory/x.md)\n"
+        );
+    }
+
+    /// A fixed file that is a folder reads as no file, and a write for the
+    /// owner fails — the folder left as it is, the reason said.
+    #[tokio::test]
+    async fn a_fixed_file_that_is_a_folder_is_not_written() {
+        let (_tmp, dir) = memory_repo().await;
+        std::fs::remove_file(dir.join(SOUL_FILE)).unwrap();
+        std::fs::create_dir_all(dir.join(SOUL_FILE).join("inside")).unwrap();
+        assert_eq!(read_text(&dir, SOUL_FILE), "");
+        assert_eq!(read_file(&dir, SOUL_FILE).unwrap(), None);
+        let update = |_: Option<&str>| Some("# Persona\n".to_string());
+        let err = write_for_owner(&dir, &[(SOUL_FILE, &update)], "owner: edit")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("is a folder"), "{err}");
+        assert!(dir.join(SOUL_FILE).join("inside").is_dir());
+    }
+
+    /// A pipe reads as no file — and reading it does not wait for a writer.
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_reads_as_no_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let fifo = std::ffi::CString::new(dir.join(SOUL_FILE).to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o644) }, 0);
+        assert_eq!(read_text(dir, SOUL_FILE), "");
+        // A file of its own reads.
+        std::fs::write(dir.join(USER_FILE), "# The owner\n").unwrap();
+        assert_eq!(read_text(dir, USER_FILE), "# The owner\n");
+    }
+
+    /// A file of its own is written in place: its permissions stay.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_save_keeps_the_files_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, dir) = memory_repo().await;
+        let user = dir.join(USER_FILE);
+        std::fs::set_permissions(&user, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let update = |_: Option<&str>| Some("# The owner\nPrivate.\n".to_string());
+        write_for_owner(&dir, &[(USER_FILE, &update)], "owner: edit").await.unwrap();
+        assert_eq!(read_text(&dir, USER_FILE), "# The owner\nPrivate.\n");
+        assert_eq!(std::fs::metadata(&user).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+
+    /// A fixed file made a link to a file kept elsewhere is committed as no
+    /// file — the file it leads to never read into the repository, where the
+    /// assistant could read it back — and so is one made a folder.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_fixed_file_not_its_own_is_committed_as_none() {
+        let (tmp, dir) = memory_repo().await;
+        let outside = tmp.path().join("secret.md");
+        std::fs::write(&outside, "the owner's secret\n").unwrap();
+        std::fs::remove_file(dir.join(SOUL_FILE)).unwrap();
+        std::fs::create_dir_all(dir.join(SOUL_FILE)).unwrap();
+        std::fs::remove_file(dir.join(RULES_FILE)).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join(RULES_FILE)).unwrap();
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        let files = memory_changes(&dir, &rev).await;
+        assert_eq!(
+            shape(&files),
+            vec![
+                ("AGENTS.md", "deleted", "rules", "AGENTS.md"),
+                ("SOUL.md", "deleted", "soul", "SOUL.md")
+            ]
+        );
+        // The owner's own save of USER.md alone, the same way.
+        write_file(&dir, USER_FILE, "# The owner\n").unwrap();
+        commit_only(&dir, "owner: edit", &[USER_FILE, SOUL_FILE]).await;
+        let objects = out(&dir, &["cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)"]).await;
+        for line in objects.lines().filter(|l| l.ends_with(" blob")) {
+            let sha = line.split(' ').next().unwrap();
+            assert!(!out(&dir, &["cat-file", "-p", sha]).await.contains("secret"), "{sha}");
+        }
+        // An undo puts the rules back as a file of its own.
+        let rules: Vec<MemoryFile> = files.iter().filter(|f| f.path == RULES_FILE).cloned().collect();
+        undo_memory(&dir, &rev, &rules, "owner: undo").await.unwrap();
+        assert!(read_text(&dir, RULES_FILE).starts_with('#'));
+        assert!(!is_symlink(&dir.join(RULES_FILE)));
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "the owner's secret\n");
+    }
+
+    /// A new file is made only where nothing is: a link there is not
+    /// written through.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_file_is_never_made_through_a_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside.md");
+        std::fs::write(&outside, "kept\n").unwrap();
+        let link = tmp.path().join(SOUL_FILE);
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert!(create_own(&link).is_err());
+        let dangling = tmp.path().join(RULES_FILE);
+        std::os::unix::fs::symlink(tmp.path().join("nowhere.md"), &dangling).unwrap();
+        assert!(create_own(&dangling).is_err());
+        assert!(!tmp.path().join("nowhere.md").exists());
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "kept\n");
+    }
+
+    /// An undo with a folder where one of its files was fails before it
+    /// writes anything.
+    #[tokio::test]
+    async fn an_undo_with_a_folder_in_the_way_writes_nothing() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nChanged.\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        assert_eq!(files.len(), 2);
+        std::fs::remove_file(dir.join(SOUL_FILE)).unwrap();
+        std::fs::create_dir_all(dir.join(SOUL_FILE)).unwrap();
+        assert!(undo_memory(&dir, &rev, &files, "owner: undo").await.is_err());
+        assert_eq!(read_text(&dir, "memory/x.md"), "x\n");
+        assert_eq!(head_of(&dir).await, rev);
+    }
+
+    /// Every blob the repository holds, read: none may hold `secret`.
+    #[cfg(unix)]
+    async fn no_blob_holds(dir: &Path, secret: &str) {
+        let objects = out(
+            dir,
+            &["cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)"],
+        )
+        .await;
+        for line in objects.lines().filter(|l| l.ends_with(" blob")) {
+            let sha = line.split(' ').next().unwrap();
+            assert!(!out(dir, &["cat-file", "-p", sha]).await.contains(secret), "{sha}");
+        }
+    }
+
+    /// On a volume that does not tell `soul.md` from `SOUL.md`, a link spelt
+    /// the other way is the persona all the same: never read into the
+    /// repository.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_fixed_file_spelt_another_way_is_still_a_fixed_file() {
+        let (tmp, dir) = memory_repo().await;
+        std::fs::remove_file(dir.join(SOUL_FILE)).unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        let outside = tmp.path().join("secret.md");
+        std::fs::write(&outside, "the owner's secret\n").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("soul.md")).unwrap();
+        if !dir.join(SOUL_FILE).exists() {
+            return; // a volume that tells them apart: `soul.md` is a file of its own name
+        }
+        commit(&dir, "turn").await;
+        no_blob_holds(&dir, "secret").await;
+    }
+
+    /// A fixed name tracked as a folder before, a file now: committed.
+    #[tokio::test]
+    async fn a_fixed_name_tracked_as_a_folder_before_commits_as_a_file() {
+        let (_tmp, dir) = memory_repo().await;
+        std::fs::remove_file(dir.join(SOUL_FILE)).unwrap();
+        std::fs::create_dir_all(dir.join(SOUL_FILE)).unwrap();
+        std::fs::write(dir.join(SOUL_FILE).join("inside.md"), "x\n").unwrap();
+        out(&dir, &["add", "-A"]).await;
+        out(&dir, &["commit", "-qm", "a folder"]).await;
+        std::fs::remove_dir_all(dir.join(SOUL_FILE)).unwrap();
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nA file again.\n").unwrap();
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        assert_eq!(
+            out(&dir, &["show", &format!("{rev}:{SOUL_FILE}")]).await,
+            "# Persona\nA file again."
+        );
+        let tree = out(&dir, &["ls-tree", "-r", "--name-only", &rev]).await;
+        assert!(!tree.contains("inside.md"), "{tree}");
+    }
+
+    /// A folder at a fixed name tracked before, still a folder: what was in
+    /// it goes with it, as the name reads as no file.
+    #[tokio::test]
+    async fn a_fixed_name_still_a_folder_takes_its_tracked_files_out() {
+        let (_tmp, dir) = memory_repo().await;
+        std::fs::remove_file(dir.join(SOUL_FILE)).unwrap();
+        std::fs::create_dir_all(dir.join(SOUL_FILE)).unwrap();
+        std::fs::write(dir.join(SOUL_FILE).join("inside.md"), "x\n").unwrap();
+        out(&dir, &["add", "-A"]).await;
+        out(&dir, &["commit", "-qm", "a folder"]).await;
+        std::fs::write(dir.join(SOUL_FILE).join("inside.md"), "x, again\n").unwrap();
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        let tree = out(&dir, &["ls-tree", "-r", "--name-only", &rev]).await;
+        assert!(!tree.lines().any(|l| l.starts_with("SOUL.md")), "{tree}");
+    }
+
+    /// Where the volume does not tell case apart, a fixed name tracked
+    /// before in another spelling does not stay beside it.
+    #[tokio::test]
+    async fn a_fixed_name_tracked_in_another_spelling_is_one_name() {
+        let (_tmp, dir) = memory_repo().await;
+        out(&dir, &["rm", "-q", "--cached", SOUL_FILE]).await;
+        out(&dir, &["update-index", "--add", "--cacheinfo", &format!(
+            "100644,{},soul.md",
+            out(&dir, &["hash-object", "-w", SOUL_FILE]).await
+        )]).await;
+        out(&dir, &["commit", "-qm", "another spelling"]).await;
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nOne name.\n").unwrap();
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        let tree = out(&dir, &["ls-tree", "-r", "--name-only", &rev]).await;
+        let spellings: Vec<&str> = tree.lines().filter(|l| l.eq_ignore_ascii_case(SOUL_FILE)).collect();
+        assert_eq!(spellings, vec![SOUL_FILE], "{tree}");
+    }
+
+    /// A fixed file not tracked and ignored is not taken into the history,
+    /// as `git add` would not take it.
+    #[tokio::test]
+    async fn an_ignored_untracked_fixed_file_is_not_committed() {
+        let (_tmp, dir) = memory_repo().await;
+        std::fs::remove_file(dir.join(USER_FILE)).unwrap();
+        let ignore = format!("{}/{USER_FILE}\n", read_text(&dir, ".gitignore"));
+        std::fs::write(dir.join(".gitignore"), ignore).unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        std::fs::write(dir.join(USER_FILE), "# The owner\nPrivate.\n").unwrap();
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nChanged.\n").unwrap();
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        let tree = out(&dir, &["ls-tree", "-r", "--name-only", &rev]).await;
+        assert!(!tree.lines().any(|l| l == USER_FILE), "{tree}");
+        assert!(commit_only(&dir, "owner: edit", &[USER_FILE]).await.is_none());
+    }
+
+    /// An undo bringing an entry back puts its line back in the index too:
+    /// a folder where the index is fails it before anything is written.
+    #[tokio::test]
+    async fn an_undo_with_a_folder_for_its_index_writes_nothing() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [X](memory/x.md)\n").unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        std::fs::remove_file(dir.join("memory/x.md")).unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        assert_eq!(shape(&files), vec![("memory/x.md", "deleted", "entry", "X")]);
+        std::fs::remove_file(dir.join(MEMORY_FILE)).unwrap();
+        std::fs::create_dir_all(dir.join(MEMORY_FILE)).unwrap();
+        assert!(undo_memory(&dir, &rev, &files, "owner: undo").await.is_err());
+        assert!(!dir.join("memory/x.md").exists());
+        assert_eq!(head_of(&dir).await, rev);
+    }
+
+    /// A persona grown large commits all the same, streamed.
+    #[tokio::test]
+    async fn a_large_fixed_file_commits() {
+        let (_tmp, dir) = memory_repo().await;
+        let big = "x".repeat(3 * 1024 * 1024);
+        std::fs::write(dir.join(SOUL_FILE), &big).unwrap();
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        let size = out(&dir, &["cat-file", "-s", &format!("{rev}:{SOUL_FILE}")]).await;
+        assert_eq!(size, big.len().to_string());
+    }
+
+    /// An undo of an entry's edit alone needs no index line: a folder where
+    /// the index is does not stop it.
+    #[tokio::test]
+    async fn an_undo_of_an_entrys_edit_needs_no_index() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        commit(&dir, "turn 0").await.unwrap();
+        write_file(&dir, "memory/x.md", "x, edited\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        assert_eq!(files[0].status, "modified");
+        std::fs::remove_file(dir.join(MEMORY_FILE)).unwrap();
+        std::fs::create_dir_all(dir.join(MEMORY_FILE)).unwrap();
+        undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+        assert_eq!(read_text(&dir, "memory/x.md"), "x\n");
+    }
+
+    /// An entry the index never named, taken out: no index line to drop, so
+    /// a folder where the index is does not stop it.
+    #[tokio::test]
+    async fn an_undo_that_needs_no_index_line_goes_through() {
+        let (_tmp, dir) = memory_repo().await;
+        write_file(&dir, "memory/x.md", "x\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        assert_eq!(shape(&files), vec![("memory/x.md", "added", "entry", "x")]);
+        std::fs::remove_file(dir.join(MEMORY_FILE)).unwrap();
+        std::fs::create_dir_all(dir.join(MEMORY_FILE)).unwrap();
+        undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+        assert!(!dir.join("memory/x.md").exists());
+    }
+
+    /// A fixed file tracked only in another spelling, an ignore rule
+    /// matching its name: still tracked, still committed — by the turn and
+    /// by the owner's own edit — never recorded as gone.
+    #[tokio::test]
+    async fn a_fixed_file_tracked_in_another_spelling_stays_despite_an_ignore_rule() {
+        for owner in [false, true] {
+            let (_tmp, dir) = memory_repo().await;
+            out(&dir, &["rm", "-q", "--cached", SOUL_FILE]).await;
+            let blob = out(&dir, &["hash-object", "-w", SOUL_FILE]).await;
+            out(&dir, &["update-index", "--add", "--cacheinfo", &format!("100644,{blob},soul.md")]).await;
+            let ignore = format!("{}/{SOUL_FILE}\n", read_text(&dir, ".gitignore"));
+            std::fs::write(dir.join(".gitignore"), ignore).unwrap();
+            out(&dir, &["add", ".gitignore"]).await;
+            out(&dir, &["commit", "-qm", "another spelling, ignored"]).await;
+            std::fs::write(dir.join(SOUL_FILE), "# Persona\nKept.\n").unwrap();
+            let rev = if owner {
+                commit_only(&dir, "owner: edit", &[SOUL_FILE]).await
+            } else {
+                commit(&dir, "turn").await
+            }
+            .expect("a commit");
+            assert_eq!(
+                out(&dir, &["show", &format!("{rev}:{SOUL_FILE}")]).await,
+                "# Persona\nKept.",
+                "owner: {owner}"
+            );
+            // Its card calls it added; undone, it is what the other
+            // spelling held — never deleted.
+            let files = memory_changes(&dir, &rev).await;
+            let soul: Vec<MemoryFile> = files.into_iter().filter(|f| f.path == SOUL_FILE).collect();
+            assert_eq!(soul[0].status, "added", "owner: {owner}");
+            let before = out(&dir, &["cat-file", "-p", &blob]).await;
+            undo_memory(&dir, &rev, &soul, "owner: undo").await.unwrap();
+            assert_eq!(read_text(&dir, SOUL_FILE).trim_end(), before, "owner: {owner}");
+            assert_eq!(
+                out(&dir, &["show", &format!("HEAD:{SOUL_FILE}")]).await,
+                before,
+                "owner: {owner}"
+            );
+        }
+    }
+
+    /// A turn's draft set aside, the fixed file tracked before only in
+    /// another spelling: put back as it was, not deleted.
+    #[tokio::test]
+    async fn a_draft_set_aside_keeps_a_fixed_file_tracked_in_another_spelling() {
+        let (_tmp, dir) = memory_repo().await;
+        out(&dir, &["rm", "-q", "--cached", SOUL_FILE]).await;
+        let blob = out(&dir, &["hash-object", "-w", SOUL_FILE]).await;
+        out(&dir, &["update-index", "--add", "--cacheinfo", &format!("100644,{blob},soul.md")]).await;
+        out(&dir, &["commit", "-qm", "another spelling"]).await;
+        let before = out(&dir, &["cat-file", "-p", &blob]).await;
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nA draft.\n").unwrap();
+        let done = commit_turn(&dir, "turn", |f| f.kind == "soul", "aside").await.unwrap();
+        assert!(done.aside.is_some(), "{done:?}");
+        assert_eq!(read_text(&dir, SOUL_FILE).trim_end(), before);
+    }
+
+    /// What the index holds inside a folder of a fixed name goes however
+    /// many there are and whatever their names are made of: hundreds of
+    /// long ones, one that is not UTF-8.
+    #[tokio::test]
+    async fn every_stale_entry_under_a_fixed_name_goes() {
+        let (_tmp, dir) = memory_repo().await;
+        let blob = out(&dir, &["hash-object", "-w", SOUL_FILE]).await;
+        let long = "x".repeat(200);
+        let mut info = Vec::new();
+        for i in 0..600 {
+            info.extend_from_slice(format!("100644 {blob}\tSOUL.md/{long}-{i}.md\n").as_bytes());
+        }
+        #[cfg(unix)]
+        {
+            info.extend_from_slice(format!("100644 {blob}\tSOUL.md/").as_bytes());
+            info.extend_from_slice(b"\xff\xfe.md\n");
+        }
+        git_input(&dir, None, &["update-index", "--index-info"], Input::Bytes(info))
+            .await
+            .unwrap();
+        out(&dir, &["commit", "-qm", "many under the name"]).await;
+        std::fs::write(dir.join(SOUL_FILE), "# Persona\nAlone.\n").unwrap();
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        let tree = git(&dir, &["ls-tree", "-r", "-z", "--name-only", &rev]).await.unwrap().stdout;
+        let under: Vec<&[u8]> = tree
+            .split(|b| *b == 0)
+            .filter(|e| e.starts_with(b"SOUL.md/"))
+            .collect();
+        assert!(under.is_empty(), "{} left", under.len());
+        assert_eq!(out(&dir, &["show", &format!("{rev}:{SOUL_FILE}")]).await, "# Persona\nAlone.");
+    }
+
+    /// A fixed file a commit added beside another spelling it kept — on a
+    /// volume that tells them apart — or beside a folder or a link of that
+    /// spelling: undone, it goes, and the other spelling stays as it was.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_added_fixed_file_beside_another_spelling_kept_goes_on_undo() {
+        let probe = tempfile::tempdir().unwrap();
+        std::fs::write(probe.path().join("a"), "").unwrap();
+        let tells_case_apart = !probe.path().join("A").exists();
+        for alias in ["file", "folder", "link"] {
+            if alias == "file" && !tells_case_apart {
+                continue; // two spellings cannot be two files here
+            }
+            let (_tmp, dir) = memory_repo().await;
+            std::fs::remove_file(dir.join(RULES_FILE)).unwrap();
+            match alias {
+                "file" => std::fs::write(dir.join("agents.md"), "lower\n").unwrap(),
+                "folder" => {
+                    std::fs::create_dir_all(dir.join("agents.md")).unwrap();
+                    std::fs::write(dir.join("agents.md").join("x.md"), "x\n").unwrap();
+                }
+                _ => std::os::unix::fs::symlink("elsewhere.md", dir.join("agents.md")).unwrap(),
+            }
+            out(&dir, &["add", "-A"]).await;
+            out(&dir, &["commit", "-qm", "another spelling"]).await;
+            if alias != "file" {
+                // Where the spelling is its folder or link, the rules come
+                // back as a file of their own name.
+                std::fs::remove_dir_all(dir.join("agents.md"))
+                    .or_else(|_| std::fs::remove_file(dir.join("agents.md")))
+                    .unwrap();
+            }
+            std::fs::write(dir.join(RULES_FILE), "# Rules\nNew.\n").unwrap();
+            let rev = commit(&dir, "turn").await.expect(alias);
+            // Added — or, where git took the spelling for the name itself,
+            // modified from a folder or a link: either way no file before.
+            let files: Vec<MemoryFile> = memory_changes(&dir, &rev)
+                .await
+                .into_iter()
+                .filter(|f| f.path == RULES_FILE)
+                .collect();
+            assert_eq!(files.len(), 1, "{alias}");
+            undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+            // Gone, or — a change from a link, not undone — as the turn left
+            // it; never the link's target written in as rules.
+            let rules = read_file(&dir, RULES_FILE).unwrap();
+            assert!(
+                rules.is_none() || rules.as_deref() == Some("# Rules\nNew.\n"),
+                "{alias}: {rules:?}"
+            );
+            if alias == "file" {
+                assert_eq!(std::fs::read_to_string(dir.join("agents.md")).unwrap(), "lower\n");
+            }
+        }
+    }
+
+    /// Another spelling counts as what a fixed file was only when it was a
+    /// file the change took away: one the change kept (two files where the
+    /// volume tells case apart), a folder or a link is not.
+    #[tokio::test]
+    async fn another_spelling_is_what_was_there_only_when_the_change_took_it() {
+        let (_tmp, dir) = memory_repo().await;
+        let blob = out(&dir, &["hash-object", "-w", SOUL_FILE]).await;
+        let tree = |entries: &[(&str, &str)]| {
+            let dir = dir.clone();
+            let listing: String = entries
+                .iter()
+                .map(|(mode, name)| {
+                    let kind = if *mode == "040000" { "tree" } else { "blob" };
+                    let sha = if *mode == "040000" {
+                        "4b825dc642cb6eb9a060e54bf8d69288fbee4904".to_string()
+                    } else {
+                        blob.clone()
+                    };
+                    format!("{mode} {kind} {sha}\t{name}\0")
+                })
+                .collect();
+            async move {
+                let out = git_input(&dir, None, &["mktree", "-z"], Input::Bytes(listing.into_bytes()))
+                    .await
+                    .unwrap();
+                String::from_utf8_lossy(&out.stdout).trim().to_string()
+            }
+        };
+        let commit_of = |tree: String, parent: Option<String>| {
+            let dir = dir.clone();
+            async move {
+                let mut args = vec!["commit-tree".to_string(), tree, "-m".into(), "x".into()];
+                if let Some(p) = parent {
+                    args.extend(["-p".into(), p]);
+                }
+                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                out(&dir, &refs).await
+            }
+        };
+        let base = commit_of(tree(&[("100644", "soul.md")]).await, None).await;
+        let took = commit_of(tree(&[("100644", SOUL_FILE)]).await, Some(base.clone())).await;
+        let kept = commit_of(
+            tree(&[("100644", SOUL_FILE), ("100644", "soul.md")]).await,
+            Some(base.clone()),
+        )
+        .await;
+        assert_eq!(spelt_otherwise(&dir, &base, &took, SOUL_FILE).await.as_deref(), Some("soul.md"));
+        assert_eq!(spelt_otherwise(&dir, &base, &kept, SOUL_FILE).await, None);
+        for mode in ["120000", "040000"] {
+            let odd = commit_of(tree(&[(mode, "soul.md")]).await, None).await;
+            let next = commit_of(tree(&[("100644", SOUL_FILE)]).await, Some(odd.clone())).await;
+            assert_eq!(spelt_otherwise(&dir, &odd, &next, SOUL_FILE).await, None, "{mode}");
+        }
+    }
+
+    /// A change to or from a link is not undone — the rules a later change
+    /// deleted or pointed elsewhere stay as that change left them — and an
+    /// entry that was a link, deleted with its index line, does not get its
+    /// line back.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_change_to_or_from_a_link_is_left_as_it_is() {
+        for later in ["deleted", "retargeted"] {
+            let (_tmp, dir) = memory_repo().await;
+            std::fs::remove_file(dir.join(RULES_FILE)).unwrap();
+            std::os::unix::fs::symlink("one.md", dir.join(RULES_FILE)).unwrap();
+            out(&dir, &["add", "-A"]).await;
+            out(&dir, &["commit", "-qm", "rules a link"]).await;
+            let rev = head_of(&dir).await;
+            let files: Vec<MemoryFile> = vec![MemoryFile {
+                path: RULES_FILE.into(),
+                status: "modified".into(),
+                kind: "rules".into(),
+                title: RULES_FILE.into(),
+            }];
+            std::fs::remove_file(dir.join(RULES_FILE)).unwrap();
+            if later == "retargeted" {
+                std::os::unix::fs::symlink("two.md", dir.join(RULES_FILE)).unwrap();
+            }
+            let undo = undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+            assert_eq!(undo.kept, vec![RULES_FILE.to_string()], "{later}");
+            match later {
+                "deleted" => assert!(std::fs::symlink_metadata(dir.join(RULES_FILE)).is_err()),
+                _ => assert_eq!(
+                    std::fs::read_link(dir.join(RULES_FILE)).unwrap(),
+                    PathBuf::from("two.md")
+                ),
+            }
+        }
+
+        let (_tmp, dir) = memory_repo().await;
+        std::os::unix::fs::symlink("elsewhere.md", dir.join("memory/x.md")).unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n- [X](memory/x.md)\n").unwrap();
+        out(&dir, &["add", "-A"]).await;
+        out(&dir, &["commit", "-qm", "a link entry"]).await;
+        std::fs::remove_file(dir.join("memory/x.md")).unwrap();
+        write_file(&dir, MEMORY_FILE, "# Memory\n").unwrap();
+        let rev = commit(&dir, "turn").await.unwrap();
+        let files = memory_changes(&dir, &rev).await;
+        undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+        assert!(!read_text(&dir, MEMORY_FILE).contains("memory/x.md"), "no line to nowhere");
+        assert!(std::fs::symlink_metadata(dir.join("memory/x.md")).is_err());
+    }
+
+    /// An entry that took a folder's place, or whose place a folder took, is
+    /// not undone — left as it is, a draft of it not applied at all.
+    #[tokio::test]
+    async fn a_change_between_a_file_and_a_folder_is_left_as_it_is() {
+        for way in ["file took the folder's place", "folder took the file's place"] {
+            let (_tmp, dir) = memory_repo().await;
+            let entry = dir.join("memory/x.md");
+            if way.starts_with("file") {
+                std::fs::create_dir_all(&entry).unwrap();
+                std::fs::write(entry.join("inner.md"), "in\n").unwrap();
+            } else {
+                std::fs::write(&entry, "x\n").unwrap();
+            }
+            commit(&dir, "turn 0").await.unwrap();
+            if way.starts_with("file") {
+                std::fs::remove_dir_all(&entry).unwrap();
+                std::fs::write(&entry, "x\n").unwrap();
+            } else {
+                std::fs::remove_file(&entry).unwrap();
+                std::fs::create_dir_all(&entry).unwrap();
+                std::fs::write(entry.join("inner.md"), "in\n").unwrap();
+            }
+            let rev = commit(&dir, "turn").await.unwrap();
+            let files: Vec<MemoryFile> = memory_changes(&dir, &rev)
+                .await
+                .into_iter()
+                .filter(|f| f.path == "memory/x.md")
+                .collect();
+            assert_eq!(files.len(), 1, "{way}");
+            if way.starts_with("folder") {
+                // Later the folder goes too.
+                std::fs::remove_dir_all(&entry).unwrap();
+            }
+            let whole = undo_whole(&dir, &rev, &files, "owner: apply").await.unwrap();
+            assert_eq!(whole.kept, vec!["memory/x.md".to_string()], "{way}");
+            assert!(whole.commit.is_none(), "{way}");
+            let undo = undo_memory(&dir, &rev, &files, "owner: undo").await.unwrap();
+            assert_eq!(undo.kept, vec!["memory/x.md".to_string()], "{way}");
+            if way.starts_with("file") {
+                assert_eq!(std::fs::read_to_string(&entry).unwrap(), "x\n", "{way}");
+            } else {
+                assert!(std::fs::symlink_metadata(&entry).is_err(), "{way}: not made again");
+            }
+        }
     }
 }
