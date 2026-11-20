@@ -64,8 +64,22 @@
       "browser": "浏览器操作",
       "computer_use": "电脑操作",
       "quick_messages": "快捷消息",
-      "logs": "运行日志"
+      "logs": "运行日志",
+      "plugins": "插件"
     }
+  },
+  "HostPlugins": {
+    "title": "插件",
+    "import": "导入清单",
+    "fileTooLarge": "插件清单超过 64 KiB。",
+    "empty": "尚未安装插件。",
+    "loading": "加载中…",
+    "unsupported": "请更新已连接的 Codeg 主机以管理插件。",
+    "retry": "重试",
+    "enable": "启用 {name}",
+    "remove": "移除 {name}",
+    "choosePanel": "插件面板",
+    "noTurns": "当前工作区暂无轮次记录。"
   },
   "AppearanceSettings": {
     "sectionTitle": "主题外观",

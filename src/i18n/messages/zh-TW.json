@@ -64,8 +64,22 @@
       "browser": "瀏覽器操作",
       "computer_use": "電腦操作",
       "quick_messages": "快捷訊息",
-      "logs": "執行日誌"
+      "logs": "執行日誌",
+      "plugins": "外掛"
     }
+  },
+  "HostPlugins": {
+    "title": "外掛",
+    "import": "匯入資訊清單",
+    "fileTooLarge": "外掛資訊清單超過 64 KiB。",
+    "empty": "尚未安裝外掛。",
+    "loading": "載入中…",
+    "unsupported": "請更新已連線的 Codeg 主機以管理外掛。",
+    "retry": "重試",
+    "enable": "啟用 {name}",
+    "remove": "移除 {name}",
+    "choosePanel": "外掛面板",
+    "noTurns": "目前工作區尚無回合記錄。"
   },
   "AppearanceSettings": {
     "sectionTitle": "主題外觀",
