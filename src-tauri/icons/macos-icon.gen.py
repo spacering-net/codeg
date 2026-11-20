@@ -115,15 +115,17 @@ def main():
         # the .icns is wanted: every other platform keeps its full-bleed art.
         out_dir = tmp_dir / "out"
         out_dir.mkdir()
+        # Resolve the shim so this also works on Windows, where `pnpm` is a
+        # `.CMD` that a bare name does not always reach.
         result = subprocess.run(
-            ["pnpm", "tauri", "icon", str(padded_svg), "-o", str(out_dir)],
+            [shutil.which("pnpm") or "pnpm", "tauri", "icon", str(padded_svg), "-o", str(out_dir)],
             cwd=REPO_ROOT,
             capture_output=True,
-            text=True,
         )
         if result.returncode != 0:
-            sys.stderr.write(result.stdout)
-            sys.stderr.write(result.stderr)
+            # Decode leniently: pnpm's output is not UTF-8 on every console.
+            sys.stderr.write(result.stdout.decode(errors="replace"))
+            sys.stderr.write(result.stderr.decode(errors="replace"))
             _fail(f"`pnpm tauri icon` failed with exit code {result.returncode}")
 
         generated = out_dir / "icon.icns"
