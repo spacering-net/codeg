@@ -1,5 +1,36 @@
 import type { LogRecord } from "@/lib/types"
 
+/** Keep the newest records while a live-tail animation frame is pending. */
+export class PendingLogBatch {
+  private records: LogRecord[] = []
+  private nextIndex = 0
+
+  constructor(private readonly limit: number) {}
+
+  append(record: LogRecord) {
+    const newestIndex =
+      this.nextIndex === 0 ? this.records.length - 1 : this.nextIndex - 1
+    const newest = this.records[newestIndex]
+    if (newest && record.seq <= newest.seq) return false
+
+    this.records[this.nextIndex] = record
+    this.nextIndex = (this.nextIndex + 1) % this.limit
+    return true
+  }
+
+  drain(): LogRecord[] {
+    const { records, nextIndex } = this
+    this.clear()
+    if (nextIndex === 0 || nextIndex === records.length) return records
+    return records.slice(nextIndex).concat(records.slice(0, nextIndex))
+  }
+
+  clear() {
+    this.records = []
+    this.nextIndex = 0
+  }
+}
+
 /**
  * Fold a batch of newly-appended log records into the existing list, applying
  * the monotonic-seq de-dup guard and the display cap once for the whole batch.
