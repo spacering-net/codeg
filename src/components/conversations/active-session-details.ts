@@ -24,12 +24,9 @@ export interface ActiveSessionDetails {
 }
 
 /**
- * The slice of a runtime session this resolver actually reads. Narrowed on
- * purpose: these fields change only at turn boundaries, so a caller can
- * subscribe to just them (e.g. via `useShallow`) and avoid the ~60/s re-render
- * a whole-session-object selector incurs during streaming. A full
- * `ConversationRuntimeSession` is still assignable here, so existing callers
- * that pass the whole session are unaffected.
+ * Inputs read while projecting metadata. Do not subscribe to this shape:
+ * `detail` and `localTurns` still own the transcript, including in a persistent
+ * consumer's previous React hook snapshot.
  */
 export type RuntimeSessionForDetails = Pick<
   ConversationRuntimeSession,
@@ -51,6 +48,24 @@ export function pickModelFromTurns(turns: MessageTurn[]): string | null {
     if (model) return model
   }
   return null
+}
+
+/**
+ * Project before subscribing, so a metadata consumer's current and previous
+ * snapshots contain only the values it displays, never a session or turn array.
+ */
+export function projectRuntimeSessionDetails(
+  session: RuntimeSessionForDetails | null | undefined
+): ActiveSessionDetails {
+  return {
+    summary: session?.detail?.summary ?? null,
+    stats: session?.sessionStats ?? session?.detail?.session_stats ?? null,
+    model:
+      pickModelFromTurns(session?.localTurns ?? []) ??
+      pickModelFromTurns(session?.detail?.turns ?? []) ??
+      session?.detail?.summary?.model ??
+      null,
+  }
 }
 
 /**
@@ -95,27 +110,31 @@ export function resolveActiveSessionDetails(
 ): ActiveSessionDetails {
   const runtimeId = tab?.runtimeConversationId ?? tab?.conversationId ?? null
   const runtimeSession = runtimeId != null ? getSession(runtimeId) : null
+  return resolveActiveSessionDetailsFromSnapshot(
+    tab,
+    projectRuntimeSessionDetails(runtimeSession),
+    conversations
+  )
+}
+
+/** Apply live workspace/tab columns after the store's metadata projection. */
+export function resolveActiveSessionDetailsFromSnapshot(
+  tab: ActiveSessionTabRef | null,
+  snapshot: ActiveSessionDetails,
+  conversations: DbConversationSummary[]
+): ActiveSessionDetails {
   const listed =
     tab?.conversationId != null
       ? (conversations.find((c) => c.id === tab.conversationId) ?? null)
       : null
   const summary = withLiveColumns(
-    runtimeSession?.detail?.summary ?? listed,
+    snapshot.summary ?? listed,
     listed,
     tab?.status
   )
-  const stats =
-    runtimeSession?.sessionStats ??
-    runtimeSession?.detail?.session_stats ??
-    null
-  // `localTurns` holds the live session's freshest turns; `detail.turns` the
-  // cold-loaded history. Prefer the live model, then history, then the (usually
-  // empty) summary column.
-  const model =
-    pickModelFromTurns(runtimeSession?.localTurns ?? []) ??
-    pickModelFromTurns(runtimeSession?.detail?.turns ?? []) ??
-    runtimeSession?.detail?.summary?.model ??
-    summary?.model ??
-    null
-  return { summary, stats, model }
+  return {
+    summary,
+    stats: snapshot.stats,
+    model: snapshot.model ?? summary?.model ?? null,
+  }
 }

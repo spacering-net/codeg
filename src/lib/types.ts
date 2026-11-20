@@ -2904,7 +2904,7 @@ export interface WorkTaskUncommittedFile {
 
 // --- Token usage dashboard (mirror of src-tauri/src/models/token_usage.rs) ---
 
-export type TokenUsageBucket = "day" | "week" | "month"
+export type TokenUsageBucket = "hour" | "day" | "week" | "month"
 
 export interface TokenUsageFilter {
   /** Inclusive lower bound, ISO-8601. Omit for "since the first recorded turn". */
@@ -4476,6 +4476,21 @@ export interface AgentSkillItem {
   path: string
   description: string | null
   read_only: boolean
+  /** Where the entry's link points; `null` for a real folder or file. Absent
+   *  from a backend older than the skills engine. */
+  link_target?: string | null
+  /**
+   * Whose skill it is: Codeg's, linked from one of its packs, from a Harness
+   * install or from a Custom skill (`pack`, `harness`, `custom` — read only in
+   * place), the agent's own (`agent`), a link outside Codeg's store
+   * (`linked_elsewhere`), or a dangling link (`broken`, listed only when asked
+   * for). Absent from an older backend.
+   */
+  owner?: string
+  /** `owner: "pack"`: which pack. */
+  pack?: string | null
+  /** A copy Codeg made where no link could be made. */
+  codeg_copy?: boolean
 }
 
 export interface AgentSkillsListResult {
@@ -4510,6 +4525,9 @@ export interface ExpertListItem {
   installed_centrally: boolean
   user_modified: boolean
   central_path: string
+  /** A skill of another origin holds this expert's id in the store: the pack
+   *  leaves it alone. Absent from an older backend. */
+  name_taken?: boolean
 }
 
 export type ExpertLinkState =
@@ -4545,6 +4563,9 @@ export interface LinkOpResult {
   /** Present on a successful enable; null for disables and failures. */
   status: ExpertInstallStatus | null
   error: string | null
+  /** A failure's stable code (`acknowledgement_required`, `name_taken`, …).
+   *  Absent from an older backend. */
+  code?: string | null
 }
 
 /**
@@ -4570,6 +4591,8 @@ export interface CustomDeleteResult {
   id: string
   ok: boolean
   error: string | null
+  /** A failure's stable code. Absent from an older backend. */
+  code?: string | null
 }
 
 /**
@@ -4583,6 +4606,8 @@ export interface CustomImportResult {
   ok: boolean
   skipped: boolean
   error: string | null
+  /** A failure's stable code. Absent from an older backend. */
+  code?: string | null
 }
 
 /**
@@ -4615,6 +4640,8 @@ export interface ScienceListItem {
   installed_centrally: boolean
   user_modified: boolean
   central_path: string
+  /** A skill of another origin holds this skill's id in the store. */
+  name_taken?: boolean
 }
 
 export interface OfficecliInfo {
@@ -4635,11 +4662,17 @@ export interface OfficecliSkill {
   displayName: Record<string, string>
   description: Record<string, string>
   installedCentrally: boolean
+  /** A skill of the user's holds this id in the store: Sync leaves it alone.
+   *  Absent from an older backend. */
+  nameTaken?: boolean
 }
 
 export interface SkillSyncReport {
   synced: number
   errors: string[]
+  /** The same problems with their codes (`name_taken`, `command_failed`, …).
+   *  Absent from an older backend. */
+  issues?: { code: string; path?: string; detail?: string }[]
 }
 
 export interface SystemProxySettings {
@@ -6373,5 +6406,45 @@ export interface DeepSeekModelCatalog {
    *  non-positive context window, image limits on a text-only entry…). The
    *  document was understood, so the rows stay editable — but until they are
    *  fixed, sessions run on the agent's built-in catalog instead. */
+  invalid: string | null
+}
+
+/** One `llm-pi-ai` provider route: a provider a DeepSeek session may serve
+ *  models from, keyed by the route id a request selects with. */
+export interface DeepSeekProviderRoute {
+  /** Route id (any non-empty key). A stored sign-in addresses it as a
+   *  credential-key segment, so catalog ids follow `[a-z][a-z0-9-]*`. */
+  id: string
+  /** Selector label; absent falls back to the provider's own name. */
+  displayName?: string
+  /** Credential reference resolved through `$DSH_HOME/.credentials.yaml`;
+   *  absent defers to pi-ai's ambient environment discovery for the provider. */
+  apiKeyEnv?: string
+  /** Wire protocol override; absent takes the pi-ai catalog's protocol. */
+  api?:
+    | "openai-completions"
+    | "openai-responses"
+    | "anthropic-messages"
+    | "google-generative-ai"
+  /** Endpoint override; absent takes the pi-ai catalog's endpoint. */
+  baseURL?: string
+}
+
+/** What the settings panel reads about the stored provider routes. */
+export interface DeepSeekProviderRoutes {
+  /** Where a save lands: `$DSH_HOME/deepseek-acp/settings.yaml`. */
+  path: string
+  /** Whether that document exists at all. */
+  exists: boolean
+  /** Whether the effective document declares `llm-pi-ai.providers`. */
+  configured: boolean
+  /** The document the routes on screen came from — the bridge's own document,
+   *  or a legacy harness document it imports from until this panel writes one. */
+  source: string | null
+  routes: DeepSeekProviderRoute[]
+  /** Why the effective document could not be read; editing is refused. */
+  error: string | null
+  /** Why the stored routes are ones the agent refuses. Editable, but sessions
+   *  keep the routes they had until the rows are fixed. */
   invalid: string | null
 }

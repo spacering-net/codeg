@@ -8,7 +8,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use super::mcp_engine;
 use crate::app_error::AppCommandError;
+use crate::web::event_bridge::EventEmitter;
 
 const MARKETPLACE_OFFICIAL: &str = "official_registry";
 const MARKETPLACE_SMITHERY: &str = "smithery";
@@ -98,7 +100,7 @@ pub enum McpAppType {
 /// server come back on the next refresh. Both used to keep their own hand-typed
 /// copy of this list; one shared constant plus [`tests::all_mcp_apps_is_exhaustive`]
 /// (which fails to compile when a variant is added) is what keeps them honest.
-const ALL_MCP_APPS: [McpAppType; 20] = [
+pub(crate) const ALL_MCP_APPS: [McpAppType; 20] = [
     McpAppType::ClaudeCode,
     McpAppType::Codex,
     McpAppType::Gemini,
@@ -386,8 +388,35 @@ pub async fn mcp_get_marketplace_server_detail(
     }
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn mcp_install_from_marketplace(
+    provider_id: String,
+    server_id: String,
+    apps: Vec<McpAppType>,
+    spec_override: Option<Value>,
+    option_id: Option<String>,
+    protocol: Option<String>,
+    parameter_values: Option<Value>,
+    app: tauri::AppHandle,
+) -> Result<LocalMcpServer, AppCommandError> {
+    mcp_install_from_marketplace_core(
+        &EventEmitter::from_app(&app),
+        provider_id,
+        server_id,
+        apps,
+        spec_override,
+        option_id,
+        protocol,
+        parameter_values,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn mcp_install_from_marketplace_core(
+    emitter: &EventEmitter,
     provider_id: String,
     server_id: String,
     apps: Vec<McpAppType>,
@@ -434,17 +463,30 @@ pub async fn mcp_install_from_marketplace(
         // returning a pre-existing server with the same id). See issue #325.
         return Err(no_hostable_app_error(&normalized_apps, &canonical_spec));
     }
-    // A selected-but-excluded app can't host this transport; remove any stale entry
-    // for this id there so it can't win scan precedence and reclassify the spec.
-    for app in excluded {
-        tracing::warn!(
-            "[MCP] {app:?} cannot host server '{server_id}' (transport unsupported); removing any stale entry"
-        );
-        let _ = remove_server_for_app(app, &server_id)?;
-    }
-    for app in hostable {
-        upsert_server_for_app(app, &server_id, &canonical_spec)?;
-    }
+    // After the network round trip, and for the writes only: one writer of
+    // the agents' config files at a time (see `mcp_engine::lock`).
+    let written = {
+        let _lock = mcp_engine::lock::acquire().await?;
+        (|| {
+            // A selected-but-excluded app can't host this transport; remove any stale
+            // entry for this id there so it can't win scan precedence and reclassify
+            // the spec.
+            for app in excluded {
+                tracing::warn!(
+                    "[MCP] {app:?} cannot host server '{server_id}' (transport unsupported); removing any stale entry"
+                );
+                let _ = remove_server_for_app(app, &server_id)?;
+            }
+            for app in hostable {
+                upsert_server_for_app(app, &server_id, &canonical_spec)?;
+            }
+            Ok::<(), AppCommandError>(())
+        })()
+    };
+    // Announced even when the walk stopped part-way: the agents before the
+    // failure were written.
+    mcp_engine::announce_changed(emitter, &normalized_apps);
+    written?;
 
     find_local_server(&server_id).ok_or_else(|| {
         mcp_configuration_invalid(format!(
@@ -463,8 +505,21 @@ pub async fn mcp_install_from_marketplace(
 /// which fields the user touched. A client that sends none (a new server, or
 /// an older build) gets the scan's spec for the id as the closest stand-in,
 /// and a new server has none.
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
 pub async fn mcp_upsert_local_server(
+    server_id: String,
+    spec: Value,
+    apps: Vec<McpAppType>,
+    shown_spec: Option<Value>,
+    app: tauri::AppHandle,
+) -> Result<LocalMcpServer, AppCommandError> {
+    mcp_upsert_local_server_core(&EventEmitter::from_app(&app), server_id, spec, apps, shown_spec)
+        .await
+}
+
+pub async fn mcp_upsert_local_server_core(
+    emitter: &EventEmitter,
     server_id: String,
     spec: Value,
     apps: Vec<McpAppType>,
@@ -492,6 +547,9 @@ pub async fn mcp_upsert_local_server(
         return Err(no_hostable_app_error(&target_apps, &canonical_spec));
     }
 
+    // One writer of the agents' config files at a time, from the scan the
+    // walk is planned on to its last write (see `mcp_engine::lock`).
+    let lock = mcp_engine::lock::acquire().await?;
     // Nothing below is reversible, and the walk REMOVES the server from every
     // non-target agent, so a target whose config cannot take it has to be
     // caught before the first write rather than halfway through.
@@ -506,7 +564,9 @@ pub async fn mcp_upsert_local_server(
             .find(|server| server.id == server_id)
             .map(|server| server.spec.clone()),
     };
-    with_upsert_preflight(&target_set, || {
+    let mut walked = false;
+    let written = with_upsert_preflight(&target_set, || {
+        walked = true;
         for app in ALL_MCP_APPS {
             if target_set.contains(&app) {
                 match (app, shown.as_ref()) {
@@ -523,7 +583,14 @@ pub async fn mcp_upsert_local_server(
             }
         }
         Ok(())
-    })?;
+    });
+    drop(lock);
+    if walked {
+        // Past the preflight every agent is walked, so every agent is
+        // announced — whether or not the walk finished.
+        mcp_engine::announce_changed(emitter, &ALL_MCP_APPS);
+    }
+    written?;
 
     find_local_server(&server_id).ok_or_else(|| {
         mcp_configuration_invalid(format!(
@@ -532,12 +599,25 @@ pub async fn mcp_upsert_local_server(
     })
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
 pub async fn mcp_set_server_apps(
+    server_id: String,
+    apps: Vec<McpAppType>,
+    app: tauri::AppHandle,
+) -> Result<Option<LocalMcpServer>, AppCommandError> {
+    mcp_set_server_apps_core(&EventEmitter::from_app(&app), server_id, apps).await
+}
+
+pub async fn mcp_set_server_apps_core(
+    emitter: &EventEmitter,
     server_id: String,
     apps: Vec<McpAppType>,
 ) -> Result<Option<LocalMcpServer>, AppCommandError> {
     let target_apps = normalize_apps(apps);
+    // One writer of the agents' config files at a time (see
+    // `mcp_engine::lock`).
+    let lock = mcp_engine::lock::acquire().await?;
     let scan = scan_local_servers();
     require_complete_scan(&scan)?;
     let current = scan
@@ -567,7 +647,9 @@ pub async fn mcp_set_server_apps(
     // config cannot take the server must stop the whole reassignment first —
     // otherwise it is dropped from its old agents and added to none.
     let added: BTreeSet<McpAppType> = target_set.difference(&current_set).copied().collect();
-    with_upsert_preflight(&added, || {
+    let mut walked = false;
+    let written = with_upsert_preflight(&added, || {
+        walked = true;
         for app in current_set.difference(&target_set) {
             remove_server_for_app(*app, &server_id)?;
         }
@@ -575,13 +657,32 @@ pub async fn mcp_set_server_apps(
             upsert_server_for_app(*app, &server_id, &current.spec)?;
         }
         Ok(())
-    })?;
+    });
+    drop(lock);
+    if walked {
+        let touched: Vec<McpAppType> = current_set
+            .symmetric_difference(&target_set)
+            .copied()
+            .collect();
+        mcp_engine::announce_changed(emitter, &touched);
+    }
+    written?;
 
     Ok(find_local_server(&server_id))
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
 pub async fn mcp_remove_server(
+    server_id: String,
+    apps: Option<Vec<McpAppType>>,
+    app: tauri::AppHandle,
+) -> Result<bool, AppCommandError> {
+    mcp_remove_server_core(&EventEmitter::from_app(&app), server_id, apps).await
+}
+
+pub async fn mcp_remove_server_core(
+    emitter: &EventEmitter,
     server_id: String,
     apps: Option<Vec<McpAppType>>,
 ) -> Result<bool, AppCommandError> {
@@ -594,11 +695,27 @@ pub async fn mcp_remove_server(
         return Ok(false);
     }
 
+    // One writer of the agents' config files at a time (see
+    // `mcp_engine::lock`).
+    let _lock = mcp_engine::lock::acquire().await?;
     let mut removed = false;
-    for app in target_apps {
-        removed |= remove_server_for_app(app, &server_id)?;
+    let mut failure = None;
+    for app in &target_apps {
+        match remove_server_for_app(*app, &server_id) {
+            Ok(here) => removed |= here,
+            Err(error) => {
+                failure = Some(error);
+                break;
+            }
+        }
     }
-    Ok(removed)
+    if removed {
+        mcp_engine::announce_changed(emitter, &target_apps);
+    }
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(removed),
+    }
 }
 
 fn normalize_apps(apps: Vec<McpAppType>) -> Vec<McpAppType> {
@@ -947,21 +1064,6 @@ fn read_codex_root_toml() -> Result<toml::Value, AppCommandError> {
     }
 
     Ok(parsed)
-}
-
-fn write_codex_root_toml(root: &toml::Value) -> Result<(), AppCommandError> {
-    let path = codex_config_toml_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(AppCommandError::io)?;
-    }
-
-    let serialized = toml::to_string_pretty(root).map_err(|e| {
-        mcp_configuration_invalid(format!(
-            "failed to serialize TOML for {}: {e}",
-            path.display()
-        ))
-    })?;
-    fs::write(&path, format!("{serialized}\n")).map_err(AppCommandError::io)
 }
 
 fn obj_as_string_map(value: Option<&Value>) -> Option<Map<String, Value>> {
@@ -2064,92 +2166,17 @@ fn read_codex_servers() -> Result<BTreeMap<String, Value>, AppCommandError> {
     Ok(out)
 }
 
+/// Write `id` into Codex's `[mcp_servers]`, the way this retired command
+/// means it — the whole entry is the spec's — but through the one writer of
+/// Codex's files (`acp::codex_catalog_commit`, under its lock), which keeps
+/// the rest of config.toml as it is.
 fn upsert_codex_server(id: &str, spec: &Value) -> Result<(), AppCommandError> {
-    let mut root = read_codex_root_toml()?;
-    let table = root
-        .as_table_mut()
-        .ok_or_else(|| mcp_configuration_invalid("Codex root TOML must be a table"))?;
-
-    let codex_entry = canonical_to_codex_entry(spec)?;
-
-    if !table
-        .get("mcp_servers")
-        .map(toml::Value::is_table)
-        .unwrap_or(false)
-    {
-        table.insert(
-            "mcp_servers".to_string(),
-            toml::Value::Table(toml::map::Map::new()),
-        );
-    }
-
-    let mcp_servers = table
-        .get_mut("mcp_servers")
-        .and_then(toml::Value::as_table_mut)
-        .ok_or_else(|| mcp_configuration_invalid("Codex mcp_servers must be a TOML table"))?;
-    mcp_servers.insert(id.to_string(), codex_entry);
-
-    if let Some(legacy_mcp) = table.get_mut("mcp").and_then(toml::Value::as_table_mut) {
-        if let Some(legacy_servers) = legacy_mcp
-            .get_mut("servers")
-            .and_then(toml::Value::as_table_mut)
-        {
-            legacy_servers.remove(id);
-            if legacy_servers.is_empty() {
-                legacy_mcp.remove("servers");
-            }
-        }
-        if legacy_mcp.is_empty() {
-            table.remove("mcp");
-        }
-    }
-
-    write_codex_root_toml(&root)
+    let entry = canonical_to_codex_entry(spec)?;
+    mcp_engine::legacy_codex_replace_entry(&codex_home_dir(), id, Some(&entry)).map(|_| ())
 }
 
 fn remove_codex_server(id: &str) -> Result<bool, AppCommandError> {
-    let path = codex_config_toml_path();
-    if !path.exists() {
-        return Ok(false);
-    }
-
-    let mut root = read_codex_root_toml()?;
-    let Some(table) = root.as_table_mut() else {
-        return Ok(false);
-    };
-
-    let mut removed = false;
-
-    if let Some(mcp_servers) = table
-        .get_mut("mcp_servers")
-        .and_then(toml::Value::as_table_mut)
-    {
-        removed |= mcp_servers.remove(id).is_some();
-        if mcp_servers.is_empty() {
-            table.remove("mcp_servers");
-        }
-    }
-
-    if let Some(legacy_mcp) = table.get_mut("mcp").and_then(toml::Value::as_table_mut) {
-        if let Some(legacy_servers) = legacy_mcp
-            .get_mut("servers")
-            .and_then(toml::Value::as_table_mut)
-        {
-            removed |= legacy_servers.remove(id).is_some();
-            if legacy_servers.is_empty() {
-                legacy_mcp.remove("servers");
-            }
-        }
-        if legacy_mcp.is_empty() {
-            table.remove("mcp");
-        }
-    }
-
-    if removed {
-        write_codex_root_toml(&root)?;
-    }
-
-    Ok(removed)
+    mcp_engine::legacy_codex_replace_entry(&codex_home_dir(), id, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -2170,10 +2197,10 @@ fn remove_codex_server(id: &str) -> Result<bool, AppCommandError> {
 // entry is not an assignment, and nothing but saving it ON touches it.
 
 /// The keys of `mcp` that are never server ids.
-const OPENCODE_MCP_RESERVED: [&str; 2] = ["servers", "timeout"];
+pub(crate) const OPENCODE_MCP_RESERVED: [&str; 2] = ["servers", "timeout"];
 
 /// A 1.x direct server entry: an object whose `type` is `local` or `remote`.
-fn is_opencode_direct_entry(value: &Value) -> bool {
+pub(crate) fn is_opencode_direct_entry(value: &Value) -> bool {
     matches!(
         value.get("type").and_then(Value::as_str),
         Some("local" | "remote")
@@ -2442,7 +2469,10 @@ fn apply_opencode_managed_keys(entry: &jsonc_parser::cst::CstObject, managed: &M
 /// the conversion OpenCode applies when it loads one (`migrateMcp` in
 /// `core/src/v1/config/migrate.ts`): a bare-number `timeout` bounds every
 /// phase, and OAuth's camelCase fields become snake_case.
-fn opencode_legacy_extras(legacy: &Value, managed: &Map<String, Value>) -> Map<String, Value> {
+pub(crate) fn opencode_legacy_extras(
+    legacy: &Value,
+    managed: &Map<String, Value>,
+) -> Map<String, Value> {
     let mut out = Map::new();
     let Some(obj) = legacy
         .as_object()
@@ -3681,57 +3711,19 @@ fn upsert_server_for_app(app: McpAppType, id: &str, spec: &Value) -> Result<(), 
     }
 }
 
+/// The servers codeg sends `agent_type` when it starts a session, read with
+/// codeg's own environment: name → `{type, command/args/env | url/headers}`.
+///
+/// A thin door onto the MCP engine's reader
+/// (`mcp_engine::session::servers_for_session`), which a launch calls with
+/// the agent's own environment instead. What it leaves out — an entry the
+/// agent's flag turns off, pi's and a custom agent's (nothing reaches them
+/// over the wire), an entry named like the built-in companion — is told
+/// there.
 pub fn read_servers_for_agent_type(
     agent_type: crate::models::agent::AgentType,
 ) -> Result<BTreeMap<String, Value>, AppCommandError> {
-    use crate::models::agent::AgentType;
-    match agent_type {
-        AgentType::ClaudeCode => read_claude_servers(),
-        AgentType::Codex => read_codex_servers(),
-        AgentType::OpenCode => read_opencode_servers(),
-        AgentType::Gemini => read_gemini_servers(),
-        AgentType::OpenClaw => read_openclaw_servers(),
-        AgentType::Cline => read_cline_servers(),
-        AgentType::Hermes => read_hermes_servers(),
-        AgentType::CodeBuddy => read_codebuddy_servers(),
-        AgentType::KimiCode => read_kimi_code_servers(),
-        AgentType::Grok => read_grok_servers(),
-        AgentType::Cursor => read_cursor_servers(),
-        // pi-acp drops ACP-wire MCP and pi has no native MCP (it needs a
-        // third-party extension). Scanning its extension config must not
-        // change the servers forwarded to a pi ACP session.
-        AgentType::Pi => Ok(BTreeMap::new()),
-        // deepseek-acp has no native MCP config file: it takes servers only
-        // as `session/new`'s `mcpServers`. `$DSH_HOME/mcp.json` is codeg's own
-        // record of what to send, and the ACP wire is the delivery path — so
-        // unlike Kimi/Grok/Cursor, DeepSeek must stay OFF the forward skip
-        // list in `connection.rs` or these servers never arrive.
-        AgentType::DeepSeek => read_deepseek_servers(),
-        AgentType::ZCode => read_zcode_servers(),
-        // Qoder reads MCP servers from its own settings.json `mcpServers`
-        // (gemini-schema settings file) at startup — see the Qoder section
-        // above for why it rides the forward skip list instead of the wire.
-        AgentType::Qoder => read_qoder_servers(),
-        // Antigravity's ACP server reads `<GEMINI_HOME>/config/mcp_config.json`
-        // itself at session setup — see the Antigravity section above for why
-        // it rides the forward skip list rather than the wire.
-        AgentType::Antigravity => read_antigravity_servers(),
-        // Kiro loads `<KIRO_HOME>/settings/mcp.json` natively — see the Kiro
-        // section below for why it rides the forward skip list.
-        AgentType::Kiro => read_kiro_servers(),
-        // TRAE CLI loads `<TRAE_HOME>/traecli.toml` natively — see the TRAE
-        // CLI section below for why it rides the forward skip list.
-        AgentType::Trae => read_trae_servers(),
-        // Command Code loads `~/.commandcode/mcp.json` natively — see the
-        // Command Code section below for why it rides the forward skip list.
-        AgentType::CommandCode => read_command_code_servers(),
-        // MiniMax Code receives client-owned assignments over the ACP wire.
-        AgentType::MiniMaxCode => read_minimax_code_servers(),
-        // Custom agents get MCP purely over the ACP wire (`session/new`'s
-        // `mcpServers`); codeg deliberately knows nothing about their native
-        // config files, so there is no per-agent store to read back here.
-        AgentType::Custom(_) => Ok(BTreeMap::new()),
-    }
+    mcp_engine::session::servers_for_session(agent_type, &crate::parsers::AgentEnv::inherited())
 }
 
 // ---------------------------------------------------------------------------
@@ -4835,7 +4827,7 @@ fn cursor_entry_to_canonical(spec: &Value, id: &str) -> Result<Value, AppCommand
 /// present must hold a value — `null` fails, as Zod's `optional` takes only
 /// a missing key. A bad `startupTimeoutSec` is no reason to fail: Cursor
 /// discards it.
-fn fits_cursor_stdio(entry: &Map<String, Value>) -> bool {
+pub(crate) fn fits_cursor_stdio(entry: &Map<String, Value>) -> bool {
     let absent_or = |key: &str, check: fn(&Value) -> bool| entry.get(key).is_none_or(check);
     entry.get("command").is_some_and(Value::is_string)
         && absent_or("type", |value| value.as_str() == Some("stdio"))
@@ -4848,7 +4840,7 @@ fn fits_cursor_stdio(entry: &Map<String, Value>) -> bool {
 
 /// Whether `entry` passes the remote branch of Cursor's union: a string
 /// `url`, and every other remote field it has well-formed.
-fn fits_cursor_remote(entry: &Map<String, Value>) -> bool {
+pub(crate) fn fits_cursor_remote(entry: &Map<String, Value>) -> bool {
     let absent_or = |key: &str, check: fn(&Value) -> bool| entry.get(key).is_none_or(check);
     entry.get("url").is_some_and(Value::is_string)
         && absent_or("type", |value| matches!(value.as_str(), Some("http" | "sse")))
@@ -5835,6 +5827,8 @@ struct OfficialArgument {
     _is_repeated: Option<bool>,
     #[serde(default, rename = "valueHint")]
     value_hint: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_choices")]
+    choices: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5854,6 +5848,36 @@ struct OfficialKeyValueInput {
     is_secret: Option<bool>,
     #[serde(default, rename = "valueHint")]
     value_hint: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_choices")]
+    choices: Vec<String>,
+}
+
+/// The values an input may take (`choices`), as text. Read leniently: a
+/// number or a boolean is written as text, anything else is left out, and a
+/// `choices` that is not a list is none — never a reason to drop the input.
+fn choices_of(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| match item {
+                    Value::String(text) => Some(text.clone()),
+                    Value::Number(number) => Some(number.to_string()),
+                    Value::Bool(flag) => Some(flag.to_string()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn deserialize_choices<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<Value>::deserialize(deserializer)?;
+    Ok(choices_of(raw.as_ref()))
 }
 
 fn deserialize_official_key_value_inputs<'de, D>(
@@ -5902,6 +5926,7 @@ where
                 is_required: None,
                 is_secret: None,
                 value_hint: None,
+                choices: Vec::new(),
             };
 
             if let Some(text) = item.as_str() {
@@ -5946,6 +5971,7 @@ where
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(str::to_string);
+                parsed.choices = choices_of(obj.get("choices"));
             }
 
             out.push(parsed);
@@ -6359,21 +6385,17 @@ fn official_kv_default(item: &OfficialKeyValueInput) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Whether the server says this value must be given. One it calls optional is
+/// left out when the user gives none — with or without a default, and also
+/// when its value is a template (`Bearer {token}`), which is no default.
 fn official_kv_is_required(item: &OfficialKeyValueInput) -> bool {
-    if item.is_required.unwrap_or(false) {
-        return true;
-    }
-    let has_placeholder = item
-        .value
-        .as_deref()
-        .map(contains_unresolved_placeholder)
-        .unwrap_or(false)
-        || item
-            .default
-            .as_deref()
-            .map(contains_unresolved_placeholder)
-            .unwrap_or(false);
-    has_placeholder || official_kv_default(item).is_none()
+    item.is_required.unwrap_or(false)
+}
+
+/// Whether a value the server declares is to be treated as a secret: marked
+/// so, or named like one.
+fn official_kv_is_secret(item: &OfficialKeyValueInput) -> bool {
+    item.is_secret.unwrap_or(false) || key_looks_secret(item.name.trim())
 }
 
 fn append_query_param(url: &str, key: &str, value: &str) -> String {
@@ -6381,6 +6403,19 @@ fn append_query_param(url: &str, key: &str, value: &str) -> String {
     let encoded_value = urlencoding::encode(value);
     let separator = if url.contains('?') { '&' } else { '?' };
     format!("{url}{separator}{encoded_key}={encoded_value}")
+}
+
+/// Whether `placeholder` occurs in the query (or fragment) of `url`.
+fn placeholder_in_query(url: &str, placeholder: &str) -> bool {
+    url.find(['?', '#'])
+        .is_some_and(|query| url.match_indices(placeholder).any(|(at, _)| at > query))
+}
+
+fn secret_in_query_error(name: &str) -> AppCommandError {
+    mcp_invalid_input(format!(
+        "the secret '{name}' would have to go into the URL's query string"
+    ))
+    .with_i18n("errors.secretInQuery", mcp_i18n_params([("name", name)]))
 }
 
 fn apply_transport_variables(
@@ -6406,12 +6441,21 @@ fn apply_transport_variables(
             let encoded = urlencoding::encode(&text);
             let brace = format!("{{{key_name}}}");
             let moustache = format!("{{{{{key_name}}}}}");
-            if url.contains(&brace) {
-                url = url.replace(&brace, &encoded);
-            } else if url.contains(&moustache) {
-                url = url.replace(&moustache, &encoded);
-            } else {
-                url = append_query_param(&url, key_name, &text);
+            // `{{name}}` holds `{name}`: the longer spelling is looked for
+            // first, or its outer braces would be left behind.
+            let placeholder = [moustache, brace]
+                .into_iter()
+                .find(|placeholder| url.contains(placeholder));
+            // A secret goes where the template puts it, but never into the
+            // query string, where proxies and logs keep it.
+            let secret = official_kv_is_secret(item);
+            match placeholder {
+                Some(placeholder) if secret && placeholder_in_query(&url, &placeholder) => {
+                    return Err(secret_in_query_error(key_name));
+                }
+                Some(placeholder) => url = url.replace(&placeholder, &encoded),
+                None if secret => return Err(secret_in_query_error(key_name)),
+                None => url = append_query_param(&url, key_name, &text),
             }
             continue;
         }
@@ -6523,7 +6567,7 @@ fn official_remote_parameter_fields(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(str::to_string),
-                enum_values: Vec::new(),
+                enum_values: item.choices.clone(),
                 location: Some("header".to_string()),
             });
         }
@@ -6557,7 +6601,7 @@ fn official_remote_parameter_fields(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .map(str::to_string),
-                enum_values: Vec::new(),
+                enum_values: item.choices.clone(),
                 location: Some("query".to_string()),
             });
         }
@@ -6692,6 +6736,53 @@ fn resolve_official_install_spec_with_selection(
     )))
 }
 
+/// A Harness item's `server.json` (the registry's own format), read the way
+/// the official registry's servers are, with every package's version
+/// replaced by the one Harness pinned: `pin(registry_type, identifier)`.
+/// A package `pin` has no version for keeps none — never the one the
+/// server.json names, which may be `latest` or missing.
+fn pinned_official_server(
+    server: &Value,
+    pin: &dyn Fn(&str, &str) -> Option<String>,
+) -> Result<OfficialServer, AppCommandError> {
+    let mut parsed: OfficialServer = serde_json::from_value(server.clone())
+        .map_err(|e| mcp_configuration_invalid(format!("not a registry server.json: {e}")))?;
+    for package in parsed.packages.iter_mut().flatten() {
+        package.version = pin(package.registry_type.trim(), package.identifier.trim());
+    }
+    Ok(parsed)
+}
+
+/// The install options of a Harness item's server.json, one per package and
+/// per remote, with Harness's pinned versions (see `pinned_official_server`).
+/// What may be installed from Harness is decided on top of these, in
+/// `harness::mcp`.
+pub(crate) fn harness_install_options(
+    server: &Value,
+    pin: &dyn Fn(&str, &str) -> Option<String>,
+) -> Result<Vec<McpMarketplaceInstallOption>, AppCommandError> {
+    build_official_install_options(&pinned_official_server(server, pin)?)
+}
+
+/// The definition the option `option_id` of a Harness item's server.json
+/// makes with these parameter values (keys as the option's `parameters`
+/// name them), as a canonical spec (`type`, `command`/`args`/`env` or
+/// `url`/`headers`). Fails on a required value that is missing.
+pub(crate) fn harness_install_spec(
+    server: &Value,
+    pin: &dyn Fn(&str, &str) -> Option<String>,
+    option_id: &str,
+    values: Map<String, Value>,
+) -> Result<Value, AppCommandError> {
+    let server = pinned_official_server(server, pin)?;
+    let selection = InstallSelection {
+        option_id: Some(option_id.to_string()),
+        protocol: None,
+        parameter_values: values,
+    };
+    resolve_official_install_spec_with_selection(&server, &selection)
+}
+
 fn package_identifier_with_version(package: &OfficialPackage, runtime: &str) -> String {
     let identifier = package.identifier.trim();
     if identifier.is_empty() {
@@ -6709,20 +6800,35 @@ fn package_identifier_with_version(package: &OfficialPackage, runtime: &str) -> 
     };
 
     if runtime == "uvx" {
-        if package.registry_type.trim() == "pypi" {
+        if package.registry_type.trim() == "pypi" && !pypi_identifier_has_version(identifier) {
             return format!("{identifier}=={version}");
         }
         return identifier.to_string();
     }
 
     if runtime == "npx" {
-        if identifier.contains('@') || identifier.starts_with("http") {
+        if npm_identifier_has_version(identifier) || identifier.starts_with("http") {
             return identifier.to_string();
         }
         return format!("{identifier}@{version}");
     }
 
     identifier.to_string()
+}
+
+/// Whether an npm package spec already names a version or a tag:
+/// `name@1.2.3`, `@scope/name@1.2.3`, `name@latest`. The `@` a scope starts
+/// with (`@scope/name`) is not one.
+pub(crate) fn npm_identifier_has_version(identifier: &str) -> bool {
+    let name = identifier.strip_prefix('@').unwrap_or(identifier);
+    name.contains('@')
+}
+
+/// Whether a PyPI requirement already says which versions it takes:
+/// `name==1.2`, `name>=1`, `name~=1.0`, `name!=2`, `name @ <url>`, or a
+/// requirement with markers. Extras (`name[cli]`) are not a version.
+pub(crate) fn pypi_identifier_has_version(identifier: &str) -> bool {
+    identifier.contains(['=', '<', '>', '!', '~', '@', ' ', ';', ','])
 }
 
 fn argument_value(arg: &OfficialArgument) -> Option<String> {
@@ -6848,7 +6954,7 @@ fn official_stdio_parameter_fields(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
-            enum_values: Vec::new(),
+            enum_values: arg.choices.clone(),
             location: Some("arg".to_string()),
         });
     }
@@ -6883,7 +6989,7 @@ fn official_stdio_parameter_fields(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
-            enum_values: Vec::new(),
+            enum_values: arg.choices.clone(),
             location: Some("arg".to_string()),
         });
     }
@@ -6915,7 +7021,7 @@ fn official_stdio_parameter_fields(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string),
-            enum_values: Vec::new(),
+            enum_values: item.choices.clone(),
             location: Some("env".to_string()),
         });
     }
@@ -10575,6 +10681,293 @@ mod tests {
         );
         let params = err.i18n_params.as_ref().expect("i18n params attached");
         assert_eq!(params.get("type").map(String::as_str), Some("ws"));
+    }
+
+    // ─── The conversion Harness reuses ──────────────────────────────────
+
+    fn npm_package(identifier: &str, version: Option<&str>) -> OfficialPackage {
+        serde_json::from_value(serde_json::json!({
+            "registryType": "npm",
+            "identifier": identifier,
+            "version": version,
+            "transport": { "type": "stdio" }
+        }))
+        .expect("OfficialPackage from json")
+    }
+
+    #[test]
+    fn a_scoped_npm_package_gets_its_pinned_version() {
+        let cases = [
+            ("@scope/server", Some("1.2.3"), "@scope/server@1.2.3"),
+            ("server", Some("1.2.3"), "server@1.2.3"),
+            (
+                "@scope/server",
+                Some("2.0.0-beta.1"),
+                "@scope/server@2.0.0-beta.1",
+            ),
+            // a name that already says which version it is keeps it
+            ("@scope/server@1.0.0", Some("1.2.3"), "@scope/server@1.0.0"),
+            ("server@1.0.0", Some("1.2.3"), "server@1.0.0"),
+            ("server@next", Some("1.2.3"), "server@next"),
+            // no version, or `latest`: none is added
+            ("@scope/server", None, "@scope/server"),
+            ("@scope/server", Some("latest"), "@scope/server"),
+            ("@scope/server", Some("  "), "@scope/server"),
+        ];
+        for (identifier, version, expected) in cases {
+            assert_eq!(
+                package_identifier_with_version(&npm_package(identifier, version), "npx"),
+                expected,
+                "{identifier} {version:?}"
+            );
+        }
+        assert!(!npm_identifier_has_version("@scope/server"));
+        assert!(!npm_identifier_has_version("server"));
+        assert!(npm_identifier_has_version("@scope/server@1"));
+        assert!(npm_identifier_has_version("server@1"));
+    }
+
+    #[test]
+    fn a_pypi_package_runs_with_uvx_and_double_equals() {
+        let package: OfficialPackage = serde_json::from_value(serde_json::json!({
+            "registryType": "pypi",
+            "identifier": "mcp-server-fetch",
+            "version": "2025.4.7",
+            "transport": { "type": "stdio" }
+        }))
+        .unwrap();
+        let spec = resolve_official_stdio_package(&package).unwrap();
+        assert_eq!(spec["command"], "uvx");
+        assert_eq!(
+            spec["args"],
+            serde_json::json!(["mcp-server-fetch==2025.4.7"])
+        );
+
+        for (identifier, expected) in [
+            ("notes[cli]", "notes[cli]==1.0"),
+            ("notes==0.9", "notes==0.9"),
+            ("notes>=0.9", "notes>=0.9"),
+            ("notes~=0.9", "notes~=0.9"),
+        ] {
+            let package: OfficialPackage = serde_json::from_value(serde_json::json!({
+                "registryType": "pypi", "identifier": identifier, "version": "1.0",
+                "transport": { "type": "stdio" }
+            }))
+            .unwrap();
+            assert_eq!(
+                package_identifier_with_version(&package, "uvx"),
+                expected,
+                "{identifier}"
+            );
+        }
+    }
+
+    #[test]
+    fn harness_pins_replace_the_server_json_versions() {
+        let server = serde_json::json!({
+            "name": "io.github.someone/notes",
+            "packages": [
+                { "registryType": "npm", "identifier": "@some/notes", "version": "latest",
+                  "transport": { "type": "stdio" } },
+                { "registryType": "pypi", "identifier": "notes", "version": "0.1.0",
+                  "transport": { "type": "stdio" } }
+            ]
+        });
+        let pin = |registry: &str, identifier: &str| match (registry, identifier) {
+            ("npm", "@some/notes") => Some("1.2.3".to_string()),
+            _ => None,
+        };
+        let options = harness_install_options(&server, &pin).unwrap();
+        assert_eq!(options.len(), 2);
+        assert_eq!(
+            options[0].spec["args"],
+            serde_json::json!(["-y", "@some/notes@1.2.3"])
+        );
+        // not pinned by Harness: no version at all, not the server.json's
+        assert_eq!(options[1].spec["args"], serde_json::json!(["notes"]));
+        let spec =
+            harness_install_spec(&server, &pin, "official:package:0:stdio", Map::new()).unwrap();
+        assert_eq!(spec["command"], "npx");
+        assert_eq!(spec["args"], serde_json::json!(["-y", "@some/notes@1.2.3"]));
+        assert!(harness_install_spec(&server, &pin, "official:remote:0:http", Map::new()).is_err());
+    }
+
+    #[test]
+    fn a_server_with_only_remotes_writes_its_url() {
+        let server = serde_json::json!({
+            "name": "com.example/notes",
+            "remotes": [
+                { "type": "streamable-http", "url": "https://mcp.example.com/mcp",
+                  "headers": [{ "name": "Authorization", "isRequired": true, "isSecret": true }] },
+                { "type": "sse", "url": "https://mcp.example.com/sse" }
+            ]
+        });
+        let options = harness_install_options(&server, &|_, _| None).unwrap();
+        let ids: Vec<&str> = options.iter().map(|option| option.id.as_str()).collect();
+        assert_eq!(ids, ["official:remote:0:http", "official:remote:1:sse"]);
+        assert_eq!(options[0].spec["url"], "https://mcp.example.com/mcp");
+        let header = &options[0].parameters[0];
+        assert_eq!(header.key, "headers.Authorization");
+        assert!(header.required && header.secret);
+
+        let mut values = Map::new();
+        values.insert(
+            "headers.Authorization".to_string(),
+            Value::String("Bearer t".to_string()),
+        );
+        let spec =
+            harness_install_spec(&server, &|_, _| None, "official:remote:0:http", values).unwrap();
+        assert_eq!(
+            spec,
+            serde_json::json!({ "type": "http", "url": "https://mcp.example.com/mcp",
+                                "headers": { "Authorization": "Bearer t" } })
+        );
+        // the required header, not given
+        assert!(
+            harness_install_spec(&server, &|_, _| None, "official:remote:0:http", Map::new())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn an_optional_parameter_without_a_default_is_not_required() {
+        let server = serde_json::json!({
+            "name": "com.example/notes",
+            "packages": [{
+                "registryType": "npm", "identifier": "notes", "version": "1.0.0",
+                "transport": { "type": "stdio" },
+                "environmentVariables": [
+                    { "name": "NOTES_DIR", "description": "Where the notes are" },
+                    { "name": "NOTES_TOKEN", "isRequired": true, "isSecret": true },
+                    { "name": "NOTES_MODE", "default": "fast" },
+                    { "name": "NOTES_HEADER", "value": "Bearer {token}" }
+                ],
+                "packageArguments": [
+                    { "type": "named", "name": "--verbose" },
+                    { "type": "positional", "valueHint": "root", "isRequired": true }
+                ]
+            }]
+        });
+        let pin = |_: &str, _: &str| Some("1.0.0".to_string());
+        let options = harness_install_options(&server, &pin).unwrap();
+        let required: BTreeMap<&str, bool> = options[0]
+            .parameters
+            .iter()
+            .map(|parameter| (parameter.key.as_str(), parameter.required))
+            .collect();
+        assert_eq!(
+            required,
+            BTreeMap::from([
+                ("env.NOTES_DIR", false),
+                ("env.NOTES_TOKEN", true),
+                ("env.NOTES_MODE", false),
+                ("env.NOTES_HEADER", false),
+                ("package_arguments.0", false),
+                ("package_arguments.1", true),
+            ])
+        );
+
+        let mut values = Map::new();
+        values.insert("env.NOTES_TOKEN".into(), Value::String("t".into()));
+        values.insert("package_arguments.1".into(), Value::String("/notes".into()));
+        let spec = harness_install_spec(&server, &pin, "official:package:0:stdio", values).unwrap();
+        // the optional ones without a value are simply left out
+        assert_eq!(
+            spec,
+            serde_json::json!({
+                "type": "stdio", "command": "npx", "args": ["-y", "notes@1.0.0", "/notes"],
+                "env": { "NOTES_TOKEN": "t", "NOTES_MODE": "fast" }
+            })
+        );
+    }
+
+    #[test]
+    fn a_secret_never_goes_into_the_query_string() {
+        let remote = |url: &str, variables: Value| -> OfficialTransport {
+            serde_json::from_value(serde_json::json!({
+                "type": "streamable-http", "url": url, "variables": variables
+            }))
+            .unwrap()
+        };
+        let values = |pairs: &[(&str, &str)]| -> Map<String, Value> {
+            pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), Value::String(value.to_string())))
+                .collect()
+        };
+
+        // in the path, as the template puts it
+        let path = remote(
+            "https://mcp.example.com/{tenant}/{api_key}/mcp",
+            serde_json::json!([{ "name": "tenant" }, { "name": "api_key", "isSecret": true }]),
+        );
+        let spec = remote_spec_from_transport_with_values(
+            &path,
+            &values(&[
+                ("variables.tenant", "acme"),
+                ("variables.api_key", "s3cret"),
+            ]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(spec["url"], "https://mcp.example.com/acme/s3cret/mcp");
+
+        // a value that is not secret still goes to the query, as before
+        let plain = remote(
+            "https://mcp.example.com/mcp",
+            serde_json::json!([{ "name": "region" }]),
+        );
+        let spec = remote_spec_from_transport_with_values(
+            &plain,
+            &values(&[("variables.region", "eu west")]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(spec["url"], "https://mcp.example.com/mcp?region=eu%20west");
+
+        // a secret is neither appended nor put into a query placeholder —
+        // also when only its name says it is one
+        for transport in [
+            remote(
+                "https://mcp.example.com/mcp",
+                serde_json::json!([{ "name": "key", "isSecret": true }]),
+            ),
+            remote(
+                "https://mcp.example.com/mcp?key={key}",
+                serde_json::json!([{ "name": "key", "isSecret": true }]),
+            ),
+            remote(
+                "https://mcp.example.com/mcp?x=1&key={{key}}",
+                serde_json::json!([{ "name": "key", "isSecret": true }]),
+            ),
+            remote(
+                "https://mcp.example.com/mcp",
+                serde_json::json!([{ "name": "access_token" }]),
+            ),
+        ] {
+            let name = transport.variables.as_ref().unwrap()[0].name.clone();
+            let err = remote_spec_from_transport_with_values(
+                &transport,
+                &values(&[(&format!("variables.{name}"), "s3cret")]),
+                true,
+            )
+            .expect_err("a secret in the query");
+            assert_eq!(err.i18n_key.as_deref(), Some("errors.secretInQuery"));
+            assert!(!err.message.contains("s3cret"));
+        }
+
+        // `{{name}}` is filled whole, braces and all
+        let moustache = remote(
+            "https://{{region}}.example.com/mcp",
+            serde_json::json!([{ "name": "region" }]),
+        );
+        let spec = remote_spec_from_transport_with_values(
+            &moustache,
+            &values(&[("variables.region", "eu")]),
+            true,
+        )
+        .unwrap();
+        assert_eq!(spec["url"], "https://eu.example.com/mcp");
     }
 
     fn make_smithery_connection(kind: &str) -> SmitheryConnection {

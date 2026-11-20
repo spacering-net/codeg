@@ -140,6 +140,7 @@ export function PiProjectTrustBanner({
     // Invalidate anything in flight for the previous workspace before deciding
     // what to do about this one.
     generation.current += 1
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- drops the old workspace's probe in the same step that invalidates its in-flight fetch
     setProbed(null)
     if (!eligible) return
     void refresh()

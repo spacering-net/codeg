@@ -187,7 +187,7 @@ pub fn handle_message(app: &AppHandle, tab_id: &str, raw: String, main_frame: bo
         "gesture" => {
             registry.push_gesture(tab_id, envelope.payload.clone());
             emit_event(
-                &EventEmitter::Tauri(app.clone()),
+                &EventEmitter::from_app(app),
                 TELEMETRY_EVENT,
                 json!({
                     "tabId": tab_id,

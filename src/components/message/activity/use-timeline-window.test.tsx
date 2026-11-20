@@ -108,6 +108,60 @@ describe("useTimelineWindow", () => {
     expect(view.queryByText("drawer-0")).toBeNull()
   })
 
+  it("unobserves rows removed by scrolling without waiting for a resize delivery", async () => {
+    const observed = new Set<Element>()
+    const observe = vi.fn((element: Element) => observed.add(element))
+    const unobserve = vi.fn((element: Element) => observed.delete(element))
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe = observe
+        unobserve = unobserve
+        disconnect() {}
+      }
+    )
+    const rows = rowsOf("retire-", 300)
+    let scrollTop = 0
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        if (this.dataset.testid === "port") return rect(0, 500)
+        if (this.dataset.testid === "list") {
+          return rect(-scrollTop, 300 * (ROW_PX + GAP_PX))
+        }
+        return rect(0, ROW_PX)
+      }
+    )
+    const view = render(
+      <div data-testid="port" style={{ overflowY: "auto" }}>
+        <List testId="list" scope="item" rows={rows} />
+      </div>
+    )
+    const port = view.getByTestId("port")
+    const list = view.getByTestId("list")
+    const retired = view.getByText("retire-0")
+    const currentRows = () => new Set(list.querySelectorAll("[data-step-key]"))
+    const observedRows = () =>
+      new Set([...observed].filter((el) => el.matches("[data-step-key]")))
+
+    expect(observed.has(retired)).toBe(true)
+    scrollTop = 200 * (ROW_PX + GAP_PX)
+    port.scrollTop = scrollTop
+    act(() => port.dispatchEvent(new Event("scroll")))
+    await waitFor(() => expect(view.getByText("retire-200")).toBeTruthy())
+
+    expect(retired.isConnected).toBe(false)
+    expect(unobserve).toHaveBeenCalledWith(retired)
+    expect(observedRows()).toEqual(currentRows())
+
+    observe.mockClear()
+    view.rerender(
+      <div data-testid="port" style={{ overflowY: "auto" }}>
+        <List testId="list" scope="item" rows={rows} />
+      </div>
+    )
+    expect(observe).not.toHaveBeenCalled()
+  })
+
   it("keeps a group's height apart from its first member's, which shares its key", () => {
     const callbacks: ResizeObserverCallback[] = []
     vi.stubGlobal(

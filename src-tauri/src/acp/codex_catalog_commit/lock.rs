@@ -156,12 +156,60 @@ pub async fn acquire(home: &Path, wait: Duration) -> Result<CodexHomeGuard, Lock
     })
 }
 
-type FileLock = (Option<std::fs::File>, Option<PathBuf>);
+/// [`acquire`] for a caller that cannot await: the same two layers, waited
+/// for on this thread. The retired MCP commands write Codex's `mcp_servers`
+/// from synchronous code; everything else should use [`acquire`].
+pub fn acquire_blocking(home: &Path, wait: Duration) -> Result<CodexHomeGuard, LockError> {
+    let deadline = Instant::now() + wait;
+    let lock = process_lock(home);
+    let process = loop {
+        match lock.clone().try_lock_owned() {
+            Ok(guard) => break guard,
+            Err(_) => {
+                if Instant::now() >= deadline {
+                    return Err(LockError::Busy);
+                }
+                std::thread::sleep(POLL);
+            }
+        }
+    };
+    let file = acquire_file(home, deadline)?;
+    Ok(CodexHomeGuard {
+        home: home.to_path_buf(),
+        _process: process,
+        _file: file.0,
+        fallback: file.1,
+    })
+}
+
+/// A held cross-process lock: the locked file, or — on a file system without
+/// `try_lock` — the fallback lock file to remove on release.
+pub(crate) type FileLock = (Option<std::fs::File>, Option<PathBuf>);
 
 fn acquire_file(home: &Path, deadline: Instant) -> Result<FileLock, LockError> {
-    std::fs::create_dir_all(home)
-        .map_err(|e| LockError::Io(format!("create {}: {e}", home.display())))?;
-    let path = home.join(LOCK_FILE);
+    acquire_file_named(
+        home,
+        LOCK_FILE,
+        FALLBACK_LOCK_FILE,
+        "codex-catalog",
+        deadline,
+    )
+}
+
+/// The cross-process layer, for any lock file: `dir/lock_file` held with
+/// `try_lock`, else `dir/fallback_file` created with `create_new` (see the
+/// module docs for why that one is never taken over). The MCP write lock
+/// (`commands::mcp_engine::lock`) is the same lock under another name.
+pub(crate) fn acquire_file_named(
+    dir: &Path,
+    lock_file: &str,
+    fallback_file: &str,
+    label: &str,
+    deadline: Instant,
+) -> Result<FileLock, LockError> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| LockError::Io(format!("create {}: {e}", dir.display())))?;
+    let path = dir.join(lock_file);
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -180,10 +228,11 @@ fn acquire_file(home: &Path, deadline: Instant) -> Result<FileLock, LockError> {
             }
             Err(std::fs::TryLockError::Error(e)) => {
                 tracing::warn!(
-                    "[codex-catalog] {} cannot be locked ({e}); using {FALLBACK_LOCK_FILE}",
+                    "[{label}] {} cannot be locked ({e}); using {fallback_file}",
                     path.display()
                 );
-                return acquire_fallback(home, deadline).map(|p| (None, Some(p)));
+                return acquire_fallback_named(dir, fallback_file, deadline)
+                    .map(|p| (None, Some(p)));
             }
         }
     }
@@ -193,9 +242,18 @@ fn this_host() -> String {
     crate::commands::config_sync::snapshot::source_device()
 }
 
+#[cfg(test)]
 fn acquire_fallback(home: &Path, deadline: Instant) -> Result<PathBuf, LockError> {
+    acquire_fallback_named(home, FALLBACK_LOCK_FILE, deadline)
+}
+
+fn acquire_fallback_named(
+    dir: &Path,
+    fallback_file: &str,
+    deadline: Instant,
+) -> Result<PathBuf, LockError> {
     use std::io::Write;
-    let path = home.join(FALLBACK_LOCK_FILE);
+    let path = dir.join(fallback_file);
     loop {
         match std::fs::OpenOptions::new()
             .write(true)

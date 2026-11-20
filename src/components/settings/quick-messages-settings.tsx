@@ -157,6 +157,7 @@ export function QuickMessagesSettings() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial list fetch; the loader flips its loading flag first
     refresh().catch((err) => {
       console.error("[QuickMessagesSettings] initial refresh failed:", err)
     })
@@ -187,21 +188,19 @@ export function QuickMessagesSettings() {
     [messages, selectedId]
   )
 
-  useEffect(() => {
-    if (selectedMessage) {
-      setDraftTitle(selectedMessage.title)
-      setDraftContent(selectedMessage.content)
-    } else {
-      setDraftTitle("")
-      setDraftContent("")
-    }
-  }, [selectedMessage])
+  // Re-seed the editor whenever the selected message (or its stored copy)
+  // changes. Adjusted while rendering; both start empty, so mount needs none.
+  const [seededMessage, setSeededMessage] = useState(selectedMessage)
+  if (selectedMessage !== seededMessage) {
+    setSeededMessage(selectedMessage)
+    setDraftTitle(selectedMessage?.title ?? "")
+    setDraftContent(selectedMessage?.content ?? "")
+  }
 
-  useEffect(() => {
-    if (selectedId === null && messages.length > 0) {
-      setSelectedId(messages[0].id)
-    }
-  }, [selectedId, messages])
+  // Fall back to the first message whenever nothing is selected.
+  if (selectedId === null && messages.length > 0) {
+    setSelectedId(messages[0].id)
+  }
 
   const filteredMessages = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()

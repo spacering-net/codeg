@@ -536,7 +536,7 @@ pub async fn set_computer_tools_settings(
 ) -> Result<ComputerToolsSettings, AppCommandError> {
     #[cfg(feature = "tauri-runtime")]
     {
-        let emitter = EventEmitter::Tauri(app);
+        let emitter = EventEmitter::from_app(&app);
         set_computer_tools_settings_core(&db.conn, &config, &emitter, settings).await
     }
     #[cfg(not(feature = "tauri-runtime"))]
@@ -555,7 +555,7 @@ pub async fn set_computer_tools_enabled(
 ) -> Result<ComputerToolsSettings, AppCommandError> {
     #[cfg(feature = "tauri-runtime")]
     {
-        let emitter = EventEmitter::Tauri(app);
+        let emitter = EventEmitter::from_app(&app);
         set_computer_tools_enabled_core(&db.conn, &config, &emitter, enabled).await
     }
     #[cfg(not(feature = "tauri-runtime"))]
@@ -598,7 +598,7 @@ pub async fn set_computer_tools_preferences(
     };
     #[cfg(feature = "tauri-runtime")]
     {
-        let emitter = EventEmitter::Tauri(app);
+        let emitter = EventEmitter::from_app(&app);
         set_computer_tools_preferences_core(&db.conn, &config, &emitter, preferences).await
     }
     #[cfg(not(feature = "tauri-runtime"))]

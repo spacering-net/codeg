@@ -17,18 +17,20 @@ import type {
 // ─── Ranges ─────────────────────────────────────────────────────────────
 
 export type TokenUsageRangePreset =
+  | "today"
+  | "24h"
   | "7d"
   | "30d"
-  | "90d"
   | "thisMonth"
   | "thisYear"
   | "all"
   | "custom"
 
 export const RANGE_PRESETS: TokenUsageRangePreset[] = [
+  "today",
+  "24h",
   "7d",
   "30d",
-  "90d",
   "thisMonth",
   "thisYear",
   "all",
@@ -91,11 +93,33 @@ export function rangeDefaultMonth(from: string, to: string, today: Date): Date {
 }
 
 /**
+ * The top of `d`'s local clock hour.
+ *
+ * Trims the minutes off the instant rather than rebuilding it from local date
+ * parts: on a DST fall-back the repeated hour has two instants, and the date
+ * constructor picks the earlier one — 01:30 in the second 01:00 hour would
+ * truncate to the *first* one, an hour before `d`. Local minutes/seconds are
+ * the same in both occurrences (and correct in half-hour-offset zones), so
+ * subtracting them always lands on the hour `d` is in.
+ */
+export function startOfLocalHour(d: Date): Date {
+  return new Date(
+    d.getTime() -
+      d.getMinutes() * 60_000 -
+      d.getSeconds() * 1_000 -
+      d.getMilliseconds()
+  )
+}
+
+/**
  * Turn a preset into concrete UTC bounds.
  *
- * Bounds are always local-day aligned and half-open `[start, end)`: "the last 7
- * days" is the last 7 *calendar* days including today, not a rolling 168 hours,
- * which is what a day-bucketed chart is showing anyway.
+ * Bounds are half-open `[start, end)` and aligned to the bucket the preset
+ * charts in. The day presets are local-day aligned: "the last 7 days" is the
+ * last 7 *calendar* days including today, not a rolling 168 hours, which is
+ * what a day-bucketed chart is showing anyway. "Last 24 hours" is likewise the
+ * last 24 local clock *hours* including the current one, so its hourly chart
+ * has 24 whole bars and usage later in the current hour still lands in range.
  *
  * `custom` takes two inclusive local dates and widens `end` to the following
  * midnight, so picking the same day twice yields that whole day.
@@ -109,12 +133,19 @@ export function resolveRange(
   const iso = (d: Date) => d.toISOString()
 
   switch (preset) {
+    case "today":
+      return { start: iso(startOfLocalDay(now)), end: iso(tomorrow) }
+    case "24h": {
+      const hour = startOfLocalHour(now)
+      return {
+        start: iso(new Date(hour.getTime() - 23 * 3_600_000)),
+        end: iso(new Date(hour.getTime() + 3_600_000)),
+      }
+    }
     case "7d":
       return { start: iso(addLocalDays(tomorrow, -7)), end: iso(tomorrow) }
     case "30d":
       return { start: iso(addLocalDays(tomorrow, -30)), end: iso(tomorrow) }
-    case "90d":
-      return { start: iso(addLocalDays(tomorrow, -90)), end: iso(tomorrow) }
     case "thisMonth":
       return {
         start: iso(new Date(now.getFullYear(), now.getMonth(), 1)),
@@ -141,10 +172,15 @@ export function resolveRange(
   }
 }
 
+/** Presets shorter than a day — charted by the hour, which is then the only
+ *  granularity that draws more than one or two bars. */
+export function isSubDayPreset(preset: TokenUsageRangePreset): boolean {
+  return preset === "today" || preset === "24h"
+}
+
 /**
  * The bucket width that keeps a range readable. Named presets map directly —
- * 90 daily bars is a picket fence, so 90d reads in weeks and a year in
- * months. Custom falls back to the span: days to ~3 months, weeks to a year,
+ * sub-day presets read in hours, a year in months. Custom falls back to the span: days to ~3 months, weeks to a year,
  * months beyond. Only ever used to pick a *default* — the control stays
  * user-settable.
  */
@@ -153,12 +189,13 @@ export function suggestBucket(
   range: ResolvedRange
 ): TokenUsageBucket {
   switch (preset) {
+    case "today":
+    case "24h":
+      return "hour"
     case "7d":
     case "30d":
     case "thisMonth":
       return "day"
-    case "90d":
-      return "week"
     case "thisYear":
       return "month"
     case "all":

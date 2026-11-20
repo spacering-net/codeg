@@ -18,12 +18,25 @@ Both `event.js` and `event.cjs` are patched; global, Webview, and Window listene
 all reach these functions. The transport, which registers through the core API,
 owns the same cleanup directly.
 
+An already-disposed returned unlisten can also share the listener's activation
+with its payload wrapper. Clear the business handler to a shared no-op when
+releasing the callback so retaining that unlisten does not retain subscriber
+captures. For `once`, snapshot the current handler before cleanup and then invoke
+the snapshot: this preserves the first event even when it arrives before the
+native registration response. Both ESM and CommonJS carry this release.
+
 The lockfile records the package patch hash. Run a frozen install and
 `src/lib/tauri-native-event-memory.test.ts` against the installed ESM/CommonJS
 package, plus `src/lib/transport/tauri-transport.test.ts`. They cover registration
 failure, cleanup racing the registration eval, repeated mounts, normal independent
 subscriptions, registry exceptions, and early `once` events. Run full TypeScript
 checking as well, including tests rather than just Next's production build.
+
+`src/lib/tauri-sdk-event-lifetime.test.ts` holds ordinary disposed and completed
+`once` unlisten functions while checking subscriber reachability against active
+and weak-only controls. It runs the installed ESM/CommonJS SDK unchanged in fresh
+Node processes; forced GC is confined to those isolated tests. This is a scoped
+callback ownership check, not a measurement of desktop retained bytes.
 
 Revisit this patch on upgrades to `@tauri-apps/api` or after upstream provides an
 equivalent callback lifetime fix. It does not change the Rust Tauri event plugin.

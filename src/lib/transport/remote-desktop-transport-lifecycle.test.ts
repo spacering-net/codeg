@@ -170,7 +170,7 @@ describe("RemoteDesktopTransport lifecycle", () => {
     await flush()
 
     expect(listenMock).toHaveBeenCalledWith(
-      "remote-ws-event-17",
+      "remote-ws-event-17-main-webview",
       expect.any(Function)
     )
     expect(invokeMock).toHaveBeenCalledWith("remote_ws_subscribe", {

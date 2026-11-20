@@ -42,7 +42,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
@@ -347,21 +347,29 @@ fn utc_from_local_naive(n: NaiveDateTime, offset_minutes: i32) -> DateTime<Utc> 
     DateTime::<Utc>::from_naive_utc_and_offset(n - Duration::minutes(offset_minutes as i64), Utc)
 }
 
-/// The first local calendar day of the bucket `date` falls in.
-fn bucket_start_date(date: NaiveDate, bucket: TokenUsageBucket) -> NaiveDate {
-    match bucket {
+/// Local start of the bucket the local instant `at` falls in. Hour buckets
+/// truncate to the hour; the calendar buckets start at a local midnight.
+fn bucket_start(at: NaiveDateTime, bucket: TokenUsageBucket) -> NaiveDateTime {
+    let date = at.date();
+    let day = match bucket {
+        TokenUsageBucket::Hour => {
+            return date.and_hms_opt(at.hour(), 0, 0).unwrap_or(at);
+        }
         TokenUsageBucket::Day => date,
         TokenUsageBucket::Week => {
             date - Duration::days(date.weekday().num_days_from_monday() as i64)
         }
         // `with_day(1)` on a valid date always yields a valid date.
         TokenUsageBucket::Month => date.with_day(1).unwrap_or(date),
-    }
+    };
+    day.and_time(NaiveTime::MIN)
 }
 
-/// The bucket immediately after the one starting at `date`.
-fn next_bucket_date(date: NaiveDate, bucket: TokenUsageBucket) -> NaiveDate {
-    match bucket {
+/// The bucket immediately after the one starting at `start`.
+fn next_bucket_start(start: NaiveDateTime, bucket: TokenUsageBucket) -> NaiveDateTime {
+    let date = start.date();
+    let next_day = match bucket {
+        TokenUsageBucket::Hour => return start + Duration::hours(1),
         TokenUsageBucket::Day => date + Duration::days(1),
         TokenUsageBucket::Week => date + Duration::days(7),
         TokenUsageBucket::Month => {
@@ -372,13 +380,15 @@ fn next_bucket_date(date: NaiveDate, bucket: TokenUsageBucket) -> NaiveDate {
             };
             NaiveDate::from_ymd_opt(y, m, 1).unwrap_or(date + Duration::days(31))
         }
-    }
+    };
+    next_day.and_time(NaiveTime::MIN)
 }
 
-fn bucket_key(date: NaiveDate, bucket: TokenUsageBucket) -> String {
+fn bucket_key(start: NaiveDateTime, bucket: TokenUsageBucket) -> String {
     match bucket {
-        TokenUsageBucket::Month => format!("{:04}-{:02}", date.year(), date.month()),
-        _ => date.format("%Y-%m-%d").to_string(),
+        TokenUsageBucket::Hour => start.format("%Y-%m-%dT%H").to_string(),
+        TokenUsageBucket::Month => format!("{:04}-{:02}", start.year(), start.month()),
+        _ => start.format("%Y-%m-%d").to_string(),
     }
 }
 
@@ -472,7 +482,7 @@ pub(crate) fn aggregate_report(
     let bucket = opts.bucket;
 
     let mut totals = Acc::default();
-    let mut by_bucket: HashMap<NaiveDate, Acc> = HashMap::new();
+    let mut by_bucket: HashMap<NaiveDateTime, Acc> = HashMap::new();
     let mut by_folder: HashMap<i32, Acc> = HashMap::new();
     let mut by_agent: HashMap<String, Acc> = HashMap::new();
     let mut by_model: HashMap<String, Acc> = HashMap::new();
@@ -488,7 +498,7 @@ pub(crate) fn aggregate_report(
 
         totals.add(row);
         by_bucket
-            .entry(bucket_start_date(date, bucket))
+            .entry(bucket_start(local, bucket))
             .or_default()
             .add(row);
         by_folder.entry(row.folder_id).or_default().add(row);
@@ -651,7 +661,7 @@ fn sort_breakdown(items: &mut [TokenUsageBreakdownItem]) {
 /// no activity, so the chart's x-axis carries real gaps instead of silently
 /// closing them up.
 fn build_series(
-    by_bucket: &HashMap<NaiveDate, Acc>,
+    by_bucket: &HashMap<NaiveDateTime, Acc>,
     opts: &AggregateOptions<'_>,
     first_activity: Option<DateTime<Utc>>,
     last_activity: Option<DateTime<Utc>>,
@@ -659,13 +669,13 @@ fn build_series(
     let tz = opts.tz_offset_minutes;
     let bucket = opts.bucket;
 
-    let point_of = |date: NaiveDate, acc: Option<&Acc>| {
-        let next = next_bucket_date(date, bucket);
+    let point_of = |start: NaiveDateTime, acc: Option<&Acc>| {
+        let next = next_bucket_start(start, bucket);
         let acc = acc.cloned().unwrap_or_default();
         TokenUsagePoint {
-            bucket_key: bucket_key(date, bucket),
-            start: utc_from_local_naive(date.and_hms_opt(0, 0, 0).unwrap_or_default(), tz),
-            end: utc_from_local_naive(next.and_hms_opt(0, 0, 0).unwrap_or_default(), tz),
+            bucket_key: bucket_key(start, bucket),
+            start: utc_from_local_naive(start, tz),
+            end: utc_from_local_naive(next, tz),
             input_tokens: acc.input,
             output_tokens: acc.output,
             cache_creation_tokens: acc.cache_create,
@@ -676,8 +686,8 @@ fn build_series(
         }
     };
 
-    let sparse = |by_bucket: &HashMap<NaiveDate, Acc>| {
-        let mut dates: Vec<NaiveDate> = by_bucket.keys().copied().collect();
+    let sparse = |by_bucket: &HashMap<NaiveDateTime, Acc>| {
+        let mut dates: Vec<NaiveDateTime> = by_bucket.keys().copied().collect();
         dates.sort_unstable();
         dates
             .into_iter()
@@ -699,8 +709,8 @@ fn build_series(
         return sparse(by_bucket);
     };
 
-    let first = bucket_start_date(local_naive(lo, tz).date(), bucket);
-    let last = bucket_start_date(local_naive(hi_inclusive, tz).date(), bucket);
+    let first = bucket_start(local_naive(lo, tz), bucket);
+    let last = bucket_start(local_naive(hi_inclusive, tz), bucket);
     if last < first {
         return sparse(by_bucket);
     }
@@ -715,7 +725,7 @@ fn build_series(
             // silently hide the tail.
             return sparse(by_bucket);
         }
-        cursor = next_bucket_date(cursor, bucket);
+        cursor = next_bucket_start(cursor, bucket);
     }
     out
 }
@@ -1247,7 +1257,7 @@ pub async fn token_usage_sync(
     db: tauri::State<'_, crate::db::AppDatabase>,
     mode: Option<TokenUsageSyncMode>,
 ) -> Result<TokenUsageSyncResult, AppCommandError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     token_usage_sync_core(&db.conn, &emitter, mode.unwrap_or_default()).await
 }
 
@@ -1636,6 +1646,48 @@ mod tests {
             &opts(&labels, TokenUsageBucket::Week, 0, None, None),
         );
         assert_eq!(report.series[0].bucket_key, "2026-07-27");
+    }
+
+    #[test]
+    fn hour_buckets_densify_a_rolling_window_in_local_time() {
+        let labels = HashMap::new();
+        // UTC+8: 01:30Z is 09:30 local, 03:10Z is 11:10 local.
+        let rows = vec![
+            row("2026-08-01T01:30:00Z", 10),
+            row("2026-08-01T01:59:00Z", 5),
+            row("2026-08-01T03:10:00Z", 20),
+        ];
+        let report = aggregate_report(
+            &rows,
+            &[],
+            &opts(
+                &labels,
+                TokenUsageBucket::Hour,
+                480,
+                // Local 09:00 – 12:00, exclusive end on an hour boundary.
+                Some(ts("2026-08-01T01:00:00Z")),
+                Some(ts("2026-08-01T04:00:00Z")),
+            ),
+        );
+        let keys: Vec<&str> = report.series.iter().map(|p| p.bucket_key.as_str()).collect();
+        assert_eq!(keys, ["2026-08-01T09", "2026-08-01T10", "2026-08-01T11"]);
+        let tokens: Vec<u64> = report.series.iter().map(|p| p.total_tokens).collect();
+        assert_eq!(tokens, [15, 0, 20]);
+        assert_eq!(report.series[0].start, ts("2026-08-01T01:00:00Z"));
+        assert_eq!(report.series[0].end, ts("2026-08-01T02:00:00Z"));
+    }
+
+    #[test]
+    fn hour_buckets_cross_local_midnight() {
+        let labels = HashMap::new();
+        let rows = vec![row("2026-08-01T23:30:00Z", 10), row("2026-08-02T00:05:00Z", 20)];
+        let report = aggregate_report(
+            &rows,
+            &[],
+            &opts(&labels, TokenUsageBucket::Hour, 0, None, None),
+        );
+        let keys: Vec<&str> = report.series.iter().map(|p| p.bucket_key.as_str()).collect();
+        assert_eq!(keys, ["2026-08-01T23", "2026-08-02T00"]);
     }
 
     #[test]

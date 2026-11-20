@@ -2,7 +2,14 @@
 
 import "@xyflow/react/dist/style.css"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import {
   Background,
   BackgroundVariant,
@@ -13,6 +20,7 @@ import {
   getNodesBounds,
   getViewportForBounds,
   useReactFlow,
+  useStore,
   type Node,
   type NodeChange,
   type NodeTypes,
@@ -187,6 +195,36 @@ function pinSurfaceKey(pinDbId: number): string {
  *  second agent (see the discovery gate in `acp-connections-context`). */
 function drawerSurfaceKey(conversationId: number): string {
   return `canvas-drawer-${conversationId}`
+}
+
+/** The alignment hairlines. Subscribes to the flow's zoom itself so the
+ *  `1/zoom` width is read from the store, not from a ref during render. */
+function AlignmentGuideLines({
+  guides,
+}: {
+  guides: readonly AlignmentGuide[]
+}) {
+  const zoom = useStore((s) => s.transform[2])
+  const hair = 1 / Math.max(zoom, 0.01)
+  return guides.map((guide) => (
+    <div
+      key={`${guide.axis}-${guide.at}-${guide.from}`}
+      className="pointer-events-none absolute bg-primary/70"
+      style={
+        guide.axis === "x"
+          ? {
+              transform: `translate(${guide.at}px, ${guide.from}px)`,
+              width: hair,
+              height: guide.to - guide.from,
+            }
+          : {
+              transform: `translate(${guide.from}px, ${guide.at}px)`,
+              width: guide.to - guide.from,
+              height: hair,
+            }
+      }
+    />
+  ))
 }
 
 function CanvasFlow({
@@ -399,6 +437,7 @@ function CanvasFlow({
   // during a refetch is never mistaken for an empty board.
   useEffect(() => {
     if (!hydrated) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prunes persisted (localStorage-backed) sets once the node set has loaded
     setDetailCardsPersisted((prev) => {
       const next = new Set([...prev].filter((id) => dbNodes.has(id)))
       return next.size === prev.size ? prev : next
@@ -467,14 +506,18 @@ function CanvasFlow({
 
   // Mirrors read from inside the drag hot path, which must not re-create its
   // callbacks every time the board changes.
+  // Synced after commit: every reader is an event handler or an async
+  // callback, none runs during render.
   const derivedRef = useRef(derived)
-  derivedRef.current = derived
   const draftsRef = useRef(drafts)
-  draftsRef.current = drafts
   const dbNodesRef = useRef(dbNodes)
-  dbNodesRef.current = dbNodes
   const overlayRef = useRef(overlay)
-  overlayRef.current = overlay
+  useLayoutEffect(() => {
+    derivedRef.current = derived
+    draftsRef.current = drafts
+    dbNodesRef.current = dbNodes
+    overlayRef.current = overlay
+  })
   const zoomRef = useRef(initialViewport?.zoom ?? 1)
 
   const rfNodes = useMemo(() => {
@@ -803,6 +846,7 @@ function CanvasFlow({
         )
       })
     if (alive.length === 0) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot adoption off the external connection store's snapshot
     setLiveSurfaces((prev) => {
       const next = new Set(prev)
       for (const key of alive) next.add(key)
@@ -843,6 +887,7 @@ function CanvasFlow({
   useEffect(() => {
     if (drawerConversationId == null) return
     if (isConversationDeleted(drawerConversationId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- follows the external deletion tombstone and the store's loading flag
       setDrawerConversationId(null)
       return
     }
@@ -2238,28 +2283,7 @@ function CanvasFlow({
               into a bar when zoomed in and vanish when zoomed out. */}
           {alignGuides.length > 0 && (
             <ViewportPortal>
-              {alignGuides.map((guide) => {
-                const hair = 1 / Math.max(zoomRef.current, 0.01)
-                return (
-                  <div
-                    key={`${guide.axis}-${guide.at}-${guide.from}`}
-                    className="pointer-events-none absolute bg-primary/70"
-                    style={
-                      guide.axis === "x"
-                        ? {
-                            transform: `translate(${guide.at}px, ${guide.from}px)`,
-                            width: hair,
-                            height: guide.to - guide.from,
-                          }
-                        : {
-                            transform: `translate(${guide.from}px, ${guide.at}px)`,
-                            width: guide.to - guide.from,
-                            height: hair,
-                          }
-                    }
-                  />
-                )
-              })}
+              <AlignmentGuideLines guides={alignGuides} />
             </ViewportPortal>
           )}
           {dropHint?.type === "merge" && (

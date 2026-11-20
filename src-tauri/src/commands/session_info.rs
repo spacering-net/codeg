@@ -424,7 +424,7 @@ pub async fn set_session_info_settings(
 ) -> Result<SessionInfoSettings, AppCommandError> {
     #[cfg(feature = "tauri-runtime")]
     {
-        let emitter = EventEmitter::Tauri(app);
+        let emitter = EventEmitter::from_app(&app);
         set_session_info_settings_core(&db.conn, &config, &emitter, settings).await
     }
     #[cfg(not(feature = "tauri-runtime"))]

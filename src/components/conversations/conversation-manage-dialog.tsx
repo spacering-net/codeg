@@ -622,8 +622,12 @@ export function ConversationManageDialog({
     return ids
   }, [allFolders, scopeFolderId])
 
-  // Reset state on open/close transitions
-  useEffect(() => {
+  // Reset state whenever the dialog is (or becomes) closed, and re-seed the
+  // scope when `folderId` changes while closed. Adjusted during render rather
+  // than in an effect so the next open never renders with the old filters.
+  const [resetKey, setResetKey] = useState({ open, folderId })
+  if (resetKey.open !== open || resetKey.folderId !== folderId) {
+    setResetKey({ open, folderId })
     if (!open) {
       setSearch("")
       setScopeFolderId(folderId)
@@ -634,7 +638,7 @@ export function ConversationManageDialog({
       setConfirmDelete(false)
       setError(null)
     }
-  }, [open, folderId])
+  }
 
   // Debounced data fetch. Each run owns a `cancelled` flag its cleanup trips, so
   // a reply that lands after the facets moved on is dropped rather than written

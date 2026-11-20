@@ -55,6 +55,7 @@ import {
 } from "@/lib/ask-selection-handoff"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
 import { useMessageQueue, type QueuedMessage } from "@/hooks/use-message-queue"
+import { useTouchSelectionMenuGuard } from "@/hooks/use-touch-selection-menu-guard"
 import {
   MessageListView,
   type LiveRunsSource,
@@ -179,7 +180,10 @@ import {
   ExportTooLongError,
 } from "@/lib/export-conversation"
 import { useExportLabels } from "@/lib/use-export-labels"
-import { resolveActiveSessionDetails } from "./active-session-details"
+import {
+  projectRuntimeSessionDetails,
+  resolveActiveSessionDetailsFromSnapshot,
+} from "./active-session-details"
 import { ConversationDetailHeader } from "./conversation-detail-header"
 import { SessionDetailsDialog } from "./session-details-dialog"
 
@@ -2797,21 +2801,22 @@ export function ConversationDetailPanel() {
     activeConversationTab?.runtimeConversationId ??
     activeConversationTab?.conversationId ??
     null
-  const activeRuntimeSession = useConversationRuntimeStore((s) =>
-    activeRuntimeId != null
-      ? (s.byConversationId.get(activeRuntimeId) ?? null)
-      : null
+  // A persistent metadata consumer's previous hook snapshot can outlive a
+  // removed session. Select its display values before React keeps that snapshot.
+  const activeRuntimeDetails = useConversationRuntimeStore(
+    useShallow((s) =>
+      projectRuntimeSessionDetails(
+        activeRuntimeId != null ? s.byConversationId.get(activeRuntimeId) : null
+      )
+    )
   )
   const {
     summary: activeSessionSummary,
     stats: activeSessionStats,
     model: activeSessionModel,
-  } = resolveActiveSessionDetails(
+  } = resolveActiveSessionDetailsFromSnapshot(
     activeConversationTab,
-    // resolveActiveSessionDetails reads only `getSession(runtimeId)`, and its
-    // internal `runtimeId` equals `activeRuntimeId` (identical computation), so
-    // resolving that single pre-selected session is exact.
-    (id) => (id === activeRuntimeId ? activeRuntimeSession : null),
+    activeRuntimeDetails,
     conversations
   )
 
@@ -2945,6 +2950,9 @@ export function ConversationDetailPanel() {
 
   const tileTabRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const groupContainerRef = useRef<HTMLDivElement | null>(null)
+  // The panel's context menu wraps the transcript, so a touch long-press that
+  // selects text would also open it — modal, over the selection's copy bubble.
+  const panelMenu = useTouchSelectionMenuGuard(groupContainerRef)
 
   // Scroll each TILED group's selected tab into view when the selection (or
   // the group's tiled-ness) changes — the signature string keeps the effect
@@ -3193,11 +3201,15 @@ export function ConversationDetailPanel() {
             status={activeTab.status as ConversationStatus | undefined}
           />
         )}
-        <ContextMenu>
+        <ContextMenu
+          open={panelMenu.open}
+          onOpenChange={panelMenu.onOpenChange}
+        >
           <ContextMenuTrigger asChild>
             <div
               ref={groupContainerRef}
               className="relative min-h-0 flex-1 overflow-hidden"
+              onPointerDownCapture={panelMenu.onPointerDownCapture}
             >
               {/* Flat sibling shells keyed by stable group id + divider
                   overlays — stable across every split/tile flip, otherwise

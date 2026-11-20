@@ -158,7 +158,6 @@ function CollapsibleContent({ children, ...props }: ComponentProps<"div">) {
       // Presence requires a post-commit DOM check; without an exit animation
       // the unmount must land in the same flush as the close (tests and
       // Radix Presence both rely on synchronous removal).
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPresent(false)
       return
     }

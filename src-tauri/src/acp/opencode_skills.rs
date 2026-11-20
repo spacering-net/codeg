@@ -70,8 +70,11 @@ impl SkillSources {
         Self {
             home: dirs::home_dir(),
             config_dir: opencode_config::config_dir_for_env(env),
-            // `cli/src/server-process.ts`: ".claude is only read for skills,
-            // so both flags gate the same roots."
+            // `cli/src/server-process.ts` through 2.3.0: ".claude is only read
+            // for skills, so both flags gate the same roots." Since 2.3.1 it
+            // also supplies `CLAUDE.md` instructions, behind
+            // `OPENCODE_DISABLE_CLAUDE_CODE` or `…_PROMPT`; the skill roots
+            // keep this pair.
             claude: !set("OPENCODE_DISABLE_CLAUDE_CODE")
                 && !set("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"),
             // `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG`:

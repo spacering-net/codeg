@@ -21,11 +21,15 @@ describe("readOpenCodeBehavior", () => {
         default_agent: "plan",
         update: "notify",
         snapshots: false,
-        compaction: { auto: false, keep: { tokens: 20000 }, buffer: 10000 },
+        compaction: {
+          auto: false,
+          background: false,
+          keep: { tokens: 20000 },
+          buffer: 10000,
+        },
         tool_output: { max_lines: 500, max_bytes: 1024 },
         experimental: {
           todo: true,
-          background_compaction: true,
           subagent_depth: 2,
         },
       })
@@ -38,8 +42,8 @@ describe("readOpenCodeBehavior", () => {
       toggles: {
         snapshots: false,
         "compaction.auto": false,
+        "compaction.background": false,
         "experimental.todo": true,
-        "experimental.background_compaction": true,
       },
       numbers: {
         "experimental.subagent_depth": 2,
@@ -93,6 +97,17 @@ describe("readOpenCodeBehavior", () => {
     ])
     // A top-level subagent_depth is dropped, not read as the depth.
     expect(view.numbers["experimental.subagent_depth"]).toBeNull()
+  })
+
+  it("lists 2.3.1's retired background-compaction flag and does not read it", () => {
+    const view = readOpenCodeBehavior(
+      JSON.stringify({ experimental: { background_compaction: false } })
+    )
+    expect(view.ignoredLegacyKeys).toEqual([
+      "experimental.background_compaction",
+    ])
+    // OpenCode no longer reads it, so the switch shows its default (on).
+    expect(view.toggles["compaction.background"]).toBeNull()
   })
 
   it("reports every field unset for an empty document and locks on bad text", () => {
@@ -172,6 +187,25 @@ describe("writers", () => {
     const out = setOpenCodeUpdate('{"autoupdate": true}', "notify")
     expect(parse(out)).toEqual({ update: "notify" })
     expect(parse(setOpenCodeUpdate(out, null))).toEqual({})
+  })
+
+  it("writes compaction.background and drops the retired experimental flag", () => {
+    const out = setOpenCodeToggle(
+      '{"experimental": {"background_compaction": true, "todo": true}}',
+      "compaction.background",
+      false
+    )
+    expect(parse(out)).toEqual({
+      experimental: { todo: true },
+      compaction: { background: false },
+    })
+    expect(
+      parse(
+        removeIgnoredLegacyKeys(
+          '{"experimental": {"background_compaction": true}}'
+        )
+      )
+    ).toEqual({})
   })
 
   it("writes toggles at their 2.x path, removing the 1.x spelling", () => {

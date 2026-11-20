@@ -9,11 +9,10 @@ import {
   type ReactNode,
 } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { toast } from "sonner"
 import { ChevronLeft, ChevronRight, Lock, type LucideIcon } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { openSettingsWindow, type SettingsSection } from "@/lib/api"
+import { useSkillNotEnabledToast } from "@/components/chat/use-skill-not-enabled-toast"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useBuiltInExperts } from "@/hooks/use-built-in-experts"
 import { useEnabledSkillIds } from "@/hooks/use-enabled-skill-ids"
@@ -36,7 +35,6 @@ import {
 } from "@/lib/quick-actions-tab-storage"
 import type { ComposerInjectContent } from "@/components/chat/message-input"
 import { type AgentType, type ExpertListItem } from "@/lib/types"
-import { getAgentLabel } from "@/lib/custom-agents"
 
 // Three primary office categories — prominent fixed cards (keep their color).
 const OFFICE_FIXED: (OfficeAction & { accent: string })[] =
@@ -389,29 +387,10 @@ export function QuickActions({ onSelect, agentType }: QuickActionsProps) {
   )
 
   // Clicking a locked card: warn (with the agent's name) and offer a one-click
-  // jump to the settings page that manages this skill family — coding cards
-  // open Experts, office cards open Office Tools — rather than injecting a
-  // badge the agent can't act on.
-  const notifyNotEnabled = useCallback(
-    (skillLabel: string, section: SettingsSection) => {
-      const agentLabel = agentType ? getAgentLabel(agentType) : ""
-      toast.warning(
-        t("notEnabled.title", { skill: skillLabel, agent: agentLabel }),
-        {
-          description: t("notEnabled.description"),
-          action: {
-            label: t("notEnabled.action"),
-            onClick: () => {
-              void openSettingsWindow(section).catch((err) =>
-                console.error("[QuickActions] failed to open settings:", err)
-              )
-            },
-          },
-        }
-      )
-    },
-    [agentType, t]
-  )
+  // jump to the skill pack that holds it — coding cards open Experts, research
+  // cards Science, office cards Office, on the Harness page — rather than
+  // injecting a badge the agent can't act on.
+  const notifyNotEnabled = useSkillNotEnabledToast(agentType)
 
   // Restore the last-picked tab; persist on change. The lazy initializer reads
   // localStorage on each mount (QuickActions only renders client-side in
@@ -433,7 +412,7 @@ export function QuickActions({ onSelect, agentType }: QuickActionsProps) {
     (action: OfficeAction) => {
       const label = t(action.id as Parameters<typeof t>[0])
       if (isLocked(action.skillId)) {
-        notifyNotEnabled(label, "office-tools")
+        notifyNotEnabled(label, "office")
         return
       }
       onSelect({

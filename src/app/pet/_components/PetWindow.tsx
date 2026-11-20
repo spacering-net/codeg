@@ -65,12 +65,15 @@ export function PetWindow({ petId }: PetWindowProps) {
   // and we want the live window to swap sprites without close/reopen, so
   // the rendered id has to be reactive state rather than the prop.
   const [activePetId, setActivePetId] = useState<string>(petId)
+  // Follow a changed `petId` prop by adjusting state during render rather
+  // than in an effect; the initial value already covers mount.
+  const [prevPetId, setPrevPetId] = useState<string>(petId)
+  if (petId !== prevPetId) {
+    setPrevPetId(petId)
+    setActivePetId(petId)
+  }
   const agentState = usePetState()
   const oneShot = usePetOneShot()
-
-  useEffect(() => {
-    setActivePetId(petId)
-  }, [petId])
 
   // Interaction-driven state takes priority over the agent-driven state so
   // a drag, hover, or click immediately wins over the ambient ACP animation.
@@ -207,6 +210,8 @@ export function PetWindow({ petId }: PetWindowProps) {
   useEffect(() => {
     let cancelled = false
     let objectUrl: string | null = null
+    // Clear the previous pet before the async load below repopulates it.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with an external fetch
     setError(null)
     setPet(null)
     setSpritesheetUrl(null)

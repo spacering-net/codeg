@@ -45,6 +45,9 @@ pub mod folder_links;
 pub mod forge;
 pub mod git_credential;
 pub mod git_repo;
+/// The SpaceRing Harness catalog: the one client, cache and set of rules
+/// every request to it goes through (both runtimes).
+pub mod harness;
 pub mod intern;
 pub mod keyring_store;
 pub mod logging;
@@ -62,6 +65,12 @@ pub mod process;
 #[cfg(all(feature = "tauri-runtime", target_os = "macos"))]
 mod relaunch;
 pub mod runtime_lock;
+/// The skills engine: every skill link, copy, status and store write
+/// (both runtimes).
+pub mod skills;
+/// Signing in to SpaceRing (SRN): the account API client (both runtimes)
+/// and the desktop's account (desktop only).
+pub mod srn;
 pub mod supervise;
 mod terminal;
 pub mod turn_timings;
@@ -252,7 +261,7 @@ mod tauri_app {
         let running_terminals = |app: &tauri::AppHandle| {
             app.try_state::<TerminalManager>()
                 .map(|tm| {
-                    let emitter = web::event_bridge::EventEmitter::Tauri(app.clone());
+                    let emitter = web::event_bridge::EventEmitter::from_app(app);
                     tm.count_live_by_owner_window(label, Some(&emitter))
                 })
                 .unwrap_or(0)
@@ -755,6 +764,18 @@ mod tauri_app {
             // same download progress; lets the upgrade UI survive navigation.
             .manage(crate::update::new_update_state_handle())
             .setup(|app| {
+                // Retain the one `AppHandle` this process will ever clone for
+                // event emission, right here on the main thread, before any
+                // worker that emits is spawned. Every `EventEmitter::Tauri`
+                // afterwards just clones an atomic `Arc`.
+                //
+                // This is a correctness requirement, not an optimisation:
+                // `AppHandle::clone`/`drop` reach `tao`'s non-atomic
+                // `Rc<EventLoopRunner>`, so letting the ACP connection threads
+                // do it races the event loop and aborts the process with
+                // `0xC0000374`. See `web::event_bridge::EventEmitter`.
+                web::event_bridge::install_tauri_app_handle(app.handle());
+
                 let app_data_dir = app.path().app_data_dir()?;
 
                 // Unify the data root across every consumer:
@@ -874,8 +895,8 @@ mod tauri_app {
                     &db.conn,
                 ));
                 if let Some(hub) = crate::logging::hub::log_hub() {
-                    hub.set_emitter(crate::web::event_bridge::EventEmitter::Tauri(
-                        app.handle().clone(),
+                    hub.set_emitter(crate::web::event_bridge::EventEmitter::from_app(
+                        app.handle(),
                     ));
                 }
 
@@ -918,47 +939,17 @@ mod tauri_app {
                 // reclamation on a machine leaking gigabytes per launch.
                 tauri::async_runtime::spawn(crate::scratch_sweep_task());
 
-                // Install bundled expert skills into the central store
-                // (`~/.codeg/skills/`). Runs in the background and does
-                // not block startup; failures are logged but non-fatal.
-                tauri::async_runtime::spawn(async move {
-                    let report = crate::commands::experts::ensure_central_experts_installed().await;
-                    if !report.errors.is_empty() {
-                        tracing::error!(
-                            "[Experts] install finished with {} error(s): {:?}",
-                            report.errors.len(),
-                            report.errors
-                        );
-                    } else {
-                        tracing::info!(
-                            "[Experts] install ok: installed={} updated={} pending_review={}",
-                            report.installed_count,
-                            report.updated_count,
-                            report.pending_user_review.len()
-                        );
-                    }
-                });
-
-                // Install bundled scientific-research skills into the same
-                // central store (`~/.codeg/skills/`). Background, non-blocking;
-                // failures are logged but non-fatal.
-                tauri::async_runtime::spawn(async move {
-                    let report = crate::commands::science::ensure_central_science_installed().await;
-                    if !report.errors.is_empty() {
-                        tracing::error!(
-                            "[Science] install finished with {} error(s): {:?}",
-                            report.errors.len(),
-                            report.errors
-                        );
-                    } else {
-                        tracing::info!(
-                            "[Science] install ok: installed={} updated={} pending_review={}",
-                            report.installed_count,
-                            report.updated_count,
-                            report.pending_user_review.len()
-                        );
-                    }
-                });
+                // The skills engine's startup work in the central store
+                // (`~/.codeg/skills/`): finish what a crash left half-moved,
+                // move older backups aside, extract the bundled Experts and
+                // Science skills, reconcile the link record — each step under
+                // the skills lock. Runs in the background and does not block
+                // startup; failures are logged but non-fatal.
+                {
+                    let emitter =
+                        crate::web::event_bridge::EventEmitter::from_app(app.handle());
+                    tauri::async_runtime::spawn(crate::skills::startup::run(emitter));
+                }
 
                 // Reclaim orphaned chat scratch dirs (pre-send drafts that never
                 // bound to a conversation, plus dirs left behind by deleted chat
@@ -1028,8 +1019,8 @@ mod tauri_app {
                 // configures a WebDAV endpoint.
                 {
                     let db_for_sync = app.state::<db::AppDatabase>().conn.clone();
-                    let emitter = std::sync::Arc::new(web::event_bridge::EventEmitter::Tauri(
-                        app.handle().clone(),
+                    let emitter = std::sync::Arc::new(web::event_bridge::EventEmitter::from_app(
+                        app.handle(),
                     ));
                     tauri::async_runtime::spawn(async move {
                         crate::commands::config_sync::auto_sync::run_auto_sync_loop(
@@ -1046,10 +1037,26 @@ mod tauri_app {
                 // what a release left behind. One per process; mirrored in
                 // `bin/codeg_server.rs`.
                 if let Some(scheduler) = crate::acp::codex_catalog_refresh::build(
-                    web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                    web::event_bridge::EventEmitter::from_app(app.handle()),
                 ) {
                     tauri::async_runtime::spawn(crate::acp::codex_catalog_refresh::run(scheduler));
                 }
+
+                // The Harness update check: asks SpaceRing daily what became of
+                // the items installed from Harness, keeps the answer in the
+                // cache and announces changes; it only tells. Not started under
+                // CODEG_HARNESS=off. One per process; mirrored in
+                // `bin/codeg_server.rs`.
+                if let Some(checker) = crate::harness::updates::build(
+                    &effective_data_dir,
+                    web::event_bridge::EventEmitter::from_app(app.handle()),
+                ) {
+                    tauri::async_runtime::spawn(crate::harness::updates::run(checker));
+                }
+
+                // The SRN account: read the sign-in from the keychain, then
+                // check it online. Background, non-blocking; desktop only.
+                crate::srn::desktop::start(app.handle());
 
                 // Label worktree folders registered before aliases were seeded at
                 // creation with the branch they have checked out, so the sidebar
@@ -1061,7 +1068,7 @@ mod tauri_app {
                     let db = db::AppDatabase {
                         conn: app.state::<db::AppDatabase>().conn.clone(),
                     };
-                    let emitter = web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
                     tauri::async_runtime::spawn(async move {
                         let n =
                             crate::commands::folders::backfill_worktree_folder_aliases(&emitter, &db)
@@ -1099,7 +1106,7 @@ mod tauri_app {
                         .inner()
                         .clone();
                     let cm = app.state::<ConnectionManager>().clone_ref();
-                    let emitter = web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
                     tauri::async_runtime::spawn(async move {
                         ccm_ref
                             .start_background(br, bus, db_conn, data_dir, cm, emitter)
@@ -1122,7 +1129,7 @@ mod tauri_app {
                         .state::<std::sync::Arc<web::event_bridge::WebEventBroadcaster>>()
                         .inner()
                         .clone();
-                    let emitter = web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
                     let pet_state_handle = app
                         .state::<crate::pet_state_mapper::PetStateHandle>()
                         .inner()
@@ -1153,7 +1160,7 @@ mod tauri_app {
                         .state::<std::sync::Arc<web::event_bridge::WebEventBroadcaster>>()
                         .inner()
                         .clone();
-                    let emitter = web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
                     let manager = app.state::<ConnectionManager>().inner().clone_ref();
                     let db_conn = app.state::<db::AppDatabase>().conn.clone();
                     tauri::async_runtime::spawn(
@@ -1306,8 +1313,8 @@ mod tauri_app {
                                 std::sync::Arc::new(db::AppDatabase {
                                     conn: db_conn.clone(),
                                 }),
-                                crate::web::event_bridge::EventEmitter::Tauri(
-                                    app.handle().clone(),
+                                crate::web::event_bridge::EventEmitter::from_app(
+                                    app.handle(),
                                 ),
                                 chat_authoring_config.clone(),
                             ),
@@ -1373,7 +1380,7 @@ mod tauri_app {
                     let service = crate::cli_run::CliRunService::new(
                         &app.state::<db::AppDatabase>(),
                         &app.state::<ConnectionManager>(),
-                        crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                        crate::web::event_bridge::EventEmitter::from_app(app.handle()),
                         app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
                             .inner()
                             .clone(),
@@ -1447,7 +1454,7 @@ mod tauri_app {
                         conn: app.state::<crate::db::AppDatabase>().conn.clone(),
                     },
                     app.state::<ConnectionManager>().clone_ref(),
-                    crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                    crate::web::event_bridge::EventEmitter::from_app(app.handle()),
                     app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
                         .inner()
                         .clone(),
@@ -1464,7 +1471,7 @@ mod tauri_app {
                         conn: app.state::<crate::db::AppDatabase>().conn.clone(),
                     },
                     app.state::<ConnectionManager>().clone_ref(),
-                    crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                    crate::web::event_bridge::EventEmitter::from_app(app.handle()),
                     app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
                         .inner()
                         .clone(),
@@ -1478,7 +1485,7 @@ mod tauri_app {
                         crate::db::AppDatabase {
                             conn: app.state::<crate::db::AppDatabase>().conn.clone(),
                         },
-                        crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                        crate::web::event_bridge::EventEmitter::from_app(app.handle()),
                     ) {
                         tauri::async_runtime::spawn(crate::forge::auto::run(processor));
                     }
@@ -1656,6 +1663,12 @@ mod tauri_app {
                 // Which workspace windows are open, for the next launch to
                 // reopen.
                 workspace_windows::on_window_event(window, event);
+
+                // The app back in front: the SRN account's online check, if
+                // one is due (at most hourly).
+                if matches!(event, tauri::WindowEvent::Focused(true)) {
+                    crate::srn::desktop::window_focused(window.app_handle());
+                }
 
                 // A window's browser tabs die with it: child webviews are
                 // destroyed by the platform, owned windows are closed here.
@@ -2024,6 +2037,7 @@ mod tauri_app {
                 windows::resize_pet_panel,
                 windows::focus_conversation,
                 crate::deep_link::take_pending_deep_link,
+                crate::deep_link::take_pending_harness_link,
                 windows::update_traffic_light_position,
                 windows::get_appearance_settings,
                 windows::update_appearance_mode,
@@ -2175,6 +2189,8 @@ mod tauri_app {
                 acp_commands::acp_update_kimi_code_config,
                 deepseek_settings_commands::acp_load_deepseek_model_catalog,
                 deepseek_settings_commands::acp_update_deepseek_model_catalog,
+                deepseek_settings_commands::acp_load_deepseek_provider_routes,
+                deepseek_settings_commands::acp_update_deepseek_provider_routes,
                 acp_commands::acp_update_pi_config,
                 acp_commands::acp_load_pi_config,
                 acp_commands::acp_list_pi_model_capabilities,
@@ -2199,11 +2215,11 @@ mod tauri_app {
                 crate::commands::custom_agents::acp_fetch_registry_catalog,
                 crate::commands::custom_agents::acp_add_registry_agent,
                 crate::commands::custom_agents::acp_current_platform,
-                acp_commands::acp_list_agent_skills,
+                acp_commands::skill_page::acp_list_agent_skills,
                 acp_commands::acp_list_agent_runtime_skills,
                 acp_commands::acp_read_agent_skill,
-                acp_commands::acp_save_agent_skill,
-                acp_commands::acp_delete_agent_skill,
+                acp_commands::skill_page::acp_save_agent_skill,
+                acp_commands::skill_page::acp_delete_agent_skill,
                 acp_commands::opencode_list_plugins,
                 acp_commands::opencode_provider_catalog,
                 acp_commands::codex_bundled_catalog,
@@ -2221,21 +2237,14 @@ mod tauri_app {
                 acp_commands::codex_request_device_code,
                 acp_commands::codex_poll_device_code,
                 experts_commands::experts_list,
-                experts_commands::experts_get_install_status,
                 experts_commands::experts_list_all_install_statuses,
-                experts_commands::experts_link_to_agent,
-                experts_commands::experts_unlink_from_agent,
                 experts_commands::experts_apply_links,
                 experts_commands::experts_read_content,
                 experts_commands::experts_open_central_dir,
                 science_commands::science_list,
-                science_commands::science_get_install_status,
                 science_commands::science_list_all_install_statuses,
-                science_commands::science_link_to_agent,
-                science_commands::science_unlink_from_agent,
                 science_commands::science_apply_links,
                 science_commands::science_read_content,
-                science_commands::science_open_central_dir,
                 crate::commands::generative_ui::generative_ui_skill_info,
                 crate::commands::generative_ui::generative_ui_list_all_install_statuses,
                 crate::commands::generative_ui::generative_ui_apply_links,
@@ -2255,9 +2264,6 @@ mod tauri_app {
                 office_tools_commands::officecli_uninstall,
                 office_tools_commands::officecli_list_skills,
                 office_tools_commands::officecli_sync_skills,
-                office_tools_commands::officecli_skill_link_to_agent,
-                office_tools_commands::officecli_skill_unlink_from_agent,
-                office_tools_commands::officecli_skill_get_install_status,
                 office_tools_commands::officecli_skill_list_all_install_statuses,
                 office_tools_commands::officecli_skill_apply_links,
                 office_tools_commands::officecli_skill_read_content,
@@ -2365,6 +2371,41 @@ mod tauri_app {
                 mcp_commands::mcp_upsert_local_server,
                 mcp_commands::mcp_set_server_apps,
                 mcp_commands::mcp_remove_server,
+                crate::commands::mcp_engine::mcp_inventory,
+                crate::commands::mcp_engine::mcp_apply,
+                crate::commands::mcp_engine::mcp_parse_snippet,
+                crate::commands::harness::harness_status,
+                crate::commands::harness::harness_config,
+                crate::commands::harness::harness_list,
+                crate::commands::harness::harness_item,
+                crate::commands::harness::harness_versions,
+                crate::commands::harness::harness_readme,
+                crate::commands::harness::harness_prompt,
+                crate::commands::harness::harness_blob,
+                crate::commands::harness::srn_asset,
+                crate::commands::harness_mcp::harness_mcp_plan,
+                crate::commands::harness_mcp::harness_mcp_install,
+                crate::commands::harness_mcp::harness_installed,
+                crate::commands::harness_mcp::harness_mcp_uninstall,
+                crate::commands::harness_skills::harness_skill_plan,
+                crate::commands::harness_skills::harness_skill_install,
+                crate::commands::harness_skills::harness_skill_uninstall,
+                crate::commands::harness_updates::harness_updates,
+                crate::commands::harness_updates::harness_check_updates,
+                crate::commands::srn::srn_account,
+                crate::commands::srn::srn_sign_in,
+                crate::commands::srn::srn_reopen_sign_in,
+                crate::commands::srn::srn_cancel_sign_in,
+                crate::commands::srn::srn_check_online,
+                crate::commands::srn::srn_sign_out,
+                crate::commands::srn::srn_open_manage_connections,
+                crate::skills::commands::skills_inventory,
+                crate::skills::commands::skills_apply_links,
+                crate::skills::commands::skills_adopt,
+                crate::skills::commands::skills_repair_link,
+                crate::skills::commands::skills_backups,
+                crate::skills::commands::skills_backup_restore,
+                crate::skills::commands::skills_backup_delete,
                 notification::send_notification,
                 notification::notification_identity,
                 notification::open_system_notification_settings,

@@ -12,11 +12,11 @@ import {
 import type { RemoteWorkspaceConnection } from "@/lib/types"
 
 /**
- * Shared state + actions behind every "Open remote workspace" menu (the status
- * bar's quick-actions submenu, the sidebar list's context menu). Each of them
- * renders its own markup — one is a dropdown, one a context menu — but the
- * loading, the opening and the two failure toasts are identical, so they live
- * here instead of being copy-pasted per surface.
+ * Shared state + actions behind every "Open remote workspace" menu (the
+ * quick-actions submenu in the status bar's account menu, the sidebar list's
+ * context menu). Each of them renders its own markup — one is a dropdown, one
+ * a context menu — but the loading, the opening and the two failure toasts
+ * are identical, so they live here instead of being copy-pasted per surface.
  *
  * `refresh` is deliberately NOT called on mount: connections are only needed
  * once a submenu actually opens, and these menus are mounted for the whole

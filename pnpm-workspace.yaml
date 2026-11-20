@@ -7,6 +7,17 @@ overrides:
   # ansi-to-react (latest 6.2.6) still declares ^3, which has quadratic scans
   # in match(); the factory/tlds() API it calls is unchanged in 5.x.
   ansi-to-react>linkify-it: ^5.0.2
+  # monaco-editor (latest 0.57.0) pins dompurify 3.4.15 exactly, inside the
+  # advisories fixed in 3.4.17. Monaco never imports this package: it ships its
+  # own DOMPurify 3.4.15 in esm/ and min/, so this moves only the installed
+  # copy; the one the editor runs changes with a monaco release.
+  monaco-editor>dompurify: ^3.4.17
+  # shadcn (latest 4.23.0) still declares ts-morph ^26, whose @ts-morph/common
+  # 0.27 asks for minimatch ^10; every 10.x is inside GHSA-g3hv-75wg-m249
+  # (fixed in 11.0.1). @ts-morph/common only calls `minimatch(path, pattern)`,
+  # which 11.x keeps; ts-morph 28 (the line on minimatch 11) is a major the
+  # shadcn CLI has not moved to.
+  "@ts-morph/common>minimatch": ^11.0.1
 
 allowBuilds:
   "@parcel/watcher": true
