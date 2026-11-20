@@ -131,6 +131,9 @@ interface ConversationShellProps {
   isEditingQueueItem?: boolean
   onSaveQueueEdit?: (draft: PromptDraft) => void
   onCancelQueueEdit?: () => void
+  /** Steer the queue's head item from an Enter on an empty composer; threaded
+   *  straight through to the composer. See `ChatInputProps.onSteerQueueHead`. */
+  onSteerQueueHead?: () => void
   /** Send the draft into the RUNNING turn over the session's live-feedback
    *  channel. Present only for sessions with a working delivery channel;
    *  threaded straight through to the composer. `blocks` carries the full
@@ -216,6 +219,7 @@ export function ConversationShell({
   isEditingQueueItem,
   onSaveQueueEdit,
   onCancelQueueEdit,
+  onSteerQueueHead,
   onSteer,
   steerChannel,
   topBanner,
@@ -343,6 +347,7 @@ export function ConversationShell({
               isEditingQueueItem={isEditingQueueItem}
               onSaveQueueEdit={onSaveQueueEdit}
               onCancelQueueEdit={onCancelQueueEdit}
+              onSteerQueueHead={onSteerQueueHead}
               onSteer={onSteer}
               steerChannel={steerChannel}
               onAddFeedback={onAddFeedback}

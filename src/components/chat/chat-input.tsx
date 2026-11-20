@@ -67,6 +67,9 @@ interface ChatInputProps {
   isEditingQueueItem?: boolean
   onSaveQueueEdit?: (draft: PromptDraft) => void
   onCancelQueueEdit?: () => void
+  /** Steer the queue's head item from an Enter on an empty composer. Threaded
+   *  straight through; see `MessageInputProps.onSteerQueueHead`. */
+  onSteerQueueHead?: () => void
   /** Send the draft into the RUNNING turn over the session's live-feedback
    *  channel. Present only when the session has a working delivery channel
    *  (`useSessionFeedback().steerAvailable`); resolves once recorded, rejects
@@ -139,6 +142,7 @@ export const ChatInput = memo(function ChatInput({
   isEditingQueueItem,
   onSaveQueueEdit,
   onCancelQueueEdit,
+  onSteerQueueHead,
   onSteer,
   steerChannel,
   onAddFeedback,
@@ -239,6 +243,7 @@ export const ChatInput = memo(function ChatInput({
         isEditingQueueItem={isEditingQueueItem}
         onSaveQueueEdit={onSaveQueueEdit}
         onCancelQueueEdit={onCancelQueueEdit}
+        onSteerQueueHead={onSteerQueueHead}
         onSteer={onSteer}
         steerChannel={steerChannel}
         onAddFeedback={onAddFeedback}

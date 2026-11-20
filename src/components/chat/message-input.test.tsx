@@ -1105,6 +1105,38 @@ describe("MessageInput mid-turn send with no queue", () => {
     expect(toast.info).not.toHaveBeenCalled()
   })
 
+  it("steers the queue head on an empty-composer Enter while prompting", async () => {
+    const onSend = vi.fn()
+    const onSteerQueueHead = vi.fn()
+    render(tree({ onSend, isPrompting: true, onSteerQueueHead }))
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+
+    pressEnter(composerHandle.current!.getEditor()!)
+
+    expect(onSteerQueueHead).toHaveBeenCalledTimes(1)
+    expect(onSend).not.toHaveBeenCalled()
+    expect(toast.info).not.toHaveBeenCalled()
+  })
+
+  it("leaves an empty-composer Enter inert when no queue head can be steered", async () => {
+    const onSend = vi.fn()
+    const onSteerQueueHead = vi.fn()
+    // Connected (not prompting): the host-gate is off, the keypress stays inert.
+    render(tree({ onSend, isPrompting: false, onSteerQueueHead }))
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+
+    pressEnter(composerHandle.current!.getEditor()!)
+
+    expect(onSteerQueueHead).not.toHaveBeenCalled()
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
   it("still queues it where the surface has a queue", async () => {
     const onSend = vi.fn()
     const onEnqueue = vi.fn()
