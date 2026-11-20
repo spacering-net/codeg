@@ -74,11 +74,7 @@ import { openProjectBootWindow } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { BLANK_PAGE_URL } from "@/lib/browser/browser-url"
 import { useBrowserCapabilities } from "@/lib/browser/use-browser-capabilities"
-import {
-  closePetWindow,
-  isPetWindowOpen,
-  openPetWindow,
-} from "@/lib/pet/api"
+import { closePetWindow, isPetWindowOpen, openPetWindow } from "@/lib/pet/api"
 import { isRemoteDesktopWindow } from "@/lib/platform"
 import { openLocalWorkspace } from "@/lib/remote-workspace"
 import { cn } from "@/lib/utils"
