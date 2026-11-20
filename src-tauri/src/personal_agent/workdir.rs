@@ -406,6 +406,65 @@ pub fn default_workdir_of_bot(data_dir: &Path, row: &crate::db::entities::person
     }
 }
 
+/// Every claim of a working directory — an assistant made, its directory
+/// moved, an assistant deleted with its directory — one at a time across
+/// all assistants: what is looked at is what is taken.
+pub static WORKDIR_CLAIM: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// `path` as the file system resolves it, one part at a time as the system
+/// does: each part that is there resolved (a link followed, the case on
+/// disk where the volume ignores case) before the next is read — so on Unix
+/// `..` after a link goes up from where the link leads (Windows takes `..`
+/// back as written first) — and the parts not there yet taken as written.
+pub fn normalized(path: &Path) -> PathBuf {
+    // Made absolute first, against the current directory as the system
+    // does — on Windows that also takes `.` and `..` back as written, before
+    // anything is followed (a junction then `..` is the folder the junction
+    // sits in); on Unix `..` stays, for the walk below.
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let path = absolute.as_path();
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => continue,
+            std::path::Component::ParentDir => out.push(".."),
+            // A drive is not looked up on its own: a bare `C:` is that
+            // drive's current directory, not the drive. With its root
+            // (`C:\`) it is, and resolves to the form its children do.
+            std::path::Component::Prefix(_) => {
+                out.push(part.as_os_str());
+                continue;
+            }
+            other => out.push(other.as_os_str()),
+        }
+        match out.canonicalize() {
+            Ok(real) => out = real,
+            // Not there: `..` takes back the part written before it.
+            Err(_) if part == std::path::Component::ParentDir => {
+                out.pop();
+                out.pop();
+            }
+            Err(_) => {}
+        }
+    }
+    out
+}
+
+/// Whether `path` is absolute and has no `.` or `..` in it.
+pub fn plain_path(path: &Path) -> bool {
+    path.is_absolute()
+        && path.components().all(|c| {
+            !matches!(c, std::path::Component::CurDir | std::path::Component::ParentDir)
+        })
+}
+
+/// Whether two directories are one, or one is inside the other.
+pub fn overlaps(a: &Path, b: &Path) -> bool {
+    let (a, b) = (normalized(a), normalized(b));
+    a.starts_with(&b) || b.starts_with(&a)
+}
+
 /// An assistant's working directory in effect: the one the owner picked, else
 /// its default.
 pub fn workdir_of_bot(data_dir: &Path, row: &crate::db::entities::personal_agent::Model) -> PathBuf {
@@ -5563,7 +5622,6 @@ mod tests {
     }
 
     /// Every blob the repository holds, read: none may hold `secret`.
-    #[cfg(unix)]
     async fn no_blob_holds(dir: &Path, secret: &str) {
         let objects = out(
             dir,
@@ -6518,5 +6576,114 @@ mod tests {
         assert_eq!(read_text(&dir, "memory/x.md"), "the assistant's, since\n");
         let why = done.not_aside_why.unwrap_or_default();
         assert!(why.contains("memory/x.md"), "{why}");
+    }
+
+    // ── Windows: links and junctions at the fixed names ────────────────────
+
+    /// A junction to a folder outside, made with `mklink /J`.
+    #[cfg(windows)]
+    fn junction(at: &Path, to: &Path) {
+        let o = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(at)
+            .arg(to)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{o:?}");
+    }
+
+    /// A file link at a fixed name reads as no file, and the owner's save
+    /// replaces the link, never the file outside.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn on_windows_a_file_link_is_never_read_or_written_through() {
+        let (tmp, dir) = memory_repo().await;
+        let outside = tmp.path().join("secret.md");
+        std::fs::write(&outside, "the owner's secret\n").unwrap();
+        std::fs::remove_file(dir.join(SOUL_FILE)).unwrap();
+        std::os::windows::fs::symlink_file(&outside, dir.join(SOUL_FILE)).unwrap();
+        assert_eq!(read_text(&dir, SOUL_FILE), "");
+        assert!(!persona_digest(&dir, "Nova").contains("secret"));
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        assert_eq!(memory_changes(&dir, &rev).await[0].status, "deleted");
+        no_blob_holds(&dir, "secret").await;
+        let update = |_: Option<&str>| Some("# Persona\nMine.\n".to_string());
+        write_for_owner(&dir, &[(SOUL_FILE, &update)], "owner: edit").await.unwrap();
+        assert!(!is_symlink(&dir.join(SOUL_FILE)));
+        assert_eq!(read_text(&dir, SOUL_FILE), "# Persona\nMine.\n");
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "the owner's secret\n");
+    }
+
+    /// A junction at a fixed name reads as no file, its folder outside is
+    /// never committed, and the owner's save replaces the junction itself.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn on_windows_a_junction_at_a_fixed_name_is_replaced_not_followed() {
+        let (tmp, dir) = memory_repo().await;
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("inside.md"), "the owner's secret\n").unwrap();
+        // Tracked as a folder before, a junction now.
+        std::fs::remove_file(dir.join(SOUL_FILE)).unwrap();
+        std::fs::create_dir_all(dir.join(SOUL_FILE)).unwrap();
+        std::fs::write(dir.join(SOUL_FILE).join("inside.md"), "x\n").unwrap();
+        out(&dir, &["add", "-A"]).await;
+        out(&dir, &["commit", "-qm", "a folder"]).await;
+        std::fs::remove_dir_all(dir.join(SOUL_FILE)).unwrap();
+        junction(&dir.join(SOUL_FILE), &outside);
+        assert_eq!(read_text(&dir, SOUL_FILE), "");
+        let rev = commit(&dir, "turn").await.expect("the turn's commit");
+        let tree = out(&dir, &["ls-tree", "-r", "--name-only", &rev]).await;
+        assert!(!tree.lines().any(|l| l.starts_with("SOUL.md")), "{tree}");
+        no_blob_holds(&dir, "secret").await;
+        let update = |_: Option<&str>| Some("# Persona\nMine.\n".to_string());
+        write_for_owner(&dir, &[(SOUL_FILE, &update)], "owner: edit").await.unwrap();
+        assert_eq!(read_text(&dir, SOUL_FILE), "# Persona\nMine.\n");
+        assert_eq!(
+            std::fs::read_to_string(outside.join("inside.md")).unwrap(),
+            "the owner's secret\n"
+        );
+    }
+
+    /// A save in place keeps the file's own access rules.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn on_windows_a_save_keeps_the_files_access_rules() {
+        let (_tmp, dir) = memory_repo().await;
+        let user = dir.join(USER_FILE);
+        let icacls = |args: &[&str]| {
+            let o = std::process::Command::new("icacls")
+                .arg(&user)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{o:?}");
+            String::from_utf8_lossy(&o.stdout).into_owned()
+        };
+        icacls(&["/grant", "*S-1-5-32-545:(R)"]);
+        let before = icacls(&[]);
+        let update = |_: Option<&str>| Some("# The owner\nPrivate.\n".to_string());
+        write_for_owner(&dir, &[(USER_FILE, &update)], "owner: edit").await.unwrap();
+        assert_eq!(read_text(&dir, USER_FILE), "# The owner\nPrivate.\n");
+        assert_eq!(icacls(&[]), before);
+    }
+
+    /// `..` after a link goes up from where the link leads, as the system
+    /// reads it; one after a part not there yet takes that part back.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_resolves_one_part_at_a_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let dir = root.join("worker");
+        std::fs::create_dir_all(dir.join("child")).unwrap();
+        std::fs::create_dir_all(root.join("aliases")).unwrap();
+        std::os::unix::fs::symlink(dir.join("child"), root.join("aliases").join("link")).unwrap();
+        assert_eq!(normalized(&root.join("aliases").join("link").join("..")), dir);
+        assert!(overlaps(&root.join("aliases").join("link").join(".."), &dir));
+        assert_eq!(
+            normalized(&root.join("missing").join("..").join("worker").join("new")),
+            dir.join("new")
+        );
     }
 }

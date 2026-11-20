@@ -360,6 +360,26 @@ impl PersonalAgentEngine {
             template: Some(template.to_string()),
             executor_assistant_id: Some(executor.id),
         };
+        // Its directory looked at and taken in one hold, before the row is
+        // there for anything to start it: no other assistant's directory,
+        // nor one inside or around it.
+        let claim = workdir::WORKDIR_CLAIM.lock().await;
+        let dir = self.data_dir.join(workdir::BOTS_DIR).join(&uid);
+        let taken = match self.workdir_taken(0, &dir).await {
+            Ok(Some(other)) => Some(format!(
+                "its working directory {} is {other}'s, or inside it or around it",
+                dir.display()
+            )),
+            Ok(None) => None,
+            Err(e) => Some(e),
+        };
+        if let Some(why) = taken {
+            drop(claim);
+            if created && !adopted {
+                undo_executor(self, &executor).await;
+            }
+            return Err(refused(why));
+        }
         let bot = match svc::create_worker(&self.db.conn, new).await {
             Ok(b) => b,
             Err(e) => {
@@ -371,21 +391,22 @@ impl PersonalAgentEngine {
         };
 
         // Its working directory: its role's files.
-        let dir = workdir::workdir_of_bot(&self.data_dir, &bot);
         let (soul, rules) = spec.files.clone().unwrap_or_else(|| {
             (
                 templates::soul_md(locale, template),
                 templates::rules_md(locale, template),
             )
         });
-        if let Err(e) = workdir::ensure_role_workdir(&dir, locale, &soul, &rules).await {
+        let made = workdir::ensure_role_workdir(&dir, locale, &soul, &rules)
+            .await
+            .map_err(|e| format!("its working directory could not be made: {e}"));
+        drop(claim);
+        if let Err(e) = made {
             let _ = svc::delete_worker(&self.db.conn, bot.id).await;
             if created && !adopted {
                 undo_executor(self, &executor).await;
             }
-            return Err(refused(format!(
-                "its working directory could not be made: {e}"
-            )));
+            return Err(refused(e));
         }
         let cards = self.prefs().await.cards;
         // A new assistant has no process skills turned off.
@@ -1184,20 +1205,53 @@ impl PersonalAgentEngine {
             self.patch_account(json!({ "team": { "division": division } }))
                 .await;
         }
-        svc::delete_worker(&self.db.conn, id)
-            .await
-            .map_err(|e| e.to_string())?;
+        // The row read again, deleted and its directory removed in one hold
+        // of the claim: the directory removed is the one it has now — not one
+        // it moved off while this ran, which another assistant may have
+        // taken since — and none is removed unless the row went.
+        {
+            // Its turn's settlement in flight done first — its commit in its
+            // directory — and none after: the directory is let go only once
+            // nothing of its own writes to it any more. (Taken before the
+            // claim, as a move of the directory takes them.)
+            let _settled = match worker.as_ref() {
+                Some(w) => Some(w.settling().await),
+                None => None,
+            };
+            let _claim = workdir::WORKDIR_CLAIM.lock().await;
+            let now = svc::get_bot(&self.db.conn, id).await.map_err(|e| e.to_string())?;
+            let deleted = svc::delete_worker(&self.db.conn, id)
+                .await
+                .map_err(|e| e.to_string())?;
+            if !deleted {
+                return Err("this assistant was deleted already".into());
+            }
+            let own_default = now
+                .as_ref()
+                .filter(|now| now.workdir.as_deref().is_none_or(|w| w.trim().is_empty()));
+            if let (true, Some(now)) = (opts.delete_workdir, own_default) {
+                let dir = workdir::default_workdir_of_bot(&self.data_dir, now);
+                // Never one another live assistant has (a directory shared
+                // before such sharing was refused).
+                // Not known to be no one else's: kept.
+                let shared = self.workdir_taken(id, &dir).await;
+                if let Ok(Some(other)) = &shared {
+                    tracing::warn!(
+                        "[personal-agent] {} kept: it is {other}'s working directory too",
+                        dir.display()
+                    );
+                } else if let Err(e) = &shared {
+                    tracing::warn!("[personal-agent] {} kept: {e}", dir.display());
+                } else if workdir::is_workdir(&dir) {
+                    if let Err(e) = std::fs::remove_dir_all(&dir) {
+                        tracing::warn!("[personal-agent] {} was not removed: {e}", dir.display());
+                    }
+                }
+            }
+        }
         if opts.delete_executor {
             if let Some(e) = row.executor_assistant_id {
                 self.delete_executor_if_unbound(e).await;
-            }
-        }
-        if opts.delete_workdir && row.workdir.as_deref().is_none_or(|w| w.trim().is_empty()) {
-            let dir = workdir::default_workdir_of_bot(&self.data_dir, &row);
-            if workdir::is_workdir(&dir) {
-                if let Err(e) = std::fs::remove_dir_all(&dir) {
-                    tracing::warn!("[personal-agent] {} was not removed: {e}", dir.display());
-                }
             }
         }
         self.emit_for(id, PersonalAgentChange::Agent);

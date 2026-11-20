@@ -844,6 +844,12 @@ impl PersonalAgentEngine {
         }
     }
 
+    /// Wait for a turn's settlement in flight (its commit, its cards) and
+    /// hold off the next while the guard lives.
+    pub(super) async fn settling(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.pump_lock.lock().await
+    }
+
     /// Ask for a delivery attempt. Cheap and idempotent.
     pub fn nudge(&self) {
         self.wake.notify_one();
@@ -2207,15 +2213,25 @@ impl PersonalAgentEngine {
     /// restart.
     async fn ensure_session(&self, row: &agent_entity::Model) -> Result<Session, String> {
         let config = brain_of(row).ok_or("the personal agent's agent is not readable")?;
-        let workdir = self.workdir_of(row);
-        workdir::ensure_bot_workdir(
-            &workdir,
-            self.owner_locale(row, None).await,
-            row.kind == BotKind::Worker,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-        let folder_id = self.ensure_folder(row, &workdir).await?;
+        // Its directory made (when it is not there) in a hold of the claim,
+        // its row read again in it: an assistant deleted meanwhile — its
+        // directory removed in the same hold — never gets it made again.
+        // Its folder taken in the same hold, from the row as it is now — never
+        // a directory it was on before, which another may have since.
+        let (workdir, folder_id) = {
+            let _claim = workdir::WORKDIR_CLAIM.lock().await;
+            let now = self.agent_row().await.ok_or("this assistant was deleted")?;
+            let workdir = self.workdir_of(&now);
+            workdir::ensure_bot_workdir(
+                &workdir,
+                self.owner_locale(&now, None).await,
+                now.kind == BotKind::Worker,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            let folder_id = self.ensure_folder(&now, &workdir).await?;
+            (workdir, folder_id)
+        };
         // Only codeg commits here: whatever of the guard went missing since
         // is put back before the assistant runs.
         workdir::ensure_guard(&workdir).await;
@@ -5018,6 +5034,23 @@ impl PersonalAgentEngine {
         path: Option<String>,
         locale: Option<&str>,
     ) -> Result<PersonalAgentInfo, String> {
+        // Settled first: a turn's commit, taken after its turn is done, goes
+        // to the directory the turn worked in — never to the new one.
+        let moved = {
+            let _settling = self.pump_lock.lock().await;
+            self.set_workdir_held(path, locale).await
+        };
+        // A delivery that found the lock held left it to the holder: what
+        // waits goes out now, not at the next thing that happens.
+        self.nudge();
+        moved
+    }
+
+    async fn set_workdir_held(
+        &self,
+        path: Option<String>,
+        locale: Option<&str>,
+    ) -> Result<PersonalAgentInfo, String> {
         if self.state.lock().await.turn.is_some() {
             return Err("wait for the turn in flight to finish".into());
         }
@@ -5026,8 +5059,39 @@ impl PersonalAgentEngine {
             Some(p) => PathBuf::from(p),
             None => workdir::default_workdir_of_bot(&self.data_dir, &row),
         };
+        // One spelling of a directory the owner names: no `.` or `..` that
+        // could make it look like another than it is. (The default is the
+        // data directory's, as configured.)
+        if path.as_deref().is_some_and(|p| !p.trim().is_empty()) && !workdir::plain_path(&target) {
+            return Err(format!(
+                "{} names a directory with . or ..: give its plain path",
+                target.display()
+            ));
+        }
         if target == self.workdir_of(&row) {
             return self.info_of(&row).ok_or_else(|| "unreadable".into());
+        }
+        // Looked at and taken in one hold: no other assistant takes the same
+        // directory meanwhile.
+        let _claim = workdir::WORKDIR_CLAIM.lock().await;
+        if let Some(other) = self.workdir_taken(row.id, &target).await? {
+            return Err(format!(
+                "{} is {other}'s working directory, or inside it or around it: pick another",
+                target.display()
+            ));
+        }
+        // A project open in codeg is not taken — refused before anything is
+        // written into it.
+        if crate::db::service::folder_service::other_folder_paths(&self.db.conn)
+            .await
+            .map_err(|e| e.to_string())?
+            .iter()
+            .any(|p| workdir::normalized(std::path::Path::new(p)) == workdir::normalized(&target))
+        {
+            return Err(format!(
+                "{} is already open in codeg as a folder; pick another directory",
+                target.display()
+            ));
         }
         workdir::ensure_bot_workdir(
             &target,
@@ -5062,6 +5126,21 @@ impl PersonalAgentEngine {
         self.emit(PersonalAgentChange::Agent);
         self.emit(PersonalAgentChange::Status);
         self.info_of(&row).ok_or_else(|| "unreadable".into())
+    }
+
+    /// The assistant whose working directory `target` is, is inside, or
+    /// holds — any but assistant `me` — by name.
+    pub(super) async fn workdir_taken(
+        &self,
+        me: i32,
+        target: &std::path::Path,
+    ) -> Result<Option<String>, String> {
+        let bots = svc::list_bots(&self.db.conn).await.map_err(|e| e.to_string())?;
+        Ok(bots
+            .iter()
+            .filter(|b| b.id != me)
+            .find(|b| workdir::overlaps(&workdir::workdir_of_bot(&self.data_dir, b), target))
+            .map(super::messages::display_name))
     }
 
     /// The owner saved a persona/memory file from the page. The persona and

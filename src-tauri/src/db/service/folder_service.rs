@@ -341,6 +341,19 @@ pub async fn add_chat_folder(
     Ok(to_detail(model))
 }
 
+/// The paths of every folder open in codeg that is not a personal agent's —
+/// the owner's projects.
+pub async fn other_folder_paths(conn: &DatabaseConnection) -> Result<Vec<String>, DbError> {
+    Ok(folder::Entity::find()
+        .filter(folder::Column::DeletedAt.is_null())
+        .filter(folder::Column::Kind.ne(FolderKind::Personal))
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|f| f.path)
+        .collect())
+}
+
 /// The hidden folder backing the personal agent's working directory at
 /// `path`: the live row there when one exists, else a new `personal` one.
 /// Get-or-create, unlike [`add_chat_folder`]: the path is fixed and the agent

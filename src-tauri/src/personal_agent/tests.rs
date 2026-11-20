@@ -5722,6 +5722,152 @@ async fn deleting_a_work_assistant_hands_its_work_on_and_returns_its_messages() 
     assert!(engine.delete_bot(primary, &BotDeleteOptions::default(), None).await.is_err());
 }
 
+/// A working directory is one assistant's: another's, one inside it or
+/// one around it is refused — a move or a new assistant's own — and two
+/// assistants asking for the same one at once get it once.
+#[tokio::test]
+async fn a_working_directory_is_one_assistants_alone() {
+    let (engine, tmp) = ready().await;
+    let primary_dir = tmp.path().join("personal-agent");
+    let made = engine.create_bot(BotSpec::named("Developer")).await.unwrap();
+    let worker = engine_of(&engine, &tmp, made.bot.id);
+    let worker_dir = workdir::workdir_of_bot(tmp.path(), &made.bot);
+    for taken in [primary_dir.clone(), primary_dir.join("inside")] {
+        let refused = worker
+            .set_workdir(Some(taken.to_string_lossy().into_owned()), None)
+            .await;
+        assert!(refused.is_err(), "{taken:?}: {refused:?}");
+        assert!(!taken.join("inside").exists());
+    }
+    let around = worker_dir.parent().unwrap().to_path_buf();
+    assert!(engine
+        .set_workdir(Some(around.to_string_lossy().into_owned()), None)
+        .await
+        .is_err());
+    // A path with `..` in it — however it resolves — is not taken.
+    let roundabout = tmp.path().join("missing").join("..").join("personal-agent").join("child");
+    assert!(worker
+        .set_workdir(Some(roundabout.to_string_lossy().into_owned()), None)
+        .await
+        .is_err());
+    assert!(!primary_dir.join("child").exists());
+    // Two at once, one directory: one gets it.
+    let other = engine.create_bot(BotSpec::named("Writer")).await.unwrap();
+    let writer = engine_of(&engine, &tmp, other.bot.id);
+    let both = tmp.path().join("shared");
+    let path = both.to_string_lossy().into_owned();
+    let (a, b) = tokio::join!(
+        worker.set_workdir(Some(path.clone()), None),
+        writer.set_workdir(Some(path.clone()), None)
+    );
+    assert_eq!(a.is_ok() as u8 + b.is_ok() as u8, 1, "{a:?} {b:?}");
+}
+
+/// A new assistant whose own directory would lie inside one another
+/// assistant has: refused, no row left behind.
+#[tokio::test]
+async fn a_new_assistant_inside_another_ones_directory_is_refused() {
+    let (engine, tmp) = ready().await;
+    let bots = tmp.path().join(workdir::BOTS_DIR);
+    engine
+        .set_workdir(Some(bots.to_string_lossy().into_owned()), None)
+        .await
+        .unwrap();
+    assert!(engine.create_bot(BotSpec::named("Reviewer")).await.is_err());
+    assert!(svc::list_bots(&engine.db.conn)
+        .await
+        .unwrap()
+        .iter()
+        .all(|b| b.name != "Reviewer"));
+}
+
+/// A project open in codeg, reached through a link to it: not taken.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_project_reached_through_a_link_is_not_taken() {
+    let (engine, tmp) = ready().await;
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    crate::db::service::folder_service::add_folder(&engine.db.conn, &project.to_string_lossy())
+        .await
+        .unwrap();
+    let alias = tmp.path().join("alias");
+    std::os::unix::fs::symlink(&project, &alias).unwrap();
+    assert!(engine
+        .set_workdir(Some(alias.to_string_lossy().into_owned()), None)
+        .await
+        .is_err());
+    assert!(!project.join(workdir::SOUL_FILE).exists(), "nothing written into it");
+}
+
+/// A directory two assistants came to share before that was refused: the
+/// one deleted with its directory leaves it to the other.
+#[tokio::test]
+async fn deleting_an_assistant_keeps_a_directory_another_one_shares() {
+    let (engine, tmp) = ready().await;
+    let made = engine.create_bot(BotSpec::named("Developer")).await.unwrap();
+    let dir = workdir::workdir_of_bot(tmp.path(), &made.bot);
+    let other = engine.create_bot(BotSpec::named("Writer")).await.unwrap();
+    svc::set_workdir(&engine.db.conn, other.bot.id, Some(dir.to_string_lossy().into_owned()), None)
+        .await
+        .unwrap();
+    engine
+        .delete_bot(
+            made.bot.id,
+            &BotDeleteOptions { hand_over: false, delete_executor: false, delete_workdir: true },
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(workdir::is_workdir(&dir));
+}
+
+/// An assistant deleted with its directory after it moved off its own
+/// default, which another assistant took since: that directory stays.
+#[tokio::test]
+async fn deleting_an_assistant_never_takes_a_directory_it_moved_off() {
+    let (engine, tmp) = ready().await;
+    let made = engine.create_bot(BotSpec::named("Developer")).await.unwrap();
+    let worker = engine_of(&engine, &tmp, made.bot.id);
+    let default_dir = workdir::workdir_of_bot(tmp.path(), &made.bot);
+    worker
+        .set_workdir(Some(tmp.path().join("elsewhere").to_string_lossy().into_owned()), None)
+        .await
+        .unwrap();
+    let other = engine.create_bot(BotSpec::named("Writer")).await.unwrap();
+    let writer = engine_of(&engine, &tmp, other.bot.id);
+    writer
+        .set_workdir(Some(default_dir.to_string_lossy().into_owned()), None)
+        .await
+        .unwrap();
+    engine
+        .delete_bot(
+            made.bot.id,
+            &BotDeleteOptions { hand_over: false, delete_executor: false, delete_workdir: true },
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(workdir::is_workdir(&default_dir), "the writer's now");
+}
+
+/// A move of the working directory waits for the turn that ended to be
+/// settled — committed where it worked — before it moves.
+#[tokio::test]
+async fn moving_the_workdir_waits_for_the_last_turn_to_settle() {
+    let (engine, tmp) = configured().await;
+    let target = tmp.path().join("moved");
+    let held = engine.hold_pump_for_test().await;
+    let e = engine.clone();
+    let path = target.to_string_lossy().into_owned();
+    let moving = tokio::spawn(async move { e.set_workdir(Some(path), None).await });
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(!target.exists(), "not while the last turn settles");
+    drop(held);
+    moving.await.unwrap().unwrap();
+    assert!(workdir::is_workdir(&target));
+}
+
 #[tokio::test]
 async fn a_work_assistants_dispatch_runs_on_its_own_executor_and_says_who_sent_it() {
     let (engine, tmp) = ready().await;
