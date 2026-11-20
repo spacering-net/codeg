@@ -4148,7 +4148,8 @@
           "allowAlways": "always allowed",
           "rejected": "declined",
           "viaChatChannel": "via a chat channel",
-          "byPolicy": "by the run's permission policy"
+          "byPolicy": "by the run's permission policy",
+          "byAutoApprove": "automatically, by CODEG_AUTO_APPROVE"
         }
       },
       "messageNav": {

@@ -320,9 +320,18 @@ fn agent_data_roots(agent_type: AgentType, runtime_env: &BTreeMap<String, String
 ///   Measured on 2.4.1 with a 3,000,000-byte file: given the whole file, a
 ///   `Read` handed the model its first 958 lines, 99,918 characters ending in
 ///   Kimi's own "Next Read" hint, and one with `n_lines=10` the ten lines.
+///
+/// DeepSeek Harness (`dsh-acp` 0.9.0) is the third: its `FsClient` ships the
+/// `read` tool's `offset`/`limit` as its OWN page arguments and asks
+/// `fs/read_text_file` for the whole file, then pages the answer itself — so
+/// the `line`/`limit` hint never reaches it either, and every read of a file
+/// past 2 MiB fails with `Invalid params` the model cannot act on. Measured
+/// twice in 2026-11 (a 2.65 MiB single-line bundle), where the child then sat
+/// in `Prompting` until it was cancelled by hand. It carries no approval mode
+/// and no retry, so a read that errors is a read it never recovers from.
 fn read_response_limit(agent_type: AgentType) -> usize {
     match agent_type {
-        AgentType::Antigravity | AgentType::KimiCode => {
+        AgentType::Antigravity | AgentType::KimiCode | AgentType::DeepSeek => {
             usize::try_from(FS_MAX_FILE_SIZE_BYTES).unwrap_or(usize::MAX)
         }
         _ => FS_MAX_READ_RESPONSE_BYTES,

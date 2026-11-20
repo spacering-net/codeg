@@ -4148,7 +4148,8 @@
           "allowAlways": "مسموح دائمًا",
           "rejected": "رُفض",
           "viaChatChannel": "عبر قناة دردشة",
-          "byPolicy": "بحسب سياسة أذونات التشغيل"
+          "byPolicy": "بحسب سياسة أذونات التشغيل",
+          "byAutoApprove": "تلقائيًا بواسطة CODEG_AUTO_APPROVE"
         }
       },
       "messageNav": {
