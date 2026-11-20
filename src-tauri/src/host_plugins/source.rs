@@ -14,6 +14,9 @@ use crate::app_error::{AppCommandError, AppErrorCode};
 const FILE_NAME: &str = "codeg-plugin.json";
 const NPM_MIRROR: &str = "https://registry.npmmirror.com";
 const MAX_ARCHIVE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_INDEX_BYTES: usize = 512 * 1024;
+const MAX_INDEX_PLUGINS: usize = 128;
+const MAX_INDEX_VERSIONS: usize = 32;
 const MAX_UNPACKED_BYTES: u64 = 32 * 1024 * 1024;
 const NPM_OFFICIAL: &str = crate::commands::acp::NPM_OFFICIAL_REGISTRY;
 
@@ -32,6 +35,112 @@ impl Registry {
             Self::Mirror => NPM_MIRROR,
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginIndex {
+    pub api_version: u32,
+    pub plugins: Vec<PluginIndexEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginIndexEntry {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub versions: Vec<PluginIndexVersion>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PluginIndexVersion {
+    pub version: String,
+    pub source: String,
+    #[serde(default)]
+    pub registry: Registry,
+}
+
+impl PluginIndex {
+    fn parse(text: &str) -> Result<Self, AppCommandError> {
+        if text.len() > MAX_INDEX_BYTES {
+            return Err(invalid("Plugin index exceeds 512 KiB"));
+        }
+        let index: Self = serde_json::from_str(text)
+            .map_err(|error| invalid(format!("Invalid plugin index: {error}")))?;
+        index.validate().map_err(invalid)?;
+        Ok(index)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.api_version != 1 {
+            return Err(format!(
+                "Unsupported plugin index API version: {}",
+                self.api_version
+            ));
+        }
+        if self.plugins.is_empty() || self.plugins.len() > MAX_INDEX_PLUGINS {
+            return Err("Provide 1 to 128 indexed plugins".to_owned());
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        for plugin in &self.plugins {
+            if !super::valid_id(&plugin.id)
+                || !super::valid_label(&plugin.name)
+                || !ids.insert(&plugin.id)
+                || plugin.description.len() > 4096
+                || plugin.versions.is_empty()
+                || plugin.versions.len() > MAX_INDEX_VERSIONS
+            {
+                return Err("Invalid or duplicate indexed plugin".to_owned());
+            }
+            let mut versions = std::collections::BTreeSet::new();
+            for version in &plugin.versions {
+                if semver::Version::parse(&version.version).is_err()
+                    || !versions.insert(&version.version)
+                    || version.source.len() > 1024
+                    || !is_remote_source(&version.source)
+                {
+                    return Err("Invalid or duplicate indexed plugin version".to_owned());
+                }
+                match parse(&version.source) {
+                    Ok(Source::Npm { selector, .. })
+                        if semver::Version::parse(selector).is_err() =>
+                    {
+                        return Err(
+                            "Indexed npm versions must use an exact semantic version".to_owned()
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(_) => return Err("Invalid indexed plugin source".to_owned()),
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub async fn fetch_index(url: &str) -> Result<PluginIndex, AppCommandError> {
+    let url =
+        Url::parse(url.trim()).map_err(|_| invalid("Enter a valid HTTPS plugin index URL"))?;
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.authority().contains('@')
+        || url.fragment().is_some()
+        || url.host_str().is_none()
+    {
+        return Err(invalid(
+            "Plugin index URLs must use HTTPS without credentials or fragments",
+        ));
+    }
+    let bytes = download(&client()?, url, MAX_INDEX_BYTES).await?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| invalid("Plugin index is not UTF-8"))?;
+    PluginIndex::parse(text)
+}
+
+fn is_remote_source(source: &str) -> bool {
+    !Path::new(source).is_absolute()
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -534,6 +643,46 @@ mod tests {
         ] {
             let installed: InstalledSource = serde_json::from_value(source.clone()).unwrap();
             assert_eq!(serde_json::to_value(installed).unwrap(), source);
+        }
+    }
+
+    #[test]
+    fn plugin_indexes_validate_metadata_and_only_allow_remote_sources() {
+        let text = r#"{
+            "apiVersion": 1,
+            "plugins": [{
+                "id": "codeg.turn-activity",
+                "name": "Turn Activity",
+                "description": "Show completed turns.",
+                "versions": [{
+                    "version": "1.0.0",
+                    "source": "https://github.com/owner/example#v1.0.0"
+                }]
+            }]
+        }"#;
+        let index = PluginIndex::parse(text).unwrap();
+        assert_eq!(index.plugins[0].versions[0].registry, Registry::Npm);
+        for invalid in [
+            text.replace("\"apiVersion\": 1", "\"apiVersion\": 2"),
+            text.replace("https://github.com/owner/example#v1.0.0", "/tmp/plugin"),
+            text.replace(
+                "https://github.com/owner/example#v1.0.0",
+                "http://owner/example",
+            ),
+            text.replace("https://github.com/owner/example#v1.0.0", "npm:example"),
+        ] {
+            assert!(PluginIndex::parse(&invalid).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn plugin_index_urls_require_https_without_credentials_or_fragments() {
+        for url in [
+            "http://example.com/plugins.json",
+            "https://user@example.com/plugins.json",
+            "https://example.com/plugins.json#fragment",
+        ] {
+            assert!(fetch_index(url).await.is_err(), "accepted {url}");
         }
     }
 

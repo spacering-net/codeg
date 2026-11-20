@@ -1,7 +1,14 @@
 "use client"
 
-import { useRef, useState } from "react"
-import { AlertTriangle, FilePlus, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { useRef, useState, type FormEvent } from "react"
+import {
+  AlertTriangle,
+  FilePlus,
+  Globe2,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import {
@@ -19,10 +26,12 @@ import { toErrorMessage } from "@/lib/app-error"
 import { isUnsupportedCommandError } from "@/lib/harness/errors"
 import {
   applyHostPlugin,
+  fetchHostPluginIndex,
   installHostPluginSource,
   updateHostPlugin,
   useHostPlugins,
   type InstalledPlugin,
+  type PluginIndex,
   type PluginMutation,
 } from "@/lib/host-plugins"
 
@@ -57,6 +66,7 @@ export function HostPluginSettings() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-base font-semibold">{t("title")}</h1>
         <div className="flex flex-wrap gap-2">
+          <PluginIndexDialog disabled={busy || !data} onInstalled={refresh} />
           <InstallSourceDialog
             disabled={busy || !data}
             onInstalled={() => {
@@ -191,6 +201,189 @@ export function HostPluginSettings() {
         </ul>
       )}
     </div>
+  )
+}
+
+function PluginIndexDialog({
+  disabled,
+  onInstalled,
+}: {
+  disabled: boolean
+  onInstalled: () => void
+}) {
+  const t = useTranslations("HostPlugins")
+  const [open, setOpen] = useState(false)
+  const [url, setUrl] = useState("")
+  const [index, setIndex] = useState<PluginIndex>()
+  const [selectedVersions, setSelectedVersions] = useState<
+    Record<string, string>
+  >({})
+  const [installed, setInstalled] = useState<string>()
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string>()
+
+  const load = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (busy || !url.trim()) return
+    setBusy(true)
+    setFailure(undefined)
+    setInstalled(undefined)
+    try {
+      const next = await fetchHostPluginIndex(url)
+      setIndex(next)
+      setSelectedVersions(
+        Object.fromEntries(
+          next.plugins.map((plugin) => [plugin.id, plugin.versions[0].version])
+        )
+      )
+    } catch (error) {
+      setFailure(toErrorMessage(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const install = async (pluginId: string) => {
+    const plugin = index?.plugins.find((item) => item.id === pluginId)
+    if (!plugin || busy) return
+    const version =
+      plugin.versions.find(
+        (item) => item.version === selectedVersions[plugin.id]
+      ) ?? plugin.versions[0]
+    setBusy(true)
+    setFailure(undefined)
+    try {
+      await installHostPluginSource(version.source, version.registry)
+      setInstalled(plugin.id)
+      onInstalled()
+    } catch (error) {
+      setFailure(
+        isUnsupportedCommandError(error)
+          ? t("sourceUnsupported")
+          : toErrorMessage(error)
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!busy) setOpen(next)
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline" disabled={disabled}>
+          <Globe2 />
+          {t("discover")}
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-2xl" showCloseButton={!busy}>
+        <DialogHeader>
+          <DialogTitle>{t("discover")}</DialogTitle>
+          <DialogDescription>{t("indexDescription")}</DialogDescription>
+        </DialogHeader>
+        <form className="grid gap-4" onSubmit={load}>
+          <label className="grid gap-2 text-sm">
+            {t("indexUrl")}
+            <Input
+              value={url}
+              maxLength={2048}
+              placeholder="https://example.com/codeg-plugins.json"
+              onChange={(event) => setUrl(event.target.value)}
+              disabled={busy}
+            />
+          </label>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              type="button"
+              disabled={busy}
+              onClick={() => setOpen(false)}
+            >
+              {t("cancel")}
+            </Button>
+            <Button type="submit" disabled={busy || !url.trim()}>
+              {t(busy ? "loading" : "loadIndex")}
+            </Button>
+          </DialogFooter>
+        </form>
+        {failure && (
+          <p role="alert" className="text-sm text-destructive">
+            {failure}
+          </p>
+        )}
+        {index && (
+          <div className="grid gap-3">
+            <div
+              role="alert"
+              className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100"
+            >
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>{t("trustWarning")}</span>
+            </div>
+            <ul className="max-h-[min(50vh,28rem)] divide-y overflow-auto border-y">
+              {index.plugins.map((plugin) => {
+                const selected =
+                  plugin.versions.find(
+                    (item) => item.version === selectedVersions[plugin.id]
+                  ) ?? plugin.versions[0]
+                const isInstalled = installed === plugin.id
+                return (
+                  <li key={plugin.id} className="grid gap-2 py-3">
+                    <div>
+                      <div className="break-words text-sm font-medium">
+                        {plugin.name}
+                      </div>
+                      <div className="break-all text-xs text-muted-foreground">
+                        {plugin.id}
+                      </div>
+                      {plugin.description && (
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {plugin.description}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        className="h-8 min-w-28 rounded-md border bg-background px-2 text-sm"
+                        aria-label={t("version", { name: plugin.name })}
+                        value={selected.version}
+                        disabled={busy || isInstalled}
+                        onChange={(event) =>
+                          setSelectedVersions((previous) => ({
+                            ...previous,
+                            [plugin.id]: event.target.value,
+                          }))
+                        }
+                      >
+                        {plugin.versions.map((item) => (
+                          <option key={item.version} value={item.version}>
+                            {item.version}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="min-w-0 flex-1 break-all text-xs text-muted-foreground">
+                        {selected.source}
+                      </span>
+                      <Button
+                        size="sm"
+                        disabled={busy || isInstalled}
+                        onClick={() => void install(plugin.id)}
+                      >
+                        {isInstalled ? t("installed") : t("install")}
+                      </Button>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 

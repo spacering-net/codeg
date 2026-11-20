@@ -1,5 +1,5 @@
 use crate::app_error::AppCommandError;
-use crate::host_plugins::source::{self, Registry};
+use crate::host_plugins::source::{self, PluginIndex, Registry};
 use crate::host_plugins::{HostPlugins, InstalledPlugin, Mutation, PluginUpdate, CATALOG_CHANGED};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
@@ -34,6 +34,10 @@ pub async fn update_core(
         emit_event(emitter, CATALOG_CHANGED, ());
     }
     Ok(update)
+}
+
+pub async fn fetch_index_core(url: &str) -> Result<PluginIndex, AppCommandError> {
+    source::fetch_index(url).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -87,4 +91,10 @@ pub async fn host_plugins_update(
     plugin_id: String,
 ) -> Result<PluginUpdate, AppCommandError> {
     update_core(&plugins, &EventEmitter::from_app(&app), &plugin_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn host_plugins_fetch_index(url: String) -> Result<PluginIndex, AppCommandError> {
+    fetch_index_core(&url).await
 }

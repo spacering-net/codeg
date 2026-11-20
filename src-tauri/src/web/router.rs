@@ -2191,6 +2191,10 @@ pub fn build_router_with_srn(
         )
         .route("/host_plugins_update", post(handlers::host_plugins::update))
         .route(
+            "/host_plugins_fetch_index",
+            post(handlers::host_plugins::fetch_index),
+        )
+        .route(
             "/cli_access_status",
             post(handlers::cli_access::cli_access_status),
         )
