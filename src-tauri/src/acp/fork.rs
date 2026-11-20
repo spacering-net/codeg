@@ -57,7 +57,7 @@ use crate::models::message::{ContentBlock, MessageTurn, TurnRole};
 ///
 /// All three strip a trailing `:segment:<n>` before matching, so ids must not
 /// carry one.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForkPoint {
     pub message_id: String,
     pub message_fingerprint: Option<String>,
@@ -101,8 +101,52 @@ fn fingerprint_occurrence(turns: &[MessageTurn], idx: usize, fingerprint: &str) 
         + 1
 }
 
-/// Build the fork point naming `turn_id`, or `None` when this agent/turn cannot
-/// be named — in which case the caller forks at the tail, as before.
+/// Why a fork point the caller PICKED could not be resolved.
+///
+/// Deliberately separate from `Ok(None)`, which says the AGENT cannot fork at a
+/// named turn at all — see `resolve_fork_point`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkPointError {
+    /// The chosen turn carries no `messageId`, so nothing on the wire names it.
+    /// Custom agents are where this happens: their reply's id comes from the
+    /// ACP stream (`parsers::acp_native`) and nowhere else, and an agent that
+    /// never stamps one leaves the turn unnameable.
+    MissingMessageId,
+    /// The chosen turn is not among the parsed turns at all — a stale id, a
+    /// parse that disagrees, or a race with the reparse. Only reachable for a
+    /// custom agent; see the lookup in `resolve_fork_point`.
+    TurnNotFound,
+}
+
+impl std::fmt::Display for ForkPointError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingMessageId => write!(
+                f,
+                "the selected turn carries no agent message id, so it cannot be used \
+                 as a fork point"
+            ),
+            Self::TurnNotFound => write!(
+                f,
+                "the selected turn is not in this conversation any more, so it cannot \
+                 be used as a fork point"
+            ),
+        }
+    }
+}
+
+/// Build the fork point naming `turn_id`.
+///
+/// `Ok(None)` means THIS AGENT cannot fork at a named turn — the caller forks
+/// at the tail, as it always has. For the built-in agents that is RETAINED OLD
+/// BEHAVIOUR, not a promise that the branch landed where the user pointed; this
+/// change deliberately leaves all twelve of them exactly as they were.
+///
+/// `Err` means something else, and that difference is the point of the type:
+/// the caller PICKED a turn and codeg cannot honour it. Answering that with a
+/// tail fork would put the branch somewhere the user did not choose and report
+/// success, which is worse than saying no. The caller must refuse, not
+/// relocate. Only `Custom(_)` reaches these arms.
 ///
 /// Only ASSISTANT turns are fork points: every adapter resolves the point
 /// against an agent message, and "continue from my own prompt" is already what
@@ -111,10 +155,23 @@ pub fn resolve_fork_point(
     turns: &[MessageTurn],
     turn_id: &str,
     agent_type: AgentType,
-) -> Option<ForkPoint> {
-    let idx = turns
+) -> Result<Option<ForkPoint>, ForkPointError> {
+    // A turn id that is not in the parsed turns splits the same way as the
+    // arms below, and for the same reason. A CUSTOM agent must refuse: the user
+    // picked this turn and codeg cannot find it, so a tail fork would be a
+    // different branch reported as success. The twelve built-in agents keep the
+    // tail fork they have always had — nothing in this change is meant to touch
+    // them.
+    let idx = match turns
         .iter()
-        .position(|t| t.id == turn_id && matches!(t.role, TurnRole::Assistant))?;
+        .position(|t| t.id == turn_id && matches!(t.role, TurnRole::Assistant))
+    {
+        Some(idx) => idx,
+        None if matches!(&agent_type, AgentType::Custom(_)) => {
+            return Err(ForkPointError::TurnNotFound)
+        }
+        None => return Ok(None),
+    };
     let turn = &turns[idx];
 
     match agent_type {
@@ -126,15 +183,15 @@ pub fn resolve_fork_point(
         AgentType::Codex => {
             let text = turn_text(turn);
             if text.trim().is_empty() {
-                return None;
+                return Ok(None);
             }
             let fingerprint = fingerprint_agent_message(&text);
             let occurrence = fingerprint_occurrence(turns, idx, &fingerprint);
-            Some(ForkPoint {
+            Ok(Some(ForkPoint {
                 message_id: turn_id.to_string(),
                 message_fingerprint: Some(fingerprint),
                 message_occurrence: u32::try_from(occurrence).ok(),
-            })
+            }))
         }
         // DeepSeek and Claude 0.75.1 both read the two halves in the same
         // order, so both are sent. The id resolves on its own whenever the
@@ -158,12 +215,12 @@ pub fn resolve_fork_point(
             // Neither half can name this turn — an assistant bubble opened by a
             // tool result alone, with no message of its own to point at.
             if turn.agent_message_id.is_none() && fingerprint.is_none() {
-                return None;
+                return Ok(None);
             }
             let occurrence = fingerprint
                 .as_ref()
                 .map(|fp| fingerprint_occurrence(turns, idx, fp));
-            Some(ForkPoint {
+            Ok(Some(ForkPoint {
                 // Same reasoning as codex when the transcript named nothing:
                 // the field is required, and codeg's own turn id (`turn-<n>`,
                 // a position, never a record uuid) is deliberately something
@@ -175,12 +232,107 @@ pub fn resolve_fork_point(
                     .unwrap_or_else(|| turn_id.to_string()),
                 message_fingerprint: fingerprint,
                 message_occurrence: occurrence.and_then(|n| u32::try_from(n).ok()),
-            })
+            }))
+        }
+        // Custom agents ride the same AIR meta, but NOT on the rule above.
+        //
+        // They are the agents with no session store for a parser to read a
+        // message id back out of, so `parsers::acp_native` is their only source
+        // of one, and that id is the only half codeg can vouch for.
+        //
+        // The fingerprint is deliberately WITHHELD. openma's `locateForkPoint`
+        // reads a supplied fingerprint as a CONSTRAINT on an id hit —
+        // `idHit && (no fingerprint || idHit.fingerprint === fingerprint)` —
+        // and its fingerprint is ONE `assistant/message` event's text where
+        // `turn_text` above is the WHOLE turn's. A turn the agent split across
+        // several messages would fail that conjunction, and openma answers
+        // `invalid` rather than degrading, so a CORRECT id would be refused.
+        //
+        // This arm is claimed for the adapter it was verified against — openma's
+        // `deepseek-harness-acp`, whose `assistantMessageId` is `turn:step`,
+        // which is exactly what the transcript carries. It is NOT a claim about
+        // `Custom(_)` at large. ACP's `_meta` is ignorable, so an agent that
+        // does not know the key may ignore it and fork at the tail exactly as
+        // before — but it may equally REJECT the request, and nothing here can
+        // rule that out for an adapter nobody has tested. An agent with no
+        // `session/fork` never reaches this arm: the call is behind
+        // `supports_fork`.
+        //
+        // A turn the agent never named is an ERROR, not a tail fork. The caller
+        // picked this turn; forking at the tail instead would put the branch
+        // somewhere else and report success. An adapter that refuses a stale id
+        // — codeg's transcript and the agent's own log are two stores and can
+        // drift — surfaces as its own error, and must not be retried as a tail
+        // fork either.
+        //
+        // Except at the TAIL. A turn nothing follows needs no name: the tail
+        // fork IS a fork at it, so refusing there would only take "fork from
+        // here" away from every custom agent that forks without stamping ids —
+        // which used to work at the newest reply and still should.
+        AgentType::Custom(_) => {
+            match turn
+                .agent_message_id
+                .as_ref()
+                .filter(|id| !id.trim().is_empty())
+            {
+                Some(message_id) => Ok(Some(ForkPoint {
+                    message_id: message_id.clone(),
+                    message_fingerprint: None,
+                    message_occurrence: None,
+                })),
+                None if is_tail_turn(turns, idx) => Ok(None),
+                None => Err(ForkPointError::MissingMessageId),
+            }
         }
         // Every other agent either has no `session/fork` or no fork point in
-        // it; forking at the tail is the honest fallback.
-        _ => None,
+        // it. This `Ok(None)` is RETAINED OLD BEHAVIOUR, not a located fork
+        // point: those agents fork at the tail exactly as they did before this
+        // function could return an error at all. It is why the refusal above is
+        // scoped to `Custom(_)` and not to `_`.
+        _ => Ok(None),
     }
+}
+
+/// Whether nothing the agent was told or answered follows `turns[idx]` — the
+/// one position where a tail fork lands exactly where the user pointed.
+///
+/// Only user and assistant turns count. A system turn (a failed turn's line,
+/// say) is codeg's account of something, not a message in the agent's history,
+/// so it does not move the tail — the same call the frontend's `markThreadTail`
+/// makes.
+fn is_tail_turn(turns: &[MessageTurn], idx: usize) -> bool {
+    turns[idx + 1..]
+        .iter()
+        .all(|t| matches!(t.role, TurnRole::System))
+}
+
+/// Whether the agent's CURRENT session is known to LACK the message
+/// `message_id` names — the one answer that may refuse a fork.
+///
+/// A custom agent's fork point is resolved from codeg's transcript CHAIN, which
+/// spans every agent session the conversation has run under: `continues_from`
+/// links back to the turns recorded before a failed `session/load` forced a new
+/// session. Those turns are still rendered — that is what the link is for — but
+/// they are NOT in the agent any more, so a fork naming one of their ids is
+/// answered `invalid_params: Fork point message … was not found in session …`.
+///
+/// This is the check that turns that into a refusal codeg can explain. It asks
+/// the session's own transcript, not the chain, and reads the file rather than
+/// the parsed turns because the parsed turns are exactly what cannot tell the
+/// two apart.
+///
+/// `false` unless absence is PROVEN — the session's own transcript exists and
+/// was read to its end without the id in it. Every other answer ("this agent
+/// keeps its own store", "there is no transcript file", "the read failed") is
+/// codeg being unable to tell, and an unanswerable question must never cost a
+/// fork that would have worked. Even a proven absence is only codeg's own
+/// record: the agent keeps the last word, and a stale id that IS in the current
+/// session still comes back as its own error.
+pub fn session_lacks_message_id(agent_type: AgentType, session_id: &str, message_id: &str) -> bool {
+    let Some(dir) = crate::acp::connection::transcript_dir_for(agent_type) else {
+        return false;
+    };
+    crate::acp_transcript::session_records_message_id(dir, session_id, message_id) == Some(false)
 }
 
 impl ForkPoint {
@@ -211,10 +363,13 @@ impl ForkPoint {
 /// response has none).
 ///
 /// `fork_point` forks at a chosen message instead of the tail; see [`ForkPoint`].
-/// An agent that does not implement it ignores the unknown `_meta` key, so this
-/// is inert rather than an error wherever it isn't understood. An agent that
-/// DOES implement it but cannot resolve the point answers `invalid_params`,
-/// which surfaces as a fork failure the user can retry from a different turn.
+/// ACP's `_meta` is ignorable, so an agent that does not know the key MAY ignore
+/// it and fork at the tail exactly as before — but it may equally REJECT the
+/// request, and nothing here can rule that out for an adapter nobody has tested.
+/// That is why a point codeg cannot resolve is refused up front instead of being
+/// quietly replaced by a tail fork. An agent that DOES implement it but cannot
+/// resolve the point answers `invalid_params`, which surfaces as a fork failure
+/// the user can retry from a different turn.
 ///
 /// What else the request names depends on the agent; see [`build_fork_request`].
 #[allow(clippy::too_many_arguments)]
@@ -566,7 +721,7 @@ mod tests {
             turn("turn-0", TurnRole::User, "hi", None),
             turn("turn-1", TurnRole::Assistant, "hello", Some("msg_01")),
         ];
-        let point = resolve_fork_point(&turns, "turn-1", AgentType::ClaudeCode).unwrap();
+        let point = resolve_fork_point(&turns, "turn-1", AgentType::ClaudeCode).unwrap().unwrap();
         assert_eq!(point.message_id, "msg_01");
         assert_eq!(
             point.message_fingerprint.as_deref(),
@@ -583,7 +738,7 @@ mod tests {
     #[test]
     fn claude_falls_back_to_the_fingerprint_with_no_agent_id() {
         let turns = vec![turn("turn-1", TurnRole::Assistant, "hello", None)];
-        let point = resolve_fork_point(&turns, "turn-1", AgentType::ClaudeCode).unwrap();
+        let point = resolve_fork_point(&turns, "turn-1", AgentType::ClaudeCode).unwrap().unwrap();
         assert_eq!(point.message_id, "turn-1");
         assert_eq!(
             point.message_fingerprint.as_deref(),
@@ -605,7 +760,7 @@ mod tests {
             status: None,
             meta: None,
         }];
-        assert!(resolve_fork_point(&[t], "turn-1", AgentType::ClaudeCode).is_none());
+        assert!(resolve_fork_point(&[t], "turn-1", AgentType::ClaudeCode).unwrap().is_none());
     }
 
     /// A textless turn Claude DID name is still a fork point by id alone.
@@ -613,7 +768,7 @@ mod tests {
     fn claude_forks_a_textless_named_turn_by_its_id_alone() {
         let mut t = turn("turn-1", TurnRole::Assistant, "", Some("msg_01"));
         t.blocks = Vec::new();
-        let point = resolve_fork_point(&[t], "turn-1", AgentType::ClaudeCode).unwrap();
+        let point = resolve_fork_point(&[t], "turn-1", AgentType::ClaudeCode).unwrap().unwrap();
         assert_eq!(point.message_id, "msg_01");
         assert!(point.message_fingerprint.is_none());
         assert!(point.message_occurrence.is_none());
@@ -625,7 +780,7 @@ mod tests {
             turn("turn-0", TurnRole::User, "hi", None),
             turn("turn-1", TurnRole::Assistant, "hello", None),
         ];
-        let point = resolve_fork_point(&turns, "turn-1", AgentType::Codex).unwrap();
+        let point = resolve_fork_point(&turns, "turn-1", AgentType::Codex).unwrap().unwrap();
         assert_eq!(
             point.message_fingerprint.as_deref(),
             Some(fingerprint_agent_message("hello").as_str())
@@ -644,13 +799,13 @@ mod tests {
         ];
         assert_eq!(
             resolve_fork_point(&turns, "turn-0", AgentType::Codex)
-                .unwrap()
+                .unwrap().unwrap()
                 .message_occurrence,
             Some(1)
         );
         assert_eq!(
             resolve_fork_point(&turns, "turn-2", AgentType::Codex)
-                .unwrap()
+                .unwrap().unwrap()
                 .message_occurrence,
             Some(2)
         );
@@ -666,7 +821,7 @@ mod tests {
         ];
         assert_eq!(
             resolve_fork_point(&turns, "turn-1", AgentType::Codex)
-                .unwrap()
+                .unwrap().unwrap()
                 .message_occurrence,
             Some(1)
         );
@@ -678,7 +833,7 @@ mod tests {
     fn codex_declines_a_turn_with_no_text() {
         let mut t = turn("turn-1", TurnRole::Assistant, "", None);
         t.blocks = vec![ContentBlock::Text { text: "   ".into() }];
-        assert!(resolve_fork_point(&[t], "turn-1", AgentType::Codex).is_none());
+        assert!(resolve_fork_point(&[t], "turn-1", AgentType::Codex).unwrap().is_none());
     }
 
     /// DeepSeek reads BOTH halves, so both are sent — unlike codex, whose id
@@ -689,7 +844,7 @@ mod tests {
             turn("turn-0", TurnRole::User, "hi", None),
             turn("turn-1", TurnRole::Assistant, "hello", Some("uuid-a2")),
         ];
-        let point = resolve_fork_point(&turns, "turn-1", AgentType::DeepSeek).unwrap();
+        let point = resolve_fork_point(&turns, "turn-1", AgentType::DeepSeek).unwrap().unwrap();
         assert_eq!(point.message_id, "uuid-a2");
         assert_eq!(
             point.message_fingerprint.as_deref(),
@@ -698,13 +853,89 @@ mod tests {
         assert_eq!(point.message_occurrence, Some(1));
     }
 
+    /// A custom ACP agent forks by the id the stream stamped, and by NOTHING
+    /// else: `parsers::acp_native` is the only source of that id (there is no
+    /// session store to read one back out of), and the fingerprint is withheld
+    /// on purpose — openma reads it as a CONSTRAINT on the id hit, not a
+    /// fallback, and codeg's is the whole turn's text where the agent's is one
+    /// message's. Before this arm existed every custom-agent fork degraded to
+    /// the tail, silently.
+    #[test]
+    fn custom_agents_fork_by_the_recorded_id_alone() {
+        let turns = vec![
+            turn("turn-0", TurnRole::User, "hi", None),
+            turn("turn-1", TurnRole::Assistant, "hello", Some("77:1")),
+        ];
+        let point = resolve_fork_point(
+            &turns,
+            "turn-1",
+            AgentType::Custom("deepseek-official-acp"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(point.message_id, "77:1");
+        assert_eq!(point.message_fingerprint, None);
+        assert_eq!(point.message_occurrence, None);
+    }
+
+    /// A turn the agent never named is REFUSED, not relocated to the tail. The
+    /// caller picked this turn; a tail fork would put the branch somewhere the
+    /// user did not choose and still report success. A fingerprint is not an
+    /// option either — the two sides hash different text (one message's against
+    /// the whole turn's) and openma answers `invalid` when nothing matches.
+    #[test]
+    fn custom_agents_refuse_a_turn_the_agent_never_named() {
+        let turns = vec![
+            turn("turn-1", TurnRole::Assistant, "hello", None),
+            turn("turn-2", TurnRole::User, "and then?", None),
+            turn("turn-3", TurnRole::Assistant, "then this", None),
+        ];
+        assert_eq!(
+            resolve_fork_point(
+                &turns,
+                "turn-1",
+                AgentType::Custom("deepseek-official-acp")
+            ),
+            Err(ForkPointError::MissingMessageId)
+        );
+    }
+
+    /// ...except at the tail, where the tail fork IS the fork the user asked
+    /// for. A custom agent that forks without stamping ids could always fork
+    /// its newest reply; refusing that would be a regression with nothing
+    /// gained. A system line after the reply (a failed turn's account) is not
+    /// in the agent's history, so it does not move the tail; a user turn does.
+    #[test]
+    fn custom_agents_tail_fork_an_unnamed_reply_nothing_follows() {
+        let custom = || AgentType::Custom("deepseek-official-acp");
+        let turns = vec![
+            turn("turn-0", TurnRole::User, "hi", None),
+            turn("turn-1", TurnRole::Assistant, "hello", None),
+        ];
+        assert_eq!(resolve_fork_point(&turns, "turn-1", custom()), Ok(None));
+
+        let mut with_error_line = turns.clone();
+        with_error_line.push(turn("turn-2", TurnRole::System, "failed", None));
+        assert_eq!(
+            resolve_fork_point(&with_error_line, "turn-1", custom()),
+            Ok(None)
+        );
+
+        let mut with_steer = turns;
+        with_steer.push(turn("turn-2", TurnRole::User, "wait", None));
+        assert_eq!(
+            resolve_fork_point(&with_steer, "turn-1", custom()),
+            Err(ForkPointError::MissingMessageId)
+        );
+    }
+
     /// A log that named nothing still forks by content, the codex shape: the id
     /// is codeg's own turn id, which DeepSeek cannot match, so it falls through
     /// to the fingerprint instead of failing.
     #[test]
     fn deepseek_falls_back_to_the_fingerprint_with_no_log_id() {
         let turns = vec![turn("turn-1", TurnRole::Assistant, "hello", None)];
-        let point = resolve_fork_point(&turns, "turn-1", AgentType::DeepSeek).unwrap();
+        let point = resolve_fork_point(&turns, "turn-1", AgentType::DeepSeek).unwrap().unwrap();
         assert_eq!(point.message_id, "turn-1");
         assert_eq!(
             point.message_fingerprint.as_deref(),
@@ -719,7 +950,7 @@ mod tests {
     fn deepseek_forks_a_textless_turn_by_its_id_alone() {
         let mut t = turn("turn-1", TurnRole::Assistant, "", Some("uuid-a1"));
         t.blocks = Vec::new();
-        let point = resolve_fork_point(&[t], "turn-1", AgentType::DeepSeek).unwrap();
+        let point = resolve_fork_point(&[t], "turn-1", AgentType::DeepSeek).unwrap().unwrap();
         assert_eq!(point.message_id, "uuid-a1");
         // Nothing to hash, so no fingerprint — and none to count occurrences of.
         assert!(point.message_fingerprint.is_none());
@@ -732,7 +963,7 @@ mod tests {
     fn deepseek_declines_a_turn_with_neither_id_nor_text() {
         let mut t = turn("turn-1", TurnRole::Assistant, "", None);
         t.blocks = vec![ContentBlock::Text { text: "   ".into() }];
-        assert!(resolve_fork_point(&[t], "turn-1", AgentType::DeepSeek).is_none());
+        assert!(resolve_fork_point(&[t], "turn-1", AgentType::DeepSeek).unwrap().is_none());
     }
 
     /// The fingerprint half counts the same way codex's does, so a repeated
@@ -746,7 +977,7 @@ mod tests {
         ];
         assert_eq!(
             resolve_fork_point(&turns, "turn-2", AgentType::DeepSeek)
-                .unwrap()
+                .unwrap().unwrap()
                 .message_occurrence,
             Some(2)
         );
@@ -757,25 +988,78 @@ mod tests {
     #[test]
     fn user_turns_are_not_fork_points() {
         let turns = vec![turn("turn-0", TurnRole::User, "hi", Some("msg_01"))];
-        assert!(resolve_fork_point(&turns, "turn-0", AgentType::ClaudeCode).is_none());
-        assert!(resolve_fork_point(&turns, "turn-0", AgentType::Codex).is_none());
-        assert!(resolve_fork_point(&turns, "turn-0", AgentType::DeepSeek).is_none());
+        assert!(resolve_fork_point(&turns, "turn-0", AgentType::ClaudeCode).unwrap().is_none());
+        assert!(resolve_fork_point(&turns, "turn-0", AgentType::Codex).unwrap().is_none());
+        assert!(resolve_fork_point(&turns, "turn-0", AgentType::DeepSeek).unwrap().is_none());
     }
 
-    /// Every other agent forks at the tail — advertising a fork point they do
-    /// not implement would silently change what their fork means.
+    /// Agents that implement no fork point fork at the tail — advertising one
+    /// they do not implement would silently change what their fork means.
+    ///
+    /// `Custom(_)` is NOT in this list any more: it resolves the id the stream
+    /// stamped, so it has its own tests below. It used to be here, and that
+    /// assertion is exactly the behaviour this change removes.
     #[test]
     fn other_agents_have_no_fork_point() {
         let turns = vec![turn("turn-1", TurnRole::Assistant, "hello", Some("msg_01"))];
-        for agent in [AgentType::Gemini, AgentType::Grok, AgentType::Custom("acme")] {
-            assert!(resolve_fork_point(&turns, "turn-1", agent).is_none());
+        for agent in [AgentType::Gemini, AgentType::Grok] {
+            assert!(resolve_fork_point(&turns, "turn-1", agent)
+                .unwrap()
+                .is_none());
         }
     }
 
     #[test]
     fn unknown_turn_id_is_not_a_fork_point() {
         let turns = vec![turn("turn-1", TurnRole::Assistant, "hello", Some("msg_01"))];
-        assert!(resolve_fork_point(&turns, "turn-9", AgentType::ClaudeCode).is_none());
+        assert!(resolve_fork_point(&turns, "turn-9", AgentType::ClaudeCode).unwrap().is_none());
+    }
+
+    /// The same missing turn is REFUSED for a custom agent. A stale id — a
+    /// reparse that renumbered, a click racing one — must not become a tail
+    /// fork: that is a different branch reported as success. Built-in agents
+    /// keep `Ok(None)`, which is why this is scoped by agent type rather than
+    /// by whether the turn was found.
+    #[test]
+    fn a_missing_turn_is_refused_for_a_custom_agent() {
+        let turns = vec![turn("turn-1", TurnRole::Assistant, "hello", Some("77:1"))];
+        assert_eq!(
+            resolve_fork_point(
+                &turns,
+                "turn-9",
+                AgentType::Custom("deepseek-official-acp")
+            ),
+            Err(ForkPointError::TurnNotFound)
+        );
+        assert_eq!(
+            resolve_fork_point(&turns, "turn-9", AgentType::ClaudeCode),
+            Ok(None)
+        );
+    }
+
+    /// An agent with its own store has no codeg transcript to read, so the
+    /// current-session check cannot answer. It must not guess "absent": that
+    /// would refuse every fork on the twelve built-in agents, which is the one
+    /// thing this change is not allowed to do.
+    #[test]
+    fn a_stored_agent_never_fails_the_current_session_check() {
+        assert!(!session_lacks_message_id(
+            AgentType::ClaudeCode,
+            "sess-1",
+            "msg_01"
+        ));
+        assert!(!session_lacks_message_id(
+            AgentType::Codex,
+            "sess-1",
+            "msg_01"
+        ));
+        // A custom agent with no transcript for this session is equally
+        // unanswerable — the file may simply not exist yet.
+        assert!(!session_lacks_message_id(
+            AgentType::Custom("deepseek-official-acp"),
+            "sess-that-was-never-recorded",
+            "msg_01"
+        ));
     }
 
     /// Pinned against a digest computed outside this crate, so a change of hash
