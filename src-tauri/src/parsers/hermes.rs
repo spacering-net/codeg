@@ -1,5 +1,7 @@
 use std::future::Future;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::path::Path;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -56,6 +58,12 @@ impl HermesParser {
     #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self { base_dir }
+    }
+
+    #[cfg(test)]
+    /// Read-only access to the home directory this parser reads from.
+    pub(crate) fn base_dir(&self) -> &Path {
+        &self.base_dir
     }
 
     fn sqlite_db_path(&self) -> PathBuf {

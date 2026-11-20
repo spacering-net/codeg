@@ -240,8 +240,146 @@ pub struct CustomAgentDef {
     /// Defaults ON, and is skipped when serializing at that default, so
     /// definitions stored before this field existed keep both their behaviour
     /// and their fingerprint.
-    #[serde(default = "default_supports_mcp", skip_serializing_if = "is_default_supports_mcp")]
+    #[serde(
+        default = "default_supports_mcp",
+        skip_serializing_if = "is_default_supports_mcp"
+    )]
     pub supports_mcp: bool,
+    /// Optional declaration of the env-var names this agent reads for shared
+    /// Model Provider projection (`commands::model_provider_launch`). When a
+    /// conversation's model source is `provider`, codeg injects the provider's
+    /// base URL / API key / model id under the names declared here; slots left
+    /// unset fall back to the standard convention keys for the provider's API
+    /// family (`OPENAI_BASE_URL`/`OPENAI_API_KEY`/`OPENAI_MODEL` or
+    /// `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_MODEL`).
+    ///
+    /// Exists because agents disagree on the key names — e.g. `glm-acp-agent`
+    /// reads `ACP_GLM_BASE_URL`/`Z_AI_API_KEY` while Qwen Code reads the
+    /// standard `OPENAI_*` family. `None` (the default, and skipped when
+    /// serializing so stored def JSON keeps its byte shape) means "standard
+    /// convention keys only".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_env: Option<ModelEnvDeclaration>,
+}
+
+/// Per-slot env-var name overrides for the shared Model Provider projection.
+/// See [`CustomAgentDef::model_env`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelEnvDeclaration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// A verified env contract for one custom agent: the env names codeg must
+/// project a provider selection into, and the wire formats the CLI actually
+/// speaks.
+///
+/// `model_env: None` means the agent reads the STANDARD convention keys for
+/// whichever API family the provider uses (`OPENAI_*` / `ANTHROPIC_*`).
+#[derive(Debug, Clone)]
+pub struct ModelProviderContract {
+    pub model_env: Option<ModelEnvDeclaration>,
+    /// Families the CLI can talk. Checked before a selection is saved or
+    /// projected, so a provider it cannot speak is never offered.
+    pub api_types: &'static [crate::models::model_provider_file::ModelProviderApiType],
+}
+
+/// Env contracts verified against the real CLI (source inspection + live run
+/// against a local endpoint). Everything here works with no user setup.
+///
+/// Deliberately short. Agents that keep provider config in their own files or
+/// only half-read env are NOT listed, because a projection codeg cannot fully
+/// deliver would leave the user with a selection that silently doesn't apply:
+///
+/// * `kilo` (`@kilocode/cli`) — falls back to `OPENAI_BASE_URL`/`ANTHROPIC_BASE_URL`
+///   and the matching `*_API_KEY` only for its built-in `openai`/`anthropic`
+///   providers (the provider must already be selected in `kilo.jsonc`), and
+///   reads no `*_MODEL` variable at all; other providers are config-file only.
+/// * `minimax-code` (`@minimax-ai/code`) — resolves API keys from env for known
+///   providers, but takes base URL and model from its own `<data-dir>/config.yaml`
+///   (managed with `mcode provider add`).
+///
+/// Any other agent can opt in explicitly with a [`ModelEnvDeclaration`].
+pub fn known_model_provider_contract(registry_id: &str) -> Option<ModelProviderContract> {
+    use crate::models::model_provider_file::ModelProviderApiType as Api;
+    match registry_id {
+        // Qwen Code's OpenAI-compatible modes: with `OPENAI_API_KEY`,
+        // `OPENAI_BASE_URL` and `OPENAI_MODEL`/`QWEN_MODEL` all set it selects
+        // its `openai` auth type on its own, and its auth table also carries
+        // `openai-responses` and `anthropic`.
+        "qwen-code" => Some(ModelProviderContract {
+            model_env: None,
+            api_types: &[
+                Api::OpenAiCompletions,
+                Api::OpenAiResponses,
+                Api::AnthropicMessages,
+            ],
+        }),
+        // GLM Agent builds an official `openai` SDK client (`chat.completions`)
+        // from `ACP_GLM_BASE_URL` + `Z_AI_API_KEY` + `ACP_GLM_MODEL`, so it
+        // speaks OpenAI Chat Completions and nothing else — a Responses-only
+        // provider would 404 on the first request.
+        "glm-acp-agent" => Some(ModelProviderContract {
+            model_env: Some(ModelEnvDeclaration {
+                base_url: Some("ACP_GLM_BASE_URL".to_string()),
+                api_key: Some("Z_AI_API_KEY".to_string()),
+                model: Some("ACP_GLM_MODEL".to_string()),
+            }),
+            api_types: &[Api::OpenAiCompletions],
+        }),
+        _ => None,
+    }
+}
+
+/// The env names to project for this agent: the user's declaration when there
+/// is one (it wins — a user-declared contract is a statement about *their*
+/// agent), otherwise the verified contract's names.
+pub fn effective_model_env(
+    registry_id: &str,
+    declared: Option<&ModelEnvDeclaration>,
+) -> Option<ModelEnvDeclaration> {
+    declared
+        .cloned()
+        .or_else(|| known_model_provider_contract(registry_id).and_then(|c| c.model_env))
+}
+
+/// Whether codeg may project a shared Model Provider selection into this custom
+/// agent: either the user declared the env names ([`CustomAgentDef::model_env`],
+/// an explicit statement that the agent reads them) or codeg ships a verified
+/// contract for it ([`known_model_provider_contract`]).
+pub fn supports_model_provider_env(
+    registry_id: &str,
+    model_env: Option<&ModelEnvDeclaration>,
+) -> bool {
+    model_env.is_some() || known_model_provider_contract(registry_id).is_some()
+}
+
+/// API families to advertise for this agent, or empty when codeg cannot project
+/// into it at all.
+///
+/// A user declaration is permissive: we know the env names but not the wire
+/// format, so every projectable family is offered and the provider choice is
+/// the user's. A verified contract knows both.
+pub fn model_provider_api_types(
+    registry_id: &str,
+    declared: Option<&ModelEnvDeclaration>,
+) -> Vec<crate::models::model_provider_file::ModelProviderApiType> {
+    use crate::models::model_provider_file::ModelProviderApiType as Api;
+    if declared.is_some() {
+        return vec![
+            Api::OpenAiCompletions,
+            Api::OpenAiResponses,
+            Api::AnthropicMessages,
+        ];
+    }
+    known_model_provider_contract(registry_id)
+        .map(|contract| contract.api_types.to_vec())
+        .unwrap_or_default()
 }
 
 /// See [`CustomAgentDef::supports_mcp`] — the wire default is "forward MCP",
@@ -709,6 +847,10 @@ struct Entry {
     source: CustomAgentSource,
     /// Optional version-probe command. See [`CustomAgentDef::version_probe`].
     version_probe: Option<&'static str>,
+    /// The user's Model Provider env-name declaration. Owned rather than
+    /// interned: it is read as a whole (three names) and never compared by
+    /// pointer, and leaking one per hydrate cycle would grow with every edit.
+    model_env: Option<ModelEnvDeclaration>,
 }
 
 fn registry() -> &'static RwLock<HashMap<&'static str, Entry>> {
@@ -746,6 +888,7 @@ pub fn hydrate(defs: &[CustomAgentDef]) -> Vec<(String, CustomAgentError)> {
                     skills_dir: prev.skills_dir,
                     source: prev.source,
                     version_probe: prev.version_probe,
+                    model_env: prev.model_env.clone(),
                 },
             );
             continue;
@@ -777,6 +920,7 @@ pub fn hydrate(defs: &[CustomAgentDef]) -> Vec<(String, CustomAgentError)> {
                             .map(str::trim)
                             .filter(|s| !s.is_empty())
                             .map(intern),
+                        model_env: def.model_env.clone(),
                     },
                 );
             }
@@ -855,6 +999,17 @@ pub fn source_of(registry_id: &str) -> Option<CustomAgentSource> {
         .map(|e| e.source)
 }
 
+/// The user-declared Model Provider env-var names for a registered
+/// definition, if any. `None` means "no declaration" — which is not the same
+/// as "cannot be projected": see [`known_model_provider_contract`].
+pub fn model_env_of(registry_id: &str) -> Option<ModelEnvDeclaration> {
+    registry()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(registry_id)
+        .and_then(|e| e.model_env.clone())
+}
+
 /// The user-declared version-probe command for a registered definition, if
 /// any. See [`CustomAgentDef::version_probe`].
 pub fn version_probe_of(registry_id: &str) -> Option<&'static str> {
@@ -930,6 +1085,84 @@ mod tests {
         hydrate_test_guard()
     }
 
+    /// Only agents verified to read the standard env keys, or agents whose
+    /// definition declares the names, are projectable — an agent that keeps
+    /// provider config in its own files must not be offered the option.
+    #[test]
+    fn model_provider_env_support_is_declared_or_verified() {
+        assert!(supports_model_provider_env("qwen-code", None));
+
+        // Verified non-readers: no option.
+        assert!(!supports_model_provider_env("kilo", None));
+        assert!(!supports_model_provider_env("minimax-code", None));
+        assert!(!supports_model_provider_env("some-manual-agent", None));
+
+        // An explicit declaration is the opt-in for everything else.
+        let declared = ModelEnvDeclaration {
+            base_url: Some("ACP_GLM_BASE_URL".into()),
+            api_key: Some("Z_AI_API_KEY".into()),
+            model: Some("ACP_GLM_MODEL".into()),
+        };
+        assert!(supports_model_provider_env(
+            "glm-acp-agent",
+            Some(&declared)
+        ));
+        assert!(supports_model_provider_env(
+            "some-manual-agent",
+            Some(&declared)
+        ));
+    }
+
+    /// The shipped contracts are the ones the tests above proved against the
+    /// real CLIs: env names the agent reads, and only the wire formats it
+    /// speaks — glm-acp-agent builds an `openai` SDK chat-completions client,
+    /// so a Responses/Anthropic provider must not be offered to it.
+    #[test]
+    fn known_contracts_pin_env_names_and_api_families() {
+        use crate::models::model_provider_file::ModelProviderApiType as Api;
+
+        let qwen = known_model_provider_contract("qwen-code").expect("qwen-code");
+        assert!(qwen.model_env.is_none(), "qwen reads the standard keys");
+        assert_eq!(
+            qwen.api_types,
+            &[
+                Api::OpenAiCompletions,
+                Api::OpenAiResponses,
+                Api::AnthropicMessages
+            ]
+        );
+
+        let glm = known_model_provider_contract("glm-acp-agent").expect("glm-acp-agent");
+        let env = glm.model_env.expect("glm declares its own names");
+        assert_eq!(env.base_url.as_deref(), Some("ACP_GLM_BASE_URL"));
+        assert_eq!(env.api_key.as_deref(), Some("Z_AI_API_KEY"));
+        assert_eq!(env.model.as_deref(), Some("ACP_GLM_MODEL"));
+        assert_eq!(glm.api_types, &[Api::OpenAiCompletions]);
+
+        assert!(known_model_provider_contract("kilo").is_none());
+        assert!(known_model_provider_contract("minimax-code").is_none());
+    }
+
+    /// The effective env names prefer the user's declaration and fall back to
+    /// the shipped contract, so a known agent needs no setup while an agent
+    /// with custom names keeps them.
+    #[test]
+    fn effective_model_env_prefers_the_declaration() {
+        let declared = ModelEnvDeclaration {
+            base_url: Some("MY_BASE_URL".into()),
+            api_key: None,
+            model: Some("MY_MODEL".into()),
+        };
+        let effective = effective_model_env("glm-acp-agent", Some(&declared)).expect("declared");
+        assert_eq!(effective.base_url.as_deref(), Some("MY_BASE_URL"));
+        assert!(effective.api_key.is_none());
+
+        let builtin = effective_model_env("glm-acp-agent", None).expect("contract");
+        assert_eq!(builtin.api_key.as_deref(), Some("Z_AI_API_KEY"));
+
+        assert!(effective_model_env("kilo", None).is_none());
+    }
+
     fn npx_def(id: &str) -> CustomAgentDef {
         CustomAgentDef {
             registry_id: id.to_string(),
@@ -953,15 +1186,22 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: true,
+            model_env: None,
         }
     }
 
     #[test]
     fn derives_command_names_from_package_specs() {
-        assert_eq!(derive_command_name("@qwen-code/qwen-code@0.21.0"), "qwen-code");
+        assert_eq!(
+            derive_command_name("@qwen-code/qwen-code@0.21.0"),
+            "qwen-code"
+        );
         assert_eq!(derive_command_name("@github/copilot@1.0.75"), "copilot");
         assert_eq!(derive_command_name("cline@3.0.46"), "cline");
-        assert_eq!(derive_command_name("fast-agent-acp==0.9.24"), "fast-agent-acp");
+        assert_eq!(
+            derive_command_name("fast-agent-acp==0.9.24"),
+            "fast-agent-acp"
+        );
         assert_eq!(
             derive_command_name("hermes-agent[acp,mcp]==0.19.0"),
             "hermes-agent"
@@ -1041,7 +1281,10 @@ mod tests {
 
         let mut empty_name = npx_def("qwen-code");
         empty_name.name = "   ".into();
-        assert_eq!(build_meta(&empty_name).unwrap_err(), CustomAgentError::EmptyName);
+        assert_eq!(
+            build_meta(&empty_name).unwrap_err(),
+            CustomAgentError::EmptyName
+        );
 
         let mut wrong_channel = npx_def("qwen-code");
         wrong_channel.distribution_kind = CustomDistributionKind::Uvx;
@@ -1096,6 +1339,7 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: true,
+            model_env: None,
         }
     }
 
@@ -1161,9 +1405,7 @@ mod tests {
     fn nested_archive_entry_switches_to_dir_tree_extraction() {
         let meta = build_meta(&binary_def("dist-package/agent", None)).expect("valid");
         match meta.distribution {
-            AgentDistribution::Binary {
-                cmd, dir_entry, ..
-            } => {
+            AgentDistribution::Binary { cmd, dir_entry, .. } => {
                 assert_eq!(cmd, "agent");
                 let entry = dir_entry.expect("nested entry must extract the whole tree");
                 assert_eq!(entry.unix, "dist-package/agent");
@@ -1230,7 +1472,13 @@ mod tests {
             );
         }
         // The registry's real spellings still work.
-        for ok in ["./goose", "goose", "dist-package/cursor-agent", "amp-acp.exe", ""] {
+        for ok in [
+            "./goose",
+            "goose",
+            "dist-package/cursor-agent",
+            "amp-acp.exe",
+            "",
+        ] {
             let def = binary_def(ok, None);
             assert!(
                 validate(&def).is_ok(),
@@ -1353,7 +1601,10 @@ mod tests {
         // Re-hydrating an unchanged definition must reuse the SAME leak.
         assert!(hydrate(std::slice::from_ref(&def)).is_empty());
         let second = get("hydrate-test-agent").expect("still registered");
-        assert!(std::ptr::eq(first, second), "unchanged def must not re-leak");
+        assert!(
+            std::ptr::eq(first, second),
+            "unchanged def must not re-leak"
+        );
 
         // Hydrating an empty set unregisters everything.
         assert!(hydrate(&[]).is_empty());
@@ -1390,7 +1641,10 @@ mod tests {
         // An unregistered (deleted) id reads as all-off — a phantom column
         // must not survive its agent.
         assert!(hydrate(&[]).is_empty());
-        assert_eq!(skills_decl("skills-flag-agent"), CustomSkillsDecl::default());
+        assert_eq!(
+            skills_decl("skills-flag-agent"),
+            CustomSkillsDecl::default()
+        );
     }
 
     #[test]
@@ -1497,6 +1751,7 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: true,
+            model_env: None,
         };
         let meta = build_meta(&def).expect("builds");
         match meta.distribution {

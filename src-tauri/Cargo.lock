@@ -1186,6 +1186,7 @@ dependencies = [
  "ignore",
  "image",
  "include_dir",
+ "indexmap 2.13.0",
  "insta",
  "javascriptcore-rs",
  "jsonc-parser",

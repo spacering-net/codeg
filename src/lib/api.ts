@@ -25,6 +25,7 @@ import { asConversationMovedError } from "./conversation-moved"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
+  AgentModelSource,
   LeakedTempReclaim,
   LeakedTempScan,
   AgentType,
@@ -270,7 +271,8 @@ export async function acpConnect(
   workingDir?: string,
   sessionId?: string,
   preferredModeId?: string | null,
-  preferredConfigValues?: Record<string, string> | null
+  preferredConfigValues?: Record<string, string> | null,
+  conversationId?: number | null
 ): Promise<string> {
   return getTransport().call("acp_connect", {
     agentType,
@@ -278,6 +280,29 @@ export async function acpConnect(
     sessionId: sessionId ?? null,
     preferredModeId: preferredModeId ?? null,
     preferredConfigValues: preferredConfigValues ?? null,
+    conversationId: conversationId ?? null,
+  })
+}
+
+/**
+ * Remember a shared-catalog provider/model for an agent that has no
+ * conversation to save it to yet (a pre-bind composer pick).
+ *
+ * The pre-bind session launches before any conversation selection exists, and
+ * an agent that cannot start unauthenticated (Qwen Code refuses `session/new`
+ * without `OPENAI_*`) would otherwise be stuck: the picker is the fix, but the
+ * session it needs to reach the picker cannot start. Remembering the pick on
+ * the agent gives that launch credentials.
+ */
+export async function acpRememberAgentModelSelection(
+  agentType: AgentType,
+  providerId: string,
+  modelId: string
+): Promise<void> {
+  return getTransport().call("acp_remember_agent_model_selection", {
+    agentType,
+    providerId,
+    modelId,
   })
 }
 
@@ -670,6 +695,16 @@ export async function acpUpdateAgentPreferences(
 
 /** Returns the number of running sessions left on stale config by this save
  *  (for the settings-side "N sessions need restart" toast). */
+export async function acpUpdateAgentModelSource(
+  agentType: AgentType,
+  modelSource: AgentModelSource
+): Promise<number> {
+  return getTransport().call("acp_update_agent_model_source", {
+    agentType,
+    modelSource,
+  })
+}
+
 export async function acpUpdateAgentEnv(
   agentType: AgentType,
   params: {
@@ -1302,6 +1337,18 @@ export interface CustomAgentSpec {
 
 export type CustomDistributionKind = "npx" | "uvx" | "binary"
 
+/**
+ * Per-slot env-var names a custom agent reads for the shared Model Provider
+ * projection (see `CustomAgentDef::model_env` on the backend). Slots left
+ * unset fall back to the standard convention keys for the provider's API
+ * family (`OPENAI_*` / `ANTHROPIC_*`).
+ */
+export interface CustomAgentModelEnv {
+  baseUrl?: string | null
+  apiKey?: string | null
+  model?: string | null
+}
+
 export interface CustomAgentInfo {
   registryId: string
   /** `custom:<registryId>` — pass this wherever an `AgentType` is expected. */
@@ -1333,6 +1380,8 @@ export interface CustomAgentInfo {
    * any server is sent.
    */
   supportsMcp: boolean
+  /** Env-var name declaration for Model Provider projection, when declared. */
+  modelEnv: CustomAgentModelEnv | null
   /** False when the definition cannot launch here (e.g. no build for this OS). */
   launchable: boolean
   problem: string | null
@@ -1383,6 +1432,13 @@ export async function acpSaveCustomAgent(params: {
    * on, for a new row) — the safe default here is what is already stored.
    */
   supportsMcp?: boolean
+  /**
+   * Env-var name declaration for Model Provider projection. Omitted = the
+   * backend keeps the stored row's declaration; an explicit empty object
+   * clears it. Slots left unset inside the object fall back to the standard
+   * convention keys for the provider's API family.
+   */
+  modelEnv?: CustomAgentModelEnv
 }): Promise<void> {
   return getTransport().call("acp_save_custom_agent", { params })
 }
@@ -1409,7 +1465,11 @@ export async function acpPatchCustomAgent(
   patch: Partial<
     Pick<
       CustomAgentInfo,
-      "skillsSharedStore" | "skillsDir" | "supportsMcp" | "versionProbe"
+      | "skillsSharedStore"
+      | "skillsDir"
+      | "supportsMcp"
+      | "versionProbe"
+      | "modelEnv"
     >
   >
 ): Promise<void> {
@@ -1435,6 +1495,14 @@ export async function acpPatchCustomAgent(
     supportsMcp: current.supportsMcp,
     versionProbe: current.versionProbe,
     ...patch,
+    // `modelEnv` is pulled back out of the spread: `null` is a serialized-
+    // absent declaration, and the save surface treats an omitted field as
+    // "keep stored", so a null patch value normalizes to an explicit empty
+    // object (clear) rather than being dropped.
+    modelEnv:
+      patch.modelEnv === null
+        ? {}
+        : (patch.modelEnv ?? current.modelEnv ?? undefined),
   })
 }
 
@@ -3612,6 +3680,12 @@ export type SettingsSection =
   | "general"
   | "appearance"
   | "agents"
+  | "mcp"
+  | "skills"
+  | "experts"
+  | "model-providers"
+  | "science"
+  | "office-tools"
   | "collaboration"
   | "browser"
   | "computer-use"
@@ -3842,6 +3916,20 @@ export async function updateConversationPinned(
   return getTransport().call("update_conversation_pinned", {
     conversationId,
     pinned,
+  })
+}
+
+/** Save or clear the shared Model Provider model selected for one conversation.
+ *  Passing both ids saves it; passing both as null restores native selection. */
+export async function updateConversationModelSelection(
+  conversationId: number,
+  providerId: string | null,
+  modelId: string | null
+): Promise<void> {
+  return getTransport().call("update_conversation_model_selection", {
+    conversationId,
+    providerId,
+    modelId,
   })
 }
 
@@ -4527,6 +4615,21 @@ export function isEmptyAttachmentError(err: unknown): boolean {
   )
 }
 
+// Fallback error when an upload's HTTP failure body is not JSON — typically
+// an intermediary's HTML error page (reverse proxy) or an empty axum
+// body-limit rejection. 413 is worth translating explicitly: the upload was
+// dropped for size before reaching the handler, and that is the detail the
+// user needs to see instead of a bare status code.
+function syntheticHttpError(status: number): { code: string; message: string } {
+  if (status === 413) {
+    return {
+      code: "upload_too_large",
+      message: "HTTP 413: request body exceeds the server-side size limit",
+    }
+  }
+  return { code: "network_error", message: `HTTP ${status}` }
+}
+
 // Upload a single attachment to the server.
 //
 // Web mode: streams the file via multipart/form-data to the same origin the
@@ -4597,10 +4700,7 @@ export async function uploadAttachment(
     throw new Error("Unauthorized")
   }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({
-      code: "network_error",
-      message: `HTTP ${res.status}`,
-    }))
+    const err = await res.json().catch(() => syntheticHttpError(res.status))
     throw err
   }
   return res.json()
@@ -4699,10 +4799,7 @@ async function workspaceFileFetch(
     throw new Error("Unauthorized")
   }
   if (!res.ok) {
-    const err = await res.json().catch(() => ({
-      code: "network_error",
-      message: `HTTP ${res.status}`,
-    }))
+    const err = await res.json().catch(() => syntheticHttpError(res.status))
     throw err
   }
   return res
@@ -4779,10 +4876,7 @@ export async function uploadWorkspaceFile(
         try {
           err = JSON.parse(xhr.responseText) as unknown
         } catch {
-          err = {
-            code: "network_error",
-            message: `HTTP ${xhr.status}`,
-          }
+          err = syntheticHttpError(xhr.status)
         }
         reject(err)
         return
@@ -6210,7 +6304,7 @@ export async function uploadBackupWeb(
         try {
           err = JSON.parse(xhr.responseText) as unknown
         } catch {
-          err = { code: "network_error", message: `HTTP ${xhr.status}` }
+          err = syntheticHttpError(xhr.status)
         }
         reject(err)
         return

@@ -6,6 +6,7 @@ import {
   AlertCircle,
   Braces,
   Check,
+  Database,
   FolderCog,
   Hash,
   ImagePlus,
@@ -28,6 +29,7 @@ import {
   acpFetchRegistryCatalog,
   acpListCustomAgents,
   acpSaveCustomAgent,
+  type CustomAgentModelEnv,
   type CustomAgentSpec,
   type CustomDistributionKind,
   type RegistryCatalogAgent,
@@ -250,6 +252,10 @@ export function AddCustomAgentDialog({
   const [manualSkills, setManualSkills] = useState(false)
   const [manualSkillsDir, setManualSkillsDir] = useState("")
   const [manualVersionProbe, setManualVersionProbe] = useState("")
+  // Optional JSON declaration of the env-var names this agent reads for the
+  // shared Model Provider projection (`{"baseUrl": …, "apiKey": …, "model":
+  // …}`). Blank = no declaration (standard convention keys only).
+  const [manualModelEnv, setManualModelEnv] = useState("")
   // Whether codeg may put MCP servers (its codeg-mcp companion) on the ACP
   // wire for this agent. On by default — the value almost every agent works
   // with, and the one a new definition should start from.
@@ -350,6 +356,7 @@ export function AddCustomAgentDialog({
     setManualSkills(false)
     setManualSkillsDir("")
     setManualVersionProbe("")
+    setManualModelEnv("")
     setManualSupportsMcp(true)
     setEditSource(null)
   }, [open])
@@ -419,6 +426,36 @@ export function AddCustomAgentDialog({
     () => (manualJson.trim() ? parseManualSpec(manualJson) : null),
     [manualJson]
   )
+  // Parse (and validate) the optional Model Provider env-name declaration.
+  // Accepted shape: an object whose `baseUrl`/`apiKey`/`model` values are
+  // strings; anything else is an error that blocks the save.
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- compiler bails preserving this memo (it feeds handleSaveManual's dep list); the computation is a pure JSON parse, so the bail is behavior-neutral
+  const manualModelEnvParsed = useMemo<{
+    env: CustomAgentModelEnv | null
+    error: boolean
+  }>(() => {
+    if (!manualModelEnv.trim()) return { env: null, error: false }
+    try {
+      const doc: unknown = JSON.parse(manualModelEnv)
+      if (typeof doc !== "object" || doc === null || Array.isArray(doc)) {
+        return { env: null, error: true }
+      }
+      const out: CustomAgentModelEnv = {}
+      for (const [key, value] of Object.entries(doc)) {
+        if (!["baseUrl", "apiKey", "model"].includes(key)) {
+          return { env: null, error: true }
+        }
+        if (typeof value !== "string") return { env: null, error: true }
+        if (value.trim() !== "") {
+          out[key as keyof CustomAgentModelEnv] = value
+        }
+      }
+      return { env: out, error: false }
+    } catch {
+      return { env: null, error: true }
+    }
+  }, [manualModelEnv])
+  const manualModelEnvInvalid = manualModelEnvParsed.error
   // Memoised so `effectiveKind` (read from this array) is a frozen value the
   // save callback below can list as a dependency.
   const manualKinds = useMemo(
@@ -463,6 +500,10 @@ export function AddCustomAgentDialog({
         source: editing ? (editSource ?? undefined) : "manual",
         versionProbe: manualVersionProbe.trim() || null,
         supportsMcp: manualSupportsMcp,
+        // A blank field means "no declaration" — an explicit empty object
+        // clears a stored one (the backend keeps the stored value when the
+        // field is omitted, which this form never does).
+        modelEnv: manualModelEnvParsed.env ?? {},
       })
       toast.success(
         editing
@@ -487,6 +528,7 @@ export function AddCustomAgentDialog({
     manualSkillsDir,
     manualVersionProbe,
     manualSupportsMcp,
+    manualModelEnvParsed,
     editing,
     editSource,
     onAdded,
@@ -897,6 +939,29 @@ export function AddCustomAgentDialog({
                     placeholder="agent-cli --version"
                     className="h-8 bg-background font-mono text-xs"
                   />
+                </SettingRow>
+                <SettingRow
+                  icon={Database}
+                  title={t("customAgentModelEnvLabel")}
+                  description={t("customAgentModelEnvHint")}
+                  htmlFor="custom-agent-model-env"
+                >
+                  <Textarea
+                    id="custom-agent-model-env"
+                    value={manualModelEnv}
+                    onChange={(e) => setManualModelEnv(e.target.value)}
+                    rows={3}
+                    spellCheck={false}
+                    placeholder={
+                      '{\n  "baseUrl": "ACP_GLM_BASE_URL",\n  "apiKey": "Z_AI_API_KEY"\n}'
+                    }
+                    className="bg-background font-mono text-xs"
+                  />
+                  {manualModelEnvInvalid && (
+                    <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                      {t("customAgentModelEnvInvalid")}
+                    </div>
+                  )}
                 </SettingRow>
               </SettingCard>
             </div>

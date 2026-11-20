@@ -193,7 +193,7 @@ fn provider_declared_context_window(config: &Value, model: &str) -> Option<u64> 
     }
 }
 
-fn resolve_pi_sessions_dir_from(
+pub(crate) fn resolve_pi_sessions_dir_from(
     session_dir_env: Option<OsString>,
     agent_dir_env: Option<OsString>,
     home_dir: Option<PathBuf>,
@@ -1436,7 +1436,7 @@ fn text_message(
         duration_ms: None,
         model,
         completed_at: Some(ts),
-    agent_message_id: None,
+        agent_message_id: None,
     }
 }
 
@@ -1462,7 +1462,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
             i += 1;
         } else if matches!(msg.role, MessageRole::System) {
@@ -1475,7 +1475,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
             i += 1;
         } else {
@@ -1514,7 +1514,7 @@ fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
                 duration_ms,
                 model: turn_model,
                 completed_at,
-            agent_message_id: None,
+                agent_message_id: None,
             });
         }
     }
@@ -1765,10 +1765,7 @@ mod tests {
     #[test]
     fn resolve_sessions_dir_defaults_to_home_dot_pi() {
         let resolved = resolve_pi_sessions_dir_from(None, None, Some(PathBuf::from("/home/demo")));
-        assert_eq!(
-            resolved,
-            PathBuf::from("/home/demo/.pi/agent/sessions")
-        );
+        assert_eq!(resolved, PathBuf::from("/home/demo/.pi/agent/sessions"));
     }
 
     #[test]
@@ -1778,10 +1775,7 @@ mod tests {
             Some(OsString::new()),
             Some(PathBuf::from("/home/demo")),
         );
-        assert_eq!(
-            resolved,
-            PathBuf::from("/home/demo/.pi/agent/sessions")
-        );
+        assert_eq!(resolved, PathBuf::from("/home/demo/.pi/agent/sessions"));
     }
 
     #[test]
@@ -1800,8 +1794,12 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create session dir");
         let mut file = std::fs::File::create(dir.join(filename)).expect("create jsonl");
         for record in records {
-            writeln!(file, "{}", serde_json::to_string(record).expect("serialize"))
-                .expect("write line");
+            writeln!(
+                file,
+                "{}",
+                serde_json::to_string(record).expect("serialize")
+            )
+            .expect("write line");
         }
     }
 
@@ -1824,8 +1822,7 @@ mod tests {
                        {"type":"thinking","thinking":"check the build first","thinkingSignature":"sig"},
                        {"type":"text","text":"Running the build now."},
                        {"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"pnpm build"}}
-                     ]}}),
-            json!({"type":"message","id":"m3","parentId":"m2","timestamp":"2026-06-27T10:00:09.000Z",
+                     ]}}),            json!({"type":"message","id":"m3","parentId":"m2","timestamp":"2026-06-27T10:00:09.000Z",
                    "message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash",
                      "content":[{"type":"text","text":"Compiled successfully"}],"isError":false}}),
             json!({"type":"message","id":"m4","parentId":"m3","timestamp":"2026-06-27T10:00:10.000Z",
@@ -1882,9 +1879,9 @@ mod tests {
 
         let has_user = detail.turns.iter().any(|t| {
             matches!(t.role, TurnRole::User)
-                && t.blocks
-                    .iter()
-                    .any(|b| matches!(b, ContentBlock::Text { text } if text.contains("pnpm build")))
+                && t.blocks.iter().any(
+                    |b| matches!(b, ContentBlock::Text { text } if text.contains("pnpm build")),
+                )
         });
         assert!(has_user, "user message becomes a User turn");
 
@@ -2022,10 +2019,10 @@ mod tests {
             &[
                 json!({"type":"session","version":3,"id":id,"timestamp":"2026-06-27T10:00:00.000Z","cwd":"/Users/demo/app"}),
                 json!({"type":"message","id":"m1","timestamp":"2026-06-27T10:00:01.000Z",
-                       "message":{"role":"user","content":[
-                         {"type":"text","text":"part one "},
-                         {"type":"text","text":"part two"}
-                       ]}}),
+                "message":{"role":"user","content":[
+                  {"type":"text","text":"part one "},
+                  {"type":"text","text":"part two"}
+                ]}}),
                 json!({"type":"message","id":"m2","timestamp":"2026-06-27T10:00:02.000Z",
                        "message":{"role":"assistant","model":"claude-sonnet-4-6",
                          "content":[{"type":"text","text":"ok"}]}}),
@@ -2121,11 +2118,18 @@ mod tests {
         .unwrap();
 
         let parser = PiParser::with_base_dir(base.to_path_buf());
-        let summaries = parser.list_conversations().expect("list survives malformed lines");
+        let summaries = parser
+            .list_conversations()
+            .expect("list survives malformed lines");
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, id);
-        let detail = parser.get_conversation(id).expect("detail survives malformed lines");
-        assert!(detail.turns.iter().any(|t| matches!(t.role, TurnRole::User)));
+        let detail = parser
+            .get_conversation(id)
+            .expect("detail survives malformed lines");
+        assert!(detail
+            .turns
+            .iter()
+            .any(|t| matches!(t.role, TurnRole::User)));
     }
 
     /// REGRESSION (#1068): a session reloaded before its first prompt is named

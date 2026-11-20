@@ -202,6 +202,7 @@ mod tests {
                 source: Default::default(),
                 version_probe: None,
                 supports_mcp: true,
+                model_env: None,
             })
             .unwrap();
             PromptUsageMode::for_distribution(meta.agent_type, &meta.distribution)

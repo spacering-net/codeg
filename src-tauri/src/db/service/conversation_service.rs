@@ -122,6 +122,9 @@ async fn create_inner(
         kind: Set(kind),
         model: Set(None),
         git_branch: Set(git_branch),
+        model_source: Set(None),
+        model_provider_id: Set(None),
+        model_provider_model_id: Set(None),
         external_id: Set(None),
         parent_id: Set(parent_id),
         parent_tool_use_id: Set(parent_tool_use_id),
@@ -658,6 +661,57 @@ pub async fn update_pin(
 /// `update_external_id`: `SessionStarted` writes are not serialized against
 /// deletes (deleting only soft-marks the row; the agent stays connected and
 /// bound), so a late event must not half-resurrect an invisible row.
+/// Fetch the raw conversation row without building a sidebar summary. Used by
+/// runtime and selection paths that need provider ids not exposed in summaries.
+pub async fn find_raw_by_id(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<Option<conversation::Model>, DbError> {
+    conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await
+        .map_err(Into::into)
+}
+
+/// Store the shared Model Provider selection for one conversation.
+///
+/// `None` restores the conversation to its agent-owned runtime by clearing all
+/// three provider fields. A concrete selection must be complete and is already
+/// validated by the command layer before it reaches this persistence function.
+pub async fn update_model_selection(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    provider_id: Option<String>,
+    model_id: Option<String>,
+) -> Result<(), DbError> {
+    let conv = conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await?
+        .ok_or_else(|| DbError::Migration(format!("Conversation not found: {conversation_id}")))?;
+    let mut active: conversation::ActiveModel = conv.into();
+    match (provider_id, model_id) {
+        (Some(provider_id), Some(model_id)) => {
+            active.model_source = Set(Some("provider".to_string()));
+            active.model_provider_id = Set(Some(provider_id));
+            active.model_provider_model_id = Set(Some(model_id.clone()));
+            active.model = Set(Some(model_id));
+        }
+        (None, None) => {
+            active.model_source = Set(None);
+            active.model_provider_id = Set(None);
+            active.model_provider_model_id = Set(None);
+        }
+        _ => {
+            return Err(DbError::Migration(
+                "Provider and model id must be set together".to_string(),
+            ));
+        }
+    }
+    active.updated_at = Set(Utc::now());
+    active.update(conn).await?;
+    Ok(())
+}
+
 pub async fn bind_external_id(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -853,7 +907,10 @@ pub async fn bind_external_id(
                 }
 
                 let agent_type = carried.agent_type.clone();
-                let preserved = carried.into_active_model(previous.clone()).insert(txn).await?;
+                let preserved = carried
+                    .into_active_model(previous.clone())
+                    .insert(txn)
+                    .await?;
                 // The preserving row IS the old conversation as far as the user
                 // can tell, so it keeps the tags they put on it.
                 conversation_tag_service::copy_conversation_tags(txn, conversation_id, preserved.id)
@@ -932,6 +989,9 @@ struct CarriedOverRow {
     kind: ConversationKind,
     model: Option<String>,
     git_branch: Option<String>,
+    model_source: Option<String>,
+    model_provider_id: Option<String>,
+    model_provider_model_id: Option<String>,
     parent_id: Option<i32>,
     message_count: i32,
     created_at: chrono::DateTime<Utc>,
@@ -964,6 +1024,9 @@ impl CarriedOverRow {
             kind: row.kind.clone(),
             model: row.model.clone(),
             git_branch: row.git_branch.clone(),
+            model_source: row.model_source.clone(),
+            model_provider_id: row.model_provider_id.clone(),
+            model_provider_model_id: row.model_provider_model_id.clone(),
             // Carried so the `kind == Delegate ⟺ parent_id IS NOT NULL`
             // invariant survives, and so a preserved child stays inside its
             // parent's sub-session subtree instead of surfacing as a root.
@@ -998,6 +1061,9 @@ impl CarriedOverRow {
             kind: Set(self.kind),
             model: Set(self.model),
             git_branch: Set(self.git_branch),
+            model_source: Set(self.model_source),
+            model_provider_id: Set(self.model_provider_id),
+            model_provider_model_id: Set(self.model_provider_model_id),
             external_id: Set(Some(external_id)),
             parent_id: Set(self.parent_id),
             // Deliberately NOT carried: both are close to unique per delegation
@@ -1462,6 +1528,9 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
         status,
         kind: r.kind.clone(),
         model: r.model,
+        model_source: r.model_source,
+        model_provider_id: r.model_provider_id,
+        model_provider_model_id: r.model_provider_model_id,
         git_branch: r.git_branch,
         external_id: r.external_id,
         message_count: r.message_count as u32,
@@ -2039,15 +2108,9 @@ mod tests {
     async fn seed_model_fills_an_empty_column_once_without_bumping_updated_at() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-seed-model").await;
-        let conv = create(
-            &db.conn,
-            folder,
-            AgentType::Codex,
-            Some("c".into()),
-            None,
-        )
-        .await
-        .expect("create");
+        let conv = create(&db.conn, folder, AgentType::Codex, Some("c".into()), None)
+            .await
+            .expect("create");
 
         // The gap this closes: a row created in-app carries no model at all,
         // which is why the sidebar could only ever show one for imported
@@ -2090,26 +2153,18 @@ mod tests {
         );
 
         // A transcript that names no model asks for no write at all.
-        assert!(
-            !seed_model_if_empty(&db.conn, conv.id, "   ")
-                .await
-                .expect("blank seed")
-        );
+        assert!(!seed_model_if_empty(&db.conn, conv.id, "   ")
+            .await
+            .expect("blank seed"));
     }
 
     #[tokio::test]
     async fn seed_model_skips_a_soft_deleted_row() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-seed-model-deleted").await;
-        let conv = create(
-            &db.conn,
-            folder,
-            AgentType::Codex,
-            Some("c".into()),
-            None,
-        )
-        .await
-        .expect("create");
+        let conv = create(&db.conn, folder, AgentType::Codex, Some("c".into()), None)
+            .await
+            .expect("create");
         soft_delete(&db.conn, conv.id).await.expect("delete");
 
         assert!(
@@ -2231,7 +2286,10 @@ mod tests {
     }
 
     /// The single live row (if any) holding `external_id`, whatever its id.
-    async fn rows_holding(conn: &DatabaseConnection, external_id: &str) -> Vec<conversation::Model> {
+    async fn rows_holding(
+        conn: &DatabaseConnection,
+        external_id: &str,
+    ) -> Vec<conversation::Model> {
         conversation::Entity::find()
             .filter(conversation::Column::ExternalId.eq(external_id))
             .filter(conversation::Column::DeletedAt.is_null())
@@ -2541,7 +2599,10 @@ mod tests {
             preserved, None,
             "a row with no session yet has nothing to preserve"
         );
-        assert_eq!(raw_row(&db.conn, row.id).await.external_id.as_deref(), Some("S1"));
+        assert_eq!(
+            raw_row(&db.conn, row.id).await.external_id.as_deref(),
+            Some("S1")
+        );
     }
 
     #[tokio::test]
@@ -2553,7 +2614,9 @@ mod tests {
         let row = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
             .await
             .expect("create");
-        bind_external_id(&db.conn, row.id, "S1", &[]).await.expect("bind");
+        bind_external_id(&db.conn, row.id, "S1", &[])
+            .await
+            .expect("bind");
 
         let preserved = bind_external_id(&db.conn, row.id, "S1", &[])
             .await
@@ -2574,7 +2637,9 @@ mod tests {
         let row = create(&db.conn, folder, AgentType::Codex, None, None)
             .await
             .expect("create");
-        bind_external_id(&db.conn, row.id, "S1", &[]).await.expect("bind");
+        bind_external_id(&db.conn, row.id, "S1", &[])
+            .await
+            .expect("bind");
         // Stand in for fork's sibling insert.
         let sibling = create(&db.conn, folder, AgentType::Codex, None, None)
             .await
@@ -2588,7 +2653,10 @@ mod tests {
         let mut original: conversation::ActiveModel = raw_row(&db.conn, row.id).await.into();
         original.external_id = Set(Some("S2".into()));
         original.update(&db.conn).await.expect("release");
-        active.update(&db.conn).await.expect("hand S1 to the sibling");
+        active
+            .update(&db.conn)
+            .await
+            .expect("hand S1 to the sibling");
 
         // Now the late SessionStarted{S2} arrives for the original row.
         let preserved = bind_external_id(&db.conn, row.id, "S2", &[])
@@ -2629,7 +2697,9 @@ mod tests {
                 .await
                 .expect("create");
             let seed = format!("S1-{original:?}");
-            bind_external_id(&db.conn, row.id, &seed, &[]).await.expect("bind");
+            bind_external_id(&db.conn, row.id, &seed, &[])
+                .await
+                .expect("bind");
             update_status(&db.conn, row.id, original.clone())
                 .await
                 .expect("status");
@@ -2966,11 +3036,9 @@ mod tests {
                 .expect("seed-locked"),
             "a locked title must not be seeded over"
         );
-        assert!(
-            !seed_auto_title_if_empty(&db.conn, row.id, String::new())
-                .await
-                .expect("seed-empty")
-        );
+        assert!(!seed_auto_title_if_empty(&db.conn, row.id, String::new())
+            .await
+            .expect("seed-empty"));
         let summary = get_by_id(&db.conn, row.id).await.expect("get");
         assert_eq!(summary.title.as_deref(), Some("User pick"));
     }
@@ -3007,7 +3075,9 @@ mod tests {
         )
         .await
         .expect("create");
-        soft_delete(&db.conn, refreshed.id).await.expect("soft delete");
+        soft_delete(&db.conn, refreshed.id)
+            .await
+            .expect("soft delete");
         assert!(
             !refresh_auto_title(&db.conn, refreshed.id, "Agent title".into())
                 .await

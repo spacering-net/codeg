@@ -68,8 +68,16 @@ async fn runtime_env(
     db: &AppDatabase,
     data_dir: &Path,
 ) -> Result<BTreeMap<String, String>, AcpError> {
-    crate::commands::acp::build_runtime_env_for_agent(db, AgentType::OpenCode, None, data_dir, true)
-        .await
+    crate::commands::acp::build_runtime_env_for_agent(
+        db,
+        AgentType::OpenCode,
+        None,
+        data_dir,
+        None,
+        None,
+        true,
+    )
+    .await
 }
 
 /// Mark the change and tell running sessions and other windows about it.

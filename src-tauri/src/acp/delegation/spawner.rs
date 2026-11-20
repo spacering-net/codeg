@@ -91,6 +91,7 @@ impl ResumedSpawn {
 ///
 /// All methods are `async` because the production impl drives a Tokio runtime
 /// and DB; the mock returns immediately.
+#[allow(clippy::too_many_arguments)]
 #[async_trait]
 pub trait ConnectionSpawner: Send + Sync {
     /// Spawn a fresh child ACP connection of `agent_type` in `working_dir`.
@@ -119,6 +120,7 @@ pub trait ConnectionSpawner: Send + Sync {
         working_dir: Option<String>,
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
+        parent_conversation_id: Option<i32>,
     ) -> Result<String, SpawnerError>;
 
     /// Send the delegation task as the child's first prompt. The
@@ -154,6 +156,7 @@ pub trait ConnectionSpawner: Send + Sync {
         external_session_id: &str,
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
+        parent_conversation_id: Option<i32>,
     ) -> Result<ResumedSpawn, SpawnerError>;
 
     /// Send the resume continuation prompt into the child's EXISTING
@@ -244,6 +247,7 @@ pub mod mock {
         pub working_dir: Option<String>,
         pub preferred_mode_id: Option<String>,
         pub preferred_config_values: BTreeMap<String, String>,
+        pub parent_conversation_id: Option<i32>,
     }
 
     #[derive(Debug, Clone)]
@@ -262,6 +266,7 @@ pub mod mock {
         pub external_session_id: String,
         pub preferred_mode_id: Option<String>,
         pub preferred_config_values: BTreeMap<String, String>,
+        pub parent_conversation_id: Option<i32>,
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,6 +335,7 @@ pub mod mock {
             working_dir: Option<String>,
             preferred_mode_id: Option<String>,
             preferred_config_values: BTreeMap<String, String>,
+            parent_conversation_id: Option<i32>,
         ) -> Result<String, SpawnerError> {
             self.spawn_args.lock().await.push(SpawnCallArgs {
                 parent_connection_id: parent_connection_id.to_string(),
@@ -337,6 +343,7 @@ pub mod mock {
                 working_dir,
                 preferred_mode_id,
                 preferred_config_values,
+                parent_conversation_id,
             });
             // Honor a test-installed gate: block here (after recording the call,
             // before returning the child id) so a test can pin `handle_request`
@@ -387,22 +394,25 @@ pub mod mock {
             external_session_id: &str,
             preferred_mode_id: Option<String>,
             preferred_config_values: BTreeMap<String, String>,
+            parent_conversation_id: Option<i32>,
         ) -> Result<ResumedSpawn, SpawnerError> {
-            self.resume_spawn_args.lock().await.push(ResumeSpawnCallArgs {
-                parent_connection_id: parent_connection_id.to_string(),
-                agent_type,
-                working_dir,
-                external_session_id: external_session_id.to_string(),
-                preferred_mode_id,
-                preferred_config_values,
-            });
+            self.resume_spawn_args
+                .lock()
+                .await
+                .push(ResumeSpawnCallArgs {
+                    parent_connection_id: parent_connection_id.to_string(),
+                    agent_type,
+                    working_dir,
+                    external_session_id: external_session_id.to_string(),
+                    preferred_mode_id,
+                    preferred_config_values,
+                    parent_conversation_id,
+                });
             self.resume_spawn_results
                 .lock()
                 .await
                 .pop_front()
-                .unwrap_or_else(|| {
-                    Err(SpawnerError::Spawn("no queued resume spawn result".into()))
-                })
+                .unwrap_or_else(|| Err(SpawnerError::Spawn("no queued resume spawn result".into())))
         }
 
         async fn send_resume_prompt(
@@ -471,12 +481,20 @@ pub mod mock {
                     Some("/tmp".into()),
                     None,
                     BTreeMap::new(),
+                    None,
                 )
                 .await
                 .unwrap();
             assert_eq!(r1, "child-1");
             let r2 = m
-                .spawn("parent-1", AgentType::Codex, None, None, BTreeMap::new())
+                .spawn(
+                    "parent-1",
+                    AgentType::Codex,
+                    None,
+                    None,
+                    BTreeMap::new(),
+                    None,
+                )
                 .await
                 .unwrap_err();
             assert!(matches!(r2, SpawnerError::Spawn(_)));
@@ -492,6 +510,7 @@ pub mod mock {
                     None,
                     None,
                     BTreeMap::new(),
+                    None,
                 )
                 .await
                 .unwrap_err();
@@ -513,6 +532,7 @@ pub mod mock {
                 Some("/work".into()),
                 Some("auto".into()),
                 cfg.clone(),
+                None,
             )
             .await
             .unwrap();

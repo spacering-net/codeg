@@ -51,6 +51,38 @@ export function emitAttachSessionToSession(
   )
 }
 
+/**
+ * In-memory handoff for mentions aimed at a composer that does not exist yet:
+ * "At in new conversation" opens a tab and immediately emits, but
+ * `dispatchEvent` is synchronous — the new tab's composer has not mounted, so
+ * the live event would be lost. Callers queue here FIRST, then emit; the
+ * target composer drains the queue once it is ready, and the live-event
+ * handler drains it too so a composer that WAS mounted never applies the
+ * queued copy on top of the live one. Keyed by tab id, capped FIFO — a tab
+ * that closes before mounting just drops its entry.
+ */
+const PENDING_SESSION_ATTACHMENTS_LIMIT = 8
+const pendingSessionAttachments = new Map<string, DbConversationSummary>()
+
+export function queuePendingSessionAttachment(
+  tabId: string,
+  conversation: DbConversationSummary
+): void {
+  if (pendingSessionAttachments.size >= PENDING_SESSION_ATTACHMENTS_LIMIT) {
+    const oldest = pendingSessionAttachments.keys().next().value
+    if (oldest !== undefined) pendingSessionAttachments.delete(oldest)
+  }
+  pendingSessionAttachments.set(tabId, conversation)
+}
+
+export function takePendingSessionAttachment(
+  tabId: string
+): DbConversationSummary | null {
+  const conversation = pendingSessionAttachments.get(tabId) ?? null
+  if (conversation !== null) pendingSessionAttachments.delete(tabId)
+  return conversation
+}
+
 export const ATTACH_PAGE_TO_SESSION_EVENT = "codeg:attach-page-to-session"
 
 /**

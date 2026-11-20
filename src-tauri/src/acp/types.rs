@@ -298,7 +298,10 @@ impl AsyncTaskDelta {
     pub fn to_record(&self) -> AsyncTaskRecord {
         AsyncTaskRecord {
             task_id: self.task_id.clone(),
-            name: self.name.clone().unwrap_or_else(|| "Background task".into()),
+            name: self
+                .name
+                .clone()
+                .unwrap_or_else(|| "Background task".into()),
             task_type: self.task_type.clone().unwrap_or_else(|| "task".into()),
             description: self.description.clone().unwrap_or_default(),
             show_in_transcript: self.show_in_transcript.unwrap_or(true),
@@ -945,10 +948,7 @@ pub enum AcpEvent {
     /// clear its "restart to apply" banner. Carried into `SessionState` so a
     /// snapshot attach (web reconnect, window refresh, new tile) recovers the
     /// staleness the one-shot event won't replay for it.
-    SessionConfigStale {
-        stale: bool,
-        kind: ConfigStaleKind,
-    },
+    SessionConfigStale { stale: bool, kind: ConfigStaleKind },
 }
 
 /// What kind of work a [`BackgroundOutstandingTask`] is.
@@ -1855,6 +1855,16 @@ pub struct AcpAgentInfo {
     /// for `AgentType::ClaudeCode`.
     pub claude_model_picker: Option<Vec<String>>,
     pub model_provider_id: Option<i32>,
+    pub model_source: String,
+    /// API families the shared Model Provider source can offer this agent.
+    /// Empty means "no shared provider source" (either a built-in that has its
+    /// own config file and no adapter, or a custom agent whose CLI cannot take
+    /// the projection). For custom agents this is per-definition — a verified
+    /// env contract pins the families the CLI speaks (`glm-acp-agent` is Chat
+    /// Completions only), a user declaration is permissive. Composer and
+    /// settings filter the provider list with it, so a provider the launch
+    /// would refuse is never offered.
+    pub model_provider_api_types: Vec<String>,
     /// Display icon for a custom ACP agent — normally an inlined
     /// `data:image/…;base64,…` URL (see
     /// `crate::acp::custom_registry::CustomAgentDef::icon_url`). Always `None`

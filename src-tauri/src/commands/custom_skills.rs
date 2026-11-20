@@ -1040,6 +1040,7 @@ mod tests {
             source: Default::default(),
             version_probe: None,
             supports_mcp: true,
+            model_env: None,
         };
         let agent = crate::models::agent::AgentType::custom("skills-matrix-agent").unwrap();
         // Absolute on every platform — a unix literal would not be on Windows.

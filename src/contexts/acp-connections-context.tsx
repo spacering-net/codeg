@@ -165,6 +165,35 @@ import {
 import { rememberAdvertisedCommands } from "@/lib/advertised-commands-store"
 import { rememberModelLabels } from "@/lib/model-label-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
+import { getAcpAgentsSnapshot } from "@/hooks/use-acp-agents"
+
+/** Keys that select a native model at connect time. In provider-source mode the
+ *  conversation's provider/model selection is authoritative, so these saved
+ *  selector prefs must not be re-applied over it. */
+function isNativeModelConfigKey(key: string): boolean {
+  const normalized = key.toLowerCase()
+  return normalized === "model" || normalized.endsWith("_model")
+}
+
+function preferredConfigValuesForConnect(
+  agentType: string,
+  agents: Array<{
+    agent_type: string
+    model_source: "native" | "provider" | null
+  }>
+): Record<string, string> | null {
+  const { configValues } = getSavedPrefsForConnect(agentType)
+  if (!configValues) return null
+  const providerSource = agents.some(
+    (agent) =>
+      agent.agent_type === agentType && agent.model_source === "provider"
+  )
+  if (!providerSource) return configValues
+  const filtered = Object.fromEntries(
+    Object.entries(configValues).filter(([key]) => !isNativeModelConfigKey(key))
+  )
+  return Object.keys(filtered).length > 0 ? filtered : null
+}
 
 /**
  * A session id we are willing to interpolate into a shell command we hand the
@@ -3663,7 +3692,11 @@ export interface AcpActionsValue {
    * it was a no-op (no connection, or a viewer / delegation child that doesn't
    * own the backend process) — callers gate their "applied" confirmation on it.
    */
-  reapplyConfig(contextKey: string): Promise<boolean>
+  reapplyConfig(
+    contextKey: string,
+    conversationIdOverride?: number,
+    options?: { freshSession?: boolean }
+  ): Promise<boolean>
   /**
    * User-driven reconnect for the composer's connection-status popover, usable
    * in ANY state — unlike `reapplyConfig`, which only restarts a live owner.
@@ -7752,13 +7785,18 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // regressed when the snapshot path replaced the event path on tab
         // re-open (the snapshot frame doesn't carry a `session_modes` event,
         // so the apply-on-event hook never fired).
-        const savedPrefs = getSavedPrefsForConnect(agentType)
+        const savedModeId = getSavedPrefsForConnect(agentType).modeId
+        const savedConfigValues = preferredConfigValuesForConnect(
+          agentType,
+          getAcpAgentsSnapshot()
+        )
         const connectionId = await acpConnect(
           agentType,
           workingDir,
           sessionId,
-          savedPrefs.modeId,
-          savedPrefs.configValues
+          savedModeId,
+          savedConfigValues,
+          conversationId
         )
 
         // If disconnect was requested while connect was in flight, tear down
@@ -8081,34 +8119,6 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     [disconnect]
   )
 
-  const reapplyConfig = useCallback(
-    async (contextKey: string): Promise<boolean> => {
-      const conn = storeRef.current.connections.get(contextKey)
-      // Viewers / delegation children don't own the backend process — restarting
-      // would kill another client's (or the broker's) agent. The banner hides
-      // its restart button for them, but guard here too. Return false so the
-      // caller doesn't show a false "applied" confirmation on this no-op.
-      if (!conn || conn.isViewer || conn.isDelegationChild) return false
-      // Capture identity BEFORE teardown. `sessionId` is what makes the new
-      // process resume this conversation (session/load) rather than start fresh.
-      const { agentType, workingDir, sessionId } = conn
-      const tornDown = await disconnect(contextKey)
-      await connect(
-        contextKey,
-        agentType,
-        workingDir ?? undefined,
-        sessionId ?? undefined
-      )
-      // Reconnect regardless — the user is left with a working connection
-      // either way — but an unconfirmed teardown means the old process may
-      // still be alive and holding the OLD config, and `connect()` can land
-      // right back on it. Returning false keeps the caller from showing an
-      // "applied" confirmation it can't stand behind.
-      return tornDown
-    },
-    [connect, disconnect]
-  )
-
   // Params a reconnect would use: the LIVE connection wins (it carries what the
   // backend actually resolved — notably a sessionId minted after connect), with
   // the remembered request filling in what the store doesn't hold
@@ -8131,6 +8141,41 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       }
     },
     []
+  )
+
+  const reapplyConfig = useCallback(
+    async (
+      contextKey: string,
+      conversationIdOverride?: number,
+      options?: { freshSession?: boolean }
+    ): Promise<boolean> => {
+      const conn = storeRef.current.connections.get(contextKey)
+      // Viewers / delegation children don't own the backend process — restarting
+      // would kill another client's (or the broker's) agent. The banner hides
+      // its restart button for them, but guard here too. Return false so the
+      // caller doesn't show a false "applied" confirmation on this no-op.
+      if (!conn || conn.isViewer || conn.isDelegationChild) return false
+      // Resolve identity BEFORE teardown: the live entry supplies backend-minted
+      // values, and remembered params preserve values once the entry is gone.
+      const request = resolveReconnectRequest(contextKey)
+      const tornDown = await disconnect(contextKey)
+      await connect(
+        contextKey,
+        request?.agentType ?? conn.agentType,
+        request?.workingDir ?? conn.workingDir ?? undefined,
+        options?.freshSession
+          ? undefined
+          : (request?.sessionId ?? conn.sessionId ?? undefined),
+        conversationIdOverride ?? request?.conversationId
+      )
+      // Reconnect regardless — the user is left with a working connection
+      // either way — but an unconfirmed teardown means the old process may
+      // still be alive and holding the OLD config, and `connect()` can land
+      // right back on it. Returning false keeps the caller from showing an
+      // "applied" confirmation it can't stand behind.
+      return tornDown
+    },
+    [connect, disconnect, resolveReconnectRequest]
   )
 
   const getReconnectInfo = useCallback(

@@ -2,6 +2,7 @@
 
 import { memo, useCallback, useState } from "react"
 import {
+  AtSign,
   ChevronRight,
   Circle,
   EllipsisVertical,
@@ -20,6 +21,10 @@ import {
   updateConversationStatus,
   updateConversationTitle,
 } from "@/lib/api"
+import {
+  emitAttachSessionToSession,
+  queuePendingSessionAttachment,
+} from "@/lib/session-attachment-events"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { ConversationHeaderFolderPicker } from "@/components/chat/conversation-context-bar"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -191,6 +196,28 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     openNewConversationTab(folderId, folderPath, { inheritFromActive: true })
   }, [folderId, folderPath, openNewConversationTab])
 
+  const handleAtToNewConversation = useCallback(() => {
+    if (conversationId == null || !folderPath) return
+    const conversation = useAppWorkspaceStore
+      .getState()
+      .conversations.find((c) => c.id === conversationId)
+    if (!conversation) return
+    // Queue BEFORE emitting: the new tab's composer is not mounted yet and
+    // dispatchEvent is synchronous, so the live event would be lost (see
+    // queuePendingSessionAttachment). Whichever path sees the mention first —
+    // the mounted composer's live handler or the fresh composer's ready
+    // effect — drains the queue, so the badge lands exactly once.
+    const { tabId: targetTabId } = openNewConversationTab(
+      folderId,
+      folderPath,
+      {
+        inheritFromActive: true,
+      }
+    )
+    queuePendingSessionAttachment(targetTabId, conversation)
+    emitAttachSessionToSession({ tabId: targetTabId, conversation })
+  }, [conversationId, folderId, folderPath, openNewConversationTab])
+
   const handleRenameOpen = useCallback(() => {
     if (conversationId == null) return
     setRenameValue(title || "")
@@ -316,6 +343,13 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
             >
               <SquarePen className="h-4 w-4" />
               {t("newConversation")}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={!persisted || !folderPath}
+              onSelect={handleAtToNewConversation}
+            >
+              <AtSign className="h-4 w-4" />
+              {t("atToNewConversation")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem disabled={!persisted} onSelect={handleRenameOpen}>

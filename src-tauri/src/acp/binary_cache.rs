@@ -904,8 +904,9 @@ pub(crate) fn tool_binary_path(tool_id: &str, version: &str, cmd_name: &str) -> 
 /// Hex SHA-256 of a file, streamed so a large archive never lands in memory.
 fn file_sha256(path: &std::path::Path) -> Result<String, AcpError> {
     use sha2::{Digest, Sha256};
-    let mut file = std::fs::File::open(path)
-        .map_err(|e| AcpError::DownloadFailed(format!("failed to open archive for hashing: {e}")))?;
+    let mut file = std::fs::File::open(path).map_err(|e| {
+        AcpError::DownloadFailed(format!("failed to open archive for hashing: {e}"))
+    })?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];
     loop {

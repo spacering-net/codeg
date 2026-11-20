@@ -1,5 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::path::Path;
 
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
@@ -349,6 +351,12 @@ impl ClineParser {
     #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
         Self { base_dir }
+    }
+
+    #[cfg(test)]
+    /// Read-only access to the home directory this parser reads from.
+    pub(crate) fn base_dir(&self) -> &Path {
+        &self.base_dir
     }
 
     fn sessions_dir(&self) -> PathBuf {

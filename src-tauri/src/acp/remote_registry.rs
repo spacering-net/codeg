@@ -76,10 +76,9 @@ async fn fetch_registry_payload() -> Result<RegistryPayload, AppCommandError> {
         )));
     }
 
-    let text = response
-        .text()
-        .await
-        .map_err(|e| AppCommandError::network(format!("failed to read ACP registry response: {e}")))?;
+    let text = response.text().await.map_err(|e| {
+        AppCommandError::network(format!("failed to read ACP registry response: {e}"))
+    })?;
     serde_json::from_str::<RegistryPayload>(&text).map_err(|e| {
         AppCommandError::configuration_invalid(format!("failed to parse ACP registry JSON: {e}"))
     })
@@ -235,9 +234,8 @@ pub async fn fetch_catalog(
             // Exactly the condition `default_kind_for` uses to pick a channel,
             // so the picker cannot advertise an entry as supported and then
             // fail to add it.
-            let supported_on_platform = kinds
-                .iter()
-                .any(|k| kind_runs_here(*k, &item.distribution));
+            let supported_on_platform =
+                kinds.iter().any(|k| kind_runs_here(*k, &item.distribution));
             RegistryCatalogAgent {
                 builtin: is_builtin_registry_id(&item.id),
                 installed: installed_ids.iter().any(|id| id == &item.id),
@@ -305,7 +303,10 @@ pub fn catalog_entry_to_def(
     let kind = effective_kind(entry, kind)?;
 
     let mut spec = entry.spec.clone();
-    if let Some(cmd) = cmd_override.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) {
+    if let Some(cmd) = cmd_override
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+    {
         match kind {
             CustomDistributionKind::Npx => {
                 if let Some(npx) = spec.npx.as_mut() {
@@ -343,6 +344,9 @@ pub fn catalog_entry_to_def(
         // itself loudly by failing to connect, which is what the settings
         // toggle is there to fix.
         supports_mcp: true,
+        // Nor about Model Provider env projection; the user declares that
+        // per-agent from the edit form after adding.
+        model_env: None,
     })
 }
 
@@ -408,7 +412,10 @@ mod tests {
             r#"{{"npx":{{"package":"kilo@7.4.16"}},"binary":{{"{}":{{"archive":"https://e/k.tgz","cmd":"./kilo"}}}}}}"#,
             registry::current_platform()
         ));
-        assert_eq!(default_kind_for(&spec), Some(CustomDistributionKind::Binary));
+        assert_eq!(
+            default_kind_for(&spec),
+            Some(CustomDistributionKind::Binary)
+        );
         // An explicit choice is still honoured over the default.
         let entry = catalog_entry("kilo", spec);
         let def = catalog_entry_to_def(&entry, Some(CustomDistributionKind::Npx), None)
@@ -467,7 +474,10 @@ mod tests {
         let spec = spec_from(&format!(
             r#"{{"binary":{{"{elsewhere}":{{"archive":"https://e/k.tgz","cmd":"./kilo"}}}}}}"#
         ));
-        assert_eq!(default_kind_for(&spec), Some(CustomDistributionKind::Binary));
+        assert_eq!(
+            default_kind_for(&spec),
+            Some(CustomDistributionKind::Binary)
+        );
         let entry = catalog_entry("kilo", spec);
         let def = catalog_entry_to_def(&entry, None, None).expect("converts");
         assert!(matches!(
@@ -581,8 +591,12 @@ mod tests {
             "qwen-code",
             spec_from(r#"{"npx":{"package":"@qwen-code/qwen-code@0.21.0","args":["--acp"]}}"#),
         );
-        let def = catalog_entry_to_def(&entry, Some(CustomDistributionKind::Npx), Some("qwen".into()))
-            .expect("converts");
+        let def = catalog_entry_to_def(
+            &entry,
+            Some(CustomDistributionKind::Npx),
+            Some("qwen".into()),
+        )
+        .expect("converts");
         assert_eq!(def.spec.npx.unwrap().cmd.as_deref(), Some("qwen"));
     }
 

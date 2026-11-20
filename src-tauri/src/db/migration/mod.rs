@@ -44,7 +44,11 @@ mod m20260825_000001_remote_workspace_connection_headers;
 mod m20260829_000001_folder_group;
 mod m20260830_000001_canvas_node;
 mod m20260831_000001_canvas_node_group_grid;
+mod m20260906_000001_agent_setting_model_source;
+mod m20260906_000002_conversation_model_selection;
 mod m20260907_000001_canvas_node_path;
+mod m20260917_000001_custom_agent_model_env;
+mod m20260917_000002_agent_setting_catalog_selection;
 mod m20260929_000001_canvas_board;
 mod m20260930_000001_agent_setting_drop_adapter_channel;
 mod m20261006_000001_conversation_tag;
@@ -109,7 +113,11 @@ impl MigratorTrait for Migrator {
             Box::new(m20260829_000001_folder_group::Migration),
             Box::new(m20260830_000001_canvas_node::Migration),
             Box::new(m20260831_000001_canvas_node_group_grid::Migration),
+            Box::new(m20260906_000001_agent_setting_model_source::Migration),
+            Box::new(m20260906_000002_conversation_model_selection::Migration),
             Box::new(m20260907_000001_canvas_node_path::Migration),
+            Box::new(m20260917_000001_custom_agent_model_env::Migration),
+            Box::new(m20260917_000002_agent_setting_catalog_selection::Migration),
             Box::new(m20260929_000001_canvas_board::Migration),
             Box::new(m20260930_000001_agent_setting_drop_adapter_channel::Migration),
             Box::new(m20261006_000001_conversation_tag::Migration),

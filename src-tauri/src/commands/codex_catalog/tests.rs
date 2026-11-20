@@ -43,6 +43,11 @@ async fn bind(db: &AppDatabase, provider: Option<i32>) {
             enabled: true,
             env_json: None,
             model_provider_id: provider,
+            model_source: if provider.is_some() {
+                "provider".to_string()
+            } else {
+                "native".to_string()
+            },
         },
     )
     .await

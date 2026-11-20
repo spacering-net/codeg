@@ -47,6 +47,7 @@ const STORED: CustomAgentInfo = {
   source: "manual",
   versionProbe: "qwen --version",
   supportsMcp: true,
+  modelEnv: { baseUrl: "OPENAI_BASE_URL" },
   launchable: true,
   problem: null,
 }
@@ -64,6 +65,7 @@ const REPLACED_FIELDS = [
   "source",
   "versionProbe",
   "supportsMcp",
+  "modelEnv",
 ] as const
 
 /**

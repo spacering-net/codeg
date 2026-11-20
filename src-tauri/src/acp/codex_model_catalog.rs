@@ -590,6 +590,14 @@ pub fn expand_catalog(config: &CodexModelConfig, listed: &[Value], templates: &[
     Value::Object(Map::from_iter([("models".to_string(), Value::Array(out))]))
 }
 
+/// [`expand_catalog`] with the officials dropped: only the user's customs, with
+/// the snapshot serving purely as each custom's `base` template. tjx's shared
+/// Model Provider launch path builds a per-conversation catalog this way — the
+/// provider decides the visible model set, so no bundled official is included.
+pub fn expand_customs_only(config: &CodexModelConfig, snapshot: &[Value]) -> Value {
+    expand_catalog(config, &[], snapshot)
+}
+
 /// The default model slug written as codex's root `model`: the explicit
 /// `default` when it names a listed model, else the first custom, else the
 /// non-excluded listable official codex itself ranks first (lowest `priority`),
@@ -1522,6 +1530,48 @@ mod tests {
         // hidden): GPT-6.2 Sol since 0.170.0.
         let cfg3 = CodexModelConfig::default();
         assert_eq!(default_slug(&cfg3, &s).as_deref(), Some("gpt-6.2-sol"));
+    }
+
+#[test]
+    fn expand_customs_only_omits_officials_and_keeps_only_customs() {
+        let config = CodexModelConfig {
+            customs: vec![CodexCustomEntry {
+                slug: "deepseek-v4-flash".into(),
+                display_name: Some("DeepSeek V4 Flash".into()),
+                context_window: Some(128_000),
+                base: "gpt-5.6-sol".into(),
+                overrides: Map::new(),
+            }],
+            excluded_officials: Vec::new(),
+            default: None,
+            catalog: None,
+        };
+        let cat = expand_customs_only(&config, &snap());
+        let models = cat.get("models").and_then(Value::as_array).expect("models array");
+        // The only entry is the custom — no bundled officials auto-included.
+        assert_eq!(models.len(), 1, "expand_customs_only must not auto-include officials");
+        let entry = &models[0];
+        // Custom is forced listable + visible + cleared upgrade, same as the
+        // full-expansion path.
+        assert_eq!(entry.get("slug").unwrap(), "deepseek-v4-flash");
+        assert_eq!(entry.get("display_name").unwrap(), "DeepSeek V4 Flash");
+        assert_eq!(entry.get("visibility").unwrap(), "list");
+        assert_eq!(entry.get("supported_in_api").unwrap(), &Value::Bool(true));
+        assert!(entry.get("upgrade").unwrap().is_null());
+        // context_window from the custom lands verbatim; max_context_window is
+        // the larger of base's value and the custom's, so a smaller custom does
+        // not shrink the upper bound the base advertised.
+        assert_eq!(entry.get("context_window").unwrap().as_u64(), Some(128_000));
+        assert!(
+            entry.get("max_context_window").unwrap().as_u64().unwrap() >= 128_000,
+            "max_context_window must be at least the custom's value"
+        );
+        // Priority inherits from the base (gpt-5.6-sol) — no renumbering
+        // happens in the customs-only path. We only assert it's a number; the
+        // exact value depends on the bundled snapshot and can drift.
+        assert!(entry.get("priority").unwrap().is_i64());
+        // Required ModelInfo fields from the clone base are present.
+        assert!(entry.get("base_instructions").and_then(Value::as_str).is_some());
     }
 
     #[test]

@@ -9,9 +9,10 @@ import {
   type PointerEvent,
   type ReactNode,
 } from "react"
-import { Reorder, useDragControls } from "motion/react"
+import { Reorder } from "motion/react"
 import { useLocale, useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
+import { useLongPressDrag } from "@/hooks/use-long-press-drag"
 import { useSearchParams } from "next/navigation"
 import {
   AlertCircle,
@@ -108,6 +109,7 @@ import {
   acpUpdateAgentConfig,
   acpUpdateClaudeModelPicker,
   acpUpdateAgentEnv,
+  acpUpdateAgentModelSource,
   acpUpdateHermesConfig,
   acpRevealHermesHome,
   acpOpenHermesSetupTerminal,
@@ -145,6 +147,16 @@ import {
   type CodexModelConfig,
 } from "@/lib/types"
 import { CodexModelListEditor } from "@/components/settings/codex-model-list-editor"
+import {
+  countCompatibleModelProviders,
+  getModelProviderApiTypes,
+  supportsModelProviderSourceCard,
+} from "@/lib/model-provider-capabilities"
+import type {
+  ModelProviderApiType,
+  ModelProviderRecord,
+} from "@/lib/model-provider-types"
+import { useModelProviderService } from "@/stores/model-provider-transport"
 import {
   CodexSavePreview,
   type CodexCatalogEndpoint,
@@ -263,12 +275,12 @@ interface AgentDraft {
   codexAuthMode: CodexAuthMode
   codexModelProvider: string
   codexProviderOptions: string[]
-  /** `[model_providers.<active>].supports_websockets` — see
-   * {@link codexWebsocketSwitchApplies}. */
   codexSupportsWebsockets: boolean
+  codexSkills: boolean
   /** `[features].default_mode_request_user_input` — see
    * {@link CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_KEY}. */
   codexDefaultModeRequestUserInput: boolean
+  codexServiceTierFast: boolean
   /** Sandbox / approval group — the thread defaults codex applies to turns it
    * starts itself (`/goal`, `/review`, `/compact`). Held as plain draft state
    * (not derived from `codexConfigTomlText`) and merged into config.toml
@@ -1972,7 +1984,10 @@ interface CodexTomlImportantValues {
   providerNames: string[]
   providerBaseUrls: Record<string, string>
   providerSupportsWebsockets: Record<string, boolean>
+  featureResponsesWebsocketsV2: boolean
+  featureSkills: boolean
   featureDefaultModeRequestUserInput: boolean
+  serviceTierFast: boolean
 }
 
 interface CodexImportantValues {
@@ -1982,7 +1997,9 @@ interface CodexImportantValues {
   modelProvider: string
   providerOptions: string[]
   supportsWebsockets: boolean
+  skills: boolean
   defaultModeRequestUserInput: boolean
+  serviceTierFast: boolean
 }
 
 const CODEX_DEFAULT_MODEL_PROVIDER = "codeg"
@@ -1994,61 +2011,6 @@ function withRootModelOf(text: string, baseline: string): string {
   return extractCodexTomlImportantValues(text).model === loaded
     ? text
     : updateTomlRootStringKey(text, "model", loaded)
-}
-
-/** Whether codeg publishes a catalog for this list, and so owns
- *  `model_catalog_json` and root `model` in config.toml. */
-function codexListIsManaged(list: CodexModelConfig): boolean {
-  return (
-    list.customs.length > 0 ||
-    (list.excludedOfficials?.length ?? 0) > 0 ||
-    !!list.catalog
-  )
-}
-
-/**
- * Provider ids codex builds in (codex 0.165.0, `built_in_model_providers` in
- * the `model-provider-info` crate); `openai` is the one an Official
- * Subscription (ChatGPT login) session runs on. A `[model_providers.<id>]`
- * table for one of them does not change it: `merge_configured_model_providers`
- * keeps the built-in entry, except that the two Bedrock ids and `gcp` (Google
- * Cloud Vertex AI, new in 0.165) accept a few fields — and reject the whole
- * config if any other field, `supports_websockets` included, is set.
- */
-const CODEX_BUILT_IN_PROVIDER_IDS: ReadonlySet<string> = new Set([
-  "openai",
-  "amazon-bedrock",
-  "amazon-bedrock-runtime",
-  "gcp",
-  "ollama",
-  "lmstudio",
-])
-
-/**
- * Whether the panel's WebSocket switch means anything for this auth mode and
- * active provider.
- *
- * Since codex 0.116.0 the Responses-over-WebSocket transport is decided by the
- * active provider's `supports_websockets` alone (the `responses_websockets*`
- * feature flags are `Stage::Removed` no-ops). The switch writes that key onto
- * `[model_providers.<active>]`, which only a configured provider reads.
- *
- * Official Subscription runs on the built-in OpenAI provider, which already
- * declares `supports_websockets: true` and cannot be overridden. Worse, the
- * write path pins `model_provider` before it writes, so the switch used to
- * move a subscription onto a `[model_providers.codeg]` with an empty
- * `base_url` — after which every turn failed with "builder error". A
- * hand-written `model_provider` naming another built-in provider is the same
- * dead end (see {@link CODEX_BUILT_IN_PROVIDER_IDS}).
- */
-export function codexWebsocketSwitchApplies(
-  authMode: CodexAuthMode,
-  activeProvider: string
-): boolean {
-  return (
-    authMode !== "chatgpt_subscription" &&
-    !CODEX_BUILT_IN_PROVIDER_IDS.has(activeProvider.trim())
-  )
 }
 
 /**
@@ -2431,18 +2393,19 @@ function extractCodexTomlImportantValues(
   const providerNames = new Set<string>()
   let model = ""
   let modelProvider = ""
+  let featureResponsesWebsocketsV2 = false
+  let featureSkills = false
   let featureDefaultModeRequestUserInput = false
+  let serviceTierFast = false
   let currentProviderSection: string | null = null
   let inFeaturesSection = false
   // Still above the first section header, i.e. in the implicit root table —
   // the only place a dotted `features.x` key actually means `[features].x`.
   let inRootTable = true
 
-  const lines = configTomlText.split(/\r?\n/)
-  const inString = tomlLinesInsideMultilineString(lines)
-  for (const [index, rawLine] of lines.entries()) {
+  for (const rawLine of configTomlText.split(/\r?\n/)) {
     const line = rawLine.trim()
-    if (!line || line.startsWith("#") || inString[index]) continue
+    if (!line || line.startsWith("#")) continue
 
     // Section tracking goes through the same header predicate the writer uses,
     // so the two never disagree about where a table begins. A header carrying
@@ -2465,19 +2428,21 @@ function extractCodexTomlImportantValues(
     }
 
     const assignment = parseTomlStringAssignment(rawLine)
-    // Root table only, which is where the writers put these two. The same keys
-    // inside `[profiles.<name>]` apply to that profile alone, yet a later
-    // profile used to override the root value here. Every patch writes the
-    // model it reads back to the root, and the WebSocket switch and the API
-    // URL field write back the provider, so one edit copied the profile's
-    // values over the user's root keys.
-    if (assignment && inRootTable) {
+    if (assignment) {
       if (assignment.key === "model") {
         model = assignment.value
         continue
       }
       if (assignment.key === "model_provider") {
         modelProvider = assignment.value
+        continue
+      }
+      if (
+        !currentProviderSection &&
+        !inFeaturesSection &&
+        assignment.key === "service_tier"
+      ) {
+        serviceTierFast = assignment.value.toLowerCase() === "fast"
         continue
       }
     }
@@ -2491,6 +2456,17 @@ function extractCodexTomlImportantValues(
         providerSupportsWebsockets[currentProviderSection] =
           boolAssignment.value
         providerNames.add(currentProviderSection.trim())
+        continue
+      }
+      if (
+        inFeaturesSection &&
+        boolAssignment.key === "responses_websockets_v2"
+      ) {
+        featureResponsesWebsocketsV2 = boolAssignment.value
+        continue
+      }
+      if (inFeaturesSection && boolAssignment.key === "skills") {
+        featureSkills = boolAssignment.value
         continue
       }
       if (
@@ -2509,18 +2485,29 @@ function extractCodexTomlImportantValues(
         providerSupportsWebsockets[providerName] = boolAssignment.value
         continue
       }
-      // The dotted `features.*` spelling is ROOT-scoped on purpose. Inside
-      // `[model_providers.codeg]` the same text means
+      // The three dotted `features.*` spellings below are ROOT-scoped on
+      // purpose. Inside `[model_providers.codeg]` the same text means
       // `model_providers.codeg.features.…` — a key codex ignores — and the
       // writer only ever touches the root spelling. Reading a nested one would
-      // show a value no save could clear.
-      if (
-        inRootTable &&
-        boolAssignment.key ===
+      // show a value no save could clear, and (for the websocket flag, which
+      // the writer re-derives on every patch) would promote a provider-local
+      // key into a global `[features]` flag behind the user's back.
+      if (inRootTable) {
+        if (boolAssignment.key === "features.responses_websockets_v2") {
+          featureResponsesWebsocketsV2 = boolAssignment.value
+          continue
+        }
+        if (boolAssignment.key === "features.skills") {
+          featureSkills = boolAssignment.value
+          continue
+        }
+        if (
+          boolAssignment.key ===
           `features.${CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_KEY}`
-      ) {
-        featureDefaultModeRequestUserInput = boolAssignment.value
-        continue
+        ) {
+          featureDefaultModeRequestUserInput = boolAssignment.value
+          continue
+        }
       }
     }
 
@@ -2566,7 +2553,10 @@ function extractCodexTomlImportantValues(
     providerNames: Array.from(providerNames),
     providerBaseUrls,
     providerSupportsWebsockets,
+    featureResponsesWebsocketsV2,
+    featureSkills,
     featureDefaultModeRequestUserInput,
+    serviceTierFast,
   }
 }
 
@@ -2653,12 +2643,11 @@ export function extractCodexImportantValues(
     : (toml.providerBaseUrls[CODEX_DEFAULT_MODEL_PROVIDER] ??
       toml.providerBaseUrls.openai ??
       "")
-  // The provider key alone, exactly as codex resolves it (`serde(default)`
-  // false). A leftover `[features].responses_websockets_v2` is NOT a
-  // fallback: that flag has been a no-op since codex 0.116.0, so reading it
-  // here would show the switch on while codex talks HTTPS.
   const providerSupportsWebsockets =
-    toml.providerSupportsWebsockets[activeProvider] ?? false
+    toml.providerSupportsWebsockets[activeProvider] ??
+    (activeProvider === CODEX_DEFAULT_MODEL_PROVIDER
+      ? toml.featureResponsesWebsocketsV2
+      : false)
   return {
     apiBaseUrl: providerBaseUrl,
     apiKey:
@@ -2676,8 +2665,14 @@ export function extractCodexImportantValues(
       toml.providerNames
     ),
     supportsWebsockets: providerSupportsWebsockets,
+    skills: toml.featureSkills,
     defaultModeRequestUserInput: toml.featureDefaultModeRequestUserInput,
+    serviceTierFast: toml.serviceTierFast,
   }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
 /**
@@ -2703,86 +2698,16 @@ function tomlSectionHeaderName(rawLine: string): string | null {
   return match ? match[1].trim() : null
 }
 
-/**
- * For each line, whether it begins inside a multi-line string — a `"""` or
- * `'''` value opened on an earlier line — and so is string content rather than
- * TOML structure. Exported for tests.
- *
- * Every line scanner in this file must skip such lines. codex's config.toml
- * takes multi-line values (`developer_instructions`, `compact_prompt`), and a
- * line inside one that looks like `[model_providers.x]` or `key = value` is
- * neither a header nor an assignment. Treating it as one makes a writer edit
- * the user's text, or delete a closing delimiter and break the document.
- *
- * A lexer, not a parser: it tracks basic and literal strings (single- and
- * multi-line) and comments, which is all it takes to know where a multi-line
- * string starts and ends.
- */
-export function tomlLinesInsideMultilineString(lines: string[]): boolean[] {
-  const inside: boolean[] = []
-  let open: '"""' | "'''" | null = null
-  for (const line of lines) {
-    inside.push(open !== null)
-    let i = 0
-    while (i < line.length) {
-      if (open !== null) {
-        // A backslash escapes the next character in a basic string only.
-        if (open === '"""' && line[i] === "\\") {
-          i += 2
-          continue
-        }
-        if (line.startsWith(open, i)) {
-          // Up to two more quotes may sit just inside the closing delimiter.
-          let end = i + 3
-          for (let extra = 0; extra < 2 && line[end] === open[0]; extra += 1) {
-            end += 1
-          }
-          i = end
-          open = null
-          continue
-        }
-        i += 1
-        continue
-      }
-      const ch = line[i]
-      if (ch === "#") break
-      if (line.startsWith('"""', i) || line.startsWith("'''", i)) {
-        open = ch === '"' ? '"""' : "'''"
-        i += 3
-        continue
-      }
-      if (ch === '"') {
-        i += 1
-        while (i < line.length && line[i] !== '"') {
-          i += line[i] === "\\" ? 2 : 1
-        }
-        i += 1
-        continue
-      }
-      if (ch === "'") {
-        const end = line.indexOf("'", i + 1)
-        i = end < 0 ? line.length : end + 1
-        continue
-      }
-      i += 1
-    }
-  }
-  return inside
-}
-
 function findTomlRootEndIndex(lines: string[]): number {
-  const inString = tomlLinesInsideMultilineString(lines)
   for (let i = 0; i < lines.length; i += 1) {
-    if (!inString[i] && isTomlSectionHeader(lines[i])) return i
+    if (isTomlSectionHeader(lines[i])) return i
   }
   return lines.length
 }
 
 function findTomlRootAssignmentIndex(lines: string[], key: string): number {
   const rootEnd = findTomlRootEndIndex(lines)
-  const inString = tomlLinesInsideMultilineString(lines)
   for (let i = 0; i < rootEnd; i += 1) {
-    if (inString[i]) continue
     const assignmentKey = parseTomlAssignmentKey(lines[i])
     if (assignmentKey === key) return i
   }
@@ -2831,11 +2756,9 @@ function findTomlSectionRange(
   lines: string[],
   sectionName: string
 ): { start: number; end: number } | null {
-  const inString = tomlLinesInsideMultilineString(lines)
   let sectionStart = -1
   let sectionEnd = lines.length
   for (let i = 0; i < lines.length; i += 1) {
-    if (inString[i]) continue
     if (sectionStart < 0) {
       if (tomlSectionHeaderName(lines[i]) === sectionName) {
         sectionStart = i
@@ -2849,23 +2772,6 @@ function findTomlSectionRange(
   }
   if (sectionStart < 0) return null
   return { start: sectionStart, end: sectionEnd }
-}
-
-/**
- * Index of the first line in `[start, end)` that assigns `key`, skipping
- * string content (see {@link tomlLinesInsideMultilineString}); -1 if none.
- */
-function findTomlKeyInRange(
-  lines: string[],
-  start: number,
-  end: number,
-  key: string
-): number {
-  const inString = tomlLinesInsideMultilineString(lines)
-  for (let i = start; i < end; i += 1) {
-    if (!inString[i] && parseTomlAssignmentKey(lines[i]) === key) return i
-  }
-  return -1
 }
 
 /**
@@ -2890,12 +2796,12 @@ function stripRootDottedKey(
   key: string
 ): void {
   const dotted = `${sectionName}.${key}`
-  for (
-    let index = findTomlRootAssignmentIndex(lines, dotted);
-    index >= 0;
-    index = findTomlRootAssignmentIndex(lines, dotted)
-  ) {
-    lines.splice(index, 1)
+  for (let i = 0; i < lines.length; i += 1) {
+    if (isTomlSectionHeader(lines[i])) return
+    if (parseTomlAssignmentKey(lines[i]) === dotted) {
+      lines.splice(i, 1)
+      i -= 1
+    }
   }
 }
 
@@ -2912,11 +2818,9 @@ function lastRootDottedSiblingIndex(
   sectionName: string
 ): number {
   const prefix = `${sectionName}.`
-  const rootEnd = findTomlRootEndIndex(lines)
-  const inString = tomlLinesInsideMultilineString(lines)
   let last = -1
-  for (let i = 0; i < rootEnd; i += 1) {
-    if (inString[i]) continue
+  for (let i = 0; i < lines.length; i += 1) {
+    if (isTomlSectionHeader(lines[i])) break
     if (parseTomlAssignmentKey(lines[i])?.startsWith(prefix)) last = i
   }
   return last
@@ -2933,12 +2837,14 @@ function upsertTomlSectionBooleanKey(
   const section = findTomlSectionRange(lines, sectionName)
 
   if (section) {
-    const assignmentIndex = findTomlKeyInRange(
-      lines,
-      section.start + 1,
-      section.end,
-      key
-    )
+    let assignmentIndex = -1
+    for (let i = section.start + 1; i < section.end; i += 1) {
+      const assignmentKey = parseTomlAssignmentKey(lines[i])
+      if (assignmentKey === key) {
+        assignmentIndex = i
+        break
+      }
+    }
 
     if (value === null) {
       if (assignmentIndex >= 0) {
@@ -3032,16 +2938,33 @@ function patchCodexProviderBaseUrl(
 
   const nextApiBaseUrl = apiBaseUrl.trim()
   const lines = configTomlText.split(/\r?\n/)
-  const section = findCodexProviderSectionRange(lines, trimmedProvider)
+  const sectionPattern = new RegExp(
+    `^\\[\\s*model_providers\\.${escapeRegExp(trimmedProvider)}\\s*\\]$`
+  )
+  let sectionStart = -1
+  let sectionEnd = lines.length
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = lines[i].trim()
+    if (sectionStart < 0) {
+      if (sectionPattern.test(trimmed)) {
+        sectionStart = i
+      }
+      continue
+    }
+    if (/^\[.*\]$/.test(trimmed)) {
+      sectionEnd = i
+      break
+    }
+  }
 
-  if (section) {
-    const { start: sectionStart, end: sectionEnd } = section
-    const baseUrlIndex = findTomlKeyInRange(
-      lines,
-      sectionStart + 1,
-      sectionEnd,
-      "base_url"
-    )
+  if (sectionStart >= 0) {
+    let baseUrlIndex = -1
+    for (let i = sectionStart + 1; i < sectionEnd; i += 1) {
+      const assignment = parseTomlStringAssignment(lines[i])
+      if (!assignment || assignment.key !== "base_url") continue
+      baseUrlIndex = i
+      break
+    }
     if (!nextApiBaseUrl) {
       if (baseUrlIndex >= 0) {
         lines.splice(baseUrlIndex, 1)
@@ -3066,24 +2989,6 @@ function patchCodexProviderBaseUrl(
   return `${appended}\n\n${sectionText}`.trim()
 }
 
-/**
- * Line range of `[model_providers.<provider>]`, found with the same header
- * predicates every other table scan in this file uses — so a header carrying
- * a trailing comment is still a header, and a header-shaped line inside a
- * multi-line string is not one. The exact-match regexes the provider writers
- * used before missed a commented provider header
- * (`[model_providers.codeg] # gateway`), so the writer appended a second
- * `[model_providers.codeg]` — a TOML redefinition the backend refuses to save
- * — and missed a commented NEXT header (`[features] # flags`) as the end, so
- * the key landed in that other table.
- */
-function findCodexProviderSectionRange(
-  lines: string[],
-  provider: string
-): { start: number; end: number } | null {
-  return findTomlSectionRange(lines, `model_providers.${provider}`)
-}
-
 function patchCodexProviderField(
   configTomlText: string,
   provider: string,
@@ -3094,16 +2999,33 @@ function patchCodexProviderField(
   if (!trimmedProvider) return configTomlText.trim()
 
   const lines = configTomlText.split(/\r?\n/)
-  const section = findCodexProviderSectionRange(lines, trimmedProvider)
+  const sectionPattern = new RegExp(
+    `^\\[\\s*model_providers\\.${escapeRegExp(trimmedProvider)}\\s*\\]$`
+  )
+  let sectionStart = -1
+  let sectionEnd = lines.length
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = lines[i].trim()
+    if (sectionStart < 0) {
+      if (sectionPattern.test(trimmed)) {
+        sectionStart = i
+      }
+      continue
+    }
+    if (/^\[.*\]$/.test(trimmed)) {
+      sectionEnd = i
+      break
+    }
+  }
 
-  if (section) {
-    const { start: sectionStart, end: sectionEnd } = section
-    const fieldIndex = findTomlKeyInRange(
-      lines,
-      sectionStart + 1,
-      sectionEnd,
-      key
-    )
+  if (sectionStart >= 0) {
+    let fieldIndex = -1
+    for (let i = sectionStart + 1; i < sectionEnd; i += 1) {
+      const assignmentKey = parseTomlAssignmentKey(lines[i])
+      if (assignmentKey !== key) continue
+      fieldIndex = i
+      break
+    }
     if (fieldIndex >= 0) {
       lines[fieldIndex] = lineText
     } else {
@@ -3120,23 +3042,6 @@ function patchCodexProviderField(
   const sectionText = `[model_providers.${trimmedProvider}]\n${lineText}`
   if (!appended) return sectionText
   return `${appended}\n\n${sectionText}`.trim()
-}
-
-/** Drop `key` from `[model_providers.<provider>]`; a no-op when either the
- * table or the key is absent. */
-function removeCodexProviderField(
-  configTomlText: string,
-  provider: string,
-  key: string
-): string {
-  const trimmedProvider = provider.trim()
-  if (!trimmedProvider) return configTomlText.trim()
-  const lines = configTomlText.split(/\r?\n/)
-  const section = findCodexProviderSectionRange(lines, trimmedProvider)
-  if (!section) return configTomlText.trim()
-  const index = findTomlKeyInRange(lines, section.start + 1, section.end, key)
-  if (index >= 0) lines.splice(index, 1)
-  return lines.join("\n").trim()
 }
 
 /**
@@ -3300,16 +3205,6 @@ function patchCodexAuthJsonText(
   }
 }
 
-/**
- * Apply the panel's structured Codex controls to a config.toml draft.
- *
- * Touches only the keys a patch names (plus the provider defaults
- * `ensureCodexProviderDefaults` supplies). It deliberately writes nothing on
- * its own initiative: the panel used to force `disable_response_storage =
- * true` and re-derive `[features].responses_websockets_v2` on every patch,
- * and current codex reads neither (the first was removed in 0.30.0, the
- * second has been a no-op since 0.116.0).
- */
 export function patchCodexConfigTomlText(
   configTomlText: string,
   patch: {
@@ -3317,7 +3212,9 @@ export function patchCodexConfigTomlText(
     model?: string
     modelProvider?: string
     supportsWebsockets?: boolean
+    skills?: boolean
     defaultModeRequestUserInput?: boolean
+    serviceTierFast?: boolean
   }
 ): string {
   let nextTomlText = configTomlText
@@ -3368,22 +3265,12 @@ export function patchCodexConfigTomlText(
         modelProvider
       )
     }
-    // The provider key is the whole switch: codex 0.116.0 retired the
-    // `responses_websockets*` feature flags, and a provider's
-    // `supports_websockets` defaults to false. So "off" removes the key —
-    // the same contract as the other switches — rather than writing `= false`.
-    nextTomlText = patch.supportsWebsockets
-      ? patchCodexProviderField(
-          nextTomlText,
-          modelProvider,
-          "supports_websockets",
-          "supports_websockets = true"
-        )
-      : removeCodexProviderField(
-          nextTomlText,
-          modelProvider,
-          "supports_websockets"
-        )
+    nextTomlText = patchCodexProviderField(
+      nextTomlText,
+      modelProvider,
+      "supports_websockets",
+      `supports_websockets = ${patch.supportsWebsockets ? "true" : "false"}`
+    )
     nextTomlText = ensureCodexProviderDefaults(nextTomlText, modelProvider)
   }
   const normalizedTomlValues = extractCodexTomlImportantValues(nextTomlText)
@@ -3394,10 +3281,39 @@ export function patchCodexConfigTomlText(
       normalizedTomlValues.model
     )
   }
+  const activeProvider =
+    normalizedTomlValues.modelProvider.trim() || CODEX_DEFAULT_MODEL_PROVIDER
+  // This key is rewritten on EVERY patch, including ones that have nothing to
+  // do with WebSockets, so it must resolve the flag exactly the way
+  // `extractCodexImportantValues` does — including its fallback to the feature
+  // key itself when the provider declares no `supports_websockets`. Reading
+  // only the provider field would treat "declared solely as a feature flag" as
+  // "off" and delete the user's setting the next time any other control moved.
+  // `??` and not `||`: an explicit `false` on the provider must win over the
+  // fallback, which is how the WebSocket switch turns itself off.
+  const shouldEnableFeature =
+    normalizedTomlValues.providerSupportsWebsockets[activeProvider] ??
+    (activeProvider === CODEX_DEFAULT_MODEL_PROVIDER
+      ? normalizedTomlValues.featureResponsesWebsocketsV2
+      : false)
+  nextTomlText = upsertTomlSectionBooleanKey(
+    nextTomlText,
+    "features",
+    "responses_websockets_v2",
+    shouldEnableFeature ? true : null
+  )
+  if (typeof patch.skills === "boolean") {
+    nextTomlText = upsertTomlSectionBooleanKey(
+      nextTomlText,
+      "features",
+      "skills",
+      patch.skills ? true : null
+    )
+  }
   if (typeof patch.defaultModeRequestUserInput === "boolean") {
     // Upstream default is false, so "off" removes the key instead of writing
-    // `= false`, which keeps config.toml free of a flag the user never opted
-    // into.
+    // `= false` — same contract as `skills` above, and it keeps config.toml
+    // free of a flag the user never opted into.
     nextTomlText = upsertTomlSectionBooleanKey(
       nextTomlText,
       "features",
@@ -3405,6 +3321,15 @@ export function patchCodexConfigTomlText(
       patch.defaultModeRequestUserInput ? true : null
     )
   }
+  if (typeof patch.serviceTierFast === "boolean") {
+    nextTomlText = updateTomlRootStringKey(
+      nextTomlText,
+      "service_tier",
+      patch.serviceTierFast ? "fast" : ""
+    )
+  }
+  // codex removed `disable_response_storage` in 0.30.0 — writing it would
+  // only pin a key the CLI ignores; a value already in the file stays as is.
   const trimmed = nextTomlText.trim()
   return trimmed ? `${trimmed}\n` : ""
 }
@@ -3620,8 +3545,7 @@ export function patchImportantConfigText(
  * Make a Claude agent's native config provider-authoritative. When a provider
  * was bound in an earlier session, the on-disk config loaded into the draft can
  * still carry stale model keys (e.g. a leftover ANTHROPIC_CUSTOM_MODEL_OPTION)
- * that no longer match the provider — `handleModelProviderSelect` only rewrites
- * configText when the dropdown changes, not on reload. A config-management save
+ * that no longer match a legacy provider binding. A config-management save
  * would otherwise persist that stale text back over the backend bind cascade, so
  * re-derive the provider-controlled keys here (empty => cleared by `assignEnv`)
  * before saving. Unrelated config/env keys are preserved.
@@ -3912,10 +3836,6 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
   const hermesValues =
     agent.agent_type === "hermes" ? parseHermesConfig(configText) : null
   const codexAuthJsonText = agent.codex_auth_json ?? ""
-  // Exactly what is on disk. The draft used to force
-  // `disable_response_storage = true` in here, so every save wrote it back.
-  // codex removed that key in 0.30.0 (openai/codex#3212) and sends every
-  // request with `store: false`; current codex reports it as unrecognized.
   const codexConfigTomlText = agent.codex_config_toml ?? ""
   const codexSandbox = agent.codex_sandbox_settings ?? null
   // Seeded once, then fingerprinted, so a save can tell a real control change
@@ -4042,8 +3962,10 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
     codexModelProvider: codexImportant.modelProvider,
     codexProviderOptions: codexImportant.providerOptions,
     codexSupportsWebsockets: codexImportant.supportsWebsockets,
+    codexSkills: codexImportant.skills,
     codexDefaultModeRequestUserInput:
       codexImportant.defaultModeRequestUserInput,
+    codexServiceTierFast: codexImportant.serviceTierFast,
     ...codexSandboxFields,
     codexSandboxBaseline: codexSandboxBaselineOf(codexSandboxFields),
     codexSandboxShadowed:
@@ -4875,7 +4797,19 @@ function AgentReorderItem({
   onSelect,
   children,
 }: AgentReorderItemProps) {
-  const dragControls = useDragControls()
+  // Mouse: drag starts immediately on grip pointerdown. Touch/pen: a
+  // long-press (anywhere on the card, including the grip) starts the drag
+  // via useLongPressDrag, which installs a native touchmove guard so the
+  // browser's scroll gesture doesn't swallow the reorder on mobile.
+  const handleTouchDragStart = useCallback(() => {
+    onDragStart(agent.agent_type)
+  }, [agent.agent_type, onDragStart])
+
+  const { dragControls, gestureHandlers } = useLongPressDrag({
+    enabled: !reordering,
+    onStart: handleTouchDragStart,
+    onEnd: onDragEnd,
+  })
 
   const startDrag = useCallback(
     (event: PointerEvent<HTMLButtonElement>) => {
@@ -4884,6 +4818,16 @@ function AgentReorderItem({
       dragControls.start(event)
     },
     [dragControls]
+  )
+
+  // Touch/pen pointerdowns fall through to the item-level gestureHandlers
+  // (bubble up from the grip), which run the long-press flow.
+  const handleGripPointerDown = useCallback(
+    (event: PointerEvent<HTMLButtonElement>) => {
+      if (event.pointerType !== "mouse") return
+      startDrag(event)
+    },
+    [startDrag]
   )
 
   return (
@@ -4897,15 +4841,21 @@ function AgentReorderItem({
       dragMomentum={false}
       layout="position"
       className={cn(
-        "rounded-lg border bg-card p-3 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+        "select-none rounded-lg border bg-card p-3 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
         selected && "border-primary/60 bg-primary/5",
-        dragging === agent.agent_type && "border-primary/60 bg-primary/5"
+        dragging === agent.agent_type &&
+          "border-primary/60 bg-primary/5 touch-none"
       )}
       tabIndex={0}
+      {...gestureHandlers}
       onDragStart={() => {
+        gestureHandlers.onDragStart()
         onDragStart(agent.agent_type)
       }}
-      onDragEnd={onDragEnd}
+      onDragEnd={() => {
+        gestureHandlers.onDragEnd()
+        onDragEnd()
+      }}
       onClick={() => {
         onSelect(agent.agent_type)
       }}
@@ -4916,8 +4866,70 @@ function AgentReorderItem({
         onSelect(agent.agent_type)
       }}
     >
-      {children(startDrag)}
+      {children(handleGripPointerDown)}
     </Reorder.Item>
+  )
+}
+
+function ModelProviderApiTypeBadges({
+  apiTypes,
+}: {
+  apiTypes: readonly ModelProviderApiType[]
+}) {
+  if (apiTypes.length === 0) return null
+
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {apiTypes.map((apiType) => (
+        <Badge
+          key={apiType}
+          variant="outline"
+          className="font-mono text-2xs font-normal"
+        >
+          {apiType}
+        </Badge>
+      ))}
+    </div>
+  )
+}
+
+function ModelProviderSourceCard({
+  apiTypes,
+  count,
+  selected,
+  onSelect,
+}: {
+  apiTypes: readonly ModelProviderApiType[]
+  count: number
+  selected: boolean
+  onSelect: (selected: boolean) => void
+}) {
+  const t = useTranslations("AcpAgentSettings")
+
+  return (
+    <div className="space-y-1.5 rounded-md border bg-muted/10 p-3">
+      <div className="space-y-1">
+        <label className="text-xs font-medium">{t("modelSourceLabel")}</label>
+        <p className="text-2xs text-muted-foreground">
+          {t("modelProviderSourceHint")}
+        </p>
+      </div>
+      <ModelProviderApiTypeBadges apiTypes={apiTypes} />
+      <Select
+        value={selected ? "model_provider" : "native"}
+        onValueChange={(value) => onSelect(value === "model_provider")}
+      >
+        <SelectTrigger className="w-full">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent align="start">
+          <SelectItem value="model_provider" disabled={count === 0}>
+            {t("authModeModelProviderCount", { count })}
+          </SelectItem>
+          <SelectItem value="native">{t("nativeConfigSource")}</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
   )
 }
 
@@ -5011,6 +5023,13 @@ export function AcpAgentSettings() {
     Partial<Record<AgentType, boolean>>
   >({})
   const [savingConfig, setSavingConfig] = useState<
+    Partial<Record<AgentType, boolean>>
+  >({})
+  const modelProviderService = useModelProviderService()
+  const [modelProviderRecords, setModelProviderRecords] = useState<
+    ModelProviderRecord[]
+  >([])
+  const [modelProviderSources, setModelProviderSources] = useState<
     Partial<Record<AgentType, boolean>>
   >({})
   const [savingInstructions, setSavingInstructions] = useState<
@@ -5162,13 +5181,23 @@ export function AcpAgentSettings() {
     setLoadingAgents(true)
     setLoadingError(null)
     try {
-      const [next, providers] = await Promise.all([
+      const [next, providers, providerInfos] = await Promise.all([
         acpListAgents(),
+        modelProviderService.list().catch(() => [] as ModelProviderRecord[]),
         listModelProviders().catch(() => [] as ModelProviderInfo[]),
       ])
       setAgents(next)
       publishAgentDisplay(next)
-      setModelProviders(providers)
+      setModelProviderRecords(providers)
+      setModelProviders(providerInfos)
+      setModelProviderSources(
+        Object.fromEntries(
+          next.map((agent) => [
+            agent.agent_type,
+            agent.model_source === "provider",
+          ])
+        ) as Partial<Record<AgentType, boolean>>
+      )
       setDrafts((prev) => {
         const updated = { ...prev }
         for (const agent of next) {
@@ -5213,7 +5242,7 @@ export function AcpAgentSettings() {
     } finally {
       setLoadingAgents(false)
     }
-  }, [])
+  }, [modelProviderService])
 
   const runPreflight = useCallback(
     async (agentType: AgentType, forceRefresh?: boolean) => {
@@ -5446,6 +5475,44 @@ export function AcpAgentSettings() {
       }, 150)
     },
     [t]
+  )
+
+  /** Flip an agent's Model Source (native ↔ shared provider), shared by the
+   * built-in source-card panel and the custom-agent panel. Optimistic update
+   * with rollback, plus the affected-sessions toast. */
+  const handleModelSourceSelect = useCallback(
+    (agentType: AgentType, selected: boolean) => {
+      const previous = modelProviderSources[agentType] ?? false
+      setModelProviderSources((prev) => ({
+        ...prev,
+        [agentType]: selected,
+      }))
+      acpUpdateAgentModelSource(agentType, selected ? "provider" : "native")
+        .then((affected) => {
+          reportAffectedSessions(affected)
+          setAgents((prev) =>
+            prev.map((agent) =>
+              agent.agent_type === agentType
+                ? {
+                    ...agent,
+                    model_source: selected ? "provider" : "native",
+                  }
+                : agent
+            )
+          )
+        })
+        .catch((err) => {
+          console.error("[Settings] save model source failed:", err)
+          setModelProviderSources((prev) => ({
+            ...prev,
+            [agentType]: previous,
+          }))
+          toast.error(t("toasts.saveEnvFailed"), {
+            description: toErrorMessage(err),
+          })
+        })
+    },
+    [modelProviderSources, reportAffectedSessions, setAgents, t]
   )
 
   const persistEnv = useCallback(
@@ -6503,8 +6570,55 @@ export function AcpAgentSettings() {
   const selectedIsSavingInstructions = selectedAgent
     ? Boolean(savingInstructions[selectedAgent.agent_type])
     : false
-  const selectedAgentKind = selectedAgent?.agent_type ?? null
 
+  const selectedAgentKind = selectedAgent?.agent_type ?? null
+  // A custom agent is only offered the shared provider source when its stored
+  // definition can actually take the projection (declared env names, or a
+  // verified standard-convention reader) — see
+  // `custom_registry::supports_model_provider_env`.
+  // A custom agent's projectable API families come from the backend
+  // (`AcpAgentInfo.model_provider_api_types`): a verified env contract pins
+  // what its CLI speaks, a user declaration is permissive. Empty means codeg
+  // cannot project into it, so the card is not offered at all.
+  const selectedCustomAgentApiTypes = useMemo(() => {
+    if (!selectedAgentKind || !isCustomAgentType(selectedAgentKind)) return []
+    return (agents.find((agent) => agent.agent_type === selectedAgentKind)
+      ?.model_provider_api_types ?? []) as ModelProviderApiType[]
+  }, [agents, selectedAgentKind])
+  const selectedModelProviderApiTypes = useMemo(
+    () =>
+      selectedAgentKind
+        ? getModelProviderApiTypes(
+            selectedAgentKind,
+            selectedCustomAgentApiTypes
+          )
+        : [],
+    [selectedAgentKind, selectedCustomAgentApiTypes]
+  )
+  const selectedCompatibleModelProviderCount = useMemo(
+    () =>
+      selectedAgentKind
+        ? countCompatibleModelProviders(
+            modelProviderRecords,
+            selectedAgentKind,
+            selectedCustomAgentApiTypes
+          )
+        : 0,
+    [modelProviderRecords, selectedAgentKind, selectedCustomAgentApiTypes]
+  )
+  const selectedAgentSupportsSourceCard = selectedAgentKind
+    ? supportsModelProviderSourceCard(
+        selectedAgentKind,
+        selectedCustomAgentApiTypes
+      )
+    : false
+  // Claude's provider mode is rendered in the legacy-agent branch below so the
+  // native config panel can be reused when the user switches back to native.
+  const selectedAgentUsesSourceCardPanel =
+    selectedAgentSupportsSourceCard && selectedAgentKind !== "claude_code"
+  const selectedUsesModelProviderSource =
+    selectedAgentSupportsSourceCard &&
+    Boolean(selectedAgentKind && modelProviderSources[selectedAgentKind])
   const selectedModelProviders = useMemo(() => {
     if (!selectedAgent) return []
     return modelProviders.filter(
@@ -6614,8 +6728,6 @@ export function AcpAgentSettings() {
     return false
   }, [selectedAgent, selectedDraft])
 
-  const selectedMissingModelProvider =
-    selectedNeedsModelProvider && selectedDraft?.modelProviderId == null
   const selectedConfigText = selectedDraft?.configText ?? ""
   // Inline validation for `writable_roots`: codex would accept a relative entry
   // and resolve it against CODEX_HOME, so it is surfaced before the save throws.
@@ -8216,7 +8328,9 @@ export function AcpAgentSettings() {
         codexModelProvider: important.modelProvider,
         codexProviderOptions: important.providerOptions,
         codexSupportsWebsockets: important.supportsWebsockets,
+        codexSkills: important.skills,
         codexDefaultModeRequestUserInput: important.defaultModeRequestUserInput,
+        codexServiceTierFast: important.serviceTierFast,
       }))
     },
     [selectedAgent, selectedDraft, updateSelectedDraft]
@@ -8306,7 +8420,9 @@ export function AcpAgentSettings() {
         codexModelProvider: CODEX_DEFAULT_MODEL_PROVIDER,
         codexProviderOptions: synced.providerOptions,
         codexSupportsWebsockets: synced.supportsWebsockets,
+        codexSkills: synced.skills,
         codexDefaultModeRequestUserInput: synced.defaultModeRequestUserInput,
+        codexServiceTierFast: synced.serviceTierFast,
       }))
     },
     [selectedAgent, selectedDraft, updateSelectedDraft]
@@ -8416,7 +8532,9 @@ export function AcpAgentSettings() {
         codexModelProvider: synced.modelProvider,
         codexProviderOptions: synced.providerOptions,
         codexSupportsWebsockets: synced.supportsWebsockets,
+        codexSkills: synced.skills,
         codexDefaultModeRequestUserInput: synced.defaultModeRequestUserInput,
+        codexServiceTierFast: synced.serviceTierFast,
         codexAuthJsonText: nextAuth.authJsonText,
         codexConfigTomlText: nextToml,
       }))
@@ -8429,13 +8547,7 @@ export function AcpAgentSettings() {
       if (
         !selectedAgent ||
         !selectedDraft ||
-        selectedAgent.agent_type !== "codex" ||
-        // The switch is not rendered then; the guard keeps any other caller
-        // from pinning a subscription onto an empty codeg provider.
-        !codexWebsocketSwitchApplies(
-          selectedDraft.codexAuthMode,
-          selectedDraft.codexModelProvider
-        )
+        selectedAgent.agent_type !== "codex"
       )
         return
       const nextToml = patchCodexConfigTomlText(
@@ -8457,7 +8569,42 @@ export function AcpAgentSettings() {
         codexModelProvider: synced.modelProvider,
         codexProviderOptions: synced.providerOptions,
         codexSupportsWebsockets: synced.supportsWebsockets,
+        codexSkills: synced.skills,
         codexDefaultModeRequestUserInput: synced.defaultModeRequestUserInput,
+        codexServiceTierFast: synced.serviceTierFast,
+        codexConfigTomlText: nextToml,
+      }))
+    },
+    [selectedAgent, selectedDraft, updateSelectedDraft]
+  )
+
+  const handleCodexSkillsChange = useCallback(
+    (enabled: boolean) => {
+      if (
+        !selectedAgent ||
+        !selectedDraft ||
+        selectedAgent.agent_type !== "codex"
+      )
+        return
+      const nextToml = patchCodexConfigTomlText(
+        selectedDraft.codexConfigTomlText,
+        { skills: enabled }
+      )
+      const synced = extractCodexImportantValues(
+        selectedDraft.codexAuthJsonText,
+        nextToml
+      )
+      updateSelectedDraft((current) => ({
+        ...current,
+        apiBaseUrl: synced.apiBaseUrl,
+        apiKey: synced.apiKey ?? current.apiKey,
+        model: synced.model,
+        codexModelProvider: synced.modelProvider,
+        codexProviderOptions: synced.providerOptions,
+        codexSupportsWebsockets: synced.supportsWebsockets,
+        codexSkills: synced.skills,
+        codexDefaultModeRequestUserInput: synced.defaultModeRequestUserInput,
+        codexServiceTierFast: synced.serviceTierFast,
         codexConfigTomlText: nextToml,
       }))
     },
@@ -8488,7 +8635,42 @@ export function AcpAgentSettings() {
         codexModelProvider: synced.modelProvider,
         codexProviderOptions: synced.providerOptions,
         codexSupportsWebsockets: synced.supportsWebsockets,
+        codexSkills: synced.skills,
         codexDefaultModeRequestUserInput: synced.defaultModeRequestUserInput,
+        codexServiceTierFast: synced.serviceTierFast,
+        codexConfigTomlText: nextToml,
+      }))
+    },
+    [selectedAgent, selectedDraft, updateSelectedDraft]
+  )
+
+  const handleCodexServiceTierFastChange = useCallback(
+    (enabled: boolean) => {
+      if (
+        !selectedAgent ||
+        !selectedDraft ||
+        selectedAgent.agent_type !== "codex"
+      )
+        return
+      const nextToml = patchCodexConfigTomlText(
+        selectedDraft.codexConfigTomlText,
+        { serviceTierFast: enabled }
+      )
+      const synced = extractCodexImportantValues(
+        selectedDraft.codexAuthJsonText,
+        nextToml
+      )
+      updateSelectedDraft((current) => ({
+        ...current,
+        apiBaseUrl: synced.apiBaseUrl,
+        apiKey: synced.apiKey ?? current.apiKey,
+        model: synced.model,
+        codexModelProvider: synced.modelProvider,
+        codexProviderOptions: synced.providerOptions,
+        codexSupportsWebsockets: synced.supportsWebsockets,
+        codexSkills: synced.skills,
+        codexDefaultModeRequestUserInput: synced.defaultModeRequestUserInput,
+        codexServiceTierFast: synced.serviceTierFast,
         codexConfigTomlText: nextToml,
       }))
     },
@@ -8759,7 +8941,7 @@ export function AcpAgentSettings() {
                       <div className="min-w-0 flex items-center gap-2">
                         <button
                           type="button"
-                          className="text-muted-foreground cursor-grab active:cursor-grabbing rounded p-0.5 hover:bg-muted"
+                          className="text-muted-foreground cursor-grab active:cursor-grabbing rounded p-0.5 hover:bg-muted touch-none select-none"
                           title={t("actions.dragSort")}
                           aria-label={t("actions.dragSortAgent", {
                             name: agent.name,
@@ -9249,724 +9431,4292 @@ export function AcpAgentSettings() {
                     )
                   })()}
 
-                {selectedAgent.agent_type === "codex" ? (
-                  <div className="space-y-3 rounded-md border bg-muted/10 p-3">
-                    <div>
-                      <label className="text-xs font-medium">
-                        {t("configManagement")}
-                      </label>
-                      <p className="mt-1 text-2xs text-muted-foreground">
-                        {t("codex.configDescription")}
-                      </p>
-                    </div>
+                {selectedAgentUsesSourceCardPanel ? (
+                  <>
+                    <ModelProviderSourceCard
+                      apiTypes={selectedModelProviderApiTypes}
+                      count={selectedCompatibleModelProviderCount}
+                      selected={selectedUsesModelProviderSource}
+                      onSelect={(selected) => {
+                        if (!selectedAgentKind) return
+                        handleModelSourceSelect(selectedAgentKind, selected)
+                      }}
+                    />
+                    {selectedUsesModelProviderSource && (
+                      <div className="rounded-md border bg-muted/20 p-3 text-2xs text-muted-foreground">
+                        {t("providerSourceActiveHint")}
+                      </div>
+                    )}
+                    {!selectedUsesModelProviderSource &&
+                      (selectedAgent.agent_type === "codex" ? (
+                        <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                          <div>
+                            <label className="text-xs font-medium">
+                              {t("configManagement")}
+                            </label>
+                            <p className="mt-1 text-2xs text-muted-foreground">
+                              {t("codex.configDescription")}
+                            </p>
+                          </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-2xs text-muted-foreground">
-                        {t("codex.authMode")}
-                      </label>
-                      <Select
-                        value={selectedDraft.codexAuthMode}
-                        onValueChange={(value) => {
-                          if (
-                            CODEX_AUTH_MODES.includes(value as CodexAuthMode)
-                          ) {
-                            handleCodexAuthModeChange(value as CodexAuthMode)
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent align="start">
-                          {CODEX_AUTH_MODES.map((mode) => (
-                            <SelectItem key={mode} value={mode}>
-                              {mode === "chatgpt_subscription"
-                                ? t("authModeOfficialSubscription")
-                                : mode === "model_provider"
-                                  ? t("authModeModelProvider")
-                                  : t("authModeCustomEndpoint")}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <p className="text-2xs text-muted-foreground">
-                        {selectedDraft.codexAuthMode === "chatgpt_subscription"
-                          ? t("codex.chatgptSubscriptionHint")
-                          : selectedDraft.codexAuthMode === "model_provider"
-                            ? t("modelProviderHint")
-                            : t("authModeCustomEndpointHint")}
-                      </p>
-                    </div>
+                          {selectedModelProviderApiTypes.length > 0 && (
+                            <ModelProviderApiTypeBadges
+                              apiTypes={selectedModelProviderApiTypes}
+                            />
+                          )}
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              {t("codex.authMode")}
+                            </label>
+                            <Select
+                              value={selectedDraft.codexAuthMode}
+                              onValueChange={(value) => {
+                                if (
+                                  CODEX_AUTH_MODES.includes(
+                                    value as CodexAuthMode
+                                  )
+                                ) {
+                                  handleCodexAuthModeChange(
+                                    value as CodexAuthMode
+                                  )
+                                }
+                              }}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent align="start">
+                                {CODEX_AUTH_MODES.map((mode) => (
+                                  <SelectItem
+                                    key={mode}
+                                    value={mode}
+                                    disabled={
+                                      mode === "model_provider" &&
+                                      selectedCompatibleModelProviderCount === 0
+                                    }
+                                  >
+                                    {mode === "chatgpt_subscription"
+                                      ? t("authModeOfficialSubscription")
+                                      : mode === "model_provider"
+                                        ? t("authModeModelProviderCount", {
+                                            count:
+                                              selectedCompatibleModelProviderCount,
+                                          })
+                                        : t("authModeCustomEndpoint")}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <p className="text-2xs text-muted-foreground">
+                              {selectedDraft.codexAuthMode ===
+                              "chatgpt_subscription"
+                                ? t("codex.chatgptSubscriptionHint")
+                                : selectedDraft.codexAuthMode ===
+                                    "model_provider"
+                                  ? t("modelProviderHint")
+                                  : t("authModeCustomEndpointHint")}
+                            </p>
+                          </div>
 
-                    {selectedDraft.codexAuthMode === "chatgpt_subscription" && (
-                      <div className="space-y-2">
-                        {hasCodexChatgptTokens(
-                          selectedDraft.codexAuthJsonText
-                        ) &&
-                          codexLoginStatus !== "polling" &&
-                          codexLoginStatus !== "requesting" && (
-                            <div className="flex items-center gap-1.5 text-xs text-green-600">
-                              <CheckCircle2 className="h-3 w-3" />
-                              {t("codex.loggedIn")}
+                          {selectedDraft.codexAuthMode ===
+                            "chatgpt_subscription" && (
+                            <div className="space-y-2">
+                              {hasCodexChatgptTokens(
+                                selectedDraft.codexAuthJsonText
+                              ) &&
+                                codexLoginStatus !== "polling" &&
+                                codexLoginStatus !== "requesting" && (
+                                  <div className="flex items-center gap-1.5 text-xs text-green-600">
+                                    <CheckCircle2 className="h-3 w-3" />
+                                    {t("codex.loggedIn")}
+                                  </div>
+                                )}
+                              {codexLoginStatus === "idle" && (
+                                <Button
+                                  onClick={handleCodexDeviceLogin}
+                                  size="sm"
+                                  variant="outline"
+                                >
+                                  {hasCodexChatgptTokens(
+                                    selectedDraft.codexAuthJsonText
+                                  )
+                                    ? t("codex.loginRelogin")
+                                    : t("codex.loginButton")}
+                                </Button>
+                              )}
+                              {codexLoginStatus === "requesting" && (
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  {t("codex.loginRequesting")}
+                                </div>
+                              )}
+                              {codexLoginStatus === "polling" &&
+                                codexDeviceCode && (
+                                  <div className="space-y-2 rounded-md border p-3">
+                                    <p className="text-xs">
+                                      {t("codex.loginStep1")}
+                                    </p>
+                                    <button
+                                      type="button"
+                                      className="text-xs text-primary underline cursor-pointer"
+                                      onClick={() =>
+                                        openUrl(codexDeviceCode.verificationUrl)
+                                      }
+                                    >
+                                      {codexDeviceCode.verificationUrl}
+                                    </button>
+                                    <p className="text-xs mt-1">
+                                      {t("codex.loginStep2")}
+                                    </p>
+                                    <div className="flex items-center gap-2">
+                                      <code className="rounded bg-muted px-2 py-1 text-sm font-mono font-bold tracking-widest">
+                                        {codexDeviceCode.userCode}
+                                      </code>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="h-7 w-7 p-0"
+                                        onClick={async () => {
+                                          const ok = await copyTextToClipboard(
+                                            codexDeviceCode.userCode
+                                          )
+                                          if (ok) {
+                                            toast.success(
+                                              t("codex.loginCodeCopied")
+                                            )
+                                          }
+                                        }}
+                                      >
+                                        <Copy className="h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                    <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                      {t("codex.loginPolling")}
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={cancelCodexDeviceLogin}
+                                    >
+                                      {t("codex.loginCancel")}
+                                    </Button>
+                                  </div>
+                                )}
+                              {codexLoginStatus === "success" && (
+                                <div className="flex items-center gap-1.5 text-xs text-green-600">
+                                  <CheckCircle2 className="h-3 w-3" />
+                                  {t("codex.loginSuccess")}
+                                </div>
+                              )}
+                              {codexLoginStatus === "error" && (
+                                <div className="space-y-1.5">
+                                  <p className="text-xs text-destructive">
+                                    {t("codex.loginFailed", {
+                                      message:
+                                        codexLoginError ?? "Unknown error",
+                                    })}
+                                  </p>
+                                  <Button
+                                    onClick={handleCodexDeviceLogin}
+                                    size="sm"
+                                    variant="outline"
+                                  >
+                                    {t("codex.loginRetry")}
+                                  </Button>
+                                </div>
+                              )}
                             </div>
                           )}
-                        {codexLoginStatus === "idle" && (
-                          <Button
-                            onClick={handleCodexDeviceLogin}
-                            size="sm"
-                            variant="outline"
-                          >
-                            {hasCodexChatgptTokens(
-                              selectedDraft.codexAuthJsonText
-                            )
-                              ? t("codex.loginRelogin")
-                              : t("codex.loginButton")}
-                          </Button>
-                        )}
-                        {codexLoginStatus === "requesting" && (
-                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            {t("codex.loginRequesting")}
-                          </div>
-                        )}
-                        {codexLoginStatus === "polling" && codexDeviceCode && (
-                          <div className="space-y-2 rounded-md border p-3">
-                            <p className="text-xs">{t("codex.loginStep1")}</p>
-                            <button
-                              type="button"
-                              className="text-xs text-primary underline cursor-pointer"
-                              onClick={() =>
-                                openUrl(codexDeviceCode.verificationUrl)
-                              }
-                            >
-                              {codexDeviceCode.verificationUrl}
-                            </button>
-                            <p className="text-xs mt-1">
-                              {t("codex.loginStep2")}
-                            </p>
-                            <div className="flex items-center gap-2">
-                              <code className="rounded bg-muted px-2 py-1 text-sm font-mono font-bold tracking-widest">
-                                {codexDeviceCode.userCode}
-                              </code>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-7 w-7 p-0"
-                                onClick={async () => {
-                                  const ok = await copyTextToClipboard(
-                                    codexDeviceCode.userCode
+
+                          {(selectedDraft.codexAuthMode === "api_key" ||
+                            selectedDraft.codexAuthMode ===
+                              "model_provider") && (
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("codex.apiUrlLabel")}
+                              </label>
+                              <Input
+                                value={selectedDraft.apiBaseUrl}
+                                readOnly={
+                                  selectedDraft.codexAuthMode ===
+                                  "model_provider"
+                                }
+                                onChange={(event) => {
+                                  handleCodexImportantConfigChange(
+                                    "apiBaseUrl",
+                                    event.target.value
                                   )
-                                  if (ok) {
-                                    toast.success(t("codex.loginCodeCopied"))
-                                  }
                                 }}
-                              >
-                                <Copy className="h-3 w-3" />
-                              </Button>
-                            </div>
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              {t("codex.loginPolling")}
-                            </div>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={cancelCodexDeviceLogin}
-                            >
-                              {t("codex.loginCancel")}
-                            </Button>
-                          </div>
-                        )}
-                        {codexLoginStatus === "success" && (
-                          <div className="flex items-center gap-1.5 text-xs text-green-600">
-                            <CheckCircle2 className="h-3 w-3" />
-                            {t("codex.loginSuccess")}
-                          </div>
-                        )}
-                        {codexLoginStatus === "error" && (
-                          <div className="space-y-1.5">
-                            <p className="text-xs text-destructive">
-                              {t("codex.loginFailed", {
-                                message: codexLoginError ?? "Unknown error",
-                              })}
-                            </p>
-                            <Button
-                              onClick={handleCodexDeviceLogin}
-                              size="sm"
-                              variant="outline"
-                            >
-                              {t("codex.loginRetry")}
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {selectedDraft.codexAuthMode === "model_provider" && (
-                      <div className="space-y-1.5">
-                        <label className="text-2xs text-muted-foreground">
-                          {t("selectModelProvider")}
-                        </label>
-                        {selectedModelProviders.length > 0 ? (
-                          <Select
-                            value={
-                              selectedDraft.modelProviderId != null
-                                ? String(selectedDraft.modelProviderId)
-                                : ""
-                            }
-                            onValueChange={handleModelProviderSelect}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue
-                                placeholder={t("selectModelProvider")}
+                                placeholder="https://api.openai.com/v1"
                               />
-                            </SelectTrigger>
-                            <SelectContent align="start">
-                              {selectedModelProviders.map((provider) => (
-                                <SelectItem
-                                  key={provider.id}
-                                  value={String(provider.id)}
+                            </div>
+                          )}
+
+                          {(selectedDraft.codexAuthMode === "api_key" ||
+                            selectedDraft.codexAuthMode ===
+                              "model_provider") && (
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("codex.apiKeyLabel")}
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  type={
+                                    showApiKeys[selectedAgent.agent_type]
+                                      ? "text"
+                                      : "password"
+                                  }
+                                  value={selectedDraft.apiKey}
+                                  readOnly={
+                                    selectedDraft.codexAuthMode ===
+                                    "model_provider"
+                                  }
+                                  onChange={(event) => {
+                                    handleCodexImportantConfigChange(
+                                      "apiKey",
+                                      event.target.value
+                                    )
+                                  }}
+                                  placeholder="sk-..."
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setShowApiKeys((prev) => ({
+                                      ...prev,
+                                      [selectedAgent.agent_type]:
+                                        !prev[selectedAgent.agent_type],
+                                    }))
+                                  }}
+                                  title={
+                                    showApiKeys[selectedAgent.agent_type]
+                                      ? t("actions.hideApiKey")
+                                      : t("actions.showApiKey")
+                                  }
                                 >
-                                  {provider.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <p className="text-2xs text-muted-foreground">
-                            {t("noModelProviderAvailable")}
-                          </p>
-                        )}
-                      </div>
-                    )}
+                                  {showApiKeys[selectedAgent.agent_type] ? (
+                                    <EyeOff className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Eye className="h-3.5 w-3.5" />
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                          )}
 
-                    {(selectedDraft.codexAuthMode === "api_key" ||
-                      selectedDraft.codexAuthMode === "model_provider") && (
-                      <div className="space-y-1.5">
-                        <label className="text-2xs text-muted-foreground">
-                          {t("codex.apiUrlLabel")}
-                        </label>
-                        <Input
-                          value={selectedDraft.apiBaseUrl}
-                          readOnly={
-                            selectedDraft.codexAuthMode === "model_provider"
-                          }
-                          onChange={(event) => {
-                            handleCodexImportantConfigChange(
-                              "apiBaseUrl",
-                              event.target.value
-                            )
-                          }}
-                          placeholder="https://api.openai.com/v1"
-                        />
-                      </div>
-                    )}
+                          {(selectedDraft.codexAuthMode === "api_key" ||
+                            selectedDraft.codexAuthMode ===
+                              "model_provider") && (
+                            <div className="space-y-1.5">
+                              <CodexModelListEditor
+                                value={selectedDraft.codexModelList}
+                                onChange={handleCodexModelListChange}
+                                readOnly={
+                                  selectedDraft.codexAuthMode ===
+                                  "model_provider"
+                                }
+                                endpoint={codexCatalogEndpoint}
+                              />
+                              {selectedDraft.codexAuthMode === "api_key" && (
+                                <CodexSavePreview
+                                  configToml={selectedDraft.codexConfigTomlText}
+                                  authJson={selectedDraft.codexAuthJsonText}
+                                  modelList={
+                                    serializeCodexModelConfig(
+                                      selectedDraft.codexModelList
+                                    ) ?? ""
+                                  }
+                                />
+                              )}
+                            </div>
+                          )}
 
-                    {(selectedDraft.codexAuthMode === "api_key" ||
-                      selectedDraft.codexAuthMode === "model_provider") && (
-                      <div className="space-y-1.5">
-                        <label className="text-2xs text-muted-foreground">
-                          {t("codex.apiKeyLabel")}
-                        </label>
-                        <div className="flex items-center gap-2">
-                          <Input
-                            type={
-                              showApiKeys[selectedAgent.agent_type]
-                                ? "text"
-                                : "password"
-                            }
-                            value={selectedDraft.apiKey}
-                            readOnly={
-                              selectedDraft.codexAuthMode === "model_provider"
-                            }
-                            onChange={(event) => {
-                              handleCodexImportantConfigChange(
-                                "apiKey",
-                                event.target.value
-                              )
-                            }}
-                            placeholder="sk-..."
-                          />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setShowApiKeys((prev) => ({
-                                ...prev,
-                                [selectedAgent.agent_type]:
-                                  !prev[selectedAgent.agent_type],
-                              }))
-                            }}
-                            title={
-                              showApiKeys[selectedAgent.agent_type]
-                                ? t("actions.hideApiKey")
-                                : t("actions.showApiKey")
-                            }
-                          >
-                            {showApiKeys[selectedAgent.agent_type] ? (
-                              <EyeOff className="h-3.5 w-3.5" />
-                            ) : (
-                              <Eye className="h-3.5 w-3.5" />
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                    )}
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("codex.enableWebsocket")}
+                              </label>
+                              <Switch
+                                checked={selectedDraft.codexSupportsWebsockets}
+                                onCheckedChange={
+                                  handleCodexSupportsWebsocketsChange
+                                }
+                                aria-label={t("codex.enableWebsocketAria")}
+                              />
+                            </div>
+                          </div>
 
-                    {(selectedDraft.codexAuthMode === "api_key" ||
-                      selectedDraft.codexAuthMode === "model_provider") && (
-                      <div className="space-y-1.5">
-                        <CodexModelListEditor
-                          value={selectedDraft.codexModelList}
-                          onChange={handleCodexModelListChange}
-                          readOnly={
-                            selectedDraft.codexAuthMode === "model_provider"
-                          }
-                          endpoint={codexCatalogEndpoint}
-                        />
-                        {selectedDraft.codexAuthMode === "api_key" && (
-                          <CodexSavePreview
-                            configToml={selectedDraft.codexConfigTomlText}
-                            authJson={selectedDraft.codexAuthJsonText}
-                            modelList={
-                              serializeCodexModelConfig(
-                                selectedDraft.codexModelList
-                              ) ?? ""
-                            }
-                          />
-                        )}
-                      </div>
-                    )}
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("codex.enableSkills")}
+                              </label>
+                              <Switch
+                                checked={selectedDraft.codexSkills}
+                                onCheckedChange={handleCodexSkillsChange}
+                                aria-label={t("codex.enableSkillsAria")}
+                              />
+                            </div>
+                          </div>
 
-                    {/* `supports_websockets` on the configured provider — the
-                        only WebSocket knob since codex 0.116.0. Official
-                        Subscription runs on the built-in OpenAI provider,
-                        which already uses WebSockets and cannot be
-                        reconfigured; see codexWebsocketSwitchApplies. */}
-                    {codexWebsocketSwitchApplies(
-                      selectedDraft.codexAuthMode,
-                      selectedDraft.codexModelProvider
-                    ) ? (
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                          <label className="text-2xs text-muted-foreground">
-                            {t("codex.enableWebsocket")}
-                          </label>
-                          <Switch
-                            checked={selectedDraft.codexSupportsWebsockets}
-                            onCheckedChange={
-                              handleCodexSupportsWebsocketsChange
-                            }
-                            aria-label={t("codex.enableWebsocketAria")}
-                          />
-                        </div>
-                        <p className="text-3xs text-muted-foreground">
-                          {t("codex.enableWebsocketHint")}
-                        </p>
-                      </div>
-                    ) : null}
-
-                    {/* `[features].default_mode_request_user_input` — without
+                          {/* `[features].default_mode_request_user_input` — without
                         it codex refuses its own `request_user_input` tool
                         outside Plan mode, so codeg's question cards never
                         appear in an ordinary turn (openai/codex#24750). */}
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                        <label className="text-2xs text-muted-foreground">
-                          {t("codex.enableDefaultModeRequestUserInput")}
-                        </label>
-                        <Switch
-                          checked={
-                            selectedDraft.codexDefaultModeRequestUserInput
-                          }
-                          onCheckedChange={
-                            handleCodexDefaultModeRequestUserInputChange
-                          }
-                          aria-label={t(
-                            "codex.enableDefaultModeRequestUserInputAria"
-                          )}
-                        />
-                      </div>
-                      <p className="text-3xs text-muted-foreground">
-                        {t("codex.enableDefaultModeRequestUserInputHint")}
-                      </p>
-                    </div>
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("codex.enableDefaultModeRequestUserInput")}
+                              </label>
+                              <Switch
+                                checked={
+                                  selectedDraft.codexDefaultModeRequestUserInput
+                                }
+                                onCheckedChange={
+                                  handleCodexDefaultModeRequestUserInputChange
+                                }
+                                aria-label={t(
+                                  "codex.enableDefaultModeRequestUserInputAria"
+                                )}
+                              />
+                            </div>
+                            <p className="text-3xs text-muted-foreground">
+                              {t("codex.enableDefaultModeRequestUserInputHint")}
+                            </p>
+                          </div>
 
-                    {/* ---- Sandbox & approvals (config.toml thread defaults) ----
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("codex.enableFast")}
+                              </label>
+                              <Switch
+                                checked={selectedDraft.codexServiceTierFast}
+                                onCheckedChange={
+                                  handleCodexServiceTierFastChange
+                                }
+                                aria-label={t("codex.enableFastAria")}
+                              />
+                            </div>
+                          </div>
+
+                          {/* ---- Sandbox & approvals (config.toml thread defaults) ----
                         These govern the turns codex starts by itself: /goal,
                         /review, /compact. Ordinary prompts carry the composer
                         preset's own policy per turn and ignore these keys. */}
-                    <div className="space-y-2 rounded-md border px-3 py-2.5">
-                      <div className="space-y-1">
-                        <p className="text-2xs font-medium">
-                          {t("codex.sandboxGroupTitle")}
-                        </p>
-                        <p className="text-3xs text-muted-foreground">
-                          {t("codex.sandboxGroupHint")}
-                        </p>
-                      </div>
+                          <div className="space-y-2 rounded-md border px-3 py-2.5">
+                            <div className="space-y-1">
+                              <p className="text-2xs font-medium">
+                                {t("codex.sandboxGroupTitle")}
+                              </p>
+                              <p className="text-3xs text-muted-foreground">
+                                {t("codex.sandboxGroupHint")}
+                              </p>
+                            </div>
 
-                      {selectedDraft.codexSandboxShadowed ? (
-                        <p className="text-3xs text-yellow-500">
-                          {t("codex.sandboxShadowedWarning")}
-                        </p>
-                      ) : null}
-                      {selectedDraft.codexSandboxHasPermissionsTable &&
-                      !selectedDraft.codexSandboxShadowed ? (
-                        <p className="text-3xs text-yellow-500">
-                          {t("codex.sandboxPermissionsTableWarning")}
-                        </p>
-                      ) : null}
-
-                      <div className="space-y-1.5">
-                        <label className="text-2xs text-muted-foreground">
-                          {t("codex.approvalPolicyLabel")}
-                        </label>
-                        <Select
-                          value={
-                            selectedDraft.codexApprovalPolicy ||
-                            CODEX_SANDBOX_UNSET_OPTION
-                          }
-                          onValueChange={(value) => {
-                            updateSelectedDraft((current) => ({
-                              ...current,
-                              codexApprovalPolicy:
-                                value === CODEX_SANDBOX_UNSET_OPTION
-                                  ? CODEX_SANDBOX_UNSET
-                                  : (value as CodexApprovalPolicyChoice),
-                            }))
-                          }}
-                        >
-                          <SelectTrigger className="h-8 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent align="start">
-                            <SelectItem value={CODEX_SANDBOX_UNSET_OPTION}>
-                              {t("codex.approvalPolicyUnset")}
-                            </SelectItem>
-                            {CODEX_APPROVAL_POLICY_VALUES.map((value) => (
-                              <SelectItem key={value} value={value}>
-                                {t(`codex.approvalPolicy_${value}`)}
-                              </SelectItem>
-                            ))}
-                            {/* Listed only so the trigger can name the value
-                                config.toml holds; it cannot be picked. */}
-                            {selectedDraft.codexApprovalPolicy ===
-                            CODEX_RETIRED_APPROVAL_POLICY ? (
-                              <SelectItem
-                                value={CODEX_RETIRED_APPROVAL_POLICY}
-                                disabled
-                              >
-                                {t("codex.approvalPolicy_untrusted")}
-                              </SelectItem>
+                            {selectedDraft.codexSandboxShadowed ? (
+                              <p className="text-3xs text-yellow-500">
+                                {t("codex.sandboxShadowedWarning")}
+                              </p>
                             ) : null}
-                          </SelectContent>
-                        </Select>
-                        {/* codex refuses to load a config carrying
-                            `untrusted`, so with it in config.toml no Codex
-                            session starts, here or in the Codex CLI. */}
-                        {selectedDraft.codexApprovalPolicy ===
-                        CODEX_RETIRED_APPROVAL_POLICY ? (
-                          <p className="text-3xs text-destructive">
-                            {t("codex.approvalPolicyUntrustedRetired")}
-                          </p>
-                        ) : null}
-                      </div>
+                            {selectedDraft.codexSandboxHasPermissionsTable &&
+                            !selectedDraft.codexSandboxShadowed ? (
+                              <p className="text-3xs text-yellow-500">
+                                {t("codex.sandboxPermissionsTableWarning")}
+                              </p>
+                            ) : null}
 
-                      {selectedDraft.codexApprovalPolicy === "granular" ? (
-                        <div className="space-y-1 rounded-md border border-dashed px-2.5 py-2">
-                          <p className="text-3xs text-muted-foreground">
-                            {t("codex.granularHint")}
-                          </p>
-                          {CODEX_GRANULAR_KEYS.map((key) => (
-                            <div
-                              className="flex items-center justify-between gap-2 py-0.5"
-                              key={key}
-                            >
+                            <div className="space-y-1.5">
                               <label className="text-2xs text-muted-foreground">
-                                {t(`codex.granular_${key}`)}
+                                {t("codex.approvalPolicyLabel")}
                               </label>
-                              <Switch
-                                checked={selectedDraft.codexGranular[key]}
-                                onCheckedChange={(checked) => {
+                              <Select
+                                value={
+                                  selectedDraft.codexApprovalPolicy ||
+                                  CODEX_SANDBOX_UNSET_OPTION
+                                }
+                                onValueChange={(value) => {
                                   updateSelectedDraft((current) => ({
                                     ...current,
-                                    codexGranular: {
-                                      ...current.codexGranular,
-                                      [key]: checked,
-                                    },
+                                    codexApprovalPolicy:
+                                      value === CODEX_SANDBOX_UNSET_OPTION
+                                        ? CODEX_SANDBOX_UNSET
+                                        : (value as CodexApprovalPolicyChoice),
                                   }))
                                 }}
-                                aria-label={t(`codex.granular_${key}`)}
-                              />
+                              >
+                                <SelectTrigger className="h-8 text-xs">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent align="start">
+                                  <SelectItem
+                                    value={CODEX_SANDBOX_UNSET_OPTION}
+                                  >
+                                    {t("codex.approvalPolicyUnset")}
+                                  </SelectItem>
+                                  {CODEX_APPROVAL_POLICY_VALUES.map((value) => (
+                                    <SelectItem key={value} value={value}>
+                                      {t(`codex.approvalPolicy_${value}`)}
+                                    </SelectItem>
+                                  ))}
+                                  {/* Listed only so the trigger can name the value
+                                config.toml holds; it cannot be picked. */}
+                                  {selectedDraft.codexApprovalPolicy ===
+                                  CODEX_RETIRED_APPROVAL_POLICY ? (
+                                    <SelectItem
+                                      value={CODEX_RETIRED_APPROVAL_POLICY}
+                                      disabled
+                                    >
+                                      {t("codex.approvalPolicy_untrusted")}
+                                    </SelectItem>
+                                  ) : null}
+                                </SelectContent>
+                              </Select>
+                              {/* codex refuses to load a config carrying
+                            `untrusted`, so with it in config.toml no Codex
+                            session starts, here or in the Codex CLI. */}
+                              {selectedDraft.codexApprovalPolicy ===
+                              CODEX_RETIRED_APPROVAL_POLICY ? (
+                                <p className="text-3xs text-destructive">
+                                  {t("codex.approvalPolicyUntrustedRetired")}
+                                </p>
+                              ) : null}
                             </div>
-                          ))}
-                        </div>
-                      ) : null}
 
-                      <div className="space-y-1.5">
-                        <label className="text-2xs text-muted-foreground">
-                          {t("codex.sandboxModeLabel")}
-                        </label>
-                        <Select
-                          disabled={selectedDraft.codexSandboxShadowed}
-                          value={
-                            selectedDraft.codexSandboxMode ||
-                            CODEX_SANDBOX_UNSET_OPTION
-                          }
-                          onValueChange={(value) => {
-                            updateSelectedDraft((current) => ({
-                              ...current,
-                              codexSandboxMode:
-                                value === CODEX_SANDBOX_UNSET_OPTION
-                                  ? CODEX_SANDBOX_UNSET
-                                  : (value as CodexSandboxModeChoice),
-                            }))
-                          }}
-                        >
-                          <SelectTrigger className="h-8 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent align="start">
-                            <SelectItem value={CODEX_SANDBOX_UNSET_OPTION}>
-                              {t("codex.sandboxModeUnset")}
-                            </SelectItem>
-                            {CODEX_SANDBOX_MODE_VALUES.map((value) => (
-                              <SelectItem key={value} value={value}>
-                                {t(`codex.sandboxMode_${value}`)}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <p className="text-3xs text-muted-foreground">
-                          {t("codex.sandboxModeHint")}
-                        </p>
-                        {/* Sandbox mode is what codeg maps onto the session's
+                            {selectedDraft.codexApprovalPolicy ===
+                            "granular" ? (
+                              <div className="space-y-1 rounded-md border border-dashed px-2.5 py-2">
+                                <p className="text-3xs text-muted-foreground">
+                                  {t("codex.granularHint")}
+                                </p>
+                                {CODEX_GRANULAR_KEYS.map((key) => (
+                                  <div
+                                    className="flex items-center justify-between gap-2 py-0.5"
+                                    key={key}
+                                  >
+                                    <label className="text-2xs text-muted-foreground">
+                                      {t(`codex.granular_${key}`)}
+                                    </label>
+                                    <Switch
+                                      checked={selectedDraft.codexGranular[key]}
+                                      onCheckedChange={(checked) => {
+                                        updateSelectedDraft((current) => ({
+                                          ...current,
+                                          codexGranular: {
+                                            ...current.codexGranular,
+                                            [key]: checked,
+                                          },
+                                        }))
+                                      }}
+                                      aria-label={t(`codex.granular_${key}`)}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("codex.sandboxModeLabel")}
+                              </label>
+                              <Select
+                                disabled={selectedDraft.codexSandboxShadowed}
+                                value={
+                                  selectedDraft.codexSandboxMode ||
+                                  CODEX_SANDBOX_UNSET_OPTION
+                                }
+                                onValueChange={(value) => {
+                                  updateSelectedDraft((current) => ({
+                                    ...current,
+                                    codexSandboxMode:
+                                      value === CODEX_SANDBOX_UNSET_OPTION
+                                        ? CODEX_SANDBOX_UNSET
+                                        : (value as CodexSandboxModeChoice),
+                                  }))
+                                }}
+                              >
+                                <SelectTrigger className="h-8 text-xs">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent align="start">
+                                  <SelectItem
+                                    value={CODEX_SANDBOX_UNSET_OPTION}
+                                  >
+                                    {t("codex.sandboxModeUnset")}
+                                  </SelectItem>
+                                  {CODEX_SANDBOX_MODE_VALUES.map((value) => (
+                                    <SelectItem key={value} value={value}>
+                                      {t(`codex.sandboxMode_${value}`)}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <p className="text-3xs text-muted-foreground">
+                                {t("codex.sandboxModeHint")}
+                              </p>
+                              {/* Sandbox mode is what codeg maps onto the session's
                             starting approval preset (#442), so it reaches
                             ordinary prompts even though approval_policy does
                             not. Worth stating next to the control that does it. */}
-                        {codexSandboxSeedsAcpPreset(
-                          selectedDraft.codexSandboxShadowed
-                        ) ? (
-                          <p className="text-3xs text-muted-foreground">
-                            {t("codex.sandboxModeSeedsPresetHint")}
-                          </p>
-                        ) : null}
-                        {/* codex-acp 1.7.0–1.13.x gave their `read-only`
+                              {codexSandboxSeedsAcpPreset(
+                                selectedDraft.codexSandboxShadowed
+                              ) ? (
+                                <p className="text-3xs text-muted-foreground">
+                                  {t("codex.sandboxModeSeedsPresetHint")}
+                                </p>
+                              ) : null}
+                              {/* codex-acp 1.7.0–1.13.x gave their `read-only`
                             preset a workspace-write sandbox and re-send that
                             policy every turn, so an ACP session on one of them
                             cannot honor a read-only sandbox. 2.0.0 restored it,
                             but launch prefers an adapter on PATH, which may be
                             older — so the caveat stays, stated as a version
                             note rather than a warning about the pinned one. */}
-                        {showsCodexReadOnlyAcpWarning(
-                          selectedDraft.codexSandboxMode,
-                          selectedDraft.codexSandboxShadowed
-                        ) ? (
-                          <p className="text-3xs text-muted-foreground">
-                            {t("codex.sandboxModeReadOnlyAcpWarning")}
-                          </p>
-                        ) : null}
-                      </div>
+                              {showsCodexReadOnlyAcpWarning(
+                                selectedDraft.codexSandboxMode,
+                                selectedDraft.codexSandboxShadowed
+                              ) ? (
+                                <p className="text-3xs text-muted-foreground">
+                                  {t("codex.sandboxModeReadOnlyAcpWarning")}
+                                </p>
+                              ) : null}
+                            </div>
 
-                      {codexWorkspaceWriteApplies(
-                        selectedDraft.codexSandboxMode
-                      ) && !selectedDraft.codexSandboxShadowed ? (
-                        <div className="space-y-2 rounded-md border border-dashed px-2.5 py-2">
-                          <div className="space-y-1">
+                            {codexWorkspaceWriteApplies(
+                              selectedDraft.codexSandboxMode
+                            ) && !selectedDraft.codexSandboxShadowed ? (
+                              <div className="space-y-2 rounded-md border border-dashed px-2.5 py-2">
+                                <div className="space-y-1">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("codex.writableRootsLabel")}
+                                  </label>
+                                  <Textarea
+                                    className="min-h-16 font-mono text-2xs"
+                                    spellCheck={false}
+                                    value={selectedDraft.codexWritableRootsText}
+                                    onChange={(event) => {
+                                      const next = event.target.value
+                                      updateSelectedDraft((current) => ({
+                                        ...current,
+                                        codexWritableRootsText: next,
+                                      }))
+                                    }}
+                                    placeholder={"/Users/me/shared\n/srv/cache"}
+                                  />
+                                  {codexRelativeWritableRoot ? (
+                                    <p className="text-3xs text-red-500">
+                                      {t("codex.sandboxRootsRelativeError", {
+                                        path: codexRelativeWritableRoot,
+                                      })}
+                                    </p>
+                                  ) : (
+                                    <p className="text-3xs text-muted-foreground">
+                                      {t("codex.writableRootsHint")}
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="flex items-center justify-between gap-2">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("codex.networkAccessLabel")}
+                                  </label>
+                                  <Switch
+                                    checked={selectedDraft.codexNetworkAccess}
+                                    onCheckedChange={(checked) => {
+                                      updateSelectedDraft((current) => ({
+                                        ...current,
+                                        codexNetworkAccess: checked,
+                                      }))
+                                    }}
+                                    aria-label={t("codex.networkAccessLabel")}
+                                  />
+                                </div>
+                                <div className="flex items-center justify-between gap-2">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("codex.excludeTmpdirLabel")}
+                                  </label>
+                                  <Switch
+                                    checked={
+                                      selectedDraft.codexExcludeTmpdirEnvVar
+                                    }
+                                    onCheckedChange={(checked) => {
+                                      updateSelectedDraft((current) => ({
+                                        ...current,
+                                        codexExcludeTmpdirEnvVar: checked,
+                                      }))
+                                    }}
+                                    aria-label={t("codex.excludeTmpdirLabel")}
+                                  />
+                                </div>
+                                <div className="flex items-center justify-between gap-2">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("codex.excludeSlashTmpLabel")}
+                                  </label>
+                                  <Switch
+                                    checked={selectedDraft.codexExcludeSlashTmp}
+                                    onCheckedChange={(checked) => {
+                                      updateSelectedDraft((current) => ({
+                                        ...current,
+                                        codexExcludeSlashTmp: checked,
+                                      }))
+                                    }}
+                                    aria-label={t("codex.excludeSlashTmpLabel")}
+                                  />
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+
+                          <div className="space-y-1.5">
                             <label className="text-2xs text-muted-foreground">
-                              {t("codex.writableRootsLabel")}
+                              {t("codex.configTomlNative")}
                             </label>
                             <Textarea
-                              className="min-h-16 font-mono text-2xs"
-                              spellCheck={false}
-                              value={selectedDraft.codexWritableRootsText}
+                              value={selectedDraft.codexConfigTomlText}
                               onChange={(event) => {
-                                const next = event.target.value
-                                updateSelectedDraft((current) => ({
-                                  ...current,
-                                  codexWritableRootsText: next,
-                                }))
+                                handleCodexConfigTomlTextChange(
+                                  event.target.value
+                                )
                               }}
-                              placeholder={"/Users/me/shared\n/srv/cache"}
-                            />
-                            {codexRelativeWritableRoot ? (
-                              <p className="text-3xs text-red-500">
-                                {t("codex.sandboxRootsRelativeError", {
-                                  path: codexRelativeWritableRoot,
-                                })}
-                              </p>
-                            ) : (
-                              <p className="text-3xs text-muted-foreground">
-                                {t("codex.writableRootsHint")}
-                              </p>
-                            )}
-                          </div>
-                          <div className="flex items-center justify-between gap-2">
-                            <label className="text-2xs text-muted-foreground">
-                              {t("codex.networkAccessLabel")}
-                            </label>
-                            <Switch
-                              checked={selectedDraft.codexNetworkAccess}
-                              onCheckedChange={(checked) => {
-                                updateSelectedDraft((current) => ({
-                                  ...current,
-                                  codexNetworkAccess: checked,
-                                }))
-                              }}
-                              aria-label={t("codex.networkAccessLabel")}
-                            />
-                          </div>
-                          <div className="flex items-center justify-between gap-2">
-                            <label className="text-2xs text-muted-foreground">
-                              {t("codex.excludeTmpdirLabel")}
-                            </label>
-                            <Switch
-                              checked={selectedDraft.codexExcludeTmpdirEnvVar}
-                              onCheckedChange={(checked) => {
-                                updateSelectedDraft((current) => ({
-                                  ...current,
-                                  codexExcludeTmpdirEnvVar: checked,
-                                }))
-                              }}
-                              aria-label={t("codex.excludeTmpdirLabel")}
-                            />
-                          </div>
-                          <div className="flex items-center justify-between gap-2">
-                            <label className="text-2xs text-muted-foreground">
-                              {t("codex.excludeSlashTmpLabel")}
-                            </label>
-                            <Switch
-                              checked={selectedDraft.codexExcludeSlashTmp}
-                              onCheckedChange={(checked) => {
-                                updateSelectedDraft((current) => ({
-                                  ...current,
-                                  codexExcludeSlashTmp: checked,
-                                }))
-                              }}
-                              aria-label={t("codex.excludeSlashTmpLabel")}
-                            />
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-2xs text-muted-foreground">
-                        {t("codex.configTomlNative")}
-                      </label>
-                      <Textarea
-                        value={selectedDraft.codexConfigTomlText}
-                        onChange={(event) => {
-                          handleCodexConfigTomlTextChange(event.target.value)
-                        }}
-                        placeholder={`model = "gpt-6.2-sol"
+                              placeholder={`model = "gpt-6.2-sol"
 model_reasoning_effort = "high"
 model_provider = "codeg"
 
-[model_providers.codeg]
-base_url = "https://api.openai.com/v1"`}
-                        className="min-h-40 max-h-80 font-mono text-xs"
-                      />
-                      {selectedDraft.codexAuthMode !== "chatgpt_subscription" &&
-                        codexListIsManaged(selectedDraft.codexModelList) && (
-                          <p className="text-2xs text-muted-foreground">
-                            {t("codex.managedKeysHint")}
-                          </p>
-                        )}
-                    </div>
+[features]
+responses_websockets_v2 = true
 
-                    <div className="flex justify-end">
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          if (selectedMissingModelProvider) {
-                            toast.error(t("toasts.modelProviderRequired"))
-                            return
-                          }
-                          const codexEnvText =
-                            selectedDraft.codexAuthMode ===
-                            "chatgpt_subscription"
-                              ? patchEnvText(selectedDraft.envText, {
-                                  OPENAI_API_KEY: "",
-                                  OPENAI_BASE_URL: "",
-                                })
-                              : selectedDraft.envText
-                          // Persist sequentially, never in parallel: persistEnv
-                          // (acp_update_agent_env) rewrites ~/.codex/config.toml
-                          // to sync the root `model`, while persistConfig writes
-                          // the full config.toml including base_url. Running both
-                          // at once races two read-modify-write cycles on the same
-                          // file, letting the model sync clobber the just-written
-                          // base_url (the API key in auth.json is unaffected, so
-                          // the key saves but the URL silently does not).
-                          // persistConfig runs last so its authoritative
-                          // config.toml wins.
-                          persistEnv(
-                            selectedAgent.agent_type,
-                            selectedDraft.enabled,
-                            codexEnvText,
-                            selectedDraft.modelProviderId
-                          )
-                            .then(() =>
-                              persistConfig(
-                                selectedAgent.agent_type,
-                                selectedDraft.configText,
-                                {
-                                  codexAuthJsonText:
-                                    selectedDraft.codexAuthJsonText,
-                                  codexConfigTomlText:
-                                    selectedDraft.codexConfigTomlText,
-                                  codexConfigTomlBaseline:
-                                    selectedDraft.codexConfigTomlBaseline,
-                                  codexModelCatalog:
-                                    serializeCodexModelConfig(
-                                      selectedDraft.codexModelList
-                                    ) ?? "",
-                                  codexSandbox:
-                                    codexSandboxSaveConfig(selectedDraft),
+[model_providers.codeg]
+base_url = "https://api.openai.com/v1"
+supports_websockets = true`}
+                              className="min-h-40 max-h-80 font-mono text-xs"
+                            />
+                          </div>
+
+                          <div className="flex justify-end">
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                const codexEnvText =
+                                  selectedDraft.codexAuthMode ===
+                                  "chatgpt_subscription"
+                                    ? patchEnvText(selectedDraft.envText, {
+                                        OPENAI_API_KEY: "",
+                                        OPENAI_BASE_URL: "",
+                                      })
+                                    : selectedDraft.envText
+                                // Persist sequentially, never in parallel: persistEnv
+                                // (acp_update_agent_env) rewrites ~/.codex/config.toml
+                                // to sync the root `model`, while persistConfig writes
+                                // the full config.toml including base_url. Running both
+                                // at once races two read-modify-write cycles on the same
+                                // file, letting the model sync clobber the just-written
+                                // base_url (the API key in auth.json is unaffected, so
+                                // the key saves but the URL silently does not).
+                                // persistConfig runs last so its authoritative
+                                // config.toml wins.
+                                persistEnv(
+                                  selectedAgent.agent_type,
+                                  selectedDraft.enabled,
+                                  codexEnvText,
+                                  selectedDraft.modelProviderId
+                                )
+                                  .then(() =>
+                                    persistConfig(
+                                      selectedAgent.agent_type,
+                                      selectedDraft.configText,
+                                      {
+                                        codexAuthJsonText:
+                                          selectedDraft.codexAuthJsonText,
+                                        codexConfigTomlText:
+                                          selectedDraft.codexConfigTomlText,
+                                        codexConfigTomlBaseline:
+                                          selectedDraft.codexConfigTomlBaseline,
+                                        codexModelCatalog:
+                                          serializeCodexModelConfig(
+                                            selectedDraft.codexModelList
+                                          ) ?? "",
+                                        codexSandbox:
+                                          codexSandboxSaveConfig(selectedDraft),
+                                      }
+                                    )
+                                  )
+                                  // The backend wrote the keys it manages
+                                  // (catalog, `model_catalog_json`, root
+                                  // `model`); start the next edit from what is
+                                  // on disk. An edit typed while the save was
+                                  // in flight survives the reseed.
+                                  .then(() =>
+                                    reseedAgentDraft("codex", selectedDraft)
+                                  )
+                                  .then(() => {
+                                    toast.success(t("toasts.codexSaved"), {
+                                      description: t("toasts.configSavedHint"),
+                                    })
+                                  })
+                                  .catch((err) => {
+                                    console.error(
+                                      "[Settings] save codex native config failed:",
+                                      err
+                                    )
+                                    toast.error(
+                                      t("toasts.saveCodexNativeFailed"),
+                                      {
+                                        description: describeCodexSaveError(
+                                          err,
+                                          tCatalog
+                                        ),
+                                      }
+                                    )
+                                  })
+                              }}
+                              disabled={
+                                selectedIsSavingEnv || selectedIsSavingConfig
+                              }
+                            >
+                              {selectedIsSavingEnv || selectedIsSavingConfig ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  {t("actions.saving")}
+                                </>
+                              ) : (
+                                <>
+                                  <Save className="h-3.5 w-3.5" />
+                                  {t("actions.saveCodexConfig")}
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : selectedAgent.agent_type === "gemini" ? (
+                        <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                          <div>
+                            <label className="text-xs font-medium">
+                              {t("gemini.authConfig")}
+                            </label>
+                            <p className="mt-1 text-2xs text-muted-foreground">
+                              {t("gemini.authConfigDescription")}
+                            </p>
+                          </div>
+
+                          {selectedModelProviderApiTypes.length > 0 && (
+                            <ModelProviderApiTypeBadges
+                              apiTypes={selectedModelProviderApiTypes}
+                            />
+                          )}
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              {t("gemini.authMode")}
+                            </label>
+                            <Select
+                              value={selectedDraft.geminiAuthMode}
+                              onValueChange={(value) => {
+                                if (
+                                  GEMINI_AUTH_MODES.includes(
+                                    value as GeminiAuthMode
+                                  )
+                                ) {
+                                  handleGeminiAuthModeChange(
+                                    value as GeminiAuthMode
+                                  )
                                 }
+                              }}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue
+                                  placeholder={t("gemini.selectAuthMode")}
+                                />
+                              </SelectTrigger>
+                              <SelectContent align="start">
+                                {GEMINI_AUTH_MODES.map((mode) => (
+                                  <SelectItem
+                                    key={mode}
+                                    value={mode}
+                                    disabled={
+                                      mode === "model_provider" &&
+                                      selectedCompatibleModelProviderCount === 0
+                                    }
+                                  >
+                                    {mode === "model_provider"
+                                      ? t("authModeModelProviderCount", {
+                                          count:
+                                            selectedCompatibleModelProviderCount,
+                                        })
+                                      : geminiAuthModeLabel(mode)}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <p className="text-2xs text-muted-foreground">
+                              {geminiAuthModeHint(selectedDraft.geminiAuthMode)}
+                            </p>
+                          </div>
+
+                          <div
+                            className={cn(
+                              "space-y-1.5",
+                              selectedDraft.geminiAuthMode ===
+                                "model_provider" && "hidden"
+                            )}
+                          >
+                            <label className="text-2xs text-muted-foreground">
+                              Model
+                            </label>
+                            <Input
+                              value={selectedDraft.model}
+                              onChange={(event) => {
+                                handleGeminiFieldChange(
+                                  "model",
+                                  event.target.value
+                                )
+                              }}
+                              placeholder="gemini-3-pro-preview"
+                            />
+                            <p className="text-2xs text-muted-foreground">
+                              {t("modelHintDefault")}
+                            </p>
+                          </div>
+
+                          {selectedDraft.geminiAuthMode === "custom" && (
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                GOOGLE_GEMINI_BASE_URL
+                              </label>
+                              <Input
+                                value={selectedDraft.apiBaseUrl}
+                                onChange={(event) => {
+                                  handleGeminiFieldChange(
+                                    "apiBaseUrl",
+                                    event.target.value
+                                  )
+                                }}
+                                placeholder="https://your-gemini-endpoint.example.com"
+                              />
+                            </div>
+                          )}
+
+                          {(selectedDraft.geminiAuthMode === "custom" ||
+                            selectedDraft.geminiAuthMode === "gemini_api_key" ||
+                            selectedDraft.geminiAuthMode ===
+                              "vertex_api_key") && (
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                {selectedDraft.geminiAuthMode ===
+                                "vertex_api_key"
+                                  ? "GOOGLE_API_KEY"
+                                  : "GEMINI_API_KEY"}
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  type={
+                                    showApiKeys[selectedAgent.agent_type]
+                                      ? "text"
+                                      : "password"
+                                  }
+                                  value={
+                                    selectedDraft.geminiAuthMode ===
+                                    "vertex_api_key"
+                                      ? selectedDraft.googleApiKey
+                                      : selectedDraft.geminiApiKey
+                                  }
+                                  onChange={(event) => {
+                                    if (
+                                      selectedDraft.geminiAuthMode ===
+                                      "vertex_api_key"
+                                    ) {
+                                      handleGeminiFieldChange(
+                                        "googleApiKey",
+                                        event.target.value
+                                      )
+                                      return
+                                    }
+                                    handleGeminiFieldChange(
+                                      "geminiApiKey",
+                                      event.target.value
+                                    )
+                                  }}
+                                  placeholder="AIza..."
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setShowApiKeys((prev) => ({
+                                      ...prev,
+                                      [selectedAgent.agent_type]:
+                                        !prev[selectedAgent.agent_type],
+                                    }))
+                                  }}
+                                  title={
+                                    showApiKeys[selectedAgent.agent_type]
+                                      ? t("actions.hideKey")
+                                      : t("actions.showKey")
+                                  }
+                                >
+                                  {showApiKeys[selectedAgent.agent_type] ? (
+                                    <EyeOff className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Eye className="h-3.5 w-3.5" />
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+
+                          {(selectedDraft.geminiAuthMode === "vertex_adc" ||
+                            selectedDraft.geminiAuthMode ===
+                              "vertex_service_account" ||
+                            selectedDraft.geminiAuthMode ===
+                              "vertex_api_key") && (
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div className="space-y-1.5">
+                                <label className="text-2xs text-muted-foreground">
+                                  GOOGLE_CLOUD_PROJECT
+                                </label>
+                                <Input
+                                  value={selectedDraft.googleCloudProject}
+                                  onChange={(event) => {
+                                    handleGeminiFieldChange(
+                                      "googleCloudProject",
+                                      event.target.value
+                                    )
+                                  }}
+                                  placeholder="my-gcp-project-id"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <label className="text-2xs text-muted-foreground">
+                                  GOOGLE_CLOUD_LOCATION
+                                </label>
+                                <Input
+                                  value={selectedDraft.googleCloudLocation}
+                                  onChange={(event) => {
+                                    handleGeminiFieldChange(
+                                      "googleCloudLocation",
+                                      event.target.value
+                                    )
+                                  }}
+                                  placeholder="global / us-central1"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {selectedDraft.geminiAuthMode ===
+                            "vertex_service_account" && (
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                GOOGLE_APPLICATION_CREDENTIALS
+                              </label>
+                              <Input
+                                value={
+                                  selectedDraft.googleApplicationCredentials
+                                }
+                                onChange={(event) => {
+                                  handleGeminiFieldChange(
+                                    "googleApplicationCredentials",
+                                    event.target.value
+                                  )
+                                }}
+                                placeholder="/path/to/service-account.json"
+                              />
+                            </div>
+                          )}
+
+                          <div className="flex items-center justify-between gap-2">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                openUrl(
+                                  "https://geminicli.com/docs/get-started/authentication/"
+                                ).catch((err) => {
+                                  console.error(
+                                    "[Settings] open gemini auth doc failed:",
+                                    err
+                                  )
+                                })
+                              }}
+                            >
+                              {t("gemini.viewAuthDoc")}
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                Promise.all([
+                                  persistEnv(
+                                    selectedAgent.agent_type,
+                                    selectedDraft.enabled,
+                                    selectedDraft.envText,
+                                    selectedDraft.modelProviderId
+                                  ),
+                                  persistConfig(
+                                    selectedAgent.agent_type,
+                                    selectedDraft.configText
+                                  ),
+                                ])
+                                  .then(() => {
+                                    toast.success(t("toasts.geminiSaved"), {
+                                      description: t("toasts.configSavedHint"),
+                                    })
+                                  })
+                                  .catch((err) => {
+                                    console.error(
+                                      "[Settings] save gemini config failed:",
+                                      err
+                                    )
+                                    const message = toErrorMessage(err)
+                                    toast.error(t("toasts.saveGeminiFailed"), {
+                                      description: message,
+                                    })
+                                  })
+                              }}
+                              disabled={
+                                selectedIsSavingEnv || selectedIsSavingConfig
+                              }
+                            >
+                              {selectedIsSavingEnv || selectedIsSavingConfig ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  {t("actions.saving")}
+                                </>
+                              ) : (
+                                <>
+                                  <Save className="h-3.5 w-3.5" />
+                                  {t("actions.saveGeminiConfig")}
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : selectedAgent.agent_type === "open_code" ? (
+                        <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                          <div>
+                            <label className="text-xs font-medium">
+                              {t("openCode.configManagement")}
+                            </label>
+                            <p className="mt-1 text-2xs text-muted-foreground">
+                              {t("openCode.configDescription")}
+                            </p>
+                          </div>
+
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("openCode.mainModel")}
+                              </label>
+                              <OpenCodeModelCombobox
+                                value={selectedOpenCodeConfig?.model ?? ""}
+                                onValueChange={(v) =>
+                                  handleOpenCodeFieldChange("model", v)
+                                }
+                                groups={openCodeModelOptions}
+                                placeholder="provider/model-id"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("openCode.smallModel")}
+                              </label>
+                              <OpenCodeModelCombobox
+                                value={selectedOpenCodeConfig?.smallModel ?? ""}
+                                onValueChange={(v) =>
+                                  handleOpenCodeFieldChange("small_model", v)
+                                }
+                                groups={openCodeModelOptions}
+                                placeholder="provider/model-id"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2 rounded-md border bg-background/60 p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <label className="text-2xs font-medium">
+                                {t("openCode.providerManagement")}
+                              </label>
+                              <div className="text-2xs text-muted-foreground">
+                                {t("openCode.providerCount", {
+                                  count:
+                                    selectedOpenCodeConfig?.providerIds
+                                      .length ?? 0,
+                                })}
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => {
+                                  setOpenCodeEditProviderId(null)
+                                  setOpenCodeConnectOpen(true)
+                                }}
+                              >
+                                <Plug className="h-3.5 w-3.5" />
+                                {t("openCode.connectProvider")}
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => {
+                                  void handleOpenCodeRefreshCatalog()
+                                }}
+                                disabled={openCodeCatalogLoading}
+                                title={t("openCode.refreshCatalog")}
+                              >
+                                <RefreshCw
+                                  className={cn(
+                                    "h-3.5 w-3.5",
+                                    openCodeCatalogLoading && "animate-spin"
+                                  )}
+                                />
+                                {t("openCode.refreshCatalog")}
+                              </Button>
+                              {((openCodeCatalogLoading &&
+                                openCodeCatalog.length === 0) ||
+                                openCodeIntegrationsLoading) && (
+                                <span className="inline-flex items-center gap-1 text-2xs text-muted-foreground">
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  {t("openCode.connect.loading")}
+                                </span>
+                              )}
+                            </div>
+
+                            {!selectedOpenCodeInstalled ? (
+                              <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+                                {t("openCode.credentialsNeedInstall")}
+                              </p>
+                            ) : (
+                              openCodeIntegrationsError && (
+                                <p className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-2xs text-amber-500">
+                                  {openCodeIntegrationsError}
+                                </p>
+                              )
+                            )}
+
+                            {openCodeWellKnownConnected.length === 0 ? (
+                              <div className="text-2xs text-muted-foreground">
+                                {t("openCode.noConnectedProviders")}
+                              </div>
+                            ) : (
+                              <div className="space-y-1.5">
+                                <label className="text-2xs font-medium">
+                                  {t("openCode.connectedProviders")}
+                                </label>
+                                <div className="space-y-1.5">
+                                  {openCodeWellKnownConnected.map(
+                                    (provider) => (
+                                      <div
+                                        key={provider.id}
+                                        className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/20 px-2.5 py-1.5"
+                                      >
+                                        <div className="flex min-w-0 flex-1 items-center gap-2">
+                                          <span className="truncate text-xs font-medium">
+                                            {provider.name}
+                                          </span>
+                                          <span className="text-3xs text-muted-foreground">
+                                            {provider.id}
+                                          </span>
+                                          <Badge
+                                            variant="outline"
+                                            className="text-3xs"
+                                            title={
+                                              provider.statusMessage ??
+                                              undefined
+                                            }
+                                          >
+                                            {provider.connection === "oauth"
+                                              ? t("openCode.authKindOauth")
+                                              : provider.connection === "env"
+                                                ? t("openCode.authKindEnv", {
+                                                    name:
+                                                      provider.envName ?? "",
+                                                  })
+                                                : provider.connection === "none"
+                                                  ? t("openCode.authKindNone")
+                                                  : t("openCode.authKindApi")}
+                                          </Badge>
+                                          {provider.statusMessage && (
+                                            <span className="truncate text-3xs text-amber-500">
+                                              {provider.statusMessage}
+                                            </span>
+                                          )}
+                                          {openCodeCredentialBusy ===
+                                            provider.id && (
+                                            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                                          )}
+                                          {!provider.inCatalog && (
+                                            <Badge
+                                              variant="secondary"
+                                              className="text-3xs"
+                                            >
+                                              {t("openCode.customBadge")}
+                                            </Badge>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-2.5">
+                                          <Switch
+                                            checked={provider.enabled}
+                                            onCheckedChange={(checked) => {
+                                              void handleOpenCodeToggleEnabled(
+                                                provider.id,
+                                                checked
+                                              )
+                                            }}
+                                            aria-label={t(
+                                              "openCode.providerEnabledState",
+                                              { providerId: provider.id }
+                                            )}
+                                          />
+                                          {provider.connection !== "oauth" &&
+                                            provider.connection !==
+                                              "external" && (
+                                              <Button
+                                                type="button"
+                                                size="xs"
+                                                variant="ghost"
+                                                disabled={
+                                                  openCodeCredentialBusy !==
+                                                  null
+                                                }
+                                                onClick={() => {
+                                                  // Top list is models.dev only → the
+                                                  // guided dialog edits the key/base URL.
+                                                  setOpenCodeEditProviderId(
+                                                    provider.id
+                                                  )
+                                                  setOpenCodeConnectOpen(true)
+                                                }}
+                                              >
+                                                {t("openCode.editConfig")}
+                                              </Button>
+                                            )}
+                                          <Button
+                                            type="button"
+                                            size="xs"
+                                            variant="outline"
+                                            // An environment variable is not codeg's
+                                            // to remove; it is unset where it is set.
+                                            disabled={
+                                              openCodeCredentialBusy !== null ||
+                                              (provider.credentialCount === 0 &&
+                                                !provider.hasConfigBlock)
+                                            }
+                                            title={
+                                              provider.credentialCount === 0 &&
+                                              provider.envName
+                                                ? t(
+                                                    "openCode.envConnectionHint",
+                                                    {
+                                                      name: provider.envName,
+                                                    }
+                                                  )
+                                                : undefined
+                                            }
+                                            onClick={() => {
+                                              void handleOpenCodeDisconnect(
+                                                provider.id,
+                                                provider.hasConfigBlock
+                                              )
+                                            }}
+                                          >
+                                            {t("openCode.disconnect")}
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    )
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            <OpenCodeConnectDialog
+                              open={openCodeConnectOpen}
+                              onOpenChange={(o) => {
+                                setOpenCodeConnectOpen(o)
+                                if (!o) setOpenCodeEditProviderId(null)
+                              }}
+                              integrations={openCodeIntegrations}
+                              integrationsLoading={openCodeIntegrationsLoading}
+                              integrationsError={
+                                selectedOpenCodeInstalled
+                                  ? openCodeIntegrationsError
+                                  : t("openCode.credentialsNeedInstall")
+                              }
+                              catalog={openCodeCatalog}
+                              editProviderId={openCodeEditProviderId}
+                              editBaseUrl={
+                                (openCodeEditProviderId &&
+                                  selectedOpenCodeConfig?.providers[
+                                    openCodeEditProviderId
+                                  ]?.baseUrl) ||
+                                ""
+                              }
+                              baseUrlEditable={(id) =>
+                                openCodeCatalogIds.has(id)
+                              }
+                              onConnect={applyOpenCodeConnect}
+                            />
+
+                            <OpenCodeCustomProviderDialog
+                              open={openCodeCustomOpen}
+                              onOpenChange={setOpenCodeCustomOpen}
+                              existingProviderIds={
+                                selectedOpenCodeConfig?.providerIds ?? []
+                              }
+                              catalogIds={openCodeCatalog.map((p) => p.id)}
+                              onSubmit={applyOpenCodeCustomProvider}
+                            />
+
+                            <div className="space-y-1 border-t pt-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-2xs font-medium text-muted-foreground">
+                                  {t("openCode.advancedProviderConfig")}
+                                </div>
+                                <Button
+                                  type="button"
+                                  size="xs"
+                                  variant="outline"
+                                  onClick={() => setOpenCodeCustomOpen(true)}
+                                  disabled={
+                                    openCodeCatalogLoading ||
+                                    !openCodeCatalogReady
+                                  }
+                                  title={
+                                    openCodeCatalogLoading ||
+                                    !openCodeCatalogReady
+                                      ? t("openCode.connect.loading")
+                                      : undefined
+                                  }
+                                >
+                                  <Plus className="h-3.5 w-3.5" />
+                                  {t("openCode.addCustomProvider")}
+                                </Button>
+                              </div>
+                              <p className="text-3xs text-muted-foreground">
+                                {t("openCode.customProviderConfigHint")}
+                              </p>
+                            </div>
+
+                            {openCodeCustomProviderIds.length === 0 ? (
+                              <div className="text-2xs text-muted-foreground">
+                                {t("openCode.emptyProvider")}
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                {openCodeCustomProviderIds.map((providerId) => {
+                                  if (!selectedOpenCodeConfig) return null
+                                  const provider =
+                                    selectedOpenCodeConfig.providers[providerId]
+                                  if (!provider) return null
+                                  const expanded =
+                                    openCodeProviderId === providerId
+                                  const isDisabled = !provider.enabled
+                                  const connection =
+                                    openCodeConnectedById.get(providerId)
+                                  return (
+                                    <Collapsible
+                                      key={providerId}
+                                      open={expanded}
+                                      onOpenChange={(open) => {
+                                        setOpenCodeProviderId(
+                                          open ? providerId : ""
+                                        )
+                                      }}
+                                    >
+                                      <div className="rounded-md border bg-muted/20">
+                                        <div className="flex items-center justify-between gap-2 px-2.5 py-2">
+                                          <button
+                                            type="button"
+                                            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                            onClick={() => {
+                                              setOpenCodeProviderId(
+                                                (current) =>
+                                                  current === providerId
+                                                    ? ""
+                                                    : providerId
+                                              )
+                                            }}
+                                          >
+                                            <ChevronDown
+                                              className={cn(
+                                                "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                                                expanded && "rotate-180"
+                                              )}
+                                            />
+                                            <span className="truncate text-xs font-medium">
+                                              {providerId}
+                                            </span>
+                                            <span className="text-2xs text-muted-foreground">
+                                              models: {provider.modelCount}
+                                            </span>
+                                          </button>
+                                          <div className="flex items-center gap-3">
+                                            <span className="text-2xs text-muted-foreground">
+                                              {isDisabled
+                                                ? t("status.disabled")
+                                                : t("status.enabled")}
+                                            </span>
+                                            <Switch
+                                              checked={!isDisabled}
+                                              onCheckedChange={(checked) => {
+                                                handleOpenCodeProviderStatusChange(
+                                                  providerId,
+                                                  checked
+                                                )
+                                              }}
+                                              aria-label={t(
+                                                "openCode.providerEnabledState",
+                                                { providerId }
+                                              )}
+                                              title={
+                                                isDisabled
+                                                  ? t("actions.clickEnable", {
+                                                      name: providerId,
+                                                    })
+                                                  : t("actions.clickDisable", {
+                                                      name: providerId,
+                                                    })
+                                              }
+                                            />
+                                            <Button
+                                              type="button"
+                                              size="xs"
+                                              variant="outline"
+                                              onClick={() => {
+                                                setOpenCodeDeleteProviderId(
+                                                  providerId
+                                                )
+                                              }}
+                                            >
+                                              {t("actions.delete")}
+                                            </Button>
+                                          </div>
+                                        </div>
+
+                                        <CollapsibleContent className="px-2.5 pb-2.5">
+                                          <div className="grid gap-3 border-t pt-2.5 md:grid-cols-2">
+                                            <div className="space-y-1.5">
+                                              <label className="text-2xs text-muted-foreground">
+                                                provider.name
+                                              </label>
+                                              <Input
+                                                value={provider.name}
+                                                onChange={(event) => {
+                                                  handleOpenCodeProviderFieldChange(
+                                                    providerId,
+                                                    "name",
+                                                    event.target.value
+                                                  )
+                                                }}
+                                                placeholder="My Provider"
+                                              />
+                                            </div>
+                                            <div className="space-y-1.5">
+                                              <label className="text-2xs text-muted-foreground">
+                                                {provider.shape === "native"
+                                                  ? "package"
+                                                  : "npm"}
+                                              </label>
+                                              <Select
+                                                value={
+                                                  provider.npm.trim()
+                                                    ? provider.npm
+                                                    : OPENCODE_PROVIDER_NPM_OPTIONS[0]
+                                                        .value
+                                                }
+                                                onValueChange={(value) => {
+                                                  handleOpenCodeProviderFieldChange(
+                                                    providerId,
+                                                    "npm",
+                                                    value
+                                                  )
+                                                }}
+                                              >
+                                                <SelectTrigger className="w-full">
+                                                  <SelectValue
+                                                    placeholder={t(
+                                                      "openCode.selectProviderNpm"
+                                                    )}
+                                                  />
+                                                </SelectTrigger>
+                                                <SelectContent align="start">
+                                                  {buildOpenCodeNpmOptions(
+                                                    provider.npm
+                                                  ).map((npmOption) => (
+                                                    <SelectItem
+                                                      key={npmOption}
+                                                      value={npmOption}
+                                                    >
+                                                      {npmOption}
+                                                    </SelectItem>
+                                                  ))}
+                                                </SelectContent>
+                                              </Select>
+                                            </div>
+                                            <div className="space-y-1.5">
+                                              <label className="text-2xs text-muted-foreground">
+                                                {provider.shape === "native"
+                                                  ? "settings.baseURL"
+                                                  : "options.baseURL"}
+                                              </label>
+                                              <Input
+                                                value={provider.baseUrl}
+                                                onChange={(event) => {
+                                                  handleOpenCodeProviderFieldChange(
+                                                    providerId,
+                                                    "baseURL",
+                                                    event.target.value
+                                                  )
+                                                }}
+                                                placeholder="https://api.example.com/v1"
+                                              />
+                                            </div>
+                                            <div className="space-y-1.5">
+                                              <label className="text-2xs text-muted-foreground">
+                                                {t("openCode.connect.apiKey")}
+                                              </label>
+                                              <div className="flex items-center gap-2">
+                                                <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">
+                                                  {connection?.connection ===
+                                                  "env"
+                                                    ? t(
+                                                        "openCode.authKindEnv",
+                                                        {
+                                                          name:
+                                                            connection.envName ??
+                                                            "",
+                                                        }
+                                                      )
+                                                    : (connection?.credentialCount ??
+                                                          0) > 0
+                                                      ? t("openCode.keyStored")
+                                                      : t(
+                                                          "openCode.keyMissing"
+                                                        )}
+                                                </span>
+                                                <Button
+                                                  type="button"
+                                                  variant="outline"
+                                                  size="sm"
+                                                  disabled={
+                                                    !selectedOpenCodeInstalled ||
+                                                    openCodeCredentialBusy !==
+                                                      null
+                                                  }
+                                                  onClick={() => {
+                                                    setOpenCodeEditProviderId(
+                                                      providerId
+                                                    )
+                                                    setOpenCodeConnectOpen(true)
+                                                  }}
+                                                >
+                                                  {openCodeCredentialBusy ===
+                                                  providerId ? (
+                                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                  ) : (
+                                                    <Plug className="h-3.5 w-3.5" />
+                                                  )}
+                                                  {t("openCode.setApiKey")}
+                                                </Button>
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <Collapsible
+                                            open={Boolean(
+                                              openCodeModelConfigExpanded[
+                                                providerId
+                                              ]
+                                            )}
+                                            onOpenChange={(open) => {
+                                              setOpenCodeModelConfigExpanded(
+                                                (prev) => ({
+                                                  ...prev,
+                                                  [providerId]: open,
+                                                })
+                                              )
+                                            }}
+                                          >
+                                            <div className="mt-3 rounded-md border bg-background/50 p-2.5">
+                                              <button
+                                                type="button"
+                                                className="flex w-full items-center justify-between gap-2 text-left"
+                                                onClick={() => {
+                                                  setOpenCodeModelConfigExpanded(
+                                                    (prev) => ({
+                                                      ...prev,
+                                                      [providerId]:
+                                                        !prev[providerId],
+                                                    })
+                                                  )
+                                                }}
+                                              >
+                                                <div className="flex items-center gap-2">
+                                                  <ChevronDown
+                                                    className={cn(
+                                                      "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                                                      openCodeModelConfigExpanded[
+                                                        providerId
+                                                      ] && "rotate-180"
+                                                    )}
+                                                  />
+                                                  <span className="text-2xs font-medium">
+                                                    {t(
+                                                      "openCode.modelManagement"
+                                                    )}
+                                                  </span>
+                                                </div>
+                                                <span className="text-2xs text-muted-foreground">
+                                                  {t("openCode.modelCount", {
+                                                    count: provider.modelCount,
+                                                  })}
+                                                </span>
+                                              </button>
+                                              <CollapsibleContent className="pt-2">
+                                                <p className="text-2xs text-muted-foreground">
+                                                  {t(
+                                                    "openCode.modelDescription"
+                                                  )}
+                                                </p>
+
+                                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                                  <Input
+                                                    value={
+                                                      openCodeNewModelIds[
+                                                        providerId
+                                                      ] ?? ""
+                                                    }
+                                                    onChange={(event) => {
+                                                      handleOpenCodeModelDraftChange(
+                                                        providerId,
+                                                        event.target.value
+                                                      )
+                                                    }}
+                                                    className="w-[15rem]"
+                                                    placeholder="new-model-id"
+                                                  />
+                                                  <Button
+                                                    type="button"
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => {
+                                                      handleOpenCodeAddModel(
+                                                        providerId
+                                                      )
+                                                    }}
+                                                  >
+                                                    {t("openCode.addModel")}
+                                                  </Button>
+                                                  {openCodeModelsProtocol(
+                                                    provider.npm
+                                                  ) && (
+                                                    <ProviderModelsPicker
+                                                      input={{
+                                                        protocol:
+                                                          openCodeModelsProtocol(
+                                                            provider.npm
+                                                          ) ?? "openai",
+                                                        baseUrl:
+                                                          provider.baseUrl,
+                                                        // The key stays in
+                                                        // OpenCode's credential
+                                                        // store; the backend reads
+                                                        // it there to ask.
+                                                        storedKey:
+                                                          (connection?.credentialCount ??
+                                                            0) > 0
+                                                            ? {
+                                                                kind: "opencodeCredential",
+                                                                integrationId:
+                                                                  providerId,
+                                                              }
+                                                            : null,
+                                                      }}
+                                                      configured={
+                                                        provider.modelIds
+                                                      }
+                                                      onConfirm={(ids) =>
+                                                        handleOpenCodeSetModels(
+                                                          providerId,
+                                                          ids
+                                                        )
+                                                      }
+                                                    />
+                                                  )}
+                                                </div>
+
+                                                {provider.modelIds.length ===
+                                                0 ? (
+                                                  <div className="mt-2 text-2xs text-muted-foreground">
+                                                    {t("openCode.emptyModel")}
+                                                  </div>
+                                                ) : (
+                                                  <div className="mt-2 space-y-1">
+                                                    <div className="flex items-center gap-2 px-1 text-3xs text-muted-foreground">
+                                                      <div className="min-w-0 flex-1">
+                                                        {t("openCode.modelId")}
+                                                      </div>
+                                                      <div className="min-w-0 flex-1">
+                                                        {t(
+                                                          "openCode.modelName"
+                                                        )}
+                                                      </div>
+                                                      <div className="size-8 shrink-0" />
+                                                    </div>
+                                                    {provider.modelIds.map(
+                                                      (modelId) => {
+                                                        const model =
+                                                          provider.models[
+                                                            modelId
+                                                          ]
+                                                        if (!model) return null
+                                                        const modelDraftKey = `${providerId}:${modelId}`
+                                                        return (
+                                                          <div
+                                                            key={`${providerId}:${modelId}`}
+                                                            className="flex items-center gap-2"
+                                                          >
+                                                            <Input
+                                                              value={
+                                                                openCodeModelIdDrafts[
+                                                                  modelDraftKey
+                                                                ] ?? model.id
+                                                              }
+                                                              onChange={(
+                                                                event
+                                                              ) => {
+                                                                handleOpenCodeModelIdDraftChange(
+                                                                  providerId,
+                                                                  modelId,
+                                                                  event.target
+                                                                    .value
+                                                                )
+                                                              }}
+                                                              onBlur={() => {
+                                                                handleOpenCodeModelIdCommit(
+                                                                  providerId,
+                                                                  modelId
+                                                                )
+                                                              }}
+                                                              {...ime.props}
+                                                              onKeyDown={(
+                                                                event
+                                                              ) => {
+                                                                if (
+                                                                  ime.isComposing(
+                                                                    event
+                                                                  )
+                                                                )
+                                                                  return
+                                                                if (
+                                                                  event.key ===
+                                                                  "Enter"
+                                                                ) {
+                                                                  event.preventDefault()
+                                                                  handleOpenCodeModelIdCommit(
+                                                                    providerId,
+                                                                    modelId
+                                                                  )
+                                                                  event.currentTarget.blur()
+                                                                  return
+                                                                }
+                                                                if (
+                                                                  event.key ===
+                                                                  "Escape"
+                                                                ) {
+                                                                  setOpenCodeModelIdDrafts(
+                                                                    (prev) => {
+                                                                      if (
+                                                                        typeof prev[
+                                                                          modelDraftKey
+                                                                        ] ===
+                                                                        "undefined"
+                                                                      ) {
+                                                                        return prev
+                                                                      }
+                                                                      const next =
+                                                                        {
+                                                                          ...prev,
+                                                                        }
+                                                                      delete next[
+                                                                        modelDraftKey
+                                                                      ]
+                                                                      return next
+                                                                    }
+                                                                  )
+                                                                  event.currentTarget.blur()
+                                                                }
+                                                              }}
+                                                              className="h-8 min-w-0 flex-1"
+                                                              placeholder="model.id"
+                                                            />
+                                                            <Input
+                                                              value={model.name}
+                                                              onChange={(
+                                                                event
+                                                              ) => {
+                                                                handleOpenCodeModelFieldChange(
+                                                                  providerId,
+                                                                  modelId,
+                                                                  event.target
+                                                                    .value
+                                                                )
+                                                              }}
+                                                              className="h-8 min-w-0 flex-1"
+                                                              placeholder="model.name"
+                                                            />
+                                                            <Button
+                                                              type="button"
+                                                              size="icon-sm"
+                                                              variant="ghost"
+                                                              className="shrink-0 text-muted-foreground hover:text-destructive"
+                                                              aria-label={t(
+                                                                "openCode.deleteModel",
+                                                                { modelId }
+                                                              )}
+                                                              title={t(
+                                                                "openCode.deleteModel",
+                                                                { modelId }
+                                                              )}
+                                                              onClick={() => {
+                                                                handleOpenCodeRemoveModel(
+                                                                  providerId,
+                                                                  modelId
+                                                                )
+                                                              }}
+                                                            >
+                                                              <Minus className="h-3.5 w-3.5" />
+                                                            </Button>
+                                                          </div>
+                                                        )
+                                                      }
+                                                    )}
+                                                  </div>
+                                                )}
+                                              </CollapsibleContent>
+                                            </div>
+                                          </Collapsible>
+                                          <div className="mt-3 flex justify-end">
+                                            <Button
+                                              type="button"
+                                              size="sm"
+                                              onClick={() => {
+                                                persistConfig(
+                                                  selectedAgent.agent_type,
+                                                  selectedDraft.configText
+                                                )
+                                                  .then(() => {
+                                                    toast.success(
+                                                      t(
+                                                        "toasts.providerSaved",
+                                                        {
+                                                          providerId,
+                                                        }
+                                                      ),
+                                                      {
+                                                        description: `${t("toasts.openCodeConfigSynced")} ${t("toasts.configSavedHint")}`,
+                                                      }
+                                                    )
+                                                  })
+                                                  .catch((err) => {
+                                                    console.error(
+                                                      "[Settings] save opencode provider failed:",
+                                                      err
+                                                    )
+                                                    const message =
+                                                      err instanceof Error
+                                                        ? err.message
+                                                        : String(err)
+                                                    toast.error(
+                                                      t(
+                                                        "toasts.saveProviderFailed",
+                                                        {
+                                                          providerId,
+                                                        }
+                                                      ),
+                                                      {
+                                                        description: message,
+                                                      }
+                                                    )
+                                                  })
+                                              }}
+                                              disabled={selectedIsSavingConfig}
+                                            >
+                                              {selectedIsSavingConfig ? (
+                                                <>
+                                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                                  {t("actions.saving")}
+                                                </>
+                                              ) : (
+                                                <>
+                                                  <Save className="h-3.5 w-3.5" />
+                                                  {t(
+                                                    "actions.saveCurrentProvider"
+                                                  )}
+                                                </>
+                                              )}
+                                            </Button>
+                                          </div>
+                                        </CollapsibleContent>
+                                      </div>
+                                    </Collapsible>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+
+                          {/*
+                      The editor owns the `permission` key and hands back a
+                      whole rewritten document, so it goes through the same
+                      path as the raw JSON box below — draft-only, like the
+                      model fields above, with the card's Save button doing
+                      the write to opencode.json.
+                    */}
+                          <OpenCodePermissionsSection
+                            configText={selectedDraft.configText}
+                            onChange={handleConfigTextChange}
+                            disabled={selectedIsSavingConfig}
+                          />
+
+                          {/*
+                      Same contract as the permissions editor above: it owns a
+                      disjoint set of top-level keys, rewrites the whole
+                      document, and leaves the write to this card's Save button.
+                    */}
+                          <OpenCodeBehaviorSection
+                            configText={selectedDraft.configText}
+                            onChange={handleConfigTextChange}
+                            disabled={selectedIsSavingConfig}
+                          />
+
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              {t("openCode.nativeJsonConfig")}
+                            </label>
+                            <Textarea
+                              value={selectedDraft.configText}
+                              onChange={(event) => {
+                                handleConfigTextChange(event.target.value)
+                              }}
+                              placeholder={`{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "google/gemini-3-pro-preview",
+  "provider": {
+    "google": {
+      "options": {
+        "baseURL": "https://generativelanguage.googleapis.com/v1beta"
+      }
+    }
+  }
+}`}
+                              className="min-h-44 max-h-96 overflow-y-auto font-mono text-xs"
+                            />
+                            {selectedConfigError && (
+                              <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-2xs text-red-400">
+                                {selectedConfigError}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex justify-end">
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                persistConfig(
+                                  selectedAgent.agent_type,
+                                  selectedDraft.configText
+                                )
+                                  .then(() => {
+                                    toast.success(t("toasts.openCodeSaved"), {
+                                      description: t("toasts.configSavedHint"),
+                                    })
+                                  })
+                                  .catch((err) => {
+                                    console.error(
+                                      "[Settings] save opencode config failed:",
+                                      err
+                                    )
+                                    const message = toErrorMessage(err)
+                                    toast.error(
+                                      t("toasts.saveOpenCodeFailed"),
+                                      {
+                                        description: message,
+                                      }
+                                    )
+                                  })
+                              }}
+                              disabled={selectedIsSavingConfig}
+                            >
+                              {selectedIsSavingConfig ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  {t("actions.saving")}
+                                </>
+                              ) : (
+                                <>
+                                  <Save className="h-3.5 w-3.5" />
+                                  {t("actions.saveOpenCodeConfig")}
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : selectedAgent.agent_type === "cline" ? (
+                        <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                          <div>
+                            <label className="text-xs font-medium">Cline</label>
+                            <p className="mt-1 text-2xs text-muted-foreground">
+                              {t("cline.configDescription")}
+                            </p>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              Provider
+                            </label>
+                            <Select
+                              value={selectedDraft.clineProvider}
+                              onValueChange={(value) => {
+                                handleClineFieldChange("clineProvider", value)
+                              }}
+                            >
+                              <SelectTrigger className="h-8 text-xs">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectGroup>
+                                  <SelectLabel>
+                                    {t("cline.signInGroup")}
+                                  </SelectLabel>
+                                  {CLINE_SIGNIN_PROVIDERS.map((p) => (
+                                    <SelectItem key={p.value} value={p.value}>
+                                      {p.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                                <SelectGroup>
+                                  <SelectLabel>
+                                    {t("cline.byoGroup")}
+                                  </SelectLabel>
+                                  {CLINE_BYO_PROVIDERS.map((p) => (
+                                    <SelectItem key={p.value} value={p.value}>
+                                      {p.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                                {/* A provider configured outside codeg (e.g. `cline
+                                    auth bedrock`) keeps its own row, so opening this
+                                    panel can't silently retarget the store. */}
+                                {!isClineSignInProvider(
+                                  selectedDraft.clineProvider
+                                ) &&
+                                  !CLINE_BYO_PROVIDERS.some(
+                                    (p) =>
+                                      p.value === selectedDraft.clineProvider
+                                  ) && (
+                                    <SelectGroup>
+                                      <SelectLabel>
+                                        {t("cline.externalGroup")}
+                                      </SelectLabel>
+                                      <SelectItem
+                                        value={selectedDraft.clineProvider}
+                                      >
+                                        {selectedDraft.clineProvider}
+                                      </SelectItem>
+                                    </SelectGroup>
+                                  )}
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          {isClineSignInProvider(
+                            selectedDraft.clineProvider
+                          ) ? (
+                            // Sign-in: cline holds the credential, so there is nothing
+                            // here to fill in — only the command that obtains it. The
+                            // launch path deliberately exports no provider/key pair
+                            // for these, leaving `tryRestoreAuth` to find the token.
+                            <div className="space-y-1.5">
+                              <p className="text-2xs text-muted-foreground">
+                                {t("cline.signInHint")}
+                              </p>
+                              <div className="flex items-center gap-2">
+                                <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-2xs font-mono whitespace-nowrap">
+                                  {clineAuthCommand(
+                                    selectedDraft.clineProvider
+                                  )}
+                                </code>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 shrink-0 p-0"
+                                  onClick={async () => {
+                                    const ok = await copyTextToClipboard(
+                                      clineAuthCommand(
+                                        selectedDraft.clineProvider
+                                      )
+                                    )
+                                    if (ok)
+                                      toast.success(t("grok.commandCopied"))
+                                  }}
+                                  title={t("grok.copyCommand")}
+                                  aria-label={t("grok.copyCommand")}
+                                >
+                                  <Copy className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                API Key
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  type={
+                                    showApiKeys[selectedAgent.agent_type]
+                                      ? "text"
+                                      : "password"
+                                  }
+                                  value={selectedDraft.clineApiKey}
+                                  onChange={(event) => {
+                                    handleClineFieldChange(
+                                      "clineApiKey",
+                                      event.target.value
+                                    )
+                                  }}
+                                  placeholder="sk-..."
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setShowApiKeys((prev) => ({
+                                      ...prev,
+                                      [selectedAgent.agent_type]:
+                                        !prev[selectedAgent.agent_type],
+                                    }))
+                                  }}
+                                  title={
+                                    showApiKeys[selectedAgent.agent_type]
+                                      ? t("actions.hideApiKey")
+                                      : t("actions.showApiKey")
+                                  }
+                                >
+                                  {showApiKeys[selectedAgent.agent_type] ? (
+                                    <EyeOff className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Eye className="h-3.5 w-3.5" />
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              Model
+                            </label>
+                            <Input
+                              value={selectedDraft.clineModel}
+                              onChange={(event) => {
+                                handleClineFieldChange(
+                                  "clineModel",
+                                  event.target.value
+                                )
+                              }}
+                              placeholder="claude-sonnet-5"
+                            />
+                          </div>
+
+                          {/* Endpoint, like the key, is cline's own for a sign-in
+                              provider — its account service, not something to point
+                              elsewhere. */}
+                          {!isClineSignInProvider(
+                            selectedDraft.clineProvider
+                          ) && (
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                API URL
+                              </label>
+                              {/* Cline stores this as `settings.baseUrl`, which its
+                                  own schema validates as a full URL — and an
+                                  OpenAI-compatible endpoint wants the version suffix,
+                                  so the placeholder shows the whole shape. */}
+                              <Input
+                                value={selectedDraft.clineBaseUrl}
+                                onChange={(event) => {
+                                  handleClineFieldChange(
+                                    "clineBaseUrl",
+                                    event.target.value
+                                  )
+                                }}
+                                placeholder="https://api.openai.com/v1"
+                              />
+                            </div>
+                          )}
+
+                          {selectedDraft.clineProvider ===
+                            CLINE_CUSTOM_MODEL_PROVIDER && (
+                            <ModelIdListField
+                              ids={selectedDraft.clineModels ?? []}
+                              onChange={(ids) =>
+                                handleClineFieldChange("clineModels", ids)
+                              }
+                              state={clineProviderModels}
+                              title={tModels("clineList.title")}
+                              hint={tModels("clineList.hint")}
+                            />
+                          )}
+
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              {t("nativeJsonConfig")} (config)
+                            </label>
+                            <Textarea
+                              value={selectedDraft.configText}
+                              onChange={(event) => {
+                                handleConfigTextChange(event.target.value)
+                              }}
+                              className="min-h-24 font-mono text-xs"
+                              placeholder={`{
+        "apiProvider": "anthropic",
+        "apiKey": "sk-...",
+        "model": "claude-sonnet-5"
+      }`}
+                            />
+                            {selectedConfigError && (
+                              <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-2xs text-red-400">
+                                {selectedConfigError}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                persistConfig(
+                                  selectedAgent.agent_type,
+                                  selectedDraft.configText
+                                )
+                                  .then(() => {
+                                    toast.success(t("toasts.clineSaved"), {
+                                      description: t("toasts.configSavedHint"),
+                                    })
+                                  })
+                                  .catch((err) => {
+                                    console.error(
+                                      "[Settings] save cline config failed:",
+                                      err
+                                    )
+                                    const message = toErrorMessage(err)
+                                    toast.error(t("toasts.saveClineFailed"), {
+                                      description: message,
+                                    })
+                                  })
+                              }}
+                              disabled={selectedIsSavingConfig}
+                            >
+                              {selectedIsSavingConfig ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  {t("actions.saving")}
+                                </>
+                              ) : (
+                                <>
+                                  <Save className="h-3.5 w-3.5" />
+                                  {t("actions.saveClineConfig")}
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : selectedAgent.agent_type === "open_claw" ? (
+                        <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                          <div>
+                            <label className="text-xs font-medium">
+                              {t("openClaw.gatewayConfig")}
+                            </label>
+                            <p className="mt-1 text-2xs text-muted-foreground">
+                              {t("openClaw.gatewayDescription")}
+                            </p>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              Gateway URL
+                            </label>
+                            <Input
+                              value={selectedDraft.openClawGatewayUrl}
+                              onChange={(event) => {
+                                handleOpenClawFieldChange(
+                                  "openClawGatewayUrl",
+                                  event.target.value
+                                )
+                              }}
+                              placeholder="wss://gateway-host:18789"
+                            />
+                            <p className="text-2xs text-muted-foreground">
+                              {t("openClaw.gatewayUrlHint")}
+                            </p>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              Gateway Token
+                            </label>
+                            <div className="flex items-center gap-2">
+                              <Input
+                                type={
+                                  showApiKeys[selectedAgent.agent_type]
+                                    ? "text"
+                                    : "password"
+                                }
+                                value={selectedDraft.openClawGatewayToken}
+                                onChange={(event) => {
+                                  handleOpenClawFieldChange(
+                                    "openClawGatewayToken",
+                                    event.target.value
+                                  )
+                                }}
+                                placeholder={t(
+                                  "openClaw.gatewayTokenPlaceholder"
+                                )}
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setShowApiKeys((prev) => ({
+                                    ...prev,
+                                    [selectedAgent.agent_type]:
+                                      !prev[selectedAgent.agent_type],
+                                  }))
+                                }}
+                                title={
+                                  showApiKeys[selectedAgent.agent_type]
+                                    ? t("actions.hideToken")
+                                    : t("actions.showToken")
+                                }
+                              >
+                                {showApiKeys[selectedAgent.agent_type] ? (
+                                  <EyeOff className="h-3.5 w-3.5" />
+                                ) : (
+                                  <Eye className="h-3.5 w-3.5" />
+                                )}
+                              </Button>
+                            </div>
+                            <p className="text-2xs text-muted-foreground">
+                              {t("openClaw.gatewayTokenHint")}
+                            </p>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              Session Key
+                            </label>
+                            <Input
+                              value={selectedDraft.openClawSessionKey}
+                              onChange={(event) => {
+                                handleOpenClawFieldChange(
+                                  "openClawSessionKey",
+                                  event.target.value
+                                )
+                              }}
+                              placeholder="agent:main:main"
+                            />
+                            <p className="text-2xs text-muted-foreground">
+                              {t("openClaw.sessionKeyHint")}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                Promise.all([
+                                  persistEnv(
+                                    selectedAgent.agent_type,
+                                    selectedDraft.enabled,
+                                    selectedDraft.envText,
+                                    selectedDraft.modelProviderId
+                                  ),
+                                  persistConfig(
+                                    selectedAgent.agent_type,
+                                    selectedDraft.configText
+                                  ),
+                                ])
+                                  .then(() => {
+                                    toast.success(t("toasts.openClawSaved"), {
+                                      description: t("toasts.configSavedHint"),
+                                    })
+                                  })
+                                  .catch((err) => {
+                                    console.error(
+                                      "[Settings] save openclaw config failed:",
+                                      err
+                                    )
+                                    const message = toErrorMessage(err)
+                                    toast.error(
+                                      t("toasts.saveOpenClawFailed"),
+                                      {
+                                        description: message,
+                                      }
+                                    )
+                                  })
+                              }}
+                              disabled={
+                                selectedIsSavingEnv || selectedIsSavingConfig
+                              }
+                            >
+                              {selectedIsSavingEnv || selectedIsSavingConfig ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  {t("actions.saving")}
+                                </>
+                              ) : (
+                                <>
+                                  <Save className="h-3.5 w-3.5" />
+                                  {t("actions.saveOpenClawConfig")}
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : selectedAgent.agent_type === "hermes" ? (
+                        <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                          <div>
+                            <label className="text-xs font-medium">
+                              {t("hermes.configManagement")}
+                            </label>
+                            <p className="mt-1 text-2xs text-muted-foreground">
+                              {t("hermes.configDescription")}
+                            </p>
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              {t("hermes.providerLabel")}
+                            </label>
+                            <Select
+                              value={selectedDraft.hermesProvider}
+                              onValueChange={(value) =>
+                                handleHermesFieldChange("hermesProvider", value)
+                              }
+                              disabled={selectedIsSavingConfig}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent align="start">
+                                {/* Preserve an existing config's provider in the list
+                              even when it's outside the curated table, so the
+                              dropdown shows the real value instead of going blank. */}
+                                {selectedDraft.hermesProvider &&
+                                  !HERMES_PROVIDERS.some(
+                                    (p) => p.id === selectedDraft.hermesProvider
+                                  ) && (
+                                    <SelectItem
+                                      value={selectedDraft.hermesProvider}
+                                    >
+                                      {selectedDraft.hermesProvider}
+                                    </SelectItem>
+                                  )}
+                                {(
+                                  [
+                                    ["apiKey", t("hermes.groupApiKey")],
+                                    ["oauth", t("hermes.groupOauth")],
+                                    ["aws", t("hermes.groupAws")],
+                                  ] as const
+                                ).map(([kind, groupLabel]) => {
+                                  const items = HERMES_PROVIDERS.filter(
+                                    (p) => p.kind === kind
+                                  )
+                                  if (items.length === 0) return null
+                                  return (
+                                    <SelectGroup key={kind}>
+                                      <SelectLabel>{groupLabel}</SelectLabel>
+                                      {items.map((provider) => (
+                                        <SelectItem
+                                          key={provider.id}
+                                          value={provider.id}
+                                        >
+                                          {provider.label}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectGroup>
+                                  )
+                                })}
+                              </SelectContent>
+                            </Select>
+                            <p className="text-2xs text-muted-foreground">
+                              {t("hermes.providerHint")}
+                            </p>
+                          </div>
+
+                          {selectedHermesProviderOption?.kind === "apiKey" && (
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                API Key
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  type={
+                                    showApiKeys[selectedAgent.agent_type]
+                                      ? "text"
+                                      : "password"
+                                  }
+                                  value={selectedDraft.apiKey}
+                                  onChange={(event) =>
+                                    handleHermesFieldChange(
+                                      "apiKey",
+                                      event.target.value
+                                    )
+                                  }
+                                  placeholder="sk-..."
+                                  disabled={selectedIsSavingConfig}
+                                />
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setShowApiKeys((prev) => ({
+                                      ...prev,
+                                      [selectedAgent.agent_type]:
+                                        !prev[selectedAgent.agent_type],
+                                    }))
+                                  }}
+                                  title={
+                                    showApiKeys[selectedAgent.agent_type]
+                                      ? t("actions.hideApiKey")
+                                      : t("actions.showApiKey")
+                                  }
+                                >
+                                  {showApiKeys[selectedAgent.agent_type] ? (
+                                    <EyeOff className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Eye className="h-3.5 w-3.5" />
+                                  )}
+                                </Button>
+                              </div>
+                              <p className="text-2xs text-muted-foreground">
+                                {t("hermes.apiKeyHint")}
+                              </p>
+                            </div>
+                          )}
+
+                          {selectedHermesProviderOption?.needsBaseUrl && (
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                API URL
+                              </label>
+                              <Input
+                                value={selectedDraft.apiBaseUrl}
+                                onChange={(event) =>
+                                  handleHermesFieldChange(
+                                    "apiBaseUrl",
+                                    event.target.value
+                                  )
+                                }
+                                placeholder="https://api.example.com/v1"
+                                disabled={selectedIsSavingConfig}
+                              />
+                            </div>
+                          )}
+
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              {t("hermes.modelName")}
+                            </label>
+                            <ModelIdInputWithFetch
+                              value={selectedDraft.model}
+                              onChange={(value) =>
+                                handleHermesFieldChange("model", value)
+                              }
+                              state={hermesProviderModels}
+                              placeholder="moonshotai/kimi-k2"
+                              disabled={selectedIsSavingConfig}
+                            />
+                          </div>
+
+                          {selectedHermesProviderOption?.kind === "oauth" && (
+                            <p className="text-2xs text-muted-foreground">
+                              {t("hermes.oauthHint")}
+                            </p>
+                          )}
+
+                          {selectedHermesProviderOption?.kind === "aws" && (
+                            <p className="text-2xs text-muted-foreground">
+                              {t("hermes.awsHint")}
+                            </p>
+                          )}
+
+                          {!selectedHermesProviderOption && (
+                            <p className="text-2xs text-amber-600 dark:text-amber-500">
+                              {t("hermes.unsupportedProvider")}
+                            </p>
+                          )}
+
+                          <div className="flex justify-end">
+                            <Button
+                              size="sm"
+                              onClick={() =>
+                                handleSaveHermesConfig("structured")
+                              }
+                              disabled={
+                                selectedIsSavingConfig ||
+                                !selectedHermesProviderOption
+                              }
+                            >
+                              {selectedIsSavingConfig ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  {t("actions.saving")}
+                                </>
+                              ) : (
+                                <>
+                                  <Save className="h-3.5 w-3.5" />
+                                  {t("actions.saveHermesConfig")}
+                                </>
+                              )}
+                            </Button>
+                          </div>
+
+                          <div className="space-y-2 rounded-md border p-3">
+                            <div>
+                              <label className="text-2xs font-medium">
+                                {t("hermes.setupTitle")}
+                              </label>
+                              <p className="mt-1 text-2xs text-muted-foreground">
+                                {t("hermes.setupHint")}
+                              </p>
+                            </div>
+                            {hermesCanUseNativeSetup && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() =>
+                                    runHermesSetupCommand(
+                                      "setup",
+                                      selectedDraft.hermesSetupCommand
+                                    )
+                                  }
+                                >
+                                  <Wrench className="h-3.5 w-3.5" />
+                                  {t("hermes.runSetup")}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() =>
+                                    runHermesSetupCommand(
+                                      "model",
+                                      selectedDraft.hermesModelCommand
+                                    )
+                                  }
+                                >
+                                  {t("hermes.configureModel")}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={handleRevealHermesHome}
+                                >
+                                  {t("hermes.openConfigFolder")}
+                                </Button>
+                              </div>
+                            )}
+                            {selectedDraft.hermesSetupCommand && (
+                              <div className="flex items-center gap-2">
+                                <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-2xs font-mono whitespace-nowrap">
+                                  {selectedDraft.hermesSetupCommand}
+                                </code>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 w-7 shrink-0 p-0"
+                                  onClick={async () => {
+                                    const ok = await copyTextToClipboard(
+                                      selectedDraft.hermesSetupCommand
+                                    )
+                                    if (ok) {
+                                      toast.success(t("hermes.commandCopied"))
+                                    }
+                                  }}
+                                  title={t("hermes.copyCommand")}
+                                >
+                                  <Copy className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+
+                          <details className="rounded-md border p-3">
+                            <summary className="cursor-pointer text-2xs font-medium text-muted-foreground">
+                              {t("hermes.advancedTitle")}
+                            </summary>
+                            <div className="mt-2 space-y-2">
+                              <p className="text-2xs text-muted-foreground">
+                                {t("hermes.rawConfigHint")}
+                              </p>
+                              <Textarea
+                                value={selectedDraft.hermesConfigYaml}
+                                onChange={(event) =>
+                                  handleHermesFieldChange(
+                                    "hermesConfigYaml",
+                                    event.target.value
+                                  )
+                                }
+                                placeholder={`model:\n  provider: openrouter\n  default: moonshotai/kimi-k2`}
+                                className="min-h-40 max-h-80 font-mono text-xs"
+                                disabled={selectedIsSavingConfig}
+                              />
+                              <div className="flex justify-end">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleSaveHermesConfig("raw")}
+                                  disabled={selectedIsSavingConfig}
+                                >
+                                  {selectedIsSavingConfig ? (
+                                    <>
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      {t("actions.saving")}
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Save className="h-3.5 w-3.5" />
+                                      {t("hermes.saveRawConfig")}
+                                    </>
+                                  )}
+                                </Button>
+                              </div>
+                            </div>
+                          </details>
+                        </div>
+                      ) : selectedAgent.agent_type === "code_buddy" ? (
+                        <CodeBuddyConfigPanel
+                          agent={selectedAgent}
+                          saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                          onSave={(env, enabled) =>
+                            persistEnv(
+                              selectedAgent.agent_type,
+                              enabled,
+                              envMapToText(env),
+                              selectedAgent.model_provider_id
+                            )
+                          }
+                        />
+                      ) : selectedAgent.agent_type === "kimi_code" ? (
+                        <KimiCodeConfigPanel
+                          agent={selectedAgent}
+                          onSaved={refreshAgents}
+                        />
+                      ) : selectedAgent.agent_type === "pi" ? (
+                        <PiConfigPanel
+                          agent={selectedAgent}
+                          saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                          onSaveEnv={(env, enabled) =>
+                            persistEnv(
+                              selectedAgent.agent_type,
+                              enabled,
+                              envMapToText(env),
+                              selectedAgent.model_provider_id
+                            )
+                          }
+                          onSaved={refreshAgents}
+                        />
+                      ) : selectedAgent.agent_type === "cursor" ? (
+                        <CursorConfigPanel
+                          agent={selectedAgent}
+                          saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                          onSaveEnv={(env, enabled) =>
+                            persistEnv(
+                              selectedAgent.agent_type,
+                              enabled,
+                              envMapToText(env),
+                              selectedAgent.model_provider_id
+                            )
+                          }
+                          onSaved={refreshAgents}
+                          onAffectedSessions={reportAffectedSessions}
+                        />
+                      ) : selectedAgent.agent_type === "deepseek" ? (
+                        <DeepSeekConfigPanel
+                          agent={selectedAgent}
+                          saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                          onSaveEnv={(env, enabled) =>
+                            persistEnv(
+                              selectedAgent.agent_type,
+                              enabled,
+                              envMapToText(env),
+                              selectedAgent.model_provider_id,
+                              // The keys this panel owns, folded into the raw
+                              // editor's draft (which the enable switch persists
+                              // wholesale) so the two can never disagree.
+                              // `DEEPSEEK_ACP_MODEL` is NOT one of them — the raw
+                              // editor owns it, and folding it in would overwrite a
+                              // model line being typed there.
+                              {
+                                DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY,
+                                DEEPSEEK_BASE_URL: env.DEEPSEEK_BASE_URL,
+                                DEEPSEEK_ACP_PROVIDER:
+                                  env.DEEPSEEK_ACP_PROVIDER,
+                              }
+                            )
+                          }
+                        />
+                      ) : selectedAgent.agent_type === "qoder" ? (
+                        <QoderConfigPanel
+                          agent={selectedAgent}
+                          saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                          onSaveEnv={(env, enabled) =>
+                            persistEnv(
+                              selectedAgent.agent_type,
+                              enabled,
+                              envMapToText(env),
+                              selectedAgent.model_provider_id,
+                              // The one key this panel owns, folded into the raw
+                              // editor's draft. That draft is persisted WHOLESALE by
+                              // the enable switch and the generic env Save button, so
+                              // without this a saved token would be silently deleted
+                              // the moment either one fires. `undefined` (the token
+                              // field was cleared) deletes the line, which is the
+                              // outcome clearing it asks for.
+                              {
+                                QODER_PERSONAL_ACCESS_TOKEN:
+                                  env.QODER_PERSONAL_ACCESS_TOKEN,
+                              }
+                            )
+                          }
+                          onSaved={refreshAgents}
+                          onAffectedSessions={reportAffectedSessions}
+                        />
+                      ) : selectedAgent.agent_type === "antigravity" ? (
+                        <AntigravityConfigPanel
+                          agent={selectedAgent}
+                          saving={Boolean(savingEnv[selectedAgent.agent_type])}
+                          onSaveEnv={(env, enabled) =>
+                            persistEnv(
+                              selectedAgent.agent_type,
+                              enabled,
+                              envMapToText(env),
+                              selectedAgent.model_provider_id,
+                              // The keys this panel owns, folded into the raw
+                              // editor's draft. That draft is persisted WHOLESALE by
+                              // the enable switch and the generic env Save button, so
+                              // without this a saved auth method would be silently
+                              // deleted the moment either one fires. `undefined` (the
+                              // method does not use that credential) deletes the
+                              // line, which is exactly what switching methods asks
+                              // for.
+                              Object.fromEntries(
+                                ANTIGRAVITY_ENV_KEYS.map((key) => [
+                                  key,
+                                  env[key],
+                                ])
                               )
                             )
-                            // The backend wrote the keys it manages (catalog,
-                            // `model_catalog_json`, root `model`); start the
-                            // next edit from what is on disk.
-                            .then(() =>
-                              reseedAgentDraft("codex", selectedDraft)
+                          }
+                          onSaved={refreshAgents}
+                        />
+                      ) : selectedAgent.agent_type === "grok" ? (
+                        <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                          <div>
+                            <label className="text-xs font-medium">
+                              {t("configManagement")}
+                            </label>
+                            <p className="mt-1 text-2xs text-muted-foreground">
+                              {t("grok.configDescription")}
+                            </p>
+                          </div>
+
+                          {/* Structured controls — mode + reasoning effort */}
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("grok.permissionModeLabel")}
+                              </label>
+                              <Select
+                                value={
+                                  selectedDraft.grokPermissionMode || GROK_UNSET
+                                }
+                                disabled={grokSaving}
+                                onValueChange={(value) =>
+                                  updateSelectedDraft((current) => ({
+                                    ...current,
+                                    grokPermissionMode:
+                                      value === GROK_UNSET ? "" : value,
+                                  }))
+                                }
+                              >
+                                <SelectTrigger
+                                  className="w-full"
+                                  aria-label={t("grok.permissionModeLabel")}
+                                >
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value={GROK_UNSET}>
+                                    {t("grok.optionDefault")}
+                                  </SelectItem>
+                                  <SelectItem value="default">
+                                    {t("grok.permissionDefault")}
+                                  </SelectItem>
+                                  <SelectItem value="acceptEdits">
+                                    {t("grok.permissionAcceptEdits")}
+                                  </SelectItem>
+                                  <SelectItem value="auto">
+                                    {t("grok.permissionAuto")}
+                                  </SelectItem>
+                                  <SelectItem value="bypassPermissions">
+                                    {t("grok.permissionAlwaysApprove")}
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("grok.reasoningEffortLabel")}
+                              </label>
+                              <Select
+                                value={
+                                  selectedDraft.grokReasoningEffort ||
+                                  GROK_UNSET
+                                }
+                                disabled={grokSaving}
+                                onValueChange={(value) =>
+                                  updateSelectedDraft((current) => ({
+                                    ...current,
+                                    grokReasoningEffort:
+                                      value === GROK_UNSET ? "" : value,
+                                  }))
+                                }
+                              >
+                                <SelectTrigger
+                                  className="w-full"
+                                  aria-label={t("grok.reasoningEffortLabel")}
+                                >
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value={GROK_UNSET}>
+                                    {t("grok.optionDefault")}
+                                  </SelectItem>
+                                  <SelectItem value="low">
+                                    {t("grok.effortLow")}
+                                  </SelectItem>
+                                  <SelectItem value="medium">
+                                    {t("grok.effortMedium")}
+                                  </SelectItem>
+                                  <SelectItem value="high">
+                                    {t("grok.effortHigh")}
+                                  </SelectItem>
+                                  <SelectItem value="xhigh">
+                                    {t("grok.effortXhigh")}
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+
+                          {/* Authentication — method selector + method-specific body.
+                        Mirrors the Cursor panel: an explicit choice between the
+                        `grok login` subscription and an XAI_API_KEY, recognized
+                        on load via inferGrokMode and recorded as GROK_AUTH_MODE. */}
+                          <div className="space-y-2.5 rounded-md border p-2.5">
+                            <div className="space-y-1.5">
+                              <label className="text-2xs font-medium">
+                                {t("grok.authTitle")}
+                              </label>
+                              <Select
+                                value={selectedDraft.grokAuthMode}
+                                disabled={grokSaving}
+                                onValueChange={(value) =>
+                                  handleGrokAuthModeChange(
+                                    value as GrokAuthMethod
+                                  )
+                                }
+                              >
+                                <SelectTrigger
+                                  className="w-full"
+                                  aria-label={t("grok.authMode")}
+                                >
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="subscription">
+                                    {t("authModeOfficialSubscription")}
+                                  </SelectItem>
+                                  <SelectItem value="api_key">
+                                    {t("grok.authModeApiKey")}
+                                  </SelectItem>
+                                  <SelectItem value="custom">
+                                    {t("grok.authModeCustom")}
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <p className="text-2xs text-muted-foreground">
+                                {selectedDraft.grokAuthMode === "subscription"
+                                  ? t("grok.subscriptionHint")
+                                  : selectedDraft.grokAuthMode === "custom"
+                                    ? t("grok.authModeCustomHint")
+                                    : t("grok.authModeApiKeyHint")}
+                              </p>
+                            </div>
+
+                            {selectedDraft.grokAuthMode === "subscription" ? (
+                              // Subscription: a copyable `grok login` command. Its
+                              // session lives in ~/.grok/auth.json (untouched here); the
+                              // launch path strips any inherited XAI_API_KEY.
+                              <div className="space-y-1.5">
+                                <p className="text-2xs text-muted-foreground">
+                                  {t("grok.loginHint")}
+                                </p>
+                                <div className="flex items-center gap-2">
+                                  <code className="flex-1 overflow-x-auto rounded bg-muted px-2 py-1 text-2xs font-mono whitespace-nowrap">
+                                    {GROK_LOGIN_COMMAND}
+                                  </code>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 w-7 shrink-0 p-0"
+                                    onClick={async () => {
+                                      const ok =
+                                        await copyTextToClipboard(
+                                          GROK_LOGIN_COMMAND
+                                        )
+                                      if (ok)
+                                        toast.success(t("grok.commandCopied"))
+                                    }}
+                                    title={t("grok.copyCommand")}
+                                    aria-label={t("grok.copyCommand")}
+                                  >
+                                    <Copy className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : selectedDraft.grokAuthMode === "api_key" ? (
+                              // API key: the non-interactive XAI_API_KEY credential.
+                              <div className="space-y-1.5">
+                                <label className="text-2xs text-muted-foreground">
+                                  XAI_API_KEY
+                                </label>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type={
+                                      showApiKeys[selectedAgent.agent_type]
+                                        ? "text"
+                                        : "password"
+                                    }
+                                    value={selectedDraft.apiKey}
+                                    onChange={(event) =>
+                                      handleImportantConfigChange(
+                                        "apiKey",
+                                        event.target.value
+                                      )
+                                    }
+                                    placeholder="xai-..."
+                                    aria-label="XAI_API_KEY"
+                                    name="grok-xai-api-key"
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    disabled={grokSaving}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={grokSaving}
+                                    onClick={() =>
+                                      setShowApiKeys((prev) => ({
+                                        ...prev,
+                                        [selectedAgent.agent_type]:
+                                          !prev[selectedAgent.agent_type],
+                                      }))
+                                    }
+                                    aria-label={
+                                      showApiKeys[selectedAgent.agent_type]
+                                        ? t("actions.hideApiKey")
+                                        : t("actions.showApiKey")
+                                    }
+                                    title={
+                                      showApiKeys[selectedAgent.agent_type]
+                                        ? t("actions.hideApiKey")
+                                        : t("actions.showApiKey")
+                                    }
+                                  >
+                                    {showApiKeys[selectedAgent.agent_type] ? (
+                                      <EyeOff className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <Eye className="h-3.5 w-3.5" />
+                                    )}
+                                  </Button>
+                                </div>
+                                <p className="text-2xs text-muted-foreground">
+                                  {selectedDraft.apiKey.trim()
+                                    ? t("grok.authKeyConfigured")
+                                    : t("grok.authKeyMissing")}
+                                </p>
+                              </div>
+                            ) : null}
+                          </div>
+
+                          {/* Custom model (BYO endpoint) → [model.<id>] + [models].default.
+                        Only shown (and saved) in the `custom` auth method: a model
+                        id registers a custom Grok model as the default; the other
+                        methods omit the codeg-managed block. */}
+                          {selectedDraft.grokAuthMode === "custom" ? (
+                            <div className="space-y-2.5 rounded-md border p-2.5">
+                              <div>
+                                <label className="text-2xs font-medium">
+                                  {t("grok.customModelTitle")}
+                                </label>
+                                <p className="mt-1 text-2xs text-muted-foreground">
+                                  {t("grok.customModelHint")}
+                                </p>
+                              </div>
+
+                              <div className="space-y-1.5">
+                                <label className="text-2xs text-muted-foreground">
+                                  {t("grok.customModelIdLabel")}
+                                </label>
+                                <Input
+                                  value={selectedDraft.grokCustomModelId}
+                                  onChange={(event) =>
+                                    updateSelectedDraft((current) => ({
+                                      ...current,
+                                      grokCustomModelId: event.target.value,
+                                    }))
+                                  }
+                                  placeholder={t(
+                                    "grok.customModelIdPlaceholder"
+                                  )}
+                                  aria-label={t("grok.customModelIdLabel")}
+                                  autoComplete="off"
+                                  spellCheck={false}
+                                  disabled={grokSaving}
+                                />
+                                <p className="text-2xs text-muted-foreground">
+                                  {t("grok.customModelIdHint")}
+                                </p>
+                              </div>
+
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <div className="space-y-1.5">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("grok.customBaseUrlLabel")}
+                                  </label>
+                                  <Input
+                                    value={selectedDraft.grokCustomBaseUrl}
+                                    onChange={(event) =>
+                                      updateSelectedDraft((current) => ({
+                                        ...current,
+                                        grokCustomBaseUrl: event.target.value,
+                                      }))
+                                    }
+                                    placeholder={t(
+                                      "grok.customBaseUrlPlaceholder"
+                                    )}
+                                    aria-label={t("grok.customBaseUrlLabel")}
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    disabled={grokSaving}
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("grok.customApiBackendLabel")}
+                                  </label>
+                                  <Select
+                                    value={
+                                      selectedDraft.grokCustomApiBackend ||
+                                      GROK_DEFAULT_API_BACKEND
+                                    }
+                                    disabled={grokSaving}
+                                    onValueChange={(value) =>
+                                      updateSelectedDraft((current) => ({
+                                        ...current,
+                                        grokCustomApiBackend: value,
+                                      }))
+                                    }
+                                  >
+                                    <SelectTrigger
+                                      className="w-full"
+                                      aria-label={t(
+                                        "grok.customApiBackendLabel"
+                                      )}
+                                    >
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="responses">
+                                        {t("grok.backendResponses")}
+                                      </SelectItem>
+                                      <SelectItem value="chat_completions">
+                                        {t("grok.backendChatCompletions")}
+                                      </SelectItem>
+                                      <SelectItem value="messages">
+                                        {t("grok.backendMessages")}
+                                      </SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              </div>
+
+                              <div className="space-y-1.5">
+                                <label className="text-2xs text-muted-foreground">
+                                  {t("grok.customApiKeyLabel")}
+                                </label>
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    type={
+                                      showGrokCustomKey ? "text" : "password"
+                                    }
+                                    value={selectedDraft.grokCustomApiKey}
+                                    onChange={(event) =>
+                                      updateSelectedDraft((current) => ({
+                                        ...current,
+                                        grokCustomApiKey: event.target.value,
+                                      }))
+                                    }
+                                    placeholder="xai-..."
+                                    aria-label={t("grok.customApiKeyLabel")}
+                                    name="grok-custom-api-key"
+                                    autoComplete="off"
+                                    spellCheck={false}
+                                    disabled={grokSaving}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={grokSaving}
+                                    onClick={() =>
+                                      setShowGrokCustomKey((prev) => !prev)
+                                    }
+                                    aria-label={
+                                      showGrokCustomKey
+                                        ? t("actions.hideApiKey")
+                                        : t("actions.showApiKey")
+                                    }
+                                    title={
+                                      showGrokCustomKey
+                                        ? t("actions.hideApiKey")
+                                        : t("actions.showApiKey")
+                                    }
+                                  >
+                                    {showGrokCustomKey ? (
+                                      <EyeOff className="h-3.5 w-3.5" />
+                                    ) : (
+                                      <Eye className="h-3.5 w-3.5" />
+                                    )}
+                                  </Button>
+                                </div>
+                                <p className="text-2xs text-muted-foreground">
+                                  {t("grok.customApiKeyHint")}
+                                </p>
+                              </div>
+
+                              <div className="space-y-1.5">
+                                <label className="text-2xs text-muted-foreground">
+                                  {t("grok.customContextWindowLabel")}
+                                </label>
+                                <Input
+                                  type="number"
+                                  inputMode="numeric"
+                                  value={selectedDraft.grokCustomContextWindow}
+                                  onChange={(event) =>
+                                    updateSelectedDraft((current) => ({
+                                      ...current,
+                                      grokCustomContextWindow:
+                                        event.target.value,
+                                    }))
+                                  }
+                                  placeholder="500000"
+                                  aria-label={t(
+                                    "grok.customContextWindowLabel"
+                                  )}
+                                  disabled={grokSaving}
+                                />
+                                <p className="text-2xs text-muted-foreground">
+                                  {t("grok.customContextWindowHint")}
+                                </p>
+                              </div>
+
+                              <ModelIdListField
+                                ids={selectedDraft.grokCustomExtraModels}
+                                onChange={(ids) =>
+                                  updateSelectedDraft((current) => ({
+                                    ...current,
+                                    grokCustomExtraModels: ids,
+                                  }))
+                                }
+                                state={grokProviderModels}
+                                readOnly={grokSaving}
+                                title={tModels("grokList.title")}
+                                hint={tModels("grokList.hint")}
+                              />
+
+                              {/* [model.<id>].reasoning_efforts — without levels from
+                                  here or from Grok's own model catalog (it never asks
+                                  the custom base_url), Grok reports no effort support
+                                  and the composer has no effort selector for this
+                                  model. */}
+                              <div className="space-y-1.5">
+                                <label
+                                  id="grok-custom-reasoning-efforts-label"
+                                  className="text-2xs text-muted-foreground"
+                                >
+                                  {t("grok.customReasoningEffortsLabel")}
+                                </label>
+                                <div
+                                  role="group"
+                                  aria-labelledby="grok-custom-reasoning-efforts-label"
+                                  className="flex flex-wrap gap-1.5"
+                                >
+                                  {grokReasoningEffortChoices(
+                                    selectedDraft.grokCustomReasoningEfforts
+                                  ).map((level) => {
+                                    const active =
+                                      selectedDraft.grokCustomReasoningEfforts.includes(
+                                        level
+                                      )
+                                    return (
+                                      <button
+                                        key={level}
+                                        type="button"
+                                        disabled={grokSaving}
+                                        onClick={() =>
+                                          updateSelectedDraft((current) => ({
+                                            ...current,
+                                            grokCustomReasoningEfforts:
+                                              toggleGrokReasoningEffort(
+                                                current.grokCustomReasoningEfforts,
+                                                level
+                                              ),
+                                          }))
+                                        }
+                                        aria-pressed={active}
+                                        className={cn(
+                                          "rounded-full border px-2 py-0.5 font-mono text-2xs transition-colors",
+                                          active
+                                            ? "border-primary/40 bg-primary/10 text-foreground"
+                                            : "border-border text-muted-foreground hover:bg-muted"
+                                        )}
+                                      >
+                                        {level}
+                                      </button>
+                                    )
+                                  })}
+                                </div>
+                                <p className="text-2xs text-muted-foreground">
+                                  {selectedDraft.grokCustomReasoningEfforts
+                                    .length === 0
+                                    ? t("grok.customReasoningEffortsEmptyHint")
+                                    : t("grok.customReasoningEffortsHint")}
+                                </p>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {/* Compaction — session-global auto-compact threshold. */}
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              {t("grok.autoCompactLabel")}
+                            </label>
+                            <Input
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              max={100}
+                              value={selectedDraft.grokAutoCompactThreshold}
+                              onChange={(event) =>
+                                updateSelectedDraft((current) => ({
+                                  ...current,
+                                  grokAutoCompactThreshold: event.target.value,
+                                }))
+                              }
+                              placeholder="85"
+                              aria-label={t("grok.autoCompactLabel")}
+                              disabled={grokSaving}
+                            />
+                            <p className="text-2xs text-muted-foreground">
+                              {t("grok.autoCompactHint")}
+                            </p>
+                          </div>
+
+                          {/* Advanced escape hatch — config.toml keys other than the
+                        controls above. Saved together with those controls by the
+                        single Save below (the structured settings merge onto this
+                        text, format-preservingly, when it was edited). */}
+                          <Collapsible
+                            open={grokAdvancedOpen}
+                            onOpenChange={setGrokAdvancedOpen}
+                          >
+                            <CollapsibleTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 gap-1 px-1 text-2xs text-muted-foreground"
+                              >
+                                <ChevronRight
+                                  className={cn(
+                                    "h-3.5 w-3.5 transition-transform",
+                                    grokAdvancedOpen && "rotate-90"
+                                  )}
+                                />
+                                {t("grok.advancedToggle")}
+                              </Button>
+                            </CollapsibleTrigger>
+                            <CollapsibleContent className="space-y-1.5 pt-2">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("grok.configTomlNative")}
+                              </label>
+                              <Textarea
+                                value={selectedDraft.grokConfigTomlText}
+                                onChange={(event) => {
+                                  const nextText = event.target.value
+                                  updateSelectedDraft((current) => ({
+                                    ...current,
+                                    grokConfigTomlText: nextText,
+                                  }))
+                                }}
+                                placeholder={t("grok.configTomlPlaceholder")}
+                                className="min-h-40 max-h-80 font-mono text-xs"
+                                spellCheck={false}
+                                aria-label={t("grok.configTomlNative")}
+                                disabled={grokSaving}
+                              />
+                              <p className="text-2xs text-muted-foreground">
+                                {t("grok.configTomlHint")}
+                              </p>
+                            </CollapsibleContent>
+                          </Collapsible>
+
+                          {/* A single Save persists every surface together: the
+                        structured controls merge (format-preserving) onto the raw
+                        text when it was edited, else onto the current on-disk file,
+                        then XAI_API_KEY is written. One action → no independent save
+                        that could drop the other surface's unsaved edits. */}
+                          <div className="flex justify-end">
+                            <Button
+                              size="sm"
+                              onClick={async () => {
+                                setGrokSaving(true)
+                                try {
+                                  // Config first, so a malformed raw edit fails before
+                                  // the API key is touched. buildGrokSaveOptions sends
+                                  // the raw text only when the user actually edited it
+                                  // (else the merge runs against fresh on-disk config).
+                                  const grokSave = buildGrokSaveOptions(
+                                    selectedDraft,
+                                    selectedAgent.grok_config_toml
+                                  )
+                                  await persistConfig(
+                                    selectedAgent.agent_type,
+                                    selectedDraft.configText,
+                                    grokSave
+                                  )
+                                  // The levels just written are what the chips now
+                                  // start from, even if the re-read below fails:
+                                  // moving them back to the old baseline would
+                                  // otherwise send null and leave this list on disk.
+                                  const writtenLevels =
+                                    grokSave.grokStructured
+                                      .customReasoningEfforts
+                                  if (writtenLevels) {
+                                    updateSelectedDraft((current) => ({
+                                      ...current,
+                                      grokCustomReasoningEffortsBaseline:
+                                        writtenLevels,
+                                    }))
+                                  }
+                                  // Independent second write (the API key lives in env).
+                                  // If it fails after config committed, report that
+                                  // partial outcome honestly rather than a blanket fail.
+                                  try {
+                                    await persistEnv(
+                                      selectedAgent.agent_type,
+                                      selectedDraft.enabled,
+                                      selectedDraft.envText,
+                                      selectedDraft.modelProviderId
+                                    )
+                                  } catch (envErr) {
+                                    console.error(
+                                      "[Settings] save grok api key failed:",
+                                      envErr
+                                    )
+                                    await reseedGrokDraft()
+                                    toast.error(
+                                      t("toasts.saveGrokApiKeyFailed"),
+                                      {
+                                        description: toErrorMessage(envErr),
+                                      }
+                                    )
+                                    return
+                                  }
+                                  await reseedGrokDraft()
+                                  toast.success(t("toasts.grokSaved"), {
+                                    description: t("toasts.configSavedHint"),
+                                  })
+                                } catch (err) {
+                                  console.error(
+                                    "[Settings] save grok settings failed:",
+                                    err
+                                  )
+                                  toast.error(
+                                    t("toasts.saveGrokNativeFailed"),
+                                    {
+                                      description: toErrorMessage(err),
+                                    }
+                                  )
+                                } finally {
+                                  setGrokSaving(false)
+                                }
+                              }}
+                              disabled={
+                                grokSaving ||
+                                selectedIsSavingConfig ||
+                                selectedIsSavingEnv
+                              }
+                            >
+                              {grokSaving ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  {t("actions.saving")}
+                                </>
+                              ) : (
+                                <>
+                                  <Save className="h-3.5 w-3.5" />
+                                  {t("actions.saveGrokConfig")}
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : isCustomAgentType(selectedAgent.agent_type) ? (
+                        // A custom agent is driven purely by the ACP protocol: codeg
+                        // knows nothing about its config file layout or auth model,
+                        // so the generic "config management" editor below would be
+                        // offering to write a file that may not exist in a format it
+                        // cannot know. Environment variables (above) are the one
+                        // channel that works for every agent; the Model Source card
+                        // adds the shared Model Provider projection (env-only on the
+                        // backend), and the skills declaration and removal round the
+                        // surface out.
+                        // All five blocks share the settings-card vocabulary
+                        // (`SettingCard` / `SettingRow`, as in the task settings
+                        // dialog) so the panel reads as one stack of settings rather
+                        // than five differently-shaped boxes.
+                        <>
+                          {selectedAgentSupportsSourceCard && (
+                            <ModelProviderSourceCard
+                              apiTypes={selectedModelProviderApiTypes}
+                              count={selectedCompatibleModelProviderCount}
+                              selected={selectedUsesModelProviderSource}
+                              onSelect={(selected) => {
+                                if (!selectedAgentKind) return
+                                handleModelSourceSelect(
+                                  selectedAgentKind,
+                                  selected
+                                )
+                              }}
+                            />
+                          )}
+                          <SettingCard>
+                            <SettingRow
+                              icon={Pencil}
+                              title={t("customAgentEdit")}
+                              description={t("customAgentEditHint")}
+                              control={
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() =>
+                                    setEditCustomAgentId(
+                                      customAgentId(selectedAgent.agent_type)
+                                    )
+                                  }
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                  {t("customAgentEdit")}
+                                </Button>
+                              }
+                            />
+                          </SettingCard>
+                          <CustomAgentSkillsToggle
+                            registryId={
+                              customAgentId(selectedAgent.agent_type) ?? ""
+                            }
+                          />
+                          <CustomAgentMcpToggle
+                            registryId={
+                              customAgentId(selectedAgent.agent_type) ?? ""
+                            }
+                          />
+                          {/* The one destructive action keeps its own tinting — the
+                        card shape is shared, the color is the warning. */}
+                          <SettingCard className="border-destructive/30 bg-destructive/5">
+                            <SettingRow
+                              icon={Trash2}
+                              title={
+                                <span className="text-destructive">
+                                  {t("customAgentRemove")}
+                                </span>
+                              }
+                              description={t("customAgentRemoveHint")}
+                              control={
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="text-destructive hover:text-destructive"
+                                  disabled={removingCustomAgent}
+                                  onClick={() =>
+                                    setRemoveConfirmAgent(selectedAgent)
+                                  }
+                                >
+                                  {removingCustomAgent ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  )}
+                                  {t("customAgentRemove")}
+                                </Button>
+                              }
+                            />
+                          </SettingCard>
+                        </>
+                      ) : (
+                        <div className="space-y-3 rounded-md border bg-muted/10 p-3">
+                          <div>
+                            <label className="text-xs font-medium">
+                              {t("configManagement")}
+                            </label>
+                            <p className="mt-1 text-2xs text-muted-foreground">
+                              {selectedAgent.agent_type === "claude_code"
+                                ? t("generalConfigDescriptionClaude")
+                                : t("generalConfigDescriptionDefault")}
+                            </p>
+                          </div>
+
+                          {selectedAgent.agent_type === "claude_code" &&
+                            selectedModelProviderApiTypes.length > 0 && (
+                              <ModelProviderApiTypeBadges
+                                apiTypes={selectedModelProviderApiTypes}
+                              />
+                            )}
+                          {selectedAgent.agent_type === "claude_code" && (
+                            <div className="space-y-1.5">
+                              <label className="text-2xs text-muted-foreground">
+                                {t("claude.authMode")}
+                              </label>
+                              <Select
+                                value={selectedDraft.claudeAuthMode}
+                                onValueChange={(value) => {
+                                  if (
+                                    CLAUDE_AUTH_MODES.includes(
+                                      value as ClaudeAuthMode
+                                    )
+                                  ) {
+                                    handleClaudeAuthModeChange(
+                                      value as ClaudeAuthMode
+                                    )
+                                  }
+                                }}
+                              >
+                                <SelectTrigger className="w-full">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent align="start">
+                                  <SelectItem value="official_subscription">
+                                    {t("authModeOfficialSubscription")}
+                                  </SelectItem>
+                                  <SelectItem value="custom">
+                                    {t("authModeCustomEndpoint")}
+                                  </SelectItem>
+                                  <SelectItem
+                                    value="model_provider"
+                                    disabled={
+                                      selectedCompatibleModelProviderCount === 0
+                                    }
+                                  >
+                                    {t("authModeModelProviderCount", {
+                                      count:
+                                        selectedCompatibleModelProviderCount,
+                                    })}
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <p className="text-2xs text-muted-foreground">
+                                {selectedDraft.claudeAuthMode ===
+                                "official_subscription"
+                                  ? t("claude.officialSubscriptionHint")
+                                  : selectedDraft.claudeAuthMode === "custom"
+                                    ? t("authModeCustomEndpointHint")
+                                    : t("modelProviderHint")}
+                              </p>
+                            </div>
+                          )}
+
+                          {(selectedAgent.agent_type !== "claude_code" ||
+                            selectedDraft.claudeAuthMode === "custom") && (
+                            <>
+                              {importantFieldsFor(selectedAgent.agent_type)
+                                .apiBaseUrl && (
+                                <div className="space-y-1.5">
+                                  <label className="text-2xs text-muted-foreground">
+                                    API URL
+                                  </label>
+                                  <Input
+                                    value={selectedDraft.apiBaseUrl}
+                                    readOnly={
+                                      selectedAgent.agent_type ===
+                                        "claude_code" &&
+                                      selectedDraft.claudeAuthMode ===
+                                        "model_provider"
+                                    }
+                                    onChange={(event) => {
+                                      handleImportantConfigChange(
+                                        "apiBaseUrl",
+                                        event.target.value
+                                      )
+                                    }}
+                                    placeholder="https://api.example.com"
+                                  />
+                                </div>
+                              )}
+
+                              {importantFieldsFor(selectedAgent.agent_type)
+                                .apiKey && (
+                                <div className="space-y-1.5">
+                                  <label className="text-2xs text-muted-foreground">
+                                    API Key
+                                  </label>
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      type={
+                                        showApiKeys[selectedAgent.agent_type]
+                                          ? "text"
+                                          : "password"
+                                      }
+                                      value={selectedDraft.apiKey}
+                                      readOnly={
+                                        selectedAgent.agent_type ===
+                                          "claude_code" &&
+                                        selectedDraft.claudeAuthMode ===
+                                          "model_provider"
+                                      }
+                                      onChange={(event) => {
+                                        handleImportantConfigChange(
+                                          "apiKey",
+                                          event.target.value
+                                        )
+                                      }}
+                                      placeholder="sk-..."
+                                    />
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => {
+                                        setShowApiKeys((prev) => ({
+                                          ...prev,
+                                          [selectedAgent.agent_type]:
+                                            !prev[selectedAgent.agent_type],
+                                        }))
+                                      }}
+                                      title={
+                                        showApiKeys[selectedAgent.agent_type]
+                                          ? t("actions.hideApiKey")
+                                          : t("actions.showApiKey")
+                                      }
+                                    >
+                                      {showApiKeys[selectedAgent.agent_type] ? (
+                                        <EyeOff className="h-3.5 w-3.5" />
+                                      ) : (
+                                        <Eye className="h-3.5 w-3.5" />
+                                      )}
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
+
+                          {selectedAgent.agent_type === "claude_code" ? (
+                            <div
+                              className={cn(
+                                "space-y-2",
+                                selectedDraft.claudeAuthMode ===
+                                  "model_provider" && "hidden"
+                              )}
+                            >
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <div className="space-y-1.5">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("claude.mainModel")}
+                                  </label>
+                                  <Input
+                                    value={selectedDraft.claudeMainModel}
+                                    readOnly={
+                                      selectedDraft.claudeAuthMode ===
+                                      "model_provider"
+                                    }
+                                    onChange={(event) => {
+                                      handleImportantConfigChange(
+                                        "claudeMainModel",
+                                        event.target.value
+                                      )
+                                    }}
+                                    placeholder="claude-sonnet-5"
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("claude.reasoningModel")}
+                                  </label>
+                                  <Input
+                                    value={selectedDraft.claudeReasoningModel}
+                                    readOnly={
+                                      selectedDraft.claudeAuthMode ===
+                                      "model_provider"
+                                    }
+                                    onChange={(event) => {
+                                      handleImportantConfigChange(
+                                        "claudeReasoningModel",
+                                        event.target.value
+                                      )
+                                    }}
+                                    placeholder="claude-opus-5"
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("claude.haikuDefaultModel")}
+                                  </label>
+                                  <Input
+                                    value={
+                                      selectedDraft.claudeDefaultHaikuModel
+                                    }
+                                    readOnly={
+                                      selectedDraft.claudeAuthMode ===
+                                      "model_provider"
+                                    }
+                                    onChange={(event) => {
+                                      handleImportantConfigChange(
+                                        "claudeDefaultHaikuModel",
+                                        event.target.value
+                                      )
+                                    }}
+                                    placeholder="claude-haiku-4-5"
+                                  />
+                                </div>
+                                <div className="space-y-1.5">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("claude.sonnetDefaultModel")}
+                                  </label>
+                                  <Input
+                                    value={
+                                      selectedDraft.claudeDefaultSonnetModel
+                                    }
+                                    readOnly={
+                                      selectedDraft.claudeAuthMode ===
+                                      "model_provider"
+                                    }
+                                    onChange={(event) => {
+                                      handleImportantConfigChange(
+                                        "claudeDefaultSonnetModel",
+                                        event.target.value
+                                      )
+                                    }}
+                                    placeholder="claude-sonnet-5"
+                                  />
+                                </div>
+                                <div className="space-y-1.5 md:col-span-2">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("claude.opusDefaultModel")}
+                                  </label>
+                                  <Input
+                                    value={selectedDraft.claudeDefaultOpusModel}
+                                    readOnly={
+                                      selectedDraft.claudeAuthMode ===
+                                      "model_provider"
+                                    }
+                                    onChange={(event) => {
+                                      handleImportantConfigChange(
+                                        "claudeDefaultOpusModel",
+                                        event.target.value
+                                      )
+                                    }}
+                                    placeholder="claude-opus-5"
+                                  />
+                                </div>
+                              </div>
+                              <p className="text-2xs text-muted-foreground">
+                                {t("modelHintDefault")}
+                              </p>
+                              <div className="space-y-2 border-t border-border/60 pt-3">
+                                <div className="grid gap-3 md:grid-cols-2">
+                                  <div className="space-y-1.5 md:col-span-2">
+                                    <label className="text-2xs text-muted-foreground">
+                                      {t("claude.customModelOption")}
+                                    </label>
+                                    <Input
+                                      value={
+                                        selectedDraft.claudeCustomModelOption
+                                      }
+                                      readOnly={
+                                        selectedDraft.claudeAuthMode ===
+                                        "model_provider"
+                                      }
+                                      onChange={(event) => {
+                                        handleImportantConfigChange(
+                                          "claudeCustomModelOption",
+                                          event.target.value
+                                        )
+                                      }}
+                                      placeholder="my-gateway/claude-opus-5"
+                                    />
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <label className="text-2xs text-muted-foreground">
+                                      {t("claude.customModelOptionName")}
+                                    </label>
+                                    <Input
+                                      value={
+                                        selectedDraft.claudeCustomModelOptionName
+                                      }
+                                      readOnly={
+                                        selectedDraft.claudeAuthMode ===
+                                        "model_provider"
+                                      }
+                                      onChange={(event) => {
+                                        handleImportantConfigChange(
+                                          "claudeCustomModelOptionName",
+                                          event.target.value
+                                        )
+                                      }}
+                                      placeholder="Gateway Opus"
+                                    />
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <label className="text-2xs text-muted-foreground">
+                                      {t("claude.customModelOptionDescription")}
+                                    </label>
+                                    <Input
+                                      value={
+                                        selectedDraft.claudeCustomModelOptionDescription
+                                      }
+                                      readOnly={
+                                        selectedDraft.claudeAuthMode ===
+                                        "model_provider"
+                                      }
+                                      onChange={(event) => {
+                                        handleImportantConfigChange(
+                                          "claudeCustomModelOptionDescription",
+                                          event.target.value
+                                        )
+                                      }}
+                                      placeholder="Routed via custom gateway"
+                                    />
+                                  </div>
+                                </div>
+                                <p className="text-2xs text-muted-foreground">
+                                  {t("claude.customModelOptionHint")}
+                                </p>
+                              </div>
+                              <div className="space-y-1.5">
+                                <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("claude.sendAttributionHeader")}
+                                  </label>
+                                  <Switch
+                                    checked={
+                                      selectedDraft.claudeSendAttributionHeader
+                                    }
+                                    onCheckedChange={(checked) => {
+                                      handleClaudeEnvFlagChange(
+                                        "claudeSendAttributionHeader",
+                                        CLAUDE_ATTRIBUTION_HEADER_ENV_KEY,
+                                        checked
+                                      )
+                                    }}
+                                    aria-label={t(
+                                      "claude.sendAttributionHeaderAria"
+                                    )}
+                                  />
+                                </div>
+                              </div>
+                              <div className="space-y-1.5">
+                                <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                                  <label className="text-2xs text-muted-foreground">
+                                    {t("claude.disableNonessentialTraffic")}
+                                  </label>
+                                  <Switch
+                                    checked={
+                                      selectedDraft.claudeDisableNonessentialTraffic
+                                    }
+                                    onCheckedChange={(checked) => {
+                                      handleClaudeEnvFlagChange(
+                                        "claudeDisableNonessentialTraffic",
+                                        CLAUDE_NONESSENTIAL_TRAFFIC_ENV_KEY,
+                                        checked
+                                      )
+                                    }}
+                                    aria-label={t(
+                                      "claude.disableNonessentialTrafficAria"
+                                    )}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            importantFieldsFor(selectedAgent.agent_type)
+                              .model && (
+                              <div className="space-y-1.5">
+                                <label className="text-2xs text-muted-foreground">
+                                  Model
+                                </label>
+                                <Input
+                                  value={selectedDraft.model}
+                                  readOnly={
+                                    selectedDraft.modelProviderId != null
+                                  }
+                                  onChange={(event) => {
+                                    handleImportantConfigChange(
+                                      "model",
+                                      event.target.value
+                                    )
+                                  }}
+                                  placeholder="gpt-5 / claude-sonnet / gemini-2.5-pro"
+                                />
+                              </div>
                             )
-                            .then(() => {
-                              toast.success(t("toasts.codexSaved"), {
-                                description: t("toasts.configSavedHint"),
-                              })
-                            })
-                            .catch((err) => {
-                              console.error(
-                                "[Settings] save codex native config failed:",
-                                err
+                          )}
+
+                          <div className="space-y-1.5">
+                            <label className="text-2xs text-muted-foreground">
+                              {t("nativeJsonConfig")}
+                            </label>
+                            <Textarea
+                              value={selectedDraft.configText}
+                              onChange={(event) => {
+                                handleConfigTextChange(event.target.value)
+                              }}
+                              placeholder={`{
+  "apiBaseUrl": "https://api.example.com",
+  "apiKey": "sk-...",
+  "model": "gpt-5",
+  "env": {
+    "CUSTOM_KEY": "VALUE"
+  }
+}`}
+                              className="min-h-36 font-mono text-xs"
+                            />
+                            {selectedConfigError && (
+                              <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-2xs text-red-400">
+                                {selectedConfigError}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex justify-end">
+                            <Button
+                              size="sm"
+                              onClick={() => {
+                                // When a Claude provider is bound, the on-disk config
+                                // loaded into configText may carry stale model keys
+                                // (e.g. a leftover custom model option) from before the
+                                // binding — re-derive them from the provider so
+                                // persistConfig cannot write a stale value back over
+                                // the backend bind cascade (invalid JSON passes through
+                                // so persistConfig still surfaces the error). Sequence
+                                // env→config (never parallel): persistEnv also rewrites
+                                // config.env on the backend, so concurrent writes would
+                                // interleave two writers of ~/.claude/settings.json.
+                                let configToSave = configTextForClaudeSave(
+                                  selectedDraft.configText,
+                                  selectedAgent.agent_type,
+                                  selectedDraft.modelProviderId,
+                                  undefined
+                                )
+                                // Materialize the Claude hardening toggles so the shown
+                                // default positions are actually applied on save —
+                                // writing the explicit "1"/"0" into both the native
+                                // config `env` and the DB env overlay — regardless of
+                                // whether the user touched the switches. Invalid JSON is
+                                // left untouched so persistConfig surfaces the error.
+                                let envToSave = selectedDraft.envText
+                                if (
+                                  selectedAgent.agent_type === "claude_code"
+                                ) {
+                                  const materialized =
+                                    materializeClaudeHardeningFlags(
+                                      configToSave,
+                                      envToSave,
+                                      {
+                                        sendAttributionHeader:
+                                          selectedDraft.claudeSendAttributionHeader,
+                                        disableNonessentialTraffic:
+                                          selectedDraft.claudeDisableNonessentialTraffic,
+                                      }
+                                    )
+                                  configToSave = materialized.configText
+                                  envToSave = materialized.envText
+                                }
+                                persistEnv(
+                                  selectedAgent.agent_type,
+                                  selectedDraft.enabled,
+                                  envToSave,
+                                  selectedDraft.modelProviderId
+                                )
+                                  .then(() =>
+                                    persistConfig(
+                                      selectedAgent.agent_type,
+                                      configToSave
+                                    )
+                                  )
+                                  .then(() => {
+                                    // Reflect the provider-authoritative rewrite AND the
+                                    // materialized hardening flags in the editors so the
+                                    // textareas don't show stale values until reload —
+                                    // and so a later env-only save doesn't persist a
+                                    // stale envText that drops the flags from the DB
+                                    // overlay. Each inner guard preserves an edit the
+                                    // user typed while the save was in flight.
+                                    const syncedConfig =
+                                      configToSave !== selectedDraft.configText
+                                        ? normalizeConfigText(configToSave)
+                                        : null
+                                    const syncEnv =
+                                      envToSave !== selectedDraft.envText
+                                    if (syncedConfig !== null || syncEnv) {
+                                      updateSelectedDraft((current) => {
+                                        let next = current
+                                        if (
+                                          syncedConfig !== null &&
+                                          current.configText ===
+                                            selectedDraft.configText
+                                        ) {
+                                          next = {
+                                            ...next,
+                                            configText: syncedConfig,
+                                          }
+                                        }
+                                        if (
+                                          syncEnv &&
+                                          current.envText ===
+                                            selectedDraft.envText
+                                        ) {
+                                          next = { ...next, envText: envToSave }
+                                        }
+                                        return next
+                                      })
+                                    }
+                                    toast.success(t("toasts.configSaved"), {
+                                      description: t("toasts.configSavedHint"),
+                                    })
+                                  })
+                                  .catch((err) => {
+                                    console.error(
+                                      "[Settings] save config management failed:",
+                                      err
+                                    )
+                                    const message = toErrorMessage(err)
+                                    toast.error(
+                                      t("toasts.saveConfigManagementFailed"),
+                                      {
+                                        description: message,
+                                      }
+                                    )
+                                  })
+                              }}
+                              disabled={
+                                selectedIsSavingEnv || selectedIsSavingConfig
+                              }
+                            >
+                              {selectedIsSavingEnv || selectedIsSavingConfig ? (
+                                <>
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  {t("actions.saving")}
+                                </>
+                              ) : (
+                                <>
+                                  <Save className="h-3.5 w-3.5" />
+                                  {t("actions.saveConfigManagement")}
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                  </>
+                ) : selectedAgent.agent_type === "claude_code" &&
+                  selectedUsesModelProviderSource ? (
+                  <div className="space-y-3">
+                    <ModelProviderSourceCard
+                      apiTypes={selectedModelProviderApiTypes}
+                      count={selectedCompatibleModelProviderCount}
+                      selected={selectedUsesModelProviderSource}
+                      onSelect={(selected) => {
+                        if (!selectedAgentKind) return
+                        const agentType = selectedAgentKind
+                        const previous =
+                          modelProviderSources[agentType] ?? false
+                        setModelProviderSources((prev) => ({
+                          ...prev,
+                          [agentType]: selected,
+                        }))
+                        acpUpdateAgentModelSource(
+                          agentType,
+                          selected ? "provider" : "native"
+                        )
+                          .then((affected) => {
+                            reportAffectedSessions(affected)
+                            setAgents((prev) =>
+                              prev.map((agent) =>
+                                agent.agent_type === agentType
+                                  ? {
+                                      ...agent,
+                                      model_source: selected
+                                        ? "provider"
+                                        : "native",
+                                    }
+                                  : agent
                               )
-                              toast.error(t("toasts.saveCodexNativeFailed"), {
-                                description: describeCodexSaveError(
-                                  err,
-                                  tCatalog
-                                ),
-                              })
+                            )
+                          })
+                          .catch((err) => {
+                            console.error(
+                              "[Settings] save model source failed:",
+                              err
+                            )
+                            setModelProviderSources((prev) => ({
+                              ...prev,
+                              [agentType]: previous,
+                            }))
+                            toast.error(t("toasts.saveEnvFailed"), {
+                              description: toErrorMessage(err),
                             })
-                        }}
-                        disabled={selectedIsSavingEnv || selectedIsSavingConfig}
-                      >
-                        {selectedIsSavingEnv || selectedIsSavingConfig ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            {t("actions.saving")}
-                          </>
-                        ) : (
-                          <>
-                            <Save className="h-3.5 w-3.5" />
-                            {t("actions.saveCodexConfig")}
-                          </>
-                        )}
-                      </Button>
+                          })
+                      }}
+                    />
+                    <div className="rounded-md border bg-muted/20 p-3 text-2xs text-muted-foreground">
+                      {t("providerSourceActiveHint")}
                     </div>
                   </div>
                 ) : selectedAgent.agent_type === "gemini" ? (
@@ -9980,6 +13730,11 @@ base_url = "https://api.openai.com/v1"`}
                       </p>
                     </div>
 
+                    {selectedModelProviderApiTypes.length > 0 && (
+                      <ModelProviderApiTypeBadges
+                        apiTypes={selectedModelProviderApiTypes}
+                      />
+                    )}
                     <div className="space-y-1.5">
                       <label className="text-2xs text-muted-foreground">
                         {t("gemini.authMode")}
@@ -10001,8 +13756,19 @@ base_url = "https://api.openai.com/v1"`}
                         </SelectTrigger>
                         <SelectContent align="start">
                           {GEMINI_AUTH_MODES.map((mode) => (
-                            <SelectItem key={mode} value={mode}>
-                              {geminiAuthModeLabel(mode)}
+                            <SelectItem
+                              key={mode}
+                              value={mode}
+                              disabled={
+                                mode === "model_provider" &&
+                                selectedCompatibleModelProviderCount === 0
+                              }
+                            >
+                              {mode === "model_provider"
+                                ? t("authModeModelProviderCount", {
+                                    count: selectedCompatibleModelProviderCount,
+                                  })
+                                : geminiAuthModeLabel(mode)}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -10011,44 +13777,6 @@ base_url = "https://api.openai.com/v1"`}
                         {geminiAuthModeHint(selectedDraft.geminiAuthMode)}
                       </p>
                     </div>
-
-                    {selectedDraft.geminiAuthMode === "model_provider" && (
-                      <div className="space-y-1.5">
-                        <label className="text-2xs text-muted-foreground">
-                          {t("selectModelProvider")}
-                        </label>
-                        {selectedModelProviders.length > 0 ? (
-                          <Select
-                            value={
-                              selectedDraft.modelProviderId != null
-                                ? String(selectedDraft.modelProviderId)
-                                : ""
-                            }
-                            onValueChange={handleModelProviderSelect}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue
-                                placeholder={t("selectModelProvider")}
-                              />
-                            </SelectTrigger>
-                            <SelectContent align="start">
-                              {selectedModelProviders.map((provider) => (
-                                <SelectItem
-                                  key={provider.id}
-                                  value={String(provider.id)}
-                                >
-                                  {provider.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <p className="text-2xs text-muted-foreground">
-                            {t("noModelProviderAvailable")}
-                          </p>
-                        )}
-                      </div>
-                    )}
 
                     <div className="space-y-1.5">
                       <label className="text-2xs text-muted-foreground">
@@ -10240,10 +13968,6 @@ base_url = "https://api.openai.com/v1"`}
                       <Button
                         size="sm"
                         onClick={() => {
-                          if (selectedMissingModelProvider) {
-                            toast.error(t("toasts.modelProviderRequired"))
-                            return
-                          }
                           Promise.all([
                             persistEnv(
                               selectedAgent.agent_type,
@@ -12793,14 +16517,26 @@ base_url = "https://api.openai.com/v1"`}
                   // so the generic "config management" editor below would be
                   // offering to write a file that may not exist in a format it
                   // cannot know. Environment variables (above) are the one
-                  // channel that works for every agent, so they are the whole
-                  // surface — plus the skills declaration and removing the
-                  // agent.
-                  // All four blocks share the settings-card vocabulary
+                  // channel that works for every agent; the Model Source card
+                  // adds the shared Model Provider projection (env-only on the
+                  // backend), and the skills declaration and removal round the
+                  // surface out.
+                  // All five blocks share the settings-card vocabulary
                   // (`SettingCard` / `SettingRow`, as in the task settings
                   // dialog) so the panel reads as one stack of settings rather
-                  // than four differently-shaped boxes.
+                  // than five differently-shaped boxes.
                   <>
+                    {selectedAgentSupportsSourceCard && (
+                      <ModelProviderSourceCard
+                        apiTypes={selectedModelProviderApiTypes}
+                        count={selectedCompatibleModelProviderCount}
+                        selected={selectedUsesModelProviderSource}
+                        onSelect={(selected) => {
+                          if (!selectedAgentKind) return
+                          handleModelSourceSelect(selectedAgentKind, selected)
+                        }}
+                      />
+                    )}
                     <SettingCard>
                       <SettingRow
                         icon={Pencil}
@@ -12871,6 +16607,62 @@ base_url = "https://api.openai.com/v1"`}
                       </p>
                     </div>
 
+                    {selectedAgent.agent_type === "claude_code" &&
+                      selectedModelProviderApiTypes.length > 0 && (
+                        <ModelProviderApiTypeBadges
+                          apiTypes={selectedModelProviderApiTypes}
+                        />
+                      )}
+                    {selectedAgent.agent_type === "claude_code" &&
+                      selectedModelProviderApiTypes.length > 0 && (
+                        <ModelProviderSourceCard
+                          apiTypes={selectedModelProviderApiTypes}
+                          count={selectedCompatibleModelProviderCount}
+                          selected={selectedUsesModelProviderSource}
+                          onSelect={(selected) => {
+                            if (!selectedAgentKind) return
+                            const agentType = selectedAgentKind
+                            const previous =
+                              modelProviderSources[agentType] ?? false
+                            setModelProviderSources((prev) => ({
+                              ...prev,
+                              [agentType]: selected,
+                            }))
+                            acpUpdateAgentModelSource(
+                              agentType,
+                              selected ? "provider" : "native"
+                            )
+                              .then((affected) => {
+                                reportAffectedSessions(affected)
+                                setAgents((prev) =>
+                                  prev.map((agent) =>
+                                    agent.agent_type === agentType
+                                      ? {
+                                          ...agent,
+                                          model_source: selected
+                                            ? "provider"
+                                            : "native",
+                                        }
+                                      : agent
+                                  )
+                                )
+                              })
+                              .catch((err) => {
+                                console.error(
+                                  "[Settings] save model source failed:",
+                                  err
+                                )
+                                setModelProviderSources((prev) => ({
+                                  ...prev,
+                                  [agentType]: previous,
+                                }))
+                                toast.error(t("toasts.saveEnvFailed"), {
+                                  description: toErrorMessage(err),
+                                })
+                              })
+                          }}
+                        />
+                      )}
                     {selectedAgent.agent_type === "claude_code" && (
                       <div className="space-y-1.5">
                         <label className="text-2xs text-muted-foreground">
@@ -12900,8 +16692,15 @@ base_url = "https://api.openai.com/v1"`}
                             <SelectItem value="custom">
                               {t("authModeCustomEndpoint")}
                             </SelectItem>
-                            <SelectItem value="model_provider">
-                              {t("authModeModelProvider")}
+                            <SelectItem
+                              value="model_provider"
+                              disabled={
+                                selectedCompatibleModelProviderCount === 0
+                              }
+                            >
+                              {t("authModeModelProviderCount", {
+                                count: selectedCompatibleModelProviderCount,
+                              })}
                             </SelectItem>
                           </SelectContent>
                         </Select>
@@ -12915,45 +16714,6 @@ base_url = "https://api.openai.com/v1"`}
                         </p>
                       </div>
                     )}
-
-                    {selectedAgent.agent_type === "claude_code" &&
-                      selectedDraft.claudeAuthMode === "model_provider" && (
-                        <div className="space-y-1.5">
-                          <label className="text-2xs text-muted-foreground">
-                            {t("selectModelProvider")}
-                          </label>
-                          {selectedModelProviders.length > 0 ? (
-                            <Select
-                              value={
-                                selectedDraft.modelProviderId != null
-                                  ? String(selectedDraft.modelProviderId)
-                                  : ""
-                              }
-                              onValueChange={handleModelProviderSelect}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue
-                                  placeholder={t("selectModelProvider")}
-                                />
-                              </SelectTrigger>
-                              <SelectContent align="start">
-                                {selectedModelProviders.map((provider) => (
-                                  <SelectItem
-                                    key={provider.id}
-                                    value={String(provider.id)}
-                                  >
-                                    {provider.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          ) : (
-                            <p className="text-2xs text-muted-foreground">
-                              {t("noModelProviderAvailable")}
-                            </p>
-                          )}
-                        </div>
-                      )}
 
                     {(selectedAgent.agent_type !== "claude_code" ||
                       selectedDraft.claudeAuthMode === "custom" ||
@@ -13373,10 +17133,6 @@ base_url = "https://api.openai.com/v1"`}
                       <Button
                         size="sm"
                         onClick={() => {
-                          if (selectedMissingModelProvider) {
-                            toast.error(t("toasts.modelProviderRequired"))
-                            return
-                          }
                           // When a Claude provider is bound, the on-disk config
                           // loaded into configText may carry stale model keys
                           // (e.g. a leftover custom model option) from before the
@@ -13391,9 +17147,7 @@ base_url = "https://api.openai.com/v1"`}
                             selectedDraft.configText,
                             selectedAgent.agent_type,
                             selectedDraft.modelProviderId,
-                            modelProviders.find(
-                              (p) => p.id === selectedDraft.modelProviderId
-                            )
+                            undefined
                           )
                           // Materialize the Claude hardening toggles so the shown
                           // default positions are actually applied on save —

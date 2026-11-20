@@ -305,9 +305,7 @@ async fn async_main(
         // bearer credential and must never enter the durable log files or the
         // in-app log viewer. `eprintln!` bypasses the tracing sinks (file +
         // ring buffer); only the local terminal / Docker stderr sees it.
-        eprintln!(
-            "[SERVER] No CODEG_TOKEN set; generated an access token (persisted): {token}"
-        );
+        eprintln!("[SERVER] No CODEG_TOKEN set; generated an access token (persisted): {token}");
         eprintln!("[SERVER] Pin your own by setting the CODEG_TOKEN environment variable.");
     }
 
@@ -527,10 +525,11 @@ async fn async_main(
             Arc::new(codeg_lib::acp::manager::ConnectionManagerQuestionLookup {
                 manager: Arc::new(state.connection_manager.clone_ref()),
             }),
-            Arc::new(codeg_lib::commands::session_info::DbSessionInfoLookup::new(
+            Arc::new(codeg_lib::commands::session_info::DbSessionInfoLookup::with_data_dir(
                 Arc::new(codeg_lib::db::AppDatabase {
                     conn: state.db.conn.clone(),
                 }),
+                Some(state.data_dir.clone()),
             )),
             Arc::new(codeg_lib::work_task::EngineWorkTaskTools),
             Arc::new(codeg_lib::commands::chat_authoring::DbChatAuthoring::new(
@@ -808,9 +807,11 @@ async fn async_main(
     // Publish runtime state so the settings page (served by us) shows
     // the truth — running on `actual_port` with this token — instead of
     // the placeholder "stopped" that triggers the stale-port banner.
-    state
-        .web_server_state
-        .mark_externally_running(advertised_host.clone(), actual_port, token.clone());
+    state.web_server_state.mark_externally_running(
+        advertised_host.clone(),
+        actual_port,
+        token.clone(),
+    );
     let addresses = addresses_for_bind(&advertised_host, actual_port);
 
     // Token on stderr ONLY (bearer credential — keep it out of the log files

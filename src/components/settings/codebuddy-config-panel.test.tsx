@@ -23,6 +23,8 @@ function makeAgent(env: Record<string, string>): AcpAgentInfo {
     available: true,
     distribution_type: "npx",
     is_acp_adapter: false,
+    model_source: "native",
+    model_provider_api_types: [],
     custom_source: null,
     enabled: true,
     sort_order: 0,
