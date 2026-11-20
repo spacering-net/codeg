@@ -30,10 +30,9 @@ const OUT_OF_VIEW_SLACK = 4
  * Where the bubble sits, or why it isn't showing.
  *
  * `offscreen` is deliberately distinct from `none`: the selection is still live,
- * it has just scrolled out of the message area. The position tracker keeps
- * running in that state, so scrolling back brings the bubble straight back —
- * collapsing it to `none` would stop the tracker and the bubble would never
- * return (nothing re-fires `selectionchange` on a scroll).
+ * it has just scrolled out of the message area. While the transcript is
+ * visible, the position tracker keeps running so scrolling back brings the
+ * bubble straight back (scrolling does not fire `selectionchange`).
  */
 type SelectionState =
   | { kind: "none" }
@@ -67,6 +66,8 @@ interface SelectionActionBubbleProps {
    * derived from viewport rects).
    */
   containerRef: RefObject<HTMLElement | null>
+  /** A transcript can stay mounted while its tab is hidden. */
+  isVisible?: boolean
   /**
    * Quote the selection into the conversation composer. Omitted on read-only
    * surfaces (the sub-agent transcript dialog, task transcripts) — the quote
@@ -102,6 +103,7 @@ interface SelectionActionBubbleProps {
  */
 export function SelectionActionBubble({
   containerRef,
+  isVisible = true,
   onQuote,
   onAsk,
   onSaveAsNote,
@@ -278,10 +280,11 @@ export function SelectionActionBubble({
   // scrolling, the window resizing, a sidebar animating, or new streamed content
   // reflowing the transcript above it. None of those fire `selectionchange`, and
   // a scroll listener alone misses the reflow cases — a frame loop covers them
-  // all, and only runs while a selection is actually live.
+  // all while the transcript and its selection can be moved. Hidden tabs and
+  // the frozen Ask composer have no position to track.
   const live = state.kind !== "none"
   useEffect(() => {
-    if (!live) return
+    if (!live || !isVisible || asking) return
     let frame = requestAnimationFrame(function tick() {
       frame = requestAnimationFrame(tick)
       if (
@@ -294,7 +297,7 @@ export function SelectionActionBubble({
       apply(measure())
     })
     return () => cancelAnimationFrame(frame)
-  }, [live, apply, measure])
+  }, [live, isVisible, asking, apply, measure])
 
   // The action handlers read the selection through `stateRef` rather than
   // `state`, so they stay referentially stable while the frame loop repositions
