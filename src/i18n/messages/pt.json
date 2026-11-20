@@ -474,6 +474,10 @@
         "title": "Nova conversa",
         "description": "Cria uma nova aba de conversa na pasta atual"
       },
+      "cycle_agent": {
+        "title": "Alternar agente",
+        "description": "Muda para o próximo agente disponível em uma página de nova conversa"
+      },
       "open_folder": {
         "title": "Abrir pasta",
         "description": "Abre o seletor de pastas e abre a pasta no espaço de trabalho"

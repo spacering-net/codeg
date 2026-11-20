@@ -474,6 +474,10 @@
         "title": "Nouvelle conversation",
         "description": "Créer un nouvel onglet de conversation dans le dossier actuel"
       },
+      "cycle_agent": {
+        "title": "Changer d’agent",
+        "description": "Passe à l’agent disponible suivant sur une page de nouvelle conversation"
+      },
       "open_folder": {
         "title": "Ouvrir un dossier",
         "description": "Ouvrir le sélecteur de dossier et ouvrir le dossier dans l'espace de travail"

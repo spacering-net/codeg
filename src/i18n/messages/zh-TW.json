@@ -474,6 +474,10 @@
         "title": "新增會話",
         "description": "在目前資料夾中建立新的對話分頁"
       },
+      "cycle_agent": {
+        "title": "切換 Agent",
+        "description": "在新增會話頁切換到下一個可用 Agent"
+      },
       "open_folder": {
         "title": "打開資料夾",
         "description": "打開資料夾選擇器並在工作區中開啟該資料夾"

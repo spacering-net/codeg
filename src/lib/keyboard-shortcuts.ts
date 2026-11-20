@@ -6,6 +6,7 @@ export type ShortcutActionId =
   | "close_current_terminal_tab"
   | "toggle_aux_panel"
   | "new_conversation"
+  | "cycle_agent"
   | "open_folder"
   | "open_settings"
   | "close_current_tab"
@@ -54,6 +55,9 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
   },
   {
     id: "new_conversation",
+  },
+  {
+    id: "cycle_agent",
   },
   {
     id: "open_folder",
@@ -140,6 +144,7 @@ export const DEFAULT_SHORTCUTS: ShortcutSettings = {
   close_current_terminal_tab: "mod+w",
   toggle_aux_panel: "mod+e",
   new_conversation: "mod+t",
+  cycle_agent: "mod+shift+a",
   open_folder: "mod+o",
   open_settings: "mod+,",
   close_current_tab: "mod+w",

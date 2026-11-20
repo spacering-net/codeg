@@ -474,6 +474,10 @@
         "title": "새 대화",
         "description": "현재 폴더에 새 대화 탭을 만듭니다"
       },
+      "cycle_agent": {
+        "title": "에이전트 전환",
+        "description": "새 대화 페이지에서 사용 가능한 다음 에이전트로 전환합니다"
+      },
       "open_folder": {
         "title": "폴더 열기",
         "description": "폴더 선택기를 열고 작업 공간에서 폴더를 엽니다"
