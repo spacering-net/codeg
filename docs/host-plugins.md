@@ -29,3 +29,22 @@ only when selected by the user.
 See the [turn activity manifest](../examples/plugins/turn-activity/codeg-plugin.json)
 for a complete example. Import it in **Settings → Plugins**, then enable it.
 Open a workspace in Codeg to use the panel and command.
+
+## Install from a source
+
+**Settings → Plugins → Add Plugin** accepts these public sources:
+
+- An npm name such as `@scope/package`, with an optional exact version or tag.
+  Publish `codeg-plugin.json` at the package root. Codeg reads the manifest
+  from the SHA-512-verified tarball. The npm registry selector also offers the
+  China mirror.
+- A GitHub repository such as `owner/repo` or `https://github.com/owner/repo`.
+  Append `#ref` to select a branch, tag, or commit. Codeg resolves the reference
+  to a commit and reads `codeg-plugin.json` at that commit's repository root.
+  For a manifest in a subdirectory, use a GitHub `/tree/<commit>/<directory>` URL.
+- An absolute directory path containing `codeg-plugin.json`. The path is on the
+  connected Codeg host, including when you use a remote workspace.
+
+For a file on the browser's machine, use **Import Manifest**. The catalog stores
+the manifest and its resolved source. Codeg starts each installed plugin
+disabled. Contributions run through the host APIs described above.

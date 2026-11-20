@@ -10,6 +10,10 @@ type WorkspacePanel = { id: string; title: string } & (
 
 export interface InstalledPlugin {
   enabled: boolean
+  source?:
+    | { type: "directory"; path: string }
+    | { type: "gitHub"; repository: string; commit: string; directory?: string }
+    | { type: "npm"; package: string; version: string }
   manifest: {
     id: string
     name: string
@@ -116,6 +120,16 @@ function loadCatalog(transport: Transport) {
 export function applyHostPlugin(mutation: PluginMutation) {
   return getTransport().call<InstalledPlugin[]>("host_plugins_apply", {
     mutation,
+  })
+}
+
+export function installHostPluginSource(
+  input: string,
+  registry: "npm" | "mirror"
+) {
+  return getTransport().call<InstalledPlugin[]>("host_plugins_install_source", {
+    input,
+    registry,
   })
 }
 

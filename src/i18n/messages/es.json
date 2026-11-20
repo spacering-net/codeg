@@ -69,6 +69,16 @@
     }
   },
   "HostPlugins": {
+    "add": "Añadir complemento",
+    "sourceDescription": "Introduce un paquete de npm, un repositorio de GitHub o una ruta absoluta del host conectado.",
+    "source": "Origen del complemento",
+    "registry": "Registro npm",
+    "mirror": "Servidor espejo de China",
+    "sourceHint": "Codeg instala el manifiesto codeg-plugin.json. El complemento queda desactivado inicialmente.",
+    "sourceUnsupported": "Actualiza el host de Codeg conectado para instalar desde un origen.",
+    "cancel": "Cancelar",
+    "install": "Instalar",
+    "installing": "Instalando…",
     "title": "Complementos",
     "import": "Importar manifiesto",
     "fileTooLarge": "El manifiesto del complemento supera los 64 KiB.",

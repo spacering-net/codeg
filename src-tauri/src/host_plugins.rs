@@ -12,6 +12,8 @@ use crate::acp::types::{AcpEvent, EventEnvelope};
 use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
+pub mod source;
+
 pub const CATALOG_CHANGED: &str = "host-plugins://changed";
 const ACTIVITY_CHANGED: &str = "host-plugins://activity";
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
@@ -99,6 +101,8 @@ enum HookAction {
 pub struct InstalledPlugin {
     manifest: Manifest,
     enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source: Option<source::InstalledSource>,
 }
 
 #[derive(Deserialize)]
@@ -157,6 +161,14 @@ impl HostPlugins {
     }
 
     pub fn apply(&self, mutation: Mutation) -> Result<Vec<InstalledPlugin>, AppCommandError> {
+        self.apply_with_source(mutation, None)
+    }
+
+    fn apply_with_source(
+        &self,
+        mutation: Mutation,
+        source: Option<source::InstalledSource>,
+    ) -> Result<Vec<InstalledPlugin>, AppCommandError> {
         let mut state = self.state.lock().expect("host plugin state lock");
         let state = state.as_mut().map_err(|error| catalog_error(error))?;
         let mut next = state.catalog.clone();
@@ -179,6 +191,7 @@ impl HostPlugins {
                     InstalledPlugin {
                         manifest,
                         enabled: false,
+                        source,
                     },
                 );
                 None
@@ -365,7 +378,7 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Catalog::new()),
         Err(error) => return Err(error.to_string()),
     };
-    let max_bytes = ((MAX_MANIFEST_BYTES + 1024) * MAX_PLUGINS) as u64;
+    let max_bytes = ((MAX_MANIFEST_BYTES + 4096) * MAX_PLUGINS) as u64;
     let mut bytes = Vec::new();
     file.take(max_bytes + 1)
         .read_to_end(&mut bytes)
