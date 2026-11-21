@@ -83,6 +83,10 @@ struct Contributions {
     hooks: Vec<Hook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     settings_panel: Option<SettingsPanel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    plugin_detail: Option<SettingsPanel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    activation_panel: Option<SettingsPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     lifecycle_hooks: Vec<lifecycle::Registration>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -950,6 +954,8 @@ impl Manifest {
             commands,
             hooks,
             settings_panel,
+            plugin_detail,
+            activation_panel,
             lifecycle_hooks,
             client_surfaces,
         } = &self.contributes;
@@ -986,11 +992,17 @@ impl Manifest {
                 return Err("Invalid or duplicate command, or unknown target panel".to_owned());
             }
         }
-        if let Some(panel) = settings_panel {
-            if self.client.is_none() || !valid_id(&panel.id) || !valid_label(&panel.title) {
-                return Err(
-                    "A plugin settings panel needs a valid ID, title and client entry".to_owned(),
-                );
+        for (label, panel) in [
+            ("settings panel", settings_panel),
+            ("detail panel", plugin_detail),
+            ("activation panel", activation_panel),
+        ] {
+            if let Some(panel) = panel {
+                if self.client.is_none() || !valid_id(&panel.id) || !valid_label(&panel.title) {
+                    return Err(format!(
+                        "A plugin {label} needs a valid ID, title and client entry"
+                    ));
+                }
             }
         }
         if !client_surfaces.is_empty() {
@@ -1272,6 +1284,43 @@ mod tests {
         unknown["contributes"]["clientSurfaces"][0]["slot"] = "unknown".into();
         for rejected in [missing_entry, duplicate, unknown] {
             assert!(Manifest::parse(&rejected.to_string()).is_err());
+        }
+    }
+
+    #[test]
+    fn validates_detail_and_activation_contributions_in_the_reviewed_manifest() {
+        use serde_json::json;
+
+        let manifest = json!({
+            "apiVersion": 2, "id": "test.plugin-settings", "name": "Plugin Settings", "version": "1.0.0",
+            "server": { "entry": "settings.mjs", "methods": ["summary"] },
+            "client": { "entry": "settings.html" },
+            "contributes": {
+                "pluginDetail": { "id": "details", "title": "Details" },
+                "activationPanel": { "id": "setup", "title": "Get started" }
+            }
+        });
+        let parsed = Manifest::parse(&manifest.to_string()).unwrap();
+        let serialized = serde_json::to_value(parsed).unwrap();
+        for field in ["pluginDetail", "activationPanel"] {
+            assert_eq!(
+                serialized["contributes"][field],
+                manifest["contributes"][field]
+            );
+            for (key, value) in [("id", "bad/id"), ("title", "")] {
+                let mut invalid = manifest.clone();
+                invalid["contributes"][field][key] = json!(value);
+                assert!(Manifest::parse(&invalid.to_string()).is_err());
+            }
+            let mut missing_entry = manifest.clone();
+            missing_entry.as_object_mut().unwrap().remove("client");
+            let other = if field == "pluginDetail" {
+                "activationPanel"
+            } else {
+                "pluginDetail"
+            };
+            missing_entry["contributes"].as_object_mut().unwrap().remove(other);
+            assert!(Manifest::parse(&missing_entry.to_string()).is_err());
         }
     }
 
