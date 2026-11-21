@@ -180,7 +180,6 @@ function weeklyDraft(info: DispatchInfo): RoutineDraft {
     kind: "dispatch",
     cron: `${now.getMinutes()} ${now.getHours()} * * ${now.getDay()}`,
     dispatch: {
-      assistant_id: info.executor.assistant_id,
       mode: info.mode,
       project_id: info.mode === "chat" ? null : info.folder_id,
       deliverable:
@@ -339,7 +338,7 @@ export function EventCard({ item }: { item: EventItem }) {
                 className="flex flex-wrap items-center gap-1.5"
                 data-pa-check-result={verdict ?? ""}
               >
-                <CheckLabel round={checkRound} via={null} />
+                <CheckLabel round={checkRound} />
                 {data?.verdict !== undefined && data?.verdict !== null ? (
                   <VerdictChip verdict={verdict} />
                 ) : null}

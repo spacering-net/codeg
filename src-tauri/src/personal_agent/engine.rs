@@ -5293,6 +5293,10 @@ impl PersonalAgentEngine {
                 self.update_segment_state(seg.id, |s| s.persona_resend = true).await;
             }
         }
+        // The roster shows the persona's head: every window reads it again.
+        if name == workdir::SOUL_FILE {
+            self.emit(PersonalAgentChange::Agent);
+        }
         // A process skill of theirs is installed as they wrote it (7.8).
         if let Some(skill) = workdir::skill_name_of(name) {
             self.approve_skill(skill, Some(content.as_str())).await?;

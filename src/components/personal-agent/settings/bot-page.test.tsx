@@ -22,9 +22,6 @@ const api = vi.hoisted(() => ({
   personalAgentSettingsPatch: vi.fn(async () => []),
   personalAgentBots: vi.fn(async () => [] as unknown[]),
   personalAgentRosterAct: vi.fn(async () => {}),
-  personalAgentTemplates: vi.fn(async () => [
-    { id: "review", name: "Reviewer role" },
-  ]),
   personalAgentSetWorkdir: vi.fn(),
   personalAgentSave: vi.fn(),
 }))
@@ -48,6 +45,9 @@ vi.mock("../persona-files", () => ({
   PersonaFiles: (props: { botId: number | null; initial: string | null }) => (
     <div data-testid="persona-files" data-initial={props.initial ?? ""} />
   ),
+}))
+vi.mock("@/stores/assistants-store", () => ({
+  useAssistants: () => [],
 }))
 
 const ctx = vi.hoisted(() => ({
@@ -88,9 +88,10 @@ function entry(
     uid: `u${id}`,
     name,
     avatar: { kind: "face", shape: "blob", color: "blue" },
-    template: kind === "worker" ? "review" : null,
     executor_assistant_id: null,
     created_at: "2026-11-10T00:00:00Z",
+    persona: kind === "worker" ? "# Persona Default sentence." : "",
+    persona_unwritten: kind === "worker",
     roster: { ...FLAGS, muted: id === 7 },
     live: { bot_id: id, updated_at: "2026-11-10T00:00:00Z" },
   } as unknown as RosterEntry
@@ -122,7 +123,6 @@ function snapshot(
       created_at: "2026-11-10T00:00:00Z",
       updated_at: "2026-11-10T00:00:00Z",
       uid: `u${agent.id}`,
-      template: agent.kind === "worker" ? "review" : null,
       executor_assistant_id: null,
     },
     status: { engine } as PersonalAgentSnapshot["status"],
@@ -203,7 +203,7 @@ describe("an assistant's own page", () => {
     ).toBe("memory/release.md")
   })
 
-  it("has a work assistant's execution, and saves its own items to it", async () => {
+  it("has a work assistant's tabs, no role in its head, and saves its own items to it", async () => {
     ctx.botId = 7
     ctx.snapshot = snapshot({ id: 7, name: "Reviewer", kind: "worker" })
     usePersonalAgentUi.setState({ viewBot: 7 })
@@ -215,12 +215,12 @@ describe("an assistant's own page", () => {
     await waitFor(() =>
       expect(
         document.querySelector("[data-pa-bot-page-subtitle]")?.textContent
-      ).toBe("Reviewer role · Claude Code")
+      ).toBe("Work assistant · Claude Code")
     )
+    // Its executor config is on "Identity & brain": no "Execution" tab.
     expect(tabNames()).toEqual([
       "Identity & brain",
       "Persona & memory",
-      "Execution",
       "Notifications",
       "Advanced",
     ])
@@ -235,13 +235,27 @@ describe("an assistant's own page", () => {
     )
   })
 
-  it("opens the primary's on its first tab when asked for a work assistant's execution", () => {
-    usePersonalAgentUi.getState().openBotPage("execution")
+  it("says on “Persona & memory” when a work assistant's persona is not written yet", async () => {
+    ctx.botId = 7
+    ctx.snapshot = snapshot({ id: 7, name: "Reviewer", kind: "worker" })
+    usePersonalAgentUi.setState({ viewBot: 7 })
+    usePersonalAgentUi.getState().openBotPage("persona")
+    const { unmount } = draw()
+    const note = await waitFor(() => {
+      const el = document.querySelector("[data-pa-persona-unwritten]")
+      expect(el).not.toBeNull()
+      return el!
+    })
+    expect(note.textContent).toMatch(/No persona written yet/)
+    unmount()
+    // The primary's says what it is: no such note.
+    ctx.botId = null
+    ctx.snapshot = snapshot({ id: 1, name: "Nova", kind: "primary" })
+    usePersonalAgentUi.setState({ viewBot: null })
+    usePersonalAgentUi.getState().openBotPage("persona")
     draw()
-    expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-      "Identity & brain"
-    )
-    expect(screen.getByTestId("identity-page")).toBeInTheDocument()
+    expect(screen.getByTestId("persona-files")).toBeInTheDocument()
+    expect(document.querySelector("[data-pa-persona-unwritten]")).toBeNull()
   })
 
   it("turns its notifications on and off on “Notifications”", async () => {
@@ -296,7 +310,9 @@ describe("an assistant's own page", () => {
     expect(
       document.querySelector("[data-pa-bot-page-head] h1")?.textContent
     ).toBe("Reviewer")
-    expect(screen.getByRole("tab", { name: "Execution" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("tab", { name: "Notifications" })
+    ).toBeInTheDocument()
     expect(screen.queryByTestId("identity-page")).toBeNull()
     expect(
       document.querySelector("[data-pa-bot-page-subtitle]")?.textContent

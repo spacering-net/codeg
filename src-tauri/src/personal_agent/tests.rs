@@ -1004,6 +1004,38 @@ async fn delivered_round(
     prompt
 }
 
+/// The roster the page reads carries each assistant's persona head, read as
+/// the team list reads it, and whether a work assistant's is still its
+/// default file — the list and hover card show it.
+#[tokio::test]
+async fn the_roster_carries_each_ones_persona_head() {
+    let (engine, tmp) = ready().await;
+    let made = engine.create_bot(BotSpec::named("Dev")).await.unwrap();
+    let roster = || async {
+        crate::commands::personal_agent::personal_agent_bots_core(&engine.db, tmp.path())
+            .await
+            .unwrap()
+    };
+    let listed = roster().await;
+    let primary = listed.iter().find(|e| e.bot.id != made.bot.id).unwrap();
+    let worker = listed.iter().find(|e| e.bot.id == made.bot.id).unwrap();
+    assert!(!primary.persona_unwritten, "the primary's default says what it is");
+    assert!(!primary.persona.is_empty());
+    assert!(worker.persona_unwritten);
+    // Written: the head, from the first line on, as the team list has it.
+    let dir = workdir::workdir_of_bot(tmp.path(), &made.bot);
+    std::fs::write(dir.join(workdir::SOUL_FILE), "# Persona\n\nYou fix CI.\n").unwrap();
+    let listed = roster().await;
+    let worker = listed.iter().find(|e| e.bot.id == made.bot.id).unwrap();
+    assert!(!worker.persona_unwritten);
+    assert_eq!(worker.persona, "# Persona You fix CI.");
+    let long = format!("# Persona\n\n{}\n", "a".repeat(400));
+    std::fs::write(dir.join(workdir::SOUL_FILE), long).unwrap();
+    let listed = roster().await;
+    let worker = listed.iter().find(|e| e.bot.id == made.bot.id).unwrap();
+    assert_eq!(worker.persona.chars().count(), super::team::HEAD_CARD_CHARS);
+}
+
 /// The team comes with the handoff (or, a session given none, the first
 /// delivery); a delivery after it changed — another
 /// assistant made, renamed, hidden, its persona written — carries it anew,
@@ -17196,6 +17228,11 @@ async fn a_step_still_failed_after_its_assistants_turn_makes_the_plan_stuck_unti
         .await
         .prompt
         .contains("step 1 of 3 of the plan \"Research\""));
+    // Its own step on the card: "self", with the agent its work ran on —
+    // what its conversation opens with.
+    let (_, card) = plan_card(&primary, id).await;
+    assert_eq!(card["plan"]["steps"][0]["target_kind"], "self");
+    assert!(card["plan"]["steps"][0]["agent_type"].is_string(), "{card}");
     // Its work fails.
     let started = settled(&primary, d).await;
     if started.state != DispatchState::Failed {

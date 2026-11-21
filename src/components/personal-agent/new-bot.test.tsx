@@ -19,21 +19,6 @@ const api = vi.hoisted(() => ({
   personalAgentBots: vi.fn(),
   personalAgentBotImpact: vi.fn(),
   personalAgentBotDelete: vi.fn(async () => {}),
-  personalAgentTemplates: vi.fn(async () => [
-    {
-      id: "research",
-      name: "Researcher",
-      job: "Look things up.",
-      description: "Looks things up.",
-      instructions: "- Conclusion first.",
-      opener: "What do you want to find out?",
-      options: ["a", "b", "c"],
-      other: "Other",
-      modes: ["chat", "session"],
-      division: "research",
-      project_option: null,
-    },
-  ]),
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
@@ -50,6 +35,35 @@ const prefetched = vi.hoisted(() => ({ read: vi.fn() }))
 const editor = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
 }))
+// The executor config picked with a plain select.
+vi.mock("./settings/executor-pick", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./settings/executor-pick")>()
+  return {
+    ...real,
+    ExecutorPick: ({
+      value,
+      onChange,
+    }: {
+      value: { kind: string; id?: number }
+      onChange: (v: unknown) => void
+    }) => (
+      <select
+        data-testid="executor-pick"
+        value={value.kind === "existing" ? String(value.id) : value.kind}
+        onChange={(e) =>
+          onChange(
+            e.target.value === "new"
+              ? { kind: "new" }
+              : { kind: "existing", id: Number(e.target.value) }
+          )
+        }
+      >
+        <option value="new">new</option>
+        <option value="5">Dev</option>
+      </select>
+    ),
+  }
+})
 vi.mock("@/components/settings/assistant-editor-dialog", () => ({
   AssistantEditorDialog: (props: Record<string, unknown>) => {
     editor.props = props
@@ -80,7 +94,6 @@ const bot = (id: number, kind: "primary" | "worker", name: string) =>
       shape: "blob",
       color: kind === "primary" ? "black" : "teal",
     },
-    template: kind === "worker" ? "review" : null,
     executor_assistant_id: kind === "worker" ? 3 : null,
     created_at: "2026-11-10T10:00:00Z",
   }) as PersonalAgentBotSummary
@@ -100,7 +113,6 @@ describe("a new work assistant", () => {
     api.personalAgentBotCreate.mockResolvedValue({
       bot: bot(9, "worker", "Code review"),
       executor_assistant_id: 3,
-      template: "review",
       options_unavailable: null,
     })
     const closed = vi.fn()
@@ -116,6 +128,10 @@ describe("a new work assistant", () => {
     expect(draft.name).toBe("Code review")
     expect(draft.uid).toMatch(/^[0-9a-f]{32}$/)
     expect(draft.avatar).toBeNull()
+    // No persona: the default one, until it writes its own; its executor
+    // config made with it.
+    expect(draft.persona).toBeNull()
+    expect(draft.executor_assistant_id).toBeNull()
     expect(draft.executor_made_for_it).toBe(false)
     await waitFor(() => expect(usePersonalAgentUi.getState().viewBot).toBe(9))
     expect(closed).toHaveBeenCalledWith(false)
@@ -135,7 +151,6 @@ describe("a new work assistant", () => {
     api.personalAgentBotCreate.mockResolvedValue({
       bot: bot(9, "worker", "Code review"),
       executor_assistant_id: 3,
-      template: "review",
       options_unavailable: null,
     })
     // Read after it is made, the roster has it.
@@ -171,7 +186,6 @@ describe("a new work assistant", () => {
     api.personalAgentBotCreate.mockResolvedValue({
       bot: bot(9, "worker", "Code review"),
       executor_assistant_id: 3,
-      template: "review",
       options_unavailable: null,
     })
     const both = [bot(1, "primary", "Nova"), bot(9, "worker", "Code review")]
@@ -205,7 +219,6 @@ describe("a new work assistant", () => {
     api.personalAgentBotCreate.mockResolvedValue({
       bot: bot(9, "worker", "Dev"),
       executor_assistant_id: 3,
-      template: "dev",
       options_unavailable: null,
     })
     wrap(<NewBotDialog open onOpenChange={() => {}} />)
@@ -229,13 +242,11 @@ describe("a new work assistant", () => {
       .mockResolvedValueOnce({
         bot: null,
         executor_assistant_id: null,
-        template: "research",
         options_unavailable: { agent_type: "gemini", why: "not installed" },
       })
       .mockResolvedValueOnce({
         bot: bot(10, "worker", "Researcher"),
         executor_assistant_id: 21,
-        template: "research",
         options_unavailable: null,
       })
     wrap(<NewBotDialog open onOpenChange={() => {}} />)
@@ -246,21 +257,51 @@ describe("a new work assistant", () => {
     await screen.findByTestId("executor-editor")
     expect(editor.props?.prefill).toMatchObject({
       name: "Researcher",
-      description: "Looks things up.",
-      instructions: "- Conclusion first.",
       agentType: "gemini",
     })
+    // Nothing of a role's: no description, no standing instructions.
+    expect(editor.props?.prefill).not.toHaveProperty("description")
+    expect(editor.props?.prefill).not.toHaveProperty("instructions")
     ;(editor.props?.onSaved as (a: { id: number }) => void)({ id: 21 })
     await waitFor(() =>
       expect(api.personalAgentBotCreate).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          template: "research",
           executor_assistant_id: 21,
           executor_made_for_it: true,
         })
       )
     )
     await waitFor(() => expect(usePersonalAgentUi.getState().viewBot).toBe(10))
+  })
+})
+
+describe("a new work assistant's persona and executor config", () => {
+  it("sends the persona written, and an executor config there is to share", async () => {
+    api.personalAgentBotCreate.mockResolvedValue({
+      bot: bot(9, "worker", "Reviewer"),
+      executor_assistant_id: 5,
+      options_unavailable: null,
+    })
+    wrap(<NewBotDialog open onOpenChange={() => {}} />)
+    expect(screen.getByText(/You can leave it empty/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Reviewer" },
+    })
+    fireEvent.change(screen.getByLabelText("Persona"), {
+      target: { value: "  I review code changes.\n" },
+    })
+    fireEvent.change(screen.getByTestId("executor-pick"), {
+      target: { value: "5" },
+    })
+    expect(screen.getByText(/can share one executor config/)).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Create" }))
+    await waitFor(() => expect(api.personalAgentBotCreate).toHaveBeenCalled())
+    expect(api.personalAgentBotCreate.mock.calls[0][0]).toMatchObject({
+      name: "Reviewer",
+      persona: "I review code changes.",
+      executor_assistant_id: 5,
+      executor_made_for_it: false,
+    })
   })
 })
 
@@ -423,7 +464,6 @@ describe("deleting a work assistant", () => {
     ],
     unanswered_messages: 2,
     executor: { id: 3, name: "Reviewer", shared_with: [] },
-    division: ["review"],
     plans: [],
     plan_steps: [],
     workdir: "/data/personal-agent-bots/u9",
@@ -443,7 +483,6 @@ describe("deleting a work assistant", () => {
     expect(
       screen.getByText(/2 messages to it have not been answered/)
     ).toBeTruthy()
-    expect(screen.getByText(/It is the first pick for Review/)).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Delete" }))
     await waitFor(() =>
       expect(api.personalAgentBotDelete).toHaveBeenCalledWith(9, {

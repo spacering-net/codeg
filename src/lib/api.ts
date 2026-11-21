@@ -56,7 +56,6 @@ import type {
   BotDeleteOptions,
   BotImpact,
   BotMade,
-  BotTemplate,
   PersonalAgentSettingChange,
   PersonalAgentPresence,
   ProposalRule,
@@ -2915,13 +2914,6 @@ export async function personalAgentConversationTarget(
   })
 }
 
-/** The work assistants' templates, in `locale`. */
-export async function personalAgentTemplates(
-  locale: string
-): Promise<BotTemplate[]> {
-  return getTransport().call("personal_agent_templates", { locale })
-}
-
 /** Make a work assistant from a name (4.12). */
 export async function personalAgentBotCreate(
   draft: BotCreateDraft
@@ -2954,17 +2946,6 @@ export async function personalAgentBotDelete(
   options: BotDeleteOptions
 ): Promise<void> {
   return getTransport().call("personal_agent_bot_delete", { botId, options })
-}
-
-/** [Change role] on a new work assistant's opening card. */
-export async function personalAgentBotSetTemplate(
-  botId: number,
-  template: string
-): Promise<TimelineRow> {
-  return getTransport().call("personal_agent_bot_set_template", {
-    botId,
-    template,
-  })
 }
 
 /** An answer on a choice card: a choice's key (with `projectId` when it asks
@@ -3120,7 +3101,6 @@ export type NoticeAction =
   | "skip"
   | "hand"
   | "next"
-  | "team"
   | "revise"
   | "recheck"
   | "retry"
@@ -3144,8 +3124,6 @@ export type NoticeAction =
   | "ask_first"
   | "hide"
   | "delete"
-  // The division rule (7.9): make the better one the pick (and "undo").
-  | "switch"
   // A plan's card (7.6): start (or go on), stop, end; a step confirmed or
   // canceled; a change taken back (`undo:<change>`).
   | "start"

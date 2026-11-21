@@ -7865,7 +7865,6 @@
   "PersonalAgent": {
     "title": "Personal agent",
     "readOnly": "The personal agent runs in another codeg process on this data directory, so this page is read-only here.",
-    "noAssistants": "No executor configs the assistants can dispatch to yet: the personal agent hands its work to them.",
     "viewSession": "View session",
     "viewSessionHint": "The current session's full transcript, live.",
     "sessionTitle": "Session {seq} · full transcript",
@@ -8105,12 +8104,10 @@
         "prefs": "Preferences",
         "identity": "Identity & brain",
         "persona": "Persona & memory",
-        "execution": "Execution",
         "notify": "Notifications",
         "advanced": "Advanced",
         "workers": "Work assistants",
         "executors": "Executor configs",
-        "division": "Division of work",
         "communication": "Communication",
         "proactive": "Proactive & notifications",
         "automation": "Dispatch & automation",
@@ -8169,12 +8166,6 @@
           "hint": "When one assistant writes to another.",
           "auto": "Send directly",
           "ask": "Ask me first"
-        },
-        "worker_handoff": {
-          "title": "Primary hands work to a work assistant",
-          "hint": "When the work is a work assistant's to do.",
-          "message": "Message it; it sees it through",
-          "direct": "Dispatch to its executor config"
         },
         "loop_rounds": {
           "title": "Stop exchanges going nowhere after",
@@ -8698,12 +8689,6 @@
           "title": "Plan stuck",
           "hint": "A step failed and stayed failed."
         },
-        "rule_division": {
-          "title": "Who does it better",
-          "hint": "Another executor config passes a kind of work the first time clearly more often than its first pick in the division (20 points or more, with at least 5 pieces done on each side).",
-          "on": "On",
-          "off": "Off"
-        },
         "tidy": {
           "title": "Tidy-ups and process skills",
           "hint": "Each night, after you stop, the assistants tidy their memory, persona and rules; when a chain of work goes well, the way it went is written down as a skill.",
@@ -8720,74 +8705,25 @@
         "apply": "Move",
         "saved": "Working directory moved."
       },
-      "execution": {
-        "executor": "Executor config",
-        "executorHint": "The one it dispatches to by default.",
-        "executorGone": "Its executor config was deleted: pick another.",
-        "pick": "Pick one",
-        "template": "Template",
-        "templateHint": "The job it was made for.",
-        "noTemplate": "Blank"
-      },
       "team": {
         "noWorkers": "No work assistants yet",
-        "noWorkersHint": "A work assistant takes one job — writing code, reviewing — and sees it through.",
-        "boundTo": "dispatches to {name}",
-        "unbound": "no executor config",
+        "noWorkersHint": "A work assistant takes the work that is its own and sees it through; tell the primary assistant when you want one, or make one here.",
+        "boundTo": "works on {name}",
+        "unbound": "no executor config: cannot do work itself yet",
         "sameBatch": "The assistants you @ in a conversation and these executor configs are the same ones: change one here and both change.",
         "delegationOff": "Multi-agent collaboration is off: they cannot be @-mentioned in conversations for now. The assistants' dispatches are not affected.",
-        "openCollaboration": "Open Collaboration settings",
-        "auto": "Auto",
-        "divisionNote": "With a work assistant as the pick, the primary writes to it; with an executor config, it dispatches to it directly."
-      },
-      "usage": {
-        "title": "How the assistants use it",
-        "dispatch": "The assistants may dispatch to it",
-        "dispatchHint": "Off, it can still be @-mentioned in conversations; the assistants just do not dispatch to it.",
-        "modes": "Modes it takes",
-        "modesHint": "A dispatch in another mode is refused, with the reason.",
-        "projects": "Projects",
-        "projectsHint": "A chat takes no project, so this never refuses one.",
-        "allProjects": "Every project",
-        "saveFailed": "Could not save how the assistants use it",
-        "notForDispatch": "not for the assistants' dispatches",
-        "onlyModes": "only {modes}",
-        "onlyProjects": "{count, plural, one {only on # project} other {only on # projects}}"
+        "openCollaboration": "Open Collaboration settings"
       },
       "executor": {
         "running": "{count} running",
         "fortnight": "2 weeks: {dispatches} dispatched · {completed} done",
-        "boundBy": "{name}'s",
-        "firstFor": "first for {kinds}",
         "failing": "The last {count} dispatches to it all failed: {error}",
-        "impactWorkerDelete": "It is {name}'s executor config: {name} will need another.",
-        "impactWorkerOff": "It is {name}'s executor config: {name} cannot dispatch to it while it is off.",
-        "impactDivisionDelete": "It is the first pick for {kinds}: that goes back to Auto.",
-        "impactDivisionOff": "It is the first pick for {kinds}: the assistants pick another while it is off.",
-        "impactRunning": "{count, plural, one {# piece of work it runs goes on.} other {# pieces of work it runs go on.}}"
-      },
-      "division": {
-        "code": "Writing code",
-        "codeHint": "Changes to a project's code.",
-        "review": "Review",
-        "reviewHint": "Reading a change and saying what is wrong with it.",
-        "test": "Testing",
-        "testHint": "Writing and running tests.",
-        "fix_ci": "Fixing CI",
-        "fix_ciHint": "A failing pipeline — and who owns a PR nobody does.",
-        "docs": "Docs",
-        "docsHint": "Writing and updating docs.",
-        "release": "Releases",
-        "releaseHint": "Versions, changelogs, publishing.",
-        "research": "Research",
-        "researchHint": "Finding things out.",
-        "check": "Checking",
-        "checkHint": "Checking finished work before it is accepted. Only those that take work sessions are listed."
+        "impactRunning": "{count, plural, one {# piece of work it runs goes on.} other {# pieces of work it runs go on.}}",
+        "usedBy": "Used by {names}",
+        "nameJoin": ", ",
+        "impactBots": "{names} will not be able to do work themselves for now."
       },
       "changed": {
-        "usageOf": "How the assistants use {name}",
-        "usageDefault": "default",
-        "usageSet": "set",
         "on": "on",
         "off": "off",
         "default": "default"
@@ -8906,7 +8842,19 @@
       "deleteSkill": "Delete skill",
       "confirmDeleteSkillHint": "Delete this process skill? Its folder is removed from the working directory.",
       "skillDeleted": "Deleted {name}",
-      "viewSubtitle": "Shared by every assistant"
+      "viewSubtitle": "Shared by every assistant",
+      "personaUnwritten": "No persona written yet. It fills it in itself — when it introduces itself, as you give it work, and in the nightly tidy-up — or you can write it here.",
+      "executorPick": {
+        "title": "Executor config",
+        "hint": "The brain thinks; the executor config does the work — whatever it does itself runs on it. Several assistants can share one.",
+        "newHint": "Saving makes one on the brain's agent, its options filled in.",
+        "missing": "No executor config: it cannot do work itself for now. Pick one, or make a new one.",
+        "disabled": "This executor config is turned off: it cannot do work itself for now.",
+        "editorNote": "codeg could not read this agent's options ({why}), so pick them here; it is set up with this executor config.",
+        "new": "New, on the brain's agent",
+        "none": "None",
+        "off": "(off)"
+      }
     },
     "statusWord": {
       "idle": "Idle",
@@ -8983,7 +8931,6 @@
         "dispatch_followup": "Following up on work",
         "items": "Updating open matters",
         "timeline_read": "Reading back the conversation",
-        "assistant_list": "Checking the assistants",
         "project_list": "Checking the projects"
       },
       "kind": {
@@ -9036,9 +8983,7 @@
       "more": "{count, plural, one {# more} other {# more}}",
       "doneWhen": "Done when",
       "check": "Acceptance check",
-      "checkRound": "Acceptance check · round {round}",
-      "checkVia": "checked with {name}'s executor config",
-      "why": "Why: {why}"
+      "checkRound": "Acceptance check · round {round}"
     },
     "event": {
       "someone": "An assistant",
@@ -9169,45 +9114,25 @@
         "dismiss": "Not now",
         "undo": "Undo",
         "seeSettings": "See in settings",
-        "bothWays": "Executor configs are also who an @ in a session reaches: this change applies to both.",
         "team": {
           "of": "{name} · {field}",
           "botField": {
             "name": "name",
             "avatar": "face",
             "brain": "brain",
-            "executor": "executor config",
-            "template": "role",
             "notify": "notifications",
             "muted": "muted",
-            "hidden": "hidden"
-          },
-          "assistantField": {
-            "name": "name",
-            "description": "description",
-            "instructions": "standing instructions",
-            "agent": "agent and options",
-            "enabled": "enabled"
+            "hidden": "hidden",
+            "persona": "persona",
+            "work_agent": "agent its work runs on"
           },
           "avatarOther": "own picture",
-          "empty": "(empty)"
+          "empty": "(empty)",
+          "nothingSet": "nothing set",
+          "personaNow": "Now",
+          "personaNew": "Becomes"
         },
-        "assistant": {
-          "applied": "Made an executor config, as you said",
-          "accepted": "Made an executor config",
-          "undone": "Undone: deleted",
-          "dismissed": "Not made",
-          "suggested": "Suggestion: a new executor config",
-          "show": "Make an executor config? (you asked to see such changes first)",
-          "editor": "Couldn't make the executor config",
-          "on": "on {agent}",
-          "editorHint": "codeg couldn't read the options of {agent} ({why}), so nothing was made. Open the editor with what was asked filled in, and pick the rest.",
-          "firstFor": "First pick for: {kinds}",
-          "kept": "{count, plural, one {# item was} other {# items were}} changed again since, so left as is",
-          "accept": "Make it",
-          "edit": "Edit",
-          "openEditor": "Open editor"
-        }
+        "uncheckedQuote": "The primary says you said “{quote}” — but you didn't type it this turn"
       },
       "retryOf": "Retry “{title}”",
       "tonight": {
@@ -9241,7 +9166,6 @@
       "withdrawn": "No longer asked",
       "resolved": "Settled"
     },
-    "addExecutor": "Add an executor config",
     "bots": {
       "new": "New work assistant",
       "copyName": "{name} (copy)",
@@ -9250,8 +9174,6 @@
       "more": "More",
       "copy": "Copy",
       "deleteAction": "Delete…",
-      "fromTemplate": "From a template",
-      "reviewAgentHint": "Pick a different agent from your developer's: the one checking the work should not be the one who wrote it.",
       "face": {
         "change": "Change the avatar",
         "shape": "Shape",
@@ -9289,13 +9211,18 @@
       },
       "create": {
         "title": "New work assistant",
-        "description": "Just a name. Its role is read from the name, its brain is the same as the primary assistant's, and an executor config is made with it.",
+        "description": "A name and a few words on who it is; its brain is the same as the primary assistant's.",
         "name": "Name",
         "namePlaceholder": "e.g. Code review",
-        "hint": "You can change its role on its first card, and everything else in its settings.",
         "cancel": "Cancel",
         "create": "Create",
-        "editorNote": "codeg could not read this agent's options ({why}), so pick them here; the work assistant is made with this executor config."
+        "editorNote": "codeg could not read this agent's options ({why}), so pick them here; the work assistant is made with this executor config.",
+        "persona": "Persona",
+        "personaPlaceholder": "e.g. I review code changes: whether they are right and well tested.",
+        "personaHint": "A line or two: who it is, what work to give it. You can leave it empty — it introduces itself first, then fills it in from what you tell it and the work it does.",
+        "executor": "Executor config",
+        "executorNewHint": "Made with it on the brain's agent, its options filled in.",
+        "executorHint": "Several assistants can share one executor config."
       },
       "roster": {
         "title": "Assistants",
@@ -9350,21 +9277,9 @@
         "other": "Other",
         "otherPlaceholder": "Write your own…",
         "send": "Send",
-        "setup": "Set up for it",
-        "role": "Role",
-        "brain": "Brain",
-        "executor": "Executor config",
-        "sameAsPrimary": "same as the primary assistant's",
-        "existing": "an existing one",
-        "filled": "{count, plural, one {# option} other {# options}} picked for you",
-        "options": "{count, plural, one {# option} other {# options}}",
-        "change": "Change",
         "answered": "You picked: {choice}",
         "answeredOwn": "You wrote: {text}",
         "noProjects": "No projects are open in codeg.",
-        "editBrain": "Change brain",
-        "editExecutor": "Change executor config",
-        "changeRole": "Change role",
         "from": {
           "given": "as said",
           "other_config": "from another config",
@@ -9381,8 +9296,6 @@
       },
       "changed": {
         "applied": "Made a work assistant",
-        "made": "Made {count, plural, one {a work assistant} other {# work assistants}} from your executor configs",
-        "madeHint": "Each takes the job its executor config was for, and keeps its executor config. Undoing one deletes the assistant; the executor config stays.",
         "show": "Make a work assistant? (you asked to see such changes first)",
         "suggested": "Suggestion: a new work assistant",
         "dismissed": "Not made",
@@ -9399,9 +9312,8 @@
         "dismiss": "Not now",
         "undo": "Undo",
         "undoAll": "Undo all",
-        "teamSuggested": "Suggestion: a team of work assistants",
-        "teamFor": "For {projects}",
-        "teamMake": "Make {count, plural, =0 {} one {# assistant} other {# assistants}}"
+        "uncheckedQuote": "The primary says you said “{quote}” — but you didn't type it this turn",
+        "persona": "Persona"
       },
       "delete": {
         "title": "Delete {name}?",
@@ -9410,7 +9322,6 @@
         "handOver": "Hand them to the primary assistant to follow (recommended)",
         "stop": "Stop them",
         "messages": "{count, plural, one {# message to it has} other {# messages to it have}} not been answered: they go back to their senders.",
-        "division": "It is the first pick for {kinds}: that goes back to auto.",
         "listJoiner": ", ",
         "dropExecutor": "Also delete its executor config {name}",
         "executorKept": "Kept by default: it can still be @-mentioned and used by codeg-cli.",
@@ -9429,7 +9340,8 @@
         "cancel": "Cancel",
         "save": "Save",
         "saved": "Saved."
-      }
+      },
+      "personaUnwritten": "No persona written yet"
     },
     "face": {
       "idle": "idle",
@@ -9958,8 +9870,6 @@
             "hint": "Another executor config checks it read-only; I judge it against what you asked."
           }
         },
-        "team": "Build a team",
-        "teamSuggested": "Team suggested",
         "prefs": "Adjust preferences",
         "pet": "Put me on the desktop",
         "petFailed": "Could not open the desktop companion",
@@ -10242,8 +10152,6 @@
         "kindDispatch": "Hand out work directly",
         "kindBrainHint": "It looks and reports; with nothing worth saying it stays quiet.",
         "kindDispatchHint": "codeg hands out the work below without waking the assistant; the result comes back as usual.",
-        "executor": "Executor config",
-        "ownExecutor": "Its own",
         "mode": "Way",
         "modeTask": "Board task",
         "modeSession": "Work session in the project",
@@ -10308,7 +10216,7 @@
           "edit": "change it"
         },
         "repeatBody": "You asked for something like this {count} times in 30 days.",
-        "pausedExecutor": "Its executor config was deleted, turned off, or may no longer be used by the assistants.",
+        "pausedExecutor": "Its work has nothing set to run on: no executor config, or the one it has is deleted or turned off.",
         "pausedFailures": "It failed three times in a row.",
         "trial": "Its trial run has started.",
         "reason": "Why: {reason}",
@@ -10318,11 +10226,11 @@
         "acceptChange": "Do it",
         "dismiss": "Not now",
         "makeIt": "Make it a routine",
-        "useAnother": "Use another",
         "resume": "Resume",
         "open": "Open routines",
         "confirm": "Routine to confirm",
-        "confirmChange": "Routine change to confirm"
+        "confirmChange": "Routine change to confirm",
+        "setExecutor": "Set its executor config"
       },
       "more": "More actions"
     },
@@ -10352,8 +10260,7 @@
         "new_project": "A new project",
         "behind": "A branch behind, with conflicts",
         "undo": "Changes you undid",
-        "idle_bot": "An idle work assistant",
-        "division": "Who does it better"
+        "idle_bot": "An idle work assistant"
       },
       "wait": {
         "permission": "Waiting for your approval",
@@ -10395,9 +10302,6 @@
         "idle_bot": {
           "hide": "Hide it",
           "delete": "Delete it…"
-        },
-        "division": {
-          "switch": "Give it to {name} first"
         }
       },
       "done": {
@@ -10411,9 +10315,7 @@
         "rebasing": "Sent back to be rebased.",
         "asking_first": "Changes you ask for now come to you as a card first.",
         "hidden": "Hidden. It is still there under the hidden assistants.",
-        "deleted": "Deleted.",
-        "switched": "{kind} now goes to {name} first.",
-        "undone": "Taken back: the division is as it was."
+        "deleted": "Deleted."
       },
       "hand": {
         "failed": "\"{title}\" failed and nobody has picked it up. Look into what went wrong and tell me what you suggest.",
@@ -10483,17 +10385,10 @@
         "idle_bot": {
           "title": "Idle work assistants",
           "hint": "In the weekly review: a work assistant nobody woke for two weeks — hide it or delete it?"
-        },
-        "division": {
-          "title": "Who does it better",
-          "hint": "Another executor config passes a kind of work the first time clearly more often than its first pick in the division (20 points or more, with at least 5 pieces done on each side)."
         }
       },
       "undoDetail": "You undid {undone} of the {made} changes made at your word in the last two weeks.",
-      "idleBotDetail": "Nobody has woken it for two weeks.",
-      "undoSwitch": "Undo",
-      "divisionDetail": "Last {days} days: {to} passed {pass} of {settled} the first time ({rate}%); {from}, the first pick now, {fromPass} of {fromSettled} ({fromRate}%).",
-      "divisionDetailAuto": "Last {days} days: {to} passed {pass} of {settled} the first time ({rate}%); the others together {fromPass} of {fromSettled} ({fromRate}%). Nobody is the first pick now."
+      "idleBotDetail": "Nobody has woken it for two weeks."
     },
     "brief": {
       "title": "Morning brief",
@@ -10673,7 +10568,8 @@
         "done_when": "done when",
         "depends_on": "what it waits for",
         "kind": "kind of work"
-      }
+      },
+      "self": "itself"
     },
     "tidy": {
       "title": {
@@ -10748,7 +10644,9 @@
       "primary": "Primary assistant",
       "worker": "Work assistant",
       "notSetUp": "Not set up yet"
-    }
+    },
+    "noExecutor": "It has no executor config to work on: it cannot do work itself for now.",
+    "setExecutor": "Set executor config"
   },
   "MessageCheck": {
     "action": "Have the assistant check this",

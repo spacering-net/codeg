@@ -7865,7 +7865,6 @@
   "PersonalAgent": {
     "title": "Agent personnel",
     "readOnly": "L'agent personnel s'exécute dans un autre processus codeg sur ce répertoire de données ; cette page est donc en lecture seule ici.",
-    "noAssistants": "Aucune configuration d'exécution à laquelle les assistants peuvent confier du travail pour l'instant : l'agent personnel leur confie son travail.",
     "viewSession": "Voir la session",
     "viewSessionHint": "La transcription complète de la session en cours, en direct.",
     "sessionTitle": "Session {seq} · transcription complète",
@@ -8106,12 +8105,10 @@
         "prefs": "Préférences",
         "identity": "Identité et cerveau",
         "persona": "Persona et mémoire",
-        "execution": "Exécution",
         "notify": "Notifications",
         "advanced": "Avancé",
         "workers": "Assistants de travail",
         "executors": "Configurations d'exécution",
-        "division": "Répartition du travail",
         "communication": "Communication",
         "proactive": "Proactivité et notifications",
         "automation": "Missions et automatisation",
@@ -8170,12 +8167,6 @@
           "hint": "Quand un assistant écrit à un autre.",
           "auto": "Envoyer directement",
           "ask": "Me demander d'abord"
-        },
-        "worker_handoff": {
-          "title": "Le principal confie le travail à un assistant de travail",
-          "hint": "Quand le travail revient à un assistant de travail.",
-          "message": "Lui écrire ; il le mène à bien",
-          "direct": "Confier à sa configuration d'exécution"
         },
         "loop_rounds": {
           "title": "Arrêter les échanges qui tournent à vide après",
@@ -8699,12 +8690,6 @@
           "title": "Plan bloqué",
           "hint": "Une étape a échoué et reste en échec."
         },
-        "rule_division": {
-          "title": "Qui le fait le mieux",
-          "hint": "Une autre configuration d’exécution réussit un type de travail du premier coup nettement plus souvent que son premier choix dans la répartition (20 points ou plus, avec au moins 5 travaux terminés de chaque côté).",
-          "on": "Activé",
-          "off": "Désactivé"
-        },
         "tidy": {
           "title": "Rangement de la mémoire et compétences de processus",
           "hint": "Chaque nuit, une fois que vous avez arrêté, les assistants rangent leur mémoire, leur persona et leurs règles ; quand une suite de travaux se passe bien, la façon de faire est consignée en compétence.",
@@ -8721,74 +8706,25 @@
         "apply": "Déplacer",
         "saved": "Répertoire de travail déplacé."
       },
-      "execution": {
-        "executor": "Configuration d'exécution",
-        "executorHint": "Celle à laquelle il confie le travail par défaut.",
-        "executorGone": "Sa configuration d'exécution a été supprimée : choisissez-en une autre.",
-        "pick": "Choisir",
-        "template": "Modèle",
-        "templateHint": "Le rôle pour lequel il a été créé.",
-        "noTemplate": "Vierge"
-      },
       "team": {
         "noWorkers": "Aucun assistant de travail pour l'instant",
-        "noWorkersHint": "Un assistant de travail prend en charge un rôle (écrire du code, relire) et le mène à bien.",
-        "boundTo": "confie à {name}",
-        "unbound": "aucune configuration d'exécution",
+        "noWorkersHint": "Un assistant de travail prend le travail qui est le sien et le mène à terme ; dites-le à l'assistant principal quand vous en voulez un, ou créez-en un ici.",
+        "boundTo": "travaille avec {name}",
+        "unbound": "aucune configuration d'exécution : ne peut pas encore travailler lui-même",
         "sameBatch": "Les assistants que vous mentionnez avec @ dans une conversation et ces configurations d'exécution sont les mêmes : modifiez-en un ici et les deux changent.",
         "delegationOff": "La collaboration multi-agent est désactivée : ils ne peuvent pas être mentionnés avec @ dans les conversations pour l'instant. Les missions des assistants ne sont pas concernées.",
-        "openCollaboration": "Ouvrir les réglages de Collaboration",
-        "auto": "Auto",
-        "divisionNote": "Si le premier choix est un assistant de travail, le principal lui écrit ; si c'est une configuration d'exécution, il lui confie le travail directement."
-      },
-      "usage": {
-        "title": "Comment les assistants l'utilisent",
-        "dispatch": "Les assistants peuvent lui confier du travail",
-        "dispatchHint": "Désactivée, elle reste mentionnable avec @ dans les conversations ; les assistants ne lui confient simplement plus de travail.",
-        "modes": "Modes acceptés",
-        "modesHint": "Une mission dans un autre mode est refusée, avec le motif.",
-        "projects": "Projets",
-        "projectsHint": "Une discussion n'a pas de projet : ce réglage n'en refuse donc jamais.",
-        "allProjects": "Tous les projets",
-        "saveFailed": "Impossible d'enregistrer la façon dont les assistants l'utilisent",
-        "notForDispatch": "pas pour les missions des assistants",
-        "onlyModes": "seulement {modes}",
-        "onlyProjects": "{count, plural, one {seulement sur # projet} other {seulement sur # projets}}"
+        "openCollaboration": "Ouvrir les réglages de Collaboration"
       },
       "executor": {
         "running": "{count} en cours",
         "fortnight": "2 semaines : {dispatches} confiées · {completed} terminées",
-        "boundBy": "de {name}",
-        "firstFor": "premier choix pour {kinds}",
         "failing": "Les {count} dernières missions qui lui ont été confiées ont toutes échoué : {error}",
-        "impactWorkerDelete": "C'est la configuration d'exécution de {name} : {name} en aura besoin d'une autre.",
-        "impactWorkerOff": "C'est la configuration d'exécution de {name} : {name} ne peut pas lui confier de travail tant qu'elle est désactivée.",
-        "impactDivisionDelete": "C'est le premier choix pour {kinds} : cela repasse en Auto.",
-        "impactDivisionOff": "C'est le premier choix pour {kinds} : les assistants en choisissent une autre tant qu'elle est désactivée.",
-        "impactRunning": "{count, plural, one {# travail qu'elle exécute continue.} other {# travaux qu'elle exécute continuent.}}"
-      },
-      "division": {
-        "code": "Écrire du code",
-        "codeHint": "Modifier le code d'un projet.",
-        "review": "Revue",
-        "reviewHint": "Lire une modification et dire ce qui ne va pas.",
-        "test": "Tests",
-        "testHint": "Écrire et lancer des tests.",
-        "fix_ci": "Réparer la CI",
-        "fix_ciHint": "Un pipeline en échec — et qui prend en charge une PR dont personne ne s'occupe.",
-        "docs": "Documentation",
-        "docsHint": "Rédiger et mettre à jour la documentation.",
-        "release": "Publications",
-        "releaseHint": "Versions, journaux des modifications, publication.",
-        "research": "Recherche",
-        "researchHint": "Se renseigner.",
-        "check": "Vérification",
-        "checkHint": "Vérifier le travail terminé avant de l'accepter. Seules celles qui acceptent les sessions de travail sont listées."
+        "impactRunning": "{count, plural, one {# travail qu'elle exécute continue.} other {# travaux qu'elle exécute continuent.}}",
+        "usedBy": "Utilisée par {names}",
+        "nameJoin": ", ",
+        "impactBots": "Ces assistants ne pourront pas travailler eux-mêmes pour l'instant : {names}."
       },
       "changed": {
-        "usageOf": "Comment les assistants utilisent {name}",
-        "usageDefault": "par défaut",
-        "usageSet": "défini",
         "on": "activé",
         "off": "désactivé",
         "default": "par défaut"
@@ -8906,7 +8842,19 @@
       "deleteSkill": "Supprimer la compétence",
       "confirmDeleteSkillHint": "Supprimer cette compétence de processus ? Son dossier est retiré du répertoire de travail.",
       "skillDeleted": "{name} supprimée",
-      "viewSubtitle": "Communs à tous les assistants"
+      "viewSubtitle": "Communs à tous les assistants",
+      "personaUnwritten": "Pas encore de persona écrite. Il la complète lui-même — en se présentant, quand vous lui confiez du travail, et lors du rangement de chaque nuit — ou vous pouvez l'écrire ici.",
+      "executorPick": {
+        "title": "Configuration d'exécution",
+        "hint": "Le cerveau réfléchit ; la configuration d'exécution fait le travail : tout ce qu'il fait lui-même tourne dessus. Plusieurs assistants peuvent en partager une.",
+        "newHint": "L'enregistrement en crée une sur l'agent du cerveau, ses options remplies.",
+        "missing": "Aucune configuration d'exécution : il ne peut pas travailler lui-même pour l'instant. Choisissez-en une ou créez-en une.",
+        "disabled": "Cette configuration d'exécution est désactivée : il ne peut pas travailler lui-même pour l'instant.",
+        "editorNote": "codeg n'a pas pu lire les options de cet agent ({why}) : choisissez-les ici ; il utilisera cette configuration d'exécution.",
+        "new": "Nouvelle, sur l'agent du cerveau",
+        "none": "Aucune",
+        "off": "(désactivée)"
+      }
     },
     "statusWord": {
       "idle": "Inactif",
@@ -8983,7 +8931,6 @@
         "dispatch_followup": "Relance un travail",
         "items": "Met à jour les sujets en cours",
         "timeline_read": "Relit la conversation",
-        "assistant_list": "Consulte les assistants",
         "project_list": "Consulte les projets"
       },
       "kind": {
@@ -9036,9 +8983,7 @@
       "more": "{count} de plus",
       "doneWhen": "Terminé quand",
       "check": "Vérification de validation",
-      "checkRound": "Vérification de validation · tour {round}",
-      "checkVia": "vérifié avec la configuration d'exécution de {name}",
-      "why": "Pourquoi : {why}"
+      "checkRound": "Vérification de validation · tour {round}"
     },
     "event": {
       "someone": "Un assistant",
@@ -9169,45 +9114,25 @@
         "dismiss": "Pas maintenant",
         "undo": "Annuler",
         "seeSettings": "Voir dans les réglages",
-        "bothWays": "Les configurations d'exécution sont aussi celles qu'un @ atteint dans une session : la modification vaut pour les deux.",
         "team": {
           "of": "{name} · {field}",
           "botField": {
             "name": "nom",
             "avatar": "visage",
             "brain": "cerveau",
-            "executor": "configuration d'exécution",
-            "template": "rôle",
             "notify": "notifications",
             "muted": "sourdine",
-            "hidden": "masqué"
-          },
-          "assistantField": {
-            "name": "nom",
-            "description": "description",
-            "instructions": "instructions permanentes",
-            "agent": "agent et options",
-            "enabled": "activée"
+            "hidden": "masqué",
+            "persona": "persona",
+            "work_agent": "agent qui fait son travail"
           },
           "avatarOther": "image personnalisée",
-          "empty": "(vide)"
+          "empty": "(vide)",
+          "nothingSet": "rien de défini",
+          "personaNow": "Actuellement",
+          "personaNew": "Devient"
         },
-        "assistant": {
-          "applied": "Configuration d'exécution créée, comme demandé",
-          "accepted": "Configuration d'exécution créée",
-          "undone": "Annulé : supprimée",
-          "dismissed": "Pas créée",
-          "suggested": "Suggestion : une nouvelle configuration d'exécution",
-          "show": "Créer la configuration d'exécution ? (tu as demandé à voir ces changements d'abord)",
-          "editor": "Impossible de créer la configuration d'exécution",
-          "on": "avec {agent}",
-          "editorHint": "codeg n'a pas pu lire les options de {agent} ({why}), rien n'a donc été créé. Ouvre l'éditeur prérempli avec ta demande et choisis le reste.",
-          "firstFor": "Premier choix pour : {kinds}",
-          "kept": "{count, plural, one {# élément a été modifié} other {# éléments ont été modifiés}} depuis, donc laissés tels quels",
-          "accept": "La créer",
-          "edit": "Modifier",
-          "openEditor": "Ouvrir l'éditeur"
-        }
+        "uncheckedQuote": "L'assistant principal dit que vous avez dit « {quote} », mais vous ne l'avez pas tapé à ce tour"
       },
       "retryOf": "Relancer « {title} »",
       "tonight": {
@@ -9241,7 +9166,6 @@
       "withdrawn": "Plus nécessaire",
       "resolved": "Réglé"
     },
-    "addExecutor": "Ajouter une configuration d'exécution",
     "bots": {
       "new": "Nouvel assistant de travail",
       "copyName": "{name} (copie)",
@@ -9250,8 +9174,6 @@
       "more": "Plus",
       "copy": "Dupliquer",
       "deleteAction": "Supprimer…",
-      "fromTemplate": "À partir d'un modèle",
-      "reviewAgentHint": "Choisissez un agent différent de celui de votre développeur : celui qui vérifie le travail ne doit pas être celui qui l'a écrit.",
       "face": {
         "change": "Changer l'avatar",
         "shape": "Forme",
@@ -9289,13 +9211,18 @@
       },
       "create": {
         "title": "Nouvel assistant de travail",
-        "description": "Juste un nom. Son rôle est déduit du nom, son cerveau est celui de l'assistant principal, et une configuration d'exécution est créée avec lui.",
+        "description": "Un nom et quelques mots sur qui il est ; son cerveau est celui de l'assistant principal.",
         "name": "Nom",
         "namePlaceholder": "ex. : Relecture de code",
-        "hint": "Vous pouvez changer son rôle sur sa première carte, et tout le reste dans ses réglages.",
         "cancel": "Annuler",
         "create": "Créer",
-        "editorNote": "codeg n'a pas pu lire les options de cet agent ({why}), choisissez-les donc ici ; l'assistant de travail est créé avec cette configuration d'exécution."
+        "editorNote": "codeg n'a pas pu lire les options de cet agent ({why}), choisissez-les donc ici ; l'assistant de travail est créé avec cette configuration d'exécution.",
+        "persona": "Persona",
+        "personaPlaceholder": "ex. : Je relis les changements de code : s'ils sont justes et bien testés.",
+        "personaHint": "Une ou deux lignes : qui il est, quel travail lui confier. Vous pouvez laisser vide — il se présente d'abord, puis complète d'après ce que vous lui dites et le travail qu'il fait.",
+        "executor": "Configuration d'exécution",
+        "executorNewHint": "Créée avec lui sur l'agent du cerveau, ses options remplies.",
+        "executorHint": "Plusieurs assistants peuvent partager une configuration d'exécution."
       },
       "roster": {
         "title": "Assistants",
@@ -9350,21 +9277,9 @@
         "other": "Autre",
         "otherPlaceholder": "Votre réponse…",
         "send": "Envoyer",
-        "setup": "Préparé pour lui",
-        "role": "Rôle",
-        "brain": "Cerveau",
-        "executor": "Configuration d'exécution",
-        "sameAsPrimary": "identique à celui de l'assistant principal",
-        "existing": "une existante",
-        "filled": "{count, plural, one {# option choisie} other {# options choisies}} pour vous",
-        "options": "{count, plural, one {# option} other {# options}}",
-        "change": "Modifier",
         "answered": "Votre choix : {choice}",
         "answeredOwn": "Vous avez écrit : {text}",
         "noProjects": "Aucun projet n'est ouvert dans codeg.",
-        "editBrain": "Modifier le cerveau",
-        "editExecutor": "Modifier la configuration d'exécution",
-        "changeRole": "Modifier le rôle",
         "from": {
           "given": "comme demandé",
           "other_config": "d'une autre configuration",
@@ -9381,8 +9296,6 @@
       },
       "changed": {
         "applied": "Assistant de travail créé",
-        "made": "{count, plural, one {Un assistant de travail créé} other {# assistants de travail créés}} à partir de vos configurations d'exécution",
-        "madeHint": "Chacun reprend le rôle auquel sa configuration d'exécution était destinée, et la garde. Annuler l'un d'eux supprime l'assistant ; la configuration d'exécution reste.",
         "show": "Créer un assistant de travail ? (vous avez demandé à voir d'abord ce type de modification)",
         "suggested": "Suggestion : un nouvel assistant de travail",
         "dismissed": "Non créé",
@@ -9399,9 +9312,8 @@
         "dismiss": "Pas maintenant",
         "undo": "Annuler",
         "undoAll": "Tout annuler",
-        "teamSuggested": "Suggestion : une équipe d'assistants de travail",
-        "teamFor": "Pour {projects}",
-        "teamMake": "Créer{count, plural, =0 {} one { # assistant} other { # assistants}}"
+        "uncheckedQuote": "L'assistant principal dit que vous avez dit « {quote} », mais vous ne l'avez pas tapé à ce tour",
+        "persona": "Persona"
       },
       "delete": {
         "title": "Supprimer {name} ?",
@@ -9410,7 +9322,6 @@
         "handOver": "Les confier à l'assistant principal pour qu'il en assure le suivi (recommandé)",
         "stop": "Les arrêter",
         "messages": "{count, plural, one {# message qui lui est adressé est resté sans réponse : il retourne à son expéditeur.} other {# messages qui lui sont adressés sont restés sans réponse : ils retournent à leurs expéditeurs.}}",
-        "division": "C'est le premier choix pour {kinds} : cela repasse en Auto.",
         "listJoiner": ", ",
         "dropExecutor": "Supprimer aussi sa configuration d'exécution {name}",
         "executorKept": "Conservée par défaut : elle reste mentionnable avec @ et utilisable par codeg-cli.",
@@ -9429,7 +9340,8 @@
         "cancel": "Annuler",
         "save": "Enregistrer",
         "saved": "Enregistré."
-      }
+      },
+      "personaUnwritten": "Pas encore de persona écrite"
     },
     "face": {
       "idle": "disponible",
@@ -9958,8 +9870,6 @@
             "hint": "Une autre configuration d'exécution le vérifie en lecture seule ; je le juge d'après ce que vous avez demandé."
           }
         },
-        "team": "Former une équipe",
-        "teamSuggested": "Équipe suggérée",
         "prefs": "Ajuster les préférences",
         "pet": "Me mettre sur le bureau",
         "petFailed": "Impossible d'ouvrir le compagnon de bureau",
@@ -10242,8 +10152,6 @@
         "kindDispatch": "Confier du travail directement",
         "kindBrainHint": "Il regarde et rend compte ; s'il n'y a rien à dire, il reste silencieux.",
         "kindDispatchHint": "codeg confie le travail ci-dessous sans réveiller l'assistant ; le résultat revient comme d'habitude.",
-        "executor": "Configuration d'exécution",
-        "ownExecutor": "La sienne",
         "mode": "Mode",
         "modeTask": "Tâche du tableau",
         "modeSession": "Session de travail dans le projet",
@@ -10308,7 +10216,7 @@
           "edit": "la modifier"
         },
         "repeatBody": "Vous avez demandé quelque chose de semblable {count} fois en 30 jours.",
-        "pausedExecutor": "Sa configuration d'exécution a été supprimée, désactivée ou n'est plus utilisable par les assistants.",
+        "pausedExecutor": "Son travail n'a rien sur quoi tourner : pas de configuration d'exécution, ou celle qu'il avait a été supprimée ou désactivée.",
         "pausedFailures": "Elle a échoué trois fois d'affilée.",
         "trial": "Son exécution d'essai a commencé.",
         "reason": "Pourquoi : {reason}",
@@ -10318,11 +10226,11 @@
         "acceptChange": "Appliquer",
         "dismiss": "Pas maintenant",
         "makeIt": "En faire une routine",
-        "useAnother": "En utiliser une autre",
         "resume": "Reprendre",
         "open": "Ouvrir les routines",
         "confirm": "Routine à confirmer",
-        "confirmChange": "Changement de routine à confirmer"
+        "confirmChange": "Changement de routine à confirmer",
+        "setExecutor": "Définir sa configuration d'exécution"
       },
       "more": "Plus d'actions"
     },
@@ -10352,8 +10260,7 @@
         "new_project": "Un nouveau projet",
         "behind": "Branche en retard, avec conflits",
         "undo": "Changements annulés",
-        "idle_bot": "Un assistant de travail inactif",
-        "division": "Qui le fait le mieux"
+        "idle_bot": "Un assistant de travail inactif"
       },
       "wait": {
         "permission": "Attend votre approbation",
@@ -10395,9 +10302,6 @@
         "idle_bot": {
           "hide": "Le masquer",
           "delete": "Le supprimer…"
-        },
-        "division": {
-          "switch": "Le confier d’abord à {name}"
         }
       },
       "done": {
@@ -10411,9 +10315,7 @@
         "rebasing": "Renvoyé pour un rebase.",
         "asking_first": "Les changements demandés vous seront d'abord montrés sur une carte.",
         "hidden": "Masqué. Il reste parmi les assistants masqués.",
-        "deleted": "Supprimé.",
-        "switched": "{kind} va désormais d’abord à {name}.",
-        "undone": "Annulé : la répartition est comme avant."
+        "deleted": "Supprimé."
       },
       "hand": {
         "failed": "« {title} » a échoué et personne ne s'en est occupé. Regarde ce qui n'a pas marché et dis-moi ce que tu proposes.",
@@ -10483,17 +10385,10 @@
         "idle_bot": {
           "title": "Assistants de travail inactifs",
           "hint": "Dans le bilan de la semaine : un assistant de travail que personne n'a réveillé depuis deux semaines — le masquer ou le supprimer ?"
-        },
-        "division": {
-          "title": "Qui le fait le mieux",
-          "hint": "Une autre configuration d’exécution réussit un type de travail du premier coup nettement plus souvent que son premier choix dans la répartition (20 points ou plus, avec au moins 5 travaux terminés de chaque côté)."
         }
       },
       "undoDetail": "Vous avez annulé {undone} des {made} changements faits à votre demande ces deux dernières semaines.",
-      "idleBotDetail": "Personne ne l'a réveillé depuis deux semaines.",
-      "undoSwitch": "Annuler",
-      "divisionDetail": "{days} derniers jours : {to} a réussi du premier coup {pass} sur {settled} ({rate} %) ; {from}, le premier choix actuel, {fromPass} sur {fromSettled} ({fromRate} %).",
-      "divisionDetailAuto": "{days} derniers jours : {to} a réussi du premier coup {pass} sur {settled} ({rate} %) ; les autres ensemble, {fromPass} sur {fromSettled} ({fromRate} %). Il n’y a pas de premier choix pour l’instant."
+      "idleBotDetail": "Personne ne l'a réveillé depuis deux semaines."
     },
     "brief": {
       "title": "Point du matin",
@@ -10673,7 +10568,8 @@
         "done_when": "terminé quand",
         "depends_on": "ce qu’elle attend",
         "kind": "type de travail"
-      }
+      },
+      "self": "lui-même"
     },
     "tidy": {
       "title": {
@@ -10748,7 +10644,9 @@
       "primary": "Assistant principal",
       "worker": "Assistant de travail",
       "notSetUp": "Pas encore configuré"
-    }
+    },
+    "noExecutor": "Il n'a pas de configuration d'exécution utilisable : il ne peut pas travailler lui-même pour l'instant.",
+    "setExecutor": "Définir la configuration"
   },
   "MessageCheck": {
     "action": "Faire vérifier par l’assistant",

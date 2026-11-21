@@ -71,14 +71,12 @@ export function DoneWhen({
   )
 }
 
-/** "Acceptance check · round 2 · checked with Ace's executor config". */
+/** "Acceptance check · round 2". */
 export function CheckLabel({
   round,
-  via,
   className,
 }: {
   round: number | null
-  via: string | null
   className?: string
 }) {
   const t = useTranslations("PersonalAgent.dispatchCard")
@@ -88,11 +86,6 @@ export function CheckLabel({
       className={cn("text-xs text-muted-foreground", className)}
     >
       {round != null ? t("checkRound", { round }) : t("check")}
-      {via ? (
-        <span className="before:mx-1.5 before:content-['·']">
-          {t("checkVia", { name: via })}
-        </span>
-      ) : null}
     </p>
   )
 }

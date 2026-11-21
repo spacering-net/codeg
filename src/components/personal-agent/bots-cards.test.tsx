@@ -4,9 +4,7 @@ import {
   render,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react"
-import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -18,35 +16,6 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 const api = vi.hoisted(() => ({
   personalAgentNoticeAct: vi.fn(),
   personalAgentChoiceAnswer: vi.fn(),
-  personalAgentBotSetTemplate: vi.fn(),
-  personalAgentTemplates: vi.fn(async () => [
-    {
-      id: "review",
-      name: "Reviewer",
-      job: "Look at PRs.",
-      description: "",
-      instructions: "",
-      opener: "Send me a PR.",
-      options: ["a", "b", "c"],
-      other: "Other",
-      modes: ["session"],
-      division: "review",
-      project_option: null,
-    },
-    {
-      id: "dev",
-      name: "Developer",
-      job: "Make PRs.",
-      description: "",
-      instructions: "",
-      opener: "Send me a request.",
-      options: ["a", "b", "c"],
-      other: "Other",
-      modes: ["task"],
-      division: "code",
-      project_option: 2,
-    },
-  ]),
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/contexts/personal-agent-context", () => ({
@@ -118,9 +87,7 @@ const starter = (extra: Record<string, unknown> = {}) =>
   row(
     {
       notice: "choice",
-      purpose: "starter",
       state: "open",
-      template: "review",
       question: "Send me a PR, a diff or a repository link.",
       options: [
         { key: "A", label: "Review a PR", project: false },
@@ -128,31 +95,6 @@ const starter = (extra: Record<string, unknown> = {}) =>
         { key: "C", label: "Pick a project", project: true },
       ],
       other: "Other",
-      made: {
-        brain: { agent: "Claude Code", same_as_primary: true, picked: [] },
-        executor: {
-          id: 3,
-          name: "Reviewer",
-          agent: "Claude Code",
-          created: true,
-          picked: [
-            {
-              id: "model",
-              name: "Model",
-              value: "sonnet",
-              value_label: "Sonnet",
-              from: "agent",
-            },
-            {
-              id: "effort",
-              name: "Effort",
-              value: "high",
-              value_label: "High",
-              from: "other_config",
-            },
-          ],
-        },
-      },
       ...extra,
     },
     "Send me a PR, a diff or a repository link."
@@ -171,26 +113,19 @@ afterEach(() => {
   cleanup()
   api.personalAgentNoticeAct.mockReset()
   api.personalAgentChoiceAnswer.mockReset()
-  api.personalAgentBotSetTemplate.mockReset()
 })
 
-describe("the opening choice card", () => {
+describe("a choice card", () => {
   it("answers with a choice, a letter key, or the owner's own words", async () => {
     api.personalAgentChoiceAnswer.mockResolvedValue(starter())
     draw(starter())
     expect(
       screen.getByText("Send me a PR, a diff or a repository link.")
     ).toBeTruthy()
-    // The card is the message, no bubble round it; what codeg set up a band
-    // of its own, not a box in it.
+    // The card is the message, no bubble round it.
     const self = document.querySelector("[data-pa-choice-card]")!
     expect(self.hasAttribute("data-pa-card-message")).toBe(true)
     expect(self.closest(".pa-agent-bubble")).toBeNull()
-    expect(
-      document
-        .querySelector("[data-pa-starter-foot]")
-        ?.hasAttribute("data-pa-sheet-part")
-    ).toBe(true)
     fireEvent.click(screen.getByText("Look at local changes"))
     await waitFor(() =>
       expect(api.personalAgentChoiceAnswer).toHaveBeenCalledWith(
@@ -248,81 +183,6 @@ describe("the opening choice card", () => {
     expect(screen.queryByText("Review a PR")).toBeNull()
     fireEvent.click(line)
     expect(screen.getByText("Review a PR")).toBeTruthy()
-    // Its role still said, no longer changed.
-    expect(screen.getByText("Role")).toBeTruthy()
-    expect(screen.queryByRole("button", { name: /Change role/ })).toBeNull()
-  })
-
-  it("says what codeg set up for it, line by line, and changes its role", async () => {
-    api.personalAgentBotSetTemplate.mockResolvedValue(starter())
-    draw(starter({ template_name: "Reviewer" }))
-    const setup = document.querySelector<HTMLElement>("[data-pa-starter-foot]")!
-    expect(within(setup).getByText("Set up for it")).toBeTruthy()
-    // A label, what it is and how to change it, a line each.
-    expect(
-      [...setup.querySelector("dl")!.children]
-        .filter((c) => c.tagName === "DT")
-        .map((d) => d.textContent)
-    ).toEqual(["Role", "Brain", "Executor config"])
-    expect(within(setup).getByText("Reviewer")).toBeTruthy()
-    expect(
-      within(setup).getByText("· same as the primary assistant's")
-    ).toBeTruthy()
-    // The options picked, folded under the executor's line; open, by where
-    // each came from.
-    const made = within(setup).getByRole("button", {
-      name: /2 options picked for you/,
-    })
-    expect(made.getAttribute("aria-expanded")).toBe("false")
-    expect(screen.queryByText("agent's default")).toBeNull()
-    fireEvent.click(made)
-    const picked = setup.querySelector<HTMLElement>("[data-pa-starter-picked]")!
-    expect(
-      [...picked.children].map((g) =>
-        [...g.querySelectorAll("p, dt, dd")].map((e) => e.textContent)
-      )
-    ).toEqual([
-      ["from another config", "Effort", "High"],
-      ["agent's default", "Model", "Sonnet"],
-    ])
-
-    fireEvent.click(screen.getByRole("button", { name: "Change brain" }))
-    expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "identity" })
-    fireEvent.click(
-      screen.getByRole("button", { name: "Change executor config" })
-    )
-    expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "execution" })
-    const role = screen.getByRole("button", { name: /Change role/ })
-    await waitFor(() => expect(role.hasAttribute("disabled")).toBe(false))
-    await userEvent.click(role)
-    await userEvent.click(await screen.findByText("Developer"))
-    await waitFor(() =>
-      expect(api.personalAgentBotSetTemplate).toHaveBeenCalledWith(7, "dev")
-    )
-  })
-
-  it("names the executor config it was bound to, an existing one", () => {
-    draw(
-      starter({
-        made: {
-          brain: { agent: "Codex", same_as_primary: false, picked: [] },
-          executor: {
-            id: 3,
-            name: "My Codex",
-            agent: "Codex CLI",
-            created: false,
-            picked: [],
-          },
-        },
-      })
-    )
-    const setup = document.querySelector<HTMLElement>("[data-pa-starter-foot]")!
-    expect(within(setup).getByText("My Codex")).toBeTruthy()
-    expect(within(setup).getByText("· an existing one")).toBeTruthy()
-    expect(within(setup).getByText("Codex")).toBeTruthy()
-    expect(within(setup).queryByText(/same as the primary/)).toBeNull()
-    // Nothing picked: nothing to open.
-    expect(setup.querySelector("[data-pa-starter-made]")).toBeNull()
   })
 })
 
@@ -332,7 +192,7 @@ describe("the card about work assistants made", () => {
       notice: "changed",
       what: "bots",
       state: "applied",
-      why: "made",
+      why: "asked",
       bots,
       ...extra,
     })
@@ -340,7 +200,6 @@ describe("the card about work assistants made", () => {
     bot_id: id,
     name: `Bot ${id}`,
     face: { id, name: `Bot ${id}`, avatar: null, kind: "worker" },
-    template_name: "Developer",
     executor_name: `Exec ${id}`,
     executor_agent: "Codex",
     executor_created: false,
@@ -351,9 +210,7 @@ describe("the card about work assistants made", () => {
   it("undoes one of them, or all", async () => {
     api.personalAgentNoticeAct.mockResolvedValue(made([bot(1), bot(2)]))
     draw(made([bot(1), bot(2)]))
-    expect(
-      screen.getByText("Made 2 work assistants from your executor configs")
-    ).toBeTruthy()
+    expect(screen.getByText("Made a work assistant")).toBeTruthy()
     expect(screen.getByText(/keeps Exec 1/)).toBeTruthy()
     fireEvent.click(
       document.querySelector("[data-pa-undo-bot='2']") as HTMLElement
@@ -422,6 +279,38 @@ describe("the card about work assistants made", () => {
     await waitFor(() =>
       expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(12, "accept", 7)
     )
+  })
+})
+
+describe("a card to make a work assistant (R9)", () => {
+  it("shows the whole persona it would be made with, and words not typed this turn as not checked", () => {
+    draw(
+      row({
+        notice: "changed",
+        what: "bots",
+        state: "open",
+        why: "show",
+        bots: [],
+        pending: {
+          name: "Reviewer",
+          persona: "I review code changes.\nWhether they are right.",
+        },
+        quote: null,
+        unchecked_quote: "make me a reviewer",
+      })
+    )
+    expect(screen.getByText("Reviewer")).toBeTruthy()
+    const persona = document.querySelector("[data-pa-bot-persona]")!
+    expect(persona.textContent).toContain(
+      "I review code changes.\nWhether they are right."
+    )
+    // Never shown as the owner's own words.
+    expect(screen.queryByText(/You said/)).toBeNull()
+    expect(
+      screen.getByText(
+        "The primary says you said “make me a reviewer” — but you didn't type it this turn"
+      )
+    ).toBeTruthy()
   })
 })
 

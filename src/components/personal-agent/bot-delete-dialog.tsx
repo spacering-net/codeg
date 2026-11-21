@@ -4,8 +4,8 @@
  * Deleting a work assistant (4.14): the confirmation says what it touches —
  * its running work (handed to the primary to follow, by default, or
  * stopped), the messages it has not answered (they go back to their
- * senders), its executor config (kept unless ticked), its place in the
- * division (back to auto) and its working directory (kept unless ticked).
+ * senders), its executor config (kept unless ticked) and its working
+ * directory (kept unless ticked).
  */
 
 import { useEffect, useState } from "react"
@@ -42,7 +42,6 @@ export function BotDeleteDialog({
   onDeleted?: () => void
 }) {
   const t = useTranslations("PersonalAgent.bots.delete")
-  const tk = useTranslations("PersonalAgent.settings.division")
   const viewBot = usePersonalAgentUi((s) => s.viewBot)
   const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
   const [impact, setImpact] = useState<BotImpact | null>(null)
@@ -158,15 +157,6 @@ export function BotDeleteDialog({
                   steps: impact.plan_steps
                     .slice(0, 3)
                     .map((s) => `${s.plan_title} · ${s.seq}. ${s.title}`)
-                    .join(t("listJoiner")),
-                })}
-              </p>
-            ) : null}
-            {impact.division.length > 0 ? (
-              <p className="text-xs text-muted-foreground">
-                {t("division", {
-                  kinds: impact.division
-                    .map((k) => tk(k as "code"))
                     .join(t("listJoiner")),
                 })}
               </p>

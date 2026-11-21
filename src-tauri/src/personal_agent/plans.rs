@@ -1781,6 +1781,9 @@ impl PersonalAgentEngine {
                 ));
                 view.work_task_id = d.work_task_id;
                 view.conversation_id = d.conversation_id;
+                // The agent the step's work ran on: what its conversation
+                // opens with (an agent, never an executor config's name).
+                view.agent_type = Some(super::dispatch::executor_of(&d).agent_type);
                 if let Some(cid) = d.conversation_id {
                     view.conversation_folder_id =
                         crate::db::service::conversation_service::get_by_id(&self.db.conn, cid)

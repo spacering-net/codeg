@@ -2,65 +2,37 @@
 
 /**
  * A choice card (10.7): a question, its lettered choices and "Other" for
- * the owner's own words. This is the native one (a new assistant's
- * opening card); the assistant brain's own questions draw the same way,
- * one question at a time (`question-choice-card.tsx`).
+ * the owner's own words. This is codeg's native one; the assistant brain's
+ * own questions draw the same way, one question at a time
+ * (`question-choice-card.tsx`).
  * A letter key picks while the card has focus. Answered, it folds to one
  * line — "You picked: B. Look at local changes" — that opens to show the
  * card as it was. A choice that is about a project opens the project list
  * first.
- *
- * A new work assistant's opening card (4.12) carries more: [Change role]
- * while it has not started, and under it what codeg made for it — its
- * brain, its executor config and the options picked for the owner — with
- * [Change brain] [Change executor config].
  */
 
-import { Fragment, useMemo, useState, type ReactNode } from "react"
+import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
-  Bot,
-  Brain,
-  BriefcaseBusiness,
   ChevronDown,
   ChevronRight,
   CircleCheck,
   PenLine,
   Send,
-  type LucideIcon,
 } from "lucide-react"
 
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { useBotId } from "@/contexts/personal-agent-context"
-import {
-  personalAgentBotSetTemplate,
-  personalAgentChoiceAnswer,
-} from "@/lib/api"
+import { personalAgentChoiceAnswer } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import type { PickedOption } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
-import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MessageItem } from "./message-items"
 import { MessageRow } from "./message-row"
-import {
-  CardMessage,
-  SheetLabel,
-  SheetNote,
-  SheetPart,
-  str,
-  usePageScope,
-} from "./shared"
-import { useBotTemplates } from "./use-templates"
+import { CardMessage, SheetNote, SheetPart, str, usePageScope } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
 
@@ -131,15 +103,6 @@ function optionsOf(v: unknown): ChoiceOption[] {
     }))
 }
 
-function pickedOf(v: unknown): PickedOption[] {
-  return Array.isArray(v)
-    ? v.filter(
-        (p): p is PickedOption =>
-          p != null && typeof p === "object" && "id" in p && "from" in p
-      )
-    : []
-}
-
 export function ChoiceCard({ item }: { item: NoticeItem }) {
   const t = useTranslations("PersonalAgent.bots.choice")
   const { readOnly } = usePageScope()
@@ -153,7 +116,6 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
   const other = str(data, "other") ?? t("other")
   const otherKey = String.fromCharCode(65 + options.length)
   const answer = (data.answer ?? null) as Record<string, unknown> | null
-  const starter = str(data, "purpose") === "starter"
   const [unfolded, setUnfolded] = useState(false)
   const [choosingProject, setChoosingProject] = useState<string | null>(null)
   const [writing, setWriting] = useState(false)
@@ -379,14 +341,6 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
             {body}
           </SheetPart>
         )}
-        {starter ? (
-          <StarterFoot
-            data={data}
-            open={!answered}
-            readOnly={readOnly}
-            botId={botId}
-          />
-        ) : null}
         {error ? (
           <SheetNote>
             <p role="alert" className="break-words text-destructive">
@@ -396,245 +350,5 @@ export function ChoiceCard({ item }: { item: NoticeItem }) {
         ) : null}
       </CardMessage>
     </MessageRow>
-  )
-}
-
-/** Where a picked option's value came from, in the order they are told. */
-const FROM_ORDER: readonly PickedOption["from"][] = [
-  "given",
-  "other_config",
-  "agent",
-]
-
-/**
- * Under a new assistant's opening card: what codeg set up for it — a panel
- * of three lines, each a label, what it is and how to change it: its role
- * (while the card waits for an answer), its brain and its executor config.
- * The options codeg picked for either open under its line, by where they
- * came from.
- */
-function StarterFoot({
-  data,
-  open,
-  readOnly,
-  botId,
-}: {
-  data: Record<string, unknown>
-  open: boolean
-  readOnly: boolean
-  botId: number | null
-}) {
-  const t = useTranslations("PersonalAgent.bots.choice")
-  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
-  const templates = useBotTemplates()
-  const [switching, setSwitching] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const made = (data.made ?? {}) as Record<string, unknown>
-  const brain = (made.brain ?? {}) as Record<string, unknown>
-  const executor = (made.executor ?? {}) as Record<string, unknown>
-  const picked = pickedOf(executor.picked)
-  const brainPicked = pickedOf(brain.picked)
-  const filled = picked.filter((p) => p.from !== "given").length
-  const template = str(data, "template")
-  const templateName =
-    str(data, "template_name") ??
-    templates?.find((tpl) => tpl.id === template)?.name ??
-    template ??
-    ""
-  const bound = executor.created === false
-
-  const changeRole = async (id: string) => {
-    if (botId == null) return
-    setSwitching(true)
-    setError(null)
-    try {
-      await personalAgentBotSetTemplate(botId, id)
-    } catch (e) {
-      setError(toErrorMessage(e))
-    } finally {
-      setSwitching(false)
-    }
-  }
-
-  return (
-    <SheetPart className="pb-2" data-pa-starter-foot>
-      <SheetLabel className="mb-1">{t("setup")}</SheetLabel>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1">
-        <SetupLine
-          icon={BriefcaseBusiness}
-          label={t("role")}
-          value={templateName}
-          // Changed only before the card is answered: the answer is about
-          // the role.
-          action={
-            open ? (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    disabled={readOnly || switching || !templates}
-                    aria-label={t("changeRole")}
-                    title={t("changeRole")}
-                    data-pa-change-role
-                  >
-                    {switching ? <SyncedSpinner small /> : null}
-                    {t("change")}
-                    <ChevronDown aria-hidden />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-64">
-                  {(templates ?? []).map((tpl) => (
-                    <DropdownMenuItem
-                      key={tpl.id}
-                      disabled={tpl.id === template}
-                      onSelect={() => void changeRole(tpl.id)}
-                      data-pa-role={tpl.id}
-                      className="flex flex-col items-start gap-0.5"
-                    >
-                      <span className="text-sm">{tpl.name}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {tpl.job}
-                      </span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            ) : null
-          }
-        />
-        <SetupLine
-          icon={Brain}
-          label={t("brain")}
-          value={str(brain, "agent") ?? ""}
-          note={brain.same_as_primary === true ? t("sameAsPrimary") : null}
-          picked={brainPicked}
-          pickedLabel={t("options", { count: brainPicked.length })}
-          action={
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => openBotPage("identity")}
-              aria-label={t("editBrain")}
-              title={t("editBrain")}
-            >
-              {t("change")}
-            </Button>
-          }
-        />
-        <SetupLine
-          icon={Bot}
-          label={t("executor")}
-          value={(bound ? str(executor, "name") : str(executor, "agent")) ?? ""}
-          note={bound ? t("existing") : null}
-          picked={picked}
-          pickedLabel={
-            filled > 0
-              ? t("filled", { count: filled })
-              : t("options", { count: picked.length })
-          }
-          action={
-            <Button
-              size="xs"
-              variant="ghost"
-              onClick={() => openBotPage("execution")}
-              aria-label={t("editExecutor")}
-              title={t("editExecutor")}
-            >
-              {t("change")}
-            </Button>
-          }
-        />
-      </dl>
-      {error ? (
-        <p role="alert" className="mt-1.5 text-xs break-words text-destructive">
-          {error}
-        </p>
-      ) : null}
-    </SheetPart>
-  )
-}
-
-/** One line of the set-up panel: its label, what it is — with a word on
- *  it and the options picked, folded — and a button to change it. */
-function SetupLine({
-  icon: Icon,
-  label,
-  value,
-  note = null,
-  picked = [],
-  pickedLabel,
-  action,
-}: {
-  icon: LucideIcon
-  label: string
-  value: string
-  note?: string | null
-  picked?: readonly PickedOption[]
-  pickedLabel?: string
-  action: ReactNode | null
-}) {
-  const t = useTranslations("PersonalAgent.bots.choice")
-  const [unfolded, setUnfolded] = useState(false)
-  const groups = FROM_ORDER.map(
-    (from) => [from, picked.filter((p) => p.from === from)] as const
-  ).filter(([, items]) => items.length > 0)
-  return (
-    <>
-      <dt className="flex h-7 items-center gap-1.5 text-xs text-muted-foreground">
-        <Icon aria-hidden className="size-3.5 shrink-0" />
-        {label}
-      </dt>
-      <dd className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm">
-        <span className="min-w-0 truncate font-medium" title={value}>
-          {value}
-        </span>
-        {note ? (
-          <span className="text-xs text-muted-foreground">· {note}</span>
-        ) : null}
-        {picked.length > 0 ? (
-          <button
-            type="button"
-            onClick={() => setUnfolded((u) => !u)}
-            aria-expanded={unfolded}
-            className="-mx-1 inline-flex items-center gap-0.5 rounded-md px-1 py-0.5 text-xs text-muted-foreground transition-colors outline-none hover:bg-(--pa-inset-hover) hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-            data-pa-starter-made
-          >
-            <span>· {pickedLabel}</span>
-            <ChevronDown
-              aria-hidden
-              className={cn(
-                "size-3.5 transition-transform",
-                !unfolded && "-rotate-90 rtl:rotate-90"
-              )}
-            />
-          </button>
-        ) : null}
-      </dd>
-      <dd className="flex justify-end">{action}</dd>
-      {unfolded ? (
-        // Under the values, by where each came from.
-        <dd
-          className="col-span-2 col-start-2 mb-1 flex flex-col gap-2 border-s border-foreground/10 ps-3 pt-0.5 pb-1"
-          data-pa-starter-picked
-        >
-          {groups.map(([from, items]) => (
-            <div key={from}>
-              <p className="mb-1 text-xs text-muted-foreground">
-                {t(`from.${from}`)}
-              </p>
-              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[0.8125rem]">
-                {items.map((p) => (
-                  <Fragment key={p.id}>
-                    <dt className="text-foreground/65">{p.name}</dt>
-                    <dd className="min-w-0 break-words">{p.value_label}</dd>
-                  </Fragment>
-                ))}
-              </dl>
-            </div>
-          ))}
-        </dd>
-      ) : null}
-    </>
   )
 }

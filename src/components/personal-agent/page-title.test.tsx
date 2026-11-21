@@ -67,7 +67,8 @@ const entry = (id: number, kind: "primary" | "worker", name: string) =>
     uid: `u${id}`,
     name,
     avatar: { kind: "face", shape: "pebble", color: "teal" },
-    template: null,
+    persona: "",
+    persona_unwritten: false,
     executor_assistant_id: null,
     created_at: "2026-11-10T10:00:00Z",
     roster: {

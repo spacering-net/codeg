@@ -1516,8 +1516,8 @@ describe("DispatchAttachments", () => {
   })
 })
 
-describe("the kind of work and why this executor (7.9)", () => {
-  it("says what kind of work it is and why the assistant picked it, not on a follow-up", () => {
+describe("no kind of work, no why this executor (R7)", () => {
+  it("says neither under a pill, whatever an old card carries", () => {
     pa.dispatchById = new Map()
     const { container } = draw(
       <DispatchAttachments
@@ -1531,22 +1531,12 @@ describe("the kind of work and why this executor (7.9)", () => {
               why: "It passed 9 of 10 research jobs the first time.",
             },
           }),
-          row(21, "dispatch", {
-            body: "Look into Y",
-            data: { followup: true, kind: "research", why: "again" },
-          }),
-          row(22, "dispatch", {
-            body: "Something",
-            data: { executor: "Builder", state: "queued", kind: "cooking" },
-          }),
         ]}
       />
     )
-    const lines = container.querySelectorAll("[data-pa-dispatch-why]")
-    expect(lines).toHaveLength(1)
-    expect(lines[0].textContent).toBe(
-      "Research · Why: It passed 9 of 10 research jobs the first time."
-    )
+    expect(container.querySelector("[data-pa-work-pill]")).toBeTruthy()
+    expect(container.textContent).not.toContain("research jobs")
+    expect(container.textContent).not.toContain("Why")
   })
 })
 
@@ -1597,7 +1587,7 @@ describe("acceptance on the work handed out (7.5)", () => {
     expect(container.querySelectorAll("[data-pa-done-when]")).toHaveLength(1)
   })
 
-  it("says a check is the acceptance check of a round, and whose executor config checks it", () => {
+  it("says a check is the acceptance check of a round, and names no executor config", () => {
     pa.dispatchById = new Map()
     const { container } = draw(
       <DispatchAttachments
@@ -1616,8 +1606,7 @@ describe("acceptance on the work handed out (7.5)", () => {
       />
     )
     const label = container.querySelector("[data-pa-check-label]")!
-    expect(label.textContent).toContain("Acceptance check · round 2")
-    expect(label.textContent).toContain("checked with Ace's executor config")
+    expect(label.textContent).toBe("Acceptance check · round 2")
     expect(container.querySelector("[data-pa-work-pill]")).toBeTruthy()
   })
 })

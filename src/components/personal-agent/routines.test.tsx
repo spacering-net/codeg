@@ -268,24 +268,28 @@ describe("routine cards", () => {
     expect(req?.draft?.kind).toBe("dispatch")
   })
 
-  it("a routine paused for its executor offers another; one paused for failures resumes", async () => {
+  it("a routine paused with nothing for its work to run on goes to set it, or resumes; one paused for failures resumes", async () => {
     draw(
       row({
         notice: "routine",
         what: "paused",
         state: "open",
         reason: "executor",
-        why: "executor config #3 is deleted or turned off",
+        why: "it has nothing to work with yet",
         routine: ROUTINE,
       })
     )
     expect(screen.getByText("Routine paused")).toBeTruthy()
-    expect(screen.getByText(/executor config #3 is deleted/)).toBeTruthy()
-    fireEvent.click(screen.getByText("Use another"))
-    expect(usePersonalAgentUi.getState().routineEditor).toMatchObject({
-      routineId: 5,
-      noticeId: 31,
-    })
+    expect(screen.getByText(/Its work has nothing set to run on/)).toBeTruthy()
+    expect(screen.queryByText("Use another")).toBeNull()
+    fireEvent.click(screen.getByText("Set its executor config"))
+    expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "identity" })
+    usePersonalAgentUi.getState().showConversation()
+    fireEvent.click(screen.getByText("Resume"))
+    await waitFor(() =>
+      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(31, "resume", 7)
+    )
+    api.personalAgentNoticeAct.mockClear()
     fireEvent.click(screen.getByText("Open routines"))
     expect(usePersonalAgentUi.getState().routinesAsked).toBe(1)
     cleanup()
@@ -705,9 +709,11 @@ describe("a result card", () => {
       title: "Check deps for security updates",
       what: "Look at Cargo.lock",
       kind: "dispatch",
-      dispatch: { assistant_id: 3, mode: "chat", project_id: null },
+      dispatch: { mode: "chat", project_id: null },
     })
     expect(req?.draft?.cron).toMatch(/^\d+ \d+ \* \* [0-6]$/)
+    // What its work runs on is taken as it runs: no executor config named.
+    expect(req?.draft?.dispatch).not.toHaveProperty("assistant_id")
   })
 
   it("not on a routine's own work", () => {

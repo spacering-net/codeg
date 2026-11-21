@@ -2,17 +2,22 @@
 
 /**
  * "Identity & brain", the first tab of an assistant's own page: its name
- * and picture, and the agent it runs on with every option picked (the
- * assistant editor's flow and validation). The mode and permissions are
- * chosen here, and codeg runs it as picked. Saved with [Save] — switching
- * the agent starts a new session. With no assistant yet, it is the first
- * setup. A name or picture saved elsewhere meanwhile (the roster's "Edit
- * basic info") shows here unless the field was changed here.
+ * and picture, the agent it runs on with every option picked (the
+ * assistant editor's flow and validation), and beside it the executor
+ * config its work runs on (D4) — the brain thinks, the executor config does
+ * the work. The mode and permissions are chosen here, and codeg runs it as
+ * picked. Saved with [Save] — switching the agent starts a new session.
+ * With no assistant yet, it is the first setup: a new executor config on
+ * the brain's agent by default, its options filled in; when codeg cannot
+ * read them nothing is saved and the executor config editor opens, the
+ * setup saved again with the one made there. A name or picture saved
+ * elsewhere meanwhile (the roster's "Edit basic info") shows here unless
+ * the field was changed here.
  */
 
 import { useMemo, useRef, useState } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { Bot, Loader2, Sparkles } from "lucide-react"
+import { AlertTriangle, Bot, Loader2, Sparkles, Workflow } from "lucide-react"
 import { toast } from "sonner"
 
 import {
@@ -32,6 +37,10 @@ import {
   type AssistantSelection,
 } from "@/components/settings/assistant-agent-config"
 import {
+  AssistantEditorDialog,
+  type AssistantPrefill,
+} from "@/components/settings/assistant-editor-dialog"
+import {
   RequiredOptionsSection,
   useRequiredOptionsGate,
 } from "@/components/settings/required-agent-options"
@@ -48,15 +57,24 @@ import { personalAgentSave } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { useBotId } from "@/contexts/personal-agent-context"
 import { getAgentLabel } from "@/lib/custom-agents"
-import type {
-  AgentType,
-  AssistantAgentConfig,
-  BotAvatar,
-  PersonalAgentInfo,
+import {
+  EXECUTOR_OPTIONS_UNAVAILABLE,
+  type AgentType,
+  type AssistantAgentConfig,
+  type BotAvatar,
+  type PersonalAgentInfo,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { useAssistants } from "@/stores/assistants-store"
 
 import { BotFacePicker } from "../bot-face-picker"
+import {
+  assistantAvatarOf,
+  choiceOf,
+  ExecutorPick,
+  sameChoice,
+  type ExecutorChoice,
+} from "./executor-pick"
 
 /** What the primary assistant starts with (10.6): a black blob. */
 const DEFAULT_AVATAR: BotAvatar = {
@@ -113,6 +131,24 @@ export function IdentityPage({
   const [invalidIds, setInvalidIds] = useState<ReadonlySet<string>>(new Set())
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // The executor config its work runs on: as bound, until another is
+  // picked; a new one on the brain's agent for the first setup.
+  const tx = useTranslations("PersonalAgent.settings.executorPick")
+  const assistants = useAssistants()
+  const boundChoice: ExecutorChoice = agent
+    ? choiceOf(agent.executor_assistant_id, assistants)
+    : { kind: "new" }
+  const [executor, setExecutor] = useState<ExecutorChoice | null>(null)
+  const executorShown = executor ?? boundChoice
+  // The one picked is turned off: its work cannot run on it.
+  const executorOff =
+    executorShown.kind === "existing" &&
+    assistants.some((a) => a.id === executorShown.id && !a.enabled)
+  // The agent's options could not be read: the editor, to make it there.
+  const [editor, setEditor] = useState<{
+    prefill: AssistantPrefill
+    why: string
+  } | null>(null)
   const triggerRefs = useRef(new Map<string, HTMLButtonElement | null>())
 
   const savedAgent: AssistantAgentConfig | null =
@@ -211,6 +247,12 @@ export function IdentityPage({
     }
     if (gate.kind === "ready") {
       const stillMissing = missingRows(gate.rows, selection)
+      // Left as saved: the save keeps it as it is (one that now lacks an
+      // option the agent added never stops the rest of the page saving —
+      // its executor config, its name).
+      if (stillMissing.length > 0 && savedAgent && !agentTouched) {
+        return { ok: true, config: null }
+      }
       if (stillMissing.length > 0) {
         setInvalidIds(new Set(stillMissing.map((row) => row.id)))
         setSubmitError(ta("missingCount", { count: stillMissing.length }))
@@ -234,7 +276,10 @@ export function IdentityPage({
       !agentTouched &&
       (gate.kind === "error" ||
         gate.kind === "unavailable-agent" ||
-        gate.kind === "not-switched")
+        gate.kind === "not-switched" ||
+        // A model to pick now (one added, or the saved one gone): the saved
+        // brain kept as it is, as with a missing option above.
+        gate.kind === "pick-model")
     ) {
       return { ok: true, config: null }
     }
@@ -250,11 +295,19 @@ export function IdentityPage({
     return { ok: false }
   }
 
-  const save = async () => {
+  /** Save; `made` is the executor config the editor just made for it. */
+  const save = async (made?: number) => {
     if (saving || disabled) return
     setSubmitError(null)
     const brain = brainToSave()
     if (!brain.ok) return
+    // Sent only when it is the first setup or another was picked.
+    const pick: ExecutorChoice | null =
+      made != null
+        ? { kind: "existing", id: made }
+        : !agent || !sameChoice(executorShown, boundChoice)
+          ? executorShown
+          : null
     setSaving(true)
     try {
       // No settings ride along: the other pages save theirs item by item,
@@ -265,14 +318,34 @@ export function IdentityPage({
           avatar,
           ...(brain.config ? { agent_config: brain.config } : {}),
           locale,
+          ...(pick?.kind === "existing"
+            ? { executor_assistant_id: pick.id }
+            : pick?.kind === "new"
+              ? { executor_new: true }
+              : {}),
         },
         botId
       )
       setAgentTouched(false)
+      setExecutor(null)
       toast.message(t("saved"))
       onSaved?.()
     } catch (error) {
-      setSubmitError(toErrorMessage(error))
+      const message = toErrorMessage(error)
+      const at = message.indexOf(EXECUTOR_OPTIONS_UNAVAILABLE)
+      if (at >= 0 && agentType !== null) {
+        // Nothing saved: the editor makes it, and the save goes again.
+        setEditor({
+          why: message.slice(at + EXECUTOR_OPTIONS_UNAVAILABLE.length),
+          prefill: {
+            name: name.trim() || tPage("title"),
+            avatar: assistantAvatarOf(avatar),
+            agentType,
+          },
+        })
+      } else {
+        setSubmitError(message)
+      }
     } finally {
       setSaving(false)
     }
@@ -282,100 +355,157 @@ export function IdentityPage({
     missing.length > 0 ? ta("missingCount", { count: missing.length }) : null
 
   return (
-    <form
-      className="flex flex-col gap-3"
-      data-pa-settings-page="identity"
-      onSubmit={(event) => {
-        event.preventDefault()
-        void save()
-      }}
-    >
-      {agent ? null : (
-        <p className="text-sm leading-6 text-pretty text-muted-foreground">
-          {t("setupDescription")}
-        </p>
-      )}
-      <SettingCard>
-        {/* Who it is: the avatar its messages carry and its name, side by
+    <>
+      <form
+        className="flex flex-col gap-3"
+        data-pa-settings-page="identity"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void save()
+        }}
+      >
+        {agent ? null : (
+          <p className="text-sm leading-6 text-pretty text-muted-foreground">
+            {t("setupDescription")}
+          </p>
+        )}
+        <SettingCard>
+          {/* Who it is: the avatar its messages carry and its name, side by
             side as in the assistant editor. A monogram is drawn from the
             name in effect — the default one while the field is empty. */}
-        <div className="flex items-start gap-3 p-3">
-          <div className="mt-0.5 shrink-0">
-            <BotFacePicker
-              value={avatar}
-              name={name.trim() || tPage("title")}
-              onChange={setAvatar}
-              disabled={disabled || saving}
-            />
+          <div className="flex items-start gap-3 p-3">
+            <div className="mt-0.5 shrink-0">
+              <BotFacePicker
+                value={avatar}
+                name={name.trim() || tPage("title")}
+                onChange={setAvatar}
+                disabled={disabled || saving}
+              />
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <Label htmlFor="pa-name" className="text-sm">
+                {t("name")}
+              </Label>
+              <Input
+                id="pa-name"
+                dir="auto"
+                value={name}
+                maxLength={40}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t("namePlaceholder")}
+                disabled={disabled || saving}
+                className="h-8 bg-background text-sm"
+              />
+              <span className="text-xs leading-5 text-muted-foreground">
+                {t("nameHint")}
+              </span>
+            </div>
           </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <Label htmlFor="pa-name" className="text-sm">
-              {t("name")}
-            </Label>
-            <Input
-              id="pa-name"
-              dir="auto"
-              value={name}
-              maxLength={40}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t("namePlaceholder")}
-              disabled={disabled || saving}
-              className="h-8 bg-background text-sm"
-            />
-            <span className="text-xs leading-5 text-muted-foreground">
-              {t("nameHint")}
-            </span>
-          </div>
-        </div>
-      </SettingCard>
-      <SettingCard>
-        <SettingRow
-          icon={Bot}
-          title={ta("agentLabel")}
-          description={
-            agentType === null ? ta("pickAgentFirst") : t("agentHint")
-          }
-          control={
-            <AgentSelect
-              value={agentType}
-              onChange={pickAgent}
-              agents={agents.filter(
-                (a) => a.enabled || a.agent_type === agentType
-              )}
-              fallbackLabel={savedAgent?.label_snapshot.agent}
-              disabled={disabled || saving}
-            />
-          }
-        />
-        {agentType !== null ? (
-          <RequiredOptionsSection
-            gate={gate}
-            loading={probe.loading}
-            saved={agentTouched ? null : savedAgent}
-            driftCount={driftCount}
-            renderRow={renderRow}
-            onRetry={() => probe.reload()}
+        </SettingCard>
+        <SettingCard>
+          <SettingRow
+            icon={Bot}
+            title={ta("agentLabel")}
+            description={
+              agentType === null ? ta("pickAgentFirst") : t("agentHint")
+            }
+            control={
+              <AgentSelect
+                value={agentType}
+                onChange={pickAgent}
+                agents={agents.filter(
+                  (a) => a.enabled || a.agent_type === agentType
+                )}
+                fallbackLabel={savedAgent?.label_snapshot.agent}
+                disabled={disabled || saving}
+              />
+            }
           />
+          {agentType !== null ? (
+            <RequiredOptionsSection
+              gate={gate}
+              loading={probe.loading}
+              saved={agentTouched ? null : savedAgent}
+              driftCount={driftCount}
+              renderRow={renderRow}
+              onRetry={() => probe.reload()}
+            />
+          ) : null}
+        </SettingCard>
+        {agent && agentType !== null && agentType !== agent.agent_type ? (
+          <SettingNote icon={Sparkles}>{t("switchNote")}</SettingNote>
         ) : null}
-      </SettingCard>
-      {agent && agentType !== null && agentType !== agent.agent_type ? (
-        <SettingNote icon={Sparkles}>{t("switchNote")}</SettingNote>
+        <SettingCard>
+          <SettingRow
+            icon={Workflow}
+            title={tx("title")}
+            htmlFor="pa-executor"
+            description={
+              executorShown.kind === "none" || executorOff ? (
+                <span
+                  className="flex items-start gap-1.5 text-amber-700 dark:text-amber-400"
+                  data-pa-executor-missing
+                >
+                  <AlertTriangle
+                    className="mt-0.5 size-3.5 shrink-0"
+                    aria-hidden
+                  />
+                  <span>{executorOff ? tx("disabled") : tx("missing")}</span>
+                </span>
+              ) : executorShown.kind === "new" ? (
+                tx("newHint")
+              ) : (
+                tx("hint")
+              )
+            }
+            control={
+              <ExecutorPick
+                id="pa-executor"
+                value={executorShown}
+                onChange={setExecutor}
+                disabled={disabled || saving}
+              />
+            }
+          />
+        </SettingCard>
+        <div className="flex items-center justify-between gap-3">
+          <p
+            className={cn(
+              "min-w-0 text-xs leading-5",
+              submitError ? "text-destructive" : "text-muted-foreground"
+            )}
+            role={submitError ? "alert" : undefined}
+          >
+            {submitError ?? footerHint}
+          </p>
+          <Button type="submit" size="sm" disabled={disabled || saving}>
+            {saving ? <Loader2 className="animate-spin" aria-hidden /> : null}
+            {t("save")}
+          </Button>
+        </div>
+      </form>
+      {/* Outside the form: the editor's own submit, bubbling through its
+          portal, never saves this page. */}
+      {editor ? (
+        <AssistantEditorDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setEditor(null)
+          }}
+          assistant={null}
+          prefill={editor.prefill}
+          extraSection={
+            <p className="px-1 text-xs leading-5 text-muted-foreground">
+              {tx("editorNote", { why: editor.why })}
+            </p>
+          }
+          onSaved={(made) => {
+            setEditor(null)
+            setExecutor({ kind: "existing", id: made.id })
+            void save(made.id)
+          }}
+        />
       ) : null}
-      <div className="flex items-center justify-between gap-3">
-        <p
-          className={cn(
-            "min-w-0 text-xs leading-5",
-            submitError ? "text-destructive" : "text-muted-foreground"
-          )}
-          role={submitError ? "alert" : undefined}
-        >
-          {submitError ?? footerHint}
-        </p>
-        <Button type="submit" size="sm" disabled={disabled || saving}>
-          {saving ? <Loader2 className="animate-spin" aria-hidden /> : null}
-          {t("save")}
-        </Button>
-      </div>
-    </form>
+    </>
   )
 }

@@ -275,7 +275,7 @@ pub async fn personal_agent_cancel(
 pub async fn personal_agent_bots(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<Vec<crate::models::personal_agent_roster::RosterEntry>>, AppCommandError> {
-    Ok(Json(pa::personal_agent_bots_core(&state.db).await?))
+    Ok(Json(pa::personal_agent_bots_core(&state.db, &state.data_dir).await?))
 }
 
 #[derive(Debug, Deserialize)]

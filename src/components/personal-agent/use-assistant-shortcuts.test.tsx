@@ -58,7 +58,8 @@ function entry(
     uid: `u${id}`,
     name: `Bot ${id}`,
     avatar: { kind: "face", shape: "blob", color: "teal" },
-    template: null,
+    persona: "",
+    persona_unwritten: false,
     executor_assistant_id: null,
     created_at: "2026-11-01T00:00:00Z",
     roster: {

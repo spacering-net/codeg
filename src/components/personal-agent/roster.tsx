@@ -137,8 +137,7 @@ import {
   useRosterShown,
   useRosterWidth,
 } from "./roster-resize"
-import { useBotName } from "./shared"
-import { useBotTemplates } from "./use-templates"
+import { useBotName, usePersonaText } from "./shared"
 
 /** How often the roster reads the clock while something on it moves
  *  (stale states, waiting past two minutes, a face shown for a while). */
@@ -547,7 +546,7 @@ export function PersonalAgentRoster({
   const locale = useLocale()
   const entries = useRoster()
   const botName = useBotName()
-  const templates = useBotTemplates()
+  const personaText = usePersonaText()
   const viewBot = usePersonalAgentUi((s) => s.viewBot)
   const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
   const showConversation = usePersonalAgentUi((s) => s.showConversation)
@@ -617,11 +616,6 @@ export function PersonalAgentRoster({
     [list, now, locale]
   )
   const sections = useMemo(() => sectionNames(list, locale), [list, locale])
-  const roleOf = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const tpl of templates ?? []) m.set(tpl.id, tpl.name)
-    return m
-  }, [templates])
 
   // Its conversation — out of its page or the settings, too.
   const go = (b: RosterEntry) => {
@@ -900,15 +894,23 @@ export function PersonalAgentRoster({
    *  (the primary's tile, a face on the rail), that line first. */
   const hover = (b: RosterEntry, view: BotView, line?: RowLine | null) => {
     const live = b.live
-    const role = b.template ? (roleOf.get(b.template) ?? null) : null
+    const persona = personaText(b)
     return (
       <div className="flex flex-col gap-2 text-xs" data-pa-roster-hover={b.id}>
         <div className="flex items-center gap-2">
           {face(b, 28)}
           <div className="min-w-0">
             <div className="truncate text-sm font-medium">{botName(b)}</div>
-            {role ? (
-              <div className="truncate text-muted-foreground">{role}</div>
+            {persona ? (
+              <div
+                className={cn(
+                  "line-clamp-2 break-words text-muted-foreground",
+                  b.persona_unwritten && "italic"
+                )}
+                data-pa-roster-persona={b.id}
+              >
+                {persona}
+              </div>
             ) : null}
           </div>
         </div>

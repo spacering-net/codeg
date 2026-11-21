@@ -9,7 +9,7 @@
  * the same. A follow-up's pill says so. A pill opens the work's session in
  * the drawer on the right (a task's own, or the conversation a chat or
  * session dispatch runs in); a chevron says it does. The rest — the agent's
- * mark, the kind of work and where — is the news card's, from the assistant
+ * mark and where — is the news card's, from the assistant
  * that ran it, which comes later in the list. Under a pill, the
  * assistant's acceptance criteria when it wrote them (7.5); over the pill of
  * the check codeg sent out for an acceptance, which round it checks; over a
@@ -21,7 +21,6 @@ import { useTranslations } from "next-intl"
 
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useElapsedLabel } from "@/hooks/use-elapsed-label"
-import { DIVISION_KINDS } from "@/lib/types"
 import type {
   DispatchInfo,
   DispatchState,
@@ -97,7 +96,6 @@ function DispatchPill({
   info: DispatchInfo | undefined
 }) {
   const t = useTranslations("PersonalAgent.dispatchCard")
-  const tKind = useTranslations("PersonalAgent.settings.division")
   const openWork = useOpenWork()
   const elapsedLabel = useElapsedLabel()
   const data = row.data
@@ -111,26 +109,11 @@ function DispatchPill({
     running && info ? elapsedLabel(now - Date.parse(info.updated_at)) : null
   const target = workTargetOf(info, row)
   const title = info?.title ?? row.body
-  // The acceptance check of other work (7.5): which round, and whose
-  // executor config checks it.
+  // The acceptance check of other work (7.5): which round.
   const checkFor = info?.check_for ?? num(data, "check_for")
   const checkRound = info?.check_round ?? num(data, "check_round")
-  const via = data?.check_via
-  const viaName =
-    via && typeof via === "object"
-      ? str(via as Record<string, unknown>, "name")
-      : null
   const doneWhen = info?.done_when ?? str(data, "done_when")
   const prFix = prFixOf(data?.pr_fix)
-  // The kind of work, and why the assistant picked this executor (7.9).
-  const kind = DIVISION_KINDS.find((k) => k === str(data, "kind")) ?? null
-  const why = str(data, "why")
-  const picked =
-    data?.followup !== true && (kind || why)
-      ? [kind ? tKind(kind) : null, why ? t("why", { why }) : null]
-          .filter(Boolean)
-          .join(" · ")
-      : null
   const pill = (
     <WorkPill
       rowId={row.id}
@@ -143,22 +126,14 @@ function DispatchPill({
       onOpen={canOpenWork(target) ? () => openWork(target) : null}
     />
   )
-  if (checkFor == null && !doneWhen && !prFix && !picked) return pill
+  if (checkFor == null && !doneWhen && !prFix) return pill
   return (
     <div className="flex max-w-full min-w-0 flex-col items-start gap-1">
       {checkFor != null ? (
-        <CheckLabel round={checkRound} via={viaName} className="ps-1" />
+        <CheckLabel round={checkRound} className="ps-1" />
       ) : null}
       {prFix ? <PrFixLabel fix={prFix} className="ps-1" /> : null}
       {pill}
-      {picked ? (
-        <p
-          className="max-w-full ps-1 text-xs break-words text-muted-foreground"
-          data-pa-dispatch-why
-        >
-          {picked}
-        </p>
-      ) : null}
       {doneWhen && data?.followup !== true ? (
         <DoneWhen text={doneWhen} className="ps-1" />
       ) : null}

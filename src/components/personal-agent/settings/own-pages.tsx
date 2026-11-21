@@ -2,8 +2,7 @@
 
 /**
  * An assistant's own pages besides "Identity & brain": "Persona & memory"
- * (its files), "Execution" (a work assistant's executor config and
- * template) and "Advanced" — compaction, the handoff card's budget,
+ * (its files) and "Advanced" — compaction, the handoff card's budget,
  * dispatch concurrency, the built-in skill (each saved the moment it
  * changes), and the working directory, moved with [Move] since that starts a
  * new session.
@@ -16,14 +15,13 @@ import {
   FolderCog,
   Gauge,
   Loader2,
+  PenLine,
   Shrink,
   Sparkles,
   SquareSlash,
-  Workflow,
 } from "lucide-react"
 import { toast } from "sonner"
 
-import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import {
   SettingCard,
   SettingNote,
@@ -31,21 +29,12 @@ import {
 } from "@/components/shared/setting-card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { personalAgentSave, personalAgentSetWorkdir } from "@/lib/api"
+import { personalAgentSetWorkdir } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type { PersonalAgentInfo } from "@/lib/types"
-import { useAssistants } from "@/stores/assistants-store"
 
 import { PersonaFiles } from "../persona-files"
-import { useBotTemplates } from "../use-templates"
 import { useSettingsPatch } from "./use-settings"
 
 interface OwnPageProps {
@@ -58,13 +47,22 @@ interface OwnPageProps {
 export function PersonaPage({
   bot,
   entry = null,
+  unwritten = false,
 }: {
   bot: number | null
   /** The file to open on (7.7). */
   entry?: string | null
+  /** A work assistant whose persona is still its default file. */
+  unwritten?: boolean
 }) {
+  const t = useTranslations("PersonalAgent.settings")
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="persona">
+      {unwritten ? (
+        <div data-pa-persona-unwritten>
+          <SettingNote icon={PenLine}>{t("personaUnwritten")}</SettingNote>
+        </div>
+      ) : null}
       <PersonaFiles key={entry ?? ""} botId={bot} initial={entry} />
     </div>
   )
@@ -282,82 +280,6 @@ export function AdvancedPage({ agent, bot, disabled }: OwnPageProps) {
             </div>
           </div>
         </SettingRow>
-      </SettingCard>
-    </div>
-  )
-}
-
-/** A work assistant's executor config — the one it dispatches to by
- *  default — and the template it was made from. */
-export function ExecutionPage({ agent, bot, disabled }: OwnPageProps) {
-  const t = useTranslations("PersonalAgent.settings")
-  const assistants = useAssistants()
-  const templates = useBotTemplates()
-  const [saving, setSaving] = useState(false)
-  const bound = assistants.find((a) => a.id === agent.executor_assistant_id)
-  const role = templates?.find((x) => x.id === agent.template)
-  const bind = async (id: number) => {
-    setSaving(true)
-    try {
-      await personalAgentSave({ executor_assistant_id: id }, bot)
-      toast.message(t("saved"))
-    } catch (e) {
-      toast.error(toErrorMessage(e))
-    } finally {
-      setSaving(false)
-    }
-  }
-  return (
-    <div className="flex flex-col gap-3" data-pa-settings-page="execution">
-      <SettingCard>
-        <SettingRow
-          icon={Workflow}
-          title={t("execution.executor")}
-          description={
-            agent.executor_assistant_id != null && !bound
-              ? t("execution.executorGone")
-              : t("execution.executorHint")
-          }
-          control={
-            <Select
-              value={bound ? String(bound.id) : undefined}
-              onValueChange={(v) => void bind(Number(v))}
-              disabled={disabled || saving}
-            >
-              <SelectTrigger className="h-8 w-48 bg-background text-xs">
-                <SelectValue placeholder={t("execution.pick")} />
-              </SelectTrigger>
-              <SelectContent>
-                {assistants.map((a) => (
-                  <SelectItem
-                    key={a.id}
-                    value={String(a.id)}
-                    className="text-xs"
-                  >
-                    <span className="flex items-center gap-1.5">
-                      <AssistantAvatar
-                        avatar={a.avatar}
-                        name={a.name}
-                        size={16}
-                      />
-                      {a.name}
-                    </span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          }
-        />
-        <SettingRow
-          icon={FileText}
-          title={t("execution.template")}
-          description={t("execution.templateHint")}
-          control={
-            <span className="text-xs text-muted-foreground">
-              {role?.name ?? agent.template ?? t("execution.noTemplate")}
-            </span>
-          }
-        />
       </SettingCard>
     </div>
   )

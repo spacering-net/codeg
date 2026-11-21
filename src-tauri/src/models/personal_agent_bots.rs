@@ -250,7 +250,7 @@ pub struct BotCreateDraft {
     pub executor_assistant_id: Option<i32>,
     /// That executor config was made for this assistant just now (in the
     /// editor the page opened): it is the assistant's as one codeg made —
-    /// its role's usage applies, and undoing the assistant deletes it.
+    /// undoing the assistant deletes it.
     #[serde(default)]
     pub executor_made_for_it: bool,
     #[serde(default)]

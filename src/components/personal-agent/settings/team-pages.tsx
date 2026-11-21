@@ -1,27 +1,18 @@
 "use client"
 
 /**
- * The team pages every assistant shares (10.5): the work assistants, the
- * executor configs — moved here from Collaboration as they were, with what
- * each is doing, whether it keeps failing, its last two weeks, and how the
- * assistants may use it — and the division of work. Each row's grade opens
- * apart (7.9): an assistant's by executor config and mode, an executor
- * config's by assistant and mode.
+ * The team pages every assistant shares (10.5): the work assistants, and
+ * the executor configs their work runs on — moved here from Collaboration
+ * as they were, with what each is doing, whether it keeps failing, its last
+ * two weeks, and the assistants whose work runs on it. Each row's grade
+ * opens apart (7.9): an assistant's by executor config and mode, an
+ * executor config's by assistant and mode.
  */
 
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import {
   AlertTriangle,
-  Bot,
-  Briefcase,
   ChartColumn,
   Layers,
   Loader2,
@@ -32,13 +23,8 @@ import {
 import { toast } from "sonner"
 
 import { AssistantsPanel } from "@/components/settings/assistants-panel"
-import {
-  SettingCard,
-  SettingNote,
-  SettingRow,
-} from "@/components/shared/setting-card"
+import { SettingCard, SettingNote } from "@/components/shared/setting-card"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,74 +37,28 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
-import {
   openSettingsWindow,
   personalAgentBotCopy,
   personalAgentGrades,
-  personalAgentSettingsPatch,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import { DIVISION_KINDS } from "@/lib/types"
 import type {
   AssistantInfo,
-  DispatchMode,
-  ExecutorUsage,
   ExecutorView,
-  PersonalAgentAccount,
   PersonalAgentBotSummary,
   PersonalAgentGrade,
   PersonalAgentGradeCell,
   PersonalAgentGrades,
 } from "@/lib/types"
-import { cn } from "@/lib/utils"
-import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useAssistants } from "@/stores/assistants-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { BotAvatar } from "../bot-avatar"
 import { BotDeleteDialog } from "../bot-delete-dialog"
 import { NewBotDialog } from "../new-bot-dialog"
-import { useBotTemplates } from "../use-templates"
-import { canOpenWork, useBotName, useOpenWork } from "../shared"
+import { canOpenWork, usePersonaText, useBotName, useOpenWork } from "../shared"
 import { PageHead } from "./pref-pages"
-import { useBots, useExecutors, useSettingsPatch } from "./use-settings"
-
-const MODES: DispatchMode[] = ["task", "chat", "session"]
-
-const DEFAULT_USAGE: ExecutorUsage = {
-  dispatch: true,
-  modes: MODES,
-  projects: null,
-}
-
-function sameUsage(a: ExecutorUsage, b: ExecutorUsage): boolean {
-  const modes = (u: ExecutorUsage) => MODES.filter((m) => u.modes.includes(m))
-  const projects = (u: ExecutorUsage) =>
-    u.projects == null ? null : [...u.projects].sort((x, y) => x - y)
-  return (
-    a.dispatch === b.dispatch &&
-    modes(a).join() === modes(b).join() &&
-    JSON.stringify(projects(a)) === JSON.stringify(projects(b))
-  )
-}
-
-/** The projects an executor config can be limited to. */
-function useProjects() {
-  const folders = useAppWorkspaceStore((s) => s.folders)
-  return useMemo(
-    () => folders.filter((f) => f.kind === "regular" && f.parent_id == null),
-    [folders]
-  )
-}
+import { useBots, useExecutors } from "./use-settings"
 
 // ── grades ──────────────────────────────────────────────────────────────────
 
@@ -212,7 +152,7 @@ export function WorkersPage({
   const bots = useBots()
   const assistants = useAssistants()
   const botName = useBotName()
-  const templates = useBotTemplates()
+  const personaText = usePersonaText()
   const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   const showConversation = usePersonalAgentUi((s) => s.showConversation)
   const setViewBot = usePersonalAgentUi((s) => s.setViewBot)
@@ -285,7 +225,7 @@ export function WorkersPage({
             const bound = assistants.find(
               (a) => a.id === w.executor_assistant_id
             )
-            const role = templates?.find((x) => x.id === w.template)?.name
+            const persona = personaText(w)
             return (
               <div
                 key={w.id}
@@ -302,16 +242,30 @@ export function WorkersPage({
                     <span className="block truncate text-sm font-medium">
                       {botName(w)}
                     </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {[
-                        role ?? w.template,
-                        bound
-                          ? t("team.boundTo", { name: bound.name })
-                          : t("team.unbound"),
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </span>
+                    {persona ? (
+                      <span
+                        className="block truncate text-xs text-muted-foreground"
+                        data-pa-worker-persona={w.id}
+                      >
+                        {persona}
+                      </span>
+                    ) : null}
+                    {bound ? (
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {t("team.boundTo", { name: bound.name })}
+                      </span>
+                    ) : (
+                      <span
+                        className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400"
+                        data-pa-worker-unbound={w.id}
+                      >
+                        <AlertTriangle
+                          className="size-3 shrink-0"
+                          aria-hidden
+                        />
+                        <span className="truncate">{t("team.unbound")}</span>
+                      </span>
+                    )}
                     {gradeText(grades?.bots[String(w.id)]) ? (
                       <span
                         className="block truncate text-xs text-muted-foreground"
@@ -416,125 +370,8 @@ export function WorkersPage({
 
 // ── executor configs ────────────────────────────────────────────────────────
 
-/** How the assistants use an executor config, in the editor. */
-export interface UsageEditorHandle {
-  save: (assistant: AssistantInfo) => void
-}
-
-const UsageEditor = forwardRef<
-  UsageEditorHandle,
-  {
-    initial: ExecutorUsage
-    /** Changing it needs the engine here and the primary set up. */
-    readOnly: boolean
-    readOnlyWhy: string | null
-  }
->(function UsageEditor({ initial, readOnly, readOnlyWhy }, ref) {
-  const t = useTranslations("PersonalAgent.settings.usage")
-  const tMode = useTranslations("PersonalAgent.mode")
-  const projects = useProjects()
-  const [usage, setUsage] = useState<ExecutorUsage>(initial)
-  useImperativeHandle(
-    ref,
-    () => ({
-      save: (assistant) => {
-        if (readOnly || sameUsage(usage, initial)) return
-        personalAgentSettingsPatch([
-          {
-            key: `team.usage.${assistant.uid}`,
-            value: sameUsage(usage, DEFAULT_USAGE) ? null : usage,
-          },
-        ]).catch((e) =>
-          toast.error(t("saveFailed"), { description: toErrorMessage(e) })
-        )
-      },
-    }),
-    [usage, initial, readOnly, t]
-  )
-  const toggleMode = (m: DispatchMode, on: boolean) =>
-    setUsage((u) => {
-      const modes = on ? [...u.modes, m] : u.modes.filter((x) => x !== m)
-      return modes.length === 0 ? u : { ...u, modes }
-    })
-  const toggleProject = (id: number, on: boolean) =>
-    setUsage((u) => {
-      const now = u.projects ?? []
-      const next = on ? [...now, id] : now.filter((x) => x !== id)
-      return next.length === 0 ? u : { ...u, projects: next }
-    })
-  const off = readOnly || !usage.dispatch
-  return (
-    <SettingCard data-pa-usage>
-      <SettingRow
-        icon={Bot}
-        title={t("dispatch")}
-        description={readOnlyWhy ?? t("dispatchHint")}
-        control={
-          <Switch
-            checked={usage.dispatch}
-            disabled={readOnly}
-            onCheckedChange={(dispatch) =>
-              setUsage((u) => ({ ...u, dispatch }))
-            }
-            aria-label={t("dispatch")}
-          />
-        }
-      />
-      <SettingRow icon={Layers} title={t("modes")} description={t("modesHint")}>
-        <div className="flex flex-wrap gap-3">
-          {MODES.map((m) => (
-            <label key={m} className="flex items-center gap-1.5 text-xs">
-              <Checkbox
-                checked={usage.modes.includes(m)}
-                disabled={off}
-                onCheckedChange={(on) => toggleMode(m, on === true)}
-              />
-              {tMode(m)}
-            </label>
-          ))}
-        </div>
-      </SettingRow>
-      <SettingRow
-        icon={Briefcase}
-        title={t("projects")}
-        description={t("projectsHint")}
-      >
-        <div className="flex flex-col gap-2">
-          <label className="flex items-center gap-1.5 text-xs">
-            <Switch
-              checked={usage.projects == null}
-              disabled={off || projects.length === 0}
-              onCheckedChange={(all) =>
-                setUsage((u) => ({
-                  ...u,
-                  projects: all ? null : projects.slice(0, 1).map((p) => p.id),
-                }))
-              }
-            />
-            {t("allProjects")}
-          </label>
-          {usage.projects != null ? (
-            <div className="flex flex-wrap gap-3">
-              {projects.map((p) => (
-                <label key={p.id} className="flex items-center gap-1.5 text-xs">
-                  <Checkbox
-                    checked={usage.projects?.includes(p.id) ?? false}
-                    disabled={off}
-                    onCheckedChange={(on) => toggleProject(p.id, on === true)}
-                  />
-                  {p.alias ?? p.name}
-                </label>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </SettingRow>
-    </SettingCard>
-  )
-})
-
-/** What a row says besides the agent: in flight, failing, two weeks, who
- *  it is bound to and first for, and how the assistants use it. */
+/** What a row says besides the agent: in flight, failing, two weeks, and
+ *  the assistants whose work runs on it. */
 function ExecutorLine({
   assistant,
   view,
@@ -543,29 +380,11 @@ function ExecutorLine({
   view: ExecutorView | undefined
 }) {
   const t = useTranslations("PersonalAgent.settings.executor")
-  const tu = useTranslations("PersonalAgent.settings.usage")
   const tMode = useTranslations("PersonalAgent.mode")
-  const tKind = useTranslations("PersonalAgent.settings.division")
   const openWork = useOpenWork()
   const botName = useBotName()
   const gradeText = useGradeText()
   if (!view) return null
-  // "Only kanban tasks · only on 2 projects"; nothing for the default.
-  const usage = view.usage
-  const summary = !usage.dispatch
-    ? tu("notForDispatch")
-    : [
-        usage.modes.length < MODES.length
-          ? tu("onlyModes", {
-              modes: usage.modes.map((m) => tMode(m)).join(" / "),
-            })
-          : null,
-        usage.projects != null
-          ? tu("onlyProjects", { count: usage.projects.length })
-          : null,
-      ]
-        .filter(Boolean)
-        .join(" · ") || null
   const chips: ReactNode[] = []
   if (view.running.length > 0) {
     chips.push(
@@ -651,21 +470,15 @@ function ExecutorLine({
       )
     )
   }
-  for (const w of view.workers) {
+  if (view.workers.length > 0) {
     chips.push(
-      <span key={`w${w.id}`}>{t("boundBy", { name: botName(w) })}</span>
-    )
-  }
-  if (view.division.length > 0) {
-    chips.push(
-      <span key="division">
-        {t("firstFor", {
-          kinds: view.division.map((k) => tKind(k)).join(" / "),
+      <span key="used-by" data-pa-executor-used-by={view.assistant_id}>
+        {t("usedBy", {
+          names: view.workers.map((w) => botName(w)).join(t("nameJoin")),
         })}
       </span>
     )
   }
-  if (summary) chips.push(<span key="usage">{summary}</span>)
   return (
     <div className="mt-0.5 space-y-0.5">
       {view.failing ? (
@@ -691,29 +504,19 @@ function ExecutorLine({
   )
 }
 
-/** What deleting or turning off an executor config takes with it. */
+/** What deleting or turning off an executor config takes with it: the
+ *  assistants whose work runs on it can do none of their own for now. */
 function useImpact(views: ReadonlyMap<number, ExecutorView>) {
   const t = useTranslations("PersonalAgent.settings.executor")
-  const tKind = useTranslations("PersonalAgent.settings.division")
   const botName = useBotName()
-  return function impactOf(
-    assistant: AssistantInfo,
-    deleting: boolean
-  ): ReactNode | null {
+  return function impactOf(assistant: AssistantInfo): ReactNode | null {
     const v = views.get(assistant.id)
     if (!v) return null
     const lines: string[] = []
-    for (const w of v.workers) {
+    if (v.workers.length > 0) {
       lines.push(
-        t(deleting ? "impactWorkerDelete" : "impactWorkerOff", {
-          name: botName(w),
-        })
-      )
-    }
-    if (v.division.length > 0) {
-      lines.push(
-        t(deleting ? "impactDivisionDelete" : "impactDivisionOff", {
-          kinds: v.division.map((k) => tKind(k)).join(" / "),
+        t("impactBots", {
+          names: v.workers.map((w) => botName(w)).join(t("nameJoin")),
         })
       )
     }
@@ -732,25 +535,13 @@ function useImpact(views: ReadonlyMap<number, ExecutorView>) {
 }
 
 export function ExecutorsPage({
-  account,
-  usageReadOnly,
-  usageReadOnlyWhy,
   delegationEnabled,
 }: {
-  account: PersonalAgentAccount | null
-  usageReadOnly: boolean
-  usageReadOnlyWhy: string | null
   delegationEnabled: boolean | null
 }) {
   const t = useTranslations("PersonalAgent.settings")
-  const tb = useTranslations("PersonalAgent.bots")
   const views = useExecutors()
   const impact = useImpact(views)
-  const templates = useBotTemplates()
-  const [editorRef, setEditorRef] = useState<UsageEditorHandle | null>(null)
-  // A card asked for the editor: on one config, or a new one prefilled.
-  const request = usePersonalAgentUi((s) => s.executorEditor)
-  const clearRequest = usePersonalAgentUi((s) => s.clearExecutorEditor)
   return (
     <div className="flex flex-col gap-3" data-pa-settings-page="executors">
       <PageHead title={t("nav.executors")} />
@@ -763,205 +554,9 @@ export function ExecutorsPage({
           void openSettingsWindow("collaboration").catch(() => {})
         }
         rowExtra={(a) => <ExecutorLine assistant={a} view={views.get(a.id)} />}
-        createMenu={(open) => (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={!templates}
-                data-pa-executor-templates
-              >
-                {tb("fromTemplate")}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-64">
-              {(templates ?? [])
-                .filter((tpl) => tpl.id !== "blank")
-                .map((tpl) => (
-                  <DropdownMenuItem
-                    key={tpl.id}
-                    data-pa-executor-template={tpl.id}
-                    className="flex flex-col items-start gap-0.5"
-                    onSelect={() =>
-                      open({
-                        name: tpl.name,
-                        description: tpl.description,
-                        instructions: tpl.instructions,
-                        template: tpl.id,
-                      })
-                    }
-                  >
-                    <span className="text-sm">{tpl.name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {tpl.job}
-                    </span>
-                  </DropdownMenuItem>
-                ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-        openRequest={request}
-        onOpenRequestHandled={clearRequest}
-        deleteImpact={(a) => impact(a, true)}
-        disableImpact={(a) => impact(a, false)}
-        editorSection={(a, prefill) => {
-          // A new one from a template (10.5 "fill one"): its usage.
-          const fromTemplate =
-            (!a && templates?.find((x) => x.id === prefill?.template)) || null
-          return (
-            <div className="space-y-2">
-              <p className="px-1 text-xs font-medium text-muted-foreground">
-                {t("usage.title")}
-              </p>
-              {fromTemplate?.id === "review" ? (
-                <p className="px-1 text-xs leading-5 text-muted-foreground">
-                  {tb("reviewAgentHint")}
-                </p>
-              ) : null}
-              <UsageEditor
-                ref={setEditorRef}
-                initial={
-                  (a && account?.team.usage[a.uid]) ||
-                  (a
-                    ? (views.get(a.id)?.usage ?? DEFAULT_USAGE)
-                    : fromTemplate?.modes
-                      ? { ...DEFAULT_USAGE, modes: fromTemplate.modes }
-                      : DEFAULT_USAGE)
-                }
-                readOnly={usageReadOnly}
-                readOnlyWhy={usageReadOnlyWhy}
-              />
-            </div>
-          )
-        }}
-        onEditorSaved={(a) => editorRef?.save(a)}
+        deleteImpact={(a) => impact(a)}
+        disableImpact={(a) => impact(a)}
       />
-    </div>
-  )
-}
-
-// ── division of work ────────────────────────────────────────────────────────
-
-export function DivisionPage({
-  account,
-  disabled,
-}: {
-  account: PersonalAgentAccount
-  disabled: boolean
-}) {
-  const t = useTranslations("PersonalAgent.settings")
-  const tKind = useTranslations("PersonalAgent.settings.division")
-  const { patch } = useSettingsPatch(null)
-  const bots = useBots()
-  const assistants = useAssistants()
-  const botName = useBotName()
-  const workers = (bots ?? []).filter(
-    (b): b is PersonalAgentBotSummary & { uid: string } =>
-      b.kind === "worker" && b.uid != null
-  )
-  const usageOf = (a: AssistantInfo) =>
-    account.team.usage[a.uid] ?? DEFAULT_USAGE
-  const restore = DIVISION_KINDS.filter((k) => account.team.division[k] != null)
-  return (
-    <div className="flex flex-col gap-3" data-pa-settings-page="division">
-      <PageHead
-        title={t("nav.division")}
-        onRestore={() =>
-          void patch(
-            restore.map((k) => ({ key: `team.division.${k}`, value: null }))
-          )
-        }
-        restoreDisabled={disabled || restore.length === 0}
-      />
-      <SettingCard>
-        {DIVISION_KINDS.map((kind) => {
-          // "Checking" goes to one that takes work sessions (7.5).
-          const takesIt = (a: AssistantInfo) =>
-            kind !== "check" || usageOf(a).modes.includes("session")
-          const pickable = assistants.filter(
-            (a) => a.enabled && usageOf(a).dispatch && takesIt(a)
-          )
-          const pickableWorkers = workers.filter((w) => {
-            if (kind !== "check") return true
-            const bound = assistants.find(
-              (a) => a.id === w.executor_assistant_id
-            )
-            return bound != null && takesIt(bound)
-          })
-          const value = account.team.division[kind] ?? "auto"
-          const known =
-            value === "auto" ||
-            pickable.some((a) => `assistant:${a.uid}` === value) ||
-            pickableWorkers.some((w) => `bot:${w.uid}` === value)
-          return (
-            <SettingRow
-              key={kind}
-              title={tKind(kind)}
-              description={tKind(`${kind}Hint` as "codeHint")}
-              control={
-                <Select
-                  value={known ? value : "auto"}
-                  disabled={disabled}
-                  onValueChange={(v) =>
-                    void patch([
-                      {
-                        key: `team.division.${kind}`,
-                        value: v === "auto" ? null : v,
-                      },
-                    ])
-                  }
-                >
-                  <SelectTrigger
-                    data-pa-division={kind}
-                    className={cn("h-8 w-48 bg-background text-xs")}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="auto" className="text-xs">
-                      {t("team.auto")}
-                    </SelectItem>
-                    {pickableWorkers.length > 0 ? (
-                      <SelectGroup>
-                        <SelectLabel className="text-2xs">
-                          {t("nav.workers")}
-                        </SelectLabel>
-                        {pickableWorkers.map((w) => (
-                          <SelectItem
-                            key={w.id}
-                            value={`bot:${w.uid}`}
-                            className="text-xs"
-                          >
-                            {botName(w)}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ) : null}
-                    {pickable.length > 0 ? (
-                      <SelectGroup>
-                        <SelectLabel className="text-2xs">
-                          {t("nav.executors")}
-                        </SelectLabel>
-                        {pickable.map((a) => (
-                          <SelectItem
-                            key={a.id}
-                            value={`assistant:${a.uid}`}
-                            className="text-xs"
-                          >
-                            {a.name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ) : null}
-                  </SelectContent>
-                </Select>
-              }
-            />
-          )
-        })}
-      </SettingCard>
-      <SettingNote icon={Users}>{t("team.divisionNote")}</SettingNote>
     </div>
   )
 }

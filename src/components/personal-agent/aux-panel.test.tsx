@@ -34,7 +34,6 @@ const api = vi.hoisted(() => ({
   personalAgentBots: vi.fn(),
   personalAgentRoutines: vi.fn(async () => []),
   personalAgentRoutineAct: vi.fn(async () => ({})),
-  personalAgentTemplates: vi.fn(async () => []),
   personalAgentSave: vi.fn(async () => ({})),
   readWorkspaceFileBase64: vi.fn(),
 }))
@@ -120,7 +119,6 @@ vi.mock("@/components/token-usage/charts", () => ({
 }))
 
 import { __resetRosterForTests } from "@/stores/personal-agent-roster-store"
-import { __resetTemplatesForTests } from "./use-templates"
 import { __resetThumbsForTests } from "./aux/output/use-thumb"
 
 import { PersonalAgentAuxPanel } from "./aux-panel"
@@ -310,7 +308,6 @@ beforeEach(() => {
   pa.snapshot = snapshot()
   pa.rows = []
   __resetRosterForTests()
-  __resetTemplatesForTests()
   __resetThumbsForTests()
   usePersonalAgentUi.setState({
     auxOpen: true,
@@ -326,7 +323,8 @@ beforeEach(() => {
       uid: "u1",
       name: "Nova",
       avatar: { kind: "emoji", emoji: "🧭", color: "violet" },
-      template: null,
+      persona: "",
+      persona_unwritten: false,
       executor_assistant_id: null,
       created_at: "2026-11-01T00:00:00Z",
       roster: {
@@ -519,7 +517,7 @@ describe("the panel", () => {
   it("keeps a work assistant's name from being left empty, and is not renamed where it runs elsewhere", async () => {
     api.personalAgentSave.mockClear()
     const worker = snapshot()
-    Object.assign(worker.agent!, { kind: "worker", template: "dev" })
+    Object.assign(worker.agent!, { kind: "worker" })
     pa.snapshot = worker
     const { unmount } = draw({ snap: worker })
     fireEvent.click(

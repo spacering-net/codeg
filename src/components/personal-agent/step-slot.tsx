@@ -46,14 +46,13 @@ const HEIGHT_MS = 200
 /** The personal agent's own tools, by name as agents title them
  *  (`mcp__codeg__dispatch`, `codeg.dispatch`, `dispatch`…). */
 const OWN_TOOLS =
-  /(?:^|[\s_.:/-])(dispatch_followup|dispatch|item_list|item_read|item_update|timeline_read|assistant_list|project_list)(?:$|[\s(:)])/i
+  /(?:^|[\s_.:/-])(dispatch_followup|dispatch|item_list|item_read|item_update|timeline_read|project_list)(?:$|[\s(:)])/i
 
 type OwnTool =
   | "dispatch"
   | "dispatch_followup"
   | "items"
   | "timeline_read"
-  | "assistant_list"
   | "project_list"
 
 export function ownToolOf(title: string): OwnTool | null {

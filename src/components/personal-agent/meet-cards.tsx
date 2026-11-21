@@ -14,8 +14,7 @@
  *   hands there: [Hand it to me] sends it as their message, [Another one],
  *   [Not now]; or that nothing needs them and it keeps an eye on it.
  * - **What I'll do on my own** — how much it may disturb them, the switches
- *   of what it does unasked, [Build a team], the preferences and the
- *   desktop companion.
+ *   of what it does unasked, the preferences and the desktop companion.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react"
@@ -34,7 +33,6 @@ import {
   PawPrint,
   Settings2,
   Sparkles,
-  Users,
   type LucideIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -743,7 +741,6 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
   const row = item.row
   const data = row.data ?? {}
   const state = str(data, "state") ?? "open"
-  const suggested = typeof data.team === "number"
   const { patch, busy: patching } = useSettingsPatch(null)
   const { busy, failed, act } = useAct(Number(row.ref_id))
   const [unfolded, setUnfolded] = useState(false)
@@ -760,8 +757,8 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
   const done = state === "done"
   // One card, as the settings write it — how much it may disturb, then the
   // switches of what it does unasked (each a row, a hairline between, the
-  // switch at its end), then its buttons: the ways on — a team, the
-  // preferences, the desktop companion — secondary, [Done] at the end.
+  // switch at its end), then its buttons: the ways on — the preferences,
+  // the desktop companion — secondary, [Done] at the end.
   const groups = account ? (
     <>
       <SettingCard
@@ -811,20 +808,6 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
         })}
       </SettingCard>
       <SheetActions data-pa-meet-actions>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={readOnly || busy != null || suggested}
-          onClick={() => void act("team")}
-          data-pa-meet-team
-        >
-          {busy === "team" ? (
-            <SyncedSpinner small className="size-3.5" />
-          ) : (
-            <Users aria-hidden />
-          )}
-          {suggested ? t("teamSuggested") : t("team")}
-        </Button>
         <Button
           size="sm"
           variant="secondary"

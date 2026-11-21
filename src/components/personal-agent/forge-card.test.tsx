@@ -22,7 +22,6 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 const api = vi.hoisted(() => ({
   personalAgentNoticeAct: vi.fn(),
-  personalAgentTemplates: vi.fn(),
 }))
 vi.mock("@/lib/api", () => api)
 const platform = vi.hoisted(() => ({ openUrl: vi.fn() }))
@@ -48,7 +47,6 @@ import { waitsForOwner } from "./message-list"
 import { buildMessageItems, type MessageItem } from "./message-items"
 import { NoticeCard } from "./notice-card"
 import { PageScopeContext, type PageScope } from "./shared"
-import { __resetTemplatesForTests } from "./use-templates"
 
 function row(data: Record<string, unknown>, body = "Card"): TimelineRow {
   return {
@@ -130,16 +128,10 @@ function draw(r: TimelineRow, { readOnly = false, zh = false } = {}) {
 
 beforeEach(() => {
   api.personalAgentNoticeAct.mockReset().mockResolvedValue({})
-  api.personalAgentTemplates.mockReset().mockResolvedValue([
-    { id: "docs", name: "Writer", job: "docs" },
-    { id: "review", name: "Reviewer", job: "reviews" },
-  ])
   platform.openUrl.mockReset().mockResolvedValue(undefined)
-  __resetTemplatesForTests()
   usePersonalAgentUi.setState({
     settings: null,
     botPage: null,
-    executorEditor: null,
   })
 })
 
@@ -372,187 +364,64 @@ describe("the team changed from the conversation", () => {
               },
             ],
           },
-          { key: "bot.u-1.executor", from: "a-1", to: "a-2" },
+          {
+            key: "bot.u-1.work_agent",
+            from: null,
+            to: {
+              agent_type: "codex",
+              agent_options: { config_values: {} },
+              label_snapshot: { agent: "Codex", mode: null, options: [] },
+            },
+          },
           {
             key: "bot.u-1.avatar",
             from: { kind: "face", shape: "blob", color: "red" },
             to: { kind: "face", shape: "egg", color: "teal" },
           },
         ],
-        names: {
-          "bot:u-1": "Yan",
-          "assistant:a-1": "Coder",
-          "assistant:a-2": "Writer",
-        },
+        names: { "bot:u-1": "Yan" },
       })
     )
     expect(screen.getByText("Yan · name")).toBeInTheDocument()
     expect(screen.getByText("Yan · brain")).toBeInTheDocument()
     expect(screen.getByText("Codex · GPT-5.5")).toBeInTheDocument()
     expect(screen.getByText("agent's default")).toBeInTheDocument()
-    expect(screen.getByText("Yan · executor config")).toBeInTheDocument()
-    expect(screen.getByText("Coder")).toBeInTheDocument()
-    expect(screen.getByText("Writer")).toBeInTheDocument()
+    // The agent its work runs on, never an executor config's name.
+    expect(screen.getByText("Yan · agent its work runs on")).toBeInTheDocument()
+    expect(screen.getByText("nothing set")).toBeInTheDocument()
+    expect(screen.getByText("Codex")).toBeInTheDocument()
     expect(screen.getByText("Egg · Teal")).toBeInTheDocument()
-    // Not an executor config's change: nothing about @-mentions.
-    expect(document.querySelector("[data-pa-both-ways]")).toBeNull()
   })
 
-  it("says an executor config's change applies to @-mentions too", async () => {
+  it("shows a persona's change whole: the opening it has, the one it gets", () => {
     draw(
       changed({
+        state: "open",
+        why: "show",
         changes: [
           {
-            key: "assistant.a-2.instructions",
-            from: "Write docs.",
-            to: "Write for beginners.",
-          },
-          {
-            key: "team.division.docs",
-            from: null,
-            to: "assistant:a-2",
+            key: "bot.u-1.persona",
+            from: "I write code.",
+            to: "I write code and its tests.\nI keep PRs small.",
           },
         ],
-        names: { "assistant:a-2": "Writer" },
-      })
-    )
-    expect(
-      screen.getByText("Writer · standing instructions")
-    ).toBeInTheDocument()
-    expect(screen.getByText("Write for beginners.")).toBeInTheDocument()
-    expect(document.querySelector("[data-pa-both-ways]")).not.toBeNull()
-    expect(screen.getAllByText("Writer").length).toBeGreaterThan(0)
-  })
-
-  it("reads a role by its name", async () => {
-    draw(
-      changed({
-        changes: [{ key: "bot.u-1.template", from: "review", to: "docs" }],
         names: { "bot:u-1": "Yan" },
+        unchecked_quote: "tests too",
       })
     )
-    expect(await screen.findByText("Reviewer")).toBeInTheDocument()
-    expect(screen.getByText("Writer")).toBeInTheDocument()
-  })
-})
-
-describe("a card about an executor config", () => {
-  const made = {
-    assistant: {
-      id: 31,
-      uid: "a-9",
-      name: "Docs writer",
-      agent: "Claude Code",
-      agent_type: "claude_code",
-    },
-    picked: [
-      {
-        id: "model",
-        name: "Model",
-        value: "sonnet",
-        value_label: "Sonnet",
-        from: "other_config",
-      },
-    ],
-    team: [{ key: "team.division.docs", from: null, to: "assistant:a-9" }],
-    template: "docs",
-  }
-  const assistantCard = (data: Record<string, unknown>) =>
-    row({
-      notice: "changed",
-      what: "assistant",
-      state: "applied",
-      why: "asked",
-      made,
-      pending: null,
-      quote: "add one for docs on Claude Code",
-      reason: null,
-      ...data,
-    })
-
-  it("shows what was made and who picked its options, undoes it, and opens its editor", async () => {
-    draw(assistantCard({}))
-    expect(
-      screen.getByText("Made an executor config, as you said")
-    ).toBeInTheDocument()
-    expect(screen.getByText("Docs writer")).toBeInTheDocument()
-    expect(screen.getByText("on Claude Code")).toBeInTheDocument()
-    expect(screen.getByText("from another config")).toBeInTheDocument()
-    expect(screen.getByText("First pick for: Docs")).toBeInTheDocument()
-    expect(
-      screen.getByText("You said: “add one for docs on Claude Code”")
-    ).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }))
-    const ui = usePersonalAgentUi.getState()
-    expect(ui.settings?.page).toBe("executors")
-    expect(ui.executorEditor).toMatchObject({ assistantId: 31, prefill: null })
-    fireEvent.click(screen.getByRole("button", { name: "Undo" }))
-    await waitFor(() =>
-      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(21, "undo", 7)
+    expect(screen.getByText("Yan · persona")).toBeInTheDocument()
+    const change = document.querySelector("[data-pa-persona-change]")!
+    expect(change.querySelector("[data-pa-persona-from]")?.textContent).toBe(
+      "I write code."
     )
-  })
-
-  it("makes one waiting on the owner", async () => {
-    draw(
-      assistantCard({
-        state: "open",
-        why: "suggest",
-        made: null,
-        pending: { name: "Docs writer", agent_type: "codex" },
-        quote: null,
-        reason: "you write docs every week",
-      })
+    expect(change.querySelector("[data-pa-persona-to]")?.textContent).toBe(
+      "I write code and its tests.\nI keep PRs small."
     )
-    expect(
-      screen.getByText("Suggestion: a new executor config")
-    ).toBeInTheDocument()
-    expect(screen.getByText("on Codex")).toBeInTheDocument()
-    expect(
-      screen.getByText("Why: you write docs every week")
-    ).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "Make it" }))
-    await waitFor(() =>
-      expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(21, "accept", 7)
-    )
-  })
-
-  it("opens the editor prefilled when the agent's options could not be read", () => {
-    draw(
-      assistantCard({
-        state: "editor",
-        why: "editor",
-        made: null,
-        pending: {
-          name: "Gem",
-          description: null,
-          instructions: "Be brief.",
-          template: null,
-          agent_type: "gemini",
-          options: { model: "pro", mode: "plan" },
-        },
-        reason: "Gemini is not installed",
-      })
-    )
-    expect(
-      screen.getByText("Couldn't make the executor config")
-    ).toBeInTheDocument()
     expect(
       screen.getByText(
-        /couldn't read the options of Gemini CLI \(Gemini is not installed\)/
+        "The primary says you said “tests too” — but you didn't type it this turn"
       )
     ).toBeInTheDocument()
-    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: "Open editor" }))
-    const ui = usePersonalAgentUi.getState()
-    expect(ui.settings?.page).toBe("executors")
-    expect(ui.executorEditor).toMatchObject({
-      assistantId: null,
-      prefill: {
-        name: "Gem",
-        instructions: "Be brief.",
-        agentType: "gemini",
-        options: { mode_id: "plan", config_values: { model: "pro" } },
-      },
-    })
+    expect(screen.queryByText(/You said/)).toBeNull()
   })
 })

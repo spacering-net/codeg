@@ -9,9 +9,7 @@
  * these" turns the rule off. A card whose thing is gone says so. The weekly
  * review's questions (6.6) are such cards too: show the changes the owner
  * keeps undoing first; hide or delete a work assistant nobody woke for two
- * weeks (the delete goes through the usual confirmation). The division rule
- * (7.9) shows both records and makes the better one the pick — undone from
- * the card while nothing changed it since.
+ * weeks (the delete goes through the usual confirmation).
  */
 
 import { useState } from "react"
@@ -24,7 +22,6 @@ import {
   GitPullRequest,
   Hourglass,
   MessageCircleQuestion,
-  Scale,
   TriangleAlert,
   Undo2,
   UserX,
@@ -74,7 +71,6 @@ const ICONS: Partial<Record<ProposalRule, LucideIcon>> = {
   behind: GitBranch,
   undo: Undo2,
   idle_bot: UserX,
-  division: Scale,
 }
 
 /** Each rule's next steps, the first the main one. */
@@ -89,7 +85,6 @@ const STEPS: Partial<Record<ProposalRule, readonly NoticeAction[]>> = {
   behind: ["rebase"],
   undo: ["ask_first"],
   idle_bot: ["hide", "delete"],
-  division: ["switch"],
 }
 
 /** The states a step leaves the card in, as the server writes them. */
@@ -105,8 +100,6 @@ const DONE_STATES = [
   "asking_first",
   "hidden",
   "deleted",
-  "switched",
-  "undone",
 ] as const
 
 function asRule(v: string | null): ProposalRule | null {
@@ -133,28 +126,14 @@ function nameOf(rule: ProposalRule, f: Facts): string {
     case "idle_bot":
       return str(f, "name") ?? ""
     case "undo":
-    case "division":
       return ""
     default:
       return str(f, "title") ?? ""
   }
 }
 
-type Side = { name?: unknown; grade?: Record<string, unknown> }
-
-/** One side of the division card: its record, "9/10 (90%)". */
-function record(side: Side | undefined) {
-  const g = (side?.grade ?? {}) as Record<string, unknown>
-  return {
-    pass: num(g, "first_pass") ?? 0,
-    settled: num(g, "settled") ?? 0,
-    rate: num(g, "first_pass_rate") ?? 0,
-  }
-}
-
 export function RuleCard({ item }: { item: NoticeItem }) {
   const t = useTranslations("PersonalAgent.rules")
-  const tKind = useTranslations("PersonalAgent.settings.division")
   const botId = useBotId()
   const { readOnly } = usePageScope()
   const when = useWhen()
@@ -173,18 +152,10 @@ export function RuleCard({ item }: { item: NoticeItem }) {
   const facts = (data.facts ?? {}) as Facts
   const state = str(data, "state") ?? "open"
   const open = state === "open"
-  // The division rule's card is about records, not about since when.
-  const since = rule === "division" ? null : str(data, "since")
-  const kind = str(facts, "kind")
-  const to = facts.to as Side | undefined
-  const from = facts.from as Side | undefined
-  const toName = typeof to?.name === "string" ? to.name : ""
-  const fromName = typeof from?.name === "string" ? from.name : null
-  const kindLabel = kind ? tKind(kind as "code") : ""
-  const name = rule === "division" ? kindLabel : nameOf(rule, facts)
+  const since = str(data, "since")
+  const name = nameOf(rule, facts)
   const Icon = ICONS[rule] ?? BellRing
-  const switched = rule === "division" && state === "switched"
-  const error = failed ?? (open || switched ? str(data, "error") : null)
+  const error = failed ?? (open ? str(data, "error") : null)
 
   /** The owner's words a step hands over, in their language. */
   const words = (a: NoticeAction): string | undefined => {
@@ -288,33 +259,6 @@ export function RuleCard({ item }: { item: NoticeItem }) {
         })
       case "idle_bot":
         return t("idleBotDetail")
-      case "division": {
-        const a = record(to)
-        const b = record(from)
-        const days = num(facts, "days") ?? 30
-        return fromName
-          ? t("divisionDetail", {
-              to: toName,
-              pass: a.pass,
-              settled: a.settled,
-              rate: a.rate,
-              from: fromName,
-              fromPass: b.pass,
-              fromSettled: b.settled,
-              fromRate: b.rate,
-              days,
-            })
-          : t("divisionDetailAuto", {
-              to: toName,
-              pass: a.pass,
-              settled: a.settled,
-              rate: a.rate,
-              fromPass: b.pass,
-              fromSettled: b.settled,
-              fromRate: b.rate,
-              days,
-            })
-      }
       default:
         return null
     }
@@ -325,9 +269,6 @@ export function RuleCard({ item }: { item: NoticeItem }) {
       return data.lowered_now === true ? t("loweredNow") : t("dismissed")
     }
     if (state === "expired") return t("expired")
-    if (rule === "division" && state === "switched") {
-      return t("done.switched", { kind: kindLabel, name: toName })
-    }
     if ((DONE_STATES as readonly string[]).includes(state)) {
       return t(`done.${state}` as "done.handed")
     }
@@ -339,9 +280,7 @@ export function RuleCard({ item }: { item: NoticeItem }) {
   const stateTone: OutcomeTone =
     state === "dismissed" || state === "expired" || state === "deleted"
       ? "off"
-      : state === "undone"
-        ? "back"
-        : "done"
+      : "done"
 
   return (
     <MessageRow
@@ -407,7 +346,7 @@ export function RuleCard({ item }: { item: NoticeItem }) {
             ) : null}
           </SheetPart>
         ) : null}
-        {(open || switched) && !readOnly ? (
+        {open && !readOnly ? (
           <SheetActions>
             {open ? (
               <>
@@ -423,9 +362,7 @@ export function RuleCard({ item }: { item: NoticeItem }) {
                     {busy === a ? (
                       <SyncedSpinner small className="size-3.5" />
                     ) : null}
-                    {rule === "division"
-                      ? t("step.division.switch", { name: toName })
-                      : t(`step.${rule}.${a}` as "step.failed.retry")}
+                    {t(`step.${rule}.${a}` as "step.failed.retry")}
                   </Button>
                 ))}
                 {rule === "pr_review" && str(facts, "url") ? (
@@ -453,20 +390,6 @@ export function RuleCard({ item }: { item: NoticeItem }) {
                   onFailed={setFailed}
                 />
               </>
-            ) : null}
-            {switched ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={busy != null}
-                onClick={() => void act("undo")}
-                data-pa-rule-act="undo"
-              >
-                {busy === "undo" ? (
-                  <SyncedSpinner small className="size-3.5" />
-                ) : null}
-                {t("undoSwitch")}
-              </Button>
             ) : null}
           </SheetActions>
         ) : null}

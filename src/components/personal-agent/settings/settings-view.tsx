@@ -3,15 +3,14 @@
 /**
  * The settings every assistant shares (13.1), across the assistants page in
  * place of the conversation, the roster and the side panel: the team — the
- * work assistants, the executor configs, the division of work — and the
+ * work assistants and the executor configs their work runs on — and the
  * preferences. An assistant's own settings are on its own page
  * (`bot-page.tsx`). The navigation down the side under the title, the
  * arrow before it going back to the conversation; on a narrow screen it
  * folds into a select at the top.
  *
  * Read-only while the engine runs in another codeg process — except the
- * executor configs themselves, which are not the engine's (how the
- * assistants use them is).
+ * executor configs themselves, which are not the engine's.
  */
 
 import { useEffect, useState } from "react"
@@ -21,7 +20,6 @@ import {
   BellRing,
   Bot,
   MessagesSquare,
-  Split,
   UserRound,
   Users,
   Zap,
@@ -50,11 +48,11 @@ import {
 
 import { AboutPage } from "./about-page"
 import { AutomationPage, CommunicationPage, ProactivePage } from "./pref-pages"
-import { DivisionPage, ExecutorsPage, WorkersPage } from "./team-pages"
+import { ExecutorsPage, WorkersPage } from "./team-pages"
 
 /** The navigation: the team, then the preferences. */
 const GROUPS: { label: "team" | "prefs"; pages: SettingsPage[] }[] = [
-  { label: "team", pages: ["workers", "executors", "division"] },
+  { label: "team", pages: ["workers", "executors"] },
   {
     label: "prefs",
     pages: ["communication", "proactive", "automation", "about"],
@@ -64,7 +62,6 @@ const GROUPS: { label: "team" | "prefs"; pages: SettingsPage[] }[] = [
 const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   workers: Users,
   executors: Bot,
-  division: Split,
   communication: MessagesSquare,
   proactive: BellRing,
   automation: Zap,
@@ -102,18 +99,7 @@ export function SettingsView() {
       case "workers":
         return <WorkersPage readOnly={accountLocked} readOnlyWhy={accountWhy} />
       case "executors":
-        return (
-          <ExecutorsPage
-            account={account}
-            usageReadOnly={accountLocked}
-            usageReadOnlyWhy={accountWhy}
-            delegationEnabled={delegation}
-          />
-        )
-      case "division":
-        return account ? (
-          <DivisionPage account={account} disabled={accountLocked} />
-        ) : null
+        return <ExecutorsPage delegationEnabled={delegation} />
       case "communication":
         return account ? (
           <CommunicationPage account={account} disabled={accountLocked} />

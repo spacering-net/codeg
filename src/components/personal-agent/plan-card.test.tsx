@@ -69,9 +69,9 @@ function plan(over: Partial<PlanView> = {}): PlanView {
         state: "running",
         ready: true,
         depends_on: [1],
-        target_kind: "assistant",
+        target_kind: "self",
         target_id: 3,
-        target_name: "Coder",
+        target_name: "Nova",
         mode: "task",
         project_id: 1,
         project_name: "codeg",
@@ -160,6 +160,15 @@ describe("the plan card", () => {
     const two = container.querySelector("[data-pa-plan-step='2']")!
     expect(two.textContent).toContain("Being checked")
     expect(two.textContent).toContain("Kanban task · codeg")
+    // Its own step: "itself", not its name; another's, by name.
+    expect(
+      two
+        .querySelector("[data-pa-plan-step-who]")
+        ?.getAttribute("data-pa-plan-step-who")
+    ).toBe("self")
+    expect(two.querySelector("[data-pa-plan-step-who]")?.textContent).toBe(
+      "itself"
+    )
     expect(two.textContent).toContain("after step 1")
     const three = container.querySelector("[data-pa-plan-step='3']")!
     expect(three.textContent).toContain("after step 1, 2")

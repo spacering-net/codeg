@@ -3,8 +3,8 @@
 /**
  * An assistant's own page (13.1), in place of its conversation, the roster
  * kept beside it: its face, its name and what it is, over its tabs —
- * "Identity & brain", "Persona & memory", a work assistant's "Execution",
- * "Notifications", "Advanced". The arrow before its face goes back to the
+ * "Identity & brain" (the executor config its work runs on there too),
+ * "Persona & memory", "Notifications", "Advanced". The arrow before its face goes back to the
  * conversation, and so does picking an assistant on the roster. With no
  * assistant set up yet, it is the first setup: the identity tab alone.
  *
@@ -33,10 +33,9 @@ import {
 
 import { BotAvatar } from "../bot-avatar"
 import { useBotLook, useBotName } from "../shared"
-import { useBotTemplates } from "../use-templates"
 import { IdentityPage } from "./identity-page"
 import { NotifyPage } from "./notify-page"
-import { AdvancedPage, ExecutionPage, PersonaPage } from "./own-pages"
+import { AdvancedPage, PersonaPage } from "./own-pages"
 
 /** The face in the page's head, in px at 100% zoom. */
 const HEAD_FACE = 48
@@ -61,7 +60,6 @@ export function BotPage() {
   const { snapshot, botId } = usePersonalAgent()
   const { switching } = usePersonalAgentSwitch()
   const entries = useRoster()
-  const templates = useBotTemplates()
   const botName = useBotName()
 
   // The assistant picked: the roster's, at once; its settings once read.
@@ -78,22 +76,13 @@ export function BotPage() {
   const readOnly = read != null && read.status.engine !== "here"
 
   const name = setUp ? botName(entry ?? agent) : t("setupTitle")
-  const role = worker
-    ? (templates?.find((x) => x.id === (entry?.template ?? agent?.template))
-        ?.name ?? tp("worker"))
-    : tp("primary")
+  const role = worker ? tp("worker") : tp("primary")
   const brain = agent?.label_snapshot.agent ?? null
   const subtitle = setUp
     ? [role, brain].filter(Boolean).join(" · ")
     : tp("notSetUp")
 
-  const tabs: BotTab[] = [
-    "identity",
-    "persona",
-    ...(worker ? (["execution"] as const) : []),
-    "notify",
-    "advanced",
-  ]
+  const tabs: BotTab[] = ["identity", "persona", "notify", "advanced"]
   const asked = open?.tab ?? "identity"
   const tab = tabs.includes(asked) ? asked : "identity"
 
@@ -122,12 +111,13 @@ export function BotPage() {
         )
       case "persona":
         return (
-          <PersonaPage key={agent.id} bot={botId} entry={open?.entry ?? null} />
+          <PersonaPage
+            key={agent.id}
+            bot={botId}
+            entry={open?.entry ?? null}
+            unwritten={entry?.persona_unwritten ?? false}
+          />
         )
-      case "execution":
-        return worker ? (
-          <ExecutionPage agent={agent} bot={botId} disabled={readOnly} />
-        ) : null
       case "notify":
         return <NotifyPage agent={agent} disabled={readOnly} />
       case "advanced":

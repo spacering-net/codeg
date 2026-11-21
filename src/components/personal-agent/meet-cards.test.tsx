@@ -3,7 +3,6 @@
  * brain is first picked, as the owner answers them.
  */
 import {
-  act,
   cleanup,
   fireEvent,
   render,
@@ -492,19 +491,12 @@ describe("what I'll do on my own", () => {
     ).toHaveLength(buttons.length - 1)
   })
 
-  it("suggests a team once, opens the preferences and the companion, and folds when done", async () => {
+  it("opens the preferences and the companion, builds no team, and folds when done", async () => {
     const openSettings = vi.fn()
     usePersonalAgentUi.setState({ openSettings })
     draw(open())
-    fireEvent.click(screen.getByRole("button", { name: "Build a team" }))
-    await waitFor(() =>
-      expect(api.personalAgentNoticeAct).toHaveBeenLastCalledWith(
-        12,
-        "team",
-        null,
-        undefined
-      )
-    )
+    // No team made from templates: one is asked for in the conversation.
+    expect(screen.queryByRole("button", { name: /team/i })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "Adjust preferences" }))
     expect(openSettings).toHaveBeenCalledWith("proactive")
     fireEvent.click(
@@ -521,53 +513,10 @@ describe("what I'll do on my own", () => {
       )
     )
     cleanup()
-    draw(open({ team: 77 }))
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Team suggested",
-        }) as HTMLButtonElement
-      ).disabled
-    ).toBe(true)
-    cleanup()
     draw(open({ state: "done" }))
     expect(
       screen.getByText("What I'll do on my own · disturbance: Standard")
     ).toBeTruthy()
     expect(screen.queryByRole("switch")).toBeNull()
-  })
-})
-
-describe("a team suggested", () => {
-  it("makes the ones ticked", async () => {
-    draw(
-      card({
-        notice: "changed",
-        what: "bots",
-        why: "suggest",
-        state: "open",
-        bots: [],
-        pending: {
-          team: [
-            { name: "Developer", template: "dev" },
-            { name: "Reviewer", template: "review" },
-            { name: "CI fixer", template: "ci" },
-          ],
-          projects: ["app"],
-        },
-      })
-    )
-    expect(screen.getByText("For app")).toBeTruthy()
-    fireEvent.click(screen.getByRole("checkbox", { name: "Reviewer" }))
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Make 2 assistants" }))
-    })
-    await waitFor(() =>
-      expect(api.personalAgentNoticeAct).toHaveBeenLastCalledWith(
-        12,
-        "accept:dev,ci",
-        null
-      )
-    )
   })
 })

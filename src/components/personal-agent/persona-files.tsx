@@ -42,6 +42,7 @@ import {
 import { toErrorMessage } from "@/lib/app-error"
 import type { PersonalAgentFile } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { reloadRoster } from "@/stores/personal-agent-roster-store"
 
 /** A fixed file: its group in the list, its icon, who writes it. */
 interface FixedFile {
@@ -237,6 +238,8 @@ export function PersonaFiles({
           )
         )
         toast.message(t("fileSaved", { name: active }))
+        // The persona's head the roster shows is read from it.
+        if (active === "SOUL.md") reloadRoster()
       })
       .catch((e) => toast.error(toErrorMessage(e)))
       .finally(() => setSaving(false))

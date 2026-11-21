@@ -26,21 +26,6 @@ const api = vi.hoisted(() => ({
   personalAgentBotCopy: vi.fn(),
   personalAgentTurnSteps: vi.fn(),
   personalAgentCancel: vi.fn(async () => {}),
-  personalAgentTemplates: vi.fn(async () => [
-    {
-      id: "review",
-      name: "Reviewer",
-      job: "",
-      description: "",
-      instructions: "",
-      opener: "",
-      options: ["a", "b", "c"],
-      other: "Other",
-      modes: ["session"],
-      division: "review",
-      project_option: null,
-    },
-  ]),
   personalAgentResend: vi.fn(),
   personalAgentSave: vi.fn(async () => ({})),
 }))
@@ -124,7 +109,8 @@ function entry(
     uid: `u${id}`,
     name,
     avatar: { kind: "face", shape: "blob", color: id === 1 ? "black" : "teal" },
-    template: id === 1 ? null : "review",
+    persona: id === 2 ? "# Persona I fix the white screens." : "",
+    persona_unwritten: id === 3,
     executor_assistant_id: null,
     created_at: iso(-86_400_000),
     roster: {
@@ -271,6 +257,27 @@ describe("the roster", () => {
     expect(card.querySelector("[data-pa-roster-line]")?.textContent).toBe(
       "All set."
     )
+  })
+
+  it("shows the head of each one's persona on its card, or that it has none yet", async () => {
+    api.personalAgentBots.mockResolvedValue([
+      entry(1, "Nova"),
+      entry(2, "Dev"),
+      entry(3, "Rev"),
+    ])
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    await screen.findByText("Dev")
+    const persona = (id: number) =>
+      document.querySelector(`[data-pa-roster-persona='${id}']`)?.textContent
+    await hoverOpen(document.querySelector("[data-pa-roster-bot='2']")!)
+    // As the team list has it, without the heading's marks.
+    expect(persona(2)).toBe("Persona I fix the white screens.")
+    fireEvent.pointerLeave(document.querySelector("[data-pa-roster-bot='2']")!)
+    cleanup()
+    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
+    await screen.findByText("Rev")
+    await hoverOpen(document.querySelector("[data-pa-roster-bot='3']")!)
+    expect(persona(3)).toBe("No persona written yet")
   })
 
   it("puts work the owner can merge before what it is doing, in a calm tone", async () => {

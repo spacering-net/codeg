@@ -1995,9 +1995,7 @@ export interface PersonalAgentInfo {
   /** The primary assistant, or a worker. */
   kind: PersonalAgentBotKind
   uid: string | null
-  /** The template a worker was made from. */
-  template: string | null
-  /** The executor profile a worker is bound to. */
+  /** The executor config its work runs on (the primary's too). */
   executor_assistant_id: number | null
 }
 
@@ -2009,9 +2007,19 @@ export interface PersonalAgentDraft {
   agent_config?: AssistantAgentConfig
   settings?: PersonalAgentSettings
   locale?: string
-  /** A work assistant's executor config. */
+  /** The executor config its work runs on, one the owner picked. */
   executor_assistant_id?: number
+  /** Make it one with this complete selection. */
+  executor_config?: AssistantAgentConfig
+  /** Make it one on the brain's agent, its options filled in. When they
+   *  cannot be read nothing is saved and the error starts with
+   *  `EXECUTOR_OPTIONS_UNAVAILABLE`. */
+  executor_new?: boolean
 }
+
+/** How a save that was to make an executor config answers when the brain's
+ *  agent's options cannot be read (Rust `EXECUTOR_OPTIONS_UNAVAILABLE`). */
+export const EXECUTOR_OPTIONS_UNAVAILABLE = "executor options unavailable: "
 
 export type SegmentReason =
   | "first"
@@ -2546,50 +2554,6 @@ export interface ChangedItem {
   picked?: PickedOption[] | null
 }
 
-/** An executor config made from the conversation (Rust
- *  `team_edit::made_json`). */
-export interface MadeExecutorData {
-  assistant: {
-    id: number
-    uid: string
-    name: string
-    agent: string
-    agent_type: AgentType
-  }
-  picked: PickedOption[]
-  team: ChangedItem[]
-  template: string
-}
-
-/** The editor's starting fields when nothing could be made. */
-export interface ExecutorPrefill {
-  name?: string | null
-  description?: string | null
-  instructions?: string | null
-  template?: string | null
-  agent_type?: AgentType | null
-  /** `{option id: value}`, or `{mode_id, config_values}`. */
-  options?: Record<string, unknown> | null
-}
-
-/** A card about an executor config made, or to make, from the
- *  conversation (`what: "assistant"`). */
-export interface AssistantCardData {
-  notice: "changed"
-  what: "assistant"
-  state: "applied" | "open" | "editor" | "undone" | "dismissed"
-  why: "asked" | "show" | "suggest" | "editor"
-  made: MadeExecutorData | null
-  /** What waits to be made (`open`), or the editor's prefill (`editor`). */
-  pending: Record<string, unknown> | null
-  quote: string | null
-  /** Why it was suggested — or, for `editor`, why the options could not be
-   *  read. */
-  reason: string | null
-  kept?: string[]
-  error?: string | null
-}
-
 /** A plan answer on an ask card: send it back (`revise`) with feedback. */
 export type AskPlanDecision = "approve" | "revise" | "abandon"
 
@@ -2907,7 +2871,6 @@ export interface PersonalAgentPrefs {
   confirm_dispatch: "never" | "code" | "always"
   followups: "auto" | "ask"
   messages: "auto" | "ask"
-  worker_handoff: "message" | "direct"
   /** 0 = no limit. */
   loop_rounds: number
   /** A dispatch a restart interrupted: retried at once, or asked first. */
@@ -3037,9 +3000,6 @@ export interface PersonalAgentPrefs {
   rule_idle_days: number
   rule_new_project: "on" | "off"
   rule_behind: "on" | "off"
-  /** Another executor config clearly does a kind of work better than its
-   *  pick in the division (7.9). */
-  rule_division: "on" | "off"
   rule_repeat: "on" | "off"
   rule_repeat_count: number
   /** The assistants' own suggestions (`suggest: true`). */
@@ -3097,7 +3057,6 @@ export const PROPOSAL_RULES = [
   "idle",
   "new_project",
   "behind",
-  "division",
   "repeat",
   "suggest",
   "undo",
@@ -3613,48 +3572,8 @@ export interface PersonalAgentProfile {
   cards: PersonalAgentCardReaction[]
 }
 
-/** How the assistants may use an executor config (10.5). */
-export interface ExecutorUsage {
-  dispatch: boolean
-  modes: DispatchMode[]
-  /** `null`: every project. */
-  projects: number[] | null
-}
-
-/** The kinds of work the division names a first pick for. */
-export type DivisionKind =
-  | "code"
-  | "review"
-  | "test"
-  | "fix_ci"
-  | "docs"
-  | "release"
-  | "research"
-  | "check"
-
-/** Every kind, in the division's order — also what a dispatch names as its
- *  kind of work (7.9). */
-export const DIVISION_KINDS: readonly DivisionKind[] = [
-  "code",
-  "review",
-  "test",
-  "fix_ci",
-  "docs",
-  "release",
-  "research",
-  "check",
-]
-
-export interface PersonalAgentTeam {
-  /** A kind of work → `bot:<uid>` or `assistant:<uid>`; left out = auto. */
-  division: Partial<Record<DivisionKind, string>>
-  /** By executor config uid; left out = the default. */
-  usage: Record<string, ExecutorUsage>
-}
-
 export interface PersonalAgentAccount {
   prefs: PersonalAgentPrefs
-  team: PersonalAgentTeam
   /** What the items add up to: a preset, or `custom`. */
   automation_level: "standard" | "ask_more" | "custom"
   /** The disturbance level the notification items add up to (13.4). */
@@ -3662,7 +3581,7 @@ export interface PersonalAgentAccount {
 }
 
 /** One item to change: `prefs.<item>`, `prefs.automation_level`,
- *  `prefs.disturb_level`, `own.<item>`, `team.division.<kind>`, `team.usage.<uid>`. */
+ *  `prefs.disturb_level`, `own.<item>`. */
 export interface PersonalAgentSettingChange {
   key: string
   value: unknown
@@ -3681,7 +3600,6 @@ export interface PersonalAgentBotSummary {
   uid: string | null
   name: string
   avatar: BotAvatar
-  template: string | null
   executor_assistant_id: number | null
   created_at: string
 }
@@ -3837,6 +3755,11 @@ export interface BotLive {
 export interface RosterEntry extends PersonalAgentBotSummary {
   roster: RosterFlags
   live: BotLive
+  /** The head of its persona, as the team list reads it: from the first
+   *  line of its `SOUL.md` on, line breaks folded, 200 characters. */
+  persona: string
+  /** A work assistant whose persona is still its default file. */
+  persona_unwritten: boolean
 }
 
 /** Payload of `personal-agent://bots`. */
@@ -3855,26 +3778,13 @@ export interface PickedOption {
   from: PickedFrom
 }
 
-/** A work assistant's template, in the owner's language (4.13). */
-export interface BotTemplate {
-  id: string
-  name: string
-  job: string
-  description: string
-  instructions: string
-  opener: string
-  options: string[]
-  other: string
-  modes: DispatchMode[] | null
-  division: string | null
-  project_option: number | null
-}
-
 export interface BotCreateDraft {
   name: string
   /** The uid the page previewed the default face with. */
   uid?: string | null
-  template?: string | null
+  /** Its persona's first paragraph; empty: the default sentence, until it
+   *  writes its own. */
+  persona?: string | null
   avatar?: BotAvatar | null
   executor_config?: AssistantAgentConfig | null
   executor_assistant_id?: number | null
@@ -3888,7 +3798,6 @@ export interface BotCreateDraft {
 export interface BotMade {
   bot: PersonalAgentBotSummary | null
   executor_assistant_id: number | null
-  template: string
   options_unavailable: { agent_type: AgentType; why: string } | null
 }
 
@@ -3904,7 +3813,6 @@ export interface BotImpact {
   }[]
   unanswered_messages: number
   executor: { id: number; name: string; shared_with: string[] } | null
-  division: string[]
   /** Its plans still going: they stop (7.6). */
   plans: { plan_id: number; title: string }[]
   /** Steps of other assistants' plans handed to it, not done yet. */
@@ -3941,7 +3849,8 @@ export type PlanStepState =
 export interface PlanStepView {
   seq: number
   title: string
-  target_kind: "bot" | "assistant"
+  /** Another assistant, or the plan's own (`self`). */
+  target_kind: "bot" | "self"
   target_id: number
   target_name: string
   agent_type?: AgentType
@@ -3950,8 +3859,6 @@ export interface PlanStepView {
   project_id: number | null
   project_name: string | null
   deliverable: "change" | "report" | null
-  /** The kind of work (7.9). */
-  kind?: DivisionKind
   prompt: string
   done_when: string | null
   depends_on: number[]
@@ -4030,7 +3937,7 @@ export interface ExecutorFailing {
   count: number
 }
 
-/** An executor config as the assistants use it. */
+/** An executor config as the assistants' work runs on it. */
 export interface ExecutorView {
   assistant_id: number
   uid: string
@@ -4038,9 +3945,8 @@ export interface ExecutorView {
   failing: ExecutorFailing | null
   dispatches_14d: number
   completed_14d: number
+  /** The assistants whose work runs on it, the primary too. */
   workers: PersonalAgentBotSummary[]
-  division: DivisionKind[]
-  usage: ExecutorUsage
   /** How its work went over the last 30 days (2.11). */
   grade: PersonalAgentGrade
   /** And apart, by who handed it out and how (7.9). */
@@ -8692,15 +8598,12 @@ export interface RoutineEventSpec {
 
 /** The work a dispatch routine hands out. */
 export interface RoutineDispatchTemplate {
-  assistant_id?: number | null
   mode?: DispatchMode | null
   project_id?: number | null
   title?: string | null
   prompt?: string | null
   deliverable?: "change" | "report" | null
   done_when?: string | null
-  /** In a change: back to the assistant's own executor config. */
-  own_executor?: boolean
 }
 
 /** What a run looks at before it wakes anyone. */

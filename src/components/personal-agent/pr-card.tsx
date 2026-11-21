@@ -240,7 +240,19 @@ function FixLine({ fix }: { fix: PrFixState }) {
       data-pa-pr-fix={fix.state}
     >
       <Wrench className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-      <span className="min-w-0 break-words">{text}</span>
+      <span className="min-w-0 break-words">
+        {text}
+        {/* Asked again: the round could not start — nothing set for the
+            work to run on yet. */}
+        {fix.state === "ask" && fix.error ? (
+          <span
+            className="mt-0.5 block font-normal text-amber-700 dark:text-amber-400"
+            data-pa-pr-fix-error
+          >
+            {fix.error}
+          </span>
+        ) : null}
+      </span>
     </SheetPart>
   )
 }

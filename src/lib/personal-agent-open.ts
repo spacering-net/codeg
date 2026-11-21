@@ -29,7 +29,6 @@ export type PersonalAgentPage = SettingsPage | BotTab
 const SETTINGS_PAGES: readonly SettingsPage[] = [
   "workers",
   "executors",
-  "division",
   "communication",
   "proactive",
   "automation",
@@ -39,7 +38,6 @@ const SETTINGS_PAGES: readonly SettingsPage[] = [
 const BOT_TABS: readonly BotTab[] = [
   "identity",
   "persona",
-  "execution",
   "notify",
   "advanced",
 ]

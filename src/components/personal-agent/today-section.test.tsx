@@ -29,9 +29,6 @@ const api = vi.hoisted(() => ({
   personalAgentNoticeAct: vi.fn(async () => ({})),
   personalAgentBots: vi.fn(),
   personalAgentToday: vi.fn(),
-  personalAgentTemplates: vi.fn(async () => [
-    { id: "research", name: "Researcher" },
-  ]),
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
@@ -115,7 +112,8 @@ function entry(
     uid: `u${id}`,
     name,
     avatar: { kind: "face", shape: "blob", color: "blue" },
-    template: null,
+    persona: "",
+    persona_unwritten: false,
     executor_assistant_id: null,
     created_at: "2026-11-01T00:00:00Z",
     roster: {
@@ -577,11 +575,15 @@ describe("today", () => {
             kind: "changed",
             bot_id: 2,
             notice_id: 8,
-            title: "bot.ab12.template blank → research",
+            title: "bot.ab12.persona …",
             state: "acted",
             changes: {
               changes: [
-                { key: "bot.ab12.template", from: "blank", to: "research" },
+                {
+                  key: "bot.ab12.persona",
+                  from: "",
+                  to: "I look things up and say what I found.",
+                },
               ],
               names: { "bot:ab12": "Goose" },
             },
@@ -594,11 +596,14 @@ describe("today", () => {
     ) as HTMLElement
     expect(prefs.textContent).toContain("Reply length: Medium → Short")
     expect(prefs.textContent).not.toContain("prefs.reply_length")
-    const role = document.querySelector('[data-key="changed:8"]') as HTMLElement
-    // A role by its name in the owner's language, once the templates are read.
-    await waitFor(() => expect(role.textContent).toContain("→ Researcher"))
-    expect(role.textContent).toContain("Goose")
-    expect(role.textContent).not.toContain("bot.ab12")
+    const persona = document.querySelector(
+      '[data-key="changed:8"]'
+    ) as HTMLElement
+    // A work assistant's item by its name, its persona in a line.
+    expect(persona.textContent).toContain(
+      "Goose · persona: (empty) → I look things up and say what I found."
+    )
+    expect(persona.textContent).not.toContain("bot.ab12")
   })
 
   it("lists what an assistant remembered, and takes it back (7.7)", async () => {

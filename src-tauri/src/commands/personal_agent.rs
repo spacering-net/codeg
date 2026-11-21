@@ -608,8 +608,9 @@ pub async fn personal_agent_stats_core(
 /// live states change on `personal-agent://bots`.
 pub async fn personal_agent_bots_core(
     db: &AppDatabase,
+    data_dir: &Path,
 ) -> Result<Vec<crate::models::personal_agent_roster::RosterEntry>, AppCommandError> {
-    use crate::personal_agent::live;
+    use crate::personal_agent::{live, team};
     let host = crate::personal_agent::host::host();
     let mut out = Vec::new();
     for row in svc::list_bots(&db.conn).await? {
@@ -617,10 +618,14 @@ pub async fn personal_agent_bots_core(
             Some(h) => h.live_of(&row).await,
             None => live::live_from_db(db, &row).await,
         };
+        // Its persona's head, as the team list has it.
+        let soul = workdir::read_text(&workdir::workdir_of_bot(data_dir, &row), workdir::SOUL_FILE);
         out.push(crate::models::personal_agent_roster::RosterEntry {
             bot: bot_summary(&row),
             roster: live::roster_flags(&row),
             live: state,
+            persona: team::persona_head(&soul, team::HEAD_CARD_CHARS),
+            persona_unwritten: team::unwritten(row.kind, &soul),
         });
     }
     Ok(out)
@@ -1661,9 +1666,10 @@ pub async fn personal_agent_starter_core(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_bots(
+    app: tauri::AppHandle,
     db: State<'_, AppDatabase>,
 ) -> Result<Vec<crate::models::personal_agent_roster::RosterEntry>, AppCommandError> {
-    personal_agent_bots_core(&db).await
+    personal_agent_bots_core(&db, &data_dir_of(&app)?).await
 }
 
 #[cfg(feature = "tauri-runtime")]

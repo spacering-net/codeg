@@ -3,11 +3,13 @@
 /**
  * [+] on the roster, [New work assistant] in the settings (4.12): a name,
  * and under it a face — a default from the new assistant's uid, which the
- * backend gives it the same way, or one the owner picks. The role is read
- * from the name, the brain is the primary's, and its executor config is
- * made with it, its options filled in. Only when codeg cannot read the
- * agent's options does the executor config editor open, prefilled with the
- * role, and the assistant is made with what is picked there.
+ * backend gives it the same way, or one the owner picks; the first lines
+ * of its persona, which may be left empty — it introduces itself, and
+ * writes its own from what it is given and does; and the executor config
+ * its work runs on: by default one made with it on the brain's agent (the
+ * primary's), its options filled in, or one there is, shared. Only when
+ * codeg cannot read the agent's options does the executor config editor
+ * open, and the assistant is made with what is picked there.
  *
  * Made, the page goes to its conversation — once the roster has it: the
  * page takes an assistant the roster does not have for one deleted, and
@@ -31,6 +33,7 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { personalAgentBotCreate } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type {
@@ -43,30 +46,16 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { BotAvatar, defaultBotFace, newBotUid } from "./bot-avatar"
 import { BotFaceChoices } from "./bot-face-picker"
-import { loadBotTemplates, useBotTemplates } from "./use-templates"
+import {
+  assistantAvatarOf,
+  ExecutorPick,
+  type ExecutorChoice,
+} from "./settings/executor-pick"
 
 const NAME_MAX = 40
-
-/** The executor configs' colour nearest a face's (the backend's
- *  `assistant_color`). */
-function assistantAvatarOf(face: BotAvatarValue): AssistantPrefill["avatar"] {
-  if (face.kind !== "face") return face
-  const map: Record<string, string> = {
-    red: "red",
-    orange: "orange",
-    yellow: "amber",
-    brown: "amber",
-    green: "green",
-    teal: "teal",
-    blue: "blue",
-    purple: "violet",
-    magenta: "pink",
-  }
-  return {
-    kind: "monogram",
-    color: (map[face.color] ?? "slate") as "slate",
-  }
-}
+/** Longest persona the dialog takes (the backend's, for the first lines
+ *  of one). */
+const PERSONA_MAX = 1_000
 
 export function NewBotDialog({
   open,
@@ -99,14 +88,14 @@ function NewBotBody({
 }) {
   const t = useTranslations("PersonalAgent.bots.create")
   const locale = useLocale()
-  const templates = useBotTemplates()
   const uid = useMemo(() => newBotUid(), [])
   const [name, setName] = useState("")
+  const [persona, setPersona] = useState("")
+  const [executor, setExecutor] = useState<ExecutorChoice>({ kind: "new" })
   const [face, setFace] = useState<BotAvatarValue | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [editor, setEditor] = useState<{
-    template: string
     prefill: AssistantPrefill
     why: string
   } | null>(null)
@@ -126,34 +115,27 @@ function NewBotBody({
     onClose()
   }
 
-  const create = async (extra?: {
-    template: string
-    executor: AssistantInfo
-  }) => {
+  /** Make it; `madeForIt` is the executor config the editor just made. */
+  const create = async (madeForIt?: AssistantInfo) => {
     if (!trimmed || busy) return
     setBusy(true)
     setError(null)
     try {
+      const picked = executor.kind === "existing" ? executor.id : null
       const made = await personalAgentBotCreate({
         name: trimmed,
         uid,
         avatar: face,
         locale,
-        template: extra?.template ?? null,
-        executor_assistant_id: extra?.executor.id ?? null,
-        executor_made_for_it: extra != null,
+        persona: persona.trim() || null,
+        executor_assistant_id: madeForIt?.id ?? picked,
+        executor_made_for_it: madeForIt != null,
       })
       if (made.options_unavailable) {
-        const list =
-          templates ?? (await loadBotTemplates(locale).catch(() => []))
-        const tpl = list.find((x) => x.id === made.template)
         setEditor({
-          template: made.template,
           why: made.options_unavailable.why,
           prefill: {
             name: trimmed,
-            description: tpl?.description ?? "",
-            instructions: tpl?.instructions ?? "",
             avatar: assistantAvatarOf(shown),
             agentType: made.options_unavailable.agent_type,
           },
@@ -206,7 +188,37 @@ function NewBotBody({
           onChange={setFace}
           disabled={busy}
         />
-        <p className="text-xs leading-5 text-muted-foreground">{t("hint")}</p>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="pa-new-bot-persona">{t("persona")}</Label>
+          <Textarea
+            id="pa-new-bot-persona"
+            dir="auto"
+            value={persona}
+            maxLength={PERSONA_MAX}
+            rows={3}
+            placeholder={t("personaPlaceholder")}
+            onChange={(e) => setPersona(e.target.value)}
+            disabled={busy}
+            className="min-h-16 resize-none text-sm"
+            data-pa-new-bot-persona
+          />
+          <p className="text-xs leading-5 text-muted-foreground">
+            {t("personaHint")}
+          </p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="pa-new-bot-executor">{t("executor")}</Label>
+          <ExecutorPick
+            id="pa-new-bot-executor"
+            value={executor}
+            onChange={setExecutor}
+            disabled={busy}
+            className="w-full"
+          />
+          <p className="text-xs leading-5 text-muted-foreground">
+            {executor.kind === "new" ? t("executorNewHint") : t("executorHint")}
+          </p>
+        </div>
         {error ? (
           <p role="alert" className="text-xs break-words text-destructive">
             {error}
@@ -239,10 +251,9 @@ function NewBotBody({
               {t("editorNote", { why: editor.why })}
             </p>
           }
-          onSaved={(executor) => {
-            const template = editor.template
+          onSaved={(made) => {
             setEditor(null)
-            void create({ template, executor })
+            void create(made)
           }}
         />
       ) : null}

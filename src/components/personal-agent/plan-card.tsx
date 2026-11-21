@@ -48,7 +48,6 @@ import type { MessageItem } from "./message-items"
 import { MessageRow } from "./message-row"
 import {
   canOpenWork,
-  ExecutorAvatar,
   CardMessage,
   SHEET_TITLE,
   SheetActions,
@@ -168,7 +167,6 @@ export function PlanCard({ item }: { item: NoticeItem }) {
   const t = useTranslations("PersonalAgent.plan")
   const tm = useTranslations("PersonalAgent.mode")
   const tl = useTranslations("PersonalAgent.ladder")
-  const tk = useTranslations("PersonalAgent.settings.division")
   const { readOnly, onQuote } = usePageScope()
   const botId = useBotId()
   const openWork = useOpenWork()
@@ -348,7 +346,7 @@ export function PlanCard({ item }: { item: NoticeItem }) {
                   s.mode === "task" ? s.project_id : s.conversation_folder_id,
                 agentType: (s.agent_type ?? null) as AgentType | null,
                 title: s.title,
-                executorId: s.target_kind === "assistant" ? s.target_id : null,
+                executorId: null,
                 executorName: s.target_name,
                 prompt: null,
                 connectionId: null,
@@ -385,21 +383,17 @@ export function PlanCard({ item }: { item: NoticeItem }) {
                       <span className="truncate font-medium">{s.title}</span>
                     </button>
                     <span className="ms-auto flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                      {s.target_kind === "bot" ? (
-                        <BotAvatar
-                          avatar={faceAvatar(s.face)}
-                          name={s.target_name}
-                          size={14}
-                        />
-                      ) : (
-                        <ExecutorAvatar
-                          id={s.target_id}
-                          name={s.target_name}
-                          agentType={s.agent_type ?? null}
-                          size={14}
-                        />
-                      )}
-                      <span className="max-w-32 truncate">{s.target_name}</span>
+                      <BotAvatar
+                        avatar={faceAvatar(s.face)}
+                        name={s.target_name}
+                        size={14}
+                      />
+                      <span
+                        className="max-w-32 truncate"
+                        data-pa-plan-step-who={s.target_kind}
+                      >
+                        {s.target_kind === "self" ? t("self") : s.target_name}
+                      </span>
                       <span aria-hidden>·</span>
                       <span
                         data-pa-plan-step-status
@@ -410,11 +404,10 @@ export function PlanCard({ item }: { item: NoticeItem }) {
                     </span>
                   </div>
                   <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 ps-5 text-xs text-muted-foreground">
-                    {s.target_kind === "assistant" && s.mode ? (
+                    {s.target_kind === "self" && s.mode ? (
                       <span>
                         {tm(s.mode)}
                         {s.project_name ? ` · ${s.project_name}` : ""}
-                        {s.kind ? ` · ${tk(s.kind)}` : ""}
                       </span>
                     ) : null}
                     {s.depends_on.length > 0 ? (

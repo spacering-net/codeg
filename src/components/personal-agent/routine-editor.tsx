@@ -51,14 +51,12 @@ import {
 } from "@/lib/types"
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
-import { useAssistants } from "@/stores/assistants-store"
 import {
   usePersonalAgentUi,
   type RoutineEditorRequest,
 } from "@/stores/personal-agent-ui-store"
 
 const NONE = "__none"
-const OWN = "__own"
 
 type PrecheckKind = RoutinePrecheck["kind"]
 const PRECHECKS: PrecheckKind[] = [
@@ -97,7 +95,6 @@ interface Form {
   eventMine: boolean
   eventLabel: string
   eventWhat: "issue" | "pr"
-  assistant: string
   mode: DispatchMode
   project: string
   deliverable: "change" | "report"
@@ -126,8 +123,6 @@ function formOf(d: RoutineDraft | null): Form {
     eventMine: d?.event?.mine ?? false,
     eventLabel: d?.event?.label ?? "",
     eventWhat: d?.event?.what === "pr" ? "pr" : "issue",
-    assistant:
-      d?.dispatch?.assistant_id != null ? String(d.dispatch.assistant_id) : OWN,
     mode: d?.dispatch?.mode ?? "task",
     project: projectOf(d?.dispatch?.project_id),
     deliverable: d?.dispatch?.deliverable === "report" ? "report" : "change",
@@ -141,7 +136,7 @@ function formOf(d: RoutineDraft | null): Form {
 }
 
 function idOf(v: string): number | null {
-  if (v === NONE || v === OWN || v.trim() === "") return null
+  if (v === NONE || v.trim() === "") return null
   const n = Number(v)
   return Number.isFinite(n) ? n : null
 }
@@ -200,9 +195,6 @@ function draftOf(f: Form): RoutineDraft {
     dispatch:
       f.kind === "dispatch"
         ? {
-            assistant_id: idOf(f.assistant),
-            // "Its own": said so, so a change clears the one it named.
-            own_executor: f.assistant === OWN,
             mode: f.mode,
             project_id: f.mode === "chat" ? null : idOf(f.project),
             deliverable: f.mode === "task" ? f.deliverable : null,
@@ -236,7 +228,6 @@ function EditorDialog({
   const [error, setError] = useState<string | null>(null)
   const [builder, setBuilder] = useState(false)
   const [nextRun, setNextRun] = useState<string | null>(null)
-  const assistants = useAssistants()
   const folders = useAppWorkspaceStore((s) => s.folders)
   const projects = useMemo(
     () => folders.filter((f) => f.kind === "regular" && f.parent_id == null),
@@ -404,32 +395,6 @@ function EditorDialog({
             </div>
             {form.kind === "dispatch" ? (
               <div className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
-                <div className="flex flex-col gap-1.5">
-                  <Label>{t("executor")}</Label>
-                  <Select
-                    value={form.assistant}
-                    onValueChange={(v) => set("assistant", v)}
-                  >
-                    <SelectTrigger
-                      className="w-full"
-                      data-pa-routine-field="executor"
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {req.botId != null ? (
-                        <SelectItem value={OWN}>{t("ownExecutor")}</SelectItem>
-                      ) : null}
-                      {assistants
-                        .filter((a) => a.enabled && a.deleted_at == null)
-                        .map((a) => (
-                          <SelectItem key={a.id} value={String(a.id)}>
-                            {a.name}
-                          </SelectItem>
-                        ))}
-                    </SelectContent>
-                  </Select>
-                </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1.5">
                     <Label>{t("mode")}</Label>

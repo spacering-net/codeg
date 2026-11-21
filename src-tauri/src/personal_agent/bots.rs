@@ -1044,7 +1044,7 @@ impl PersonalAgentEngine {
 
     // ── the card that says so ───────────────────────────────────────────────
 
-    /// A "changed" card about work assistants: made (`asked`, `made`), or
+    /// A "changed" card about work assistants: made (`asked`), or
     /// waiting to be made (`show`, `suggest`, with the call to make it).
     pub(super) async fn raise_bots_card(
         &self,
@@ -1055,20 +1055,12 @@ impl PersonalAgentEngine {
         reason: Option<String>,
     ) -> Result<i32, String> {
         let bots: Vec<Value> = made.iter().map(made_json).collect();
-        let applied = why == "asked" || why == "made";
+        let applied = why == "asked";
         let body = if applied {
             format!(
                 "Made {}",
                 made.iter()
                     .map(|m| display_name(&m.bot))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        } else if let Some(team) = pending.as_ref().and_then(|p| p["team"].as_array()) {
-            format!(
-                "Make work assistants: {}",
-                team.iter()
-                    .filter_map(|m| m["name"].as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -1224,7 +1216,7 @@ impl PersonalAgentEngine {
                 .map(Value::from)
                 .unwrap_or(Value::Null);
             let card = self.write_card(row_id, data).await?;
-            if !undone.is_empty() && why != "made" {
+            if !undone.is_empty() {
                 self.tell_bots(
                     notice,
                     &format!("The owner undid making {}: deleted.", undone.join(", ")),
@@ -1308,19 +1300,6 @@ impl PersonalAgentEngine {
                 }
                 data["state"] = "dismissed".into();
                 let card = self.write_card(row_id, data.clone()).await?;
-                if let Some(team) = data["pending"]["team"].as_array() {
-                    let names: Vec<&str> = team.iter().filter_map(|m| m["name"].as_str()).collect();
-                    self.tell_bots(
-                        notice,
-                        &format!(
-                            "The owner let the suggested team ({}) be (card #{}).",
-                            names.join(", "),
-                            notice.id
-                        ),
-                    )
-                    .await;
-                    return Ok(card);
-                }
                 let name = data["pending"]["name"].as_str().unwrap_or_default();
                 self.tell_bots(
                     notice,

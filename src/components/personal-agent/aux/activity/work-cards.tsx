@@ -164,7 +164,7 @@ export function DispatchCard({
         d.check_for != null ? (
           <div className="flex min-w-0 flex-col gap-2">
             {d.check_for != null ? (
-              <CheckLabel round={d.check_round ?? null} via={null} />
+              <CheckLabel round={d.check_round ?? null} />
             ) : null}
             <DoneWhenFold text={d.done_when} />
             {d.task ? <TaskStrip d={d} compact /> : null}

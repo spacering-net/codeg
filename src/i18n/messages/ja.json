@@ -7865,7 +7865,6 @@
   "PersonalAgent": {
     "title": "パーソナルエージェント",
     "readOnly": "パーソナルエージェントはこのデータディレクトリを使う別の codeg プロセスで動作しているため、ここではこのページは読み取り専用です。",
-    "noAssistants": "アシスタントが依頼できる実行設定がまだありません。パーソナルエージェントは作業をこれらに依頼します。",
     "viewSession": "セッションを表示",
     "viewSessionHint": "現在のセッションの全記録をリアルタイムで表示します。",
     "sessionTitle": "セッション {seq} · 全記録",
@@ -8106,12 +8105,10 @@
         "prefs": "環境設定",
         "identity": "アイデンティティと頭脳",
         "persona": "ペルソナとメモリ",
-        "execution": "実行",
         "notify": "通知",
         "advanced": "詳細設定",
         "workers": "作業アシスタント",
         "executors": "実行設定",
-        "division": "役割分担",
         "communication": "コミュニケーション",
         "proactive": "プロアクティブと通知",
         "automation": "依頼と自動化",
@@ -8170,12 +8167,6 @@
           "hint": "あるアシスタントが別のアシスタントに書くとき。",
           "auto": "直接送る",
           "ask": "先に確認して"
-        },
-        "worker_handoff": {
-          "title": "メインアシスタントから作業アシスタントへの引き渡し",
-          "hint": "その作業が作業アシスタントの担当であるとき。",
-          "message": "メッセージを送り、最後まで任せる",
-          "direct": "その実行設定に直接依頼する"
         },
         "loop_rounds": {
           "title": "進展のないやり取りを止める往復数",
@@ -8699,12 +8690,6 @@
           "title": "計画の停止",
           "hint": "ステップが失敗し、そのままになっています。"
         },
-        "rule_division": {
-          "title": "役割分担の提案",
-          "hint": "ある種類の仕事で、別の実行設定の一発合格率が役割分担の第一候補より明らかに高いとき（20 ポイント以上、双方とも 5 件以上完了）。",
-          "on": "オン",
-          "off": "オフ"
-        },
         "tidy": {
           "title": "記憶の整理と手順スキル",
           "hint": "毎晩あなたが作業を終えたあと、各アシスタントが自分の記憶・ペルソナ・ルールを整理します。一連の仕事がうまくいったら、その進め方を手順スキルにまとめます。",
@@ -8721,74 +8706,25 @@
         "apply": "移動",
         "saved": "作業ディレクトリを移動しました。"
       },
-      "execution": {
-        "executor": "実行設定",
-        "executorHint": "既定の依頼先です。",
-        "executorGone": "実行設定が削除されました。別のものを選んでください。",
-        "pick": "選択してください",
-        "template": "テンプレート",
-        "templateHint": "作成時に想定した役割。",
-        "noTemplate": "空白"
-      },
       "team": {
         "noWorkers": "作業アシスタントはまだいません",
-        "noWorkersHint": "作業アシスタントはコードを書く、レビューするなど 1 つの役割を担い、最後までやり遂げます。",
-        "boundTo": "{name} に依頼",
-        "unbound": "実行設定なし",
+        "noWorkersHint": "作業アシスタントは自分の担当の仕事を引き受け、最後までやり遂げます。必要になったらメインアシスタントに伝えるか、ここで作成してください。",
+        "boundTo": "{name} で作業",
+        "unbound": "実行設定なし：まだ自分で作業できません",
         "sameBatch": "会話で @ するアシスタントとこれらの実行設定は同じものです。ここで変更すると両方に反映されます。",
         "delegationOff": "マルチエージェント連携がオフのため、今は会話で @ で呼び出せません。アシスタントの依頼には影響しません。",
-        "openCollaboration": "コラボレーション設定を開く",
-        "auto": "自動",
-        "divisionNote": "第一候補が作業アシスタントならメインアシスタントがメッセージを送り、実行設定なら直接依頼します。"
-      },
-      "usage": {
-        "title": "アシスタントでの使われ方",
-        "dispatch": "アシスタントからの依頼を受ける",
-        "dispatchHint": "オフにしても会話で @ で呼び出せます。アシスタントが依頼しなくなるだけです。",
-        "modes": "受け付けるモード",
-        "modesHint": "他のモードの依頼は、理由を添えて断られます。",
-        "projects": "プロジェクト",
-        "projectsHint": "チャットはプロジェクトを持たないため、この設定で断られることはありません。",
-        "allProjects": "すべてのプロジェクト",
-        "saveFailed": "アシスタントでの使われ方を保存できませんでした",
-        "notForDispatch": "アシスタントの依頼には使わない",
-        "onlyModes": "{modes} のみ",
-        "onlyProjects": "{count} 件のプロジェクトのみ"
+        "openCollaboration": "コラボレーション設定を開く"
       },
       "executor": {
         "running": "{count} 件実行中",
         "fortnight": "2 週間：依頼 {dispatches} 件 · 完了 {completed} 件",
-        "boundBy": "{name} 用",
-        "firstFor": "{kinds} の第一候補",
         "failing": "直近 {count} 件の依頼がすべて失敗しました：{error}",
-        "impactWorkerDelete": "{name} の実行設定です。{name} には別の実行設定が必要になります。",
-        "impactWorkerOff": "{name} の実行設定です。無効の間、{name} はここに依頼できません。",
-        "impactDivisionDelete": "{kinds} の第一候補です。その分は「自動」に戻ります。",
-        "impactDivisionOff": "{kinds} の第一候補です。無効の間、アシスタントは別の候補を選びます。",
-        "impactRunning": "実行中の {count} 件の作業はそのまま続きます。"
-      },
-      "division": {
-        "code": "コードを書く",
-        "codeHint": "プロジェクトのコードの変更。",
-        "review": "レビュー",
-        "reviewHint": "変更を読んで問題点を指摘する。",
-        "test": "テスト",
-        "testHint": "テストを書いて実行する。",
-        "fix_ci": "CI の修正",
-        "fix_ciHint": "失敗したパイプライン。担当者のいない PR を誰が引き受けるかもここで決まります。",
-        "docs": "ドキュメント",
-        "docsHint": "ドキュメントの作成と更新。",
-        "release": "リリース",
-        "releaseHint": "バージョン、変更履歴、公開。",
-        "research": "調査",
-        "researchHint": "調べもの。",
-        "check": "チェック",
-        "checkHint": "完了した作業を受け入れる前にチェックする。作業セッションを受け付けるものだけが表示されます。"
+        "impactRunning": "実行中の {count} 件の作業はそのまま続きます。",
+        "usedBy": "使っているアシスタント：{names}",
+        "nameJoin": "、",
+        "impactBots": "次のアシスタントはしばらく自分で作業できなくなります：{names}。"
       },
       "changed": {
-        "usageOf": "アシスタントでの {name} の使われ方",
-        "usageDefault": "既定",
-        "usageSet": "設定済み",
         "on": "オン",
         "off": "オフ",
         "default": "既定"
@@ -8906,7 +8842,19 @@
       "deleteSkill": "スキルを削除",
       "confirmDeleteSkillHint": "この手順スキルを削除しますか？作業ディレクトリからフォルダーごと削除されます。",
       "skillDeleted": "{name} を削除しました",
-      "viewSubtitle": "すべてのアシスタントで共通"
+      "viewSubtitle": "すべてのアシスタントで共通",
+      "personaUnwritten": "ペルソナはまだ書かれていません。自己紹介のとき、あなたが仕事を任せたとき、毎晩の整理のときに自分で書き足します。ここで直接書くこともできます。",
+      "executorPick": {
+        "title": "実行設定",
+        "hint": "頭脳は考え、実行設定は作業をします。自分で行う作業はすべてこの上で動きます。複数のアシスタントで共有できます。",
+        "newHint": "保存時に頭脳と同じエージェントで新しく作成し、オプションは自動で補います。",
+        "missing": "実行設定がありません。今は自分で作業できません。選ぶか、新しく作成してください。",
+        "disabled": "この実行設定は無効です。しばらく自分で作業できません。",
+        "editorNote": "codeg はこのエージェントのオプションを読み取れませんでした（{why}）。ここで選んでください。保存するとこの実行設定を使います。",
+        "new": "新規（頭脳と同じエージェント）",
+        "none": "なし",
+        "off": "（無効）"
+      }
     },
     "statusWord": {
       "idle": "待機中",
@@ -8983,7 +8931,6 @@
         "dispatch_followup": "作業をフォローアップ中",
         "items": "進行中の事項を整理中",
         "timeline_read": "会話をさかのぼって確認中",
-        "assistant_list": "アシスタントを確認中",
         "project_list": "プロジェクトを確認中"
       },
       "kind": {
@@ -9036,9 +8983,7 @@
       "more": "ほか {count} 件",
       "doneWhen": "完了条件",
       "check": "検収の確認",
-      "checkRound": "検収の確認 · {round} 回目",
-      "checkVia": "{name} の実行設定で確認",
-      "why": "選んだ理由：{why}"
+      "checkRound": "検収の確認 · {round} 回目"
     },
     "event": {
       "someone": "アシスタント",
@@ -9169,45 +9114,25 @@
         "dismiss": "やめておく",
         "undo": "元に戻す",
         "seeSettings": "設定で見る",
-        "bothWays": "実行設定はセッションで @ する相手でもあります：変更は両方に反映されます。",
         "team": {
           "of": "{name} · {field}",
           "botField": {
             "name": "名前",
             "avatar": "顔",
             "brain": "ブレイン",
-            "executor": "実行設定",
-            "template": "役割",
             "notify": "通知",
             "muted": "ミュート",
-            "hidden": "非表示"
-          },
-          "assistantField": {
-            "name": "名前",
-            "description": "説明",
-            "instructions": "常設指示",
-            "agent": "エージェントとオプション",
-            "enabled": "有効"
+            "hidden": "非表示",
+            "persona": "ペルソナ",
+            "work_agent": "作業に使うエージェント"
           },
           "avatarOther": "カスタム画像",
-          "empty": "（空）"
+          "empty": "（空）",
+          "nothingSet": "未設定",
+          "personaNow": "現在",
+          "personaNew": "変更後"
         },
-        "assistant": {
-          "applied": "指示どおり実行設定を作りました",
-          "accepted": "実行設定を作りました",
-          "undone": "取り消しました：削除済み",
-          "dismissed": "作成しませんでした",
-          "suggested": "提案：新しい実行設定",
-          "show": "実行設定を作りますか？（この種の変更は先に確認する設定です）",
-          "editor": "実行設定を作れませんでした",
-          "on": "{agent} 使用",
-          "editorHint": "codeg が {agent} のオプションを読めなかったため（{why}）、作成していません。指示内容を入力済みのエディターを開き、残りを選んでください。",
-          "firstFor": "最初の担当：{kinds}",
-          "kept": "{count, plural, other {# 項目}}はその後変更されたため、そのままです",
-          "accept": "作成する",
-          "edit": "編集",
-          "openEditor": "エディターを開く"
-        }
+        "uncheckedQuote": "メインアシスタントはあなたの発言だとしています：「{quote}」。ただし今回あなたはこう入力していません"
       },
       "retryOf": "「{title}」を再試行",
       "tonight": {
@@ -9241,7 +9166,6 @@
       "withdrawn": "不要になりました",
       "resolved": "解決済み"
     },
-    "addExecutor": "実行設定を追加",
     "bots": {
       "new": "新しい作業アシスタント",
       "copyName": "{name}（コピー）",
@@ -9250,8 +9174,6 @@
       "more": "その他",
       "copy": "複製",
       "deleteAction": "削除…",
-      "fromTemplate": "テンプレートから作成",
-      "reviewAgentHint": "開発担当とは別のエージェントを選んでください。作業を確認する側が、書いた本人であってはいけません。",
       "face": {
         "change": "アバターを変更",
         "shape": "形",
@@ -9289,13 +9211,18 @@
       },
       "create": {
         "title": "新しい作業アシスタント",
-        "description": "名前だけで作れます。役割は名前から推測し、頭脳はメインアシスタントと同じにし、実行設定も一緒に作成します。",
+        "description": "名前と、どんなアシスタントかを数行。頭脳はメインアシスタントと同じです。",
         "name": "名前",
         "namePlaceholder": "例：コードレビュー",
-        "hint": "役割は最初のカードで、それ以外は設定で変更できます。",
         "cancel": "キャンセル",
         "create": "作成",
-        "editorNote": "codeg はこのエージェントのオプションを読み取れませんでした（{why}）。ここで選んでください。作業アシスタントはこの実行設定で作成されます。"
+        "editorNote": "codeg はこのエージェントのオプションを読み取れませんでした（{why}）。ここで選んでください。作業アシスタントはこの実行設定で作成されます。",
+        "persona": "ペルソナ",
+        "personaPlaceholder": "例：コードの変更をレビューします。正しいか、テストは十分かを見ます。",
+        "personaHint": "1〜2行で：どんなアシスタントで、どんな仕事を任せるか。空欄でも構いません。まず自己紹介し、その後あなたの指示とこなした仕事から自分で書き足します。",
+        "executor": "実行設定",
+        "executorNewHint": "頭脳と同じエージェントで新しく作成し、オプションは自動で補います。",
+        "executorHint": "複数のアシスタントで 1 つの実行設定を共有できます。"
       },
       "roster": {
         "title": "アシスタント",
@@ -9350,21 +9277,9 @@
         "other": "その他",
         "otherPlaceholder": "自由に入力…",
         "send": "送信",
-        "setup": "用意した設定",
-        "role": "役割",
-        "brain": "頭脳",
-        "executor": "実行設定",
-        "sameAsPrimary": "メインアシスタントと同じ",
-        "existing": "既存の設定",
-        "filled": "オプション {count} 件を補完",
-        "options": "オプション {count} 件",
-        "change": "変更",
         "answered": "あなたの選択：{choice}",
         "answeredOwn": "あなたの入力：{text}",
         "noProjects": "codeg で開いているプロジェクトはありません。",
-        "editBrain": "頭脳を変更",
-        "editExecutor": "実行設定を変更",
-        "changeRole": "役割を変更",
         "from": {
           "given": "指示どおり",
           "other_config": "別の実行設定から",
@@ -9381,8 +9296,6 @@
       },
       "changed": {
         "applied": "作業アシスタントを作成しました",
-        "made": "実行設定から作業アシスタントを {count} 人作成しました",
-        "madeHint": "それぞれ元の実行設定が担っていた仕事を引き継ぎ、その実行設定もそのまま使います。1 人を元に戻すとそのアシスタントだけが削除され、実行設定は残ります。",
         "show": "作業アシスタントを作成しますか？（この種の変更は先に確認する設定です）",
         "suggested": "提案：新しい作業アシスタント",
         "dismissed": "作成しませんでした",
@@ -9399,9 +9312,8 @@
         "dismiss": "やめておく",
         "undo": "元に戻す",
         "undoAll": "すべて元に戻す",
-        "teamSuggested": "提案：作業アシスタントのチーム",
-        "teamFor": "選んだプロジェクト向け：{projects}",
-        "teamMake": "作る{count, plural, =0 {} other {（# 人）}}"
+        "uncheckedQuote": "メインアシスタントはあなたの発言だとしています：「{quote}」。ただし今回あなたはこう入力していません",
+        "persona": "ペルソナ"
       },
       "delete": {
         "title": "{name} を削除しますか？",
@@ -9410,7 +9322,6 @@
         "handOver": "メインアシスタントに引き継いで追ってもらう（推奨）",
         "stop": "停止する",
         "messages": "このアシスタント宛てのメッセージ {count} 件が未返信です。送信元に戻されます。",
-        "division": "{kinds} の第一候補です。その分は「自動」に戻ります。",
         "listJoiner": "、",
         "dropExecutor": "実行設定 {name} も削除する",
         "executorKept": "既定では残します。引き続き @ で呼び出せ、codeg-cli からも使えます。",
@@ -9429,7 +9340,8 @@
         "cancel": "キャンセル",
         "save": "保存",
         "saved": "保存しました。"
-      }
+      },
+      "personaUnwritten": "ペルソナはまだ書かれていません"
     },
     "face": {
       "idle": "待機中",
@@ -9958,8 +9870,6 @@
             "hint": "別の実行設定が読み取り専用で確認し、あなたの要望に照らして私が判断します。"
           }
         },
-        "team": "チームを作る",
-        "teamSuggested": "チームを提案済み",
         "prefs": "設定を調整",
         "pet": "デスクトップに出す",
         "petFailed": "デスクトップの相棒を開けませんでした",
@@ -10242,8 +10152,6 @@
         "kindDispatch": "作業を直接依頼",
         "kindBrainHint": "確認して報告します。伝えることがなければ黙っています。",
         "kindDispatchHint": "codeg がアシスタントを起こさずに下の作業を依頼し、結果はいつもどおり戻ります。",
-        "executor": "実行設定",
-        "ownExecutor": "自分のもの",
         "mode": "方法",
         "modeTask": "ボードのタスク",
         "modeSession": "プロジェクトの作業セッション",
@@ -10308,7 +10216,7 @@
           "edit": "変更"
         },
         "repeatBody": "30 日間で {count} 回、似たことを頼んでいます。",
-        "pausedExecutor": "使用する実行設定が削除・無効化されたか、アシスタントが使えなくなりました。",
+        "pausedExecutor": "作業を動かす先が設定されていません。実行設定がないか、使っているものが削除または無効化されました。",
         "pausedFailures": "3 回続けて失敗しました。",
         "trial": "試しの実行を始めました。",
         "reason": "理由：{reason}",
@@ -10318,11 +10226,11 @@
         "acceptChange": "変更する",
         "dismiss": "今はいい",
         "makeIt": "ルーティンにする",
-        "useAnother": "別のものを使う",
         "resume": "再開",
         "open": "ルーティンを開く",
         "confirm": "確認待ちのルーチン",
-        "confirmChange": "確認待ちのルーチン変更"
+        "confirmChange": "確認待ちのルーチン変更",
+        "setExecutor": "実行設定を設定"
       },
       "more": "その他の操作"
     },
@@ -10352,8 +10260,7 @@
         "new_project": "新しいプロジェクト",
         "behind": "ブランチが遅れていて競合あり",
         "undo": "取り消した変更",
-        "idle_bot": "使われていない作業アシスタント",
-        "division": "役割分担の提案"
+        "idle_bot": "使われていない作業アシスタント"
       },
       "wait": {
         "permission": "承認待ち",
@@ -10395,9 +10302,6 @@
         "idle_bot": {
           "hide": "非表示にする",
           "delete": "削除…"
-        },
-        "division": {
-          "switch": "まず {name} に任せる"
         }
       },
       "done": {
@@ -10411,9 +10315,7 @@
         "rebasing": "rebase を依頼しました。",
         "asking_first": "今後の変更はまずカードでお見せします。",
         "hidden": "非表示にしました。非表示のアシスタントから戻せます。",
-        "deleted": "削除しました。",
-        "switched": "変更しました：{kind}はまず {name} に任せます。",
-        "undone": "元に戻しました。役割分担は以前のとおりです。"
+        "deleted": "削除しました。"
       },
       "hand": {
         "failed": "「{title}」が失敗したまま誰も対応していません。何が起きたか調べて、どうするか提案して。",
@@ -10483,17 +10385,10 @@
         "idle_bot": {
           "title": "使われていない作業アシスタント",
           "hint": "週の振り返りで：2 週間呼ばれていない作業アシスタントを、非表示にするか削除するか尋ねます。"
-        },
-        "division": {
-          "title": "役割分担の提案",
-          "hint": "ある種類の仕事で、別の実行設定の一発合格率が役割分担の第一候補より明らかに高いとき（20 ポイント以上、双方とも 5 件以上完了）。"
         }
       },
       "undoDetail": "この 2 週間、言われたとおりに行った変更 {made} 件のうち {undone} 件を取り消しました。",
-      "idleBotDetail": "2 週間誰も呼んでいません。",
-      "undoSwitch": "元に戻す",
-      "divisionDetail": "直近 {days} 日：{to} は一発合格 {pass}/{settled}（{rate}%）、現在の第一候補 {from} は {fromPass}/{fromSettled}（{fromRate}%）。",
-      "divisionDetailAuto": "直近 {days} 日：{to} は一発合格 {pass}/{settled}（{rate}%）、ほかの実行設定は合計 {fromPass}/{fromSettled}（{fromRate}%）。今は第一候補がありません。"
+      "idleBotDetail": "2 週間誰も呼んでいません。"
     },
     "brief": {
       "title": "朝のまとめ",
@@ -10673,7 +10568,8 @@
         "done_when": "完了条件",
         "depends_on": "依存",
         "kind": "仕事の種類"
-      }
+      },
+      "self": "自分"
     },
     "tidy": {
       "title": {
@@ -10748,7 +10644,9 @@
       "primary": "メインアシスタント",
       "worker": "作業アシスタント",
       "notSetUp": "まだ設定されていません"
-    }
+    },
+    "noExecutor": "使える実行設定がないため、今は自分で作業できません。",
+    "setExecutor": "実行設定を設定"
   },
   "MessageCheck": {
     "action": "アシスタントに確認してもらう",

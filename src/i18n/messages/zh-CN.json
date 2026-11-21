@@ -7865,7 +7865,6 @@
   "PersonalAgent": {
     "title": "个人助手",
     "readOnly": "个人助手在同一数据目录的另一个 codeg 进程里运行，本页在这里只读。",
-    "noAssistants": "还没有可派活的执行配置：个人助手派活只交给它们。",
     "viewSession": "查看底层会话",
     "viewSessionHint": "当前会话段的完整记录，实时更新。",
     "sessionTitle": "第 {seq} 段 · 完整记录",
@@ -8105,12 +8104,10 @@
         "prefs": "偏好",
         "identity": "身份与大脑",
         "persona": "人设与记忆",
-        "execution": "执行方式",
         "notify": "通知",
         "advanced": "高级",
         "workers": "工作助手",
         "executors": "执行配置",
-        "division": "分工",
         "communication": "沟通",
         "proactive": "主动与通知",
         "automation": "派活与自动",
@@ -8169,12 +8166,6 @@
           "hint": "一个助手写给另一个助手时。",
           "auto": "直接发",
           "ask": "先问我"
-        },
-        "worker_handoff": {
-          "title": "主助手把活交给工作助手",
-          "hint": "活该归某个工作助手时。",
-          "message": "发消息给它，由它负责到底",
-          "direct": "直接派给它的执行配置"
         },
         "loop_rounds": {
           "title": "助手之间来回没进展时停下",
@@ -8698,12 +8689,6 @@
           "title": "计划卡住",
           "hint": "有一步失败了，而且一直没做成。"
         },
-        "rule_division": {
-          "title": "分工建议",
-          "hint": "某类活另一个执行配置的一次过率明显高于分工里的首选（高 20 个百分点以上，两边各至少 5 件做完的）。",
-          "on": "开",
-          "off": "关"
-        },
         "tidy": {
           "title": "整理记忆与流程技能",
           "hint": "每晚你停下之后，各助手整理自己的记忆、人设和规则；一串活顺利做完后，把做法写成流程技能。",
@@ -8720,74 +8705,25 @@
         "apply": "迁移",
         "saved": "工作目录已迁移。"
       },
-      "execution": {
-        "executor": "执行配置",
-        "executorHint": "它默认派给的执行配置。",
-        "executorGone": "它绑的执行配置已删除，请另选一个。",
-        "pick": "选一个",
-        "template": "模板",
-        "templateHint": "建它时用的岗位模板。",
-        "noTemplate": "空白"
-      },
       "team": {
         "noWorkers": "还没有工作助手",
-        "noWorkersHint": "工作助手各管一摊——写代码、评审——并负责到底。",
-        "boundTo": "派给 {name}",
-        "unbound": "没绑执行配置",
+        "noWorkersHint": "工作助手负责属于它的那摊活，并负责到底。需要时跟主助手说，或在这里新建。",
+        "boundTo": "用 {name} 干活",
+        "unbound": "没有执行配置：暂时不能自己干活",
         "sameBatch": "会话里 @ 的助手和这里的执行配置是同一批，这里改了，两边同时生效。",
         "delegationOff": "多智能体协同关着：会话里暂时不能 @ 它们；助手派活不受影响。",
-        "openCollaboration": "打开协作设置",
-        "auto": "自动",
-        "divisionNote": "首选是工作助手的，主助手发消息给它；是执行配置的，直接派。"
-      },
-      "usage": {
-        "title": "助手怎么用它",
-        "dispatch": "助手可以派活给它",
-        "dispatchHint": "关掉后会话里照样能 @ 它，只是助手不派给它。",
-        "modes": "可用的方式",
-        "modesHint": "别的方式的派活会被拒绝，并说明原因。",
-        "projects": "适用项目",
-        "projectsHint": "聊天不带项目，不受这一项限制。",
-        "allProjects": "全部项目",
-        "saveFailed": "助手的用法没保存上",
-        "notForDispatch": "不给助手派活",
-        "onlyModes": "只接{modes}",
-        "onlyProjects": "仅 {count} 个项目"
+        "openCollaboration": "打开协作设置"
       },
       "executor": {
         "running": "在做 {count} 件",
         "fortnight": "两周派 {dispatches} 件 · 完成 {completed} 件",
-        "boundBy": "绑在 {name}",
-        "firstFor": "{kinds}的首选",
         "failing": "最近 {count} 次派给它的活都失败了：{error}",
-        "impactWorkerDelete": "它绑在「{name}」上：删了，「{name}」要重新选一个。",
-        "impactWorkerOff": "它绑在「{name}」上：停用期间「{name}」派不了给它。",
-        "impactDivisionDelete": "分工里「{kinds}」的首选是它：删除后改为「自动」。",
-        "impactDivisionOff": "分工里「{kinds}」的首选是它：停用期间助手会另挑。",
-        "impactRunning": "有 {count} 件派给它的活在跑，不受影响。"
-      },
-      "division": {
-        "code": "写代码",
-        "codeHint": "改项目代码。",
-        "review": "评审",
-        "reviewHint": "读改动、指出问题。",
-        "test": "测试",
-        "testHint": "写测试、跑测试。",
-        "fix_ci": "修 CI",
-        "fix_ciHint": "流水线失败；也是没人负责的 PR 归谁。",
-        "docs": "文档",
-        "docsHint": "写文档、改文档。",
-        "release": "发布",
-        "releaseHint": "版本、更新日志、发布。",
-        "research": "调研",
-        "researchHint": "查资料、做调研。",
-        "check": "检查",
-        "checkHint": "验收前检查做完的活。只列出开了工作会话的。"
+        "impactRunning": "有 {count} 件派给它的活在跑，不受影响。",
+        "usedBy": "用它的助手：{names}",
+        "nameJoin": "、",
+        "impactBots": "这些助手会暂时不能自己干活：{names}。"
       },
       "changed": {
-        "usageOf": "助手怎么用「{name}」",
-        "usageDefault": "默认",
-        "usageSet": "已设置",
         "on": "开",
         "off": "关",
         "default": "默认"
@@ -8906,7 +8842,19 @@
       "deleteSkill": "删除技能",
       "confirmDeleteSkillHint": "删除这个流程技能？它的文件夹会从工作目录里删掉。",
       "skillDeleted": "已删除 {name}",
-      "viewSubtitle": "所有助手共用"
+      "viewSubtitle": "所有助手共用",
+      "personaUnwritten": "还没写人设。它会在自我介绍、你交代工作、每晚整理时自己补，你也可以直接写。",
+      "executorPick": {
+        "title": "执行配置",
+        "hint": "大脑负责想，执行配置负责干活：它自己干的活都在这上面跑。几个助手可以共用一个。",
+        "newHint": "保存时在大脑同一个 agent 上新建一个，选项自动补全。",
+        "missing": "还没有执行配置：它现在不能自己干活。选一个，或新建一个。",
+        "disabled": "这个执行配置已停用：它暂时不能自己干活。",
+        "editorNote": "codeg 读不到这个 agent 的选项（{why}），请在这里选好；保存后就用这个执行配置。",
+        "new": "新建（用大脑同一个 agent）",
+        "none": "没有",
+        "off": "（已停用）"
+      }
     },
     "statusWord": {
       "idle": "空闲",
@@ -8983,7 +8931,6 @@
         "dispatch_followup": "继续一件活",
         "items": "整理在途事项",
         "timeline_read": "翻看对话记录",
-        "assistant_list": "查看岗位助手",
         "project_list": "查看项目"
       },
       "kind": {
@@ -9036,9 +8983,7 @@
       "more": "还有 {count} 件",
       "doneWhen": "验收标准",
       "check": "验收检查",
-      "checkRound": "验收检查 · 第 {round} 轮",
-      "checkVia": "用 {name} 的执行配置检查",
-      "why": "为什么交给它：{why}"
+      "checkRound": "验收检查 · 第 {round} 轮"
     },
     "event": {
       "someone": "岗位助手",
@@ -9169,45 +9114,25 @@
         "dismiss": "不用",
         "undo": "撤销",
         "seeSettings": "去设置里看",
-        "bothWays": "执行配置也是会话里 @ 的那些助手：这里改了，两边同时生效。",
         "team": {
           "of": "{name} · {field}",
           "botField": {
             "name": "名字",
             "avatar": "头像",
             "brain": "大脑",
-            "executor": "执行配置",
-            "template": "岗位",
             "notify": "通知我",
             "muted": "静音",
-            "hidden": "隐藏"
-          },
-          "assistantField": {
-            "name": "名称",
-            "description": "简介",
-            "instructions": "常驻指令",
-            "agent": "agent 与选项",
-            "enabled": "启用"
+            "hidden": "隐藏",
+            "persona": "人设",
+            "work_agent": "干活用的 agent"
           },
           "avatarOther": "自定义头像",
-          "empty": "（空）"
+          "empty": "（空）",
+          "nothingSet": "未设置",
+          "personaNow": "现在",
+          "personaNew": "改成"
         },
-        "assistant": {
-          "applied": "照你说的建了一个执行配置",
-          "accepted": "建了一个执行配置",
-          "undone": "已撤销：已删除",
-          "dismissed": "没有建",
-          "suggested": "建议：新建一个执行配置",
-          "show": "要建这个执行配置吗？（你要求这类改动先给你看）",
-          "editor": "没能建这个执行配置",
-          "on": "用 {agent}",
-          "editorHint": "codeg 读不到 {agent} 的选项（{why}），所以没有建。打开编辑器，按你说的已经填好，补选剩下的项即可。",
-          "firstFor": "设为首选：{kinds}",
-          "kept": "{count, plural, other {# 项}}之后又被改过，保持现状",
-          "accept": "建吧",
-          "edit": "编辑",
-          "openEditor": "打开编辑器"
-        }
+        "uncheckedQuote": "主助手说是你说的：「{quote}」，但这一轮你没打过"
       },
       "retryOf": "重试「{title}」",
       "tonight": {
@@ -9241,7 +9166,6 @@
       "withdrawn": "已不再需要",
       "resolved": "已处理"
     },
-    "addExecutor": "添加执行配置",
     "bots": {
       "new": "新建工作助手",
       "copyName": "{name} 副本",
@@ -9250,8 +9174,6 @@
       "more": "更多",
       "copy": "复制",
       "deleteAction": "删除…",
-      "fromTemplate": "从模板新建",
-      "reviewAgentHint": "选一个和研发不同的 agent：检查的不该是写的那个。",
       "face": {
         "change": "换头像",
         "shape": "形状",
@@ -9289,13 +9211,18 @@
       },
       "create": {
         "title": "新建工作助手",
-        "description": "只要名字。岗位按名字推断，大脑和主助手一样，执行配置一并建好。",
+        "description": "名字和几句人设；大脑和主助手一样。",
         "name": "名字",
         "namePlaceholder": "比如：代码评审",
-        "hint": "岗位可以在它的第一张卡上换，其余的在它的设置里改。",
         "cancel": "取消",
         "create": "建好",
-        "editorNote": "codeg 读不到这个 agent 的选项（{why}），请在这里选好；工作助手会用这个执行配置建成。"
+        "editorNote": "codeg 读不到这个 agent 的选项（{why}），请在这里选好；工作助手会用这个执行配置建成。",
+        "persona": "人设",
+        "personaPlaceholder": "比如：我负责代码评审，看改动对不对、测试够不够。",
+        "personaHint": "一两句：它是谁、什么活找它。留空也行，它会先做自我介绍，之后按你交代的和它做过的活自己补。",
+        "executor": "执行配置",
+        "executorNewHint": "在大脑同一个 agent 上新建一个，选项自动补全。",
+        "executorHint": "几个助手可以共用一个执行配置。"
       },
       "roster": {
         "title": "助手",
@@ -9350,21 +9277,9 @@
         "other": "其他",
         "otherPlaceholder": "自己写…",
         "send": "发送",
-        "setup": "已为它配好",
-        "role": "岗位",
-        "brain": "大脑",
-        "executor": "执行配置",
-        "sameAsPrimary": "和主助手一样",
-        "existing": "沿用已有的",
-        "filled": "补了 {count} 项选项",
-        "options": "{count} 项选项",
-        "change": "更改",
         "answered": "你选了：{choice}",
         "answeredOwn": "你写了：{text}",
         "noProjects": "codeg 里还没有打开的项目。",
-        "editBrain": "更改大脑",
-        "editExecutor": "更改执行配置",
-        "changeRole": "更改岗位",
         "from": {
           "given": "照你说的",
           "other_config": "沿用别的执行配置",
@@ -9381,8 +9296,6 @@
       },
       "changed": {
         "applied": "建好了一个工作助手",
-        "made": "把你的执行配置建成了 {count} 个工作助手",
-        "madeHint": "各管原来那个执行配置的活，执行配置照旧绑着。撤销一个只删那个工作助手，执行配置留下。",
         "show": "要建这个工作助手吗？（你要求这类改动先给你看）",
         "suggested": "建议：新建一个工作助手",
         "dismissed": "没建",
@@ -9399,9 +9312,8 @@
         "dismiss": "不用",
         "undo": "撤销",
         "undoAll": "全部撤销",
-        "teamSuggested": "建议：组一个工作助手团队",
-        "teamFor": "按你选的项目：{projects}",
-        "teamMake": "建好{count, plural, =0 {} other { # 个}}"
+        "uncheckedQuote": "主助手说是你说的：「{quote}」，但这一轮你没打过",
+        "persona": "人设"
       },
       "delete": {
         "title": "删除 {name}？",
@@ -9410,7 +9322,6 @@
         "handOver": "交给主助手接着跟（推荐）",
         "stop": "停下",
         "messages": "发给它的 {count} 条消息还没回：退回给发信的助手。",
-        "division": "它是{kinds}的首选：删除后改为「自动」。",
         "listJoiner": "、",
         "dropExecutor": "一起删掉它的执行配置 {name}",
         "executorKept": "默认留下：会话里照样能 @，codeg-cli 照样能用。",
@@ -9429,7 +9340,8 @@
         "cancel": "取消",
         "save": "保存",
         "saved": "已保存。"
-      }
+      },
+      "personaUnwritten": "还没写人设"
     },
     "face": {
       "idle": "闲着",
@@ -9958,8 +9870,6 @@
             "hint": "派另一个执行配置只读检查，我对照你的要求下结论。"
           }
         },
-        "team": "组个团队",
-        "teamSuggested": "已建议团队",
         "prefs": "调整偏好",
         "pet": "把我放到桌面上",
         "petFailed": "打不开桌面伙伴",
@@ -10242,8 +10152,6 @@
         "kindDispatch": "直接派活",
         "kindBrainHint": "它看完会告诉你；没有值得说的就不出声。",
         "kindDispatchHint": "codeg 直接按下面的设置派活，不叫醒助手；结果照常回来。",
-        "executor": "执行配置",
-        "ownExecutor": "它自己的",
         "mode": "方式",
         "modeTask": "看板任务",
         "modeSession": "项目里的工作会话",
@@ -10308,7 +10216,7 @@
           "edit": "修改"
         },
         "repeatBody": "30 天里你第 {count} 次让它做这类事。",
-        "pausedExecutor": "它用的执行配置被删除、停用，或者不再允许助手派活。",
+        "pausedExecutor": "它的活没有设好在哪儿跑：没有执行配置，或者用的那个被删除、停用了。",
         "pausedFailures": "连续失败了 3 次。",
         "trial": "已开始试跑。",
         "reason": "依据：{reason}",
@@ -10318,11 +10226,11 @@
         "acceptChange": "照这个改",
         "dismiss": "不用",
         "makeIt": "做成例程",
-        "useAnother": "换一个",
         "resume": "恢复",
         "open": "打开例程",
         "confirm": "待确认的例程",
-        "confirmChange": "待确认的例程改动"
+        "confirmChange": "待确认的例程改动",
+        "setExecutor": "去设置执行配置"
       },
       "more": "更多操作"
     },
@@ -10352,8 +10260,7 @@
         "new_project": "新项目",
         "behind": "分支落后且有冲突",
         "undo": "你撤销的改动",
-        "idle_bot": "闲着的工作助手",
-        "division": "分工建议"
+        "idle_bot": "闲着的工作助手"
       },
       "wait": {
         "permission": "等你批准",
@@ -10395,9 +10302,6 @@
         "idle_bot": {
           "hide": "隐藏",
           "delete": "删掉…"
-        },
-        "division": {
-          "switch": "改成先交给 {name}"
         }
       },
       "done": {
@@ -10411,9 +10315,7 @@
         "rebasing": "已派人 rebase。",
         "asking_first": "以后你要改的设置会先给你看，点了才改。",
         "hidden": "已隐藏，在隐藏的助手里还能找到。",
-        "deleted": "已删掉。",
-        "switched": "已改：{kind}先交给 {name}。",
-        "undone": "已撤销，分工回到原来的样子。"
+        "deleted": "已删掉。"
       },
       "hand": {
         "failed": "「{title}」失败了，一直没人处理。帮我看看是怎么回事，告诉我你的建议。",
@@ -10483,17 +10385,10 @@
         "idle_bot": {
           "title": "闲着的工作助手",
           "hint": "周回顾里：两周都没被叫醒的工作助手，问你要不要隐藏或删掉。"
-        },
-        "division": {
-          "title": "分工建议",
-          "hint": "某类活另一个执行配置的一次过率明显高于分工里的首选（高 20 个百分点以上，两边各至少 5 件做完的）。"
         }
       },
       "undoDetail": "最近两周按你的话直接做的 {made} 处改动，你撤销了 {undone} 处。",
-      "idleBotDetail": "已经两周没被叫醒了。",
-      "undoSwitch": "撤销",
-      "divisionDetail": "最近 {days} 天，{to} 一次过 {pass}/{settled}（{rate}%）；现在的首选 {from} 是 {fromPass}/{fromSettled}（{fromRate}%）。",
-      "divisionDetailAuto": "最近 {days} 天，{to} 一次过 {pass}/{settled}（{rate}%）；其他执行配置合计 {fromPass}/{fromSettled}（{fromRate}%）。现在没有首选。"
+      "idleBotDetail": "已经两周没被叫醒了。"
     },
     "brief": {
       "title": "晨报",
@@ -10673,7 +10568,8 @@
         "done_when": "验收标准",
         "depends_on": "依赖",
         "kind": "活的种类"
-      }
+      },
+      "self": "自己"
     },
     "tidy": {
       "title": {
@@ -10748,7 +10644,9 @@
       "primary": "主助手",
       "worker": "工作助手",
       "notSetUp": "还没设置"
-    }
+    },
+    "noExecutor": "它还没有能用的执行配置，暂时不能自己干活。",
+    "setExecutor": "设置执行配置"
   },
   "MessageCheck": {
     "action": "让助手核查",

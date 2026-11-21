@@ -86,7 +86,7 @@ import { personalAgentKeepalive, personalAgentNewSession } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import type { TimelineRow } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { useAssistants } from "@/stores/assistants-store"
+import { useAssistants, useAssistantsStore } from "@/stores/assistants-store"
 import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
 import { usePaAccent } from "@/lib/personal-agent-accent"
 import {
@@ -361,6 +361,7 @@ export function PersonalAgentPage() {
   const openSession = useSessionLinkOpener()
   const { botId, snapshot, rows, loading } = usePersonalAgent()
   const assistants = useAssistants()
+  const assistantsRead = useAssistantsStore((s) => s.hydrated)
   const isMobile = useIsMobile()
   const auxOpen = usePersonalAgentUi((s) => s.auxOpen)
   const setAuxOpen = usePersonalAgentUi((s) => s.setAuxOpen)
@@ -528,12 +529,11 @@ export function PersonalAgentPage() {
     )
   }
 
-  // Only those the assistants may dispatch to count.
-  const noAssistants =
-    assistants.filter(
-      (a) =>
-        a.enabled && snapshot.account?.team.usage[a.uid]?.dispatch !== false
-    ).length === 0
+  // Nothing set for its own work to run on — none bound, or the one bound
+  // gone or turned off: it cannot do work itself until one is.
+  const noExecutor =
+    assistantsRead &&
+    !assistants.some((a) => a.enabled && a.id === agent.executor_assistant_id)
   const conversation = settingsOpen ? (
     <SettingsView />
   ) : (
@@ -558,24 +558,27 @@ export function PersonalAgentPage() {
             {isMobile && rosterShown ? (
               <PersonalAgentRoster variant="strip" readOnly={readOnly} />
             ) : null}
-            {readOnly || noAssistants ? (
+            {readOnly || noExecutor ? (
               <div className="mx-auto flex w-full chat-content-w shrink-0 flex-col gap-1 px-4 pt-2">
                 {readOnly ? (
                   <p className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-800 dark:text-amber-200">
                     {t("readOnly")}
                   </p>
                 ) : null}
-                {noAssistants ? (
-                  <p className="flex items-center justify-between gap-2 rounded-lg bg-muted px-3 py-1.5 text-xs text-muted-foreground">
-                    <span>{t("noAssistants")}</span>
+                {noExecutor ? (
+                  <p
+                    className="flex items-center justify-between gap-2 rounded-lg bg-muted px-3 py-1.5 text-xs text-muted-foreground"
+                    data-pa-no-executor
+                  >
+                    <span>{t("noExecutor")}</span>
                     <Button
                       size="xs"
                       variant="outline"
                       className="shrink-0 bg-background"
-                      data-pa-add-executor
-                      onClick={() => openSettings("executors")}
+                      data-pa-set-executor
+                      onClick={() => openBotPage("identity")}
                     >
-                      {t("addExecutor")}
+                      {t("setExecutor")}
                     </Button>
                   </p>
                 ) : null}

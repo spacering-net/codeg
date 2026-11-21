@@ -607,3 +607,25 @@ export function useBotName(): (
     return t("title")
   }
 }
+
+/** The head of an assistant's persona as the roster has it (the team
+ *  list's: from the first line of its `SOUL.md` on), shown without the
+ *  heading's marks; a work assistant's not written yet says so. `null`:
+ *  nothing to show. */
+export function usePersonaText(): (
+  bot: { persona?: string | null; persona_unwritten?: boolean } | null
+) => string | null {
+  const t = useTranslations("PersonalAgent.bots")
+  return (bot) => {
+    if (!bot) return null
+    if (bot.persona_unwritten) return t("personaUnwritten")
+    const head = personaHead(bot.persona ?? "")
+    return head || null
+  }
+}
+
+/** A persona's head without the marks of a heading it starts with
+ *  ("# Persona I review…" → "Persona I review…"). */
+export function personaHead(text: string): string {
+  return text.replace(/^\s*#+\s*/u, "").trim()
+}

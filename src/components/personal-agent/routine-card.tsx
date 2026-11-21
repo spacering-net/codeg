@@ -6,8 +6,8 @@
  * - suggested by the assistant: in full, [Make it] / [Do it] and [Not now];
  * - an offer to make a request the owner keeps making a routine: [Make it a
  *   routine] opens the editor prefilled, [Not now];
- * - paused by codeg (three failed runs, an executor config it cannot use):
- *   why, [Resume] or [Use another], and [Open routines].
+ * - paused by codeg (three failed runs, or nothing set for its work to run
+ *   on): why, [Set it] for the latter, [Resume], and [Open routines].
  */
 
 import { useState } from "react"
@@ -89,6 +89,7 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
   const { readOnly } = usePageScope()
   const openEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
   const showRoutines = usePersonalAgentUi((s) => s.showRoutines)
+  const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   const row = item.row
   const data = (row.data ?? {}) as Record<string, unknown>
   const noticeId = Number(row.ref_id)
@@ -356,32 +357,25 @@ export function RoutineCard({ item }: { item: NoticeItem }) {
             ) : null}
             {what === "paused" && open ? (
               <>
-                {pausedWhy === "executor" && routineId != null ? (
+                {pausedWhy === "executor" ? (
                   <Button
                     size="sm"
-                    onClick={() =>
-                      openEditor({
-                        botId,
-                        routineId,
-                        draft: null,
-                        noticeId: Number.isFinite(noticeId) ? noticeId : null,
-                      })
-                    }
-                    data-pa-routine-card-act="another"
+                    onClick={() => openBotPage("identity")}
+                    data-pa-routine-card-act="executor"
                   >
-                    {t("useAnother")}
+                    {t("setExecutor")}
                   </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    disabled={busy != null}
-                    onClick={() => void answer("resume")}
-                    data-pa-routine-card-act="resume"
-                  >
-                    {spin("resume")}
-                    {t("resume")}
-                  </Button>
-                )}
+                ) : null}
+                <Button
+                  size="sm"
+                  variant={pausedWhy === "executor" ? "secondary" : "default"}
+                  disabled={busy != null}
+                  onClick={() => void answer("resume")}
+                  data-pa-routine-card-act="resume"
+                >
+                  {spin("resume")}
+                  {t("resume")}
+                </Button>
                 <Button
                   size="sm"
                   variant="ghost"

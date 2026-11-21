@@ -7,8 +7,9 @@
  *
  * Read whole on the first holder and again whenever the roster changes (an
  * assistant made, deleted, renamed, pinned, hidden…: `personal-agent://bots`
- * `roster`, or `personal-agent://changed` `agent`) or the transport comes
- * back; each assistant's state is then replaced as it is pushed
+ * `roster`, or `personal-agent://changed` `agent`), a persona may have (a
+ * memory or tidy-up card comes or changes; the owner saved a `SOUL.md`), or
+ * the transport comes back; each assistant's state is then replaced as it is pushed
  * (`personal-agent://bots` `live`). States are kept by freshness: a read
  * that was on its way while a newer push came does not undo it, and a push
  * that came before the first read is kept for it. Reads are kept by the
@@ -32,6 +33,7 @@ import {
   type BotsChange,
   type PersonalAgentChange,
   type RosterEntry,
+  type TimelineRow,
 } from "@/lib/types"
 
 export const PERSONAL_AGENT_BOTS_EVENT = "personal-agent://bots"
@@ -142,6 +144,12 @@ export async function readRosterNow(): Promise<void> {
   showRead(seq, await personalAgentBots())
 }
 
+/** A card about what an assistant's own files now say. */
+function touchesPersona(row: TimelineRow): boolean {
+  const notice = row.data?.notice
+  return row.kind === "notice" && (notice === "memory" || notice === "tidy")
+}
+
 function start(): () => void {
   let live = true
   const offs: Array<() => void> = []
@@ -163,7 +171,12 @@ function start(): () => void {
   )
   hold(
     subscribe<PersonalAgentChange>(PERSONAL_AGENT_CHANGED_EVENT, (change) => {
-      if (live && change.kind === "agent") reloadRoster()
+      if (!live) return
+      if (change.kind === "agent") reloadRoster()
+      // A turn's memory card, a tidy-up applied, either undone: a persona
+      // may have changed, and the roster shows its head.
+      else if (change.kind === "timeline" && change.rows.some(touchesPersona))
+        reloadRoster()
     })
   )
   try {

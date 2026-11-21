@@ -38,21 +38,15 @@ export const PERSONAL_AGENT_EVENTS = {
 export type SettingsPage =
   | "workers"
   | "executors"
-  | "division"
   | "communication"
   | "proactive"
   | "automation"
   | "about"
 
-/** The tabs of an assistant's own page (13.1): who it is and the agent it
- *  runs on, its persona and memory, a work assistant's execution, its
- *  notifications, the advanced. */
-export type BotTab =
-  | "identity"
-  | "persona"
-  | "execution"
-  | "notify"
-  | "advanced"
+/** The tabs of an assistant's own page (13.1): who it is, the agent it
+ *  runs on and the executor config its work runs on, its persona and
+ *  memory, its notifications, the advanced. */
+export type BotTab = "identity" | "persona" | "notify" | "advanced"
 
 /** The settings view, while it is open: on which page. */
 export interface SettingsOpen {
@@ -66,25 +60,6 @@ export interface BotPageOpen {
   /** The persona tab's file to open on: a memory entry a card or a reply
    *  names (7.7). */
   entry?: string | null
-}
-
-/** The executor config editor, asked to open from a card (10.5): an
- *  existing one by id, or a new one with its fields filled in. `key`
- *  tells two requests for the same one apart. */
-export interface ExecutorEditorRequest {
-  key: number
-  assistantId: number | null
-  prefill: ExecutorEditorPrefill | null
-}
-
-/** A new executor config's starting fields, as a card asks for them. */
-export interface ExecutorEditorPrefill {
-  name?: string
-  description?: string
-  instructions?: string
-  template?: string
-  agentType?: AgentType | null
-  options?: { mode_id?: string | null; config_values: Record<string, string> }
 }
 
 /** A piece of handed-out work, as the card that opens it knows it: the
@@ -156,14 +131,6 @@ interface PersonalAgentUiState {
   /** Back to the conversation: the settings or the assistant's page over it
    *  closed. */
   showConversation: () => void
-  /** The executor configs' page, with its editor open on one (or a new one
-   *  prefilled); taken by the page once it opens it. */
-  executorEditor: ExecutorEditorRequest | null
-  openExecutorEditor: (
-    assistantId: number | null,
-    prefill?: ExecutorEditorPrefill | null
-  ) => void
-  clearExecutorEditor: () => void
   /** The routine editor, when open. */
   routineEditor: RoutineEditorRequest | null
   openRoutineEditor: (req: Omit<RoutineEditorRequest, "key">) => void
@@ -234,18 +201,6 @@ export const usePersonalAgentUi = create<PersonalAgentUiState>((set) => ({
           }
     }),
   showConversation: () => set({ settings: null, botPage: null }),
-  executorEditor: null,
-  openExecutorEditor: (assistantId, prefill = null) =>
-    set((s) => ({
-      settings: { page: "executors" },
-      botPage: null,
-      executorEditor: {
-        key: (s.executorEditor?.key ?? 0) + 1,
-        assistantId,
-        prefill,
-      },
-    })),
-  clearExecutorEditor: () => set({ executorEditor: null }),
   routineEditor: null,
   openRoutineEditor: (req) =>
     set((s) => ({

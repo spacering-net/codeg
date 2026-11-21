@@ -51,8 +51,6 @@ import {
   CircleHelp,
   CircleSlash,
   History,
-  Info,
-  Layers,
   Lightbulb,
   ListTodo,
   MessageSquareQuote,
@@ -67,19 +65,16 @@ import {
 
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentNoticeAct } from "@/lib/api"
 import { isBotTab, type PersonalAgentPage } from "@/lib/personal-agent-open"
 import type {
   AgentType,
   BotFace,
-  MadeExecutorData,
   PersonalAgentPrefKey,
   PickedOption,
   TimelineRow,
 } from "@/lib/types"
-import { AGENT_LABELS } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
@@ -100,7 +95,13 @@ import { PrCard } from "./pr-card"
 import { RoutineCard } from "./routine-card"
 import { RuleCard } from "./rule-card"
 import { MutedNote, MuteKindButton } from "./mute-kind"
-import { ChangeValue, changesOf, namesOf, useChangeText } from "./change-text"
+import {
+  ChangeValue,
+  changesOf,
+  namesOf,
+  teamKey,
+  useChangeText,
+} from "./change-text"
 import type { MessageItem } from "./message-items"
 import { MessageRow } from "./message-row"
 import { RowIcon, RowLines, splitLine } from "./list-row"
@@ -283,7 +284,6 @@ export function NoticeCard({ item }: { item: NoticeItem }) {
   if (kind === "changed") {
     const what = str(item.row.data, "what")
     if (what === "bots") return <BotsChangedCard item={item} />
-    if (what === "assistant") return <AssistantChangedCard item={item} />
     return <ChangedCard item={item} />
   }
   if (kind === "choice") {
@@ -934,6 +934,41 @@ function StoppedCard({ item }: { item: NoticeItem }) {
   )
 }
 
+/** A persona's change, whole: the opening it has now (as the card was
+ *  made) and the one it gets — what is written when it is accepted. */
+function PersonaChange({ from, to }: { from: unknown; to: unknown }) {
+  const t = useTranslations("PersonalAgent.notice.changed.team")
+  const text = (v: unknown) => (typeof v === "string" ? v.trim() : "")
+  const before = text(from)
+  const after = text(to)
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5" data-pa-persona-change>
+      <div>
+        <p className="text-[0.6875rem] leading-4 text-muted-foreground">
+          {t("personaNow")}
+        </p>
+        <p
+          className="text-sm leading-5 break-words whitespace-pre-wrap text-muted-foreground"
+          data-pa-persona-from
+        >
+          {before || t("empty")}
+        </p>
+      </div>
+      <div>
+        <p className="text-[0.6875rem] leading-4 text-muted-foreground">
+          {t("personaNew")}
+        </p>
+        <p
+          className="text-sm leading-5 font-medium break-words whitespace-pre-wrap"
+          data-pa-persona-to
+        >
+          {after || t("empty")}
+        </p>
+      </div>
+    </div>
+  )
+}
+
 /** A label as a band's heading: its own colon left to the layout. */
 function bareLabel(label: string): string {
   return label.replace(/\s*[:：]\s*$/u, "")
@@ -944,10 +979,7 @@ function bareLabel(label: string): string {
 function pageOf(key: string): PersonalAgentPage {
   if (key === "own.brain") return "identity"
   if (key.startsWith("own.")) return "advanced"
-  if (key.startsWith("team.division.")) return "division"
-  if (key.startsWith("team.usage.")) return "executors"
   if (key.startsWith("bot.")) return "workers"
-  if (key.startsWith("assistant.")) return "executors"
   const item = key.replace(/^prefs\./, "") as PersonalAgentPrefKey
   if (ABOUT_ITEMS.includes(item)) return "about"
   if (PROACTIVE_ITEMS.includes(item)) return "proactive"
@@ -1016,9 +1048,8 @@ function ChangedCard({ item }: { item: NoticeItem }) {
   const state = str(data, "state") ?? "open"
   const why = str(data, "why") ?? "asked"
   const changes = changesOf(data?.changes)
-  // An executor config is also who a session's @ reaches (10.5).
-  const bothWays = changes.some((c) => c.key.startsWith("assistant."))
   const quote = str(data, "quote")
+  const unchecked = str(data, "unchecked_quote")
   const reason = str(data, "reason")
   const forRow = num(data, "for_row")
   const kept = Array.isArray(data?.kept) ? (data.kept as string[]) : []
@@ -1055,6 +1086,13 @@ function ChangedCard({ item }: { item: NoticeItem }) {
       text: t("quote", { quote }),
     })
   }
+  if (unchecked) {
+    why_.push({
+      key: "unchecked",
+      icon: CircleHelp,
+      text: t("uncheckedQuote", { quote: unchecked }),
+    })
+  }
   if (reason)
     why_.push({ key: "reason", icon: Lightbulb, text: t("reason", { reason }) })
   if (kept.length > 0) {
@@ -1064,7 +1102,6 @@ function ChangedCard({ item }: { item: NoticeItem }) {
       text: t("kept", { items: kept.map(label).join("、") }),
     })
   }
-  if (bothWays) why_.push({ key: "bothWays", icon: Info, text: t("bothWays") })
   return (
     <CardFrame
       item={item}
@@ -1097,20 +1134,24 @@ function ChangedCard({ item }: { item: NoticeItem }) {
                 }
                 data-pa-change={c.key}
               >
-                <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 leading-5">
-                  <span className="text-muted-foreground line-through decoration-muted-foreground/60">
-                    <ChangeValue item={c.key} value={c.from} text={value} />
+                {teamKey(c.key)?.field === "persona" ? (
+                  <PersonaChange from={c.from} to={c.to} />
+                ) : (
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 leading-5">
+                    <span className="text-muted-foreground line-through decoration-muted-foreground/60">
+                      <ChangeValue item={c.key} value={c.from} text={value} />
+                    </span>
+                    <span
+                      aria-hidden
+                      className="text-muted-foreground rtl:-scale-x-100"
+                    >
+                      →
+                    </span>
+                    <span className="font-medium">
+                      <ChangeValue item={c.key} value={c.to} text={value} />
+                    </span>
                   </span>
-                  <span
-                    aria-hidden
-                    className="text-muted-foreground rtl:-scale-x-100"
-                  >
-                    →
-                  </span>
-                  <span className="font-medium">
-                    <ChangeValue item={c.key} value={c.to} text={value} />
-                  </span>
-                </span>
+                )}
                 <PickedList
                   picked={pickedOf(c.picked)}
                   className="mt-1 w-full"
@@ -1194,7 +1235,6 @@ interface MadeBot {
   bot_id: number
   name: string
   face: BotFace | null
-  template_name: string | null
   executor_name: string | null
   executor_agent: string | null
   executor_created: boolean
@@ -1211,9 +1251,9 @@ function madeBots(v: unknown): MadeBot[] {
     : []
 }
 
-/** Work assistants made from the conversation (4.12) or on the way up from
- *  the executor configs (4.15), each with [Undo] — or one to make, waiting
- *  on the owner: [Make it] [Not now]. */
+/** Work assistants made from the conversation (4.12), each with [Undo] —
+ *  or one to make, waiting on the owner: [Make it] [Not now]. The persona
+ *  it is made with shows whole: what accepting the card writes. */
 function BotsChangedCard({ item }: { item: NoticeItem }) {
   const t = useTranslations("PersonalAgent.bots.changed")
   const { readOnly } = usePageScope()
@@ -1225,49 +1265,36 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
   const bots = madeBots(data?.bots)
   const pending = obj(data?.pending)
   const quote = str(data, "quote")
+  const unchecked = str(data, "unchecked_quote")
   const reason = str(data, "reason")
   const error = str(data, "error")
+  const persona = str(pending, "persona")
   const { busy, failed, answer } = useAnswer(Number(row.ref_id))
   const live = bots.filter((b) => b.state !== "undone")
-  // A team suggested when getting to know the owner (5.4): ticked to make.
-  const team = Array.isArray(pending?.team)
-    ? (pending.team as Array<Record<string, unknown>>).filter(
-        (m) => typeof m.template === "string"
-      )
-    : null
-  const teamProjects = Array.isArray(pending?.projects)
-    ? (pending.projects as unknown[]).filter(
-        (p): p is string => typeof p === "string"
-      )
-    : []
-  const [unticked, setUnticked] = useState<ReadonlySet<string>>(new Set())
-  const ticked = (team ?? [])
-    .map((m) => m.template as string)
-    .filter((k) => !unticked.has(k))
   const heading =
     state === "open"
       ? why === "suggest"
-        ? team
-          ? t("teamSuggested")
-          : t("suggested")
+        ? t("suggested")
         : t("show")
       : state === "dismissed"
         ? t("dismissed")
         : state === "undone"
           ? t("undone")
-          : why === "made"
-            ? t("made", { count: bots.length })
-            : t("applied")
-  const text =
-    bots.map((b) => b.name).join(", ") ||
-    str(pending, "name") ||
-    (team ?? []).map((m) => String(m.name ?? "")).join(", ")
+          : t("applied")
+  const text = bots.map((b) => b.name).join(", ") || str(pending, "name") || ""
   const why_: { key: string; icon: LucideIcon; text: React.ReactNode }[] = []
   if (quote) {
     why_.push({
       key: "quote",
       icon: MessageSquareQuote,
       text: t("quote", { quote }),
+    })
+  }
+  if (unchecked) {
+    why_.push({
+      key: "unchecked",
+      icon: CircleHelp,
+      text: t("uncheckedQuote", { quote: unchecked }),
     })
   }
   if (reason)
@@ -1294,53 +1321,7 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
       }
     >
       <SheetPart className="flex flex-col gap-2.5">
-        {why === "made" ? (
-          <p className="text-xs leading-5 text-muted-foreground">
-            {t("madeHint")}
-          </p>
-        ) : null}
-        {team && proposing ? (
-          <>
-            {teamProjects.length > 0 ? (
-              <p className="text-xs leading-5 text-muted-foreground">
-                {t("teamFor", { projects: teamProjects.join(", ") })}
-              </p>
-            ) : null}
-            <ul className={CARD_LIST} data-pa-team>
-              {team.map((m) => {
-                const key = m.template as string
-                const id = `pa-team-${row.id}-${key}`
-                return (
-                  <li
-                    key={key}
-                    className="flex items-center gap-2.5"
-                    data-pa-team-member={key}
-                  >
-                    <Checkbox
-                      id={id}
-                      checked={!unticked.has(key)}
-                      disabled={state !== "open" || readOnly || busy != null}
-                      onCheckedChange={(on) =>
-                        setUnticked((u) => {
-                          const next = new Set(u)
-                          if (on === true) next.delete(key)
-                          else next.add(key)
-                          return next
-                        })
-                      }
-                    />
-                    <label
-                      htmlFor={id}
-                      className="min-w-0 flex-1 cursor-pointer text-sm leading-5 font-medium"
-                    >
-                      {String(m.name ?? key)}
-                    </label>
-                  </li>
-                )
-              })}
-            </ul>
-          </>
-        ) : proposing ? (
+        {proposing ? (
           <p className={SHEET_TITLE} data-pa-bot-pending>
             {str(pending, "name")}
           </p>
@@ -1371,25 +1352,20 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
                       >
                         {b.name}
                       </span>
-                      <span className="block truncate text-xs leading-4 text-muted-foreground">
-                        {[
-                          b.template_name,
-                          b.executor_name
-                            ? b.executor_created
-                              ? filled > 0
-                                ? t("executorFilled", {
-                                    agent: b.executor_agent ?? "",
-                                    count: filled,
-                                  })
-                                : t("executorMade", {
-                                    agent: b.executor_agent ?? "",
-                                  })
-                              : t("executorBound", { name: b.executor_name })
-                            : null,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </span>
+                      {b.executor_name ? (
+                        <span className="block truncate text-xs leading-4 text-muted-foreground">
+                          {b.executor_created
+                            ? filled > 0
+                              ? t("executorFilled", {
+                                  agent: b.executor_agent ?? "",
+                                  count: filled,
+                                })
+                              : t("executorMade", {
+                                  agent: b.executor_agent ?? "",
+                                })
+                            : t("executorBound", { name: b.executor_name })}
+                        </span>
+                      ) : null}
                     </span>
                   </span>
                   {b.state !== "undone" ? (
@@ -1427,6 +1403,16 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
             })}
           </ul>
         )}
+        {persona ? (
+          <div data-pa-bot-persona>
+            <p className="text-[0.6875rem] leading-4 text-muted-foreground">
+              {t("persona")}
+            </p>
+            <p className="text-sm leading-5 break-words whitespace-pre-wrap">
+              {persona}
+            </p>
+          </div>
+        ) : null}
       </SheetPart>
       {why_.length > 0 ? (
         <SheetPart>
@@ -1439,20 +1425,14 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
             <>
               <Button
                 size="sm"
-                disabled={
-                  readOnly ||
-                  busy != null ||
-                  (team != null && ticked.length === 0)
-                }
-                onClick={() =>
-                  void answer(team ? `accept:${ticked.join(",")}` : "accept")
-                }
+                disabled={readOnly || busy != null}
+                onClick={() => void answer("accept")}
                 data-pa-bots-accept
               >
-                {busy === "accept" || busy?.startsWith("accept:") ? (
+                {busy === "accept" ? (
                   <SyncedSpinner small className="size-3.5" />
                 ) : null}
-                {team ? t("teamMake", { count: ticked.length }) : t("accept")}
+                {t("accept")}
               </Button>
               <Button
                 size="sm"
@@ -1462,7 +1442,7 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
               >
                 {t("dismiss")}
               </Button>
-              {why === "suggest" && !team ? (
+              {why === "suggest" ? (
                 <MuteKindButton
                   noticeId={Number(row.ref_id)}
                   disabled={busy != null}
@@ -1482,267 +1462,6 @@ function BotsChangedCard({ item }: { item: NoticeItem }) {
               ) : null}
               {bots.length > 1 ? t("undoAll") : t("undo")}
             </Button>
-          ) : null}
-        </SheetActions>
-      ) : null}
-    </CardFrame>
-  )
-}
-
-function madeOf(v: unknown): MadeExecutorData | null {
-  const m = obj(v)
-  const a = obj(m?.assistant)
-  return m && a && typeof a.id === "number"
-    ? (m as unknown as MadeExecutorData)
-    : null
-}
-
-/** An agent's name from its wire slug. */
-function agentName(v: unknown): string | null {
-  return typeof v === "string"
-    ? (AGENT_LABELS[v as keyof typeof AGENT_LABELS] ?? v)
-    : null
-}
-
-/** A call's options as the editor reads them: `{mode_id, config_values}`,
- *  or a flat `{option id: value}` with `mode` among them. */
-function optionsOf(
-  v: unknown
-): { mode_id?: string | null; config_values: Record<string, string> } | null {
-  const o = obj(v)
-  if (!o) return null
-  const flat = obj(o.config_values) ?? o
-  const config_values: Record<string, string> = {}
-  for (const [k, x] of Object.entries(flat)) {
-    if (k === "mode_id" || (flat === o && k === "mode")) continue
-    if (typeof x === "string") config_values[k] = x
-    else if (typeof x === "boolean" || typeof x === "number") {
-      config_values[k] = String(x)
-    }
-  }
-  const mode = str(o, "mode_id") ?? (flat === o ? str(o, "mode") : null)
-  return { mode_id: mode, config_values }
-}
-
-/** An executor config made from the conversation (10.5) — with [Undo]
- *  (deleting it, its place in the division back) and [Edit]; one to make,
- *  waiting on the owner: [Make it] [Not now]; or nothing made because the
- *  agent's options could not be read: [Open editor], filled in with what
- *  was asked. */
-function AssistantChangedCard({ item }: { item: NoticeItem }) {
-  const t = useTranslations("PersonalAgent.notice.changed.assistant")
-  const tc = useTranslations("PersonalAgent.notice.changed")
-  const tk = useTranslations("PersonalAgent.settings.division")
-  const { readOnly } = usePageScope()
-  const openExecutorEditor = usePersonalAgentUi((s) => s.openExecutorEditor)
-  const row = item.row
-  const data = row.data
-  const state = str(data, "state") ?? "open"
-  const why = str(data, "why") ?? "asked"
-  const made = madeOf(data?.made)
-  const pending = obj(data?.pending)
-  const quote = str(data, "quote")
-  const reason = str(data, "reason")
-  const error = str(data, "error")
-  const kept = Array.isArray(data?.kept) ? (data.kept as string[]) : []
-  const { busy, failed, answer } = useAnswer(Number(row.ref_id))
-  const name =
-    made?.assistant.name ??
-    str(pending, "name") ??
-    str(pending, "template") ??
-    ""
-  const agent = made?.assistant.agent ?? agentName(pending?.agent_type) ?? null
-  const picked = made ? pickedOf(made.picked) : []
-  const firstFor = (made ? changesOf(made.team) : [])
-    .map((c) => c.key)
-    .filter((k) => k.startsWith("team.division."))
-    .map((k) => tk(k.slice(14) as "code"))
-  const heading =
-    state === "editor"
-      ? t("editor")
-      : state === "applied"
-        ? why === "asked"
-          ? t("applied")
-          : t("accepted")
-        : state === "undone"
-          ? t("undone")
-          : state === "dismissed"
-            ? t("dismissed")
-            : why === "suggest"
-              ? t("suggested")
-              : t("show")
-  const openEditor = () => {
-    const prefill = pending ?? {}
-    openExecutorEditor(null, {
-      name: str(prefill, "name") ?? undefined,
-      description: str(prefill, "description") ?? undefined,
-      instructions: str(prefill, "instructions") ?? undefined,
-      template: str(prefill, "template") ?? undefined,
-      agentType: (str(prefill, "agent_type") as AgentType | null) ?? null,
-      options: optionsOf(prefill.options) ?? undefined,
-    })
-  }
-  const why_: { key: string; icon: LucideIcon; text: React.ReactNode }[] = []
-  if (quote) {
-    why_.push({
-      key: "quote",
-      icon: MessageSquareQuote,
-      text: tc("quote", { quote }),
-    })
-  }
-  if (reason && state !== "editor") {
-    why_.push({
-      key: "reason",
-      icon: Lightbulb,
-      text: tc("reason", { reason }),
-    })
-  }
-  if (kept.length > 0) {
-    why_.push({
-      key: "kept",
-      icon: History,
-      text: t("kept", { count: kept.length }),
-    })
-  }
-  return (
-    <CardFrame
-      item={item}
-      icon={Layers}
-      settle={
-        state === "editor"
-          ? "warn"
-          : state === "applied"
-            ? "done"
-            : state === "undone"
-              ? "undone"
-              : state === "dismissed"
-                ? "off"
-                : "open"
-      }
-      heading={heading}
-      text={[name, agent].filter(Boolean).join(" · ")}
-      failed={
-        failed ?? (state === "open" || state === "applied" ? error : null)
-      }
-    >
-      {/* The executor config: its name and agent, what codeg picked for
-          it, where it goes first. */}
-      <SheetPart className="flex flex-col gap-2">
-        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <p
-            className={cn(
-              SHEET_TITLE,
-              state === "undone" && "text-muted-foreground line-through"
-            )}
-            data-pa-assistant-made={made?.assistant.id ?? ""}
-          >
-            {name}
-          </p>
-          {agent ? (
-            <span className="text-xs text-muted-foreground">
-              {t("on", { agent })}
-            </span>
-          ) : null}
-        </div>
-        {state === "editor" ? (
-          <p className="flex items-start gap-2 text-xs leading-5 break-words text-amber-700 dark:text-amber-400">
-            <CircleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            <span className="min-w-0">
-              {t("editorHint", { agent: agent ?? "", why: reason ?? "" })}
-            </span>
-          </p>
-        ) : null}
-        {picked.length > 0 ? <PickedList picked={picked} /> : null}
-        {firstFor.length > 0 ? (
-          <p
-            className="text-xs leading-5 text-muted-foreground"
-            data-pa-first-for
-          >
-            {t("firstFor", { kinds: firstFor.join(" / ") })}
-          </p>
-        ) : null}
-        {made && state === "applied" ? (
-          <p
-            className="flex items-start gap-2 text-xs leading-5 text-muted-foreground"
-            data-pa-both-ways
-          >
-            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            <span className="min-w-0">{tc("bothWays")}</span>
-          </p>
-        ) : null}
-      </SheetPart>
-      {why_.length > 0 ? (
-        <SheetPart>
-          <WhyLines lines={why_} />
-        </SheetPart>
-      ) : null}
-      {state === "open" ||
-      state === "editor" ||
-      (state === "applied" && made) ? (
-        <SheetActions>
-          {state === "open" ? (
-            <>
-              <Button
-                size="sm"
-                disabled={readOnly || busy != null}
-                onClick={() => void answer("accept")}
-                data-pa-assistant-act="accept"
-              >
-                {busy === "accept" ? (
-                  <SyncedSpinner small className="size-3.5" />
-                ) : null}
-                {t("accept")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={readOnly || busy != null}
-                onClick={() => void answer("dismiss")}
-                data-pa-assistant-act="dismiss"
-              >
-                {tc("dismiss")}
-              </Button>
-              {why === "suggest" ? (
-                <MuteKindButton
-                  noticeId={Number(row.ref_id)}
-                  disabled={busy != null}
-                />
-              ) : null}
-            </>
-          ) : null}
-          {state === "editor" ? (
-            <Button
-              size="sm"
-              disabled={readOnly}
-              onClick={openEditor}
-              data-pa-assistant-act="editor"
-            >
-              {t("openEditor")}
-            </Button>
-          ) : null}
-          {state === "applied" && made ? (
-            <>
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={readOnly || busy != null}
-                onClick={() => void answer("undo")}
-                data-pa-assistant-act="undo"
-              >
-                {busy === "undo" ? (
-                  <SyncedSpinner small className="size-3.5" />
-                ) : null}
-                {tc("undo")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => openExecutorEditor(made.assistant.id)}
-                data-pa-assistant-act="edit"
-              >
-                {t("edit")}
-              </Button>
-            </>
           ) : null}
         </SheetActions>
       ) : null}

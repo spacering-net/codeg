@@ -18,7 +18,7 @@ import {
   PERSONAL_AGENT_CHANGED_EVENT,
   type ExecutorView,
   type PersonalAgentApplied,
-  type PersonalAgentBotSummary,
+  type RosterEntry,
   type PersonalAgentChange,
   type PersonalAgentSettingChange,
 } from "@/lib/types"
@@ -51,7 +51,7 @@ function usePersonalAgentChanges(
 
 /** The owner's assistants, kept up to date: the roster's (one read and one
  *  subscription for the whole window). */
-export function useBots(): PersonalAgentBotSummary[] | null {
+export function useBots(): RosterEntry[] | null {
   return useRoster()
 }
 

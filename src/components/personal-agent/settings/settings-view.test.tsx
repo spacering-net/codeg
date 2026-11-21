@@ -176,13 +176,11 @@ function snapshot(
       updated_at: "2026-11-10T00:00:00Z",
       kind: "primary",
       uid: "u1",
-      template: null,
       executor_assistant_id: null,
     },
     status: { engine } as PersonalAgentSnapshot["status"],
     account: {
       prefs: PREFS,
-      team: { division: {}, usage: {} },
       automation_level: "standard",
       disturb_level: "standard",
       ...account,
@@ -225,7 +223,7 @@ describe("the settings view", () => {
       [...g.querySelectorAll("[data-pa-nav]")].map((b) =>
         b.getAttribute("data-pa-nav")
       )
-    expect(pages(groups[0])).toEqual(["workers", "executors", "division"])
+    expect(pages(groups[0])).toEqual(["workers", "executors"])
     expect(pages(groups[1])).toEqual([
       "communication",
       "proactive",
@@ -237,13 +235,7 @@ describe("the settings view", () => {
       expect(b.querySelector("svg")).not.toBeNull()
     }
     // An assistant's own pages are on its page now.
-    for (const page of [
-      "identity",
-      "persona",
-      "execution",
-      "notify",
-      "advanced",
-    ]) {
+    for (const page of ["identity", "persona", "notify", "advanced"]) {
       expect(document.querySelector(`[data-pa-nav="${page}"]`)).toBeNull()
     }
     // It opens on the work assistants.
@@ -740,9 +732,10 @@ describe("the settings view", () => {
         uid: "u7",
         name: "Reviewer",
         avatar: { kind: "face", shape: "blob", color: "blue" },
-        template: null,
         executor_assistant_id: null,
         created_at: "2026-11-10T00:00:00Z",
+        persona: "# Persona I review changes.",
+        persona_unwritten: false,
         roster: flags,
         live: { bot_id: 7, updated_at: "2026-11-10T00:00:00Z" },
       },
@@ -753,6 +746,12 @@ describe("the settings view", () => {
       expect(el).not.toBeNull()
       return el as HTMLElement
     })
+    // Its persona's head, the heading's marks left out — and that it has
+    // nothing to work on yet.
+    expect(row.querySelector('[data-pa-worker-persona="7"]')?.textContent).toBe(
+      "Persona I review changes."
+    )
+    expect(row.querySelector('[data-pa-worker-unbound="7"]')).not.toBeNull()
     fireEvent.click(within(row).getByText("Reviewer"))
     let ui = usePersonalAgentUi.getState()
     expect(ui.viewBot).toBe(7)
@@ -785,9 +784,10 @@ describe("the settings view", () => {
         uid: "u7",
         name: "Reviewer",
         avatar: { kind: "face", shape: "blob", color: "blue" },
-        template: null,
         executor_assistant_id: null,
         created_at: "2026-11-10T00:00:00Z",
+        persona: "# Persona I review changes.",
+        persona_unwritten: false,
         roster: flags,
         live: { bot_id: 7, updated_at: "2026-11-10T00:00:00Z" },
       },

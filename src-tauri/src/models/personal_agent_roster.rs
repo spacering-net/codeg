@@ -245,6 +245,11 @@ pub struct RosterEntry {
     pub bot: BotSummary,
     pub roster: RosterFlags,
     pub live: BotLive,
+    /// The head of its persona, read as the team list reads it (the first
+    /// line of the `SOUL.md` in its working directory on, as written).
+    pub persona: String,
+    /// A work assistant whose persona is still its default file.
+    pub persona_unwritten: bool,
 }
 
 /// Payload of [`PERSONAL_AGENT_BOTS_EVENT`].
