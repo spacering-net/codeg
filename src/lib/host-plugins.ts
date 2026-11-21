@@ -12,8 +12,62 @@ export type PluginTextTranslations = Record<string, string>
 
 export const MAX_PLUGIN_SCREENS = 16
 export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
+export const MAX_PLUGIN_SLASH_COMMANDS = 16
+export const MAX_PLUGIN_SLASH_COMMAND_NAME_LENGTH = 48
+export const MAX_PLUGIN_SLASH_COMMAND_ARGS_BYTES = 8 * 1024
+export const MAX_PLUGIN_SLASH_COMMAND_MESSAGE_CHARS = 512
 
 export type PluginSidebarItemPlacement = "header" | "footer"
+export type PluginSlashCommandScope = "workspace" | "session"
+
+export interface PluginSlashCommandContribution {
+  name: string
+  description: string
+  descriptionTranslations?: PluginTextTranslations
+  argumentHint?: string
+  scope: PluginSlashCommandScope
+  method: string
+}
+
+export interface ResolvedPluginSlashCommand {
+  key: string
+  pluginId: string
+  pluginName: string
+  name: string
+  description: string
+  argumentHint?: string
+  scope: PluginSlashCommandScope
+  method: string
+}
+
+export type PluginSlashCommandInput =
+  | {
+      name: string
+      args: string
+      folderId: number
+      conversationId: null
+    }
+  | {
+      name: string
+      args: string
+      folderId: number | null
+      conversationId: number
+    }
+
+export type PluginSlashCommandOutput = null | { message: string }
+
+export interface MatchedPluginSlashCommand {
+  command: ResolvedPluginSlashCommand
+  args: string
+}
+
+export type BuildPluginSlashCommandInputResult =
+  | { ok: true; input: PluginSlashCommandInput }
+  | { ok: false; reason: "outOfScope" | "argsTooLong" }
+
+export type ParsePluginSlashCommandOutputResult =
+  | { ok: true; message: string | null }
+  | { ok: false }
 
 export interface PluginThemeContribution {
   id: string
@@ -174,6 +228,7 @@ export interface InstalledPlugin {
       themes?: PluginThemeContribution[]
       screens?: PluginScreenContribution[]
       sidebarItems?: PluginSidebarItemContribution[]
+      slashCommands?: PluginSlashCommandContribution[]
     }
   }
 }
@@ -358,6 +413,12 @@ function getReadyHostTransportSnapshot(): Transport | null {
   return safeGetTransport()
 }
 
+export function isCurrentReadyHostTransport(
+  transport: Transport | null
+): boolean {
+  return transport !== null && getReadyHostTransportSnapshot() === transport
+}
+
 function getNullTransportSnapshot(): null {
   return null
 }
@@ -499,6 +560,10 @@ export function pluginScreenKey(pluginId: string, screenId: string) {
 
 export function pluginSidebarItemKey(pluginId: string, itemId: string) {
   return `${pluginId}:${itemId}`
+}
+
+export function pluginSlashCommandKey(pluginId: string, name: string) {
+  return `${pluginId}:${name}`
 }
 
 export function resolvePluginHostScope(
@@ -819,6 +884,213 @@ export function hostPluginSessionScopeKey(
 }
 
 const utf8Encoder = new TextEncoder()
+
+const PLUGIN_SLASH_COMMAND_NAME_RE = /^[a-z][a-z0-9-]{0,47}$/
+const PLUGIN_LABEL_CONTROL_CHAR_RE = /\p{Cc}/u
+// Reject C0/C1 control chars (except \n after CRLF normalization), zero-width
+// space, Unicode line/paragraph separators, bidi overrides/isolates, and BOM.
+const PLUGIN_SLASH_MESSAGE_FORBIDDEN_RE =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B\u2028\u2029\u202A-\u202E\u2066-\u2069\uFEFF]/
+
+function isValidPluginManifestLabel(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    Array.from(value).length <= 100 &&
+    !PLUGIN_LABEL_CONTROL_CHAR_RE.test(value)
+  )
+}
+
+function isPositiveSafeId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+}
+
+export function isPluginSlashCommandInScope(
+  scope: PluginSlashCommandScope,
+  context: HostPluginSessionContext | null | undefined
+): boolean {
+  if (!context) return false
+  if (scope === "workspace") return isPositiveSafeId(context.folderId)
+  if (scope === "session") return isPositiveSafeId(context.conversationId)
+  return false
+}
+
+export function selectPluginSlashCommands(
+  plugins: readonly InstalledPlugin[] | undefined,
+  context: HostPluginSessionContext | null | undefined,
+  locale?: string,
+  reservedNames?: ReadonlySet<string>
+): ResolvedPluginSlashCommand[] {
+  if (!plugins?.length || !context) return []
+  const items: ResolvedPluginSlashCommand[] = []
+  const seenPlugins = new Set<string>()
+  const seenActiveNames = new Set<string>()
+
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled) continue
+    const rawMethods = plugin.manifest.server?.methods
+    if (!Array.isArray(rawMethods) || rawMethods.length === 0) continue
+    const declaredMethods = new Set(
+      rawMethods.filter(
+        (method): method is string =>
+          typeof method === "string" && method.trim().length > 0
+      )
+    )
+    if (declaredMethods.size === 0) continue
+    const commands = plugin.manifest.contributes?.slashCommands
+    if (!commands?.length) continue
+
+    const pluginName =
+      resolvePluginText(
+        plugin.manifest.name,
+        plugin.manifest.nameTranslations,
+        locale
+      ).trim() || plugin.manifest.id
+    const seenPluginNames = new Set<string>()
+    let pluginValidCount = 0
+
+    for (const command of commands) {
+      if (pluginValidCount >= MAX_PLUGIN_SLASH_COMMANDS) break
+      if (
+        typeof command.name !== "string" ||
+        !PLUGIN_SLASH_COMMAND_NAME_RE.test(command.name) ||
+        seenPluginNames.has(command.name)
+      ) {
+        continue
+      }
+      if (command.scope !== "workspace" && command.scope !== "session") {
+        continue
+      }
+      if (
+        typeof command.method !== "string" ||
+        !declaredMethods.has(command.method)
+      ) {
+        continue
+      }
+      if (!isValidPluginManifestLabel(command.description)) continue
+      const localizedDescription = resolvePluginText(
+        command.description,
+        command.descriptionTranslations,
+        locale
+      )
+      if (!isValidPluginManifestLabel(localizedDescription)) continue
+      const argumentHint = command.argumentHint
+      if (
+        argumentHint !== undefined &&
+        !isValidPluginManifestLabel(argumentHint)
+      ) {
+        continue
+      }
+
+      seenPluginNames.add(command.name)
+      pluginValidCount += 1
+
+      if (!isPluginSlashCommandInScope(command.scope, context)) continue
+      if (reservedNames?.has(command.name)) continue
+      if (seenActiveNames.has(command.name)) continue
+
+      seenActiveNames.add(command.name)
+      items.push({
+        key: pluginSlashCommandKey(plugin.manifest.id, command.name),
+        pluginId: plugin.manifest.id,
+        pluginName,
+        name: command.name,
+        description: localizedDescription.trim(),
+        ...(argumentHint !== undefined
+          ? { argumentHint: argumentHint.trim() }
+          : {}),
+        scope: command.scope,
+        method: command.method,
+      })
+    }
+  }
+  return items
+}
+
+export function matchPluginSlashCommandText(
+  rawText: string,
+  commands: readonly ResolvedPluginSlashCommand[]
+): MatchedPluginSlashCommand | null {
+  if (commands.length === 0) return null
+  const trimmed = rawText.trim()
+  if (!trimmed.startsWith("/")) return null
+  const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(trimmed)
+  if (!match) return null
+  const commandName = match[1]
+  const command = commands.find((item) => item.name === commandName)
+  if (!command) return null
+  return {
+    command,
+    args: (match[2] ?? "").trim(),
+  }
+}
+
+export function buildPluginSlashCommandInput(
+  command: Pick<ResolvedPluginSlashCommand, "name" | "scope">,
+  args: string,
+  context: HostPluginSessionContext | null | undefined
+): BuildPluginSlashCommandInputResult {
+  if (!isPluginSlashCommandInScope(command.scope, context) || !context) {
+    return { ok: false, reason: "outOfScope" }
+  }
+  const trimmedArgs = args.trim()
+  if (
+    utf8Encoder.encode(trimmedArgs).byteLength >
+    MAX_PLUGIN_SLASH_COMMAND_ARGS_BYTES
+  ) {
+    return { ok: false, reason: "argsTooLong" }
+  }
+  if (command.scope === "workspace") {
+    return {
+      ok: true,
+      input: {
+        name: command.name,
+        args: trimmedArgs,
+        folderId: context.folderId as number,
+        conversationId: null,
+      },
+    }
+  }
+  return {
+    ok: true,
+    input: {
+      name: command.name,
+      args: trimmedArgs,
+      folderId: isPositiveSafeId(context.folderId) ? context.folderId : null,
+      conversationId: context.conversationId as number,
+    },
+  }
+}
+
+export function parsePluginSlashCommandOutput(
+  raw: unknown
+): ParsePluginSlashCommandOutputResult {
+  if (raw === null) {
+    return { ok: true, message: null }
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false }
+  }
+  const record = raw as Record<string, unknown>
+  const keys = Object.keys(record)
+  if (keys.length !== 1 || keys[0] !== "message") {
+    return { ok: false }
+  }
+  if (typeof record.message !== "string") {
+    return { ok: false }
+  }
+  const normalized = record.message.replace(/\r\n?/g, "\n").trim()
+  if (
+    normalized.length === 0 ||
+    PLUGIN_SLASH_MESSAGE_FORBIDDEN_RE.test(normalized) ||
+    Array.from(normalized).length > MAX_PLUGIN_SLASH_COMMAND_MESSAGE_CHARS
+  ) {
+    return { ok: false }
+  }
+  return { ok: true, message: normalized }
+}
 
 export function validatePluginComposerInsertPayload(payload: unknown): string {
   if (
