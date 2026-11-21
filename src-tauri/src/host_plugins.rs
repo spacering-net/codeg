@@ -102,6 +102,8 @@ struct Contributions {
     screens: Vec<HostPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidebar_items: Vec<SidebarItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    workspace_row_badges: Vec<WorkspaceRowBadge>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -162,6 +164,16 @@ struct WorkspacePanel {
     text_translations: Translations,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     method: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WorkspaceRowBadge {
+    id: String,
+    title: String,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    title_translations: Translations,
+    method: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -1003,6 +1015,7 @@ impl Manifest {
             themes,
             screens,
             sidebar_items,
+            workspace_row_badges,
         } = &self.contributes;
         if !bundled && workspace_panels.is_empty() && themes.is_empty() {
             return Err("A declarative plugin needs a workspace panel or theme".to_owned());
@@ -1107,6 +1120,24 @@ impl Manifest {
         {
             return Err(
                 "Provide up to 16 sidebar items with unique IDs, valid titles and a screen from this plugin"
+                    .into(),
+            );
+        }
+        let mut badge_ids = BTreeSet::new();
+        if workspace_row_badges.len() > MAX_CONTRIBUTIONS
+            || workspace_row_badges.iter().any(|badge| {
+                !valid_id(&badge.id)
+                    || !valid_label(&badge.title)
+                    || !valid_translations(&badge.title_translations, valid_label)
+                    || !badge_ids.insert(&badge.id)
+                    || !self
+                        .server
+                        .as_ref()
+                        .is_some_and(|server| server.methods.contains(&badge.method))
+            })
+        {
+            return Err(
+                "Provide up to 16 workspace row badges with unique IDs, valid titles and a declared server method"
                     .into(),
             );
         }
@@ -1404,6 +1435,30 @@ mod tests {
         manifest["contributes"]["workspacePanels"][0]["textTranslations"] =
             json!({"en": "This view has no static text field"});
         assert!(Manifest::parse(&manifest.to_string()).is_err());
+    }
+
+    #[test]
+    fn validates_workspace_row_badges_against_declared_server_methods() {
+        use serde_json::json;
+
+        let source = include_str!("../../examples/plugins/workspace-row-badges/codeg-plugin.json");
+        let manifest: serde_json::Value = serde_json::from_str(source).unwrap();
+        let wire = serde_json::to_value(Manifest::parse(source).unwrap()).unwrap();
+        assert_eq!(
+            wire["contributes"]["workspaceRowBadges"],
+            manifest["contributes"]["workspaceRowBadges"]
+        );
+
+        let mut duplicate = manifest.clone();
+        let badges = duplicate["contributes"]["workspaceRowBadges"]
+            .as_array_mut()
+            .unwrap();
+        badges.push(badges[0].clone());
+        assert!(Manifest::parse(&duplicate.to_string()).is_err());
+
+        let mut unknown_method = manifest;
+        unknown_method["contributes"]["workspaceRowBadges"][0]["method"] = json!("missing");
+        assert!(Manifest::parse(&unknown_method.to_string()).is_err());
     }
 
     #[test]
