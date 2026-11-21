@@ -169,7 +169,11 @@ impl HostPlugins {
                             &emitter,
                             EVENT_CHANNEL,
                             json!({
-                                "pluginId": plugin_id, "event": event, "folderId": input.get("folderId"), "data": data
+                                "pluginId": plugin_id,
+                                "event": event,
+                                "folderId": input.get("folderId"),
+                                "conversationId": input.get("conversationId"),
+                                "data": data
                             }),
                         );
                     }
@@ -328,13 +332,12 @@ mod tests {
         connections
             .insert_test_connection("workspace-session", AgentType::Codex, None, emitter.clone())
             .await;
-        connections
-            .get_state("workspace-session")
-            .await
-            .unwrap()
-            .write()
-            .await
-            .folder_id = Some(12);
+        let session = connections.get_state("workspace-session").await.unwrap();
+        {
+            let mut session = session.write().await;
+            session.folder_id = Some(12);
+            session.conversation_id = Some(23);
+        }
         let receiver = bus.subscribe();
         let observer = tokio::spawn(async move {
             plugins
@@ -359,6 +362,7 @@ mod tests {
         assert_eq!(event.payload["event"], name);
         assert_eq!(event.payload["pluginId"], id);
         assert_eq!(event.payload["folderId"], 12);
+        assert_eq!(event.payload["conversationId"], 23);
         assert_eq!(event.payload["data"]["connectionId"], "workspace-session");
         assert_eq!(
             event.payload["data"]["detail"],
