@@ -2969,16 +2969,7 @@ pub async fn delete_conversation_with_cleanup_core(
     manager: &crate::acp::manager::ConnectionManager,
     conversation_id: i32,
 ) -> Result<(), AppCommandError> {
-    // Capture the backing folder AND parent before the soft-delete: a hidden
-    // chat folder is retired afterward, and a deleted delegation child must
-    // re-broadcast its parent so the parent's child_count (hence its chevron)
-    // converges from the DB aggregate.
-    let pre = conversation_service::get_by_id(conn, conversation_id)
-        .await
-        .ok();
-    let folder_id = pre.as_ref().map(|c| c.folder_id);
-    let parent_id = pre.as_ref().and_then(|c| c.parent_id);
-    delete_conversation_core(conn, conversation_id).await?;
+    let archived = conversation_service::archive_live_conversation(conn, conversation_id).await?;
     // Deleting is the explicit stop. Closing the conversation's tabs (the
     // cleanups below, and every client's own close) does not stop anything
     // that still has work in flight, so without this a background task or a
@@ -2988,7 +2979,7 @@ pub async fn delete_conversation_with_cleanup_core(
     // A removed delegation child drops its parent's child_count (→ 0 hides the
     // chevron). Re-emit the parent from the authoritative aggregate so every
     // client converges — symmetric with the create-time parent re-emit.
-    if let Some(parent_id) = parent_id {
+    if let Some(parent_id) = archived.parent_id {
         emit_conversation_upsert(emitter, conn, parent_id).await;
     }
     cleanup_tabs_for_deleted_conversation(emitter, conn, conversation_id).await;
@@ -3001,8 +2992,18 @@ pub async fn delete_conversation_with_cleanup_core(
         conversation_id,
     )
     .await;
-    if let Some(folder_id) = folder_id {
-        retire_chat_folder_if_unused(conn, folder_id).await;
+    retire_chat_folder_if_unused(conn, archived.folder_id).await;
+    if let Some(plugins) = emitter.host_plugins() {
+        plugins.observe(
+            emitter,
+            crate::host_plugins::lifecycle::Event::AgentArchived,
+            serde_json::json!({
+                "folderId": archived.folder_id,
+                "conversationId": archived.id,
+                "agentType": archived.agent_type,
+                "sessionId": archived.external_id,
+            }),
+        );
     }
     Ok(())
 }

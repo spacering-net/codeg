@@ -404,13 +404,14 @@ export function BranchDropdown({ folder, isChatMode }: BranchDropdownProps) {
     if (!name || !wtPath) return
     setWorktreeOpen(false)
     await runGitTask(t("tasks.newWorktree", { name }), async () => {
-      await gitWorktreeAdd(folderPath, name, wtPath)
+      const destination =
+        (await gitWorktreeAdd(folderPath, name, wtPath)) ?? wtPath
       // Register the worktree as a folder parented to this repo (flattened to
       // the root), then open a draft conversation in it. Once child folders are
       // merged under their parent in the sidebar, a worktree with no
       // conversations would otherwise be unreachable; this also lands the new
       // session with its cwd set to the worktree directory (detail.path).
-      const detail = await openWorktreeFolder(wtPath, folderId)
+      const detail = await openWorktreeFolder(destination, folderId)
       // Return to the conversation workspace if a route (e.g. Automations)
       // was covering the content region, else the new tab opens unseen.
       openConversations()

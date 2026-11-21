@@ -1,8 +1,9 @@
 use chrono::Utc;
+use sea_orm::sea_query::Expr;
 use sea_orm::DatabaseConnection;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Set, Statement,
+    IntoActiveModel, QueryFilter, QueryOrder, Set, SqlErr, Statement,
 };
 
 use crate::db::entities::folder;
@@ -93,7 +94,7 @@ pub async fn get_folder_by_id(
 /// How [`add_folder_inner`] writes the `parent_id` column. The two callers want
 /// different semantics on reopen of an existing path, which a bare `Option<i32>`
 /// could not express (it conflates "no parent" with "don't touch the parent").
-enum ParentWrite {
+pub(crate) enum ParentWrite {
     /// Plain open: leave an existing row's `parent_id` untouched (insert NULL).
     /// A plain reopen must never clear a worktree's recorded root.
     Preserve,
@@ -107,7 +108,9 @@ pub async fn add_folder(
     conn: &DatabaseConnection,
     path: &str,
 ) -> Result<FolderHistoryEntry, DbError> {
-    add_folder_inner(conn, path, ParentWrite::Preserve).await
+    add_folder_inner(conn, path, ParentWrite::Preserve)
+        .await
+        .map(|(row, _)| to_entry(row))
 }
 
 /// Like [`add_folder`] but authoritatively sets `parent_id` — the *root* folder
@@ -120,14 +123,39 @@ pub async fn add_folder_with_parent(
     path: &str,
     parent_id: Option<i32>,
 ) -> Result<FolderHistoryEntry, DbError> {
-    add_folder_inner(conn, path, ParentWrite::Set(parent_id)).await
+    add_folder_inner(conn, path, ParentWrite::Set(parent_id))
+        .await
+        .map(|(row, _)| to_entry(row))
+}
+
+pub(crate) async fn is_registered_path(
+    conn: &DatabaseConnection,
+    path: &str,
+) -> Result<bool, DbError> {
+    Ok(folder::Entity::find()
+        .filter(folder::Column::Path.eq(path))
+        .one(conn)
+        .await?
+        .is_some())
+}
+
+/// Return the snapshot written by registration and whether this was its first
+/// registration. A previously archived path retains its original identity.
+pub(crate) async fn register_workspace(
+    conn: &DatabaseConnection,
+    path: &str,
+    parent: ParentWrite,
+) -> Result<(FolderDetail, bool), DbError> {
+    add_folder_inner(conn, path, parent)
+        .await
+        .map(|(row, created)| (to_detail(row), created))
 }
 
 async fn add_folder_inner(
     conn: &DatabaseConnection,
     path: &str,
     parent: ParentWrite,
-) -> Result<FolderHistoryEntry, DbError> {
+) -> Result<(folder::Model, bool), DbError> {
     let now = Utc::now();
     let name = std::path::Path::new(path)
         .file_name()
@@ -139,22 +167,11 @@ async fn add_folder_inner(
         .one(conn)
         .await?;
 
-    let model = if let Some(row) = existing {
-        let mut active = row.into_active_model();
-        active.name = Set(name);
-        active.last_opened_at = Set(now);
-        active.updated_at = Set(now);
-        active.deleted_at = Set(None);
-        active.is_open = Set(true);
-        // Plain reopen leaves the relationship as-is; the worktree flow writes
-        // the authoritative value (including NULL) so it can never go stale.
-        if let ParentWrite::Set(parent_id) = parent {
-            active.parent_id = Set(parent_id);
-        }
-        active.update(conn).await?
-    } else {
-        let next_order = next_sort_order(conn).await?;
-        let active = folder::ActiveModel {
+    let row = match existing {
+        Some(row) => row,
+        None => {
+            let next_order = next_sort_order(conn).await?;
+            let active = folder::ActiveModel {
             id: NotSet,
             name: Set(name.clone()),
             path: Set(path.to_string()),
@@ -176,11 +193,34 @@ async fn add_folder_inner(
             // A newly opened folder always lands at the top level; the user
             // moves it into a group afterwards.
             group_id: Set(None),
-        };
-        active.insert(conn).await?
+            };
+            match active.insert(conn).await {
+                Ok(row) => return Ok((row, true)),
+                Err(error)
+                    if matches!(error.sql_err(), Some(SqlErr::UniqueConstraintViolation(_))) =>
+                {
+                    // A concurrent registration won this path. Preserve its ID
+                    // and continue through the same updater as any other reopen.
+                    folder::Entity::find()
+                        .filter(folder::Column::Path.eq(path))
+                        .one(conn)
+                        .await?
+                        .ok_or(error)?
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
     };
-
-    Ok(to_entry(model))
+    let mut active = row.into_active_model();
+    active.name = Set(name);
+    active.last_opened_at = Set(now);
+    active.updated_at = Set(now);
+    active.deleted_at = Set(None);
+    active.is_open = Set(true);
+    if let ParentWrite::Set(parent_id) = parent {
+        active.parent_id = Set(parent_id);
+    }
+    Ok((active.update(conn).await?, false))
 }
 
 /// Get (or create) the folder row for a directory a BACKGROUND producer needs to
@@ -215,19 +255,21 @@ pub async fn ensure_folder_for_path(
     conn: &DatabaseConnection,
     path: &str,
 ) -> Result<FolderHistoryEntry, DbError> {
-    ensure_folder_inner(conn, path, None).await
+    ensure_folder_inner(conn, path, None)
+        .await
+        .map(|(row, _)| to_entry(row))
 }
 
-/// [`ensure_folder_for_path`] for a worktree a background producer made under
-/// the root folder `root_id` (a `codeg-cli --worktree` run): a new row is
-/// recorded under that root — closed, as every row this family makes — and an
-/// existing live one is left as it is.
-pub async fn ensure_worktree_folder_closed(
+/// Return a closed registration snapshot and whether the insert created its
+/// first durable identity. A worktree can attach to its root on insertion.
+pub(crate) async fn register_closed_workspace(
     conn: &DatabaseConnection,
     path: &str,
-    root_id: i32,
-) -> Result<FolderHistoryEntry, DbError> {
-    ensure_folder_inner(conn, path, Some(root_id)).await
+    parent_on_insert: Option<i32>,
+) -> Result<(FolderDetail, bool), DbError> {
+    ensure_folder_inner(conn, path, parent_on_insert)
+        .await
+        .map(|(row, created)| (to_detail(row), created))
 }
 
 /// Whether the live folder `folder_id` is open in the workspace.
@@ -243,7 +285,7 @@ async fn ensure_folder_inner(
     conn: &DatabaseConnection,
     path: &str,
     parent_on_insert: Option<i32>,
-) -> Result<FolderHistoryEntry, DbError> {
+) -> Result<(folder::Model, bool), DbError> {
     let now = Utc::now();
 
     let existing = folder::Entity::find()
@@ -251,56 +293,51 @@ async fn ensure_folder_inner(
         .one(conn)
         .await?;
 
-    let model = if let Some(row) = existing {
+    if let Some(row) = existing {
         if row.deleted_at.is_none() {
-            return Ok(to_entry(row));
+            return Ok((row, false));
         }
         let mut active = row.into_active_model();
         active.deleted_at = Set(None);
         active.is_open = Set(false);
         active.updated_at = Set(now);
-        active.update(conn).await?
-    } else {
-        let name = std::path::Path::new(path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.to_string());
-        let next_order = next_sort_order(conn).await?;
-        let active = folder::ActiveModel {
-            id: NotSet,
-            name: Set(name),
-            path: Set(path.to_string()),
-            git_branch: Set(None),
-            default_agent_type: Set(None),
-            last_opened_at: Set(now),
-            created_at: Set(now),
-            updated_at: Set(now),
-            deleted_at: Set(None),
-            is_open: Set(false),
-            sort_order: Set(next_order),
-            color: Set(DEFAULT_FOLDER_COLOR.to_string()),
-            parent_id: Set(parent_on_insert),
-            kind: Set(FolderKind::Regular),
-            alias: Set(None),
-            group_id: Set(None),
-        };
-        match active.insert(conn).await {
-            Ok(model) => model,
-            // Another caller made the row meanwhile — the runs of one
-            // `codeg-cli -a x -a y` in a new workspace, started together, say
-            // (`UNIQUE(path)`): the row it made is this caller's too.
-            Err(err) => match folder::Entity::find()
-                .filter(folder::Column::Path.eq(path))
-                .one(conn)
-                .await?
-            {
-                Some(row) if row.deleted_at.is_none() => row,
-                _ => return Err(err.into()),
-            },
-        }
+        return Ok((active.update(conn).await?, false));
+    }
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string());
+    let next_order = next_sort_order(conn).await?;
+    let active = folder::ActiveModel {
+        id: NotSet,
+        name: Set(name),
+        path: Set(path.to_string()),
+        git_branch: Set(None),
+        default_agent_type: Set(None),
+        last_opened_at: Set(now),
+        created_at: Set(now),
+        updated_at: Set(now),
+        deleted_at: Set(None),
+        is_open: Set(false),
+        sort_order: Set(next_order),
+        color: Set(DEFAULT_FOLDER_COLOR.to_string()),
+        parent_id: Set(parent_on_insert),
+        kind: Set(FolderKind::Regular),
+        alias: Set(None),
+        group_id: Set(None),
     };
-
-    Ok(to_entry(model))
+    match active.insert(conn).await {
+        Ok(model) => Ok((model, true)),
+        // Concurrent runs share the row under UNIQUE(path).
+        Err(err) => match folder::Entity::find()
+            .filter(folder::Column::Path.eq(path))
+            .one(conn)
+            .await?
+        {
+            Some(row) if row.deleted_at.is_none() => Ok((row, false)),
+            _ => Err(err.into()),
+        },
+    }
 }
 
 /// Create a dedicated hidden folder backing a single chat-mode conversation.
@@ -514,20 +551,20 @@ pub async fn list_folders(conn: &DatabaseConnection) -> Result<Vec<FolderHistory
 }
 
 pub async fn remove_folder(conn: &DatabaseConnection, path: &str) -> Result<(), DbError> {
-    let now = Utc::now();
+    archive_folder_by_path(conn, path).await.map(drop)
+}
+
+pub(crate) async fn archive_folder_by_path(
+    conn: &DatabaseConnection,
+    path: &str,
+) -> Result<Option<FolderDetail>, DbError> {
     let row = folder::Entity::find()
         .filter(folder::Column::Path.eq(path))
         .filter(folder::Column::DeletedAt.is_null())
         .one(conn)
         .await?;
 
-    if let Some(row) = row {
-        let mut active = row.into_active_model();
-        active.deleted_at = Set(Some(now));
-        active.updated_at = Set(now);
-        active.update(conn).await?;
-    }
-    Ok(())
+    archive_folder_row(conn, row, false).await
 }
 
 /// Soft-delete a folder by id and close it — the permanent counterpart of
@@ -538,19 +575,37 @@ pub async fn remove_folder(conn: &DatabaseConnection, path: &str) -> Result<(), 
 /// a caller retrying a half-finished cleanup still reaches its "announce the
 /// drop" step instead of aborting on a row it already removed.
 pub async fn soft_delete_folder(conn: &DatabaseConnection, folder_id: i32) -> Result<(), DbError> {
-    let Some(row) = folder::Entity::find_by_id(folder_id).one(conn).await? else {
-        return Ok(());
-    };
-    if row.deleted_at.is_some() {
-        return Ok(());
-    }
+    archive_folder_by_id(conn, folder_id).await.map(drop)
+}
+
+pub(crate) async fn archive_folder_by_id(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+) -> Result<Option<FolderDetail>, DbError> {
+    let row = folder::Entity::find_by_id(folder_id)
+        .filter(folder::Column::DeletedAt.is_null())
+        .one(conn)
+        .await?;
+    archive_folder_row(conn, row, true).await
+}
+
+async fn archive_folder_row(
+    conn: &DatabaseConnection,
+    row: Option<folder::Model>,
+    close: bool,
+) -> Result<Option<FolderDetail>, DbError> {
+    let Some(row) = row else { return Ok(None) };
     let now = Utc::now();
-    let mut active = row.into_active_model();
-    active.is_open = Set(false);
-    active.deleted_at = Set(Some(now));
-    active.updated_at = Set(now);
-    active.update(conn).await?;
-    Ok(())
+    let mut update = folder::Entity::update_many()
+        .filter(folder::Column::Id.eq(row.id))
+        .filter(folder::Column::DeletedAt.is_null())
+        .col_expr(folder::Column::DeletedAt, Expr::value(now))
+        .col_expr(folder::Column::UpdatedAt, Expr::value(now));
+    if close {
+        update = update.col_expr(folder::Column::IsOpen, Expr::value(false));
+    }
+    let updated = update.exec(conn).await?;
+    Ok((updated.rows_affected == 1).then(|| to_detail(row)))
 }
 
 pub async fn set_folder_open(

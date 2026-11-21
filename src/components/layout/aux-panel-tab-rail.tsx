@@ -23,6 +23,7 @@ import {
   saveAuxTabOrder,
   type AuxPanelTab,
   type AuxTabOrder,
+  type OrderedAuxPanelTab,
 } from "@/lib/aux-panel-tab-order"
 import { cn } from "@/lib/utils"
 
@@ -51,6 +52,7 @@ const WHILE_DRAG = { scale: 1.08 }
 interface AuxPanelTabRailProps {
   /** The tabs to list, top to bottom. */
   tabs: AuxTabOrder
+  showPluginTab: boolean
   /**
    * Off while only Session Details is shown (chat mode, no folder): the rail
    * is `hidden` then — display:none takes its lone trigger out of the tab
@@ -81,19 +83,20 @@ interface AuxPanelTabRailProps {
  */
 export function AuxPanelTabRail({
   tabs,
+  showPluginTab,
   visible,
   icons,
   labelOf,
   activeTab,
   onReselect,
 }: AuxPanelTabRailProps) {
-  const [dragOrder, setDragOrder] = useState<AuxPanelTab[] | null>(null)
-  const dragOrderRef = useRef<AuxPanelTab[] | null>(null)
+  const [dragOrder, setDragOrder] = useState<OrderedAuxPanelTab[] | null>(null)
+  const dragOrderRef = useRef<OrderedAuxPanelTab[] | null>(null)
   // The stored order when this drag first moved a tab.
   const dragStartRef = useRef<AuxTabOrder | null>(null)
   const shown = dragOrder ?? tabs
 
-  const handleReorder = useCallback((next: AuxPanelTab[]) => {
+  const handleReorder = useCallback((next: OrderedAuxPanelTab[]) => {
     dragStartRef.current ??= getAuxTabOrder()
     dragOrderRef.current = next
     setDragOrder(next)
@@ -126,7 +129,7 @@ export function AuxPanelTabRail({
 
   // Written from the store's current order rather than this render's copy, so
   // two quick presses in a row can't have the second undo the first.
-  const move = useCallback((tab: AuxPanelTab, delta: -1 | 1) => {
+  const move = useCallback((tab: OrderedAuxPanelTab, delta: -1 | 1) => {
     const current = getAuxTabOrder()
     const next = moveAuxTab(current, tab, delta)
     if (next === current) return
@@ -163,7 +166,7 @@ export function AuxPanelTabRail({
         <Reorder.Group
           as="div"
           axis="y"
-          values={shown as AuxPanelTab[]}
+          values={shown as OrderedAuxPanelTab[]}
           onReorder={handleReorder}
           className="flex flex-col items-center gap-1"
         >
@@ -202,21 +205,54 @@ export function AuxPanelTabRail({
           )
         })
       )}
+      {showPluginTab && (
+        <PluginTabTrigger
+          label={labelOf("plugins")}
+          Icon={icons.plugins}
+          selected={activeTab === "plugins"}
+          onReselect={onReselect}
+        />
+      )}
     </TabsPrimitive.List>
   )
 }
 
 interface AuxTabRailItemProps {
-  tab: AuxPanelTab
+  tab: OrderedAuxPanelTab
   label: string
   Icon: LucideIcon
   isFirst: boolean
   isLast: boolean
   selected: boolean
   onReselect: () => void
-  onMove: (tab: AuxPanelTab, delta: -1 | 1) => void
+  onMove: (tab: OrderedAuxPanelTab, delta: -1 | 1) => void
   onDragEnd: () => void
   setTriggerRef: (tab: AuxPanelTab, node: HTMLButtonElement | null) => void
+}
+
+function PluginTabTrigger({
+  label,
+  Icon,
+  selected,
+  onReselect,
+}: {
+  label: string
+  Icon: LucideIcon
+  selected: boolean
+  onReselect: () => void
+}) {
+  const { triggerProps } = useTabReselect(selected, onReselect)
+  return (
+    <TabsPrimitive.Trigger
+      value="plugins"
+      title={label}
+      aria-label={label}
+      className={cn(TRIGGER_CLASS, "mt-1")}
+      {...triggerProps}
+    >
+      <Icon className="size-4" />
+    </TabsPrimitive.Trigger>
+  )
 }
 
 function AuxTabRailItem({
