@@ -1,0 +1,20 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.workspace-row-badges",
+  "name": "Workspace Row Badges",
+  "version": "1.0.0",
+  "server": {
+    "entry": "badges.mjs",
+    "methods": ["worktree-badges"]
+  },
+  "contributes": {
+    "workspaceRowBadges": [
+      {
+        "id": "worktree",
+        "title": "Git worktree",
+        "titleTranslations": { "es": "Árbol de trabajo de Git" },
+        "method": "worktree-badges"
+      }
+    ]
+  }
+}

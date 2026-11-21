@@ -197,6 +197,32 @@ host.
 Install and enable the [Plugin Navigation example](../examples/plugins/plugin-navigation)
 to open its overview from the sidebar header and its help screen from the footer.
 
+### Workspace row badges
+
+Declare `contributes.workspaceRowBadges` to put short status labels on
+workspace rows in the sidebar. Each plugin can declare up to 16 badges with
+unique IDs. `title` and optional `titleTranslations` name the badge. `method`
+names a method in the same plugin's `server.methods`.
+
+```json
+{
+  "workspaceRowBadges": [
+    { "id": "worktree", "title": "Git worktree", "method": "worktree-badges" }
+  ]
+}
+```
+
+Codeg calls the method with the app `locale` and a batch of `workspaces`.
+Each workspace has `folderId`, `parentFolderId`, and `branch`. Return an
+array with one entry per workspace that needs a badge. An entry contains the
+requested `folderId`, a nonempty plain-text `label` of up to 32 characters and
+an optional `tone` of `muted`, `success`, `warning`, `danger`, or `info`.
+Omit a folder to leave its row without this badge. See the
+[input and result types](host-plugin-workspace-badges.d.ts).
+
+Install and enable the [Workspace Row Badges example](../examples/plugins/workspace-row-badges)
+to display a badge on Git worktree rows.
+
 ### Insert text into the composer
 
 An open `composer` contribution can call
