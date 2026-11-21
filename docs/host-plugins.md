@@ -129,6 +129,24 @@ and open its **Workspace Events** settings panel. Open or close a folder in a
 second Codeg window connected to the same host to see the events. Opening
 `workspace-alias` by path opens the sibling `workspace-real` directory.
 
+## Live session hooks
+
+Plugins can observe Codeg-managed ACP sessions associated with a workspace.
+These hooks receive `folderId`, `connectionId`, `conversationId` when linked,
+`agentType` and the event-specific `detail` below. Results use the same live
+client event stream as workspace hooks.
+
+| Event | `detail` |
+| --- | --- |
+| `session.started` | `{ sessionId }` from the agent when starting or loading a session. |
+| `session.turn.started` | `null` when the connection enters its prompting state. |
+| `session.turn.completed` | `{ stopReason }` from the completed turn. |
+| `session.permission.requested` | `{ requestId, queued }` when a request becomes visible. |
+| `session.permission.resolved` | `{ requestId, optionId, origin }` when the request is answered or withdrawn. |
+
+The permission hooks report state transitions. The user's permission decision
+continues through the standard Codeg approval flow.
+
 ## Install from a source
 
 **Settings → Plugins → Add Plugin** accepts these public sources:
