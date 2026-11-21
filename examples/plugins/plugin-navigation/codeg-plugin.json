@@ -1,0 +1,32 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.plugin-navigation",
+  "name": "Plugin Navigation",
+  "version": "1.0.0",
+  "client": { "entry": "navigation.html" },
+  "contributes": {
+    "screens": [
+      {
+        "id": "overview",
+        "title": "Plugin Overview",
+        "titleTranslations": { "es": "Resumen del complemento" }
+      },
+      { "id": "help", "title": "Plugin Navigation Help" }
+    ],
+    "sidebarItems": [
+      {
+        "id": "overview",
+        "title": "Plugin Overview",
+        "titleTranslations": { "es": "Resumen del complemento" },
+        "placement": "header",
+        "screenId": "overview"
+      },
+      {
+        "id": "help",
+        "title": "Plugin Navigation Help",
+        "placement": "footer",
+        "screenId": "help"
+      }
+    ]
+  }
+}

@@ -26,6 +26,16 @@ export type WorkbenchRouteId =
   | "tokenUsage"
   | "canvas"
   | "harness"
+  | "pluginScreen"
+
+export interface PluginScreenRouteTarget {
+  pluginId: string
+  screenId: string
+}
+
+export interface ActivePluginScreenRoute extends PluginScreenRouteTarget {
+  openSeq: number
+}
 
 interface WorkbenchRouteContextValue {
   routeId: WorkbenchRouteId
@@ -34,6 +44,10 @@ interface WorkbenchRouteContextValue {
   setRoute: (id: WorkbenchRouteId) => void
   /** Sugar for returning to the conversation workspace. */
   openConversations: () => void
+  /** Target plugin screen when `routeId === "pluginScreen"`, otherwise `null`. */
+  pluginScreen: ActivePluginScreenRoute | null
+  /** Navigate to a host plugin's full-page screen in the main content area. */
+  openPluginScreen: (target: PluginScreenRouteTarget) => void
 }
 
 const WorkbenchRouteContext = createContext<WorkbenchRouteContextValue | null>(
@@ -74,9 +88,32 @@ export function useOptionalWorkbenchRoute(): WorkbenchRouteContextValue | null {
 
 export function WorkbenchRouteProvider({ children }: { children: ReactNode }) {
   const [routeId, setRouteId] = useState<WorkbenchRouteId>("conversations")
+  const [pluginScreen, setPluginScreen] =
+    useState<ActivePluginScreenRoute | null>(null)
 
-  const setRoute = useCallback((id: WorkbenchRouteId) => setRouteId(id), [])
-  const openConversations = useCallback(() => setRouteId("conversations"), [])
+  const setRoute = useCallback((id: WorkbenchRouteId) => {
+    setRouteId(id)
+    if (id !== "pluginScreen") {
+      setPluginScreen(null)
+    }
+  }, [])
+
+  const openConversations = useCallback(() => {
+    setRouteId("conversations")
+    setPluginScreen(null)
+  }, [])
+
+  const openPluginScreen = useCallback((target: PluginScreenRouteTarget) => {
+    const pluginId = target.pluginId.trim()
+    const screenId = target.screenId.trim()
+    if (!pluginId || !screenId) return
+    setPluginScreen((prev) => ({
+      pluginId,
+      screenId,
+      openSeq: (prev?.openSeq ?? 0) + 1,
+    }))
+    setRouteId("pluginScreen")
+  }, [])
 
   const value = useMemo<WorkbenchRouteContextValue>(
     () => ({
@@ -84,8 +121,10 @@ export function WorkbenchRouteProvider({ children }: { children: ReactNode }) {
       isConversations: routeId === "conversations",
       setRoute,
       openConversations,
+      pluginScreen,
+      openPluginScreen,
     }),
-    [routeId, setRoute, openConversations]
+    [routeId, setRoute, openConversations, pluginScreen, openPluginScreen]
   )
 
   return (
