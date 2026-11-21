@@ -19,8 +19,12 @@ use tauri::Manager;
 
 use crate::app_error::AppCommandError;
 use crate::db::error::DbError;
-use crate::db::service::{folder_group_service, folder_service};
+use crate::db::service::{
+    folder_group_service,
+    folder_service::{self, ParentWrite},
+};
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::{Event as PluginEvent, Worktree, WorktreeOrigin};
 use crate::models::GitCredentials;
 use crate::models::{FolderDetail, FolderGroupDetail, FolderHistoryEntry, SidebarLayoutEntry};
 use crate::web::event_bridge::EventEmitter;
@@ -637,19 +641,34 @@ pub async fn load_folder_history_core(
 }
 
 pub async fn add_folder_to_history_core(
+    emitter: &EventEmitter,
     db: &AppDatabase,
     path: String,
-) -> Result<FolderHistoryEntry, DbError> {
-    folder_service::add_folder(&db.conn, &path).await
+) -> Result<FolderHistoryEntry, AppCommandError> {
+    let folder = match emitter.host_plugins() {
+        Some(plugins) => open_folder_with_plugins(&plugins, emitter, db, path).await?,
+        None => open_folder_core(db, path).await?,
+    };
+    Ok(FolderHistoryEntry {
+        id: folder.id,
+        path: folder.path,
+        name: folder.name,
+        last_opened_at: folder.last_opened_at,
+    })
 }
 
 pub async fn remove_folder_from_history_core(
+    emitter: &EventEmitter,
     db: &AppDatabase,
     path: String,
 ) -> Result<(), AppCommandError> {
-    folder_service::remove_folder(&db.conn, &path)
+    let archived = folder_service::archive_folder_by_path(&db.conn, &path)
         .await
-        .map_err(AppCommandError::from)
+        .map_err(AppCommandError::from)?;
+    if let (Some(folder), Some(plugins)) = (archived, emitter.host_plugins()) {
+        plugins.observe_workspace(emitter, PluginEvent::WorkspaceArchived, &folder);
+    }
+    Ok(())
 }
 
 pub async fn list_open_folders_core(
@@ -680,13 +699,41 @@ pub async fn open_folder_core(
     db: &AppDatabase,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
-    let entry = folder_service::add_folder(&db.conn, &path)
+    folder_service::register_workspace(&db.conn, &path, ParentWrite::Preserve)
         .await
-        .map_err(AppCommandError::from)?;
-    folder_service::get_folder_by_id(&db.conn, entry.id)
-        .await
-        .map_err(AppCommandError::from)?
-        .ok_or_else(|| AppCommandError::not_found("Folder not found after add"))
+        .map(|(detail, _)| detail)
+        .map_err(AppCommandError::from)
+}
+
+pub async fn open_folder_with_plugins(
+    plugins: &std::sync::Arc<crate::host_plugins::HostPlugins>,
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    path: String,
+) -> Result<FolderDetail, AppCommandError> {
+    let mut path = plugins.workspace_open_path(path).await?;
+    if !folder_service::is_registered_path(&db.conn, &path).await? {
+        path = plugins.workspace_create_path(path).await?;
+    }
+    let (detail, created) =
+        folder_service::register_workspace(&db.conn, &path, ParentWrite::Preserve).await?;
+    if created {
+        plugins.observe_workspace(emitter, PluginEvent::WorkspaceCreated, &detail);
+    }
+    observe_folder_open(plugins, emitter, &detail);
+    Ok(detail)
+}
+
+fn observe_folder_open(
+    plugins: &std::sync::Arc<crate::host_plugins::HostPlugins>,
+    emitter: &EventEmitter,
+    detail: &FolderDetail,
+) {
+    plugins.observe(
+        emitter,
+        crate::host_plugins::lifecycle::Event::OpenAfter,
+        serde_json::json!({ "folderId": detail.id, "path": detail.path }),
+    );
 }
 
 /// Open a freshly created git worktree directory as a folder, recording the
@@ -704,6 +751,7 @@ pub async fn open_folder_core(
 /// checkout, the automation engine's per-run worktree, and the work-task
 /// engine's per-task worktree (fresh mint and re-create-from-branch alike).
 pub async fn open_worktree_folder_core(
+    emitter: &EventEmitter,
     db: &AppDatabase,
     path: String,
     source_folder_id: i32,
@@ -716,14 +764,17 @@ pub async fn open_worktree_folder_core(
     } else {
         None
     };
-    let entry = folder_service::add_folder_with_parent(&db.conn, &path, parent_id)
-        .await
-        .map_err(AppCommandError::from)?;
-    seed_worktree_alias(db, entry.id, &path).await;
-    folder_service::get_folder_by_id(&db.conn, entry.id)
+    let (record, created) =
+        folder_service::register_workspace(&db.conn, &path, ParentWrite::Set(parent_id)).await?;
+    seed_worktree_alias(db, record.id, &path).await;
+    let detail = folder_service::get_folder_by_id(&db.conn, record.id)
         .await
         .map_err(AppCommandError::from)?
-        .ok_or_else(|| AppCommandError::not_found("Folder not found after add"))
+        .ok_or_else(|| AppCommandError::not_found("Folder not found after add"))?;
+    if let (true, Some(plugins)) = (created, emitter.host_plugins()) {
+        plugins.observe_workspace(emitter, PluginEvent::WorkspaceCreated, &detail);
+    }
+    Ok(detail)
 }
 
 /// Default a worktree folder's alias to the branch checked out at `path`.
@@ -810,11 +861,12 @@ pub async fn backfill_worktree_folder_aliases(emitter: &EventEmitter, db: &AppDa
 /// the remote server's broadcaster (remote desktop) — so only windows talking
 /// to this same backend react.
 pub async fn open_folder_in_workspace_core(
+    plugins: &std::sync::Arc<crate::host_plugins::HostPlugins>,
     emitter: &EventEmitter,
     db: &AppDatabase,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
-    let detail = open_folder_core(db, path).await?;
+    let detail = open_folder_with_plugins(plugins, emitter, db, path).await?;
     crate::web::event_bridge::emit_event(emitter, "folder://open-in-workspace", &detail);
     Ok(detail)
 }
@@ -830,6 +882,17 @@ pub async fn open_folder_by_id_core(
         .await
         .map_err(AppCommandError::from)?
         .ok_or_else(|| AppCommandError::not_found(format!("Folder {folder_id} not found")))
+}
+
+pub async fn reopen_folder_with_plugins(
+    plugins: &std::sync::Arc<crate::host_plugins::HostPlugins>,
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    folder_id: i32,
+) -> Result<FolderDetail, AppCommandError> {
+    let detail = open_folder_by_id_core(db, folder_id).await?;
+    observe_folder_open(plugins, emitter, &detail);
+    Ok(detail)
 }
 
 pub async fn remove_folder_from_workspace_core(
@@ -876,6 +939,21 @@ pub async fn remove_folder_from_workspace_core(
     if let Some(path) = folder_path {
         crate::office_watch::stop_office_watches_under_root(&path);
     }
+    Ok(())
+}
+
+pub async fn close_folder_with_plugins(
+    plugins: &std::sync::Arc<crate::host_plugins::HostPlugins>,
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    folder_id: i32,
+) -> Result<(), AppCommandError> {
+    remove_folder_from_workspace_core(emitter, db, folder_id).await?;
+    plugins.observe(
+        emitter,
+        crate::host_plugins::lifecycle::Event::CloseAfter,
+        serde_json::json!({ "folderId": folder_id }),
+    );
     Ok(())
 }
 
@@ -1076,19 +1154,21 @@ pub async fn load_folder_history(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn add_folder_to_history(
+    app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
     path: String,
-) -> Result<FolderHistoryEntry, DbError> {
-    add_folder_to_history_core(&db, path).await
+) -> Result<FolderHistoryEntry, AppCommandError> {
+    add_folder_to_history_core(&EventEmitter::from_app(&app), &db, path).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn remove_folder_from_history(
+    app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
     path: String,
 ) -> Result<(), AppCommandError> {
-    remove_folder_from_history_core(&db, path).await
+    remove_folder_from_history_core(&EventEmitter::from_app(&app), &db, path).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1110,20 +1190,23 @@ pub async fn list_all_folder_details(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_folder(
+    app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    plugins: tauri::State<'_, std::sync::Arc<crate::host_plugins::HostPlugins>>,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
-    open_folder_core(&db, path).await
+    open_folder_with_plugins(&plugins, &EventEmitter::from_app(&app), &db, path).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_worktree_folder(
+    app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
     path: String,
     source_folder_id: i32,
 ) -> Result<FolderDetail, AppCommandError> {
-    open_worktree_folder_core(&db, path, source_folder_id).await
+    open_worktree_folder_core(&EventEmitter::from_app(&app), &db, path, source_folder_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1131,19 +1214,22 @@ pub async fn open_worktree_folder(
 pub async fn open_folder_in_workspace(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    plugins: tauri::State<'_, std::sync::Arc<crate::host_plugins::HostPlugins>>,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
     let emitter = EventEmitter::from_app(&app);
-    open_folder_in_workspace_core(&emitter, &db, path).await
+    open_folder_in_workspace_core(&plugins, &emitter, &db, path).await
 }
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_folder_by_id(
+    app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    plugins: tauri::State<'_, std::sync::Arc<crate::host_plugins::HostPlugins>>,
     folder_id: i32,
 ) -> Result<FolderDetail, AppCommandError> {
-    open_folder_by_id_core(&db, folder_id).await
+    reopen_folder_with_plugins(&plugins, &EventEmitter::from_app(&app), &db, folder_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1151,9 +1237,10 @@ pub async fn open_folder_by_id(
 pub async fn remove_folder_from_workspace(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    plugins: tauri::State<'_, std::sync::Arc<crate::host_plugins::HostPlugins>>,
     folder_id: i32,
 ) -> Result<(), AppCommandError> {
-    remove_folder_from_workspace_core(&EventEmitter::from_app(&app), &db, folder_id).await
+    close_folder_with_plugins(&plugins, &EventEmitter::from_app(&app), &db, folder_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2157,12 +2244,11 @@ pub async fn git_new_branch(
     Ok(())
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn git_worktree_add(
-    path: String,
-    branch_name: String,
-    worktree_path: String,
-    base: Option<String>,
+pub async fn git_worktree_add_core(
+    path: &str,
+    branch_name: &str,
+    worktree_path: &str,
+    base: Option<&str>,
 ) -> Result<(), AppCommandError> {
     // 校验分支是否已存在
     let check = crate::process::tokio_command("git")
@@ -2171,7 +2257,7 @@ pub async fn git_worktree_add(
             "--verify",
             &format!("refs/heads/{}", branch_name),
         ])
-        .current_dir(&path)
+        .current_dir(path)
         .output()
         .await
         .map_err(AppCommandError::io)?;
@@ -2182,7 +2268,7 @@ pub async fn git_worktree_add(
     }
 
     // 校验目录是否已存在
-    if std::path::Path::new(&worktree_path).exists() {
+    if std::path::Path::new(worktree_path).exists() {
         return Err(
             AppCommandError::already_exists("Worktree directory already exists")
                 .with_detail(worktree_path),
@@ -2192,19 +2278,13 @@ pub async fn git_worktree_add(
     // 执行 git worktree add -b <branch> <path> [<base>]
     // 显式 base（提交/引用）消除「读分支 → 建 worktree」间用户切分支的漂移窗口；
     // 省略时沿用 HEAD（既有调用方行为不变）。
-    let mut args = vec![
-        "worktree".to_string(),
-        "add".to_string(),
-        "-b".to_string(),
-        branch_name,
-        worktree_path,
-    ];
+    let mut args = vec!["worktree", "add", "-b", branch_name, worktree_path];
     if let Some(base) = base {
         args.push(base);
     }
     let output = crate::process::tokio_command("git")
         .args(&args)
-        .current_dir(&path)
+        .current_dir(path)
         .output()
         .await
         .map_err(AppCommandError::io)?;
@@ -2213,6 +2293,69 @@ pub async fn git_worktree_add(
         return Err(git_command_error("worktree add", &output.stderr));
     }
     Ok(())
+}
+
+pub async fn git_worktree_add_with_plugins(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    path: &str,
+    branch_name: &str,
+    worktree_path: &str,
+    base: Option<&str>,
+    allow_plugin_destination: bool,
+) -> Result<Option<String>, AppCommandError> {
+    let repository = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+    let checkout = repository.join(worktree_path);
+    let folder = folder_at_path(db, &repository).await.ok().flatten();
+    let checkout = crate::paths::simplify_verbatim_path(&checkout);
+    let plan = Worktree {
+        folder_id: folder.map(|folder| folder.parent_id.unwrap_or(folder.id)),
+        repository_path: path,
+        path: &checkout.to_string_lossy(),
+        branch: Some(branch_name),
+        origin: WorktreeOrigin::Workspace,
+    };
+    let destination = if allow_plugin_destination {
+        Some(plan.destination(emitter).await?)
+    } else {
+        None
+    };
+    git_worktree_add_core(
+        path,
+        branch_name,
+        destination.as_deref().unwrap_or(worktree_path),
+        base,
+    )
+    .await?;
+    Worktree {
+        path: destination.as_deref().unwrap_or(plan.path),
+        ..plan
+    }
+    .observe(emitter, PluginEvent::WorktreeCreated);
+    Ok(destination)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn git_worktree_add(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    path: String,
+    branch_name: String,
+    worktree_path: String,
+    base: Option<String>,
+    allow_plugin_destination: Option<bool>,
+) -> Result<Option<String>, AppCommandError> {
+    git_worktree_add_with_plugins(
+        &EventEmitter::from_app(&app),
+        &db,
+        &path,
+        &branch_name,
+        &worktree_path,
+        base.as_deref(),
+        allow_plugin_destination.unwrap_or_default(),
+    )
+    .await
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
@@ -3503,6 +3646,17 @@ pub async fn git_remove_worktree_core(
             }
         }
         removal.worktree_path = Some(worktree_path.clone());
+        Worktree {
+            folder_id: wt_folder
+                .as_ref()
+                .and_then(|folder| folder.parent_id)
+                .or_else(|| (source_folder_id > 0).then_some(source_folder_id)),
+            repository_path: &repo_path,
+            path: &worktree_path,
+            branch: Some(&branch_name),
+            origin: WorktreeOrigin::Workspace,
+        }
+        .observe(emitter, PluginEvent::WorktreeArchived);
 
         // Only the "delete everything" variant drops the folder: removing just
         // the checkout is how you free a branch while keeping the workspace
@@ -7663,9 +7817,10 @@ mod tests {
     #[tokio::test]
     async fn add_folder_to_history_core_derives_name_from_path() {
         let db = fresh_in_memory_db().await;
-        let entry = add_folder_to_history_core(&db, "/tmp/codeg-test-project".into())
-            .await
-            .expect("add folder");
+        let entry =
+            add_folder_to_history_core(&EventEmitter::Noop, &db, "/tmp/codeg-test-project".into())
+                .await
+                .expect("add folder");
         assert_eq!(entry.name, "codeg-test-project");
         assert_eq!(entry.path, "/tmp/codeg-test-project");
     }
@@ -7674,10 +7829,10 @@ mod tests {
     async fn add_folder_to_history_core_upserts_on_duplicate_path() {
         let db = fresh_in_memory_db().await;
         let path = "/tmp/codeg-dup-test".to_string();
-        let first = add_folder_to_history_core(&db, path.clone())
+        let first = add_folder_to_history_core(&EventEmitter::Noop, &db, path.clone())
             .await
             .expect("add 1st");
-        let second = add_folder_to_history_core(&db, path.clone())
+        let second = add_folder_to_history_core(&EventEmitter::Noop, &db, path.clone())
             .await
             .expect("add 2nd");
         assert_eq!(first.id, second.id, "duplicate path must reuse id");
@@ -7694,10 +7849,10 @@ mod tests {
     async fn remove_folder_from_history_core_soft_deletes() {
         let db = fresh_in_memory_db().await;
         let path = "/tmp/codeg-remove-test".to_string();
-        add_folder_to_history_core(&db, path.clone())
+        add_folder_to_history_core(&EventEmitter::Noop, &db, path.clone())
             .await
             .expect("add");
-        remove_folder_from_history_core(&db, path.clone())
+        remove_folder_from_history_core(&EventEmitter::Noop, &db, path.clone())
             .await
             .expect("remove");
         let history = load_folder_history_core(&db).await.expect("history");
@@ -7829,9 +7984,13 @@ mod tests {
         let opened = open_folder_core(&db, "/tmp/codeg-ensure-deleted".into())
             .await
             .expect("open folder");
-        remove_folder_from_history_core(&db, "/tmp/codeg-ensure-deleted".into())
-            .await
-            .expect("soft delete");
+        remove_folder_from_history_core(
+            &EventEmitter::Noop,
+            &db,
+            "/tmp/codeg-ensure-deleted".into(),
+        )
+        .await
+        .expect("soft delete");
         assert!(
             folder_service::get_folder_by_id(&db.conn, opened.id)
                 .await
@@ -7867,9 +8026,10 @@ mod tests {
             .expect("open root");
         assert_eq!(root.parent_id, None, "root folder has no parent");
 
-        let wt = open_worktree_folder_core(&db, "/tmp/codeg-wt-a".into(), root.id)
-            .await
-            .expect("open worktree");
+        let wt =
+            open_worktree_folder_core(&EventEmitter::Noop, &db, "/tmp/codeg-wt-a".into(), root.id)
+                .await
+                .expect("open worktree");
         assert_eq!(
             wt.parent_id,
             Some(root.id),
@@ -7883,14 +8043,24 @@ mod tests {
         let root = open_folder_core(&db, "/tmp/codeg-wt-flat-root".into())
             .await
             .expect("open root");
-        let child = open_worktree_folder_core(&db, "/tmp/codeg-wt-flat-1".into(), root.id)
-            .await
-            .expect("open child worktree");
+        let child = open_worktree_folder_core(
+            &EventEmitter::Noop,
+            &db,
+            "/tmp/codeg-wt-flat-1".into(),
+            root.id,
+        )
+        .await
+        .expect("open child worktree");
         // A worktree created *from* the child must still point at the root, not
         // the intermediate child.
-        let grandchild = open_worktree_folder_core(&db, "/tmp/codeg-wt-flat-2".into(), child.id)
-            .await
-            .expect("open grandchild worktree");
+        let grandchild = open_worktree_folder_core(
+            &EventEmitter::Noop,
+            &db,
+            "/tmp/codeg-wt-flat-2".into(),
+            child.id,
+        )
+        .await
+        .expect("open grandchild worktree");
         assert_eq!(child.parent_id, Some(root.id));
         assert_eq!(
             grandchild.parent_id,
@@ -7902,9 +8072,10 @@ mod tests {
     #[tokio::test]
     async fn open_worktree_folder_core_unknown_source_is_root() {
         let db = fresh_in_memory_db().await;
-        let wt = open_worktree_folder_core(&db, "/tmp/codeg-wt-orphan".into(), 0)
-            .await
-            .expect("open worktree with no source");
+        let wt =
+            open_worktree_folder_core(&EventEmitter::Noop, &db, "/tmp/codeg-wt-orphan".into(), 0)
+                .await
+                .expect("open worktree with no source");
         assert_eq!(
             wt.parent_id, None,
             "non-positive / unknown source degrades to a top-level folder"
@@ -7919,7 +8090,7 @@ mod tests {
         let (_dir, repo, wt_path) = repo_with_worktree();
         let root = open_folder_core(&db, repo).await.expect("root");
 
-        let wt = open_worktree_folder_core(&db, wt_path, root.id)
+        let wt = open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path, root.id)
             .await
             .expect("worktree folder");
 
@@ -7938,14 +8109,14 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let (_dir, repo, wt_path) = repo_with_worktree();
         let root = open_folder_core(&db, repo).await.expect("root");
-        let wt = open_worktree_folder_core(&db, wt_path.clone(), root.id)
+        let wt = open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path.clone(), root.id)
             .await
             .expect("worktree folder");
         update_folder_alias_core(&db, wt.id, Some("Payment rewrite".into()))
             .await
             .expect("user renames it");
 
-        let again = open_worktree_folder_core(&db, wt_path, root.id)
+        let again = open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path, root.id)
             .await
             .expect("re-register the same worktree");
 
@@ -7972,7 +8143,7 @@ mod tests {
             .to_string();
         std::fs::create_dir_all(&plain).expect("mkdir");
 
-        let wt = open_worktree_folder_core(&db, plain, 0)
+        let wt = open_worktree_folder_core(&EventEmitter::Noop, &db, plain, 0)
             .await
             .expect("registers anyway");
 
@@ -7986,7 +8157,7 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let (_dir, repo, wt_path) = repo_with_worktree();
         let root = open_folder_core(&db, repo).await.expect("root");
-        let wt = open_worktree_folder_core(&db, wt_path, root.id)
+        let wt = open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path, root.id)
             .await
             .expect("worktree folder");
         // Back to the pre-seeding state: a worktree folder row with no alias.
@@ -8023,12 +8194,12 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let (_dir, repo, wt_path) = repo_with_worktree();
         let root = open_folder_core(&db, repo.clone()).await.expect("root");
-        let open_wt = open_worktree_folder_core(&db, wt_path, root.id)
+        let open_wt = open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path, root.id)
             .await
             .expect("open worktree folder");
         let (_dir2, repo2, wt_path2) = repo_with_worktree();
         let root2 = open_folder_core(&db, repo2).await.expect("second root");
-        let closed_wt = open_worktree_folder_core(&db, wt_path2, root2.id)
+        let closed_wt = open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path2, root2.id)
             .await
             .expect("worktree folder to close");
         // Back to the pre-seeding state for both, then close the second one the
@@ -8084,7 +8255,7 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let (_dir, repo, wt_path) = repo_with_worktree();
         let root = open_folder_core(&db, repo).await.expect("root");
-        let wt = open_worktree_folder_core(&db, wt_path, root.id)
+        let wt = open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path, root.id)
             .await
             .expect("worktree folder");
 
@@ -8117,7 +8288,7 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let (_dir, repo, wt_path) = repo_with_worktree();
         let root = open_folder_core(&db, repo).await.expect("root");
-        let wt = open_worktree_folder_core(&db, wt_path, root.id)
+        let wt = open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path, root.id)
             .await
             .expect("worktree folder");
         update_folder_alias_core(&db, wt.id, Some("Payment rewrite".into()))
@@ -8222,9 +8393,10 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let (_dir, repo, wt_path) = repo_with_worktree();
         let root = open_folder_core(&db, repo.clone()).await.expect("root");
-        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
-            .await
-            .expect("worktree folder");
+        let wt_folder =
+            open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path.clone(), root.id)
+                .await
+                .expect("worktree folder");
 
         let removal = git_remove_worktree_core(
             &test_emitter(),
@@ -8266,9 +8438,10 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let (_dir, repo, wt_path) = repo_with_worktree();
         let root = open_folder_core(&db, repo.clone()).await.expect("root");
-        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
-            .await
-            .expect("worktree folder");
+        let wt_folder =
+            open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path.clone(), root.id)
+                .await
+                .expect("worktree folder");
         let conv =
             conversation_service::create(&db.conn, wt_folder.id, AgentType::ClaudeCode, None, None)
                 .await
@@ -8321,9 +8494,10 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let (_dir, repo, wt_path) = repo_with_worktree();
         let root = open_folder_core(&db, repo.clone()).await.expect("root");
-        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
-            .await
-            .expect("worktree folder");
+        let wt_folder =
+            open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path.clone(), root.id)
+                .await
+                .expect("worktree folder");
         let conv =
             conversation_service::create(&db.conn, wt_folder.id, AgentType::ClaudeCode, None, None)
                 .await
@@ -8414,9 +8588,10 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let (_dir, repo, wt_path) = repo_with_worktree();
         let root = open_folder_core(&db, repo.clone()).await.expect("root");
-        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
-            .await
-            .expect("worktree folder");
+        let wt_folder =
+            open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path.clone(), root.id)
+                .await
+                .expect("worktree folder");
         let task_id = seed_task_on_worktree(&db, root.id, wt_folder.id).await;
 
         git_remove_worktree_core(
@@ -8448,9 +8623,10 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let (_dir, repo, wt_path) = repo_with_worktree();
         let root = open_folder_core(&db, repo.clone()).await.expect("root");
-        let wt_folder = open_worktree_folder_core(&db, wt_path.clone(), root.id)
-            .await
-            .expect("worktree folder");
+        let wt_folder =
+            open_worktree_folder_core(&EventEmitter::Noop, &db, wt_path.clone(), root.id)
+                .await
+                .expect("worktree folder");
         let task_id = seed_task_on_worktree(&db, root.id, wt_folder.id).await;
         // Straight to `running` — the real transition chain would need a live
         // engine, and only the status matters here.
@@ -8597,9 +8773,14 @@ branch refs/heads/main";
         let root = open_folder_core(&db, "/tmp/codeg-wt-preserve-root".into())
             .await
             .expect("open root");
-        let wt = open_worktree_folder_core(&db, "/tmp/codeg-wt-preserve".into(), root.id)
-            .await
-            .expect("open worktree");
+        let wt = open_worktree_folder_core(
+            &EventEmitter::Noop,
+            &db,
+            "/tmp/codeg-wt-preserve".into(),
+            root.id,
+        )
+        .await
+        .expect("open worktree");
         assert_eq!(wt.parent_id, Some(root.id));
         // A plain reopen of the same path must not clear the recorded parent.
         let reopened = open_folder_core(&db, "/tmp/codeg-wt-preserve".into())
@@ -8619,13 +8800,13 @@ branch refs/heads/main";
             .await
             .expect("open root");
         let path = "/tmp/codeg-wt-demote".to_string();
-        let wt = open_worktree_folder_core(&db, path.clone(), root.id)
+        let wt = open_worktree_folder_core(&EventEmitter::Noop, &db, path.clone(), root.id)
             .await
             .expect("open worktree");
         assert_eq!(wt.parent_id, Some(root.id));
         // Reopening the same path as a worktree with an unknown source writes the
         // authoritative value (top-level) rather than keeping the stale parent.
-        let demoted = open_worktree_folder_core(&db, path, 0)
+        let demoted = open_worktree_folder_core(&EventEmitter::Noop, &db, path, 0)
             .await
             .expect("reopen worktree with no source");
         assert_eq!(
@@ -8637,9 +8818,10 @@ branch refs/heads/main";
     #[tokio::test]
     async fn update_folder_color_core_roundtrips() {
         let db = fresh_in_memory_db().await;
-        let entry = add_folder_to_history_core(&db, "/tmp/codeg-color-test".into())
-            .await
-            .expect("add");
+        let entry =
+            add_folder_to_history_core(&EventEmitter::Noop, &db, "/tmp/codeg-color-test".into())
+                .await
+                .expect("add");
         let updated = update_folder_color_core(&db, entry.id, "#ff8800".into())
             .await
             .expect("update color");
@@ -8654,9 +8836,10 @@ branch refs/heads/main";
         use std::sync::Arc;
 
         let db = fresh_in_memory_db().await;
-        let entry = add_folder_to_history_core(&db, "/tmp/codeg-agent-test".into())
-            .await
-            .expect("add");
+        let entry =
+            add_folder_to_history_core(&EventEmitter::Noop, &db, "/tmp/codeg-agent-test".into())
+                .await
+                .expect("add");
         let broadcaster = Arc::new(WebEventBroadcaster::new());
         let mut rx = broadcaster.subscribe();
         let emitter = EventEmitter::test_web_only(broadcaster.clone());
