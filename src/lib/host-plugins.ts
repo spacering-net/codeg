@@ -37,6 +37,13 @@ export interface HostPluginSessionContext {
   sessionKey: string
 }
 
+export const MAX_PLUGIN_COMPOSER_INSERT_BYTES = 16 * 1024
+
+export interface PluginComposerInsertResult {
+  inserted: true
+  length: number
+}
+
 export interface InstalledPlugin {
   enabled: boolean
   source?:
@@ -166,7 +173,10 @@ function usePluginResource<T, E>(
 export function useHostPlugins(enabled = true) {
   const transport =
     enabled && typeof window !== "undefined" ? getTransport() : null
-  return usePluginResource(transport, enabled, loadCatalog, CATALOG_CHANGED)
+  return {
+    ...usePluginResource(transport, enabled, loadCatalog, CATALOG_CHANGED),
+    transport,
+  }
 }
 
 function loadCatalog(transport: Transport) {
@@ -310,4 +320,32 @@ export function hostPluginSessionScopeKey(
   context: HostPluginSessionContext
 ): string {
   return `${context.folderId ?? "none"}:${context.conversationId ?? "draft"}:${context.sessionKey}`
+}
+
+const utf8Encoder = new TextEncoder()
+
+export function validatePluginComposerInsertPayload(payload: unknown): string {
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    !("type" in payload) ||
+    payload.type !== "insertText" ||
+    !("text" in payload) ||
+    typeof payload.text !== "string"
+  ) {
+    throw new Error("Invalid composer insertion payload")
+  }
+  const normalized = payload.text.replace(/\r\n?/g, "\n")
+  if (normalized.length === 0) {
+    throw new Error("Composer text must be non-empty")
+  }
+  if (normalized.includes("\0")) {
+    throw new Error("Composer text contains unsupported control characters")
+  }
+  if (
+    utf8Encoder.encode(normalized).byteLength > MAX_PLUGIN_COMPOSER_INSERT_BYTES
+  ) {
+    throw new Error("Composer text exceeds 16 KiB limit")
+  }
+  return normalized
 }

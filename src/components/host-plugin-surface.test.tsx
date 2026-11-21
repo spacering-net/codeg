@@ -359,4 +359,192 @@ describe("HostPluginSurface clientSurface context & isolation", () => {
 
     expect(session.received).toHaveLength(1)
   })
+
+  it("exposes window.codeg.composer.insertText only to composer surfaces and validates requests", async () => {
+    const mock = createMockTransport()
+    mockTransportRef.current = mock.transport
+    const onComposerInsertText = vi.fn((text: string) => ({
+      inserted: true as const,
+      length: text.length,
+    }))
+
+    const { getByTitle, rerender } = render(
+      withIntl(
+        <HostPluginSurface
+          pluginId="acme.composer"
+          title="Composer Helper"
+          context={{
+            type: "clientSurface",
+            slot: "composer",
+            id: "helper",
+            folderId: 5,
+            conversationId: 12,
+            sessionKey: "tab-12",
+          }}
+          onComposerInsertText={onComposerInsertText}
+        />
+      )
+    )
+
+    const iframe = (await waitFor(() =>
+      getByTitle("Composer Helper")
+    )) as HTMLIFrameElement
+    expect(iframe.getAttribute("srcdoc")).toContain("api.composer =")
+    expect(iframe.getAttribute("srcdoc")).toContain("insertText:")
+
+    await act(async () => {})
+    const session = connectFrame(iframe)
+
+    // Valid insertion request
+    await act(async () => {
+      session.port!.postMessage({
+        id: 1,
+        operation: "composer",
+        json: JSON.stringify({ type: "insertText", text: "Hello\r\nWorld" }),
+      })
+    })
+
+    await waitFor(() => {
+      expect(session.received).toContainEqual({
+        id: 1,
+        ok: true,
+        value: { inserted: true, length: 11 },
+      })
+    })
+    expect(onComposerInsertText).toHaveBeenCalledWith("Hello\nWorld")
+
+    // Empty text rejected
+    await act(async () => {
+      session.port!.postMessage({
+        id: 2,
+        operation: "composer",
+        json: JSON.stringify({ type: "insertText", text: "" }),
+      })
+    })
+    await waitFor(() => {
+      expect(session.received).toContainEqual({
+        id: 2,
+        ok: false,
+        error: "Composer text must be non-empty",
+      })
+    })
+
+    // Oversized text (> 16 KiB) rejected
+    await act(async () => {
+      session.port!.postMessage({
+        id: 3,
+        operation: "composer",
+        json: JSON.stringify({ type: "insertText", text: "x".repeat(16385) }),
+      })
+    })
+    await waitFor(() => {
+      expect(session.received).toContainEqual({
+        id: 3,
+        ok: false,
+        error: "Composer text exceeds 16 KiB limit",
+      })
+    })
+    expect(onComposerInsertText).toHaveBeenCalledTimes(1)
+
+    // Switching conversation closes the old port so stale frame requests are ignored
+    rerender(
+      withIntl(
+        <HostPluginSurface
+          pluginId="acme.composer"
+          title="Composer Helper"
+          context={{
+            type: "clientSurface",
+            slot: "composer",
+            id: "helper",
+            folderId: 5,
+            conversationId: 13,
+            sessionKey: "tab-13",
+          }}
+          onComposerInsertText={onComposerInsertText}
+        />
+      )
+    )
+
+    session.port!.postMessage({
+      id: 4,
+      operation: "composer",
+      json: JSON.stringify({ type: "insertText", text: "stale-write" }),
+    })
+    expect(onComposerInsertText).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    {
+      label: "sessionHeader clientSurface",
+      context: {
+        type: "clientSurface" as const,
+        slot: "sessionHeader" as const,
+        id: "hdr",
+        folderId: 5,
+        conversationId: 12,
+        sessionKey: "tab-12",
+      },
+    },
+    {
+      label: "workspacePanel",
+      context: {
+        type: "workspacePanel" as const,
+        id: "panel",
+        folderId: 5,
+      },
+    },
+    {
+      label: "settingsPanel",
+      context: {
+        type: "settingsPanel" as const,
+        id: "settings",
+      },
+    },
+  ])(
+    "does not expose or accept composer insertion on $label",
+    async ({ context }) => {
+      const mock = createMockTransport()
+      mockTransportRef.current = mock.transport
+      const onComposerInsertText = vi.fn(() => ({
+        inserted: true as const,
+        length: 2,
+      }))
+
+      const { getByTitle } = render(
+        withIntl(
+          <HostPluginSurface
+            pluginId="acme.other"
+            title="Non-Composer Surface"
+            context={context}
+            onComposerInsertText={onComposerInsertText}
+          />
+        )
+      )
+
+      const iframe = (await waitFor(() =>
+        getByTitle("Non-Composer Surface")
+      )) as HTMLIFrameElement
+      expect(iframe.getAttribute("srcdoc")).not.toContain("api.composer =")
+
+      await act(async () => {})
+      const session = connectFrame(iframe)
+
+      await act(async () => {
+        session.port!.postMessage({
+          id: 1,
+          operation: "composer",
+          json: JSON.stringify({ type: "insertText", text: "blocked" }),
+        })
+      })
+
+      await waitFor(() => {
+        expect(session.received).toContainEqual({
+          id: 1,
+          ok: false,
+          error: "Composer insertion is unavailable",
+        })
+      })
+      expect(onComposerInsertText).not.toHaveBeenCalled()
+    }
+  )
 })

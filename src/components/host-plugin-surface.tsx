@@ -1,16 +1,21 @@
 "use client"
 
-import { useEffect, useMemo, useRef } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { toErrorMessage } from "@/lib/app-error"
 import {
   usePluginClientHtml,
+  validatePluginComposerInsertPayload,
   type HostPluginSessionContext,
   type PluginClientSurfaceSlot,
+  type PluginComposerInsertResult,
 } from "@/lib/host-plugins"
 import type { Transport } from "@/lib/transport"
 import { cn } from "@/lib/utils"
+
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect
 
 export type SurfaceContext = { id: string } & (
   | { type: "workspacePanel"; folderId: number }
@@ -45,7 +50,11 @@ const CLIENT_POLICY = [
 
 // A unique handshake key binds the MessagePort to the installed document,
 // even if the sandboxed frame navigates and retains its WindowProxy.
-function buildDocument(html: string, key: string): string {
+function buildDocument(
+  html: string,
+  key: string,
+  options: { composerInsert: boolean }
+): string {
   return `<!doctype html><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${CLIENT_POLICY}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -114,22 +123,37 @@ function buildDocument(html: string, key: string): string {
       return () => subscribers.delete(listener);
     },
   });
-  Object.defineProperty(window, "codeg", { value: Object.freeze({ ready, call, settings, events }) });
+  const api = { ready, call, settings, events };
+  ${
+    options.composerInsert
+      ? `api.composer = Object.freeze({
+    insertText: (text) => request("composer", { type: "insertText", text }),
+  });`
+      : ""
+  }
+  Object.defineProperty(window, "codeg", { value: Object.freeze(api) });
 })();
 </script>
 ${html}`
 }
+
+export type PluginComposerInsertHandler = (
+  text: string
+) => PluginComposerInsertResult | Promise<PluginComposerInsertResult>
 
 export function HostPluginSurface({
   pluginId,
   title,
   context,
   className,
+  onComposerInsertText,
 }: {
   pluginId: string
   title: string
   context: SurfaceContext
   className?: string
+  /** Controlled plain-text insertion handler; honored ONLY for `composer` clientSurfaces. */
+  onComposerInsertText?: PluginComposerInsertHandler
 }) {
   const t = useTranslations("HostPlugins")
   const locale = useLocale()
@@ -158,6 +182,7 @@ export function HostPluginSurface({
       context={context}
       host={transport}
       className={className}
+      onComposerInsertText={onComposerInsertText}
     />
   )
 }
@@ -170,6 +195,7 @@ function PluginFrame({
   html,
   host,
   className,
+  onComposerInsertText,
 }: {
   pluginId: string
   title: string
@@ -178,6 +204,7 @@ function PluginFrame({
   html: string
   host: Transport
   className?: string
+  onComposerInsertText?: PluginComposerInsertHandler
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const { type, id } = context
@@ -190,13 +217,26 @@ function PluginFrame({
     context.type === "clientSurface" ? context.conversationId : undefined
   const sessionKey =
     context.type === "clientSurface" ? context.sessionKey : undefined
+  const allowComposerInsert =
+    type === "clientSurface" &&
+    slot === "composer" &&
+    Boolean(onComposerInsertText)
+  const composerInsertRef = useRef(onComposerInsertText)
+  useIsomorphicLayoutEffect(() => {
+    composerInsertRef.current = onComposerInsertText
+  }, [onComposerInsertText])
   const { handshake, doc } = useMemo(() => {
     const handshake = Array.from(
       crypto.getRandomValues(new Uint8Array(16)),
       (byte) => byte.toString(16).padStart(2, "0")
     ).join("")
-    return { handshake, doc: buildDocument(html, handshake) }
-    // A context or host change restarts the frame and disconnects the old port.
+    return {
+      handshake,
+      doc: buildDocument(html, handshake, {
+        composerInsert: allowComposerInsert,
+      }),
+    }
+    // A context, capability, or host change restarts the frame and disconnects the old port.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     html,
@@ -206,6 +246,7 @@ function PluginFrame({
     folderId,
     conversationId,
     sessionKey,
+    allowComposerInsert,
     locale,
     host,
     pluginId,
@@ -217,6 +258,7 @@ function PluginFrame({
     let closed = false
     function connect(event: MessageEvent) {
       if (
+        closed ||
         channel ||
         event.origin !== "null" ||
         event.source !== frame.current?.contentWindow ||
@@ -229,6 +271,7 @@ function PluginFrame({
       let activeCalls = 0
       let connected = false
       port1.onmessage = async ({ data }) => {
+        if (closed) return
         if (!connected) {
           if (data?.type !== "authenticate" || data.key !== handshake) return
           connected = true
@@ -249,7 +292,7 @@ function PluginFrame({
           })
           void host
             .subscribe<PluginEvent>(LIFECYCLE_EVENT_CHANNEL, (event) => {
-              if (event.pluginId !== pluginId) return
+              if (closed || event.pluginId !== pluginId) return
               if (type === "workspacePanel") {
                 if (event.folderId !== folderId) return
               } else if (type === "clientSurface") {
@@ -278,7 +321,9 @@ function PluginFrame({
         }
         if (
           !Number.isSafeInteger(data?.id) ||
-          (data.operation !== "call" && data.operation !== "settings") ||
+          (data.operation !== "call" &&
+            data.operation !== "settings" &&
+            data.operation !== "composer") ||
           typeof data.json !== "string"
         )
           return
@@ -297,19 +342,30 @@ function PluginFrame({
         activeCalls += 1
         try {
           const input: unknown = JSON.parse(data.json)
-          const value = await handleRequest(
-            host,
-            pluginId,
-            data.operation,
-            input
-          )
-          port1.postMessage({ id: requestId, ok: true, value })
+          let value: unknown
+          if (data.operation === "composer") {
+            const insertHandler = allowComposerInsert
+              ? composerInsertRef.current
+              : undefined
+            if (!insertHandler || closed) {
+              throw new Error("Composer insertion is unavailable")
+            }
+            const text = validatePluginComposerInsertPayload(input)
+            value = await insertHandler(text)
+          } else {
+            value = await handleRequest(host, pluginId, data.operation, input)
+          }
+          if (!closed) {
+            port1.postMessage({ id: requestId, ok: true, value })
+          }
         } catch (cause) {
-          port1.postMessage({
-            id: requestId,
-            ok: false,
-            error: toErrorMessage(cause),
-          })
+          if (!closed) {
+            port1.postMessage({
+              id: requestId,
+              ok: false,
+              error: toErrorMessage(cause),
+            })
+          }
         } finally {
           activeCalls -= 1
         }
@@ -325,7 +381,10 @@ function PluginFrame({
       closed = true
       unsubscribe?.()
       window.removeEventListener("message", connect)
-      channel?.port1.close()
+      if (channel) {
+        channel.port1.onmessage = null
+        channel.port1.close()
+      }
     }
   }, [
     handshake,
@@ -333,6 +392,7 @@ function PluginFrame({
     folderId,
     conversationId,
     sessionKey,
+    allowComposerInsert,
     host,
     id,
     locale,

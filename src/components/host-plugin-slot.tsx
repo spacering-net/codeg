@@ -1,9 +1,20 @@
 "use client"
 
-import { memo, useCallback, useMemo, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { ChevronDown, Puzzle } from "lucide-react"
 import { useTranslations } from "next-intl"
-import { HostPluginSurface } from "@/components/host-plugin-surface"
+import {
+  HostPluginSurface,
+  type PluginComposerInsertHandler,
+} from "@/components/host-plugin-surface"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -25,17 +36,26 @@ import {
   useHostPlugins,
   type HostPluginSessionContext,
   type PluginClientSurfaceSlot,
+  type PluginComposerInsertResult,
   type ResolvedPluginClientSurface,
 } from "@/lib/host-plugins"
+import { getTransport, type Transport } from "@/lib/transport"
 import { cn } from "@/lib/utils"
 
 const MAX_DESKTOP_INLINE = 2
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect
 
 export interface HostPluginSlotProps {
   slot: PluginClientSurfaceSlot
   sessionContext: HostPluginSessionContext
   /** Disable catalog subscription while the parent view is offscreen. */
   enabled?: boolean
+  /** Controlled draft text insertion callback; honored only when `slot === "composer"`. */
+  onComposerInsertText?: (
+    text: string,
+    expectedScopeKey: string
+  ) => PluginComposerInsertResult
   className?: string
 }
 
@@ -57,37 +77,93 @@ export const HostPluginSlot = memo(function HostPluginSlot({
   slot,
   sessionContext,
   enabled = true,
+  onComposerInsertText,
   className,
 }: HostPluginSlotProps) {
   const t = useTranslations("HostPlugins")
   const isMobile = useIsMobile()
-  const { data } = useHostPlugins(enabled)
+  const { data, transport } = useHostPlugins(enabled)
 
   const surfaces = useMemo(
-    () => selectPluginClientSurfaces(data, slot),
-    [data, slot]
+    () => (enabled ? selectPluginClientSurfaces(data, slot) : []),
+    [data, enabled, slot]
   )
   const scopeKey = hostPluginSessionScopeKey(sessionContext)
   const [opened, setOpened] = useState<{
     surfaceKey: string
     scopeKey: string
+    transport: Transport | null
   } | null>(null)
 
   const activeSurface = useMemo(
     () =>
-      opened && opened.scopeKey === scopeKey
+      enabled &&
+      opened &&
+      opened.scopeKey === scopeKey &&
+      opened.transport === transport
         ? (surfaces.find((surface) => surface.key === opened.surfaceKey) ??
           null)
         : null,
-    [opened, scopeKey, surfaces]
+    [enabled, opened, scopeKey, surfaces, transport]
   )
   if (opened && !activeSurface) setOpened(null)
 
+  // Permanently clear open state on withdrawal (session/workspace/host switch,
+  // offscreen tab, or plugin disable/removal) so the dialog never resurrects
+  // when the tab returns or the plugin is re-enabled later.
+  if (opened !== null && !activeSurface) {
+    setOpened(null)
+  }
+
+  const liveGuardRef = useRef({
+    enabled,
+    scopeKey,
+    transport,
+    activeSurfaceKey: activeSurface?.key ?? null,
+    onComposerInsertText,
+  })
+  useIsomorphicLayoutEffect(() => {
+    liveGuardRef.current = {
+      enabled,
+      scopeKey,
+      transport,
+      activeSurfaceKey: activeSurface?.key ?? null,
+      onComposerInsertText,
+    }
+  }, [enabled, scopeKey, transport, activeSurface?.key, onComposerInsertText])
+
+  const activeSurfaceKey = activeSurface?.key ?? null
+  const handleSurfaceComposerInsert = useMemo<
+    PluginComposerInsertHandler | undefined
+  >(() => {
+    if (slot !== "composer" || !activeSurfaceKey || !onComposerInsertText) {
+      return undefined
+    }
+    const expectedSurfaceKey = activeSurfaceKey
+    const expectedScopeKey = scopeKey
+    const expectedTransport = transport
+    return (text: string) => {
+      const live = liveGuardRef.current
+      if (
+        !live.enabled ||
+        live.scopeKey !== expectedScopeKey ||
+        live.transport !== expectedTransport ||
+        (typeof window !== "undefined" &&
+          getTransport() !== expectedTransport) ||
+        live.activeSurfaceKey !== expectedSurfaceKey ||
+        !live.onComposerInsertText
+      ) {
+        throw new Error("Plugin composer surface is no longer active")
+      }
+      return live.onComposerInsertText(text, expectedScopeKey)
+    }
+  }, [slot, activeSurfaceKey, onComposerInsertText, scopeKey, transport])
+
   const handleOpen = useCallback(
     (surface: ResolvedPluginClientSurface) => {
-      setOpened({ surfaceKey: surface.key, scopeKey })
+      setOpened({ surfaceKey: surface.key, scopeKey, transport })
     },
-    [scopeKey]
+    [scopeKey, transport]
   )
 
   const handleDialogOpenChange = useCallback((nextOpen: boolean) => {
@@ -258,6 +334,7 @@ export const HostPluginSlot = memo(function HostPluginSlot({
                 id: activeSurface.id,
                 ...sessionContext,
               }}
+              onComposerInsertText={handleSurfaceComposerInsert}
             />
           </DialogContent>
         </Dialog>

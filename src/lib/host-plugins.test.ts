@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest"
 import {
+  MAX_PLUGIN_COMPOSER_INSERT_BYTES,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
   selectPluginClientSurfaces,
+  validatePluginComposerInsertPayload,
   type InstalledPlugin,
 } from "@/lib/host-plugins"
 
@@ -170,5 +172,64 @@ describe("hostPluginSessionScopeKey", () => {
     })
 
     expect(new Set([a, b, c, d]).size).toBe(4)
+  })
+})
+
+describe("validatePluginComposerInsertPayload", () => {
+  it("accepts valid text and normalizes CRLF/CR line endings", () => {
+    expect(
+      validatePluginComposerInsertPayload({
+        type: "insertText",
+        text: "line1\r\nline2\rline3",
+      })
+    ).toBe("line1\nline2\nline3")
+  })
+
+  it("enforces UTF-8 byte length limits, non-empty text, and payload shape", () => {
+    expect(() => validatePluginComposerInsertPayload(null)).toThrow(
+      /Invalid composer insertion payload/
+    )
+    expect(() =>
+      validatePluginComposerInsertPayload({ type: "replace", text: "hi" })
+    ).toThrow(/Invalid composer insertion payload/)
+    expect(() =>
+      validatePluginComposerInsertPayload({ type: "insertText", text: 123 })
+    ).toThrow(/Invalid composer insertion payload/)
+    expect(() =>
+      validatePluginComposerInsertPayload({ type: "insertText", text: "" })
+    ).toThrow(/non-empty/)
+    expect(() =>
+      validatePluginComposerInsertPayload({
+        type: "insertText",
+        text: "bad\0text",
+      })
+    ).toThrow(/control characters/)
+
+    const exactLimit = "a".repeat(MAX_PLUGIN_COMPOSER_INSERT_BYTES)
+    expect(
+      validatePluginComposerInsertPayload({
+        type: "insertText",
+        text: exactLimit,
+      })
+    ).toBe(exactLimit)
+
+    const overAscii = "a".repeat(MAX_PLUGIN_COMPOSER_INSERT_BYTES + 1)
+    expect(() =>
+      validatePluginComposerInsertPayload({
+        type: "insertText",
+        text: overAscii,
+      })
+    ).toThrow(/16 KiB/)
+
+    // Multi-byte UTF-8 characters are measured in bytes, not JS UTF-16 code units.
+    const overUtf8 = "中".repeat(
+      Math.floor(MAX_PLUGIN_COMPOSER_INSERT_BYTES / 3) + 1
+    )
+    expect(() =>
+      validatePluginComposerInsertPayload({
+        type: "insertText",
+        text: overUtf8,
+      })
+    ).toThrow(/16 KiB/)
   })
 })
