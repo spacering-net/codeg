@@ -60,8 +60,8 @@ export type SidebarSectionKey = (typeof SIDEBAR_SECTION_KEYS)[number]
  */
 export type SidebarSectionOrder = readonly SidebarSectionId[]
 
-/** Folders, then Chat, then Recent — the historical layout with the (newest)
- *  Recent section appended at the bottom. */
+/** Folders, then Chat, then the btw section, then Recent — the historical
+ *  layout with the two newest sections (btw, Recent) appended at the bottom. */
 export const DEFAULT_SECTION_ORDER: SidebarSectionOrder = SIDEBAR_SECTION_IDS
 
 /** Collapsed state of the top-level sidebar sections. Absent key = expanded

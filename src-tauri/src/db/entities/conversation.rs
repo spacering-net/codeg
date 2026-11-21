@@ -22,11 +22,12 @@ pub enum ConversationStatus {
 /// the loop engine); `delegate` is a delegation child nested under its
 /// parent's tool-call view; `btw` is a `/btw` side-question fork
 /// (`commands::btw`) — like `delegate` it sets `parent_id`, but it renders in
-/// the folder's collapsible "btw" section instead of under the parent's
+/// the global collapsible "btw" section instead of under the parent's
 /// chevron, and `child_count` / `list_children` count only `delegate` so a
-/// side question never lights the parent's subtree. Promoting clears `kind`
-/// and `parent_id` together, so the lineage invariant holds for every live
-/// row. Written once at insert, with one exception: a chat conversation the
+/// side question never lights the parent's subtree. Lineage therefore always
+/// comes with its kind (`parent_id` is set only on `delegate` and `btw`
+/// rows); promoting clears `kind` and `parent_id` together, so a live row
+/// never carries a parent without saying why. Written once at insert, with one exception: a chat conversation the
 /// user moves into a project becomes `regular`
 /// (`conversation_service::relocate_conversations`) — it is an ordinary project
 /// conversation from then on.

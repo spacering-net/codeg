@@ -14051,8 +14051,20 @@ async fn fork_copy_roundtrip(
     )
     .await?;
     let forked = fork_response.session_id.0.to_string();
-    if agent_type == AgentType::Codex && supports_close {
-        close_forked_parent(cx, &forked, &sid.0);
+    if agent_type == AgentType::Codex && supports_close && forked != sid.0.as_ref() {
+        // Awaited, unlike the in-place fork's fire-and-forget
+        // `close_forked_parent`: the caller spawns a child connection that
+        // resumes THIS thread immediately, and a resume racing a still-
+        // subscribed fork re-opens the #1105 ignored-config hole the close
+        // exists to prevent. Awaiting is free of pump cost because the whole
+        // roundtrip runs on a spawned task (`spawn_fork_copy`).
+        let request = CloseSessionRequest::new(SessionId::new(forked.clone()));
+        match cx.send_request_to(Agent, request).block_task().await {
+            Ok(_) => tracing::info!("[ACP] copy fork closed {forked} on the parent"),
+            Err(e) => tracing::warn!(
+                "[ACP] copy fork's close of {forked} failed (child resume may ignore its config): {e}"
+            ),
+        }
     }
     Ok(crate::acp::types::ForkProtocolResult {
         forked_session_id: forked,
@@ -20738,7 +20750,11 @@ fn available_command_infos(
     // description is a placeholder — the frontend replaces it with localized
     // text for this name, the same courtesy it already extends advertised
     // labels (see `localizedMessage`).
-    if btw_supported && !seen.contains("btw") {
+    if btw_supported
+        && !seen
+            .iter()
+            .any(|name| name.trim().eq_ignore_ascii_case("btw"))
+    {
         infos.push(AvailableCommandInfo {
             name: "btw".to_string(),
             description: "Ask a side question in a copy-fork of this conversation".to_string(),

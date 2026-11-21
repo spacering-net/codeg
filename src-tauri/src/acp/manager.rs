@@ -686,6 +686,13 @@ pub struct ConnectionLaunchContext {
     /// from the client and would otherwise happily parent one conversation's
     /// history under another's row.
     pub conversation_id: Option<i32>,
+    /// The parent's live selector state (mode + config option values), replayed
+    /// onto the btw child connection so the side answer runs on the same model
+    /// the parent is using — the row inherits the parent's `model`, and an
+    /// answer served by the agent's default model would silently differ from
+    /// what the row and the sidebar claim.
+    pub preferred_mode_id: Option<String>,
+    pub preferred_config_values: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for ConnectionManager {
@@ -2732,12 +2739,32 @@ impl ConnectionManager {
         let conns = self.connections.lock().await;
         let parent = conns.get(conn_id)?;
         let state = parent.state.read().await;
+        // The current config options are the truth of what this session runs
+        // with (they latch every select/boolean the agent accepted), so
+        // replaying them as the child's preferred values reproduces the
+        // frontend's own connect-time payload without the frontend.
+        let mut preferred_config_values = std::collections::BTreeMap::new();
+        if let Some(options) = &state.config_options {
+            for option in options {
+                let value = match &option.kind {
+                    crate::acp::types::SessionConfigKindInfo::Select(s) => {
+                        s.current_value.clone()
+                    }
+                    crate::acp::types::SessionConfigKindInfo::Boolean(b) => {
+                        b.current_value.to_string()
+                    }
+                };
+                preferred_config_values.insert(option.id.clone(), value);
+            }
+        }
         Some(ConnectionLaunchContext {
             emitter: parent.emitter.clone(),
             owner_window_label: parent.owner_window_label.clone(),
             working_dir: state.working_dir.clone(),
             btw_supported: state.btw_supported,
             conversation_id: state.conversation_id,
+            preferred_mode_id: state.current_mode.clone(),
+            preferred_config_values,
         })
     }
 

@@ -144,8 +144,8 @@ pub async fn btw_create_core(
             runtime_env,
             launch.owner_window_label,
             emitter.clone(),
-            None,
-            Default::default(),
+            launch.preferred_mode_id,
+            launch.preferred_config_values,
         )
         .await
         .map_err(|e| AppCommandError::task_execution_failed(format!("btw child connection failed: {e}")));
