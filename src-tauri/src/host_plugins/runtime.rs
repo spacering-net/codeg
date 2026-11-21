@@ -1,10 +1,13 @@
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use rquickjs::{Context, Ctx, Error, Function, Module, Promise, Runtime, Value};
+use rquickjs::{Context, Ctx, Error, Exception, Function, Module, Object, Promise, Runtime, Value};
 use serde_json::Value as Json;
 
 use super::invalid;
 use super::schema::RpcContract;
+use super::timeline;
 use crate::app_error::{AppCommandError, AppErrorCode};
 
 pub(super) const MAX_MODULE_BYTES: usize = 256 * 1024;
@@ -20,6 +23,23 @@ pub(super) fn call_with_settings(
     settings: Option<&Json>,
     contract: Option<&RpcContract>,
 ) -> Result<Json, AppCommandError> {
+    Ok(invoke(entry, code, method, input, settings, contract, None)?.value)
+}
+
+pub(super) struct Output {
+    pub value: Json,
+    pub timeline: Vec<timeline::Append>,
+}
+
+pub(super) fn invoke(
+    entry: &str,
+    code: &str,
+    method: &str,
+    input: &Json,
+    settings: Option<&Json>,
+    contract: Option<&RpcContract>,
+    conversation_id: Option<i32>,
+) -> Result<Output, AppCommandError> {
     let input_json = serde_json::to_vec(input).map_err(|_| invalid("Invalid plugin input"))?;
     if input_json.len() > MAX_MESSAGE_BYTES {
         return Err(invalid("Plugin input exceeds 64 KiB"));
@@ -35,6 +55,8 @@ pub(super) fn call_with_settings(
     runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() >= deadline)));
     let context = Context::full(&runtime).map_err(|_| failed())?;
 
+    let appends = Rc::new(RefCell::new(Vec::new()));
+    let append_error = Rc::new(Cell::new(None));
     let output = context.with(|ctx| -> rquickjs::Result<String> {
         let module = Module::declare(ctx.clone(), entry, code)?;
         let (module, initialized) = module.eval()?;
@@ -42,7 +64,39 @@ pub(super) fn call_with_settings(
         let handle: Function<'_> = module.get("handle")?;
         let input = ctx.json_parse(input_json)?;
         let settings = ctx.json_parse(settings)?;
-        let result: Value<'_> = handle.call((method, input, settings))?;
+        let result: Value<'_> = if let Some(conversation_id) = conversation_id {
+            let host = Object::new(ctx.clone())?;
+            host.set("conversationId", conversation_id)?;
+            let timeline = Object::new(ctx.clone())?;
+            let appends = appends.clone();
+            let append_error = append_error.clone();
+            let append = Function::new(ctx.clone(), move |item: Value<'_>| {
+                let ctx = item.ctx().clone();
+                let serialized = ctx
+                    .json_stringify(item)?
+                    .ok_or_else(|| Exception::throw_type(&ctx, "Expected a JSON timeline item"))?
+                    .to_string()?;
+                let mut pending = appends.borrow_mut();
+                let error = if serialized.len() > timeline::MAX_APPEND_BYTES {
+                    Some("Timeline item data exceeds 64 KiB")
+                } else if pending.len() >= timeline::MAX_ITEMS {
+                    Some("A plugin call can append up to 64 timeline items")
+                } else {
+                    None
+                };
+                if let Some(error) = error {
+                    append_error.set(Some(error));
+                    return Err(Exception::throw_range(&ctx, error));
+                }
+                pending.push(serialized);
+                Ok(())
+            })?;
+            timeline.set("append", append)?;
+            host.set("timeline", timeline)?;
+            handle.call((method, input, settings, host))?
+        } else {
+            handle.call((method, input, settings))?
+        };
         let result = match result.as_promise() {
             Some(promise) => resolve(&ctx, promise.clone(), deadline)?,
             None => result,
@@ -57,6 +111,9 @@ pub(super) fn call_with_settings(
             "The plugin exceeded its execution time limit",
         ));
     }
+    if let Some(error) = append_error.get() {
+        return Err(invalid(error));
+    }
     let output = output.map_err(|_| failed())?;
     if output.len() > MAX_MESSAGE_BYTES {
         return Err(invalid("Plugin response exceeds 64 KiB"));
@@ -65,7 +122,12 @@ pub(super) fn call_with_settings(
     if let Some(contract) = contract {
         contract.check_output(method, &value)?;
     }
-    Ok(value)
+    let timeline = appends
+        .take()
+        .iter()
+        .map(|item| serde_json::from_str(item).map_err(|_| invalid("Invalid timeline item")))
+        .collect::<Result<_, _>>()?;
+    Ok(Output { value, timeline })
 }
 
 fn resolve<'js>(

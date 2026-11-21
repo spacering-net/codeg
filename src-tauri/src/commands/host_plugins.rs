@@ -1,11 +1,13 @@
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::app_error::AppCommandError;
+use crate::db::{entities::conversation, error::DbError, AppDatabase};
 use crate::host_plugins::source::{self, PluginIndex, Registry};
 use crate::host_plugins::{
     ExpectedPlugin, HostPlugins, InstallPreview, InstalledPlugin, Mutation, PluginSettings,
-    PluginUpdate, SettingsRequest, CATALOG_CHANGED,
+    PluginUpdate, SettingsRequest, TimelineItem, CATALOG_CHANGED,
 };
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
@@ -15,14 +17,16 @@ pub async fn apply_core(
     mutation: Mutation,
 ) -> Result<Vec<InstalledPlugin>, AppCommandError> {
     let plugins = plugins.clone();
-    let catalog = tokio::task::spawn_blocking(move || plugins.apply(mutation))
-        .await
-        .map_err(|_| {
-            AppCommandError::new(
-                crate::app_error::AppErrorCode::TaskExecutionFailed,
-                "Plugin catalog update stopped",
-            )
-        })??;
+    let timeline_emitter = emitter.clone();
+    let catalog =
+        tokio::task::spawn_blocking(move || plugins.apply_with_events(mutation, &timeline_emitter))
+            .await
+            .map_err(|_| {
+                AppCommandError::new(
+                    crate::app_error::AppErrorCode::TaskExecutionFailed,
+                    "Plugin catalog update stopped",
+                )
+            })??;
     emit_event(emitter, CATALOG_CHANGED, ());
     Ok(catalog)
 }
@@ -83,7 +87,7 @@ pub async fn update_core(
     emitter: &EventEmitter,
     plugin_id: &str,
 ) -> Result<PluginUpdate, AppCommandError> {
-    let update = plugins.update(plugin_id).await?;
+    let update = plugins.update_with_events(plugin_id, emitter).await?;
     if update.updated {
         emit_event(emitter, CATALOG_CHANGED, ());
     }
@@ -92,6 +96,61 @@ pub async fn update_core(
 
 pub async fn fetch_index_core(url: &str) -> Result<PluginIndex, AppCommandError> {
     source::fetch_index(url).await
+}
+
+async fn require_saved_conversation(
+    db: &AppDatabase,
+    conversation_id: i32,
+) -> Result<(), AppCommandError> {
+    if conversation_id <= 0 {
+        return Err(AppCommandError::invalid_input(
+            "A positive conversation ID is required",
+        ));
+    }
+    let conversation = conversation::Entity::find_by_id(conversation_id)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .one(&db.conn)
+        .await
+        .map_err(DbError::from)?;
+    if conversation.is_none() {
+        return Err(AppCommandError::not_found("Conversation not found"));
+    }
+    Ok(())
+}
+
+pub async fn call_core(
+    plugins: &HostPlugins,
+    db: &AppDatabase,
+    emitter: &EventEmitter,
+    plugin_id: &str,
+    method: String,
+    input: serde_json::Value,
+    conversation_id: Option<i32>,
+) -> Result<serde_json::Value, AppCommandError> {
+    if let Some(conversation_id) = conversation_id {
+        require_saved_conversation(db, conversation_id).await?;
+        return plugins
+            .call_with_timeline(plugin_id, method, input, Some((conversation_id, emitter)))
+            .await;
+    }
+    plugins.call(plugin_id, method, input).await
+}
+
+pub async fn timeline_list_core(
+    plugins: &Arc<HostPlugins>,
+    db: &AppDatabase,
+    conversation_id: i32,
+) -> Result<Vec<TimelineItem>, AppCommandError> {
+    require_saved_conversation(db, conversation_id).await?;
+    let plugins = plugins.clone();
+    tokio::task::spawn_blocking(move || plugins.timeline_list(conversation_id))
+        .await
+        .map_err(|_| {
+            AppCommandError::new(
+                crate::app_error::AppErrorCode::TaskExecutionFailed,
+                "Plugin timeline read stopped",
+            )
+        })?
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -135,12 +194,34 @@ pub async fn host_plugins_activity(
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn host_plugins_call(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
     plugins: tauri::State<'_, Arc<HostPlugins>>,
     plugin_id: String,
     method: String,
     input: serde_json::Value,
+    conversation_id: Option<i32>,
 ) -> Result<serde_json::Value, AppCommandError> {
-    plugins.call(&plugin_id, method, input).await
+    call_core(
+        &plugins,
+        &db,
+        &EventEmitter::from_app(&app),
+        &plugin_id,
+        method,
+        input,
+        conversation_id,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn host_plugins_timeline_list(
+    db: tauri::State<'_, AppDatabase>,
+    plugins: tauri::State<'_, Arc<HostPlugins>>,
+    conversation_id: i32,
+) -> Result<Vec<TimelineItem>, AppCommandError> {
+    timeline_list_core(&plugins, &db, conversation_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

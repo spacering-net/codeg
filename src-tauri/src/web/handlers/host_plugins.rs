@@ -9,7 +9,7 @@ use crate::app_state::AppState;
 use crate::host_plugins::source::Registry;
 use crate::host_plugins::{
     ExpectedPlugin, InstallPreview, InstalledPlugin, Mutation, PluginSettings, PluginUpdate,
-    SettingsRequest, TurnActivity,
+    SettingsRequest, TimelineItem, TurnActivity,
 };
 
 #[derive(Deserialize)]
@@ -49,6 +49,13 @@ pub struct CallParams {
     plugin_id: String,
     method: String,
     input: serde_json::Value,
+    conversation_id: Option<i32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineListParams {
+    conversation_id: i32,
 }
 
 #[derive(Deserialize)]
@@ -117,11 +124,30 @@ pub async fn call(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<CallParams>,
 ) -> Result<Json<serde_json::Value>, AppCommandError> {
-    state
-        .host_plugins
-        .call(&params.plugin_id, params.method, params.input)
-        .await
-        .map(Json)
+    crate::commands::host_plugins::call_core(
+        &state.host_plugins,
+        &state.db,
+        &state.emitter,
+        &params.plugin_id,
+        params.method,
+        params.input,
+        params.conversation_id,
+    )
+    .await
+    .map(Json)
+}
+
+pub async fn timeline_list(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<TimelineListParams>,
+) -> Result<Json<Vec<TimelineItem>>, AppCommandError> {
+    crate::commands::host_plugins::timeline_list_core(
+        &state.host_plugins,
+        &state.db,
+        params.conversation_id,
+    )
+    .await
+    .map(Json)
 }
 
 pub async fn client_html(

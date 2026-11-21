@@ -11,7 +11,19 @@ type Surface = {
   readonly locale: string
 }
 
-export type ClientContext = Surface &
+export interface TimelineItemContext {
+  readonly type: "timelineItem"
+  readonly kind: string
+  readonly version: number
+  readonly itemId: string
+  readonly conversationId: number
+  readonly data: Json
+  readonly locale: string
+}
+
+export type ClientContext =
+  | TimelineItemContext
+  | (Surface &
   (
     | { readonly type: "workspacePanel"; readonly folderId: number }
     | {
@@ -28,7 +40,7 @@ export type ClientContext = Surface &
         readonly conversationId: number | null
         readonly sessionKey: string
       }
-  )
+  ))
 
 export interface PluginSettingsSnapshot {
   readonly version: number

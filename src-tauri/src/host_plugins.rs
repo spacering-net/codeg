@@ -21,9 +21,11 @@ mod settings;
 pub mod source;
 mod text;
 mod theme;
+mod timeline;
 
 pub use settings::Snapshot as PluginSettings;
 use text::{valid_translations, Translations};
+pub use timeline::TimelineItem;
 
 pub const CATALOG_CHANGED: &str = "host-plugins://changed";
 const ACTIVITY_CHANGED: &str = "host-plugins://activity";
@@ -75,6 +77,7 @@ struct PluginBundle {
     server_code: Option<Arc<str>>,
     client_html: Option<Arc<str>>,
     rpc: RpcContracts,
+    timeline_renderers: timeline::Renderers,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -102,6 +105,8 @@ struct Contributions {
     screens: Vec<HostPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidebar_items: Vec<SidebarItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    timeline_renderers: Vec<timeline::Renderer>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -227,6 +232,10 @@ pub struct InstalledPlugin {
     settings: Option<PluginSettings>,
     #[serde(skip)]
     rpc: RpcContracts,
+    #[serde(skip)]
+    timeline_renderers: timeline::Renderers,
+    #[serde(default, skip_serializing)]
+    timeline_key: Option<Uuid>,
     /// An in-flight download may commit only to the installed definition it read.
     /// Toggling the plugin does not replace its definition.
     #[serde(skip)]
@@ -294,7 +303,8 @@ type Catalog = BTreeMap<String, InstalledPlugin>;
 
 pub struct HostPlugins {
     path: PathBuf,
-    state: Mutex<Result<PluginState, String>>,
+    state: Arc<Mutex<Result<PluginState, String>>>,
+    timeline: timeline::Store,
     runtime_slots: Arc<Semaphore>,
     observer_slots: Arc<Semaphore>,
 }
@@ -308,17 +318,27 @@ struct PluginState {
 impl HostPlugins {
     pub fn new(data_dir: &Path) -> Self {
         let path = data_dir.join("host-plugins.json");
-        let state = load_catalog(&path).map(|catalog| PluginState {
-            catalog,
-            turns: BTreeMap::new(),
-            pending_installs: VecDeque::new(),
+        let timeline = timeline::Store::new(data_dir);
+        let state = load_catalog(&path).map(|catalog| {
+            timeline.clean_removed(
+                &catalog
+                    .values()
+                    .filter_map(|plugin| plugin.timeline_key)
+                    .collect(),
+            );
+            PluginState {
+                catalog,
+                turns: BTreeMap::new(),
+                pending_installs: VecDeque::new(),
+            }
         });
         if let Err(error) = &state {
             tracing::warn!(%error, "Could not load the host plugin catalog");
         }
         Self {
             path,
-            state: Mutex::new(state),
+            state: Arc::new(Mutex::new(state)),
+            timeline,
             runtime_slots: Arc::new(Semaphore::new(4)),
             observer_slots: Arc::new(Semaphore::new(16)),
         }
@@ -336,6 +356,14 @@ impl HostPlugins {
     }
 
     pub fn apply(&self, mutation: Mutation) -> Result<Vec<InstalledPlugin>, AppCommandError> {
+        self.apply_with_events(mutation, &EventEmitter::Noop)
+    }
+
+    pub(crate) fn apply_with_events(
+        &self,
+        mutation: Mutation,
+        emitter: &EventEmitter,
+    ) -> Result<Vec<InstalledPlugin>, AppCommandError> {
         let (id, enabled) = match mutation {
             Mutation::Install { manifest } => {
                 let bundle = PluginBundle::manifest_only(Manifest::parse(&manifest)?)?;
@@ -346,6 +374,10 @@ impl HostPlugins {
         };
         let mut guard = self.state.lock().expect("host plugin state lock");
         let state = guard.as_mut().map_err(|error| catalog_error(error))?;
+        let timeline_key = state
+            .catalog
+            .get(&id)
+            .and_then(|plugin| plugin.timeline_key);
         let mut next = state.catalog.clone();
         if let Some(enabled) = enabled {
             let plugin = next.get_mut(&id).ok_or_else(plugin_not_found)?;
@@ -370,6 +402,12 @@ impl HostPlugins {
         state.catalog = next;
         if enabled != Some(true) {
             state.turns.remove(&id);
+        }
+        if let Some(key) = timeline_key {
+            if enabled.is_none() {
+                self.timeline.remove(key);
+            }
+            timeline::invalidate(emitter, &id);
         }
         Ok(state.catalog.values().cloned().collect())
     }
@@ -397,6 +435,8 @@ impl HostPlugins {
                 client_html: bundle.client_html,
                 settings,
                 rpc: bundle.rpc,
+                timeline_key: (!bundle.timeline_renderers.is_empty()).then(Uuid::new_v4),
+                timeline_renderers: bundle.timeline_renderers,
                 revision: Arc::new(()),
                 activation: Arc::new(()),
             },
@@ -466,6 +506,14 @@ impl HostPlugins {
     }
 
     pub async fn update(&self, id: &str) -> Result<PluginUpdate, AppCommandError> {
+        self.update_with_events(id, &EventEmitter::Noop).await
+    }
+
+    pub(crate) async fn update_with_events(
+        &self,
+        id: &str,
+        emitter: &EventEmitter,
+    ) -> Result<PluginUpdate, AppCommandError> {
         let (revision, source) = {
             let guard = self.state.lock().expect("host plugin state lock");
             let state = guard.as_ref().map_err(|error| catalog_error(error))?;
@@ -477,7 +525,7 @@ impl HostPlugins {
             (plugin.revision.clone(), source)
         };
         let (bundle, source) = source.refresh().await?;
-        self.replace(id, &revision, bundle, source)
+        self.replace(id, &revision, bundle, source, emitter)
     }
 
     fn replace(
@@ -486,6 +534,7 @@ impl HostPlugins {
         revision: &Arc<()>,
         bundle: PluginBundle,
         source: source::InstalledSource,
+        emitter: &EventEmitter,
     ) -> Result<PluginUpdate, AppCommandError> {
         let mut guard = self.state.lock().expect("host plugin state lock");
         let state = guard.as_mut().map_err(|error| catalog_error(error))?;
@@ -495,6 +544,7 @@ impl HostPlugins {
             server_code,
             client_html,
             rpc,
+            timeline_renderers,
         } = bundle;
         if !Arc::ptr_eq(&current.revision, revision) {
             return Err(invalid(
@@ -518,7 +568,9 @@ impl HostPlugins {
             || current.server_code != server_code
             || current.manifest.client != manifest.client
             || current.client_html != client_html
-            || current.manifest.contributes.lifecycle_hooks != manifest.contributes.lifecycle_hooks;
+            || current.manifest.contributes.lifecycle_hooks != manifest.contributes.lifecycle_hooks
+            || current.manifest.contributes.timeline_renderers
+                != manifest.contributes.timeline_renderers;
         let settings_changed = current.manifest.settings != manifest.settings;
         let settings = current.settings_for_update(manifest.settings.as_ref())?;
         if current.manifest == manifest
@@ -535,6 +587,9 @@ impl HostPlugins {
         let disabled_for_update = current.enabled && !enabled;
         let discard_activity =
             !enabled || manifest.contributes.hooks != current.manifest.contributes.hooks;
+        let timeline_key = current
+            .timeline_key
+            .or_else(|| (!timeline_renderers.is_empty()).then(Uuid::new_v4));
         let mut next = state.catalog.clone();
         next.insert(
             id.to_owned(),
@@ -546,6 +601,8 @@ impl HostPlugins {
                 client_html,
                 settings,
                 rpc,
+                timeline_renderers,
+                timeline_key,
                 revision: Arc::new(()),
                 activation: Arc::new(()),
             },
@@ -554,6 +611,9 @@ impl HostPlugins {
         state.catalog = next;
         if discard_activity {
             state.turns.remove(id);
+        }
+        if disabled_for_update && timeline_key.is_some() {
+            timeline::invalidate(emitter, id);
         }
         Ok(PluginUpdate {
             updated: true,
@@ -567,6 +627,16 @@ impl HostPlugins {
         id: &str,
         method: String,
         input: serde_json::Value,
+    ) -> Result<serde_json::Value, AppCommandError> {
+        self.call_with_timeline(id, method, input, None).await
+    }
+
+    pub(crate) async fn call_with_timeline(
+        &self,
+        id: &str,
+        method: String,
+        input: serde_json::Value,
+        timeline_scope: Option<(i32, &EventEmitter)>,
     ) -> Result<serde_json::Value, AppCommandError> {
         let invocation = {
             let guard = self.state.lock().expect("host plugin state lock");
@@ -588,13 +658,23 @@ impl HostPlugins {
             }
             Invocation::new(id, plugin, method).ok_or_else(plugin_not_found)?
         };
-        self.invoke(invocation, input).await
+        self.invoke_with_timeline(invocation, input, timeline_scope)
+            .await
     }
 
     async fn invoke(
         &self,
         invocation: Invocation,
         input: serde_json::Value,
+    ) -> Result<serde_json::Value, AppCommandError> {
+        self.invoke_with_timeline(invocation, input, None).await
+    }
+
+    async fn invoke_with_timeline(
+        &self,
+        invocation: Invocation,
+        input: serde_json::Value,
+        timeline_scope: Option<(i32, &EventEmitter)>,
     ) -> Result<serde_json::Value, AppCommandError> {
         let Invocation {
             id,
@@ -604,7 +684,10 @@ impl HostPlugins {
             activation,
             settings,
             contract,
+            has_timeline,
         } = invocation;
+        let scope = timeline_scope.filter(|_| has_timeline);
+        let conversation_id = scope.map(|(conversation_id, _)| conversation_id);
         let slot = self
             .runtime_slots
             .clone()
@@ -614,29 +697,66 @@ impl HostPlugins {
             })?;
         let result = tokio::task::spawn_blocking(move || {
             let _slot = slot;
-            runtime::call_with_settings(
+            runtime::invoke(
                 &entry,
                 &code,
                 &method,
                 &input,
                 settings.as_ref().map(|settings| &settings.value),
                 contract.as_deref(),
+                conversation_id,
             )
         })
         .await
         .map_err(|_| {
             AppCommandError::new(AppErrorCode::TaskExecutionFailed, "Plugin runtime stopped")
         })?;
+        let output = {
+            let guard = self.state.lock().expect("host plugin state lock");
+            let state = guard.as_ref().map_err(|error| catalog_error(error))?;
+            state.active_plugin(&id, &activation)?;
+            result?
+        };
+        if !output.timeline.is_empty() {
+            let (conversation_id, emitter) = scope.expect("only scoped calls can append");
+            let emitter = emitter.clone();
+            let state = self.state.clone();
+            let timeline = self.timeline.clone();
+            tokio::task::spawn_blocking(move || {
+                let guard = state.lock().expect("host plugin state lock");
+                let state = guard.as_ref().map_err(|error| catalog_error(error))?;
+                let plugin = state.active_plugin(&id, &activation)?;
+                let key = plugin.timeline_key.ok_or_else(plugin_not_found)?;
+                for append in &output.timeline {
+                    append.validate(&plugin.timeline_renderers)?;
+                }
+                timeline.upsert(key, &id, conversation_id, output.timeline, &emitter)
+            })
+            .await
+            .map_err(|_| {
+                AppCommandError::new(
+                    AppErrorCode::TaskExecutionFailed,
+                    "Plugin timeline write stopped",
+                )
+            })??;
+        }
+        Ok(output.value)
+    }
+
+    pub(crate) fn timeline_list(
+        &self,
+        conversation_id: i32,
+    ) -> Result<Vec<TimelineItem>, AppCommandError> {
         let guard = self.state.lock().expect("host plugin state lock");
         let state = guard.as_ref().map_err(|error| catalog_error(error))?;
-        if !state
-            .catalog
-            .get(&id)
-            .is_some_and(|plugin| Arc::ptr_eq(&plugin.activation, &activation))
-        {
-            return Err(plugin_not_found());
+        let mut items = Vec::new();
+        for (id, plugin) in state.catalog.iter().filter(|(_, plugin)| plugin.enabled) {
+            if let Some(key) = plugin.timeline_key {
+                items.extend(self.timeline.load(key, id, conversation_id)?);
+            }
         }
-        result
+        timeline::sort(&mut items);
+        Ok(items)
     }
 
     pub fn settings(&self, id: &str) -> Result<PluginSettings, AppCommandError> {
@@ -824,6 +944,7 @@ struct Invocation {
     activation: Arc<()>,
     settings: Option<PluginSettings>,
     contract: Option<Arc<schema::RpcContract>>,
+    has_timeline: bool,
 }
 
 impl Invocation {
@@ -834,6 +955,7 @@ impl Invocation {
             entry: server.entry.clone(),
             code: plugin.server_code.clone()?,
             contract: plugin.rpc.get(&method).cloned(),
+            has_timeline: !plugin.timeline_renderers.is_empty(),
             method,
             activation: plugin.activation.clone(),
             settings: plugin
@@ -843,6 +965,19 @@ impl Invocation {
                 .and(plugin.settings.as_ref())
                 .cloned(),
         })
+    }
+}
+
+impl PluginState {
+    fn active_plugin(
+        &self,
+        id: &str,
+        activation: &Arc<()>,
+    ) -> Result<&InstalledPlugin, AppCommandError> {
+        self.catalog
+            .get(id)
+            .filter(|plugin| plugin.enabled && Arc::ptr_eq(&plugin.activation, activation))
+            .ok_or_else(plugin_not_found)
     }
 }
 
@@ -916,6 +1051,9 @@ impl InstalledPlugin {
 }
 
 impl Manifest {
+    fn compile_timeline_renderers(&self) -> Result<timeline::Renderers, String> {
+        timeline::compile(&self.contributes.timeline_renderers, self.client.is_some())
+    }
     fn compile_rpc(&self) -> Result<RpcContracts, String> {
         self.server
             .iter()
@@ -939,7 +1077,7 @@ impl Manifest {
         Ok(manifest)
     }
 
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<timeline::Renderers, String> {
         let bundled = self.server.is_some() || self.client.is_some();
         if !matches!((self.api_version, bundled), (1, false) | (2, true)) {
             return Err(format!(
@@ -1003,6 +1141,7 @@ impl Manifest {
             themes,
             screens,
             sidebar_items,
+            timeline_renderers: _,
         } = &self.contributes;
         if !bundled && workspace_panels.is_empty() && themes.is_empty() {
             return Err("A declarative plugin needs a workspace panel or theme".to_owned());
@@ -1112,7 +1251,7 @@ impl Manifest {
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
-        Ok(())
+        self.compile_timeline_renderers()
     }
 }
 
@@ -1126,6 +1265,7 @@ impl PluginBundle {
             server_code: None,
             client_html: None,
             rpc: BTreeMap::new(),
+            timeline_renderers: BTreeMap::new(),
         })
     }
 }
@@ -1181,9 +1321,15 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
         return Err("Too many installed host plugins".to_owned());
     }
     let mut result = Catalog::new();
+    let mut timeline_keys = BTreeSet::new();
     for mut plugin in catalog {
-        plugin.manifest.validate()?;
+        plugin.timeline_renderers = plugin.manifest.validate()?;
         plugin.rpc = plugin.manifest.compile_rpc()?;
+        match plugin.timeline_key {
+            Some(key) if timeline_keys.insert(key) => {}
+            None if plugin.timeline_renderers.is_empty() => {}
+            _ => return Err("Invalid installed plugin timeline key".into()),
+        }
         match (&plugin.manifest.server, &plugin.server_code) {
             (None, None) => {}
             (Some(_), Some(code))
@@ -1234,6 +1380,8 @@ fn write_catalog(path: &Path, catalog: &Catalog) -> Result<(), AppCommandError> 
         client_html: Option<&'a str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         settings: Option<&'a PluginSettings>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timeline_key: Option<Uuid>,
     }
     let write = || -> Result<(), Box<dyn std::error::Error>> {
         let dir = path.parent().expect("host plugin catalog has a parent");
@@ -1246,6 +1394,7 @@ fn write_catalog(path: &Path, catalog: &Catalog) -> Result<(), AppCommandError> 
                 server_code: plugin.server_code.as_deref(),
                 client_html: plugin.client_html.as_deref(),
                 settings: plugin.settings.as_ref(),
+                timeline_key: plugin.timeline_key,
             })
             .collect();
         serde_json::to_writer(&mut file, &stored)?;
@@ -1915,6 +2064,7 @@ mod tests {
             revision,
             PluginBundle::manifest_only(updated.clone()).unwrap(),
             source.clone(),
+            &EventEmitter::Noop,
         )
         .unwrap();
         assert!(host.list().unwrap()[0].enabled);
@@ -1923,7 +2073,8 @@ mod tests {
                 ID,
                 revision,
                 PluginBundle::manifest_only(updated).unwrap(),
-                source
+                source,
+                &EventEmitter::Noop,
             )
             .is_err());
     }

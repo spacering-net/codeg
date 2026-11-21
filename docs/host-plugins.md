@@ -217,6 +217,54 @@ the surface, hiding the session or changing the session, workspace, or connected
 host revokes its access. It works for a conversation's composer and the
 composer within its canvas card.
 
+## Plugin timeline items
+
+Declare `contributes.timelineRenderers` with up to 16 entries. Each entry
+has a `kind` of 1 to 32 lowercase ASCII letters, digits, or hyphens, starting
+with a letter. Provide a positive `version`, a `title`, and optional
+`titleTranslations`. The `(kind, version)` pair must be unique within the
+plugin. The optional `dataSchema` uses the same JSON Schema rules as server
+RPC contracts. Every renderer uses the plugin's reviewed `client.entry`.
+
+Call a declared plugin method through `host_plugins_call` with `pluginId`,
+`method`, `input`, and a top-level `conversationId` for the active saved
+conversation. Codeg verifies that this conversation exists on the connected
+host. The method receives a fourth argument with `conversationId` and
+`timeline.append({ id, kind, version, data })` when its plugin declares a
+renderer. Session lifecycle methods receive this capability when the host
+has a saved conversation for the event. Methods called without a conversation
+use the usual three arguments.
+
+An appended item must match a renderer declared by the calling plugin. It
+uses an `id` of up to 64 lowercase ASCII letters, digits, hyphens, or dots,
+starting with a letter. `data` may be any JSON value up to 64 KiB when
+serialized as UTF-8. Codeg rejects oversized data and enforces the matching
+renderer schema when present. The host assigns `pluginId`, `conversationId`,
+and `updatedAt`. A plugin can keep up to 64 items per conversation and submit
+up to 64 appends in one call. An existing `(conversationId, pluginId, id)`
+is replaced. Codeg commits the appends atomically after a successful method
+return and RPC output validation.
+
+`host_plugins_timeline_list` takes `{ conversationId }` and returns items
+from enabled plugins on that host, ordered by `updatedAt`, `pluginId`, and
+`id`. The `host-plugins://timeline` event carries
+`{ conversationId, pluginId, item }` after each committed upsert. Catalog
+changes that hide or restore a plugin's timeline emit
+`{ conversationId: null, pluginId, item: null }` so clients can refresh.
+Disabling a plugin hides its rows. Removing a plugin deletes its stored rows.
+
+The reviewed client receives `{ type: "timelineItem", kind, version, itemId,
+conversationId, data, locale }` from `window.codeg.ready` when Codeg renders
+an item owned by that plugin. Use a new renderer version when changing the
+shape of its stored data. See the [timeline author types](host-plugin-timeline.d.ts)
+for the manifest and method contracts.
+
+Install and enable the [Timeline Review example](../examples/plugins/timeline-review)
+on the connected host. Call `record-review` on `codeg.timeline-review` with a
+saved `conversationId` and input such as
+`{ "summary": "The review is ready.", "status": "passed" }`. The example
+upserts a `review-result` timeline item for that conversation.
+
 ## Persist plugin settings
 
 Declare `settings` with a positive integer `version`, a JSON Schema whose root

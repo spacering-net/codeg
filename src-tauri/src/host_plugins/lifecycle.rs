@@ -236,11 +236,17 @@ impl HostPlugins {
         };
         let host = self.clone();
         let emitter = emitter.clone();
+        let conversation_id = input
+            .get("conversationId")
+            .and_then(Value::as_i64)
+            .and_then(|id| i32::try_from(id).ok())
+            .filter(|id| *id > 0);
         tokio::spawn(async move {
             let _slot = slot;
             for hook in hooks {
                 let plugin_id = hook.id.clone();
-                match host.invoke(hook, input.clone()).await {
+                let scope = conversation_id.map(|id| (id, &emitter));
+                match host.invoke_with_timeline(hook, input.clone(), scope).await {
                     Ok(data) if !data.is_null() => {
                         emit_event(
                             &emitter,
