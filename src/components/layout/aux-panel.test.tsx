@@ -142,7 +142,8 @@ import enMessages from "@/i18n/messages/en.json"
 import { resetAuxTabOrderCacheForTests } from "@/lib/aux-panel-tab-order"
 import { RIGHT_CHROME_CLUSTER } from "@/lib/window-chrome"
 
-import { AuxPanel, resolveAuxTabView } from "./aux-panel"
+import { AuxPanel } from "./aux-panel"
+import { resolveAuxTabView } from "./aux-panel-tab-meta"
 
 const KEY = "workspace:right-sidebar-tab-order"
 
