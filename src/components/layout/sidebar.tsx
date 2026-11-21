@@ -64,7 +64,9 @@ import { leftChromeReserve } from "@/lib/window-chrome"
 import {
   isNavItemVisible,
   loadNavItemVisibility,
+  loadSidebarPluginViewMap,
   loadTagFilter,
+  saveSidebarPluginView,
   saveTagFilter,
   loadShowCompleted,
   loadShowRecent,
@@ -80,6 +82,7 @@ import {
   saveSectionOrder,
   DEFAULT_SECTION_ORDER,
   SIDEBAR_NAV_ITEM_IDS,
+  SIDEBAR_PLUGIN_VIEW_KEY,
   type SidebarNavItemId,
   type SidebarNavItemVisibility,
   type SidebarSectionId,
@@ -98,9 +101,12 @@ import {
   SidebarTagFilterSubmenu,
 } from "@/components/conversations/sidebar-tag-filter"
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
+import { HostPluginSurface } from "@/components/host-plugin-surface"
 import {
   selectPluginSidebarItems,
+  selectPluginSidebarViews,
   useHostPlugins,
+  usePluginHostScope,
   type PluginSidebarItemPlacement,
 } from "@/lib/host-plugins"
 import { cn } from "@/lib/utils"
@@ -126,6 +132,7 @@ const SHORTCUT_BADGE_CLASS = cn(
 // visibility toggle today.
 const NO_HIDDEN_SECTIONS: ReadonlySet<SidebarSectionId> = new Set()
 const RECENT_HIDDEN: ReadonlySet<SidebarSectionId> = new Set(["recent"])
+const DEFAULT_SIDEBAR_VIEW = "__conversations__"
 
 // Icon per optional nav row. The visibility checkboxes in the view-options menu
 // carry the same glyph as the row they switch, so that group reads as a mirror
@@ -200,7 +207,8 @@ export function Sidebar() {
     pluginScreen,
     openPluginScreen,
   } = useWorkbenchRoute()
-  const { data: hostPlugins } = useHostPlugins()
+  const hostScope = usePluginHostScope()
+  const { data: hostPlugins, transport: hostTransport } = useHostPlugins()
   const headerPluginItems = useMemo(
     () => selectPluginSidebarItems(hostPlugins, "header", locale),
     [hostPlugins, locale]
@@ -208,6 +216,10 @@ export function Sidebar() {
   const footerPluginItems = useMemo(
     () => selectPluginSidebarItems(hostPlugins, "footer", locale),
     [hostPlugins, locale]
+  )
+  const pluginSidebarViews = useMemo(
+    () => (hostTransport ? selectPluginSidebarViews(hostPlugins, locale) : []),
+    [hostTransport, hostPlugins, locale]
   )
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
@@ -250,12 +262,29 @@ export function Sidebar() {
   // needs nothing but ids, so a persisted filter applies from the first paint
   // instead of flashing the whole list and then narrowing it.
   const [rawTagFilter, setRawTagFilter] = useState<TagFilter>(EMPTY_TAG_FILTER)
+  const [storedPluginViews, setStoredPluginViews] = useState<
+    Record<string, string>
+  >({})
+  const [pluginViewsHydrated, setPluginViewsHydrated] = useState(false)
   const tagsById = useConversationTagsStore((s) => s.tagsById)
   const tagsHydrated = useConversationTagsStore((s) => s.hydrated)
   const tagFilter = useMemo(
     () =>
       tagsHydrated ? pruneTagFilter(rawTagFilter, tagsById) : rawTagFilter,
     [rawTagFilter, tagsById, tagsHydrated]
+  )
+  const selectedPluginViewKey =
+    pluginViewsHydrated && hostScope.transportReady && hostTransport !== null
+      ? (storedPluginViews[hostScope.scopeKey] ?? null)
+      : null
+  const activePluginSidebarView = useMemo(
+    () =>
+      selectedPluginViewKey
+        ? (pluginSidebarViews.find(
+            (view) => view.key === selectedPluginViewKey
+          ) ?? null)
+        : null,
+    [pluginSidebarViews, selectedPluginViewKey]
   )
   const newConversationShortcutLabel = formatShortcutLabel(
     shortcuts.new_conversation,
@@ -280,7 +309,60 @@ export function Sidebar() {
     setSortMode(loadSortMode())
     setSectionOrder(loadSectionOrder())
     setRawTagFilter(loadTagFilter())
+    setStoredPluginViews(loadSidebarPluginViewMap())
+    setPluginViewsHydrated(true)
   }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === SIDEBAR_PLUGIN_VIEW_KEY) {
+        setStoredPluginViews(loadSidebarPluginViewMap())
+      }
+    }
+    window.addEventListener("storage", onStorage)
+    return () => window.removeEventListener("storage", onStorage)
+  }, [])
+
+  // Prune a stored selection ONLY once the connected host's catalog has loaded
+  // (`hostPlugins !== undefined`) and confirms the view is no longer contributed
+  // (disabled, removed, or contribution withdrawn). Never clear a saved choice
+  // while the transport or catalog is still loading or errored.
+  useEffect(() => {
+    if (
+      !pluginViewsHydrated ||
+      !hostScope.transportReady ||
+      !hostTransport ||
+      hostPlugins === undefined ||
+      !selectedPluginViewKey
+    ) {
+      return
+    }
+    if (pluginSidebarViews.some((view) => view.key === selectedPluginViewKey)) {
+      return
+    }
+    const next = saveSidebarPluginView(hostScope.scopeKey, null)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- prune withdrawn plugin view after host catalog settles
+    setStoredPluginViews(next)
+  }, [
+    pluginViewsHydrated,
+    hostScope.scopeKey,
+    hostScope.transportReady,
+    hostTransport,
+    hostPlugins,
+    selectedPluginViewKey,
+    pluginSidebarViews,
+  ])
+
+  const handleSelectSidebarView = useCallback(
+    (value: string) => {
+      if (!hostScope.transportReady || !hostTransport) return
+      const nextKey = value === DEFAULT_SIDEBAR_VIEW ? null : value
+      const next = saveSidebarPluginView(hostScope.scopeKey, nextKey)
+      setStoredPluginViews(next)
+    },
+    [hostScope.scopeKey, hostScope.transportReady, hostTransport]
+  )
 
   const handleSetTagFilter = useCallback((next: TagFilter) => {
     setRawTagFilter(next)
@@ -410,40 +492,49 @@ export function Sidebar() {
             window's top edge, so its empty space must move the window. */}
         <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
         <div className="flex items-center gap-0.5">
-          {/* Locate the active conversation in the list below (moved here from
-              the conversation detail header). Always shown, leading the header
-              cluster. The sidebar is unmounted while collapsed, so `listRef` is
-              live whenever this button is visible. */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 shrink-0 text-muted-foreground"
-            onClick={() => listRef.current?.scrollToActive()}
-            title={t("locateActiveConversation")}
-            aria-label={t("locateActiveConversation")}
-          >
-            <Crosshair aria-hidden="true" className="h-3.5 w-3.5" />
-          </Button>
-          {/* Expand/collapse-all is an icon-only header button on every
-              viewport (it used to be a labelled row inside the view-options
-              menu on desktop): it acts on the list right now instead of storing
-              a display preference, so it does not belong among that menu's
-              settings rows — and it took two clicks there. The icon itself
-              states the direction, hence label-free with a tooltip. */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 shrink-0 text-muted-foreground"
-            onClick={handleToggleExpandAll}
-            title={toggleExpandLabel}
-            aria-label={toggleExpandLabel}
-          >
-            {allExpanded ? (
-              <ListChevronsDownUp aria-hidden="true" className="h-3.5 w-3.5" />
-            ) : (
-              <ListChevronsUpDown aria-hidden="true" className="h-3.5 w-3.5" />
-            )}
-          </Button>
+          {!activePluginSidebarView && (
+            <>
+              {/* Locate the active conversation in the list below (moved here from
+                  the conversation detail header). Always shown while the
+                  conversation list is visible. */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 shrink-0 text-muted-foreground"
+                onClick={() => listRef.current?.scrollToActive()}
+                title={t("locateActiveConversation")}
+                aria-label={t("locateActiveConversation")}
+              >
+                <Crosshair aria-hidden="true" className="h-3.5 w-3.5" />
+              </Button>
+              {/* Expand/collapse-all is an icon-only header button on every
+                  viewport (it used to be a labelled row inside the view-options
+                  menu on desktop): it acts on the list right now instead of storing
+                  a display preference, so it does not belong among that menu's
+                  settings rows — and it took two clicks there. The icon itself
+                  states the direction, hence label-free with a tooltip. */}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 shrink-0 text-muted-foreground"
+                onClick={handleToggleExpandAll}
+                title={toggleExpandLabel}
+                aria-label={toggleExpandLabel}
+              >
+                {allExpanded ? (
+                  <ListChevronsDownUp
+                    aria-hidden="true"
+                    className="h-3.5 w-3.5"
+                  />
+                ) : (
+                  <ListChevronsUpDown
+                    aria-hidden="true"
+                    className="h-3.5 w-3.5"
+                  />
+                )}
+              </Button>
+            </>
+          )}
           <DropdownMenu
             open={viewOptionsOpen}
             onOpenChange={setViewOptionsOpen}
@@ -468,6 +559,29 @@ export function Sidebar() {
                 clips overflow-x — 48 would start truncating longer localized
                 section names. */}
             <DropdownMenuContent align="end" className="min-w-56">
+              {pluginSidebarViews.length > 0 && (
+                <>
+                  <DropdownMenuLabel>{t("sidebarView")}</DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    value={activePluginSidebarView?.key ?? DEFAULT_SIDEBAR_VIEW}
+                    onValueChange={handleSelectSidebarView}
+                  >
+                    <DropdownMenuRadioItem value={DEFAULT_SIDEBAR_VIEW}>
+                      {t("sidebarViewConversations")}
+                    </DropdownMenuRadioItem>
+                    {pluginSidebarViews.map((view) => (
+                      <DropdownMenuRadioItem
+                        key={view.key}
+                        value={view.key}
+                        title={`${view.pluginName} · ${view.title}`}
+                      >
+                        <span className="truncate">{view.title}</span>
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                  <DropdownMenuSeparator />
+                </>
+              )}
               {/* Five groups: what the list shows → which nav rows exist →
                   which tabs the window shows → how the list is sorted → how its
                   sections are stacked. The first group is the tag filter plus
@@ -756,7 +870,7 @@ export function Sidebar() {
       <div
         className="flex flex-col flex-1 min-h-0 overflow-hidden pt-1.5"
         onClick={
-          isMobile
+          isMobile && !activePluginSidebarView
             ? (e) => {
                 const target = e.target as HTMLElement
                 if (target.closest("[data-conversation-id]")) {
@@ -766,16 +880,66 @@ export function Sidebar() {
             : undefined
         }
       >
-        <SidebarTagFilterBar filter={tagFilter} onChange={handleSetTagFilter} />
-        <SidebarConversationList
-          ref={listRef}
-          showCompleted={showCompleted}
-          showWorktrees={showWorktrees}
-          showRecent={showRecent}
-          sortMode={sortMode}
-          sectionOrder={sectionOrder}
-          tagFilter={tagFilter}
-        />
+        {activePluginSidebarView ? (
+          <div
+            data-testid="sidebar-plugin-view"
+            data-plugin-id={activePluginSidebarView.pluginId}
+            data-sidebar-view-id={activePluginSidebarView.id}
+            className="flex min-h-0 flex-1 flex-col overflow-hidden px-1.5 pb-1.5"
+          >
+            <div className="mb-1.5 flex shrink-0 items-center justify-between gap-2 px-1.5">
+              <span
+                className="min-w-0 truncate text-xs font-medium text-muted-foreground"
+                title={`${activePluginSidebarView.pluginName} · ${activePluginSidebarView.title}`}
+              >
+                {activePluginSidebarView.title}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => handleSelectSidebarView(DEFAULT_SIDEBAR_VIEW)}
+                title={t("backToConversations")}
+                aria-label={t("backToConversations")}
+                className="h-6 shrink-0 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <MessagesSquare
+                  aria-hidden="true"
+                  className="mr-1 h-3 w-3 shrink-0"
+                />
+                <span className="truncate">
+                  {t("sidebarViewConversations")}
+                </span>
+              </Button>
+            </div>
+            <HostPluginSurface
+              key={`${hostScope.scopeKey}:${activePluginSidebarView.key}`}
+              pluginId={activePluginSidebarView.pluginId}
+              title={activePluginSidebarView.title}
+              context={{
+                type: "sidebarView",
+                id: activePluginSidebarView.id,
+              }}
+              className="h-full min-h-0 flex-1 rounded-lg border-border/60"
+            />
+          </div>
+        ) : (
+          <>
+            <SidebarTagFilterBar
+              filter={tagFilter}
+              onChange={handleSetTagFilter}
+            />
+            <SidebarConversationList
+              ref={listRef}
+              showCompleted={showCompleted}
+              showWorktrees={showWorktrees}
+              showRecent={showRecent}
+              sortMode={sortMode}
+              sectionOrder={sectionOrder}
+              tagFilter={tagFilter}
+            />
+          </>
+        )}
       </div>
 
       {footerPluginItems.length > 0 && (

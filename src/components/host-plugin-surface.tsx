@@ -23,6 +23,7 @@ export type SurfaceContext = { id: string } & (
   | { type: "pluginDetail" }
   | { type: "activationPanel" }
   | { type: "screen" }
+  | { type: "sidebarView" }
   | ({
       type: "clientSurface"
       slot: PluginClientSurfaceSlot
