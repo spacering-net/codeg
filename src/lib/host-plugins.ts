@@ -10,6 +10,33 @@ type WorkspacePanel = { id: string; title: string } & (
   | { view: "client" }
 )
 
+export type PluginClientSurfaceSlot = "sessionHeader" | "composer"
+
+export interface PluginClientSurfaceContribution {
+  id: string
+  title: string
+  slot: PluginClientSurfaceSlot
+}
+
+export interface ResolvedPluginClientSurface {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  slot: PluginClientSurfaceSlot
+}
+
+export interface HostPluginSessionContext {
+  /** Workspace folder ID; `null` for folderless chat sessions/drafts. */
+  folderId: number | null
+  /** Persisted DB conversation ID when saved; `null` for unsent drafts. */
+  conversationId: number | null
+  /** Stable UI session identifier (e.g. tab ID or canvas context key) used to
+   *  isolate drafts and sibling sessions. */
+  sessionKey: string
+}
+
 export interface InstalledPlugin {
   enabled: boolean
   source?:
@@ -36,6 +63,7 @@ export interface InstalledPlugin {
       }[]
       hooks: { event: "session.turnCompleted"; action: "recordTurnActivity" }[]
       settingsPanel?: { id: string; title: string }
+      clientSurfaces?: PluginClientSurfaceContribution[]
     }
   }
 }
@@ -240,4 +268,46 @@ export function usePluginClientHtml(pluginId: string) {
 
 export function pluginPanelKey(pluginId: string, panelId: string) {
   return `${pluginId}:${panelId}`
+}
+
+export function pluginClientSurfaceKey(pluginId: string, surfaceId: string) {
+  return `${pluginId}:${surfaceId}`
+}
+
+export function selectPluginClientSurfaces(
+  plugins: readonly InstalledPlugin[] | undefined,
+  slot: PluginClientSurfaceSlot
+): ResolvedPluginClientSurface[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginClientSurface[] = []
+  const seen = new Set<string>()
+  for (const plugin of plugins) {
+    if (!plugin.enabled || !plugin.manifest.client?.entry?.trim()) continue
+    const surfaces = plugin.manifest.contributes.clientSurfaces
+    if (!surfaces?.length) continue
+    for (const surface of surfaces) {
+      if (surface.slot !== slot) continue
+      const id = surface.id.trim()
+      const title = surface.title.trim()
+      if (!id || !title) continue
+      const key = pluginClientSurfaceKey(plugin.manifest.id, id)
+      if (seen.has(key)) continue
+      seen.add(key)
+      items.push({
+        key,
+        pluginId: plugin.manifest.id,
+        pluginName: plugin.manifest.name,
+        id,
+        title,
+        slot: surface.slot,
+      })
+    }
+  }
+  return items
+}
+
+export function hostPluginSessionScopeKey(
+  context: HostPluginSessionContext
+): string {
+  return `${context.folderId ?? "none"}:${context.conversationId ?? "draft"}:${context.sessionKey}`
 }

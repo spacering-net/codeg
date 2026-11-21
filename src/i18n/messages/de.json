@@ -105,7 +105,9 @@
     "enable": "{name} aktivieren",
     "remove": "{name} entfernen",
     "choosePanel": "Plugin-Bereich",
-    "noTurns": "In diesem Workspace wurden keine Runden erfasst."
+    "noTurns": "In diesem Workspace wurden keine Runden erfasst.",
+    "pluginSurfaces": "Plugin-Aktionen",
+    "morePluginSurfaces": "Weitere Plugin-Aktionen"
   },
   "AppearanceSettings": {
     "sectionTitle": "Design-Erscheinungsbild",
