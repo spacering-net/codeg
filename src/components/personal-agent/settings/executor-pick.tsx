@@ -77,11 +77,17 @@ export function ExecutorPick({
   return (
     <Select
       value={selected}
-      onValueChange={(v) =>
-        onChange(
-          v === NEW ? { kind: "new" } : { kind: "existing", id: Number(v) }
-        )
-      }
+      onValueChange={(v) => {
+        if (v === NEW) return onChange({ kind: "new" })
+        // Only one of the items: in a form the select keeps a native
+        // <select> in step with its value, and when the value names an
+        // item not there yet (the bound one, as the list loads) it reports
+        // back "" — not a pick.
+        const id = Number(v)
+        if (v && listed.some((a) => a.id === id)) {
+          onChange({ kind: "existing", id })
+        }
+      }}
       disabled={disabled}
     >
       <SelectTrigger
