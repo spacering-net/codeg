@@ -24,9 +24,15 @@ equivalent for each:
 
 Two OpenChamber mechanisms disappear outright. The boundary message id (which
 trims inherited history out of the fork's visible transcript) is unnecessary
-because Codeg renders a conversation from its own native transcript, and the
-inherited history never enters the fork's file. Promote/destroy become single
-field updates in one transaction instead of metadata patches with rollback
+because a btw transcript showing the history up to the fork point is the
+feature, not a bug — that is what the side question is asked against. How the
+history gets there differs per engine and needs no shared bookkeeping:
+claude's fork copies the persisted JSONL prefix into the child's own file,
+and codex's child rollout carries a `forked_from_id` reference the parser
+follows back to the cut (`CodexParser`, tested by
+`a_by_reference_fork_inherits_the_parent_history_up_to_the_cut`); either way
+the ordinary detail path renders it. Promote/destroy become single field
+updates in one transaction instead of metadata patches with rollback
 compensation.
 
 ## Behavior

@@ -1261,6 +1261,26 @@ describe("MessageInput /btw intercept", () => {
     await act(async () => resolveBtw(true))
     await waitFor(() => expect(composerHandle.current?.getText()).toBe(""))
   })
+
+  it("keeps text typed while the fork is in flight", async () => {
+    // The composer still shows the submitted question while the RPC runs;
+    // text typed into it during that window is unsent and must survive the
+    // success cleanup (same guard the steer path uses).
+    let resolveBtw: (v: boolean) => void = () => {}
+    const onBtw = vi
+      .fn()
+      .mockImplementation(() => new Promise<boolean>((r) => (resolveBtw = r)))
+    const editor = await mountTyped("/btw slow fork", { onBtw })
+    pressEnter(editor)
+
+    act(() => {
+      editor.commands.insertContentAt(" /btw slow fork".length, " and more")
+    })
+    await act(async () => resolveBtw(true))
+
+    expect(composerHandle.current?.getText()).toBe("/btw slow fork and more")
+    expect(loadMessageInputDraftV2(DRAFT_KEY)).not.toBeNull()
+  })
 })
 
 // The sidebar's "add to session" drops a session mention — the same reference the

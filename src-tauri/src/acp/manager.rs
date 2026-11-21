@@ -1999,9 +1999,15 @@ impl ConnectionManager {
         // The btw-promotion frame (see the `btw_promoted` column): the first
         // user prompt of a row promoted from `/btw` carries the notice that
         // lifts the side-question constraints. Read-only here — the flag
-        // clears ONLY after the prompt reaches the agent, so every failure
-        // path below (gate refusal, closed channel, exited process) leaves the
-        // notice pending for the next prompt rather than swallowing it.
+        // clears ONLY after the prompt reaches the connection loop, so every
+        // failure path below (gate refusal, closed channel, exited process)
+        // leaves the notice pending for the next prompt rather than
+        // swallowing it. The residual edge is smaller than it reads: Ok from
+        // the helper means the command is queued, and an agent that rejects
+        // the request afterwards loses the notice for that one retry — the
+        // message visibly failed, so the user is resending anyway, and the
+        // row's ordinary conversation context (it is a normal conversation
+        // again after promote) outgrows the stale instruction line by line.
         let btw_promotion_pending = match conversation_id_for_status {
             Some(cid) if conversation_service::has_btw_promotion_pending(&db.conn, cid)
                 .await

@@ -1692,13 +1692,24 @@ export function MessageInput({
     ) {
       if (btwInFlightRef.current) return
       btwInFlightRef.current = true
+      const sentEditor = editorRef.current?.getEditor()
       void onBtw(btwQuestion)
         .then((consumed) => {
           if (!consumed) return
-          if (effectiveDraftStorageKey) {
-            clearMessageInputDraftV2(effectiveDraftStorageKey)
+          // Same guard as the steer path: the fork RPC takes seconds, and text
+          // typed during that window is unsent — only clear what this Enter
+          // actually submitted (same editor, same draft, same storage key).
+          const current = currentComposerRef.current
+          if (
+            current.draftStorageKey === effectiveDraftStorageKey &&
+            editorRef.current?.getEditor() === sentEditor &&
+            JSON.stringify(current.buildDraft()) === JSON.stringify(draft)
+          ) {
+            if (effectiveDraftStorageKey) {
+              clearMessageInputDraftV2(effectiveDraftStorageKey)
+            }
+            resetComposer()
           }
-          resetComposer()
         })
         .finally(() => {
           btwInFlightRef.current = false
