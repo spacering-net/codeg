@@ -374,6 +374,7 @@ async fn async_main(
         data_dir.clone(),
     );
     let state = Arc::new(AppState {
+        host_plugins: Arc::new(codeg_lib::host_plugins::HostPlugins::new(&data_dir)),
         db,
         connection_manager,
         terminal_manager: codeg_lib::app_state::default_terminal_manager(),
@@ -402,6 +403,13 @@ async fn async_main(
         cli_runs,
         cli_access,
     });
+    {
+        let plugins = state.host_plugins.clone();
+        let events = acp_event_bus.subscribe();
+        let connections = state.connection_manager.clone_ref();
+        let emitter = state.emitter.clone();
+        tokio::spawn(async move { plugins.observe_sessions(events, connections, emitter).await });
+    }
     state
         .connection_manager
         .install_chat_channel(state.chat_channel_manager.clone_ref());
