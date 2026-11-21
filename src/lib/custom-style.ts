@@ -74,10 +74,70 @@ export const CUSTOM_THEME_TOKENS = [
 
 export type CustomThemeToken = (typeof CUSTOM_THEME_TOKENS)[number]
 
+export type PluginThemeToken = Exclude<CustomThemeToken, "radius">
+
+export const PLUGIN_THEME_TOKENS: readonly PluginThemeToken[] =
+  CUSTOM_THEME_TOKENS.filter(
+    (token): token is PluginThemeToken => token !== "radius"
+  )
+
+export type PluginThemePalette = Partial<Record<PluginThemeToken, string>>
+
 const TOKEN_SET = new Set<string>(CUSTOM_THEME_TOKENS)
+const PLUGIN_THEME_TOKEN_SET = new Set<string>(PLUGIN_THEME_TOKENS)
+const PLUGIN_HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/
 
 export function isCustomThemeToken(name: unknown): name is CustomThemeToken {
   return typeof name === "string" && TOKEN_SET.has(name)
+}
+
+export function isPluginThemeToken(name: unknown): name is PluginThemeToken {
+  return typeof name === "string" && PLUGIN_THEME_TOKEN_SET.has(name)
+}
+
+export function isValidPluginThemeColor(value: unknown): value is string {
+  return typeof value === "string" && PLUGIN_HEX_COLOR_RE.test(value)
+}
+
+export function parsePluginThemePalette(
+  raw: unknown
+): PluginThemePalette | null {
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw !== "object" || Array.isArray(raw)) return null
+  const out: PluginThemePalette = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (value === undefined) continue
+    if (!isPluginThemeToken(key) || !isValidPluginThemeColor(value)) {
+      return null
+    }
+    out[key] = value
+  }
+  return out
+}
+
+export function parseStoredPluginThemeMap(
+  raw: string | null | undefined
+): Record<string, string> {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {}
+    }
+    const out: Record<string, string> = {}
+    for (const [scope, key] of Object.entries(
+      parsed as Record<string, unknown>
+    )) {
+      const trimmedScope = scope.trim()
+      const trimmedKey = typeof key === "string" ? key.trim() : ""
+      if (trimmedScope && trimmedKey) {
+        out[trimmedScope] = trimmedKey
+      }
+    }
+    return out
+  } catch {
+    return {}
+  }
 }
 
 /** `radius` 之外的都是颜色，UI 用它决定渲染色板还是滑块。 */
