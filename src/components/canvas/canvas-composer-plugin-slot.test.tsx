@@ -448,6 +448,14 @@ describe("CanvasConversationSurface composer plugin text insertion", () => {
       h.composers.get("card-b")!.setText("card B untouched")
     })
 
+    // Wait for card B's own 300ms debounced draft save to settle and capture its
+    // baseline before driving card A's plugin surface, so machine load never
+    // races the pending timer against the post-insertion assertion.
+    await waitFor(() => {
+      expect(loadMessageInputDraftV2("canvas-draft:card-b")).not.toBeNull()
+    })
+    const cardBBaselineDraft = loadMessageInputDraftV2("canvas-draft:card-b")
+
     const cardAEl = document.querySelector<HTMLElement>(
       '[data-canvas-card="card-a"]'
     )!
@@ -493,7 +501,12 @@ describe("CanvasConversationSurface composer plugin text insertion", () => {
     )
     expect(h.composers.get("card-b")!.getText()).toBe("card B untouched")
     expect(loadMessageInputDraftV2("canvas-draft:card-a")?.kind).toBe("doc")
-    expect(loadMessageInputDraftV2("canvas-draft:card-b")).toBeNull()
+    expect(
+      JSON.stringify(loadMessageInputDraftV2("canvas-draft:card-a"))
+    ).toContain("clause from plugin")
+    expect(loadMessageInputDraftV2("canvas-draft:card-b")).toEqual(
+      cardBBaselineDraft
+    )
     expect(h.handleSend).not.toHaveBeenCalled()
 
     // Disabling the plugin withdraws the dialog and blocks subsequent writes on the old port
