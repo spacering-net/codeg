@@ -46,6 +46,14 @@ only declared methods of enabled plugins. A `serverText` workspace panel
 passes `{ folderId }` to its registered method and displays the returned
 string as plain text.
 
+Declare `server.rpc` to give public methods an input and output contract. Its
+keys name methods from `server.methods`. Each value has `input` and `output`
+JSON Schemas. Codeg validates the request before running the handler and
+validates the handler result before returning it. References to definitions in
+the same schema are supported. Methods without a schema continue to accept and
+return JSON. The Workspace Summary example requires an integer `folderId` and
+returns a string.
+
 Each call runs in a fresh QuickJS context on the connected host. The context
 provides ECMAScript built-ins. Files, processes, network requests, external
 imports and Codeg credentials are unavailable. Calls have a 500 ms execution

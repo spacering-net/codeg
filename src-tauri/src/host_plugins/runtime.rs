@@ -4,6 +4,7 @@ use rquickjs::{Context, Ctx, Error, Function, Module, Promise, Runtime, Value};
 use serde_json::Value as Json;
 
 use super::invalid;
+use super::schema::RpcContract;
 use crate::app_error::{AppCommandError, AppErrorCode};
 
 pub(super) const MAX_MODULE_BYTES: usize = 256 * 1024;
@@ -17,10 +18,14 @@ pub(super) fn call_with_settings(
     method: &str,
     input: &Json,
     settings: Option<&Json>,
+    contract: Option<&RpcContract>,
 ) -> Result<Json, AppCommandError> {
-    let input = serde_json::to_vec(input).map_err(|_| invalid("Invalid plugin input"))?;
-    if input.len() > MAX_MESSAGE_BYTES {
+    let input_json = serde_json::to_vec(input).map_err(|_| invalid("Invalid plugin input"))?;
+    if input_json.len() > MAX_MESSAGE_BYTES {
         return Err(invalid("Plugin input exceeds 64 KiB"));
+    }
+    if let Some(contract) = contract {
+        contract.check_input(method, input)?;
     }
     let settings = serde_json::to_vec(&settings).map_err(|_| invalid("Invalid plugin settings"))?;
 
@@ -35,7 +40,7 @@ pub(super) fn call_with_settings(
         let (module, initialized) = module.eval()?;
         resolve(&ctx, initialized, deadline)?;
         let handle: Function<'_> = module.get("handle")?;
-        let input = ctx.json_parse(input)?;
+        let input = ctx.json_parse(input_json)?;
         let settings = ctx.json_parse(settings)?;
         let result: Value<'_> = handle.call((method, input, settings))?;
         let result = match result.as_promise() {
@@ -56,7 +61,11 @@ pub(super) fn call_with_settings(
     if output.len() > MAX_MESSAGE_BYTES {
         return Err(invalid("Plugin response exceeds 64 KiB"));
     }
-    serde_json::from_str(&output).map_err(|_| failed())
+    let value = serde_json::from_str(&output).map_err(|_| failed())?;
+    if let Some(contract) = contract {
+        contract.check_output(method, &value)?;
+    }
+    Ok(value)
 }
 
 fn resolve<'js>(
@@ -95,6 +104,7 @@ mod tests {
             "echo",
             &json!({ "value": 42 }),
             None,
+            None,
         ).unwrap();
         assert_eq!(
             output,
@@ -110,6 +120,7 @@ mod tests {
             "loop",
             &Json::Null,
             None,
+            None,
         )
         .unwrap_err();
         assert!(error.to_string().contains("execution time limit"));
@@ -121,7 +132,9 @@ mod tests {
             "export const handle = () => 'a'.repeat(65536)",
             "import fs from 'node:fs'; export const handle = () => fs",
         ] {
-            assert!(call_with_settings("fixture.mjs", code, "test", &Json::Null, None).is_err());
+            assert!(
+                call_with_settings("fixture.mjs", code, "test", &Json::Null, None, None).is_err()
+            );
         }
     }
 }
