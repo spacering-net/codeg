@@ -189,6 +189,65 @@ With the Workspace Lifecycle example enabled, create and remove a worktree
 from a test repository. The example's settings panel shows the checkout path
 for both events.
 
+## Awaited session hooks
+
+Declare these events in `contributes.lifecycleHooks` with private method names.
+Codeg runs enabled handlers in plugin ID order, with a shared three-second
+deadline for each chain and the usual per-invocation execution limit.
+`conversationId` and `folderId` may be `null` before a session is linked.
+
+### `session.prompt.before`
+
+The hook receives `{ conversationId, folderId, agentType, prompt }` before
+Codeg records or sends the user prompt. `prompt` joins user text blocks with
+newlines and is empty for attachment-only input. Attachments and Codeg's
+internal prompt suffix are outside the hook input.
+
+Return `null` or `undefined` to carry the current prompt forward. Return
+`{ prompt: string }` to pass replacement text to the next hook. The replacement
+must contain non-whitespace text and fit in 128 KiB of UTF-8. NUL is invalid
+and Codeg strips the reserved routing separator. When the chain supplies a
+replacement, Codeg puts a single text block where the first text block was,
+or at the start for attachment-only input, and preserves the attachment blocks.
+
+Return `{ reject: string }` to block the send. Use a nonblank reason of up to
+512 UTF-8 bytes without control characters. The command error includes the
+plugin ID and reason. A thrown error, timeout, invalid response, or oversized
+runtime message also blocks the send. The session stays available for retry
+without a turn, transcript entry, or user-message event for the blocked prompt.
+
+### `session.permission.before`
+
+The hook receives `{ conversationId, folderId, agentType, requestId, title,
+toolKind?, rawInputPreview?, options }` before Codeg queues a permission card.
+Each option has `{ optionId, name, kind }`. The optional `rawInputPreview`
+is a UTF-8 prefix of the tool input's JSON representation, up to 4 KiB.
+A shortened preview may end inside a JSON value. ACP metadata and tool output
+are outside the hook input.
+
+- Return `null` or `undefined` to defer to the next hook. If each hook defers,
+  Codeg queues the request in the normal approval flow.
+- Return `{ action: "select", optionId }` to choose an exact option ID from
+  this request, including a rejection option. Return `{ action: "cancel" }`
+  to send ACP `Cancelled`. Either decision ends the chain and bypasses the
+  permission card.
+- A thrown error, timeout, unknown option ID, or invalid response ends
+  automation for that request. Codeg logs the failure and queues the normal
+  approval card. No later hook can approve the request after a failed hook.
+
+A plugin decision emits `session.permission.resolved` for workspace sessions
+with `origin: { kind: "host_plugin", plugin_id }` and the selected option ID
+or `null` for cancellation. A selected option also records a tool approval when
+the request identifies a tool call. Stopping the turn or withdrawing the ACP
+request cancels pending policy evaluation. Codeg's interactive-question bridges
+and explicit `codeg-cli` run policies keep their existing approval flows.
+Disabling or removing a plugin excludes it from new hook chains and invalidates
+its in-flight result.
+
+Install the [Session Guard example](../examples/plugins/session-guard) to
+reject a prompt containing `EXAMPLE_SECRET_PLACEHOLDER`. For a tool of kind
+`delete`, it chooses an offered `reject_once` option or cancels the request.
+
 ## Live session hooks
 
 Plugins can observe Codeg-managed ACP sessions associated with a workspace.
@@ -203,9 +262,6 @@ client event stream as workspace hooks.
 | `session.turn.completed` | `{ stopReason }` from the completed turn. |
 | `session.permission.requested` | `{ requestId, queued }` when a request becomes visible. |
 | `session.permission.resolved` | `{ requestId, optionId, origin }` when the request is answered or withdrawn. |
-
-The permission hooks report state transitions. The user's permission decision
-continues through the standard Codeg approval flow.
 
 ### Tool result events
 

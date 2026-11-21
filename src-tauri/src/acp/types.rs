@@ -1583,6 +1583,8 @@ pub enum PermissionAnswerOrigin {
     /// told apart from the session's card so the page's own submission is
     /// recognised when it is the one that took effect.
     AssistantPage,
+    /// An enabled host plugin’s session permission policy.
+    HostPlugin { plugin_id: String },
 }
 
 impl PermissionAnswerOrigin {
@@ -1595,6 +1597,7 @@ impl PermissionAnswerOrigin {
             Self::CliPolicy { .. } => "cli_policy",
             Self::Assistant { .. } => "assistant",
             Self::AssistantPage => "assistant_page",
+            Self::HostPlugin { .. } => "host_plugin",
         }
     }
 }

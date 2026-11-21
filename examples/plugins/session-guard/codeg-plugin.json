@@ -1,0 +1,13 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.session-guard",
+  "name": "Session Guard",
+  "version": "1.0.0",
+  "server": { "entry": "guard.mjs", "methods": [] },
+  "contributes": {
+    "lifecycleHooks": [
+      { "event": "session.prompt.before", "method": "guard-prompt" },
+      { "event": "session.permission.before", "method": "guard-permission" }
+    ]
+  }
+}

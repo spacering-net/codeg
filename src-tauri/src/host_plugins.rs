@@ -561,6 +561,7 @@ impl HostPlugins {
             activation,
             settings,
             contract,
+            mode,
         } = invocation;
         let slot = self
             .runtime_slots
@@ -571,29 +572,35 @@ impl HostPlugins {
             })?;
         let result = tokio::task::spawn_blocking(move || {
             let _slot = slot;
-            runtime::call_with_settings(
+            runtime::call(
                 &entry,
                 &code,
                 &method,
                 &input,
                 settings.as_ref().map(|settings| &settings.value),
                 contract.as_deref(),
+                mode,
             )
         })
         .await
         .map_err(|_| {
             AppCommandError::new(AppErrorCode::TaskExecutionFailed, "Plugin runtime stopped")
         })?;
+        self.check_activation(&id, &activation)?;
+        result
+    }
+
+    fn check_activation(&self, id: &str, activation: &Arc<()>) -> Result<(), AppCommandError> {
         let guard = self.state.lock().expect("host plugin state lock");
         let state = guard.as_ref().map_err(|error| catalog_error(error))?;
         if !state
             .catalog
-            .get(&id)
-            .is_some_and(|plugin| Arc::ptr_eq(&plugin.activation, &activation))
+            .get(id)
+            .is_some_and(|plugin| Arc::ptr_eq(&plugin.activation, activation))
         {
             return Err(plugin_not_found());
         }
-        result
+        Ok(())
     }
 
     pub fn settings(&self, id: &str) -> Result<PluginSettings, AppCommandError> {
@@ -781,6 +788,7 @@ struct Invocation {
     activation: Arc<()>,
     settings: Option<PluginSettings>,
     contract: Option<Arc<schema::RpcContract>>,
+    mode: runtime::CallMode,
 }
 
 impl Invocation {
@@ -791,6 +799,7 @@ impl Invocation {
             entry: server.entry.clone(),
             code: plugin.server_code.clone()?,
             contract: plugin.rpc.get(&method).cloned(),
+            mode: runtime::CallMode::Standard,
             method,
             activation: plugin.activation.clone(),
             settings: plugin

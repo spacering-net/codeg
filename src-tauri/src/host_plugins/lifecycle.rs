@@ -6,9 +6,11 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use super::runtime::{CallMode, MAX_PROMPT_BYTES};
 use super::{catalog_error, invalid, valid_id, HostPlugins, Invocation, ServerModule};
+use crate::acp::agent_mentions::ROUTE_FRAME_SEPARATOR;
 use crate::acp::session_state::{SessionState, ToolCallOutput, ToolCallStatus};
-use crate::acp::types::{AcpEvent, ConnectionStatus};
+use crate::acp::types::{AcpEvent, ConnectionStatus, PermissionOptionInfo, PromptInputBlock};
 use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::db::entities::conversation::{self, ConversationKind};
 use crate::db::entities::folder::FolderKind;
@@ -18,6 +20,7 @@ use crate::web::event_bridge::{emit_event, EventEmitter};
 pub const EVENT_CHANNEL: &str = "host-plugins://event";
 const TRANSFORM_DEADLINE: Duration = Duration::from_secs(3);
 const TOOL_PREVIEW_BYTES: usize = 4 * 1024;
+const PROMPT_REJECTION_BYTES: usize = 512;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Event {
@@ -41,12 +44,16 @@ pub enum Event {
     WorktreeArchived,
     #[serde(rename = "session.started")]
     SessionStarted,
+    #[serde(rename = "session.prompt.before")]
+    PromptBefore,
     #[serde(rename = "session.turn.started")]
     TurnStarted,
     #[serde(rename = "session.turn.completed")]
     TurnCompleted,
     #[serde(rename = "session.tool.completed")]
     ToolCompleted,
+    #[serde(rename = "session.permission.before")]
+    PermissionBefore,
     #[serde(rename = "session.permission.requested")]
     PermissionRequested,
     #[serde(rename = "session.permission.resolved")]
@@ -119,6 +126,266 @@ pub(crate) async fn prepare_agent_title(
             "Agent creation plugin hooks timed out",
         )
     })?
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct SessionHookScope {
+    pub conversation_id: Option<i32>,
+    pub folder_id: Option<i32>,
+    pub agent_type: AgentType,
+}
+
+impl From<&SessionState> for SessionHookScope {
+    fn from(session: &SessionState) -> Self {
+        Self {
+            conversation_id: session.conversation_id,
+            folder_id: session.folder_id,
+            agent_type: session.agent_type,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+enum PromptResult {
+    Replace { prompt: String },
+    Reject { reject: String },
+}
+
+pub(crate) async fn prepare_session_prompt(
+    emitter: &EventEmitter,
+    scope: SessionHookScope,
+    blocks: &mut Vec<PromptInputBlock>,
+) -> Result<(), AppCommandError> {
+    let Some(host) = emitter.host_plugins() else {
+        return Ok(());
+    };
+    let hooks = host.lifecycle_handlers(Event::PromptBefore);
+    if hooks.is_empty() {
+        return Ok(());
+    }
+    let prompt = blocks
+        .iter()
+        .filter_map(|block| match block {
+            PromptInputBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let replacement = tokio::time::timeout(TRANSFORM_DEADLINE, async {
+        let mut replacement: Option<String> = None;
+        for hook in hooks {
+            let source = hook.id.clone();
+            let result = host
+                .invoke(
+                    hook,
+                    json!({
+                        "conversationId": scope.conversation_id,
+                        "folderId": scope.folder_id,
+                        "agentType": scope.agent_type,
+                        "prompt": replacement.as_deref().unwrap_or(prompt.as_str()),
+                    }),
+                )
+                .await
+                .map_err(|error| {
+                    AppCommandError::task_execution_failed(format!(
+                        "Plugin {source} could not prepare the session prompt"
+                    ))
+                    .with_detail(error.to_string())
+                })?;
+            if result.is_null() {
+                continue;
+            }
+            let invalid_result =
+                || invalid(format!("Plugin {source} returned an invalid prompt result"));
+            match serde_json::from_value(result).map_err(|_| invalid_result())? {
+                PromptResult::Replace { mut prompt } => {
+                    if prompt.len() > MAX_PROMPT_BYTES || prompt.contains('\0') {
+                        return Err(invalid_result());
+                    }
+                    prompt.retain(|character| character != ROUTE_FRAME_SEPARATOR);
+                    if prompt.trim().is_empty() {
+                        return Err(invalid_result());
+                    }
+                    replacement = Some(prompt);
+                }
+                PromptResult::Reject { reject } => {
+                    if reject.trim().is_empty()
+                        || reject.len() > PROMPT_REJECTION_BYTES
+                        || reject.chars().any(char::is_control)
+                    {
+                        return Err(invalid_result());
+                    }
+                    return Err(AppCommandError::new(
+                        AppErrorCode::PermissionDenied,
+                        format!("Plugin {source} rejected the session prompt ({reject})"),
+                    ));
+                }
+            }
+        }
+        Ok(replacement)
+    })
+    .await
+    .map_err(|_| {
+        AppCommandError::task_execution_failed("Session prompt plugin hooks timed out")
+    })??;
+    if let Some(text) = replacement {
+        let mut replacement = Some(text);
+        blocks.retain_mut(|block| {
+            let PromptInputBlock::Text { text } = block else {
+                return true;
+            };
+            let Some(updated) = replacement.take() else {
+                return false;
+            };
+            *text = updated;
+            true
+        });
+        if let Some(text) = replacement {
+            blocks.insert(0, PromptInputBlock::Text { text });
+        }
+    }
+    Ok(())
+}
+
+pub(crate) struct PermissionHookRequest<'a> {
+    pub request_id: &'a str,
+    pub title: &'a str,
+    pub tool_kind: Option<&'a agent_client_protocol::schema::v1::ToolKind>,
+    pub raw_input: Option<&'a Value>,
+    pub options: &'a [PermissionOptionInfo],
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum PermissionHookAction {
+    Select {
+        #[serde(rename = "optionId")]
+        option_id: String,
+    },
+    // An empty struct variant enforces deny_unknown_fields for cancellation.
+    Cancel {},
+}
+
+pub(crate) struct PermissionHookDecision {
+    pub plugin_id: String,
+    pub action: PermissionHookAction,
+    host: Arc<HostPlugins>,
+    activation: Arc<()>,
+}
+
+impl PermissionHookDecision {
+    pub(crate) fn is_current(&self) -> bool {
+        self.host
+            .check_activation(&self.plugin_id, &self.activation)
+            .is_ok()
+    }
+}
+
+pub(crate) struct SessionPermissionHooks {
+    host: Arc<HostPlugins>,
+    handlers: Vec<Invocation>,
+}
+
+impl SessionPermissionHooks {
+    pub(crate) fn for_emitter(emitter: &EventEmitter) -> Option<Self> {
+        let host = emitter.host_plugins()?;
+        let handlers = host.lifecycle_handlers(Event::PermissionBefore);
+        (!handlers.is_empty()).then_some(Self { host, handlers })
+    }
+
+    pub(crate) async fn decide(
+        self,
+        scope: SessionHookScope,
+        request: PermissionHookRequest<'_>,
+    ) -> Option<PermissionHookDecision> {
+        let Self { host, handlers } = self;
+        let input = {
+            let options: Vec<_> = request
+                .options
+                .iter()
+                .map(|option| {
+                    json!({
+                        "optionId": option.option_id,
+                        "name": option.name,
+                        "kind": option.kind,
+                    })
+                })
+                .collect();
+            let mut input = json!({
+                "conversationId": scope.conversation_id,
+                "folderId": scope.folder_id,
+                "agentType": scope.agent_type,
+                "requestId": request.request_id,
+                "title": request.title,
+                "options": options,
+            });
+            if let Some(kind) = request.tool_kind {
+                input["toolKind"] = json!(kind);
+            }
+            if let Some(raw) = request.raw_input {
+                let text = raw.to_string();
+                input["rawInputPreview"] = json!(tool_preview(&text));
+            }
+            input
+        };
+        let evaluate = async {
+            for hook in handlers {
+                let plugin_id = hook.id.clone();
+                let activation = hook.activation.clone();
+                let result = match host.invoke(hook, input.clone()).await {
+                    Ok(result) => result,
+                    Err(error) => {
+                        tracing::warn!(
+                            %plugin_id, request_id = request.request_id, %error,
+                            "Permission hook failed; requesting a human decision"
+                        );
+                        return None;
+                    }
+                };
+                if result.is_null() {
+                    continue;
+                }
+                let Ok(action) = serde_json::from_value::<PermissionHookAction>(result) else {
+                    tracing::warn!(
+                        %plugin_id, request_id = request.request_id,
+                        "Invalid permission hook response; requesting a human decision"
+                    );
+                    return None;
+                };
+                if let PermissionHookAction::Select { option_id } = &action {
+                    if !request
+                        .options
+                        .iter()
+                        .any(|option| &option.option_id == option_id)
+                    {
+                        tracing::warn!(
+                            %plugin_id, request_id = request.request_id,
+                            "Permission hook selected an unknown option; requesting a human decision"
+                        );
+                        return None;
+                    }
+                }
+                return Some(PermissionHookDecision {
+                    plugin_id,
+                    action,
+                    host,
+                    activation,
+                });
+            }
+            None
+        };
+        match tokio::time::timeout(TRANSFORM_DEADLINE, evaluate).await {
+            Ok(decision) => decision,
+            Err(_) => {
+                tracing::warn!(
+                    request_id = request.request_id,
+                    "Permission hooks timed out; requesting a human decision"
+                );
+                None
+            }
+        }
+    }
 }
 
 pub(crate) fn observe_agent_created(emitter: &EventEmitter, agent: &conversation::Model) {
@@ -262,13 +529,7 @@ pub(crate) fn tool_result_input(session: &SessionState, tool_call_id: &str) -> O
             tool.content.as_deref(),
         ),
     };
-    let preview = text.map(|text| {
-        let mut end = text.len().min(TOOL_PREVIEW_BYTES);
-        while !text.is_char_boundary(end) {
-            end -= 1;
-        }
-        &text[..end]
-    });
+    let preview = text.map(tool_preview);
     Some(json!({
         "folderId": session.folder_id,
         "conversationId": session.conversation_id,
@@ -283,6 +544,14 @@ pub(crate) fn tool_result_input(session: &SessionState, tool_call_id: &str) -> O
             "previewTruncated": text.zip(preview).is_some_and(|(text, preview)| text.len() != preview.len()),
         },
     }))
+}
+
+fn tool_preview(text: &str) -> &str {
+    let mut end = text.len().min(TOOL_PREVIEW_BYTES);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -362,7 +631,13 @@ impl HostPlugins {
                     .lifecycle_hooks
                     .iter()
                     .find(|hook| hook.event == event)?;
-                Invocation::new(id, plugin, hook.method.clone())
+                let mut invocation = Invocation::new(id, plugin, hook.method.clone())?;
+                invocation.mode = match event {
+                    Event::PromptBefore => CallMode::SessionPrompt,
+                    Event::PermissionBefore => CallMode::SessionPermission,
+                    _ => CallMode::Standard,
+                };
+                Some(invocation)
             })
             .collect()
     }
@@ -657,7 +932,7 @@ fn validate_worktree_destination(path: &str, repository: &str) -> Result<String,
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::commands::folders::{
         close_folder_with_plugins, git_remove_worktree_core, git_worktree_add_with_plugins,
@@ -669,6 +944,170 @@ mod tests {
     use crate::db::test_helpers::fresh_in_memory_db;
     use crate::host_plugins::{source::Registry, Mutation};
     use crate::web::event_bridge::WebEventBroadcaster;
+
+    pub(crate) const SESSION_GUARD_ID: &str = "codeg.session-guard";
+
+    pub(crate) async fn install_session_guard(host: &HostPlugins, id: &str, code: Option<&str>) {
+        let source = tempfile::tempdir().unwrap();
+        let manifest = include_str!("../../../examples/plugins/session-guard/codeg-plugin.json")
+            .replace(SESSION_GUARD_ID, id);
+        std::fs::write(source.path().join("codeg-plugin.json"), manifest).unwrap();
+        std::fs::write(
+            source.path().join("guard.mjs"),
+            code.unwrap_or(include_str!(
+                "../../../examples/plugins/session-guard/guard.mjs"
+            )),
+        )
+        .unwrap();
+        let preview = host
+            .preview_install(source.path().to_str().unwrap(), Registry::Npm, None)
+            .await
+            .unwrap();
+        host.confirm_install(preview.ticket).unwrap();
+        host.apply(Mutation::SetEnabled {
+            id: id.into(),
+            enabled: true,
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn prompt_hooks_apply_in_plugin_id_order_and_preserve_attachments() {
+        let data = tempfile::tempdir().unwrap();
+        let app = crate::app_state::AppState::new_for_test(
+            fresh_in_memory_db().await,
+            data.path().into(),
+        );
+        install_session_guard(
+            &app.host_plugins,
+            "test.z-last",
+            Some(
+                r#"
+            export async function handle(_, input) {
+                return { prompt: `${input.prompt}!` }
+            }
+        "#,
+            ),
+        )
+        .await;
+        install_session_guard(&app.host_plugins, "test.a-first", Some(r#"
+            export function handle(_, { prompt, folderId, conversationId, agentType, ...rest }) {
+                if (folderId !== 7 || conversationId !== 9 || !agentType || Object.keys(rest).length) {
+                    throw new Error()
+                }
+                return { prompt: prompt.toUpperCase() + '\u001e' }
+            }
+        "#)).await;
+        let scope = SessionHookScope {
+            folder_id: Some(7),
+            conversation_id: Some(9),
+            agent_type: AgentType::Codex,
+        };
+        let image = PromptInputBlock::Image {
+            data: "base64".into(),
+            mime_type: "image/png".into(),
+            uri: None,
+        };
+        let mut blocks = vec![
+            PromptInputBlock::Text {
+                text: "first".into(),
+            },
+            image.clone(),
+            PromptInputBlock::Text {
+                text: "second".into(),
+            },
+        ];
+        prepare_session_prompt(&app.emitter, scope, &mut blocks)
+            .await
+            .unwrap();
+        assert_eq!(
+            blocks,
+            vec![
+                PromptInputBlock::Text {
+                    text: "FIRST\nSECOND!".into()
+                },
+                image
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn prompt_hooks_validate_decoded_utf8_results_and_pass_through_undefined() {
+        let data = tempfile::tempdir().unwrap();
+        let app = crate::app_state::AppState::new_for_test(
+            fresh_in_memory_db().await,
+            data.path().into(),
+        );
+        install_session_guard(
+            &app.host_plugins,
+            "test.results",
+            Some(
+                r#"
+            export async function handle(_, { prompt }) {
+                switch (prompt) {
+                  case "valid": return { prompt: '\x01'.repeat(131069) + '界' }
+                  case "big": return { prompt: '界'.repeat(43691) }
+                  case "nul": return { prompt: 'bad\0prompt' }
+                  case "blank": return { prompt: '  ' }
+                  case "mixed": return { prompt: 'valid', reject: 'stop' }
+                  case "unknown": return { prompt: 'valid', extra: true }
+                  case "long reason": return { reject: 'x'.repeat(513) }
+                  case "throw": throw new Error()
+                  case "loop": while (true) {}
+                }
+            }
+        "#,
+            ),
+        )
+        .await;
+        // The next invocation must accept the full JSON-escaped replacement.
+        install_session_guard(
+            &app.host_plugins,
+            "test.second",
+            Some(
+                r#"
+            export function handle(_, input) {
+                if (input.prompt.endsWith('界') && input.prompt.length !== 131070) throw new Error()
+            }
+        "#,
+            ),
+        )
+        .await;
+        let scope = SessionHookScope {
+            folder_id: None,
+            conversation_id: None,
+            agent_type: AgentType::Codex,
+        };
+        for (input, expected) in [
+            ("valid", None),
+            ("pass", None),
+            ("big", Some("invalid prompt result")),
+            ("nul", Some("invalid prompt result")),
+            ("blank", Some("invalid prompt result")),
+            ("mixed", Some("invalid prompt result")),
+            ("unknown", Some("invalid prompt result")),
+            ("long reason", Some("invalid prompt result")),
+            ("throw", Some("could not prepare")),
+            ("loop", Some("could not prepare")),
+        ] {
+            let mut blocks = vec![PromptInputBlock::Text { text: input.into() }];
+            let result = prepare_session_prompt(&app.emitter, scope, &mut blocks).await;
+            if let Some(message) = expected {
+                assert!(result.unwrap_err().message.contains(message), "{input}");
+                assert_eq!(blocks, vec![PromptInputBlock::Text { text: input.into() }]);
+            } else {
+                result.unwrap();
+                let [PromptInputBlock::Text { text }] = blocks.as_slice() else {
+                    panic!("expected text")
+                };
+                if input == "valid" {
+                    assert_eq!(text.len(), MAX_PROMPT_BYTES);
+                } else {
+                    assert_eq!(text, input);
+                }
+            }
+        }
+    }
 
     const EXAMPLE_ID: &str = "codeg.workspace-lifecycle";
 
@@ -1402,7 +1841,10 @@ mod tests {
             json!({
                 "apiVersion": 2, "id": id, "name": "Session hooks", "version": "1.0.0",
                 "server": { "entry": "session.mjs", "methods": [] },
-                "contributes": { "lifecycleHooks": [{ "event": name, "method": name }] }
+                "contributes": { "lifecycleHooks": [
+                    { "event": name, "method": name },
+                    { "event": "session.permission.resolved", "method": "resolved" },
+                ] }
             })
             .to_string(),
         )
@@ -1467,6 +1909,31 @@ mod tests {
         assert_eq!(
             event.payload["data"]["detail"],
             json!({"requestId": "request-1", "queued": 1})
+        );
+        bus.send(Arc::new(EventEnvelope {
+            seq: 2,
+            connection_id: "workspace-session".into(),
+            payload: AcpEvent::PermissionResolved {
+                request_id: "request-2".into(),
+                option_id: None,
+                origin: Some(crate::acp::types::PermissionAnswerOrigin::HostPlugin {
+                    plugin_id: SESSION_GUARD_ID.into(),
+                }),
+            },
+        }));
+        let event = tokio::time::timeout(Duration::from_secs(1), outgoing.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.channel, EVENT_CHANNEL);
+        assert_eq!(event.payload["event"], "session.permission.resolved");
+        assert_eq!(
+            event.payload["data"]["detail"],
+            json!({
+                "requestId": "request-2",
+                "optionId": null,
+                "origin": { "kind": "host_plugin", "plugin_id": SESSION_GUARD_ID },
+            })
         );
         observer.abort();
     }

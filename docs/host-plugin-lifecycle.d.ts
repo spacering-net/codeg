@@ -80,6 +80,40 @@ export interface SessionToolCompletedInput {
   }
 }
 
+interface SessionBeforeInput {
+  conversationId: number | null
+  folderId: number | null
+  agentType: string
+}
+
+export interface SessionPromptBeforeInput extends SessionBeforeInput {
+  prompt: string
+}
+
+export type SessionPromptBeforeResult =
+  | { prompt: string; reject?: never }
+  | { reject: string; prompt?: never }
+  | null
+  | undefined
+
+export interface SessionPermissionBeforeInput extends SessionBeforeInput {
+  requestId: string
+  title: string
+  toolKind?: string
+  rawInputPreview?: string
+  options: Array<{
+    optionId: string
+    name: string
+    kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" | "unknown"
+  }>
+}
+
+export type SessionPermissionBeforeResult =
+  | { action: "select"; optionId: string }
+  | { action: "cancel"; optionId?: never }
+  | null
+  | undefined
+
 export interface PluginLifecycleInputs {
   "workspace.open.before": { path: string }
   "workspace.open.after": { folderId: number; path: string }
@@ -90,6 +124,8 @@ export interface PluginLifecycleInputs {
   "worktree.create.before": WorktreeLifecycleInput
   "worktree.create.after": WorktreeLifecycleInput
   "worktree.archive.after": WorktreeLifecycleInput
+  "session.prompt.before": SessionPromptBeforeInput
+  "session.permission.before": SessionPermissionBeforeInput
   "session.started": SessionLifecycleInput<{ sessionId: string }>
   "session.turn.started": SessionLifecycleInput<null>
   "session.turn.completed": SessionLifecycleInput<{ stopReason: string }>
@@ -105,6 +141,9 @@ export interface PluginLifecycleInputs {
       | { kind: "user" }
       | { kind: "chat_channel" }
       | { kind: "cli_policy"; run_id: string }
+      | { kind: "host_plugin"; plugin_id: string }
+      | { kind: "assistant"; bot_id: number }
+      | { kind: "assistant_page" }
       | null
   }>
   "agent.close.after": AgentClosedInput
@@ -117,13 +156,17 @@ export interface PluginLifecycleInputs {
 export type PluginLifecycleEvent = keyof PluginLifecycleInputs
 
 export type PluginLifecycleResult<Event extends PluginLifecycleEvent> =
-  Event extends "agent.open.before"
-    ? { env: Record<string, string> } | null
-    : Event extends "agent.create.before"
-      ? { title: string } | null
-      : Event extends `${string}.before`
-        ? { path: string } | null
-        : PluginJsonValue
+  Event extends "session.prompt.before"
+    ? SessionPromptBeforeResult
+    : Event extends "session.permission.before"
+      ? SessionPermissionBeforeResult
+      : Event extends "agent.open.before"
+        ? { env: Record<string, string> } | null
+        : Event extends "agent.create.before"
+          ? { title: string } | null
+          : Event extends `${string}.before`
+            ? { path: string } | null
+            : PluginJsonValue
 
 /** A handler routed by the private method name declared in the manifest. */
 export type PluginLifecycleHandler<Event extends PluginLifecycleEvent> = (

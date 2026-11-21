@@ -2044,7 +2044,10 @@ impl CliRunService {
         };
         let decided_by = match origin {
             None => DecidedBy::Withdrawn,
-            Some(PermissionAnswerOrigin::CliPolicy { .. }) => DecidedBy::Policy,
+            Some(
+                PermissionAnswerOrigin::CliPolicy { .. }
+                | PermissionAnswerOrigin::HostPlugin { .. },
+            ) => DecidedBy::Policy,
             Some(
                 PermissionAnswerOrigin::User
                 | PermissionAnswerOrigin::ChatChannel

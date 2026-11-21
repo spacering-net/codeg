@@ -243,7 +243,9 @@ fn answered_by_permission(origin: Option<&PermissionAnswerOrigin>, names: &dyn F
         Some(PermissionAnswerOrigin::User) => json!({ "kind": "owner" }),
         Some(PermissionAnswerOrigin::AssistantPage) => json!({ "kind": "owner", "where": "page" }),
         Some(PermissionAnswerOrigin::ChatChannel) => json!({ "kind": "channel" }),
-        Some(PermissionAnswerOrigin::CliPolicy { .. }) => json!({ "kind": "policy" }),
+        Some(PermissionAnswerOrigin::CliPolicy { .. } | PermissionAnswerOrigin::HostPlugin { .. }) => {
+            json!({ "kind": "policy" })
+        }
         Some(PermissionAnswerOrigin::Assistant { bot_id }) => {
             json!({ "kind": "assistant", "bot_id": bot_id, "name": names(*bot_id) })
         }
