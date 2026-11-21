@@ -107,7 +107,9 @@
     "choosePanel": "لوحة الإضافة",
     "noTurns": "لا توجد جولات مسجلة في مساحة العمل هذه.",
     "pluginSurfaces": "إجراءات الإضافات",
-    "morePluginSurfaces": "مزيد من إجراءات الإضافات"
+    "morePluginSurfaces": "مزيد من إجراءات الإضافات",
+    "pluginDetail": "تفاصيل الإضافة",
+    "activationPanel": "دليل التفعيل"
   },
   "AppearanceSettings": {
     "sectionTitle": "مظهر السمة",

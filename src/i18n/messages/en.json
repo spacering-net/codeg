@@ -107,7 +107,9 @@
     "choosePanel": "Plugin panel",
     "noTurns": "No turns recorded in this workspace.",
     "pluginSurfaces": "Plugin actions",
-    "morePluginSurfaces": "More plugin actions"
+    "morePluginSurfaces": "More plugin actions",
+    "pluginDetail": "Plugin details",
+    "activationPanel": "Activation guide"
   },
   "AppearanceSettings": {
     "sectionTitle": "Theme Appearance",

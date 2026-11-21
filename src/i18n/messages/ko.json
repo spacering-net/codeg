@@ -107,7 +107,9 @@
     "choosePanel": "플러그인 패널",
     "noTurns": "이 작업 공간에 기록된 턴이 없습니다.",
     "pluginSurfaces": "플러그인 작업",
-    "morePluginSurfaces": "더 많은 플러그인 작업"
+    "morePluginSurfaces": "더 많은 플러그인 작업",
+    "pluginDetail": "플러그인 세부정보",
+    "activationPanel": "활성화 가이드"
   },
   "AppearanceSettings": {
     "sectionTitle": "테마 모양",

@@ -18,6 +18,16 @@ export interface PluginClientSurfaceContribution {
   slot: PluginClientSurfaceSlot
 }
 
+export interface PluginHostSurfaceContribution {
+  id: string
+  title: string
+}
+
+export type PluginSettingsSurfaceType =
+  | "settingsPanel"
+  | "pluginDetail"
+  | "activationPanel"
+
 export interface ResolvedPluginClientSurface {
   key: string
   pluginId: string
@@ -69,7 +79,9 @@ export interface InstalledPlugin {
         action: { type: "openWorkspacePanel"; panelId: string }
       }[]
       hooks: { event: "session.turnCompleted"; action: "recordTurnActivity" }[]
-      settingsPanel?: { id: string; title: string }
+      settingsPanel?: PluginHostSurfaceContribution
+      pluginDetail?: PluginHostSurfaceContribution
+      activationPanel?: PluginHostSurfaceContribution
       clientSurfaces?: PluginClientSurfaceContribution[]
     }
   }
@@ -282,6 +294,19 @@ export function pluginPanelKey(pluginId: string, panelId: string) {
 
 export function pluginClientSurfaceKey(pluginId: string, surfaceId: string) {
   return `${pluginId}:${surfaceId}`
+}
+
+export function resolvePluginHostSurface(
+  plugin: InstalledPlugin,
+  type: PluginSettingsSurfaceType
+): PluginHostSurfaceContribution | null {
+  if (!plugin.enabled || !plugin.manifest.client?.entry?.trim()) return null
+  const surface = plugin.manifest.contributes[type]
+  if (!surface) return null
+  const id = surface.id.trim()
+  const title = surface.title.trim()
+  if (!id || !title) return null
+  return { id, title }
 }
 
 export function selectPluginClientSurfaces(

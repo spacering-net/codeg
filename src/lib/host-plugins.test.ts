@@ -3,6 +3,7 @@ import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
+  resolvePluginHostSurface,
   selectPluginClientSurfaces,
   validatePluginComposerInsertPayload,
   type InstalledPlugin,
@@ -231,5 +232,72 @@ describe("validatePluginComposerInsertPayload", () => {
         text: overUtf8,
       })
     ).toThrow(/16 KiB/)
+  })
+})
+
+describe("resolvePluginHostSurface", () => {
+  it("resolves pluginDetail, activationPanel, and settingsPanel only for enabled plugins with client.entry", () => {
+    const enabledWithClient: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.full",
+        name: "Acme Full",
+        version: "1.0.0",
+        client: { entry: "panel.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          pluginDetail: { id: "detail", title: "About Acme" },
+          activationPanel: { id: "onboard", title: "Get Started" },
+          settingsPanel: { id: "prefs", title: "Preferences" },
+        },
+      },
+    }
+
+    expect(resolvePluginHostSurface(enabledWithClient, "pluginDetail")).toEqual(
+      { id: "detail", title: "About Acme" }
+    )
+    expect(
+      resolvePluginHostSurface(enabledWithClient, "activationPanel")
+    ).toEqual({ id: "onboard", title: "Get Started" })
+    expect(
+      resolvePluginHostSurface(enabledWithClient, "settingsPanel")
+    ).toEqual({ id: "prefs", title: "Preferences" })
+
+    const disabled: InstalledPlugin = {
+      ...enabledWithClient,
+      enabled: false,
+    }
+    expect(resolvePluginHostSurface(disabled, "pluginDetail")).toBeNull()
+    expect(resolvePluginHostSurface(disabled, "activationPanel")).toBeNull()
+    expect(resolvePluginHostSurface(disabled, "settingsPanel")).toBeNull()
+
+    const noClientEntry: InstalledPlugin = {
+      ...enabledWithClient,
+      manifest: {
+        ...enabledWithClient.manifest,
+        client: undefined,
+      },
+    }
+    expect(resolvePluginHostSurface(noClientEntry, "pluginDetail")).toBeNull()
+    expect(
+      resolvePluginHostSurface(noClientEntry, "activationPanel")
+    ).toBeNull()
+    expect(resolvePluginHostSurface(noClientEntry, "settingsPanel")).toBeNull()
+
+    const blankFields: InstalledPlugin = {
+      ...enabledWithClient,
+      manifest: {
+        ...enabledWithClient.manifest,
+        contributes: {
+          ...enabledWithClient.manifest.contributes,
+          pluginDetail: { id: "   ", title: "About" },
+          activationPanel: { id: "setup", title: "   " },
+        },
+      },
+    }
+    expect(resolvePluginHostSurface(blankFields, "pluginDetail")).toBeNull()
+    expect(resolvePluginHostSurface(blankFields, "activationPanel")).toBeNull()
   })
 })

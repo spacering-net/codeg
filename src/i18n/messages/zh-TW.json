@@ -107,7 +107,9 @@
     "choosePanel": "外掛面板",
     "noTurns": "目前工作區尚無回合記錄。",
     "pluginSurfaces": "外掛入口",
-    "morePluginSurfaces": "更多外掛入口"
+    "morePluginSurfaces": "更多外掛入口",
+    "pluginDetail": "外掛詳情",
+    "activationPanel": "啟用引導"
   },
   "AppearanceSettings": {
     "sectionTitle": "主題外觀",
