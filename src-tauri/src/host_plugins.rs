@@ -14,6 +14,7 @@ use crate::acp::types::{AcpEvent, EventEnvelope};
 use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
+pub mod lifecycle;
 mod runtime;
 mod settings;
 pub mod source;
@@ -76,6 +77,8 @@ struct Contributions {
     hooks: Vec<Hook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     settings_panel: Option<SettingsPanel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    lifecycle_hooks: Vec<lifecycle::Registration>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -225,6 +228,7 @@ pub struct HostPlugins {
     path: PathBuf,
     state: Mutex<Result<PluginState, String>>,
     runtime_slots: Arc<Semaphore>,
+    observer_slots: Arc<Semaphore>,
 }
 
 struct PluginState {
@@ -248,6 +252,7 @@ impl HostPlugins {
             path,
             state: Mutex::new(state),
             runtime_slots: Arc::new(Semaphore::new(4)),
+            observer_slots: Arc::new(Semaphore::new(16)),
         }
     }
 
@@ -442,7 +447,8 @@ impl HostPlugins {
         let runtime_changed = current.manifest.server != manifest.server
             || current.server_code != server_code
             || current.manifest.client != manifest.client
-            || current.client_html != client_html;
+            || current.client_html != client_html
+            || current.manifest.contributes.lifecycle_hooks != manifest.contributes.lifecycle_hooks;
         let settings_changed = current.manifest.settings != manifest.settings;
         let settings = current.settings_for_update(manifest.settings.as_ref())?;
         if current.manifest == manifest
@@ -491,7 +497,7 @@ impl HostPlugins {
         method: String,
         input: serde_json::Value,
     ) -> Result<serde_json::Value, AppCommandError> {
-        let (entry, code, activation, settings) = {
+        let invocation = {
             let guard = self.state.lock().expect("host plugin state lock");
             let state = guard.as_ref().map_err(|error| catalog_error(error))?;
             let plugin = state
@@ -509,20 +515,24 @@ impl HostPlugins {
                     "Plugin method is not registered",
                 ));
             }
-            let code = plugin.server_code.clone().ok_or_else(plugin_not_found)?;
-            let settings = plugin
-                .manifest
-                .settings
-                .as_ref()
-                .and(plugin.settings.as_ref())
-                .cloned();
-            (
-                server.entry.clone(),
-                code,
-                plugin.activation.clone(),
-                settings,
-            )
+            Invocation::new(id, plugin, method).ok_or_else(plugin_not_found)?
         };
+        self.invoke(invocation, input).await
+    }
+
+    async fn invoke(
+        &self,
+        invocation: Invocation,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, AppCommandError> {
+        let Invocation {
+            id,
+            entry,
+            code,
+            method,
+            activation,
+            settings,
+        } = invocation;
         let slot = self
             .runtime_slots
             .clone()
@@ -548,7 +558,7 @@ impl HostPlugins {
         let state = guard.as_ref().map_err(|error| catalog_error(error))?;
         if !state
             .catalog
-            .get(id)
+            .get(&id)
             .is_some_and(|plugin| Arc::ptr_eq(&plugin.activation, &activation))
         {
             return Err(plugin_not_found());
@@ -699,6 +709,34 @@ impl HostPlugins {
     }
 }
 
+struct Invocation {
+    id: String,
+    entry: String,
+    code: Arc<str>,
+    method: String,
+    activation: Arc<()>,
+    settings: Option<PluginSettings>,
+}
+
+impl Invocation {
+    fn new(id: &str, plugin: &InstalledPlugin, method: String) -> Option<Self> {
+        let server = plugin.manifest.server.as_ref()?;
+        Some(Self {
+            id: id.to_owned(),
+            entry: server.entry.clone(),
+            code: plugin.server_code.clone()?,
+            method,
+            activation: plugin.activation.clone(),
+            settings: plugin
+                .manifest
+                .settings
+                .as_ref()
+                .and(plugin.settings.as_ref())
+                .cloned(),
+        })
+    }
+}
+
 impl InstalledPlugin {
     fn settings_for_update(
         &self,
@@ -795,7 +833,7 @@ impl Manifest {
         if let Some(server) = &self.server {
             let mut methods = BTreeSet::new();
             if !server.entry.strip_suffix(".mjs").is_some_and(valid_id)
-                || server.methods.is_empty()
+                || (server.methods.is_empty() && self.contributes.lifecycle_hooks.is_empty())
                 || server.methods.len() > MAX_CONTRIBUTIONS
                 || !server.methods.iter().all(|method| {
                     valid_id(method)
@@ -803,7 +841,9 @@ impl Manifest {
                         && methods.insert(method)
                 })
             {
-                return Err("Provide a root .mjs file and 1 to 16 unique plugin methods".to_owned());
+                return Err(
+                    "Provide a root .mjs file and up to 16 unique plugin methods".to_owned(),
+                );
             }
         }
         if let Some(definition) = &self.settings {
@@ -827,6 +867,7 @@ impl Manifest {
             commands,
             hooks,
             settings_panel,
+            lifecycle_hooks,
         } = &self.contributes;
         if (!bundled && workspace_panels.is_empty())
             || workspace_panels.len() > MAX_CONTRIBUTIONS
@@ -868,6 +909,7 @@ impl Manifest {
                 );
             }
         }
+        lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         Ok(())
     }
 }
