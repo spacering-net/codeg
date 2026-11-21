@@ -9,6 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::host_plugins::lifecycle::{Event as PluginEvent, Worktree, WorktreeOrigin};
+use crate::web::event_bridge::EventEmitter;
+
 use super::service::CliError;
 use super::wire::WorktreeInfo;
 
@@ -33,6 +36,17 @@ impl RunWorktree {
             path: self.root.to_string_lossy().into_owned(),
             branch: self.branch.clone(),
         }
+    }
+
+    pub(super) fn observe(&self, emitter: &EventEmitter, event: PluginEvent) {
+        Worktree {
+            folder_id: None,
+            repository_path: &self.repository.to_string_lossy(),
+            path: &self.root.to_string_lossy(),
+            branch: Some(&self.branch),
+            origin: WorktreeOrigin::Cli,
+        }
+        .observe(emitter, event);
     }
 }
 
@@ -342,28 +356,21 @@ async fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
 }
 
 /// Take away a worktree no run used: its checkout, then its branch. Best
-/// effort; what is left is logged.
-pub async fn remove(worktree: &RunWorktree) {
-    let root = worktree.root.to_string_lossy().into_owned();
-    for args in [
-        vec!["worktree", "remove", "--force", root.as_str()],
-        vec!["branch", "-D", worktree.branch.as_str()],
-    ] {
-        let done = crate::process::tokio_command("git")
-            .args(&args)
-            .current_dir(&worktree.repository)
-            .output()
-            .await;
-        match done {
-            Ok(out) if out.status.success() => {}
-            Ok(out) => tracing::warn!(
-                "[cli] could not undo the unused worktree {root} (git {}): {}",
-                args.join(" "),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ),
-            Err(e) => tracing::warn!("[cli] could not undo the unused worktree {root}: {e}"),
-        }
+/// effort; returns whether Git removed the checkout.
+pub async fn remove(worktree: &RunWorktree) -> bool {
+    let root = worktree.root.to_string_lossy();
+    let checkout = git(
+        &worktree.repository,
+        &["worktree", "remove", "--force", &root],
+    )
+    .await;
+    if let Err(e) = &checkout {
+        tracing::warn!("[cli] could not remove the unused worktree {root}: {e}");
     }
+    if let Err(e) = git(&worktree.repository, &["branch", "-D", &worktree.branch]).await {
+        tracing::warn!("[cli] could not delete the branch of unused worktree {root}: {e}");
+    }
+    checkout.is_ok()
 }
 
 /// The top of the repository `workspace` is in, and the workspace's path
