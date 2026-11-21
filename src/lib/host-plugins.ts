@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
+import { extractAppCommandError, toErrorMessage } from "@/lib/app-error"
 import {
   parsePluginThemePalette,
   type PluginThemePalette,
@@ -140,6 +141,100 @@ export interface PluginComposerInsertResult {
   length: number
 }
 
+export interface PluginServiceContract {
+  name: string
+  version: number
+  methods: string[]
+  description?: string
+  descriptionTranslations?: PluginTextTranslations
+}
+
+export interface PluginServiceDependency {
+  service: string
+  /** Defaults to 1. */
+  minVersion?: number
+  /** A strong dependency requires an enabled provider at activation time. */
+  optional?: boolean
+}
+
+export interface PluginServicesManifest {
+  provides?: PluginServiceContract[]
+  requires?: PluginServiceDependency[]
+}
+
+export type PluginEventScope = "host" | "workspace" | "session"
+
+export interface PluginEventContract {
+  name: string
+  /** Defaults to host. */
+  scope?: PluginEventScope
+  payloadSchema?: boolean | Record<string, unknown>
+  description?: string
+  descriptionTranslations?: PluginTextTranslations
+}
+
+export interface PluginEventsManifest {
+  publishes?: PluginEventContract[]
+}
+
+export type PluginPublishedEvent<Payload = unknown> = Readonly<
+  {
+    pluginId: string
+    event: string
+    payload: Payload
+    /** UTC RFC 3339 timestamp assigned by the host. */
+    emittedAt: string
+  } & (
+    | { scope: "host"; folderId: null; conversationId: null }
+    | { scope: "workspace"; folderId: number; conversationId: null }
+    | { scope: "session"; folderId: number | null; conversationId: number }
+  )
+>
+
+export interface PluginClientLifecycleEvent {
+  readonly pluginId: string
+  readonly event: string
+  readonly folderId: number | null
+  readonly conversationId: number | null
+  readonly data: unknown
+}
+
+export type PluginEvent = PluginClientLifecycleEvent | PluginPublishedEvent
+
+export interface PluginSurfaceEventTarget {
+  pluginId: string
+  folderId?: number | null
+  conversationId?: number | null
+}
+
+export interface HostPluginManifest {
+  id: string
+  name: string
+  nameTranslations?: PluginTextTranslations
+  version: string
+  services?: PluginServicesManifest
+  events?: PluginEventsManifest
+  server?: { entry: string; methods: string[] }
+  client?: { entry: string }
+  contributes: {
+    workspacePanels: WorkspacePanel[]
+    commands: {
+      id: string
+      title: string
+      titleTranslations?: PluginTextTranslations
+      action: { type: "openWorkspacePanel"; panelId: string }
+    }[]
+    hooks: { event: "session.turnCompleted"; action: "recordTurnActivity" }[]
+    settingsPanel?: PluginHostSurfaceContribution
+    pluginDetail?: PluginHostSurfaceContribution
+    activationPanel?: PluginHostSurfaceContribution
+    clientSurfaces?: PluginClientSurfaceContribution[]
+    themes?: PluginThemeContribution[]
+    screens?: PluginScreenContribution[]
+    sidebarItems?: PluginSidebarItemContribution[]
+  }
+}
+
 export interface InstalledPlugin {
   enabled: boolean
   source?:
@@ -151,31 +246,7 @@ export interface InstalledPlugin {
         version: string
         registry?: "npm" | "mirror"
       }
-  manifest: {
-    id: string
-    name: string
-    nameTranslations?: PluginTextTranslations
-    version: string
-    server?: { entry: string; methods: string[] }
-    client?: { entry: string }
-    contributes: {
-      workspacePanels: WorkspacePanel[]
-      commands: {
-        id: string
-        title: string
-        titleTranslations?: PluginTextTranslations
-        action: { type: "openWorkspacePanel"; panelId: string }
-      }[]
-      hooks: { event: "session.turnCompleted"; action: "recordTurnActivity" }[]
-      settingsPanel?: PluginHostSurfaceContribution
-      pluginDetail?: PluginHostSurfaceContribution
-      activationPanel?: PluginHostSurfaceContribution
-      clientSurfaces?: PluginClientSurfaceContribution[]
-      themes?: PluginThemeContribution[]
-      screens?: PluginScreenContribution[]
-      sidebarItems?: PluginSidebarItemContribution[]
-    }
-  }
+  manifest: HostPluginManifest
 }
 
 export type PluginMutation =
@@ -209,6 +280,8 @@ export interface PluginIndexVersion {
 
 const CATALOG_CHANGED = "host-plugins://changed"
 const ACTIVITY_CHANGED = "host-plugins://activity"
+export const PLUGIN_LIFECYCLE_EVENT_CHANNEL = "host-plugins://event"
+export const PLUGIN_PUBLISHED_EVENT_CHANNEL = "host-plugins://plugin-event"
 
 function usePluginResource<T, E>(
   transport: Transport | null,
@@ -844,4 +917,218 @@ export function validatePluginComposerInsertPayload(payload: unknown): string {
     throw new Error("Composer text exceeds 16 KiB limit")
   }
   return normalized
+}
+
+function hasControlChars(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code <= 0x1f || code === 0x7f) return true
+  }
+  return false
+}
+
+function isNonBlankSafeText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    !hasControlChars(value)
+  )
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
+/**
+ * Validate and normalize a typed `PluginPublishedEvent` received on
+ * `host-plugins://plugin-event`. Returns `null` for malformed payloads.
+ */
+export function parsePluginPublishedEvent(
+  raw: unknown
+): PluginPublishedEvent | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return null
+  }
+  const record = raw as Record<string, unknown>
+  if (
+    !isNonBlankSafeText(record.pluginId) ||
+    !isNonBlankSafeText(record.event) ||
+    !isNonBlankSafeText(record.emittedAt) ||
+    !("payload" in record) ||
+    record.payload === undefined
+  ) {
+    return null
+  }
+
+  const scope = record.scope
+  if (scope === "host") {
+    if (record.folderId !== null || record.conversationId !== null) {
+      return null
+    }
+    return {
+      pluginId: record.pluginId,
+      event: record.event,
+      scope: "host",
+      folderId: null,
+      conversationId: null,
+      payload: record.payload,
+      emittedAt: record.emittedAt,
+    }
+  }
+
+  if (scope === "workspace") {
+    if (
+      !isNonNegativeSafeInteger(record.folderId) ||
+      record.conversationId !== null
+    ) {
+      return null
+    }
+    return {
+      pluginId: record.pluginId,
+      event: record.event,
+      scope: "workspace",
+      folderId: record.folderId,
+      conversationId: null,
+      payload: record.payload,
+      emittedAt: record.emittedAt,
+    }
+  }
+
+  if (scope === "session") {
+    if (!isNonNegativeSafeInteger(record.conversationId)) {
+      return null
+    }
+    const folderId = record.folderId
+    if (folderId !== null && !isNonNegativeSafeInteger(folderId)) {
+      return null
+    }
+    return {
+      pluginId: record.pluginId,
+      event: record.event,
+      scope: "session",
+      folderId,
+      conversationId: record.conversationId,
+      payload: record.payload,
+      emittedAt: record.emittedAt,
+    }
+  }
+
+  return null
+}
+
+/**
+ * Determine whether a validated `PluginPublishedEvent` may be delivered to a
+ * given plugin client surface without leaking across plugins, workspaces, or
+ * conversations.
+ */
+export function matchesPluginPublishedEventScope(
+  event: PluginPublishedEvent,
+  target: PluginSurfaceEventTarget
+): boolean {
+  if (event.pluginId !== target.pluginId) {
+    return false
+  }
+  if (event.scope === "host") {
+    return event.folderId === null && event.conversationId === null
+  }
+  if (event.scope === "workspace") {
+    return (
+      isNonNegativeSafeInteger(event.folderId) &&
+      event.conversationId === null &&
+      typeof target.folderId === "number" &&
+      target.folderId === event.folderId
+    )
+  }
+  if (event.scope === "session") {
+    if (
+      !isNonNegativeSafeInteger(event.conversationId) ||
+      typeof target.conversationId !== "number" ||
+      target.conversationId !== event.conversationId
+    ) {
+      return false
+    }
+    if (event.folderId !== null) {
+      return (
+        typeof target.folderId === "number" &&
+        target.folderId === event.folderId
+      )
+    }
+    return true
+  }
+  return false
+}
+
+function readRawI18nParams(error: unknown): Record<string, string> | null {
+  const appError = extractAppCommandError(error)
+  if (appError?.i18n_params) return appError.i18n_params
+  if (typeof error !== "object" || error === null) return null
+  const raw = (error as Record<string, unknown>).i18nParams
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return null
+  }
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value === "string") out[key] = value
+    else if (typeof value === "number" || typeof value === "boolean") {
+      out[key] = String(value)
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
+
+export type HostPluginErrorMessageKey =
+  | "serviceConflict"
+  | "servicesMissing"
+  | "servicesIncompatible"
+  | "servicesMissingAndIncompatible"
+
+export type HostPluginErrorTranslator = (
+  key: HostPluginErrorMessageKey,
+  params?: Record<string, string | number>
+) => string
+
+/**
+ * Format host plugin command errors, producing localized messages for
+ * structured `already_exists` service conflicts and `dependency_missing`
+ * service dependency failures.
+ */
+export function formatHostPluginError(
+  error: unknown,
+  translate: HostPluginErrorTranslator
+): string {
+  const appError = extractAppCommandError(error)
+  const params = readRawI18nParams(error)
+
+  if (
+    appError?.code === "already_exists" ||
+    appError?.i18n_key === "errors.hostPluginServiceConflict"
+  ) {
+    const service = params?.service?.trim()
+    const providerId = params?.providerId?.trim()
+    if (service && providerId) {
+      return translate("serviceConflict", { service, providerId })
+    }
+  }
+
+  if (
+    appError?.code === "dependency_missing" ||
+    appError?.i18n_key === "errors.hostPluginServicesUnavailable"
+  ) {
+    const missingServices = params?.missingServices?.trim() ?? ""
+    const incompatibleServices = params?.incompatibleServices?.trim() ?? ""
+    if (missingServices && incompatibleServices) {
+      return translate("servicesMissingAndIncompatible", {
+        missingServices,
+        incompatibleServices,
+      })
+    }
+    if (missingServices) {
+      return translate("servicesMissing", { missingServices })
+    }
+    if (incompatibleServices) {
+      return translate("servicesIncompatible", { incompatibleServices })
+    }
+  }
+
+  return toErrorMessage(error)
 }

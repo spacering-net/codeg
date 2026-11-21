@@ -10,7 +10,10 @@ import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
+  formatHostPluginError,
   hostPluginSessionScopeKey,
+  matchesPluginPublishedEventScope,
+  parsePluginPublishedEvent,
   pluginClientSurfaceKey,
   pluginScreenKey,
   pluginSidebarItemKey,
@@ -24,6 +27,7 @@ import {
   selectPluginSidebarItems,
   selectPluginThemes,
   validatePluginComposerInsertPayload,
+  type HostPluginManifest,
   type InstalledPlugin,
   type PluginTextTranslations,
 } from "@/lib/host-plugins"
@@ -908,5 +912,404 @@ describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems
     ).not.toBeNull()
     expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
     expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
+  })
+})
+
+describe("parsePluginPublishedEvent, matchesPluginPublishedEventScope & formatHostPluginError", () => {
+  it("validates bundled service-provider and service-consumer manifests against HostPluginManifest", () => {
+    const provider = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          "examples/plugins/service-provider/codeg-plugin.json"
+        ),
+        "utf8"
+      )
+    ) as HostPluginManifest
+    const consumer = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          "examples/plugins/service-consumer/codeg-plugin.json"
+        ),
+        "utf8"
+      )
+    ) as HostPluginManifest
+
+    expect(provider.services?.provides).toEqual([
+      expect.objectContaining({
+        name: "workspace.metrics",
+        version: 1,
+        methods: ["summarize"],
+      }),
+    ])
+    expect(consumer.services?.requires).toEqual([
+      { service: "workspace.metrics" },
+    ])
+    expect(consumer.events?.publishes).toEqual([
+      expect.objectContaining({
+        name: "metrics.summary",
+        scope: "workspace",
+      }),
+    ])
+  })
+
+  it("parses valid host, workspace, and session published events and rejects malformed payloads", () => {
+    const hostEvent = parsePluginPublishedEvent({
+      pluginId: "codeg.metrics-consumer",
+      event: "metrics.global",
+      scope: "host",
+      folderId: null,
+      conversationId: null,
+      payload: { total: 3 },
+      emittedAt: "2026-11-22T01:00:00Z",
+    })
+    expect(hostEvent).toEqual({
+      pluginId: "codeg.metrics-consumer",
+      event: "metrics.global",
+      scope: "host",
+      folderId: null,
+      conversationId: null,
+      payload: { total: 3 },
+      emittedAt: "2026-11-22T01:00:00Z",
+    })
+
+    const workspaceEvent = parsePluginPublishedEvent({
+      pluginId: "codeg.metrics-consumer",
+      event: "metrics.summary",
+      scope: "workspace",
+      folderId: 7,
+      conversationId: null,
+      payload: { fileCount: 7, score: 14 },
+      emittedAt: "2026-11-22T01:00:00Z",
+    })
+    expect(workspaceEvent).toMatchObject({
+      scope: "workspace",
+      folderId: 7,
+      conversationId: null,
+    })
+
+    const sessionWithFolder = parsePluginPublishedEvent({
+      pluginId: "codeg.metrics-consumer",
+      event: "session.updated",
+      scope: "session",
+      folderId: 7,
+      conversationId: 99,
+      payload: null,
+      emittedAt: "2026-11-22T01:00:00Z",
+    })
+    expect(sessionWithFolder).toMatchObject({
+      scope: "session",
+      folderId: 7,
+      conversationId: 99,
+      payload: null,
+    })
+
+    const folderlessSession = parsePluginPublishedEvent({
+      pluginId: "codeg.metrics-consumer",
+      event: "session.updated",
+      scope: "session",
+      folderId: null,
+      conversationId: 100,
+      payload: "ok",
+      emittedAt: "2026-11-22T01:00:00Z",
+    })
+    expect(folderlessSession).toMatchObject({
+      scope: "session",
+      folderId: null,
+      conversationId: 100,
+    })
+
+    // Malformed payloads rejected
+    expect(parsePluginPublishedEvent(null)).toBeNull()
+    expect(parsePluginPublishedEvent([])).toBeNull()
+    expect(
+      parsePluginPublishedEvent({
+        pluginId: "codeg.metrics-consumer",
+        event: "x",
+        scope: "host",
+        folderId: 1,
+        conversationId: null,
+        payload: {},
+        emittedAt: "2026-11-22T01:00:00Z",
+      })
+    ).toBeNull()
+    expect(
+      parsePluginPublishedEvent({
+        pluginId: "codeg.metrics-consumer",
+        event: "x",
+        scope: "workspace",
+        folderId: null,
+        conversationId: null,
+        payload: {},
+        emittedAt: "2026-11-22T01:00:00Z",
+      })
+    ).toBeNull()
+    expect(
+      parsePluginPublishedEvent({
+        pluginId: "codeg.metrics-consumer",
+        event: "x",
+        scope: "workspace",
+        folderId: 7,
+        conversationId: 99,
+        payload: {},
+        emittedAt: "2026-11-22T01:00:00Z",
+      })
+    ).toBeNull()
+    expect(
+      parsePluginPublishedEvent({
+        pluginId: "codeg.metrics-consumer",
+        event: "x",
+        scope: "session",
+        folderId: 7,
+        conversationId: null,
+        payload: {},
+        emittedAt: "2026-11-22T01:00:00Z",
+      })
+    ).toBeNull()
+    expect(
+      parsePluginPublishedEvent({
+        pluginId: "codeg.metrics-consumer",
+        event: "x",
+        scope: "unknown",
+        folderId: null,
+        conversationId: null,
+        payload: {},
+        emittedAt: "2026-11-22T01:00:00Z",
+      })
+    ).toBeNull()
+    expect(
+      parsePluginPublishedEvent({
+        pluginId: "codeg.metrics-consumer",
+        event: "x",
+        scope: "host",
+        folderId: null,
+        conversationId: null,
+        emittedAt: "2026-11-22T01:00:00Z",
+      })
+    ).toBeNull()
+    expect(
+      parsePluginPublishedEvent({
+        pluginId: "   ",
+        event: "x",
+        scope: "host",
+        folderId: null,
+        conversationId: null,
+        payload: {},
+        emittedAt: "2026-11-22T01:00:00Z",
+      })
+    ).toBeNull()
+  })
+
+  it("matches published event scopes strictly without leaking across plugins, workspaces, or conversations", () => {
+    const hostEvent = parsePluginPublishedEvent({
+      pluginId: "acme.a",
+      event: "host.ping",
+      scope: "host",
+      folderId: null,
+      conversationId: null,
+      payload: {},
+      emittedAt: "2026-11-22T01:00:00Z",
+    })!
+    expect(
+      matchesPluginPublishedEventScope(hostEvent, { pluginId: "acme.a" })
+    ).toBe(true)
+    expect(
+      matchesPluginPublishedEventScope(hostEvent, {
+        pluginId: "acme.a",
+        folderId: 5,
+        conversationId: 12,
+      })
+    ).toBe(true)
+    expect(
+      matchesPluginPublishedEventScope(hostEvent, { pluginId: "acme.b" })
+    ).toBe(false)
+
+    const wsEvent = parsePluginPublishedEvent({
+      pluginId: "acme.a",
+      event: "metrics.summary",
+      scope: "workspace",
+      folderId: 5,
+      conversationId: null,
+      payload: { score: 14 },
+      emittedAt: "2026-11-22T01:00:00Z",
+    })!
+    expect(
+      matchesPluginPublishedEventScope(wsEvent, {
+        pluginId: "acme.a",
+        folderId: 5,
+      })
+    ).toBe(true)
+    expect(
+      matchesPluginPublishedEventScope(wsEvent, {
+        pluginId: "acme.a",
+        folderId: 5,
+        conversationId: 12,
+      })
+    ).toBe(true)
+    expect(
+      matchesPluginPublishedEventScope(wsEvent, {
+        pluginId: "acme.a",
+        folderId: 6,
+      })
+    ).toBe(false)
+    expect(
+      matchesPluginPublishedEventScope(wsEvent, {
+        pluginId: "acme.a",
+        folderId: null,
+      })
+    ).toBe(false)
+    expect(
+      matchesPluginPublishedEventScope(wsEvent, { pluginId: "acme.a" })
+    ).toBe(false)
+    expect(
+      matchesPluginPublishedEventScope(wsEvent, {
+        pluginId: "acme.b",
+        folderId: 5,
+      })
+    ).toBe(false)
+
+    const sessionEvent = parsePluginPublishedEvent({
+      pluginId: "acme.a",
+      event: "session.ping",
+      scope: "session",
+      folderId: 5,
+      conversationId: 12,
+      payload: {},
+      emittedAt: "2026-11-22T01:00:00Z",
+    })!
+    expect(
+      matchesPluginPublishedEventScope(sessionEvent, {
+        pluginId: "acme.a",
+        folderId: 5,
+        conversationId: 12,
+      })
+    ).toBe(true)
+    expect(
+      matchesPluginPublishedEventScope(sessionEvent, {
+        pluginId: "acme.a",
+        folderId: 5,
+        conversationId: 13,
+      })
+    ).toBe(false)
+    expect(
+      matchesPluginPublishedEventScope(sessionEvent, {
+        pluginId: "acme.a",
+        folderId: 99,
+        conversationId: 12,
+      })
+    ).toBe(false)
+    expect(
+      matchesPluginPublishedEventScope(sessionEvent, {
+        pluginId: "acme.a",
+        folderId: null,
+        conversationId: 12,
+      })
+    ).toBe(false)
+    expect(
+      matchesPluginPublishedEventScope(sessionEvent, {
+        pluginId: "acme.a",
+        folderId: 5,
+      })
+    ).toBe(false)
+
+    const folderlessSessionEvent = parsePluginPublishedEvent({
+      pluginId: "acme.a",
+      event: "session.ping",
+      scope: "session",
+      folderId: null,
+      conversationId: 12,
+      payload: {},
+      emittedAt: "2026-11-22T01:00:00Z",
+    })!
+    expect(
+      matchesPluginPublishedEventScope(folderlessSessionEvent, {
+        pluginId: "acme.a",
+        folderId: null,
+        conversationId: 12,
+      })
+    ).toBe(true)
+    expect(
+      matchesPluginPublishedEventScope(folderlessSessionEvent, {
+        pluginId: "acme.a",
+        folderId: 5,
+        conversationId: 12,
+      })
+    ).toBe(true)
+  })
+
+  it("formats structured already_exists and dependency_missing plugin errors cleanly", () => {
+    const translate = (key: string, params?: Record<string, string | number>) =>
+      `${key}:${JSON.stringify(params ?? {})}`
+
+    expect(
+      formatHostPluginError(
+        {
+          code: "already_exists",
+          message:
+            "Plugin codeg.metrics-provider already provides service workspace.metrics",
+          i18n_key: "errors.hostPluginServiceConflict",
+          i18n_params: {
+            service: "workspace.metrics",
+            providerId: "codeg.metrics-provider",
+          },
+        },
+        translate
+      )
+    ).toBe(
+      'serviceConflict:{"service":"workspace.metrics","providerId":"codeg.metrics-provider"}'
+    )
+
+    expect(
+      formatHostPluginError(
+        {
+          code: "dependency_missing",
+          message: "Plugin services unavailable: workspace.metrics (missing)",
+          i18n_key: "errors.hostPluginServicesUnavailable",
+          i18n_params: {
+            missingServices: "workspace.metrics",
+            incompatibleServices: "",
+          },
+        },
+        translate
+      )
+    ).toBe('servicesMissing:{"missingServices":"workspace.metrics"}')
+
+    expect(
+      formatHostPluginError(
+        {
+          code: "dependency_missing",
+          message:
+            "Plugin services unavailable: test.upstream (needs v2, found v1)",
+          i18n_key: "errors.hostPluginServicesUnavailable",
+          i18n_params: {
+            missingServices: "",
+            incompatibleServices: "test.upstream",
+          },
+        },
+        translate
+      )
+    ).toBe('servicesIncompatible:{"incompatibleServices":"test.upstream"}')
+
+    expect(
+      formatHostPluginError(
+        {
+          code: "dependency_missing",
+          message: "Plugin services unavailable",
+          i18n_key: "errors.hostPluginServicesUnavailable",
+          i18n_params: {
+            missingServices: "svc.a",
+            incompatibleServices: "svc.b",
+          },
+        },
+        translate
+      )
+    ).toBe(
+      'servicesMissingAndIncompatible:{"missingServices":"svc.a","incompatibleServices":"svc.b"}'
+    )
+
+    expect(formatHostPluginError(new Error("Generic failure"), translate)).toBe(
+      "Generic failure"
+    )
   })
 })

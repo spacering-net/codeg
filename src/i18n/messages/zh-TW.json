@@ -109,7 +109,18 @@
     "pluginSurfaces": "外掛入口",
     "morePluginSurfaces": "更多外掛入口",
     "pluginDetail": "外掛詳情",
-    "activationPanel": "啟用引導"
+    "activationPanel": "啟用引導",
+    "providesService": "提供服務 · {name} v{version}",
+    "requiresService": "依賴服務 · {service}",
+    "requiresOptionalService": "可選依賴 · {service}",
+    "publishesEvent": "發布事件 · {name}（{scope}）",
+    "eventScopeHost": "主機",
+    "eventScopeWorkspace": "工作區",
+    "eventScopeSession": "工作階段",
+    "serviceConflict": "服務 {service} 已由已啟用的外掛 {providerId} 提供。",
+    "servicesMissing": "缺少所需的外掛服務：{missingServices}。",
+    "servicesIncompatible": "所需的外掛服務版本未達最低要求：{incompatibleServices}。",
+    "servicesMissingAndIncompatible": "所需的外掛服務缺失（{missingServices}）或版本不相容（{incompatibleServices}）。"
   },
   "AppearanceSettings": {
     "sectionTitle": "主題外觀",

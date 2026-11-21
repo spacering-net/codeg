@@ -109,7 +109,18 @@
     "pluginSurfaces": "插件入口",
     "morePluginSurfaces": "更多插件入口",
     "pluginDetail": "插件详情",
-    "activationPanel": "启用引导"
+    "activationPanel": "启用引导",
+    "providesService": "提供服务 · {name} v{version}",
+    "requiresService": "依赖服务 · {service}",
+    "requiresOptionalService": "可选依赖 · {service}",
+    "publishesEvent": "发布事件 · {name}（{scope}）",
+    "eventScopeHost": "主机",
+    "eventScopeWorkspace": "工作区",
+    "eventScopeSession": "会话",
+    "serviceConflict": "服务 {service} 已由已启用的插件 {providerId} 提供。",
+    "servicesMissing": "缺少所需的插件服务：{missingServices}。",
+    "servicesIncompatible": "所需的插件服务版本不满足最低要求：{incompatibleServices}。",
+    "servicesMissingAndIncompatible": "所需的插件服务缺失（{missingServices}）或版本不兼容（{incompatibleServices}）。"
   },
   "AppearanceSettings": {
     "sectionTitle": "主题外观",

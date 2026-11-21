@@ -30,14 +30,17 @@ import { toErrorMessage } from "@/lib/app-error"
 import { isUnsupportedCommandError } from "@/lib/harness/errors"
 import {
   applyHostPlugin,
-  fetchHostPluginIndex,
   confirmHostPluginInstall,
+  fetchHostPluginIndex,
+  formatHostPluginError,
   previewHostPluginInstall,
   resolvePluginHostSurface,
   resolvePluginText,
   updateHostPlugin,
   useHostPlugins,
+  type HostPluginManifest,
   type InstalledPlugin,
+  type PluginEventScope,
   type PluginIndex,
   type PluginInstallPreview,
   type PluginMutation,
@@ -92,7 +95,7 @@ export function HostPluginSettings() {
       await action()
       refresh()
     } catch (cause) {
-      setFailure(toErrorMessage(cause))
+      setFailure(formatHostPluginError(cause, t))
     } finally {
       setBusy(false)
     }
@@ -207,6 +210,7 @@ export function HostPluginSettings() {
                       {sourceText(source)}
                     </div>
                   )}
+                  <PluginContractsSummary manifest={manifest} locale={locale} />
                 </div>
                 {detailSurface && (
                   <Button
@@ -384,6 +388,7 @@ function PluginSettingsSurfaceDialog({
                 {t("clientEntry", { entry: manifest.client.entry })}
               </p>
             )}
+            <PluginContractsSummary manifest={manifest} locale={locale} />
           </div>
         )}
         <HostPluginSurface
@@ -484,7 +489,7 @@ function PluginIndexDialog({
       setInstalled(pending.manifest.id)
       onInstalled()
     } catch (error) {
-      setFailure(toErrorMessage(error))
+      setFailure(formatHostPluginError(error, t))
     } finally {
       setPreview(undefined)
       setBusy(false)
@@ -710,7 +715,7 @@ function InstallSourceDialog({
                 setOpen(false)
                 onInstalled()
               } catch (error) {
-                setFailure(toErrorMessage(error))
+                setFailure(formatHostPluginError(error, t))
               } finally {
                 setPreview(undefined)
                 setBusy(false)
@@ -821,6 +826,7 @@ function InstallReview({
           {source.type === "npm" &&
             ` · ${source.registry === "mirror" ? t("mirror") : "npm"}`}
         </p>
+        <PluginContractsSummary manifest={manifest} locale={locale} />
       </div>
       <div className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
         <AlertTriangle className="mt-0.5 size-4 shrink-0" />
@@ -847,5 +853,108 @@ function InstallReview({
         </Button>
       </DialogFooter>
     </section>
+  )
+}
+
+function eventScopeTranslationKey(scope?: PluginEventScope) {
+  switch (scope) {
+    case "workspace":
+      return "eventScopeWorkspace" as const
+    case "session":
+      return "eventScopeSession" as const
+    default:
+      return "eventScopeHost" as const
+  }
+}
+
+function PluginContractsSummary({
+  manifest,
+  locale,
+}: {
+  manifest: HostPluginManifest
+  locale: string
+}) {
+  const t = useTranslations("HostPlugins")
+  const provides = manifest.services?.provides ?? []
+  const requires = manifest.services?.requires ?? []
+  const publishes = manifest.events?.publishes ?? []
+
+  if (
+    provides.length === 0 &&
+    requires.length === 0 &&
+    publishes.length === 0
+  ) {
+    return null
+  }
+
+  return (
+    <div
+      data-slot="plugin-contracts-summary"
+      className="flex flex-wrap items-center gap-1.5 pt-1"
+    >
+      {provides.map((service) => {
+        const description = service.description
+          ? resolvePluginText(
+              service.description,
+              service.descriptionTranslations,
+              locale
+            ).trim()
+          : ""
+        const methods = service.methods.join(", ")
+        const tooltip = [description, methods].filter(Boolean).join(" · ")
+        return (
+          <span
+            key={`provide:${service.name}`}
+            title={tooltip || undefined}
+            className="inline-flex max-w-full items-center rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+          >
+            {t("providesService", {
+              name: service.name,
+              version: service.version,
+            })}
+          </span>
+        )
+      })}
+      {requires.map((dependency) => {
+        const serviceLabel =
+          dependency.minVersion != null && dependency.minVersion > 1
+            ? `${dependency.service} >= v${dependency.minVersion}`
+            : dependency.service
+        return (
+          <span
+            key={`require:${dependency.service}`}
+            className="inline-flex max-w-full items-center rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+          >
+            {t(
+              dependency.optional
+                ? "requiresOptionalService"
+                : "requiresService",
+              {
+                service: serviceLabel,
+              }
+            )}
+          </span>
+        )
+      })}
+      {publishes.map((event) => {
+        const description = event.description
+          ? resolvePluginText(
+              event.description,
+              event.descriptionTranslations,
+              locale
+            ).trim()
+          : ""
+        const scope = t(eventScopeTranslationKey(event.scope))
+        return (
+          <span
+            key={`publish:${event.name}`}
+            title={description || undefined}
+            className="inline-flex max-w-full items-center rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
+          >
+            {t("publishesEvent", { name: event.name, scope })}
+          </span>
+        )
+      })}
+    </div>
   )
 }

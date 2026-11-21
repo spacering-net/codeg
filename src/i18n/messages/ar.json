@@ -109,7 +109,18 @@
     "pluginSurfaces": "إجراءات الإضافات",
     "morePluginSurfaces": "مزيد من إجراءات الإضافات",
     "pluginDetail": "تفاصيل الإضافة",
-    "activationPanel": "دليل التفعيل"
+    "activationPanel": "دليل التفعيل",
+    "providesService": "يوفّر · {name} v{version}",
+    "requiresService": "يتطلب · {service}",
+    "requiresOptionalService": "اختياري · {service}",
+    "publishesEvent": "ينشر · {name} ({scope})",
+    "eventScopeHost": "المضيف",
+    "eventScopeWorkspace": "مساحة العمل",
+    "eventScopeSession": "الجلسة",
+    "serviceConflict": "الخدمة {service} متوفرة بالفعل عبر الإضافة المفعّلة {providerId}.",
+    "servicesMissing": "خدمات الإضافة المطلوبة غير متوفرة: {missingServices}.",
+    "servicesIncompatible": "خدمات الإضافة المطلوبة لا تستوفي الحد الأدنى للإصدار: {incompatibleServices}.",
+    "servicesMissingAndIncompatible": "خدمات الإضافة المطلوبة غير متوفرة ({missingServices}) أو غير متوافقة ({incompatibleServices})."
   },
   "AppearanceSettings": {
     "sectionTitle": "مظهر السمة",

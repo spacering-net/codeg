@@ -109,7 +109,18 @@
     "pluginSurfaces": "Plugin-Aktionen",
     "morePluginSurfaces": "Weitere Plugin-Aktionen",
     "pluginDetail": "Plugin-Details",
-    "activationPanel": "Aktivierungsanleitung"
+    "activationPanel": "Aktivierungsanleitung",
+    "providesService": "Bietet · {name} v{version}",
+    "requiresService": "Erfordert · {service}",
+    "requiresOptionalService": "Optional · {service}",
+    "publishesEvent": "Veröffentlicht · {name} ({scope})",
+    "eventScopeHost": "Host",
+    "eventScopeWorkspace": "Arbeitsbereich",
+    "eventScopeSession": "Sitzung",
+    "serviceConflict": "Der Dienst {service} wird bereits vom aktivierten Plugin {providerId} bereitgestellt.",
+    "servicesMissing": "Erforderliche Plugin-Dienste sind nicht verfügbar: {missingServices}.",
+    "servicesIncompatible": "Erforderliche Plugin-Dienste erfüllen nicht die Mindestversion: {incompatibleServices}.",
+    "servicesMissingAndIncompatible": "Erforderliche Plugin-Dienste sind nicht verfügbar ({missingServices}) oder inkompatibel ({incompatibleServices})."
   },
   "AppearanceSettings": {
     "sectionTitle": "Design-Erscheinungsbild",

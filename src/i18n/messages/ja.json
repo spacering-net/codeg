@@ -109,7 +109,18 @@
     "pluginSurfaces": "プラグインアクション",
     "morePluginSurfaces": "その他のプラグインアクション",
     "pluginDetail": "プラグイン詳細",
-    "activationPanel": "有効化ガイド"
+    "activationPanel": "有効化ガイド",
+    "providesService": "提供 · {name} v{version}",
+    "requiresService": "必須 · {service}",
+    "requiresOptionalService": "任意 · {service}",
+    "publishesEvent": "発行 · {name}（{scope}）",
+    "eventScopeHost": "ホスト",
+    "eventScopeWorkspace": "ワークスペース",
+    "eventScopeSession": "セッション",
+    "serviceConflict": "サービス {service} は既に有効なプラグイン {providerId} によって提供されています。",
+    "servicesMissing": "必要なプラグインサービスが利用できません: {missingServices}。",
+    "servicesIncompatible": "必要なプラグインサービスが最小バージョンを満たしていません: {incompatibleServices}。",
+    "servicesMissingAndIncompatible": "必要なプラグインサービスが不足しているか（{missingServices}）、互換性がありません（{incompatibleServices}）。"
   },
   "AppearanceSettings": {
     "sectionTitle": "テーマ外観",

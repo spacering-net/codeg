@@ -109,7 +109,18 @@
     "pluginSurfaces": "플러그인 작업",
     "morePluginSurfaces": "더 많은 플러그인 작업",
     "pluginDetail": "플러그인 세부정보",
-    "activationPanel": "활성화 가이드"
+    "activationPanel": "활성화 가이드",
+    "providesService": "제공 · {name} v{version}",
+    "requiresService": "필수 · {service}",
+    "requiresOptionalService": "선택 · {service}",
+    "publishesEvent": "게시 · {name} ({scope})",
+    "eventScopeHost": "호스트",
+    "eventScopeWorkspace": "작업 공간",
+    "eventScopeSession": "세션",
+    "serviceConflict": "서비스 {service}는 이미 활성화된 플러그인 {providerId}에서 제공하고 있습니다.",
+    "servicesMissing": "필요한 플러그인 서비스를 사용할 수 없습니다: {missingServices}.",
+    "servicesIncompatible": "필요한 플러그인 서비스가 최소 버전 요구 사항을 충족하지 않습니다: {incompatibleServices}.",
+    "servicesMissingAndIncompatible": "필요한 플러그인 서비스가 없거나({missingServices}) 호환되지 않습니다({incompatibleServices})."
   },
   "AppearanceSettings": {
     "sectionTitle": "테마 모양",

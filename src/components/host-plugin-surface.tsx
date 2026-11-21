@@ -5,9 +5,14 @@ import { useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { toErrorMessage } from "@/lib/app-error"
 import {
+  PLUGIN_LIFECYCLE_EVENT_CHANNEL,
+  PLUGIN_PUBLISHED_EVENT_CHANNEL,
+  matchesPluginPublishedEventScope,
+  parsePluginPublishedEvent,
   usePluginClientHtml,
   validatePluginComposerInsertPayload,
   type HostPluginSessionContext,
+  type PluginClientLifecycleEvent,
   type PluginClientSurfaceSlot,
   type PluginComposerInsertResult,
 } from "@/lib/host-plugins"
@@ -32,14 +37,13 @@ export type SurfaceContext = { id: string } & (
 const CLIENT_TIMEOUT_MS = 12_000
 const MAX_PENDING_CALLS = 4
 const MAX_INPUT_BYTES = 64 * 1024
-const LIFECYCLE_EVENT_CHANNEL = "host-plugins://event"
 
-type PluginEvent = {
-  pluginId: string
-  event: string
+type LifecycleWireEvent = Omit<
+  PluginClientLifecycleEvent,
+  "folderId" | "conversationId"
+> & {
   folderId?: number | null
   conversationId?: number | null
-  data: unknown
 }
 
 const CLIENT_POLICY = [
@@ -257,7 +261,8 @@ function PluginFrame({
 
   useEffect(() => {
     let channel: MessageChannel | undefined
-    let unsubscribe: (() => void) | undefined
+    let unsubscribeLifecycle: (() => void) | undefined
+    let unsubscribePublished: (() => void) | undefined
     let closed = false
     function connect(event: MessageEvent) {
       if (
@@ -293,33 +298,61 @@ function PluginFrame({
                   }
                 : { type, id, folderId, locale },
           })
-          void host
-            .subscribe<PluginEvent>(LIFECYCLE_EVENT_CHANNEL, (event) => {
-              if (closed || event.pluginId !== pluginId) return
-              if (type === "workspacePanel") {
-                if (event.folderId !== folderId) return
-              } else if (type === "clientSurface") {
-                if (folderId != null) {
-                  if (event.folderId !== folderId) return
-                } else if (event.folderId != null) {
-                  return
+          if (typeof host.subscribe === "function") {
+            void host
+              .subscribe<LifecycleWireEvent>(
+                PLUGIN_LIFECYCLE_EVENT_CHANNEL,
+                (event) => {
+                  if (closed || event.pluginId !== pluginId) return
+                  if (type === "workspacePanel") {
+                    if (event.folderId !== folderId) return
+                  } else if (type === "clientSurface") {
+                    if (folderId != null) {
+                      if (event.folderId !== folderId) return
+                    } else if (event.folderId != null) {
+                      return
+                    }
+                    if (
+                      event.conversationId != null &&
+                      event.conversationId !== conversationId
+                    ) {
+                      return
+                    }
+                  }
+                  port1.postMessage({ type: "event", value: event })
                 }
+              )
+              .then(
+                (stop) => {
+                  if (closed) stop()
+                  else unsubscribeLifecycle = stop
+                },
+                () => undefined
+              )
+            void host
+              .subscribe<unknown>(PLUGIN_PUBLISHED_EVENT_CHANNEL, (raw) => {
+                if (closed) return
+                const parsed = parsePluginPublishedEvent(raw)
+                if (!parsed) return
                 if (
-                  event.conversationId != null &&
-                  event.conversationId !== conversationId
+                  !matchesPluginPublishedEventScope(parsed, {
+                    pluginId,
+                    folderId,
+                    conversationId,
+                  })
                 ) {
                   return
                 }
-              }
-              port1.postMessage({ type: "event", value: event })
-            })
-            .then(
-              (stop) => {
-                if (closed) stop()
-                else unsubscribe = stop
-              },
-              () => undefined
-            )
+                port1.postMessage({ type: "event", value: parsed })
+              })
+              .then(
+                (stop) => {
+                  if (closed) stop()
+                  else unsubscribePublished = stop
+                },
+                () => undefined
+              )
+          }
           return
         }
         if (
@@ -382,7 +415,8 @@ function PluginFrame({
     window.addEventListener("message", connect)
     return () => {
       closed = true
-      unsubscribe?.()
+      unsubscribeLifecycle?.()
+      unsubscribePublished?.()
       window.removeEventListener("message", connect)
       if (channel) {
         channel.port1.onmessage = null

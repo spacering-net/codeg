@@ -109,7 +109,18 @@
     "pluginSurfaces": "Actions des extensions",
     "morePluginSurfaces": "Autres actions des extensions",
     "pluginDetail": "Détails de l’extension",
-    "activationPanel": "Guide d’activation"
+    "activationPanel": "Guide d’activation",
+    "providesService": "Fournit · {name} v{version}",
+    "requiresService": "Requiert · {service}",
+    "requiresOptionalService": "Optionnel · {service}",
+    "publishesEvent": "Publie · {name} ({scope})",
+    "eventScopeHost": "hôte",
+    "eventScopeWorkspace": "espace de travail",
+    "eventScopeSession": "session",
+    "serviceConflict": "Le service {service} est déjà fourni par l’extension activée {providerId}.",
+    "servicesMissing": "Les services d’extension requis sont indisponibles : {missingServices}.",
+    "servicesIncompatible": "Les services d’extension requis ne respectent pas la version minimale : {incompatibleServices}.",
+    "servicesMissingAndIncompatible": "Les services d’extension requis sont indisponibles ({missingServices}) ou incompatibles ({incompatibleServices})."
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",

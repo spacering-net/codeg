@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { type ReactElement } from "react"
 import { act, cleanup, render, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
@@ -674,4 +676,212 @@ describe("HostPluginSurface clientSurface context & isolation", () => {
       })
     }
   )
+
+  it("forwards typed host-plugins://plugin-event payloads by host/workspace/session scope alongside legacy lifecycle events and withdraws on disable or close", async () => {
+    const metricsHtml = readFileSync(
+      resolve(process.cwd(), "examples/plugins/service-consumer/metrics.html"),
+      "utf8"
+    )
+    let enabled = true
+    const mock = createMockTransport()
+    mock.call.mockImplementation(async (method: string) => {
+      if (method === "host_plugins_client_html") {
+        if (!enabled) throw new Error("Plugin is disabled")
+        return metricsHtml
+      }
+      return null
+    })
+    mockTransportRef.current = mock.transport
+
+    // 1) Workspace panel (examples/plugins/service-consumer/metrics.html contract)
+    const { getByTitle, rerender, unmount } = render(
+      withIntl(
+        <HostPluginSurface
+          pluginId="codeg.metrics-consumer"
+          title="Workspace Metrics"
+          context={{ type: "workspacePanel", id: "metrics", folderId: 7 }}
+        />
+      )
+    )
+
+    const wsFrame = (await waitFor(() =>
+      getByTitle("Workspace Metrics")
+    )) as HTMLIFrameElement
+    expect(wsFrame.getAttribute("srcdoc")).toContain("metrics.summary")
+    await act(async () => {})
+    const wsSession = connectFrame(wsFrame)
+
+    await waitFor(() => {
+      expect(mock.subscribe).toHaveBeenCalledWith(
+        "host-plugins://plugin-event",
+        expect.any(Function)
+      )
+    })
+
+    // Wrong plugin -> blocked
+    mock.emit("host-plugins://plugin-event", {
+      pluginId: "other.plugin",
+      event: "metrics.summary",
+      scope: "workspace",
+      folderId: 7,
+      conversationId: null,
+      payload: { fileCount: 1, score: 2 },
+      emittedAt: "2026-11-22T01:00:00Z",
+    })
+    // Wrong workspace -> blocked
+    mock.emit("host-plugins://plugin-event", {
+      pluginId: "codeg.metrics-consumer",
+      event: "metrics.summary",
+      scope: "workspace",
+      folderId: 8,
+      conversationId: null,
+      payload: { fileCount: 1, score: 2 },
+      emittedAt: "2026-11-22T01:00:00Z",
+    })
+    // Session event on workspace panel (no conversationId) -> blocked
+    mock.emit("host-plugins://plugin-event", {
+      pluginId: "codeg.metrics-consumer",
+      event: "session.note",
+      scope: "session",
+      folderId: 7,
+      conversationId: 42,
+      payload: { ok: true },
+      emittedAt: "2026-11-22T01:00:00Z",
+    })
+    // Malformed event -> blocked
+    mock.emit("host-plugins://plugin-event", {
+      pluginId: "codeg.metrics-consumer",
+      event: "metrics.summary",
+      scope: "workspace",
+      folderId: null,
+      conversationId: null,
+      payload: { bad: true },
+      emittedAt: "2026-11-22T01:00:00Z",
+    })
+
+    // Matching workspace event -> delivered
+    const workspaceEvent = {
+      pluginId: "codeg.metrics-consumer",
+      event: "metrics.summary",
+      scope: "workspace",
+      folderId: 7,
+      conversationId: null,
+      payload: { fileCount: 7, score: 14 },
+      emittedAt: "2026-11-22T01:00:00Z",
+    }
+    mock.emit("host-plugins://plugin-event", workspaceEvent)
+
+    // Matching host event -> delivered to any surface of the plugin
+    const hostEvent = {
+      pluginId: "codeg.metrics-consumer",
+      event: "metrics.global",
+      scope: "host",
+      folderId: null,
+      conversationId: null,
+      payload: { ready: true },
+      emittedAt: "2026-11-22T01:00:01Z",
+    }
+    mock.emit("host-plugins://plugin-event", hostEvent)
+
+    // Legacy lifecycle event still coexists on the same channel
+    const legacyEvent = {
+      pluginId: "codeg.metrics-consumer",
+      event: "workspace.open.after",
+      folderId: 7,
+      conversationId: null,
+      data: { opened: true },
+    }
+    mock.emit("host-plugins://event", legacyEvent)
+
+    expect(wsSession.received).toEqual([
+      {
+        type: "context",
+        context: {
+          type: "workspacePanel",
+          id: "metrics",
+          folderId: 7,
+          locale: "en",
+        },
+      },
+      { type: "event", value: workspaceEvent },
+      { type: "event", value: hostEvent },
+      { type: "event", value: legacyEvent },
+    ])
+
+    // 2) Switch to session-scoped clientSurface -> old port closes & session scope enforces conversationId + folderId
+    rerender(
+      withIntl(
+        <HostPluginSurface
+          pluginId="codeg.metrics-consumer"
+          title="Workspace Metrics"
+          context={{
+            type: "clientSurface",
+            slot: "sessionHeader",
+            id: "metrics-header",
+            folderId: 7,
+            conversationId: 42,
+            sessionKey: "tab-42",
+          }}
+        />
+      )
+    )
+    expect(wsSession.port!.peer.closed).toBe(true)
+
+    const sessionFrame = getByTitle("Workspace Metrics") as HTMLIFrameElement
+    const sessionConn = connectFrame(sessionFrame)
+    await waitFor(() => {
+      expect(mock.subscribe).toHaveBeenCalledWith(
+        "host-plugins://plugin-event",
+        expect.any(Function)
+      )
+    })
+
+    // Wrong conversation -> blocked; wrong folder -> blocked; matching session -> delivered
+    mock.emit("host-plugins://plugin-event", {
+      pluginId: "codeg.metrics-consumer",
+      event: "session.delta",
+      scope: "session",
+      folderId: 7,
+      conversationId: 43,
+      payload: { n: 1 },
+      emittedAt: "2026-11-22T01:00:02Z",
+    })
+    mock.emit("host-plugins://plugin-event", {
+      pluginId: "codeg.metrics-consumer",
+      event: "session.delta",
+      scope: "session",
+      folderId: 9,
+      conversationId: 42,
+      payload: { n: 2 },
+      emittedAt: "2026-11-22T01:00:02Z",
+    })
+    const matchingSessionEvent = {
+      pluginId: "codeg.metrics-consumer",
+      event: "session.delta",
+      scope: "session",
+      folderId: 7,
+      conversationId: 42,
+      payload: { n: 3 },
+      emittedAt: "2026-11-22T01:00:03Z",
+    }
+    mock.emit("host-plugins://plugin-event", matchingSessionEvent)
+    expect(sessionConn.received).toContainEqual({
+      type: "event",
+      value: matchingSessionEvent,
+    })
+    expect(sessionConn.received).toHaveLength(2)
+
+    // 3) Disabling the plugin triggers host-plugins://changed -> surface unmounts frame & unsubscribes
+    enabled = false
+    await act(async () => {
+      mock.emit("host-plugins://changed", null)
+    })
+    await waitFor(() => {
+      expect(sessionConn.port!.peer.closed).toBe(true)
+    })
+    mock.emit("host-plugins://plugin-event", matchingSessionEvent)
+    expect(sessionConn.received).toHaveLength(2)
+
+    unmount()
+  })
 })

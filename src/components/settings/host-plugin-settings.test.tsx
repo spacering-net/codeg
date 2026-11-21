@@ -497,4 +497,186 @@ describe("HostPluginSettings pluginDetail and activationPanel surfaces", () => {
       "acme/localized/plugins/inspector#1234567890abcdef"
     )
   })
+
+  it("displays compact services and published events summaries on installed rows and install review, with zero extra DOM when undeclared", async () => {
+    const providerManifest = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          "examples/plugins/service-provider/codeg-plugin.json"
+        ),
+        "utf8"
+      )
+    ) as InstalledPlugin["manifest"]
+    const consumerManifest = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          "examples/plugins/service-consumer/codeg-plugin.json"
+        ),
+        "utf8"
+      )
+    ) as InstalledPlugin["manifest"]
+    const plainPlugin = makePlugin({
+      id: "acme.plain",
+      name: "Plain Plugin",
+      enabled: false,
+    })
+
+    const preview: PluginInstallPreview = {
+      ticket: "ticket-consumer",
+      manifest: consumerManifest,
+      source: {
+        type: "directory",
+        path: "/examples/plugins/service-consumer",
+      },
+    }
+
+    const mock = createSettingsTransport(
+      [
+        {
+          enabled: true,
+          source: {
+            type: "directory",
+            path: "/examples/plugins/service-provider",
+          },
+          manifest: providerManifest,
+        },
+        {
+          enabled: false,
+          source: {
+            type: "directory",
+            path: "/examples/plugins/service-consumer",
+          },
+          manifest: consumerManifest,
+        },
+        plainPlugin,
+      ],
+      preview
+    )
+    state.transport = mock.transport
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    render(withIntl(<HostPluginSettings />))
+
+    expect(
+      await screen.findByText("Workspace Metrics Provider")
+    ).toBeInTheDocument()
+
+    // Provider and consumer rows show compact summaries; plain plugin renders zero extra summary DOM.
+    const summaries = document.querySelectorAll(
+      '[data-slot="plugin-contracts-summary"]'
+    )
+    expect(summaries).toHaveLength(2)
+    expect(
+      screen.getByText("Provides · workspace.metrics v1")
+    ).toBeInTheDocument()
+    expect(screen.getByText("Requires · workspace.metrics")).toBeInTheDocument()
+    expect(
+      screen.getByText("Publishes · metrics.summary (workspace)")
+    ).toBeInTheDocument()
+
+    // Install review also displays declared service/event contracts.
+    await user.click(screen.getByRole("button", { name: "Add Plugin" }))
+    const sourceInput = await screen.findByPlaceholderText(
+      "owner/repo, @scope/package"
+    )
+    await user.type(sourceInput, "/examples/plugins/service-consumer")
+    await user.click(
+      screen.getByRole("button", { name: "Review installation" })
+    )
+
+    const reviewSection = await screen.findByRole("region", {
+      name: "Review installation",
+    })
+    expect(reviewSection).toHaveTextContent("Requires · workspace.metrics")
+    expect(reviewSection).toHaveTextContent(
+      "Publishes · metrics.summary (workspace)"
+    )
+  })
+
+  it("formats dependency_missing and already_exists errors with service names and conflicting provider ID", async () => {
+    const consumerManifest = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          "examples/plugins/service-consumer/codeg-plugin.json"
+        ),
+        "utf8"
+      )
+    ) as InstalledPlugin["manifest"]
+    const conflictManifest = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          "examples/plugins/service-provider/codeg-plugin.json"
+        ),
+        "utf8"
+      )
+    ) as InstalledPlugin["manifest"]
+    conflictManifest.id = "acme.metrics-conflict"
+    conflictManifest.name = "Conflict Provider"
+
+    const mock = createSettingsTransport([
+      { enabled: false, manifest: consumerManifest },
+      { enabled: false, manifest: conflictManifest },
+    ])
+    mock.call.mockImplementation(
+      async (method: string, params?: Record<string, unknown>) => {
+        if (method === "host_plugins_list") {
+          return [
+            { enabled: false, manifest: consumerManifest },
+            { enabled: false, manifest: conflictManifest },
+          ]
+        }
+        if (method === "host_plugins_apply") {
+          const mutation = params?.mutation as { id?: string } | undefined
+          if (mutation?.id === "codeg.metrics-consumer") {
+            throw {
+              code: "dependency_missing",
+              message:
+                "Plugin services unavailable: workspace.metrics (missing)",
+              i18n_key: "errors.hostPluginServicesUnavailable",
+              i18n_params: {
+                missingServices: "workspace.metrics",
+                incompatibleServices: "",
+              },
+            }
+          }
+          if (mutation?.id === "acme.metrics-conflict") {
+            throw {
+              code: "already_exists",
+              message:
+                "Plugin codeg.metrics-provider already provides service workspace.metrics",
+              i18n_key: "errors.hostPluginServiceConflict",
+              i18n_params: {
+                service: "workspace.metrics",
+                providerId: "codeg.metrics-provider",
+              },
+            }
+          }
+        }
+        return null
+      }
+    )
+    state.transport = mock.transport
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    render(withIntl(<HostPluginSettings />))
+
+    await screen.findByText("Workspace Metrics")
+    await user.click(
+      screen.getByRole("switch", { name: "Enable Workspace Metrics" })
+    )
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Required plugin services are unavailable: workspace.metrics."
+    )
+
+    await user.click(
+      screen.getByRole("switch", { name: "Enable Conflict Provider" })
+    )
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Service workspace.metrics is already provided by enabled plugin codeg.metrics-provider."
+    )
+  })
 })

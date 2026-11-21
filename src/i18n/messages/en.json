@@ -109,7 +109,18 @@
     "pluginSurfaces": "Plugin actions",
     "morePluginSurfaces": "More plugin actions",
     "pluginDetail": "Plugin details",
-    "activationPanel": "Activation guide"
+    "activationPanel": "Activation guide",
+    "providesService": "Provides · {name} v{version}",
+    "requiresService": "Requires · {service}",
+    "requiresOptionalService": "Optional · {service}",
+    "publishesEvent": "Publishes · {name} ({scope})",
+    "eventScopeHost": "host",
+    "eventScopeWorkspace": "workspace",
+    "eventScopeSession": "session",
+    "serviceConflict": "Service {service} is already provided by enabled plugin {providerId}.",
+    "servicesMissing": "Required plugin services are unavailable: {missingServices}.",
+    "servicesIncompatible": "Required plugin services do not meet the minimum version: {incompatibleServices}.",
+    "servicesMissingAndIncompatible": "Required plugin services are unavailable ({missingServices}) or incompatible ({incompatibleServices})."
   },
   "AppearanceSettings": {
     "sectionTitle": "Theme Appearance",

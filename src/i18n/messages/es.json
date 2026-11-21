@@ -109,7 +109,18 @@
     "pluginSurfaces": "Acciones de complementos",
     "morePluginSurfaces": "Más acciones de complementos",
     "pluginDetail": "Detalles del complemento",
-    "activationPanel": "Guía de activación"
+    "activationPanel": "Guía de activación",
+    "providesService": "Provee · {name} v{version}",
+    "requiresService": "Requiere · {service}",
+    "requiresOptionalService": "Opcional · {service}",
+    "publishesEvent": "Publica · {name} ({scope})",
+    "eventScopeHost": "host",
+    "eventScopeWorkspace": "espacio de trabajo",
+    "eventScopeSession": "sesión",
+    "serviceConflict": "El servicio {service} ya lo provee el complemento habilitado {providerId}.",
+    "servicesMissing": "Los servicios de complemento requeridos no están disponibles: {missingServices}.",
+    "servicesIncompatible": "Los servicios de complemento requeridos no cumplen la versión mínima: {incompatibleServices}.",
+    "servicesMissingAndIncompatible": "Los servicios de complemento requeridos no están disponibles ({missingServices}) o son incompatibles ({incompatibleServices})."
   },
   "AppearanceSettings": {
     "sectionTitle": "Apariencia del tema",
