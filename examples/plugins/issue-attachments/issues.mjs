@@ -37,7 +37,8 @@ export function handle(method, input) {
   const terms = query.trim().toLowerCase().split(/\s+/u).filter(Boolean)
   const items = issues
     .filter(({ identifier, title, subtitle, text }) => {
-      const searchable = `${identifier} ${title} ${subtitle} ${text}`.toLowerCase()
+      const searchable =
+        `${identifier} ${title} ${subtitle} ${text}`.toLowerCase()
       return terms.every((term) => searchable.includes(term))
     })
     .slice(0, 20)
