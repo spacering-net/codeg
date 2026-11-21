@@ -7,8 +7,7 @@
 //!   recorded with its coordinates, resolved once there and then, and not
 //!   read on its own.
 //! - **Whose.** Work an assistant dispatched is that assistant's; the rest
-//!   is the work assistant the division picks for fixing CI, else the
-//!   primary's. Whoever's it is is woken by what needs judging.
+//!   is the primary's. Whoever's it is is woken by what needs judging.
 //! - **How it is read.** Each assistant's engine reads its own on the
 //!   clock: every 5 minutes while it moves (or its checks run), every 30 once
 //!   it has been still two days; through the shared forge entry with the

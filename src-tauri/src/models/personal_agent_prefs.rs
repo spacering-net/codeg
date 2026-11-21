@@ -604,7 +604,7 @@ pub const NEWS: &[(&str, Level, &str)] = &[
     (
         "routine_paused",
         Level::Urgent,
-        "a routine paused: it failed three times in a row, or its executor config is gone",
+        "a routine paused: it failed three times in a row, or its work has nothing set to run on",
     ),
     (
         "used_up",
@@ -2050,14 +2050,14 @@ fn brain_value(key: &str, value: &Value) -> String {
         }
         ("when_unsure", "ask") => "ask the owner first".into(),
         ("chat_changes", "apply") => {
-            "the settings, assistants, executor configs and routines the owner asks to change \
-             (prefs_update, bot_update, assistant_update, routine_create, routine_update) change \
-             at once; they can undo it"
+            "the settings, assistants and routines the owner asks to change (prefs_update, \
+             bot_create, bot_update, routine_create, routine_update) change at once; they can \
+             undo it"
                 .into()
         }
         ("chat_changes", "show") => {
-            "what the owner asks to change in the settings, assistants, executor configs and \
-             routines goes on a card for them first"
+            "what the owner asks to change in the settings, assistants and routines goes on a \
+             card for them first"
                 .into()
         }
         ("confirm_dispatch", "never") => "dispatches go out directly".into(),
@@ -2093,8 +2093,8 @@ fn brain_value(key: &str, value: &Value) -> String {
             "they go to the owner; you are told, nothing to answer".into()
         }
         ("auto_accept", "on") => {
-            "on: when code work you dispatched is ready for review, codeg has another \
-             executor check it (read-only) and you accept it with acceptance_decide"
+            "on: when code work you dispatched is ready for review, codeg checks it in a \
+             separate read-only session and you accept it with acceptance_decide"
                 .into()
         }
         ("auto_accept", "off") => {
@@ -2108,7 +2108,7 @@ fn brain_value(key: &str, value: &Value) -> String {
         ("flush", "off") => {
             "off: codeg compacts your context without asking for notes first".into()
         }
-        ("accept_revise", "auto") => "sent back to the executor at once".into(),
+        ("accept_revise", "auto") => "sent back to the work session at once".into(),
         ("forge_comment" | "issue_close", "auto") => {
             "done at once; the owner sees a card with what was done and where".into()
         }
@@ -2513,6 +2513,27 @@ impl AccountView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the assistants read of the preferences names no executor
+    /// config and no tool that is gone (R10), whichever way they are set.
+    #[test]
+    fn the_prefs_block_names_no_executor_config() {
+        for chat_changes in [ChatChanges::Apply, ChatChanges::Show] {
+            for auto_accept in [OnOff::On, OnOff::Off] {
+                let prefs = Prefs {
+                    chat_changes,
+                    auto_accept,
+                    ..Prefs::default()
+                };
+                for worker in [false, true] {
+                    let block = prefs_block(&prefs, worker);
+                    for gone in ["executor", "assistant_update", "division"] {
+                        assert!(!block.contains(gone), "{gone:?} in {block}");
+                    }
+                }
+            }
+        }
+    }
 
     /// The brain changes a preference by its key, as `prefs_update` names
     /// them: one it does not name, it does not know it can change.

@@ -232,18 +232,20 @@ Tell them to pick it in your settings, or hand the work to another assistant wit
     }
 }
 
-const TOOL_NOTES: &str = "You hand work out with `dispatch` (modes: `task` for code changes in a \
-project's worktree, `chat` for work outside any project, `session` for investigating a project's \
-current checkout) and continue it with `dispatch_followup`. Both return at once; progress reaches \
+const TOOL_NOTES: &str = "You do work yourself with `dispatch`: it opens a work session (modes: \
+`task` for code changes in a project's worktree, `chat` for work outside any project, `session` for \
+investigating a project's current checkout); continue it with `dispatch_followup`. Work that is \
+another assistant's (\"Your team\" above, the first lines of each one's persona) you hand to it \
+with `bot_message`. Both return at once; progress reaches \
 you later as a <codeg-events> block. `project_list` gives the project ids they take. \
 `item_list` / `item_read` / `item_update` keep your open matters; `timeline_read` pages back \
 through the timeline. Every turn starts with <codeg-now>: the owner's date, time, weekday and zone, \
 whether they are in codeg now — work out \"tomorrow at 3 pm\" from it. To remind the owner at a time, `item_update` with `due` \
 (`YYYY-MM-DD HH:MM` in their time; `repeat` for a recurring one): codeg shows them a reminder card \
 then without waking you; with `at_due: \"act\"` and an `act_spec` it wakes you then to do it. Tell \
-the owner the time and weekday codeg's answer gives back. `bot_list` shows the owner's other assistants and `bot_message` writes to \
-one: hand it work that is its job and it sees it through; its answer comes back as a \
-<codeg-message>. When the owner asks how things stand, call `overview` first (every assistant, \
+the owner the time and weekday codeg's answer gives back. `bot_list` shows how the owner's \
+assistants stand and `bot_message` writes to one: hand it work that is its job and it sees it \
+through; its answer comes back as a <codeg-message>. When the owner asks how things stand, call `overview` first (every assistant, \
 what waits on the owner anywhere in codeg, what runs) and answer from it — do not message the \
 assistants to ask; `board_status`, `session_list`, `automation_status`, `pr_status`, \
 `usage_summary` and `activity_summary` read more. When the owner asks about the past (\"why did we \
@@ -256,13 +258,17 @@ work you dispatched is checked against it in a separate read-only session, and t
 watches the pull requests board tasks delivered and tells you what changes on them (checks failed, \
 a conflict, ready to merge, merged) as `pr` events; `pr_status` with `watch: true` watches any \
 other. When a turn carries inputs from more than one source, say which one each \
-action is for with `for`. You never do long work yourself. Messages and events carry their timeline \
+action is for with `for`. Long work never runs in your own turn: dispatch it. Messages and events carry their timeline \
 number as `[#ID]`; when you answer one that is not the newest, write `[[quote:#ID]]` in your \
 answer (it is shown as a quote, not as text). When the owner tells you to change how you or \
 codeg work (shorter replies, ask before dispatching code changes, …), `prefs_update` changes it \
 — there is no setting they cannot change that way; the preferences you follow are in \
-<codeg-prefs>. When they ask for a new work assistant, `bot_create` makes it; `bot_update` \
-changes one. \
+<codeg-prefs>. When they ask for a new work assistant, `bot_create` makes it, \
+with a `name` and the first lines of its `persona` — look at the team first, and hand the work to \
+one there that fits instead; a new one is for work that keeps coming with rules or a rhythm of its \
+own, not a one-off, and not what a routine or a skill would do. `bot_update` changes an assistant \
+(its persona, the agent its work runs on, …). Quote the owner's words as they typed them this turn: \
+other words put the change on a card for them to confirm first. \
 `forge_comment`, `issue_close` and `pr_merge` act on a forge — a merge only of the version that \
 should be merged, its checks passed. `routine_create` makes recurring work of yours on a schedule \
 or a coding event (codeg keeps its rhythm; a run with nothing to say replies `[[silent]]`). Big \
@@ -318,8 +324,8 @@ owner's click, as the only action of a Button's or Link's press.";
 /// at length, but not every agent loads skills, nor reads one before it
 /// learns something worth keeping.
 const MEMORY_NOTES: &str =
-    "Your working directory keeps your memory and is committed to git after \
-every turn. `USER.md` is what you know about the owner: keep it current and short. `MEMORY.md` is \
+    "Your working directory keeps your memory; codeg commits it to git at the end \
+of every turn. `USER.md` is what you know about the owner: keep it current and short. `MEMORY.md` is \
 the index of everything else you remember — facts, references, and lessons about your own way of \
 working: one line per entry, `- [Title](memory/<name>.md) — one-line hook`, each entry in its own \
 file with `name`, `description` and `type` (`lesson`, `fact` or `reference`) frontmatter. Every \
@@ -327,8 +333,16 @@ session of yours starts with the first 200 lines of the index; read an entry's f
 it. When you learn something worth keeping — about the owner, a decision, a correction — write \
 the entry's file and then its line in the index; update an entry rather than adding a duplicate, \
 and delete one that turns out wrong. A lesson (what the owner corrected, or an approach they \
-confirmed) says why it holds and how to apply it. `SOUL.md` and `AGENTS.md` are your persona and \
-rules: change them only when the owner asks.";
+confirmed) says why it holds and how to apply it. `SOUL.md` is who you are — you and the owner \
+keep it up together: write it when the owner says who you are or what is yours, when you are new, \
+and in the nightly tidy-up; keep the owner's words in their meaning (later ones override earlier), \
+write only what their words or your finished work show (no abilities made up, a one-off request \
+not taken for lasting work), change a little at a time, its first lines (who you are, what work is \
+yours — what the other assistants read) under about 200 characters. `AGENTS.md` is the owner's \
+rules for you: change it only when the owner asks, or a nightly tidy-up does. Do not commit in your \
+working directory yourself (`git commit` is refused there): codeg commits what you changed at the \
+end of the turn and shows the owner a memory card, which they can undo — do not write back what \
+they undid.";
 
 /// [`MEMORY_NOTES`] for a worker: the facts about the owner are not its to
 /// keep.
@@ -839,6 +853,28 @@ pub fn delivery_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What every handoff says of the tools and of memory (§1.3, R10):
+    /// dispatch is work done yourself, bot_message work handed on; SOUL.md
+    /// is who the assistant is, kept with the owner; AGENTS.md the owner's;
+    /// the commits codeg's.
+    #[test]
+    fn the_handoff_notes_are_the_team_as_it_is_now() {
+        for gone in ["assistant_list", "assistant_update", "assistant_id", "executor config", "division"] {
+            assert!(!TOOL_NOTES.contains(gone), "the tool notes still say {gone:?}");
+            assert!(!MEMORY_NOTES.contains(gone), "the memory notes still say {gone:?}");
+        }
+        assert!(TOOL_NOTES.contains("You do work yourself with `dispatch`"));
+        assert!(TOOL_NOTES.contains("you hand to it with `bot_message`"));
+        assert!(TOOL_NOTES.contains("look at the team first"));
+        for worker in [false, true] {
+            let notes = memory_notes(worker);
+            assert!(notes.contains("`SOUL.md` is who you are"), "{notes}");
+            assert!(notes.contains("`AGENTS.md` is the owner's rules"), "{notes}");
+            assert!(notes.contains("Do not commit in your working directory yourself"), "{notes}");
+            assert!(!notes.contains("change them only when the owner asks"), "{notes}");
+        }
+    }
 
     fn input<'a>(
         recent: &'a [RecentLine],

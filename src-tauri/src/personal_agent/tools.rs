@@ -121,7 +121,9 @@ pub(super) fn without_executors(mut data: Value) -> Value {
     fn strip(v: &mut Value) {
         match v {
             Value::Object(map) => {
-                map.retain(|k, _| !k.starts_with("executor") && !k.starts_with("checker"));
+                map.retain(|k, _| {
+                    !k.starts_with("executor") && !k.starts_with("checker") && k != "by_executor"
+                });
                 map.values_mut().for_each(strip);
             }
             Value::Array(items) => items.iter_mut().for_each(strip),

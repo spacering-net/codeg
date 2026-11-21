@@ -1005,12 +1005,8 @@ pub fn lines(w: &Week) -> Vec<String> {
     if !w.by_bot.is_empty() {
         out.push(format!("- handed out by assistant: {}", list(&w.by_bot)));
     }
-    if !w.by_executor.is_empty() {
-        out.push(format!(
-            "- handed out by executor config: {}",
-            list(&w.by_executor)
-        ));
-    }
+    // No line by executor config: no executor config's name reaches the
+    // brain (it is on the owner's card only).
     out.push(format!(
         "- the work's questions and plan approvals: {} ({} plans) · answered by the assistants: {} · \
          went to the owner: {}",

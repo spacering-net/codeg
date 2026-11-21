@@ -16542,6 +16542,14 @@ async fn profile_steps() {
     assert_eq!((week.changes, week.changes_undone), (4, 3));
     assert_eq!(week.ci_fixed, 1, "this week's round on its checks");
     assert!(weekly::lines(&week)[0].contains("fixed by codeg 1"));
+    let read = weekly::lines(&week).join("\n");
+    assert!(
+        !read.contains("executor"),
+        "no executor config's name in what the brain reads: {read}"
+    );
+    let card = super::tools::without_executors(serde_json::to_value(&week).unwrap());
+    assert!(card.get("by_executor").is_none(), "{card}");
+    assert!(card.get("by_bot").is_some(), "{card}");
     assert_eq!(week.tokens, 1334);
     assert_eq!(week.tokens_by_bot[0].bot_id, w);
     assert_eq!(

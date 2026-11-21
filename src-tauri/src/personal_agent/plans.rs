@@ -23,8 +23,9 @@
 //! hand it to another or change the plan (`plan_update`). Still failed once
 //! that turn ended, the plan is stuck: the owner is told urgently. What does
 //! not wait on the step goes on meanwhile. A step that cannot be handed out
-//! (its executor gone, off or not for this use) fails the same way: the
-//! assistant picks another by the division of work, or tells the owner.
+//! (its assistant gone, or nothing set for its work to run on) fails the
+//! same way: the assistant hands it to another, does it itself, or tells
+//! the owner.
 //!
 //! **Stopped.** The owner's [Stop] hands out nothing new; what is under way
 //! runs to its end, and each can be canceled from the card. [Go on] picks it
@@ -2354,9 +2355,9 @@ impl PersonalAgentEngine {
         };
         let summary = format!(
             "Plan #{} \"{}\": step {} \"{}\" ({}) {}. The plan waits on it — {} step(s) depend on \
-             it; what does not goes on. Pick it up now: {retry}, hand it to another by the \
-             division of work (plan_update with a new `assistant_id` or `bot`), or change the \
-             plan. If nothing fits, tell the owner why: once this turn ends with the step still \
+             it; what does not goes on. Pick it up now: {retry}, hand it to another \
+             assistant or do it yourself (plan_update with a new `to`; for yourself, \
+             \"self\" with a `mode` and, for a task or session, a `project_id`), or change the plan. If nothing fits, tell the owner why: once this turn ends with the step still \
              failed, codeg tells them the plan is stuck.",
             p.id,
             p.title,

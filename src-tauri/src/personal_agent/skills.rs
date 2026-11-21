@@ -1071,8 +1071,8 @@ it.\n\
 Write `process-skills/<name>/SKILL.md` in your working directory — <name> in lowercase letters, digits \
 and hyphens (say `release`) — with front matter giving `name: <name>` and `description:` when \
 to use it, in the owner's words for it (\"when the owner says release or cut a release\"); then \
-the steps in order: what each does, who carries it out (a work assistant by name, or an \
-executor config by name with its mode), what done looks like, and where to stop and wait for \
+the steps in order: what each does, who carries it out (a work assistant by name, or you \
+yourself with its mode), what done looks like, and where to stop and wait for \
 the owner — before anything that cannot be taken back. Keep it to a page.\n\
 A skill of yours for this already (listed below): change that one instead. A one-off, or nothing \
 worth doing the same way again: write nothing.\n\

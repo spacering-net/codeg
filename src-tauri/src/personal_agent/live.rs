@@ -637,19 +637,13 @@ pub async fn live_from_db_with_needs(
 
 /// The names steps may refer to by id.
 pub(super) async fn names(db: &AppDatabase) -> Names {
-    let executors = crate::db::service::assistant_service::list_all(&db.conn)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|a| (a.id, a.name))
-        .collect();
     let bots = svc::list_bots(&db.conn)
         .await
         .unwrap_or_default()
         .iter()
         .map(|b| (b.id, super::messages::display_name(b)))
         .collect();
-    Names { executors, bots }
+    Names { bots }
 }
 
 /// The step a session is on: its last block of the main thread.

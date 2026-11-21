@@ -31,9 +31,9 @@ const MAX_TARGET_CHARS: usize = 80;
 /// Names the steps' objects may refer to by id.
 #[derive(Debug, Default, Clone)]
 pub struct Names {
-    /// Executor configs by id.
-    pub executors: HashMap<i32, String>,
-    /// Assistants by id.
+    /// Assistants by id. No executor configs: what an assistant's work runs
+    /// on is never named to the assistants (bot_list and overview read
+    /// these lines).
     pub bots: HashMap<i32, String>,
 }
 
@@ -274,8 +274,6 @@ fn own_tool(
     match tool {
         "dispatch" => {
             line.kind = "dispatch".into();
-            let id = input.and_then(|i| i.get("assistant_id")).and_then(as_i32);
-            line.target = id.and_then(|id| names.executors.get(&id).cloned());
             line.dispatch_id = output
                 .and_then(|o| last_number(&DISPATCH_REF, o))
                 .map(|n| n as i32);
@@ -754,7 +752,6 @@ mod tests {
     #[test]
     fn codegs_own_tools_name_whom_the_work_went_to() {
         let mut names = Names::default();
-        names.executors.insert(3, "Claude Code".into());
         names.bots.insert(9, "Reviewer".into());
         let l = line_of(
             &raw(
@@ -766,9 +763,10 @@ mod tests {
             ),
             &names,
         );
+        // A stale call naming an executor config by id names none.
         assert_eq!(
             (l.kind.as_str(), l.target.as_deref(), l.dispatch_id),
-            ("dispatch", Some("Claude Code"), Some(234))
+            ("dispatch", None, Some(234))
         );
         let l = line_of(
             &raw(
