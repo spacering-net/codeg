@@ -12,6 +12,7 @@ server it is connected to.
 | `workspacePanels` | Plugins tab in the right workspace panel | Codeg renders a named view for the active workspace. Version 1 supports `text` with a plain `text` field and `turnActivity` with the turn hook. |
 | `commands` | Workspace quick actions | A user-selected command opens a panel owned by the same plugin. |
 | `hooks` | Codeg-managed ACP sessions | `session.turnCompleted` can record completion metadata for a workspace panel. |
+| `themes` | Settings → Appearance | The user selects an installed color palette for light mode, dark mode, or both. |
 
 The manifest is declarative. The host validates identifiers and panel
 references before installation. Plugins can use the views, actions and events
@@ -56,6 +57,24 @@ Import the [Workspace Notes example](../examples/plugins/localized-notes/codeg-p
 and enable it. Open **Show Workspace Notes** in an active workspace, then
 change the app language to Spanish or Chinese to see the translated labels and
 panel text.
+
+## Plugin themes
+
+Declare `contributes.themes` to offer up to 16 themes in **Settings →
+Appearance**. Each theme has a unique `id`, a `title`, optional
+`titleTranslations`, and at least one nonempty `light` or `dark` palette.
+Palettes map Codeg's semantic color tokens to six-digit `#RRGGBB` colors.
+Use token names such as `background`, `foreground`, `primary`,
+`primary-foreground`, `card`, `sidebar`, `accent`, and `ring`.
+
+Codeg applies a selected palette for the active light or dark mode. Missing
+tokens use the current appearance. The user's custom token overrides take
+precedence. Switching hosts uses the selection for the connected host, and
+disabling or removing the plugin returns the client to its usual appearance.
+
+Import the [Juniper example](../examples/plugins/juniper-theme/codeg-plugin.json),
+enable it in Plugins, and select Juniper under the plugin themes in Appearance.
+A manifest with just a theme can use `apiVersion: 1`.
 
 ## Version 2 server modules
 
