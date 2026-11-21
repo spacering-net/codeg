@@ -575,7 +575,9 @@ mod tests {
             .preview_install(source.to_str().unwrap(), Registry::Npm, None)
             .await
             .unwrap();
-        state.host_plugins.confirm_install(preview.ticket).unwrap();
+        let preview = serde_json::to_value(preview).unwrap();
+        let ticket = preview["ticket"].as_str().unwrap().to_owned();
+        state.host_plugins.confirm_install(ticket).unwrap();
         state
             .host_plugins
             .apply(Mutation::SetEnabled {
