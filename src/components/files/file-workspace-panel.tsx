@@ -1,6 +1,13 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import dynamic from "next/dynamic"
 import { ChevronDown, ChevronRight, FileCode2, FileIcon } from "lucide-react"
 import type {
@@ -25,6 +32,10 @@ import {
   type FileWorkspaceTab,
 } from "@/contexts/workspace-context"
 import { BrowserTabView } from "@/components/browser/browser-tab-view"
+import {
+  isReadableTextFileTab,
+  useActiveFilePluginPanels,
+} from "@/components/files/file-plugin-panels"
 import { ImagePreview } from "@/components/files/image-preview"
 import { HtmlPreview } from "@/components/files/html-preview"
 import { MarkdownDocumentPreview } from "@/components/files/markdown-document-preview"
@@ -33,6 +44,12 @@ import {
   isOfficeFileTab,
 } from "@/components/files/kept-office-previews"
 import { PdfPreview } from "@/components/files/pdf-preview"
+import { HostPluginSurface } from "@/components/host-plugin-surface"
+import {
+  isCurrentReadyHostTransport,
+  validatePluginFileReadTextResult,
+  type PluginFileReadTextResult,
+} from "@/lib/host-plugins"
 import { isHtmlPreviewable } from "@/lib/language-detect"
 import { DiffViewer } from "@/components/diff/diff-viewer"
 import { ImageDiffView } from "@/components/diff/image-diff-view"
@@ -59,6 +76,8 @@ import {
 import "@/lib/monaco-local"
 
 const AUTO_SAVE_DELAY_MS = 5000
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect
 
 interface AddToChatPill {
   widget: MonacoEditorNs.IContentWidget
@@ -780,6 +799,74 @@ function FileWorkspacePanelBody() {
   const t = useTranslations("Folder.fileWorkspacePanel")
   const { activeFileTab, pendingFileReveal, previewFileTabIds } =
     useWorkspaceFileTabs()
+  const filePluginPanels = useActiveFilePluginPanels(activeFileTab, {
+    ownsSurface: true,
+  })
+  const activePluginFilePanel = filePluginPanels.activePanel
+  const activePluginFileSelectionId = filePluginPanels.selectionId
+  const selectPluginFilePanel = filePluginPanels.selectPanel
+  const filePluginScopeKey = filePluginPanels.hostScope.scopeKey
+  const filePluginTransport = filePluginPanels.transport
+  const filePluginHostHidden = filePluginPanels.hostHidden
+  const expectedPluginTabId =
+    activeFileTab && activePluginFilePanel ? activeFileTab.id : null
+  const expectedPluginPanelKey = activePluginFilePanel?.key ?? null
+  const liveFileReadStateRef = useRef({
+    tab: activeFileTab,
+    scopeKey: filePluginScopeKey,
+    transport: filePluginTransport,
+    activePanelKey: expectedPluginPanelKey,
+    selectionId: activePluginFileSelectionId,
+    hostHidden: filePluginHostHidden,
+  })
+  useIsomorphicLayoutEffect(() => {
+    liveFileReadStateRef.current = {
+      tab: activeFileTab,
+      scopeKey: filePluginScopeKey,
+      transport: filePluginTransport,
+      activePanelKey: expectedPluginPanelKey,
+      selectionId: activePluginFileSelectionId,
+      hostHidden: filePluginHostHidden,
+    }
+  }, [
+    activeFileTab,
+    activePluginFileSelectionId,
+    expectedPluginPanelKey,
+    filePluginHostHidden,
+    filePluginScopeKey,
+    filePluginTransport,
+  ])
+  const handlePluginFileReadText = useCallback((): PluginFileReadTextResult => {
+    const live = liveFileReadStateRef.current
+    if (
+      live.hostHidden ||
+      !expectedPluginTabId ||
+      !filePluginTransport ||
+      !expectedPluginPanelKey ||
+      activePluginFileSelectionId == null ||
+      live.tab?.id !== expectedPluginTabId ||
+      live.scopeKey !== filePluginScopeKey ||
+      live.transport !== filePluginTransport ||
+      live.activePanelKey !== expectedPluginPanelKey ||
+      live.selectionId !== activePluginFileSelectionId ||
+      !isCurrentReadyHostTransport(filePluginTransport)
+    ) {
+      throw new Error("File snapshot is no longer active")
+    }
+    if (!isReadableTextFileTab(live.tab)) {
+      throw new Error("Active tab is not a readable text file")
+    }
+    if (live.tab.loading) {
+      throw new Error("File is currently loading")
+    }
+    return validatePluginFileReadTextResult(live.tab.content)
+  }, [
+    activePluginFileSelectionId,
+    expectedPluginPanelKey,
+    expectedPluginTabId,
+    filePluginScopeKey,
+    filePluginTransport,
+  ])
   const {
     consumePendingFileReveal,
     openBranchDiff,
@@ -1563,6 +1650,10 @@ function FileWorkspacePanelBody() {
     ) {
       return
     }
+    if (activePluginFilePanel) {
+      selectPluginFilePanel(null)
+      return
+    }
 
     const jumped = jumpToLine(pendingFileReveal.line)
     if (!jumped) return
@@ -1570,11 +1661,13 @@ function FileWorkspacePanelBody() {
     consumePendingFileReveal(pendingFileReveal.requestId)
   }, [
     activeFileTab,
+    activePluginFilePanel,
     consumePendingFileReveal,
     editorMountVersion,
     isFileTab,
     jumpToLine,
     pendingFileReveal,
+    selectPluginFilePanel,
   ])
 
   useEffect(() => {
@@ -1899,6 +1992,39 @@ function FileWorkspacePanelBody() {
   // keeps it mounted while other tabs are in front.
   if (isOfficeFileTab(activeFileTab)) {
     return null
+  }
+
+  // Opt-in read-only plugin file panel (mounted only on explicit user choice).
+  if (
+    isFileTab &&
+    activeFileTab &&
+    activePluginFilePanel &&
+    activePluginFileSelectionId != null &&
+    filePluginPanels.fileName
+  ) {
+    const fileScopeKey = `${filePluginScopeKey}:${activePluginFileSelectionId}:${activeFileTab.id}`
+    return (
+      <div className="relative flex h-full min-h-0 flex-col">
+        {activeFileTab.loading && (
+          <div className="absolute top-2 right-3 z-10 rounded-md bg-background/70 px-2 py-1 text-2xs text-muted-foreground backdrop-blur-sm">
+            {t("loading")}
+          </div>
+        )}
+        <HostPluginSurface
+          key={`${fileScopeKey}:${activePluginFilePanel.key}`}
+          pluginId={activePluginFilePanel.pluginId}
+          title={activePluginFilePanel.title}
+          context={{
+            type: "filePanel",
+            id: activePluginFilePanel.id,
+            fileName: filePluginPanels.fileName,
+            fileScopeKey,
+          }}
+          onFileReadText={handlePluginFileReadText}
+          className="h-full min-h-0 flex-1 rounded-none border-0"
+        />
+      </div>
+    )
   }
 
   // HTML preview (sandboxed iframe)

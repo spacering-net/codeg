@@ -5,11 +5,15 @@ import { useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { toErrorMessage } from "@/lib/app-error"
 import {
+  isCurrentReadyHostTransport,
   usePluginClientHtml,
   validatePluginComposerInsertPayload,
+  validatePluginFileReadRequest,
+  validatePluginFileReadTextResult,
   type HostPluginSessionContext,
   type PluginClientSurfaceSlot,
   type PluginComposerInsertResult,
+  type PluginFileReadTextResult,
 } from "@/lib/host-plugins"
 import type { Transport } from "@/lib/transport"
 import { cn } from "@/lib/utils"
@@ -24,6 +28,15 @@ export type SurfaceContext = { id: string } & (
   | { type: "activationPanel" }
   | { type: "screen" }
   | { type: "sidebarView" }
+  | {
+      type: "filePanel"
+      /** Bare file name exposed to the plugin iframe (never a directory or absolute path). */
+      fileName: string
+      /** Internal host-only scope identity (e.g. tab id) used to restart the
+       *  iframe when switching between different files with the same name.
+       *  Never sent to the iframe. */
+      fileScopeKey: string
+    }
   | ({
       type: "clientSurface"
       slot: PluginClientSurfaceSlot
@@ -57,7 +70,7 @@ const CLIENT_POLICY = [
 function buildDocument(
   html: string,
   key: string,
-  options: { composerInsert: boolean }
+  options: { composerInsert: boolean; fileReadText: boolean }
 ): string {
   return `<!doctype html><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${CLIENT_POLICY}">
@@ -135,6 +148,18 @@ function buildDocument(
   });`
       : ""
   }
+  ${
+    options.fileReadText
+      ? `api.file = Object.freeze({
+    readText: (...args) => {
+      if (args.length > 0) {
+        return Promise.reject(new Error("file.readText does not accept arguments"));
+      }
+      return request("file", { type: "readText" });
+    },
+  });`
+      : ""
+  }
   Object.defineProperty(window, "codeg", { value: Object.freeze(api) });
 })();
 </script>
@@ -145,12 +170,17 @@ export type PluginComposerInsertHandler = (
   text: string
 ) => PluginComposerInsertResult | Promise<PluginComposerInsertResult>
 
+export type PluginFileReadTextHandler = () =>
+  | PluginFileReadTextResult
+  | Promise<PluginFileReadTextResult>
+
 export function HostPluginSurface({
   pluginId,
   title,
   context,
   className,
   onComposerInsertText,
+  onFileReadText,
 }: {
   pluginId: string
   title: string
@@ -158,6 +188,8 @@ export function HostPluginSurface({
   className?: string
   /** Controlled plain-text insertion handler; honored ONLY for `composer` clientSurfaces. */
   onComposerInsertText?: PluginComposerInsertHandler
+  /** Read-only current text file snapshot handler; honored ONLY for `filePanel` surfaces. */
+  onFileReadText?: PluginFileReadTextHandler
 }) {
   const t = useTranslations("HostPlugins")
   const locale = useLocale()
@@ -187,6 +219,7 @@ export function HostPluginSurface({
       host={transport}
       className={className}
       onComposerInsertText={onComposerInsertText}
+      onFileReadText={onFileReadText}
     />
   )
 }
@@ -200,6 +233,7 @@ function PluginFrame({
   host,
   className,
   onComposerInsertText,
+  onFileReadText,
 }: {
   pluginId: string
   title: string
@@ -209,6 +243,7 @@ function PluginFrame({
   host: Transport
   className?: string
   onComposerInsertText?: PluginComposerInsertHandler
+  onFileReadText?: PluginFileReadTextHandler
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const { type, id } = context
@@ -221,14 +256,20 @@ function PluginFrame({
     context.type === "clientSurface" ? context.conversationId : undefined
   const sessionKey =
     context.type === "clientSurface" ? context.sessionKey : undefined
+  const fileName = context.type === "filePanel" ? context.fileName : undefined
+  const fileScopeKey =
+    context.type === "filePanel" ? context.fileScopeKey : undefined
   const allowComposerInsert =
     type === "clientSurface" &&
     slot === "composer" &&
     Boolean(onComposerInsertText)
+  const allowFileReadText = type === "filePanel" && Boolean(onFileReadText)
   const composerInsertRef = useRef(onComposerInsertText)
+  const fileReadTextRef = useRef(onFileReadText)
   useIsomorphicLayoutEffect(() => {
     composerInsertRef.current = onComposerInsertText
-  }, [onComposerInsertText])
+    fileReadTextRef.current = onFileReadText
+  }, [onComposerInsertText, onFileReadText])
   const { handshake, doc } = useMemo(() => {
     const handshake = Array.from(
       crypto.getRandomValues(new Uint8Array(16)),
@@ -238,6 +279,7 @@ function PluginFrame({
       handshake,
       doc: buildDocument(html, handshake, {
         composerInsert: allowComposerInsert,
+        fileReadText: allowFileReadText,
       }),
     }
     // A context, capability, or host change restarts the frame and disconnects the old port.
@@ -250,7 +292,10 @@ function PluginFrame({
     folderId,
     conversationId,
     sessionKey,
+    fileName,
+    fileScopeKey,
     allowComposerInsert,
+    allowFileReadText,
     locale,
     host,
     pluginId,
@@ -292,7 +337,14 @@ function PluginFrame({
                     sessionKey,
                     locale,
                   }
-                : { type, id, folderId, locale },
+                : type === "filePanel"
+                  ? {
+                      type,
+                      id,
+                      fileName,
+                      locale,
+                    }
+                  : { type, id, folderId, locale },
           })
           void host
             .subscribe<PluginEvent>(LIFECYCLE_EVENT_CHANNEL, (event) => {
@@ -327,7 +379,8 @@ function PluginFrame({
           !Number.isSafeInteger(data?.id) ||
           (data.operation !== "call" &&
             data.operation !== "settings" &&
-            data.operation !== "composer") ||
+            data.operation !== "composer" &&
+            data.operation !== "file") ||
           typeof data.json !== "string"
         )
           return
@@ -356,6 +409,23 @@ function PluginFrame({
             }
             const text = validatePluginComposerInsertPayload(input)
             value = await insertHandler(text)
+          } else if (data.operation === "file") {
+            const readTextHandler = allowFileReadText
+              ? fileReadTextRef.current
+              : undefined
+            if (
+              !readTextHandler ||
+              closed ||
+              !isCurrentReadyHostTransport(host)
+            ) {
+              throw new Error("File snapshot is unavailable")
+            }
+            validatePluginFileReadRequest(input)
+            const snapshot = await readTextHandler()
+            if (closed || !isCurrentReadyHostTransport(host)) {
+              throw new Error("File snapshot is no longer active")
+            }
+            value = validatePluginFileReadTextResult(snapshot?.text)
           } else {
             value = await handleRequest(host, pluginId, data.operation, input)
           }
@@ -396,7 +466,10 @@ function PluginFrame({
     folderId,
     conversationId,
     sessionKey,
+    fileName,
+    fileScopeKey,
     allowComposerInsert,
+    allowFileReadText,
     host,
     id,
     locale,
