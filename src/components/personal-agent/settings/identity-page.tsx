@@ -420,8 +420,10 @@ export function IdentityPage({
   if (!agent) {
     return (
       <SetupFrame face={avatar.kind === "face" ? avatar.color : null}>
+        {/* One column; side by side once the screen is wide enough — its
+            face and name on the left, its agent on the right. */}
         <form
-          className="flex w-full flex-col items-center"
+          className="flex w-full flex-col items-center @4xl/setup:grid @4xl/setup:grid-cols-2 @4xl/setup:items-center @4xl/setup:gap-x-16"
           data-pa-settings-page="identity"
           data-pa-setup
           onSubmit={(event) => {
@@ -436,62 +438,64 @@ export function IdentityPage({
             onName={setName}
             disabled={disabled || saving}
           />
-          {/* Its agent: the tiles, its options under them once picked. */}
-          <div
-            className="mt-9 w-full overflow-hidden rounded-2xl border border-border/70 bg-background/80"
-            data-pa-setup-agent
-          >
-            <div className="flex flex-col gap-2.5 p-3">
-              <p className="flex items-center gap-1.5 px-0.5 text-xs font-medium text-muted-foreground">
-                <Bot className="size-3.5" aria-hidden />
-                {ta("agentLabel")}
-              </p>
-              <SetupAgentTiles
-                value={agentType}
-                onChange={pickAgent}
-                agents={agents.filter((a) => a.enabled)}
-                disabled={disabled || saving}
-              />
-            </div>
-            {options ? (
-              <div className="divide-y divide-border/60 border-t border-border/60">
-                {options}
+          <div className="flex w-full flex-col" data-pa-setup-side>
+            {/* Its agent: the tiles, its options under them once picked. */}
+            <div
+              className="mt-9 w-full overflow-hidden rounded-2xl border border-border/70 bg-background/80 @4xl/setup:mt-0"
+              data-pa-setup-agent
+            >
+              <div className="flex flex-col gap-2.5 p-3">
+                <p className="flex items-center gap-1.5 px-0.5 text-xs font-medium text-muted-foreground">
+                  <Bot className="size-3.5" aria-hidden />
+                  {ta("agentLabel")}
+                </p>
+                <SetupAgentTiles
+                  value={agentType}
+                  onChange={pickAgent}
+                  agents={agents.filter((a) => a.enabled)}
+                  disabled={disabled || saving}
+                />
               </div>
+              {options ? (
+                <div className="divide-y divide-border/60 border-t border-border/60">
+                  {options}
+                </div>
+              ) : null}
+            </div>
+            <Button
+              type="submit"
+              size="lg"
+              disabled={disabled || saving}
+              className="group/start mt-5 h-11 w-full rounded-full text-[0.9375rem]"
+              data-pa-setup-start
+            >
+              {saving ? (
+                <Loader2 className="animate-spin" aria-hidden />
+              ) : (
+                <MessageCircle aria-hidden />
+              )}
+              {t("setupStart")}
+              <ArrowRight
+                className="transition-transform group-hover/start:translate-x-0.5 rtl:rotate-180 rtl:group-hover/start:-translate-x-0.5"
+                aria-hidden
+              />
+            </Button>
+            {disabled ? (
+              <p className="mt-3 text-center text-xs leading-5 text-muted-foreground">
+                {tPage("readOnly")}
+              </p>
+            ) : submitError || footerHint ? (
+              <p
+                className={cn(
+                  "mt-3 text-center text-xs leading-5",
+                  submitError ? "text-destructive" : "text-muted-foreground"
+                )}
+                role={submitError ? "alert" : undefined}
+              >
+                {submitError ?? footerHint}
+              </p>
             ) : null}
           </div>
-          <Button
-            type="submit"
-            size="lg"
-            disabled={disabled || saving}
-            className="group/start mt-5 h-11 w-full rounded-full text-[0.9375rem]"
-            data-pa-setup-start
-          >
-            {saving ? (
-              <Loader2 className="animate-spin" aria-hidden />
-            ) : (
-              <MessageCircle aria-hidden />
-            )}
-            {t("setupStart")}
-            <ArrowRight
-              className="transition-transform group-hover/start:translate-x-0.5 rtl:rotate-180 rtl:group-hover/start:-translate-x-0.5"
-              aria-hidden
-            />
-          </Button>
-          {disabled ? (
-            <p className="mt-3 text-center text-xs leading-5 text-muted-foreground">
-              {tPage("readOnly")}
-            </p>
-          ) : submitError || footerHint ? (
-            <p
-              className={cn(
-                "mt-3 text-center text-xs leading-5",
-                submitError ? "text-destructive" : "text-muted-foreground"
-              )}
-              role={submitError ? "alert" : undefined}
-            >
-              {submitError ?? footerHint}
-            </p>
-          ) : null}
         </form>
         {executorEditor}
       </SetupFrame>

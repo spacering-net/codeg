@@ -4386,10 +4386,21 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 }
 .pa-setup-wash {
   background: radial-gradient(
-    50% 40% at 50% 32%,
+    50% 40% at var(--pa-setup-wash-at, 50% 32%),
     color-mix(in oklab, var(--pa-setup-tint) var(--pa-setup-wash), transparent),
     transparent 75%
   );
+}
+/* Side by side (the frame 56rem wide or more): behind the face, on the
+   left — the middle of the left half of the 54rem column. */
+@container setup (min-width: 56rem) {
+  .pa-setup-wash {
+    --pa-setup-wash-at: calc(50% - 14rem) 50%;
+  }
+  /* Right to left, the face is on the right. */
+  [dir="rtl"] .pa-setup-wash {
+    --pa-setup-wash-at: calc(50% + 14rem) 50%;
+  }
 }
 .pa-setup-halo {
   position: absolute;
