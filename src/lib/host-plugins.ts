@@ -22,6 +22,14 @@ export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
 export const MAX_PLUGIN_WORKSPACE_ROW_BADGES = 16
 export const MAX_WORKSPACE_ROW_BADGE_LABEL_CHARS = 32
 export const WORKSPACE_ROW_BADGE_BATCH_SIZE = 64
+export const MAX_WORKSPACE_ROW_BADGE_INPUT_BYTES = 64 * 1024
+export const WORKSPACE_ROW_BADGE_MAX_CONCURRENCY = 2
+
+const utf8Encoder = new TextEncoder()
+
+function utf8ByteLength(value: string): number {
+  return utf8Encoder.encode(value).byteLength
+}
 
 export const WORKSPACE_ROW_BADGE_TONES = [
   "muted",
@@ -1041,18 +1049,77 @@ export function buildWorkspaceRowBadgeInputs(
   return inputs
 }
 
+export interface ChunkWorkspaceRowBadgeInputsOptions {
+  batchSize?: number
+  maxBytes?: number
+  locale?: string
+}
+
+function fitWorkspaceItemToByteLimit(
+  item: WorkspaceRowBadgeInputItem,
+  baseBytes: number,
+  maxBytes: number
+): WorkspaceRowBadgeInputItem {
+  if (
+    item.branch === null ||
+    baseBytes + utf8ByteLength(JSON.stringify(item)) <= maxBytes
+  ) {
+    return item
+  }
+  // When a single workspace's branch alone overflows the 64 KiB RPC message
+  // limit, omit it (`null`) rather than truncating it into a different-looking
+  // branch name. Normal branches stay verbatim.
+  return { ...item, branch: null }
+}
+
 export function chunkWorkspaceRowBadgeInputs(
   workspaces: readonly WorkspaceRowBadgeInputItem[],
-  batchSize = WORKSPACE_ROW_BADGE_BATCH_SIZE
+  options?: number | ChunkWorkspaceRowBadgeInputsOptions
 ): WorkspaceRowBadgeInputItem[][] {
   if (workspaces.length === 0) return []
+  const resolved =
+    typeof options === "number" ? { batchSize: options } : (options ?? {})
   const size =
-    Number.isSafeInteger(batchSize) && batchSize > 0
-      ? batchSize
+    typeof resolved.batchSize === "number" &&
+    Number.isSafeInteger(resolved.batchSize) &&
+    resolved.batchSize > 0
+      ? resolved.batchSize
       : WORKSPACE_ROW_BADGE_BATCH_SIZE
+  const maxBytes =
+    typeof resolved.maxBytes === "number" &&
+    Number.isSafeInteger(resolved.maxBytes) &&
+    resolved.maxBytes > 0
+      ? resolved.maxBytes
+      : MAX_WORKSPACE_ROW_BADGE_INPUT_BYTES
+  const locale = resolved.locale ?? ""
+  const baseBytes = utf8ByteLength(JSON.stringify({ locale, workspaces: [] }))
+
   const batches: WorkspaceRowBadgeInputItem[][] = []
-  for (let i = 0; i < workspaces.length; i += size) {
-    batches.push(workspaces.slice(i, i + size))
+  let current: WorkspaceRowBadgeInputItem[] = []
+  let currentBytes = baseBytes
+
+  for (const rawItem of workspaces) {
+    const item = fitWorkspaceItemToByteLimit(rawItem, baseBytes, maxBytes)
+    const itemBytes = utf8ByteLength(JSON.stringify(item))
+    const nextBytes =
+      current.length === 0
+        ? baseBytes + itemBytes
+        : currentBytes + 1 + itemBytes
+
+    if (
+      current.length > 0 &&
+      (current.length >= size || nextBytes > maxBytes)
+    ) {
+      batches.push(current)
+      current = [item]
+      currentBytes = baseBytes + itemBytes
+    } else {
+      current.push(item)
+      currentBytes = nextBytes
+    }
+  }
+  if (current.length > 0) {
+    batches.push(current)
   }
   return batches
 }
@@ -1072,6 +1139,84 @@ const EMPTY_WORKSPACE_ROW_BADGES: ReadonlyMap<
   number,
   readonly ResolvedWorkspaceRowBadge[]
 > = new Map()
+
+interface PendingWorkspaceBadgeTask {
+  isActive: () => boolean
+  run: () => Promise<void>
+  onSkip: () => void
+}
+
+/**
+ * Per-transport bounded concurrency queue shared across refresh epochs.
+ * In-flight host RPCs hold their slot until they actually settle so rapid
+ * consecutive refreshes on the same host never stack past
+ * `WORKSPACE_ROW_BADGE_MAX_CONCURRENCY`, while distinct `Transport` instances
+ * maintain independent queues and never block each other.
+ */
+class WorkspaceBadgeTransportQueue {
+  private inFlight = 0
+  private readonly queue: PendingWorkspaceBadgeTask[] = []
+
+  enqueue(isActive: () => boolean, fn: () => Promise<void>): () => void {
+    let finished = false
+    const finish = () => {
+      finished = true
+    }
+    const task: PendingWorkspaceBadgeTask = {
+      isActive,
+      run: async () => {
+        try {
+          await fn()
+        } finally {
+          finish()
+        }
+      },
+      onSkip: finish,
+    }
+    this.queue.push(task)
+    this.drain()
+    return () => {
+      if (finished) return
+      const index = this.queue.indexOf(task)
+      if (index >= 0) {
+        this.queue.splice(index, 1)
+        task.onSkip()
+      }
+    }
+  }
+
+  private drain() {
+    while (this.inFlight < WORKSPACE_ROW_BADGE_MAX_CONCURRENCY) {
+      const next = this.queue.shift()
+      if (!next) return
+      if (!next.isActive()) {
+        next.onSkip()
+        continue
+      }
+      this.inFlight += 1
+      void next.run().finally(() => {
+        this.inFlight -= 1
+        this.drain()
+      })
+    }
+  }
+}
+
+const transportBadgeQueues = new WeakMap<
+  Transport,
+  WorkspaceBadgeTransportQueue
+>()
+
+function getWorkspaceBadgeTransportQueue(
+  transport: Transport
+): WorkspaceBadgeTransportQueue {
+  let queue = transportBadgeQueues.get(transport)
+  if (!queue) {
+    queue = new WorkspaceBadgeTransportQueue()
+    transportBadgeQueues.set(transport, queue)
+  }
+  return queue
+}
 
 function workspaceRowBadgeMethodKey(pluginId: string, method: string) {
   return `${pluginId}\0${method}`
@@ -1133,7 +1278,7 @@ export function useWorkspaceRowBadges(
       }
     }
 
-    const batches = chunkWorkspaceRowBadgeInputs(stableWorkspaces)
+    const batches = chunkWorkspaceRowBadgeInputs(stableWorkspaces, { locale })
     const epochResults = new Map<
       string,
       Map<number, ParsedWorkspaceRowBadgeEntry>
@@ -1162,40 +1307,50 @@ export function useWorkspaceRowBadges(
       })
     }
 
+    const queue = getWorkspaceBadgeTransportQueue(transport)
+    const cancelQueued: (() => void)[] = []
+
     for (const group of stableMethodGroups) {
-      void (async () => {
-        const merged = new Map<number, ParsedWorkspaceRowBadgeEntry>()
-        for (const batch of batches) {
-          if (!active) return
-          const allowedIds = new Set(batch.map((item) => item.folderId))
-          try {
-            const raw = await transport.call<unknown>("host_plugins_call", {
-              pluginId: group.pluginId,
-              method: group.method,
-              input: {
-                locale,
-                workspaces: batch,
-              } satisfies WorkspaceRowBadgeInput,
-            })
+      const cancel = queue.enqueue(
+        () => active,
+        async () => {
+          const merged = new Map<number, ParsedWorkspaceRowBadgeEntry>()
+          for (const batch of batches) {
             if (!active) return
-            const parsed = parseWorkspaceRowBadgeResults(raw, allowedIds)
-            for (const [folderId, entry] of parsed) {
-              if (!merged.has(folderId)) merged.set(folderId, entry)
+            const allowedIds = new Set(batch.map((item) => item.folderId))
+            try {
+              const raw = await transport.call<unknown>("host_plugins_call", {
+                pluginId: group.pluginId,
+                method: group.method,
+                input: {
+                  locale,
+                  workspaces: batch,
+                } satisfies WorkspaceRowBadgeInput,
+              })
+              if (!active) return
+              const parsed = parseWorkspaceRowBadgeResults(raw, allowedIds)
+              for (const [folderId, entry] of parsed) {
+                if (!merged.has(folderId)) merged.set(folderId, entry)
+              }
+            } catch {
+              // Isolate failing plugin methods / batches so other badges and
+              // the sidebar continue rendering cleanly.
             }
-          } catch {
-            // Isolate failing plugin methods / batches so other badges and the
-            // sidebar continue rendering cleanly.
           }
+          if (!active) return
+          epochResults.set(group.key, merged)
+          settledGroups.add(group.key)
+          commit()
         }
-        if (!active) return
-        epochResults.set(group.key, merged)
-        settledGroups.add(group.key)
-        commit()
-      })()
+      )
+      cancelQueued.push(cancel)
     }
 
     return () => {
       active = false
+      for (const cancel of cancelQueued) {
+        cancel()
+      }
     }
   }, [catalogVersion, locale, stableMethodGroups, stableWorkspaces, transport])
 
@@ -1244,8 +1399,6 @@ export function hostPluginSessionScopeKey(
   return `${context.folderId ?? "none"}:${context.conversationId ?? "draft"}:${context.sessionKey}`
 }
 
-const utf8Encoder = new TextEncoder()
-
 export function validatePluginComposerInsertPayload(payload: unknown): string {
   if (
     !payload ||
@@ -1264,9 +1417,7 @@ export function validatePluginComposerInsertPayload(payload: unknown): string {
   if (normalized.includes("\0")) {
     throw new Error("Composer text contains unsupported control characters")
   }
-  if (
-    utf8Encoder.encode(normalized).byteLength > MAX_PLUGIN_COMPOSER_INSERT_BYTES
-  ) {
+  if (utf8ByteLength(normalized) > MAX_PLUGIN_COMPOSER_INSERT_BYTES) {
     throw new Error("Composer text exceeds 16 KiB limit")
   }
   return normalized
