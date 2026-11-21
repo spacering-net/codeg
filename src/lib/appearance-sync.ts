@@ -28,7 +28,8 @@ import { getTransport } from "./transport"
  * `src-tauri/src/commands/config_sync/appearance.rs` (a test holds the two
  * together). Deliberately absent: the background image's version stamp and
  * market source page (meaningless without the image file, which stays on its
- * machine) and the custom-style escape hatch (a per-machine safety switch).
+ * machine), the custom-style escape hatch (a per-machine safety switch), and
+ * the per-host plugin theme selection (isolated to each connected host).
  */
 export const SYNCED_APPEARANCE_KEYS = [
   "theme",
