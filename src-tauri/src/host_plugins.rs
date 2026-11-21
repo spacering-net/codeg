@@ -102,6 +102,28 @@ struct Contributions {
     screens: Vec<HostPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidebar_items: Vec<SidebarItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    slash_commands: Vec<SlashCommand>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SlashCommand {
+    name: String,
+    description: String,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    description_translations: Translations,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    argument_hint: Option<String>,
+    scope: SlashCommandScope,
+    method: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum SlashCommandScope {
+    Workspace,
+    Session,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -1003,6 +1025,7 @@ impl Manifest {
             themes,
             screens,
             sidebar_items,
+            slash_commands,
         } = &self.contributes;
         if !bundled && workspace_panels.is_empty() && themes.is_empty() {
             return Err("A declarative plugin needs a workspace panel or theme".to_owned());
@@ -1110,6 +1133,7 @@ impl Manifest {
                     .into(),
             );
         }
+        validate_slash_commands(slash_commands, self.server.as_ref())?;
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
         Ok(())
@@ -1150,6 +1174,35 @@ fn valid_id(value: &str) -> bool {
 
 fn valid_label(value: &str) -> bool {
     !value.trim().is_empty() && value.chars().count() <= 100 && !value.chars().any(char::is_control)
+}
+
+fn validate_slash_commands(
+    commands: &[SlashCommand],
+    server: Option<&ServerModule>,
+) -> Result<(), String> {
+    if commands.is_empty() {
+        return Ok(());
+    }
+    let server = server.ok_or("Slash commands need a plugin server module")?;
+    let mut names = BTreeSet::new();
+    if commands.len() > MAX_CONTRIBUTIONS
+        || commands.iter().any(|command| {
+            command.name.len() > 48
+                || !valid_id(&command.name)
+                || command.name.contains('.')
+                || !names.insert(&command.name)
+                || !valid_label(&command.description)
+                || !valid_translations(&command.description_translations, valid_label)
+                || command
+                    .argument_hint
+                    .as_deref()
+                    .is_some_and(|hint| !valid_label(hint))
+                || !server.methods.contains(&command.method)
+        })
+    {
+        return Err("Provide up to 16 slash commands with unique names, valid labels and declared server methods".into());
+    }
+    Ok(())
 }
 
 fn valid_panel_text(value: &str) -> bool {
@@ -1469,6 +1522,52 @@ mod tests {
             invalid["contributes"]["sidebarItems"][0][field] = json!(value);
             assert!(Manifest::parse(&invalid.to_string()).is_err());
         }
+    }
+
+    #[test]
+    fn validates_slash_commands_against_their_own_server_methods() {
+        use serde_json::json;
+
+        let source = include_str!("../../examples/plugins/composer-commands/codeg-plugin.json");
+        let manifest: serde_json::Value = serde_json::from_str(source).unwrap();
+        let wire = serde_json::to_value(Manifest::parse(source).unwrap()).unwrap();
+        assert_eq!(
+            wire["contributes"]["slashCommands"],
+            manifest["contributes"]["slashCommands"]
+        );
+        for (field, value) in [
+            ("name", json!("/workspace-check")),
+            ("name", json!("x".repeat(49))),
+            ("name", json!("session-check")),
+            ("name", json!("plugin.command")),
+            ("description", json!("\n")),
+            ("descriptionTranslations", json!({ "en": "" })),
+            ("argumentHint", json!("")),
+            ("scope", json!("global")),
+            ("method", json!("not-registered")),
+        ] {
+            let mut invalid = manifest.clone();
+            invalid["contributes"]["slashCommands"][0][field] = value;
+            assert!(Manifest::parse(&invalid.to_string()).is_err(), "{field}");
+        }
+
+        let mut too_many = manifest.clone();
+        let commands = too_many["contributes"]["slashCommands"]
+            .as_array_mut()
+            .unwrap();
+        let template = commands[0].clone();
+        for index in commands.len()..=MAX_CONTRIBUTIONS {
+            let mut command = template.clone();
+            command["name"] = json!(format!("command-{index}"));
+            commands.push(command);
+        }
+        assert!(Manifest::parse(&too_many.to_string()).is_err());
+
+        let mut missing_entry = manifest;
+        missing_entry.as_object_mut().unwrap().remove("server");
+        missing_entry["client"] = json!({ "entry": "panel.html" });
+        let error = Manifest::parse(&missing_entry.to_string()).unwrap_err();
+        assert!(error.to_string().contains("need a plugin server module"));
     }
 
     #[test]

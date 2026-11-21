@@ -197,6 +197,45 @@ host.
 Install and enable the [Plugin Navigation example](../examples/plugins/plugin-navigation)
 to open its overview from the sidebar header and its help screen from the footer.
 
+### Composer slash commands
+
+Declare `contributes.slashCommands` to run a plugin method from the composer.
+Each entry names a method in the same plugin's `server.methods`. For example:
+
+```json
+{
+  "name": "workspace-check",
+  "description": "Show the workspace handling this command",
+  "argumentHint": "[label]",
+  "scope": "workspace",
+  "method": "show-context"
+}
+```
+
+Declare up to 16 commands with unique names in each plugin. Use 1–48 lowercase
+ASCII letters, digits and hyphens, starting with a letter. Codeg adds the leading
+slash. The optional `argumentHint` and `descriptionTranslations` appear in
+autocomplete. Codeg gives built-in commands priority, then enabled plugin
+commands in catalog order, then commands advertised by the agent.
+
+The `workspace` scope is available in workspace conversations, including drafts.
+The `session` scope requires a saved conversation and also supports folderless
+chats. Submitting a matching plain-text command calls the method on the current
+host, with `{ name, args, folderId, conversationId }`. `args` is the trimmed
+remainder of the text and accepts up to 8 KiB of UTF-8. For workspace commands,
+`conversationId` is `null`. For folderless sessions, `folderId` is `null`.
+Codeg displays a short plain-text `message` when the method returns
+`{ message }`. Return `null` for silent success.
+
+Codeg handles the command locally and leaves a failed command in the draft for
+retry. Commands use plain-text drafts without attachments or reference badges.
+Disabling the plugin withdraws its commands from the composer.
+
+Install and enable the [Composer Commands example](../examples/plugins/composer-commands),
+then submit `/workspace-check hello` in a workspace or `/session-check hello`
+in a saved session. See the [author types](host-plugin-slash-commands.d.ts) for
+the manifest and method contracts.
+
 ### Insert text into the composer
 
 An open `composer` contribution can call
