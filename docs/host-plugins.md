@@ -10,7 +10,7 @@ server it is connected to.
 | Contribution | Placement | Contract |
 | --- | --- | --- |
 | `workspacePanels` | Plugins tab in the right workspace panel | Codeg renders a named view for the active workspace. Version 1 supports `text` with a plain `text` field and `turnActivity` with the turn hook. |
-| `commands` | Workspace quick actions | A user-selected command opens a panel owned by the same plugin. |
+| `commands` | Workspace quick actions | A workspace command opens a panel owned by the same plugin. |
 | `hooks` | Codeg-managed ACP sessions | `session.turnCompleted` can record completion metadata for a workspace panel. |
 | `themes` | Settings → Appearance | The user selects an installed color palette for light mode, dark mode, or both. |
 
@@ -31,6 +31,43 @@ See the [turn activity manifest](../examples/plugins/turn-activity/codeg-plugin.
 for a complete example. Import it in **Settings → Plugins**, then enable it.
 Open a workspace in Codeg to use the panel and command.
 
+## Scoped commands
+
+Declare up to 16 entries in `contributes.commands`. Each entry has a unique
+`id`, a `title`, and an `action`. Omitting `scope` gives the command
+`"workspace"` scope, so existing workspace quick actions keep working.
+Use `titleTranslations` and `descriptionTranslations` to localize command
+text. Titles, optional descriptions, and their translations follow the
+localized label rules below. A `description` is required as the fallback for
+description translations. Add up to eight unique, nonblank `keywords` of up
+to 32 characters each to make a command easier to find in palette searches.
+
+| `scope` | Visibility |
+| --- | --- |
+| `global` | Whenever its host is connected |
+| `workspace` | With an active workspace and its `folderId` |
+| `session` | With a saved conversation and its `conversationId` |
+
+| `action.type` | Target | Allowed scopes |
+| --- | --- | --- |
+| `openWorkspacePanel` | `panelId` from `contributes.workspacePanels` | `workspace` and `session` with a workspace |
+| `openScreen` | `screenId` from `contributes.screens` with `client.entry` | All |
+| `callMethod` | `method` from `server.methods` with `server.entry` | All |
+
+Targets must be declared in the same manifest. Codeg dispatches these actions
+when the user selects a command from an enabled plugin. Method calls use the
+reviewed server module on the connected host and the declared RPC contract,
+when present. A `callMethod` action passes `{ scope, folderId, conversationId }`.
+The scope matches the command declaration. Each ID is `null` when its
+context is absent.
+
+Install and enable the [Command Palette example](../examples/plugins/command-palette)
+on the connected host. Use **Open Command Guide** in the global context.
+Open a workspace to see **Show Workspace Notes** and
+**Check Workspace Context**. Open a saved conversation to see
+**Check Session Context**. The [author types](host-plugin-commands.d.ts)
+describe the command entries and their method inputs.
+
 ## Localized names and labels
 
 Add optional `nameTranslations` beside the manifest `name`, `titleTranslations`
@@ -48,10 +85,10 @@ Codeg resolves these strings in each client using the current app language. It
 tries the exact locale, the base language, then the original string. Use locale keys
 such as `en`, `es`, `zh-CN`, or `zh-Hant-TW`, with a lowercase language, an
 optional title-case script, and an optional uppercase or numeric region. Use
-nonempty names and titles of up to 100 characters, and panel text of up to
-4,096 UTF-8 bytes per translation. Keep contribution IDs and references stable
-across languages. Custom HTML surfaces receive the app locale from
-`window.codeg.ready` and can present their own translated content.
+nonempty names, titles, and descriptions of up to 100 characters, and panel
+text of up to 4,096 UTF-8 bytes per translation. Keep contribution IDs and
+references stable across languages. Custom HTML surfaces receive the app locale
+from `window.codeg.ready` and can present their own translated content.
 
 Import the [Workspace Notes example](../examples/plugins/localized-notes/codeg-plugin.json)
 and enable it. Open **Show Workspace Notes** in an active workspace, then

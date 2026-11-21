@@ -1,0 +1,16 @@
+<style>
+  :root {
+    color-scheme: light dark;
+    font: 14px system-ui;
+  }
+</style>
+<h1>Command Guide</h1>
+<ul>
+  <li>Open a workspace to show its notes or check its context.</li>
+  <li>Open a saved conversation to check its session context.</li>
+</ul>
+<script>
+  window.codeg.ready.then(({ locale }) => {
+    document.documentElement.lang = locale
+  })
+</script>

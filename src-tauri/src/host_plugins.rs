@@ -31,6 +31,8 @@ pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const MAX_CLIENT_HTML_BYTES: usize = 256 * 1024;
 const MAX_PLUGINS: usize = 32;
 const MAX_CONTRIBUTIONS: usize = 16;
+const MAX_COMMAND_KEYWORDS: usize = 8;
+const MAX_COMMAND_KEYWORD_CHARS: usize = 32;
 const MAX_TURNS: usize = 128;
 const MAX_INSTALL_PREVIEWS: usize = 16;
 const INSTALL_PREVIEW_LIFETIME: Duration = Duration::from_secs(300);
@@ -180,18 +182,60 @@ struct PluginCommand {
     title: String,
     #[serde(default, skip_serializing_if = "Translations::is_empty")]
     title_translations: Translations,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_command_field",
+        skip_serializing_if = "Option::is_none"
+    )]
+    description: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_command_field",
+        skip_serializing_if = "Option::is_none"
+    )]
+    description_translations: Option<Translations>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    keywords: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_default_command_scope")]
+    scope: CommandScope,
     action: CommandAction,
 }
 
+fn deserialize_command_field<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum CommandScope {
+    Global,
+    #[default]
+    Workspace,
+    Session,
+}
+
+fn is_default_command_scope(scope: &CommandScope) -> bool {
+    *scope == CommandScope::Workspace
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum CommandAction {
-    OpenWorkspacePanel { panel_id: String },
+    OpenWorkspacePanel {
+        #[serde(rename = "panelId")]
+        panel_id: String,
+    },
+    OpenScreen {
+        #[serde(rename = "screenId")]
+        screen_id: String,
+    },
+    CallMethod {
+        method: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -1036,18 +1080,6 @@ impl Manifest {
                 _ => return Err("Invalid panel data. Provide text, a turn hook, a registered server method or a client entry for the selected view.".to_owned()),
             }
         }
-        let mut command_ids = BTreeSet::new();
-        for command in commands {
-            let CommandAction::OpenWorkspacePanel { panel_id } = &command.action;
-            if !valid_id(&command.id)
-                || !valid_label(&command.title)
-                || !valid_translations(&command.title_translations, valid_label)
-                || !command_ids.insert(&command.id)
-                || !panels.contains(panel_id)
-            {
-                return Err("Invalid or duplicate command, or unknown target panel".to_owned());
-            }
-        }
         for (label, panel) in [
             ("settings panel", settings_panel),
             ("detail panel", plugin_detail),
@@ -1094,6 +1126,67 @@ impl Manifest {
             })
         {
             return Err("Provide up to 16 plugin screens with unique IDs and valid titles".into());
+        }
+        let mut command_ids = BTreeSet::new();
+        for command in commands {
+            if !valid_id(&command.id)
+                || !valid_label(&command.title)
+                || !valid_translations(&command.title_translations, valid_label)
+                || !command_ids.insert(&command.id)
+            {
+                return Err("Invalid or duplicate plugin command".into());
+            }
+            if command
+                .description
+                .as_deref()
+                .is_some_and(|description| !valid_label(description))
+                || command
+                    .description_translations
+                    .as_ref()
+                    .is_some_and(|translations| {
+                        command.description.is_none()
+                            || !valid_translations(translations, valid_label)
+                    })
+            {
+                return Err("Invalid plugin command description or translations".into());
+            }
+            let mut keywords = BTreeSet::new();
+            if command.keywords.len() > MAX_COMMAND_KEYWORDS
+                || command.keywords.iter().any(|keyword| {
+                    !valid_label(keyword)
+                        || keyword.chars().count() > MAX_COMMAND_KEYWORD_CHARS
+                        || !keywords.insert(keyword)
+                })
+            {
+                return Err("Provide up to 8 unique command keywords of 1 to 32 characters".into());
+            }
+            match (&command.scope, &command.action) {
+                (CommandScope::Global, CommandAction::OpenWorkspacePanel { .. }) => {
+                    return Err("A global command cannot open a workspace panel".into());
+                }
+                (_, CommandAction::OpenWorkspacePanel { panel_id })
+                    if !panels.contains(panel_id) =>
+                {
+                    return Err("A command must target a workspace panel from this plugin".into());
+                }
+                (_, CommandAction::OpenScreen { screen_id }) if !screen_ids.contains(screen_id) => {
+                    return Err(
+                        "A command must target a screen from this plugin with a client entry"
+                            .into(),
+                    );
+                }
+                (_, CommandAction::CallMethod { method })
+                    if !self
+                        .server
+                        .as_ref()
+                        .is_some_and(|server| server.methods.contains(method)) =>
+                {
+                    return Err(
+                        "A command must target a declared server method from this plugin".into(),
+                    );
+                }
+                _ => {}
+            }
         }
         let mut sidebar_ids = BTreeSet::new();
         if sidebar_items.len() > MAX_CONTRIBUTIONS
@@ -1285,6 +1378,8 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = include_str!("../../examples/plugins/turn-activity/codeg-plugin.json");
+    const COMMAND_PALETTE: &str =
+        include_str!("../../examples/plugins/command-palette/codeg-plugin.json");
     const ID: &str = "codeg.turn-activity";
 
     fn install(
@@ -1352,6 +1447,250 @@ mod tests {
         install(&host, SAMPLE).unwrap();
         assert!(install(&host, SAMPLE).is_err());
         assert_eq!(host.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn existing_workspace_commands_round_trip_without_new_fields() {
+        use serde_json::{json, Value};
+
+        for source in [
+            SAMPLE,
+            include_str!("../../examples/plugins/workspace-inspector/codeg-plugin.json"),
+        ] {
+            let original: Value = serde_json::from_str(source).unwrap();
+            let parsed = Manifest::parse(source).unwrap();
+            assert!(!parsed.contributes.commands.is_empty());
+            assert!(parsed
+                .contributes
+                .commands
+                .iter()
+                .all(|command| command.scope == CommandScope::Workspace));
+            let serialized = serde_json::to_value(&parsed).unwrap();
+            assert_eq!(
+                serialized["contributes"]["commands"],
+                original["contributes"]["commands"]
+            );
+            if source == SAMPLE {
+                assert_eq!(serialized, original);
+            }
+
+            let mut explicit = original;
+            explicit["contributes"]["commands"][0]["scope"] = json!("workspace");
+            explicit["contributes"]["commands"][0]["keywords"] = json!([]);
+            assert_eq!(Manifest::parse(&explicit.to_string()).unwrap(), parsed);
+        }
+    }
+
+    #[test]
+    fn validates_and_round_trips_all_command_scopes_and_actions() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(COMMAND_PALETTE).unwrap();
+        let parsed = Manifest::parse(COMMAND_PALETTE).unwrap();
+        let serialized = serde_json::to_value(&parsed).unwrap();
+        let mut expected = example.clone();
+        for command in expected["contributes"]["commands"].as_array_mut().unwrap() {
+            if command["scope"] == "workspace" {
+                command.as_object_mut().unwrap().remove("scope");
+            }
+        }
+        assert_eq!(
+            serialized["contributes"]["commands"],
+            expected["contributes"]["commands"]
+        );
+        assert_eq!(Manifest::parse(&serialized.to_string()).unwrap(), parsed);
+
+        let actions = [
+            json!({ "type": "openWorkspacePanel", "panelId": "notes" }),
+            json!({ "type": "openScreen", "screenId": "guide" }),
+            json!({ "type": "callMethod", "method": "describe-context" }),
+        ];
+        for scope in ["global", "workspace", "session"] {
+            for action in &actions {
+                let mut manifest = example.clone();
+                let mut command = json!({
+                    "id": "test-command", "title": "Test command", "scope": scope, "action": action
+                });
+                manifest["contributes"]["commands"] = json!([command]);
+                let parsed = Manifest::parse(&manifest.to_string());
+                if scope == "global" && action["type"] == "openWorkspacePanel" {
+                    assert!(parsed.unwrap_err().message.contains("global command"));
+                    continue;
+                }
+                let parsed = parsed.unwrap();
+                if scope == "workspace" {
+                    command.as_object_mut().unwrap().remove("scope");
+                }
+                let serialized = serde_json::to_value(&parsed).unwrap();
+                assert_eq!(serialized["contributes"]["commands"], json!([command]));
+                assert_eq!(Manifest::parse(&serialized.to_string()).unwrap(), parsed);
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_commands_with_missing_or_foreign_targets() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(COMMAND_PALETTE).unwrap();
+        for (index, field) in [(0, "screenId"), (1, "panelId"), (2, "method")] {
+            for target in ["", "another-plugin.target"] {
+                let mut manifest = example.clone();
+                manifest["contributes"]["commands"][index]["action"][field] = json!(target);
+                assert!(Manifest::parse(&manifest.to_string()).is_err());
+            }
+        }
+        for field in ["client", "server"] {
+            let mut manifest = example.clone();
+            manifest.as_object_mut().unwrap().remove(field);
+            assert!(Manifest::parse(&manifest.to_string()).is_err());
+        }
+        for field in ["workspacePanels", "screens"] {
+            let mut manifest = example.clone();
+            manifest["contributes"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(Manifest::parse(&manifest.to_string()).is_err());
+        }
+    }
+
+    #[test]
+    fn validates_command_limits_keywords_and_descriptions() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(COMMAND_PALETTE).unwrap();
+        let mut manifest = example.clone();
+        let commands = manifest["contributes"]["commands"].as_array_mut().unwrap();
+        let template = commands[0].clone();
+        for index in commands.len()..MAX_CONTRIBUTIONS {
+            let mut command = template.clone();
+            command["id"] = json!(format!("command-{index}"));
+            commands.push(command);
+        }
+        Manifest::parse(&manifest.to_string()).unwrap();
+        let mut additional = template;
+        additional["id"] = json!("extra-command");
+        manifest["contributes"]["commands"]
+            .as_array_mut()
+            .unwrap()
+            .push(additional);
+        assert!(Manifest::parse(&manifest.to_string()).is_err());
+
+        let mut max_keywords = example.clone();
+        max_keywords["contributes"]["commands"][0]["keywords"] = json!([
+            "一".repeat(32),
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight"
+        ]);
+        Manifest::parse(&max_keywords.to_string()).unwrap();
+
+        for (field, invalid) in [
+            ("id", json!("show-notes")),
+            ("id", json!("bad/id")),
+            ("title", json!("")),
+            ("titleTranslations", json!({ "es": "" })),
+            ("description", json!("")),
+            (
+                "descriptionTranslations",
+                json!({ "zh-cn": "Invalid locale" }),
+            ),
+            ("descriptionTranslations", json!({ "es": "x".repeat(101) })),
+            (
+                "keywords",
+                json!(["a", "b", "c", "d", "e", "f", "g", "h", "i"]),
+            ),
+            ("keywords", json!(["repeat", "repeat"])),
+            ("keywords", json!([" \t"])),
+            ("keywords", json!(["一".repeat(33)])),
+        ] {
+            let mut manifest = example.clone();
+            manifest["contributes"]["commands"][0][field] = invalid;
+            assert!(Manifest::parse(&manifest.to_string()).is_err(), "{field}");
+        }
+        let mut missing_description = example;
+        missing_description["contributes"]["commands"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("description");
+        assert!(Manifest::parse(&missing_description.to_string()).is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_command_fields_and_invalid_json_types() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(COMMAND_PALETTE).unwrap();
+        for (field, invalid) in [
+            ("scope", json!("app")),
+            ("scope", json!(null)),
+            ("description", json!(42)),
+            ("description", json!(null)),
+            ("descriptionTranslations", json!({ "es": 42 })),
+            ("keywords", json!([42])),
+            ("tooltip", json!("Unknown")),
+            (
+                "action",
+                json!({ "type": "openScreen", "screenId": "guide", "extra": true }),
+            ),
+            ("action", json!({ "type": "openScreen", "screenId": 42 })),
+            ("action", json!({ "type": "runScript" })),
+        ] {
+            let mut manifest = example.clone();
+            manifest["contributes"]["commands"][0][field] = invalid;
+            assert!(Manifest::parse(&manifest.to_string()).is_err(), "{field}");
+        }
+    }
+
+    #[tokio::test]
+    async fn installs_command_palette_and_dispatches_example_methods() {
+        use serde_json::json;
+
+        let data = tempfile::tempdir().unwrap();
+        let host = HostPlugins::new(data.path());
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/command-palette");
+        let preview = host
+            .preview_install(source.to_str().unwrap(), source::Registry::Npm, None)
+            .await
+            .unwrap();
+        let id = preview.manifest.id.clone();
+        host.confirm_install(preview.ticket).unwrap();
+        host.apply(Mutation::SetEnabled {
+            id: id.clone(),
+            enabled: true,
+        })
+        .unwrap();
+        assert_eq!(
+            host.client_html(&id).unwrap().as_ref(),
+            include_str!("../../examples/plugins/command-palette/guide.html")
+        );
+        for (input, expected) in [
+            (
+                json!({ "scope": "workspace", "folderId": 42, "conversationId": null }),
+                "Workspace #42",
+            ),
+            (
+                json!({ "scope": "session", "folderId": 42, "conversationId": 7 }),
+                "Conversation #7 in workspace #42",
+            ),
+            (
+                json!({ "scope": "session", "folderId": null, "conversationId": 7 }),
+                "Conversation #7 without a workspace",
+            ),
+        ] {
+            assert_eq!(
+                host.call(&id, "describe-context".into(), input)
+                    .await
+                    .unwrap(),
+                json!(expected)
+            );
+        }
     }
 
     #[test]
