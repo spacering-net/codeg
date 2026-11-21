@@ -66,6 +66,11 @@ export interface CodegClient {
   /** Available while the selected file panel is open for a text file. */
   readonly file?: {
     readText(): Promise<{ text: string }>
+    /**
+     * Available only to the active file panel declared with `writable: true`.
+     * Replaces the open file's editor buffer through Codeg's usual save flow.
+     */
+    writeText?(text: string): Promise<{ updated: true; length: number }>
   }
 }
 

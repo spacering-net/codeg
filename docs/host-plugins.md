@@ -217,8 +217,8 @@ save it on that host.
 
 ### File panels
 
-Declare `contributes.filePanels` to add a read-only view to matching text files
-in the workspace file editor. For example:
+Declare `contributes.filePanels` to add views to matching text files in the
+workspace file editor. Panels are read-only by default.
 
 ```json
 {
@@ -239,6 +239,20 @@ The reviewed HTML receives `{ type: "filePanel", id, fileName, locale }` from
 UTF-8 text, and is available while the panel is selected for that file. Use the
 [JSON Outline example](../examples/plugins/json-outline) to view the structure
 of an open JSON file.
+
+Declare `writable: true` on a file panel to enable editing. Its reviewed HTML
+can call `await window.codeg.file.writeText(text)` to replace the current open
+file's editor buffer. Pass one string of up to 64 KiB of UTF-8 text. The method
+takes no path and rejects NUL characters and read-only files. It returns
+`{ updated: true, length }`, where `length` is the JavaScript string length.
+Codeg uses its usual save and external-change conflict handling for the
+updated buffer. Leaving or hiding the file editor, switching the file, or
+withdrawing the panel revokes access.
+
+Install and enable the [JSON Editor example](../examples/plugins/json-editor),
+open a `.json` file, and choose **JSON Editor** from the file view selector.
+Edit the JSON and select **Apply to editor** to validate it and update the
+open buffer.
 
 ### Insert text into the composer
 

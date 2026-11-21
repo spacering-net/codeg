@@ -142,6 +142,12 @@ struct FilePanel {
     #[serde(default, skip_serializing_if = "Translations::is_empty")]
     title_translations: Translations,
     extensions: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    writable: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -1613,6 +1619,41 @@ mod tests {
         missing_client["server"] = json!({ "entry": "server.mjs", "methods": ["read"] });
         let error = Manifest::parse(&missing_client.to_string()).unwrap_err();
         assert!(error.message.contains("File panels need a client entry"));
+    }
+
+    #[test]
+    fn file_panel_writes_are_opt_in_and_require_a_boolean() {
+        use serde_json::json;
+
+        let outline = include_str!("../../examples/plugins/json-outline/codeg-plugin.json");
+        let editor = include_str!("../../examples/plugins/json-editor/codeg-plugin.json");
+        for (source, writable) in [(outline, false), (editor, true)] {
+            let expected: serde_json::Value = serde_json::from_str(source).unwrap();
+            let parsed = Manifest::parse(source).unwrap();
+            assert_eq!(parsed.contributes.file_panels[0].writable, writable);
+
+            let serialized = serde_json::to_value(&parsed).unwrap();
+            assert_eq!(
+                serialized["contributes"]["filePanels"],
+                expected["contributes"]["filePanels"]
+            );
+            assert_eq!(Manifest::parse(&serialized.to_string()).unwrap(), parsed);
+        }
+
+        let mut explicit: serde_json::Value = serde_json::from_str(outline).unwrap();
+        explicit["contributes"]["filePanels"][0]["writable"] = json!(false);
+        let parsed = Manifest::parse(&explicit.to_string()).unwrap();
+        assert_eq!(parsed, Manifest::parse(outline).unwrap());
+        let serialized = serde_json::to_value(&parsed).unwrap();
+        assert!(serialized["contributes"]["filePanels"][0]
+            .get("writable")
+            .is_none());
+        assert_eq!(Manifest::parse(&serialized.to_string()).unwrap(), parsed);
+
+        for invalid in [json!("true"), json!(1), json!(null)] {
+            explicit["contributes"]["filePanels"][0]["writable"] = invalid;
+            assert!(Manifest::parse(&explicit.to_string()).is_err());
+        }
     }
 
     #[test]

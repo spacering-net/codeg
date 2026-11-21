@@ -1,0 +1,18 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.json-editor",
+  "name": "JSON Editor",
+  "version": "1.0.0",
+  "client": { "entry": "editor.html" },
+  "contributes": {
+    "filePanels": [
+      {
+        "id": "editor",
+        "title": "JSON Editor",
+        "titleTranslations": { "zh-CN": "JSON 编辑器", "es": "Editor JSON" },
+        "extensions": ["json"],
+        "writable": true
+      }
+    ]
+  }
+}
