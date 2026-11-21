@@ -1120,6 +1120,23 @@ impl ConnectionManager {
             });
         }
 
+        if let Some(plugins) = emitter.host_plugins() {
+            let additions = plugins
+                .agent_launch_environment(agent_type, working_dir.as_deref(), session_id.as_deref())
+                .await
+                .map_err(|error| AcpError::SpawnFailed(error.to_string()))?;
+            for (key, value) in additions {
+                if cfg!(windows)
+                    && runtime_env
+                        .keys()
+                        .any(|existing| existing.eq_ignore_ascii_case(&key))
+                {
+                    continue;
+                }
+                runtime_env.entry(key).or_insert(value);
+            }
+        }
+
         let connection_id = uuid::Uuid::new_v4().to_string();
         tracing::info!(
             "[ACP] spawning connection id={} owner_window={} agent={:?}",

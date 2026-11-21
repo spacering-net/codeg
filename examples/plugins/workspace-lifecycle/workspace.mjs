@@ -16,6 +16,11 @@ export function handle(method, input) {
       ? { path: input.path.replace(/-request$/, "-checkout") }
       : null
   }
+  if (method === "before-agent-open") {
+    return /[/\\]plugin-launch-demo$/.test(input.workingDirectory ?? "")
+      ? { env: { ...input.env, CODEG_PLUGIN_WORKSPACE_LABEL: "Launch demo" } }
+      : null
+  }
   if (method === "turn-completed") {
     return { folderId: input.folderId, stopReason: input.detail.stopReason }
   }
