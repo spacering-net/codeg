@@ -109,7 +109,11 @@
     "pluginSurfaces": "플러그인 작업",
     "morePluginSurfaces": "더 많은 플러그인 작업",
     "pluginDetail": "플러그인 세부정보",
-    "activationPanel": "활성화 가이드"
+    "activationPanel": "활성화 가이드",
+    "attachmentSearchPlaceholder": "항목 검색…",
+    "attachmentSearchEmpty": "일치하는 항목이 없습니다.",
+    "attachmentSearchFailed": "첨부 소스를 검색하지 못했습니다.",
+    "removeAttachment": "{name} 제거"
   },
   "AppearanceSettings": {
     "sectionTitle": "테마 모양",

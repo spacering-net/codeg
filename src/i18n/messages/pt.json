@@ -109,7 +109,11 @@
     "pluginSurfaces": "Ações de plugins",
     "morePluginSurfaces": "Mais ações de plugins",
     "pluginDetail": "Detalhes do plugin",
-    "activationPanel": "Guia de ativação"
+    "activationPanel": "Guia de ativação",
+    "attachmentSearchPlaceholder": "Pesquisar itens…",
+    "attachmentSearchEmpty": "Nenhum item correspondente encontrado.",
+    "attachmentSearchFailed": "Falha ao pesquisar a fonte de anexos.",
+    "removeAttachment": "Remover {name}"
   },
   "AppearanceSettings": {
     "sectionTitle": "Aparência do tema",

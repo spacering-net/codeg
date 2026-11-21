@@ -109,7 +109,11 @@
     "pluginSurfaces": "Plugin actions",
     "morePluginSurfaces": "More plugin actions",
     "pluginDetail": "Plugin details",
-    "activationPanel": "Activation guide"
+    "activationPanel": "Activation guide",
+    "attachmentSearchPlaceholder": "Search items…",
+    "attachmentSearchEmpty": "No matching items found.",
+    "attachmentSearchFailed": "Failed to search attachment source.",
+    "removeAttachment": "Remove {name}"
   },
   "AppearanceSettings": {
     "sectionTitle": "Theme Appearance",

@@ -109,7 +109,11 @@
     "pluginSurfaces": "إجراءات الإضافات",
     "morePluginSurfaces": "مزيد من إجراءات الإضافات",
     "pluginDetail": "تفاصيل الإضافة",
-    "activationPanel": "دليل التفعيل"
+    "activationPanel": "دليل التفعيل",
+    "attachmentSearchPlaceholder": "البحث عن عناصر…",
+    "attachmentSearchEmpty": "لم يتم العثور على عناصر مطابقة.",
+    "attachmentSearchFailed": "تعذر البحث في مصدر المرفقات.",
+    "removeAttachment": "إزالة {name}"
   },
   "AppearanceSettings": {
     "sectionTitle": "مظهر السمة",

@@ -7,10 +7,15 @@ import {
   parsePluginThemePalette,
 } from "@/lib/custom-style"
 import {
+  MAX_PLUGIN_ATTACHMENT_ITEMS,
+  MAX_PLUGIN_ATTACHMENT_SOURCES,
+  MAX_PLUGIN_ATTACHMENT_TEXT_BYTES,
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
   hostPluginSessionScopeKey,
+  parsePluginAttachmentSearchOutput,
+  pluginAttachmentSourceKey,
   pluginClientSurfaceKey,
   pluginScreenKey,
   pluginSidebarItemKey,
@@ -19,6 +24,7 @@ import {
   resolvePluginHostSurface,
   resolvePluginScreen,
   resolvePluginText,
+  selectPluginAttachmentSources,
   selectPluginClientSurfaces,
   selectPluginScreens,
   selectPluginSidebarItems,
@@ -908,5 +914,303 @@ describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems
     ).not.toBeNull()
     expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
     expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
+  })
+})
+
+describe("selectPluginAttachmentSources & parsePluginAttachmentSearchOutput", () => {
+  it("loads and localizes the bundled issue-attachments example manifest", () => {
+    const manifestPath = resolve(
+      process.cwd(),
+      "examples/plugins/issue-attachments/codeg-plugin.json"
+    )
+    const manifest = JSON.parse(
+      readFileSync(manifestPath, "utf8")
+    ) as InstalledPlugin["manifest"]
+    const plugin: InstalledPlugin = { enabled: true, manifest }
+
+    expect(selectPluginAttachmentSources([plugin], "en")).toEqual([
+      {
+        key: pluginAttachmentSourceKey(
+          "codeg.issue-attachments",
+          "example-issues"
+        ),
+        pluginId: "codeg.issue-attachments",
+        pluginName: "Issue Attachments",
+        id: "example-issues",
+        title: "Example Issues",
+        pickerTitle: "Attach an issue",
+        searchPlaceholder: "Search issues by ID or keyword",
+        method: "search-issues",
+      },
+    ])
+
+    expect(selectPluginAttachmentSources([plugin], "zh-CN")).toEqual([
+      {
+        key: "codeg.issue-attachments:example-issues",
+        pluginId: "codeg.issue-attachments",
+        pluginName: "Issue Attachments",
+        id: "example-issues",
+        title: "示例工单",
+        pickerTitle: "附加工单",
+        searchPlaceholder: "按编号或关键词搜索工单",
+        method: "search-issues",
+      },
+    ])
+
+    expect(selectPluginAttachmentSources([plugin], "es")).toEqual([
+      {
+        key: "codeg.issue-attachments:example-issues",
+        pluginId: "codeg.issue-attachments",
+        pluginName: "Issue Attachments",
+        id: "example-issues",
+        title: "Incidencias de ejemplo",
+        pickerTitle: "Adjuntar una incidencia",
+        searchPlaceholder: "Buscar por ID o palabra clave",
+        method: "search-issues",
+      },
+    ])
+  })
+
+  it("enforces enabled status, server entry + same-plugin method, fallback rules, and 16-source cap", () => {
+    expect(MAX_PLUGIN_ATTACHMENT_SOURCES).toBe(16)
+
+    const disabledPlugin: InstalledPlugin = {
+      enabled: false,
+      manifest: {
+        id: "acme.disabled",
+        name: "Disabled",
+        version: "1.0.0",
+        server: { entry: "server.mjs", methods: ["search"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          attachmentSources: [
+            { id: "s1", title: "Disabled Source", method: "search" },
+          ],
+        },
+      },
+    }
+
+    const noServerEntryPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.no-server",
+        name: "No Server",
+        version: "1.0.0",
+        server: { entry: "   ", methods: ["search"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          attachmentSources: [
+            { id: "s1", title: "No Server Entry", method: "search" },
+          ],
+        },
+      },
+    }
+
+    const validAndInvalidPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.issues",
+        name: "Acme Issues",
+        version: "1.0.0",
+        server: { entry: "server.mjs", methods: ["search-own"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          attachmentSources: [
+            // Missing fallback pickerTitle/searchPlaceholder must ignore translations
+            {
+              id: "valid-minimal",
+              title: "Own Source",
+              pickerTitleTranslations: { "zh-CN": "不应回退" },
+              searchPlaceholder: "   ",
+              searchPlaceholderTranslations: { "zh-CN": "不应回退" },
+              method: "search-own",
+            },
+            // Duplicate id is skipped
+            {
+              id: "valid-minimal",
+              title: "Duplicate",
+              method: "search-own",
+            },
+            // Method not declared in this plugin's server.methods is skipped
+            {
+              id: "undeclared-method",
+              title: "Foreign Method",
+              method: "search-other",
+            },
+            // Blank title fallback is skipped even if translations exist
+            {
+              id: "blank-title",
+              title: "   ",
+              titleTranslations: { "zh-CN": "有翻译但无默认标题" },
+              method: "search-own",
+            },
+          ],
+        },
+      },
+    }
+
+    expect(
+      selectPluginAttachmentSources(
+        [disabledPlugin, noServerEntryPlugin, validAndInvalidPlugin],
+        "zh-CN"
+      )
+    ).toEqual([
+      {
+        key: "acme.issues:valid-minimal",
+        pluginId: "acme.issues",
+        pluginName: "Acme Issues",
+        id: "valid-minimal",
+        title: "Own Source",
+        method: "search-own",
+      },
+    ])
+
+    const cappedPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.capped-sources",
+        name: "Capped",
+        version: "1.0.0",
+        server: { entry: "server.mjs", methods: ["search"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          attachmentSources: Array.from({ length: 20 }, (_, index) => ({
+            id: `source-${index + 1}`,
+            title: `Source ${index + 1}`,
+            method: "search",
+          })),
+        },
+      },
+    }
+
+    const capped = selectPluginAttachmentSources([cappedPlugin])
+    expect(capped).toHaveLength(16)
+    expect(capped[0].id).toBe("source-1")
+    expect(capped[15].id).toBe("source-16")
+  })
+
+  it("validates, sanitizes, and caps parsePluginAttachmentSearchOutput", () => {
+    expect(MAX_PLUGIN_ATTACHMENT_ITEMS).toBe(20)
+    expect(MAX_PLUGIN_ATTACHMENT_TEXT_BYTES).toBe(16 * 1024)
+
+    expect(() => parsePluginAttachmentSearchOutput(null)).toThrow()
+    expect(() => parsePluginAttachmentSearchOutput({})).toThrow()
+    expect(() =>
+      parsePluginAttachmentSearchOutput({ items: "invalid" })
+    ).toThrow()
+
+    // Exact 16 KiB multi-byte UTF-8 boundary (each "汉" is 3 bytes: 5461 * 3 = 16383 + "a" = 16384)
+    const exact16KiB = `${"汉".repeat(5461)}a`
+    expect(new TextEncoder().encode(exact16KiB).byteLength).toBe(16 * 1024)
+    const over16KiB = `${"汉".repeat(5461)}ab`
+    expect(new TextEncoder().encode(over16KiB).byteLength).toBe(16 * 1024 + 1)
+
+    const parsed = parsePluginAttachmentSearchOutput({
+      items: [
+        {
+          id: "  item-1  ",
+          identifier: "  DEMO-104 \n ",
+          title: "  Fix\tlogin\nbug  ",
+          subtitle: "  Auth · Open  ",
+          url: "https://example.com/issues/104",
+          text: exact16KiB,
+          resourceType: "  issue  ",
+        },
+        // Duplicate id ignored
+        {
+          id: "item-1",
+          title: "Duplicate",
+          text: "duplicate",
+        },
+        // HTTP allowed
+        {
+          id: "item-http",
+          title: "Local doc",
+          url: "http://example.org/doc",
+          text: "line1\r\nline2",
+          identifier: "   ",
+          subtitle: "",
+          resourceType: "   ",
+        },
+        // Over 16 KiB UTF-8 rejected
+        {
+          id: "too-large",
+          title: "Too Large",
+          text: over16KiB,
+        },
+        // NUL character rejected
+        {
+          id: "nul-text",
+          title: "NUL",
+          text: "hello\0world",
+        },
+        // Unsafe URLs rejected
+        {
+          id: "bad-js-url",
+          title: "JS URL",
+          url: "javascript:alert(1)",
+          text: "payload",
+        },
+        {
+          id: "bad-data-url",
+          title: "Data URL",
+          url: "data:text/html,<script>alert(1)</script>",
+          text: "payload",
+        },
+        {
+          id: "bad-file-url",
+          title: "File URL",
+          url: "file:///etc/passwd",
+          text: "payload",
+        },
+        {
+          id: "bad-malformed-url",
+          title: "Bad URL",
+          url: "not a url",
+          text: "payload",
+        },
+        // Missing required fields rejected
+        { id: "", title: "Empty ID", text: "ok" },
+        { id: "blank-title", title: "   ", text: "ok" },
+        { id: "blank-text", title: "Blank Text", text: "   \n  " },
+      ],
+    })
+
+    expect(parsed).toEqual([
+      {
+        id: "item-1",
+        identifier: "DEMO-104",
+        title: "Fix login bug",
+        subtitle: "Auth · Open",
+        url: "https://example.com/issues/104",
+        text: exact16KiB,
+        resourceType: "issue",
+      },
+      {
+        id: "item-http",
+        title: "Local doc",
+        url: "http://example.org/doc",
+        text: "line1\nline2",
+      },
+    ])
+
+    // 20-item cap
+    const manyItems = Array.from({ length: 25 }, (_, index) => ({
+      id: `item-${index + 1}`,
+      title: `Item ${index + 1}`,
+      text: `Snapshot ${index + 1}`,
+    }))
+    const cappedItems = parsePluginAttachmentSearchOutput({ items: manyItems })
+    expect(cappedItems).toHaveLength(20)
+    expect(cappedItems[0].id).toBe("item-1")
+    expect(cappedItems[19].id).toBe("item-20")
   })
 })

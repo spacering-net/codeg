@@ -12,6 +12,7 @@ import {
   MessageSquareText,
   Paperclip,
   Plus,
+  Puzzle,
   Search,
   Sparkles,
   Upload,
@@ -32,6 +33,7 @@ import { rankByTextMatch } from "@/lib/fuzzy-text-match"
 import { isImeCompositionKey } from "@/lib/ime-composition"
 import { cn } from "@/lib/utils"
 import type { AvailableCommandInfo } from "@/lib/types"
+import type { ResolvedPluginAttachmentSource } from "@/lib/host-plugins"
 
 import {
   commandInputHint,
@@ -69,6 +71,11 @@ export interface ComposerAddMenuProps {
   /** Open the live-feedback dialog. Conversation-only; omitted elsewhere. */
   onAddFeedback?: () => void
   feedbackAddDisabled?: boolean
+  /** Enabled plugin attachment sources; omitted or empty renders zero extra DOM. */
+  pluginAttachmentSources?: readonly ResolvedPluginAttachmentSource[]
+  onSelectPluginAttachmentSource?: (
+    source: ResolvedPluginAttachmentSource
+  ) => void
   triggerClassName?: string
 }
 
@@ -89,6 +96,8 @@ export function ComposerAddMenu({
   attachOnly = false,
   onAddFeedback,
   feedbackAddDisabled,
+  pluginAttachmentSources,
+  onSelectPluginAttachmentSource,
   triggerClassName,
 }: ComposerAddMenuProps) {
   const shortcuts = attachOnly ? null : shortcutsProp
@@ -186,6 +195,20 @@ export function ComposerAddMenu({
             </>
           )
         ) : null}
+        {pluginAttachmentSources &&
+        pluginAttachmentSources.length > 0 &&
+        onSelectPluginAttachmentSource
+          ? pluginAttachmentSources.map((source) => (
+              <DropdownMenuItem
+                key={source.key}
+                data-slot="composer-plugin-attachment-source"
+                onClick={() => onSelectPluginAttachmentSource(source)}
+              >
+                <Puzzle className="size-4 shrink-0" aria-hidden />
+                <span className="truncate">{source.title}</span>
+              </DropdownMenuItem>
+            ))
+          : null}
         {shortcuts ? (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>

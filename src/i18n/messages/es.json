@@ -109,7 +109,11 @@
     "pluginSurfaces": "Acciones de complementos",
     "morePluginSurfaces": "Más acciones de complementos",
     "pluginDetail": "Detalles del complemento",
-    "activationPanel": "Guía de activación"
+    "activationPanel": "Guía de activación",
+    "attachmentSearchPlaceholder": "Buscar elementos…",
+    "attachmentSearchEmpty": "No se encontraron elementos coincidentes.",
+    "attachmentSearchFailed": "No se pudo buscar en la fuente de adjuntos.",
+    "removeAttachment": "Quitar {name}"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apariencia del tema",

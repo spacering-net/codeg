@@ -12,8 +12,43 @@ export type PluginTextTranslations = Record<string, string>
 
 export const MAX_PLUGIN_SCREENS = 16
 export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
+export const MAX_PLUGIN_ATTACHMENT_SOURCES = 16
+export const MAX_PLUGIN_ATTACHMENT_ITEMS = 20
+export const MAX_PLUGIN_ATTACHMENT_TEXT_BYTES = 16 * 1024
 
 export type PluginSidebarItemPlacement = "header" | "footer"
+
+export interface PluginAttachmentSourceContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  pickerTitle?: string
+  pickerTitleTranslations?: PluginTextTranslations
+  searchPlaceholder?: string
+  searchPlaceholderTranslations?: PluginTextTranslations
+  method: string
+}
+
+export interface ResolvedPluginAttachmentSource {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  pickerTitle?: string
+  searchPlaceholder?: string
+  method: string
+}
+
+export interface PluginAttachmentSourceItem {
+  id: string
+  identifier?: string
+  title: string
+  subtitle?: string
+  url?: string
+  text: string
+  resourceType?: string
+}
 
 export interface PluginThemeContribution {
   id: string
@@ -174,6 +209,7 @@ export interface InstalledPlugin {
       themes?: PluginThemeContribution[]
       screens?: PluginScreenContribution[]
       sidebarItems?: PluginSidebarItemContribution[]
+      attachmentSources?: PluginAttachmentSourceContribution[]
     }
   }
 }
@@ -358,6 +394,13 @@ function getReadyHostTransportSnapshot(): Transport | null {
   return safeGetTransport()
 }
 
+export function isCurrentReadyHostTransport(
+  transport: Transport | null
+): boolean {
+  if (!transport) return false
+  return getReadyHostTransportSnapshot() === transport
+}
+
 function getNullTransportSnapshot(): null {
   return null
 }
@@ -499,6 +542,10 @@ export function pluginScreenKey(pluginId: string, screenId: string) {
 
 export function pluginSidebarItemKey(pluginId: string, itemId: string) {
   return `${pluginId}:${itemId}`
+}
+
+export function pluginAttachmentSourceKey(pluginId: string, sourceId: string) {
+  return `${pluginId}:${sourceId}`
 }
 
 export function resolvePluginHostScope(
@@ -812,13 +859,217 @@ export function selectPluginSidebarItems(
   return items
 }
 
+export function selectPluginAttachmentSources(
+  plugins: readonly InstalledPlugin[] | undefined,
+  locale?: string
+): ResolvedPluginAttachmentSource[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginAttachmentSource[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled) continue
+    const server = plugin.manifest.server
+    if (!server?.entry?.trim() || !Array.isArray(server.methods)) continue
+    const declaredMethods = new Set(
+      server.methods
+        .map((method) => (typeof method === "string" ? method.trim() : ""))
+        .filter(Boolean)
+    )
+    if (declaredMethods.size === 0) continue
+    const sources = plugin.manifest.contributes?.attachmentSources
+    if (!sources?.length) continue
+    const pluginName =
+      resolvePluginText(
+        plugin.manifest.name,
+        plugin.manifest.nameTranslations,
+        locale
+      ).trim() || plugin.manifest.id
+    const seenIds = new Set<string>()
+    let pluginValidCount = 0
+    for (const source of sources) {
+      if (pluginValidCount >= MAX_PLUGIN_ATTACHMENT_SOURCES) break
+      const id = typeof source.id === "string" ? source.id.trim() : ""
+      const fallbackTitle =
+        typeof source.title === "string" ? source.title.trim() : ""
+      const method =
+        typeof source.method === "string" ? source.method.trim() : ""
+      if (!id || !fallbackTitle || !method) continue
+      if (seenIds.has(id) || !declaredMethods.has(method)) continue
+      const title = resolvePluginText(
+        fallbackTitle,
+        source.titleTranslations,
+        locale
+      ).trim()
+      if (!title) continue
+      const pickerTitle = resolveOptionalPluginText(
+        source.pickerTitle,
+        source.pickerTitleTranslations,
+        locale
+      )
+      const searchPlaceholder = resolveOptionalPluginText(
+        source.searchPlaceholder,
+        source.searchPlaceholderTranslations,
+        locale
+      )
+      seenIds.add(id)
+      pluginValidCount += 1
+      items.push({
+        key: pluginAttachmentSourceKey(plugin.manifest.id, id),
+        pluginId: plugin.manifest.id,
+        pluginName,
+        id,
+        title,
+        ...(pickerTitle ? { pickerTitle } : {}),
+        ...(searchPlaceholder ? { searchPlaceholder } : {}),
+        method,
+      })
+    }
+  }
+  return items
+}
+
+function resolveOptionalPluginText(
+  fallback: string | undefined,
+  translations: PluginTextTranslations | undefined,
+  locale?: string
+): string | undefined {
+  if (typeof fallback !== "string") return undefined
+  const trimmedFallback = fallback.trim()
+  if (!trimmedFallback) return undefined
+  const resolved = resolvePluginText(
+    trimmedFallback,
+    translations,
+    locale
+  ).trim()
+  return resolved || undefined
+}
+
+const utf8Encoder = new TextEncoder()
+
+const MAX_ATTACHMENT_ID_CHARS = 128
+const MAX_ATTACHMENT_TITLE_CHARS = 200
+const MAX_ATTACHMENT_IDENTIFIER_CHARS = 64
+const MAX_ATTACHMENT_SUBTITLE_CHARS = 160
+const MAX_ATTACHMENT_RESOURCE_TYPE_CHARS = 48
+const MAX_ATTACHMENT_URL_CHARS = 2048
+
+function normalizeAttachmentMetadata(
+  value: unknown,
+  maxChars: number
+): string | undefined {
+  if (typeof value !== "string") return undefined
+  if (value.includes("\0")) return undefined
+  const normalized = value.replace(/[\r\n\t]+/g, " ").trim()
+  if (!normalized) return undefined
+  return normalized.slice(0, maxChars).trim() || undefined
+}
+
+function parseSafeHttpUrl(raw: unknown): {
+  valid: boolean
+  url?: string
+} {
+  if (raw === undefined || raw === null) return { valid: true }
+  if (typeof raw !== "string") return { valid: false }
+  if (raw.includes("\0")) return { valid: false }
+  const trimmed = raw.trim()
+  if (!trimmed) return { valid: true }
+  if (trimmed.length > MAX_ATTACHMENT_URL_CHARS) return { valid: false }
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return { valid: false }
+    }
+    return { valid: true, url: parsed.toString() }
+  } catch {
+    return { valid: false }
+  }
+}
+
+export function parsePluginAttachmentSearchOutput(
+  raw: unknown
+): PluginAttachmentSourceItem[] {
+  if (
+    !raw ||
+    typeof raw !== "object" ||
+    Array.isArray(raw) ||
+    !("items" in raw) ||
+    !Array.isArray((raw as { items?: unknown }).items)
+  ) {
+    throw new Error("Invalid attachment search response")
+  }
+  const rawItems = (raw as { items: unknown[] }).items
+  const items: PluginAttachmentSourceItem[] = []
+  const seenIds = new Set<string>()
+  for (const entry of rawItems) {
+    if (items.length >= MAX_PLUGIN_ATTACHMENT_ITEMS) break
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue
+    const candidate = entry as Record<string, unknown>
+    if (
+      typeof candidate.id !== "string" ||
+      candidate.id.includes("\0") ||
+      typeof candidate.title !== "string" ||
+      candidate.title.includes("\0") ||
+      typeof candidate.text !== "string"
+    ) {
+      continue
+    }
+    const id = candidate.id.trim()
+    const title = candidate.title
+      .replace(/[\r\n\t]+/g, " ")
+      .trim()
+      .slice(0, MAX_ATTACHMENT_TITLE_CHARS)
+      .trim()
+    const text = candidate.text.replace(/\r\n?/g, "\n")
+    if (
+      !id ||
+      id.length > MAX_ATTACHMENT_ID_CHARS ||
+      seenIds.has(id) ||
+      !title ||
+      !text.trim() ||
+      text.includes("\0")
+    ) {
+      continue
+    }
+    if (
+      utf8Encoder.encode(text).byteLength > MAX_PLUGIN_ATTACHMENT_TEXT_BYTES
+    ) {
+      continue
+    }
+    const parsedUrl = parseSafeHttpUrl(candidate.url)
+    if (!parsedUrl.valid) continue
+    const identifier = normalizeAttachmentMetadata(
+      candidate.identifier,
+      MAX_ATTACHMENT_IDENTIFIER_CHARS
+    )
+    const subtitle = normalizeAttachmentMetadata(
+      candidate.subtitle,
+      MAX_ATTACHMENT_SUBTITLE_CHARS
+    )
+    const resourceType = normalizeAttachmentMetadata(
+      candidate.resourceType,
+      MAX_ATTACHMENT_RESOURCE_TYPE_CHARS
+    )
+    seenIds.add(id)
+    items.push({
+      id,
+      title,
+      text,
+      ...(identifier ? { identifier } : {}),
+      ...(subtitle ? { subtitle } : {}),
+      ...(parsedUrl.url ? { url: parsedUrl.url } : {}),
+      ...(resourceType ? { resourceType } : {}),
+    })
+  }
+  return items
+}
+
 export function hostPluginSessionScopeKey(
   context: HostPluginSessionContext
 ): string {
   return `${context.folderId ?? "none"}:${context.conversationId ?? "draft"}:${context.sessionKey}`
 }
-
-const utf8Encoder = new TextEncoder()
 
 export function validatePluginComposerInsertPayload(payload: unknown): string {
   if (

@@ -109,7 +109,11 @@
     "pluginSurfaces": "Actions des extensions",
     "morePluginSurfaces": "Autres actions des extensions",
     "pluginDetail": "Détails de l’extension",
-    "activationPanel": "Guide d’activation"
+    "activationPanel": "Guide d’activation",
+    "attachmentSearchPlaceholder": "Rechercher des éléments…",
+    "attachmentSearchEmpty": "Aucun élément correspondant trouvé.",
+    "attachmentSearchFailed": "Échec de la recherche dans la source de pièces jointes.",
+    "removeAttachment": "Retirer {name}"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",

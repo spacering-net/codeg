@@ -109,7 +109,11 @@
     "pluginSurfaces": "插件入口",
     "morePluginSurfaces": "更多插件入口",
     "pluginDetail": "插件详情",
-    "activationPanel": "启用引导"
+    "activationPanel": "启用引导",
+    "attachmentSearchPlaceholder": "搜索条目…",
+    "attachmentSearchEmpty": "未找到匹配的条目。",
+    "attachmentSearchFailed": "搜索附件源失败。",
+    "removeAttachment": "移除 {name}"
   },
   "AppearanceSettings": {
     "sectionTitle": "主题外观",

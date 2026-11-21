@@ -109,7 +109,11 @@
     "pluginSurfaces": "Plugin-Aktionen",
     "morePluginSurfaces": "Weitere Plugin-Aktionen",
     "pluginDetail": "Plugin-Details",
-    "activationPanel": "Aktivierungsanleitung"
+    "activationPanel": "Aktivierungsanleitung",
+    "attachmentSearchPlaceholder": "Einträge suchen…",
+    "attachmentSearchEmpty": "Keine passenden Einträge gefunden.",
+    "attachmentSearchFailed": "Fehler beim Durchsuchen der Anhangsquelle.",
+    "removeAttachment": "{name} entfernen"
   },
   "AppearanceSettings": {
     "sectionTitle": "Design-Erscheinungsbild",
