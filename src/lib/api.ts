@@ -2744,7 +2744,7 @@ export async function gitWorktreeAdd(
       allowPluginDestination: true,
     }
   )
-  return typeof destination === "string" && destination.trim()
+  return typeof destination === "string" && destination.length > 0
     ? destination
     : null
 }

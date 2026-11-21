@@ -175,6 +175,16 @@ describe("gitWorktreeAdd API and Tauri wrappers", () => {
     await expect(
       tauriGitWorktreeAdd("/workspace/repo", "legacy", "/workspace/repo-legacy")
     ).resolves.toBeNull()
+
+    // Preserves trailing spaces in valid Unix paths verbatim
+    h.transportCall.mockResolvedValueOnce("/plugins/worktrees/trailing ")
+    await expect(
+      apiGitWorktreeAdd(
+        "/workspace/repo",
+        "feat-space",
+        "/workspace/repo-space"
+      )
+    ).resolves.toBe("/plugins/worktrees/trailing ")
   })
 })
 
@@ -301,6 +311,46 @@ describe("BranchDropdown worktree creation with worktree.create.before placement
       expect(h.openNewConversationTab).toHaveBeenCalledWith(
         89,
         "/workspace/requested-legacy-wt"
+      )
+    })
+  })
+
+  it("preserves trailing spaces in plugin-returned worktree destinations byte-for-byte", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    const { branchInput, pathInput } = await openNewWorktreeDialog(user)
+
+    await user.clear(branchInput)
+    await user.type(branchInput, "feat/trailing-space")
+    await user.clear(pathInput)
+    await user.type(pathInput, "/workspace/requested-wt")
+
+    const trailingSpaceDestination = "/custom/plugin-worktrees/trailing-space "
+    const authoritativeDetailPath =
+      "/canonical/plugin-worktrees/trailing-space "
+    h.transportCall.mockImplementation(async (cmd: string) => {
+      if (cmd === "git_worktree_add") return trailingSpaceDestination
+      return null
+    })
+    h.openWorktreeFolder.mockResolvedValueOnce(
+      makeFolder({
+        id: 90,
+        parent_id: 7,
+        name: "trailing-space ",
+        path: authoritativeDetailPath,
+        git_branch: "feat/trailing-space",
+      })
+    )
+
+    await user.click(screen.getByRole("button", { name: "create" }))
+
+    await waitFor(() => {
+      expect(h.openWorktreeFolder).toHaveBeenCalledWith(
+        trailingSpaceDestination,
+        7
+      )
+      expect(h.openNewConversationTab).toHaveBeenCalledWith(
+        90,
+        authoritativeDetailPath
       )
     })
   })
