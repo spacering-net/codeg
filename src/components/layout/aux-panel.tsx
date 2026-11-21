@@ -2,34 +2,25 @@
 
 import { useCallback, useEffect, useState } from "react"
 import {
-  CircleDot,
-  Folder,
-  FolderPen,
-  GitCommit,
-  GitPullRequestArrow,
-  ListTodo,
-  ReceiptText,
-  Zap,
-  type LucideIcon,
-} from "lucide-react"
-import { useTranslations } from "next-intl"
-import {
   useAuxPanelContext,
   type AuxPanelTab,
 } from "@/contexts/aux-panel-context"
 import { useActiveFolder } from "@/contexts/active-folder-context"
-import { useActiveProjectFolderId } from "@/hooks/use-active-project-folder"
 import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { usePlatform } from "@/hooks/use-platform"
 import { useTabReselect } from "@/hooks/use-tab-reselect"
 import { useZoomLevel } from "@/hooks/use-appearance"
 import { useAuxTabOrder, type AuxTabOrder } from "@/lib/aux-panel-tab-order"
-import { useFolderForgeProvider } from "@/lib/forge-provider-cache"
 import { isDesktop } from "@/lib/platform"
 import { rightChromeReserve } from "@/lib/window-chrome"
 import { cn } from "@/lib/utils"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import {
+  TAB_ICONS,
+  resolveAuxTabView,
+  useAuxTabLabel,
+} from "./aux-panel-tab-meta"
 import { AuxPanelTabRail } from "./aux-panel-tab-rail"
 import { ChromeReserve } from "./chrome-reserve"
 import { SessionDetailsTab } from "./aux-panel-session-details-tab"
@@ -50,66 +41,10 @@ const LAZY_TABS: AuxPanelTab[] = [
   "pull_requests",
 ]
 
-// Icon for every aux tab. The desktop rail and the mobile tab row both map the
-// stored order (see `aux-panel-tab-order.ts`) over these, so the two surfaces
-// can never drift.
-// The work tabs wear the left sidebar's own glyphs for the same pages
-// (automations, to-dos) and the repository panel's state glyphs for an open
-// issue and an open pull request.
-const TAB_ICONS: Record<AuxPanelTab, LucideIcon> = {
-  session_details: ReceiptText,
-  file_tree: Folder,
-  changes: FolderPen,
-  git_log: GitCommit,
-  automations: Zap,
-  tasks: ListTodo,
-  issues: CircleDot,
-  pull_requests: GitPullRequestArrow,
-}
-// The three folder-content tabs share one label namespace (Folder.auxPanel.tabs);
-// session details resolves from its own (Folder.sessionDetails.menuLabel), and
-// the work tabs are named exactly as the pages they mirror. The value type is
-// the literal key union so next-intl's typed `t()` accepts it.
-const FOLDER_TAB_LABEL_KEY: Record<
-  "file_tree" | "changes" | "git_log",
-  "files" | "changes" | "commits"
-> = {
-  file_tree: "files",
-  changes: "changes",
-  git_log: "commits",
-}
-
 /** What the tab switchers list while the folder tabs are hidden. */
 const SESSION_DETAILS_ONLY: AuxTabOrder = ["session_details"]
 
-/**
- * Decide which aux-panel tabs are available and which to actually show.
- *
- * The folder-scoped tabs (files/changes/commits, and the project's automations,
- * tasks, issues and pull requests) only make sense with a real folder
- * workspace open, so chat sessions and the folderless state collapse to just
- * the Session Details tab. `effectiveTab` keeps the rendered selection
- * valid even when the stored `activeTab` is a now-hidden folder tab, avoiding a
- * one-frame flash before the reconciling effect corrects the stored value.
- */
-export function resolveAuxTabView(
-  activeTab: AuxPanelTab,
-  activeFolderId: number | null,
-  isChatMode: boolean
-): { showFolderTabs: boolean; effectiveTab: AuxPanelTab } {
-  const showFolderTabs = activeFolderId != null && !isChatMode
-  return {
-    showFolderTabs,
-    effectiveTab: showFolderTabs ? activeTab : "session_details",
-  }
-}
-
 export function AuxPanel() {
-  const t = useTranslations("Folder.auxPanel.tabs")
-  const tDetails = useTranslations("Folder.sessionDetails")
-  const tAutomations = useTranslations("Automations")
-  const tTasks = useTranslations("Tasks")
-  const tForge = useTranslations("Forge")
   const { isOpen, activeTab, setActiveTab, setOpen } = useAuxPanelContext()
   const { activeFolderId } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
@@ -126,13 +61,10 @@ export function AuxPanel() {
     activeFolderId,
     isChatMode
   )
-  // GitLab calls them merge requests, GitHub and Gitea pull requests: the tab
-  // is named for the forge the project's remote is on, as the repository
-  // panel's own switcher is. Looked up only while the tab is on the rail.
-  const projectFolderId = useActiveProjectFolderId()
-  const forgeProvider = useFolderForgeProvider(
-    isOpen && showFolderTabs ? projectFolderId : null
-  )
+  // The tab names, and the forge lookup behind the change-request tab, come
+  // from the shared meta — see `useAuxTabLabel`. Looked up only while a tab
+  // switcher that lists the work tabs is rendered.
+  const tabLabel = useAuxTabLabel(isOpen && showFolderTabs)
 
   // Ensure the shown tab is mounted (covers both user clicks and programmatic changes)
   if (
@@ -169,30 +101,6 @@ export function AuxPanel() {
   // before it can run underneath.
   const winLinuxControls = isDesktop() && (isWindows || isLinux)
   const rightReserve = rightChromeReserve(winLinuxControls, zoomLevel)
-
-  const tabLabel = useCallback(
-    (tab: AuxPanelTab) => {
-      switch (tab) {
-        case "session_details":
-          return tDetails("menuLabel")
-        case "automations":
-          return tAutomations("title")
-        case "tasks":
-          return tTasks("title")
-        case "issues":
-          return tForge("tabIssues")
-        case "pull_requests":
-          return tForge(
-            forgeProvider === "gitlab" || forgeProvider === "cnb"
-              ? "tabMrs"
-              : "tabPrs"
-          )
-        default:
-          return t(FOLDER_TAB_LABEL_KEY[tab])
-      }
-    },
-    [t, tDetails, tAutomations, tTasks, tForge, forgeProvider]
-  )
 
   const shownTabs = showFolderTabs ? tabOrder : SESSION_DETAILS_ONLY
 

@@ -32,7 +32,10 @@ import { cn } from "@/lib/utils"
 // and an icon rail would have to undo nearly every class. The primitives keep
 // what matters — the Tabs context, roving focus, and the trigger ids each
 // panel's `aria-labelledby` points at.
-const TRIGGER_CLASS = cn(
+// Shared with the collapsed rail (see `aux-panel-collapsed-rail.tsx`): the two
+// switchers must paint the same icons the same way, whatever mechanism moves
+// the panel.
+export const TRIGGER_CLASS = cn(
   "flex size-8 items-center justify-center rounded-lg text-muted-foreground outline-none transition-colors",
   "hover:bg-foreground/[0.06] hover:text-foreground",
   "focus-visible:ring-2 focus-visible:ring-ring/50",
