@@ -83,6 +83,27 @@ contribution `id`, the app `locale` and, for a workspace panel, `folderId`.
 plugin and connected host. `input` and the result use JSON. Codeg disconnects
 the message port when the contribution closes or is disabled.
 
+## Persist plugin settings
+
+Declare `settings` with a positive integer `version`, a JSON Schema whose root
+has `type: "object"`, and a `defaults` object that satisfies that schema. Codeg
+keeps one value per installed plugin on the connected host. Values may contain
+up to 16 KiB of JSON. Schema references resolve within the supplied schema.
+
+`await window.codeg.settings.read()` gives `{ version, revision, value }`.
+Save an edited copy with `await window.codeg.settings.save(revision, value)`.
+If another client saved first, read the latest revision and apply the edit to
+that value. Server methods get the active settings as the third argument to
+`handle(method, input, settings)`.
+
+Increase `settings.version` when changing the shape. When the stored value
+satisfies the new schema, Codeg can keep it directly. To transform an older
+value, declare `settings.migrate: true` and handle `settings.migrate` in the
+server entry. The method receives `{ fromVersion, toVersion, value }`. Return
+the replacement settings object. Codeg calls the migration when the user
+enables the update, then validates and stores the result together with
+enablement. If it fails, the original value stays available for a later retry.
+
 ## Install from a source
 
 **Settings → Plugins → Add Plugin** accepts these public sources:

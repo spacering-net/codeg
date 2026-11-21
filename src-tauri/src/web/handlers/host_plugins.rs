@@ -8,7 +8,8 @@ use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::host_plugins::source::Registry;
 use crate::host_plugins::{
-    ExpectedPlugin, InstallPreview, InstalledPlugin, Mutation, PluginUpdate, TurnActivity,
+    ExpectedPlugin, InstallPreview, InstalledPlugin, Mutation, PluginSettings, PluginUpdate,
+    SettingsRequest, TurnActivity,
 };
 
 #[derive(Deserialize)]
@@ -58,6 +59,13 @@ pub struct ClientHtmlParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SettingsParams {
+    plugin_id: String,
+    request: SettingsRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateParams {
     plugin_id: String,
 }
@@ -78,7 +86,21 @@ pub async fn apply(
     Json(params): Json<ApplyParams>,
 ) -> Result<Json<Vec<InstalledPlugin>>, AppCommandError> {
     crate::commands::host_plugins::apply_core(&state.host_plugins, &state.emitter, params.mutation)
+        .await
         .map(Json)
+}
+
+pub async fn settings(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SettingsParams>,
+) -> Result<Json<PluginSettings>, AppCommandError> {
+    crate::commands::host_plugins::settings_core(
+        &state.host_plugins,
+        params.plugin_id,
+        params.request,
+    )
+    .await
+    .map(Json)
 }
 
 pub async fn activity(

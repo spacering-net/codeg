@@ -1,21 +1,51 @@
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::app_error::AppCommandError;
 use crate::host_plugins::source::{self, PluginIndex, Registry};
 use crate::host_plugins::{
-    ExpectedPlugin, HostPlugins, InstallPreview, InstalledPlugin, Mutation, PluginUpdate,
-    CATALOG_CHANGED,
+    ExpectedPlugin, HostPlugins, InstallPreview, InstalledPlugin, Mutation, PluginSettings,
+    PluginUpdate, SettingsRequest, CATALOG_CHANGED,
 };
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
-pub fn apply_core(
-    plugins: &HostPlugins,
+pub async fn apply_core(
+    plugins: &Arc<HostPlugins>,
     emitter: &EventEmitter,
     mutation: Mutation,
 ) -> Result<Vec<InstalledPlugin>, AppCommandError> {
-    let catalog = plugins.apply(mutation)?;
+    let plugins = plugins.clone();
+    let catalog = tokio::task::spawn_blocking(move || plugins.apply(mutation))
+        .await
+        .map_err(|_| {
+            AppCommandError::new(
+                crate::app_error::AppErrorCode::TaskExecutionFailed,
+                "Plugin catalog update stopped",
+            )
+        })??;
     emit_event(emitter, CATALOG_CHANGED, ());
     Ok(catalog)
+}
+
+pub async fn settings_core(
+    plugins: &Arc<HostPlugins>,
+    plugin_id: String,
+    request: SettingsRequest,
+) -> Result<PluginSettings, AppCommandError> {
+    let plugins = plugins.clone();
+    tokio::task::spawn_blocking(move || match request {
+        SettingsRequest::Read => plugins.settings(&plugin_id),
+        SettingsRequest::Save { revision, value } => {
+            plugins.save_settings(&plugin_id, revision, value)
+        }
+    })
+    .await
+    .map_err(|_| {
+        AppCommandError::new(
+            crate::app_error::AppErrorCode::TaskExecutionFailed,
+            "Plugin settings operation stopped",
+        )
+    })?
 }
 
 pub async fn install_source_core(
@@ -65,9 +95,6 @@ pub async fn fetch_index_core(url: &str) -> Result<PluginIndex, AppCommandError>
 }
 
 #[cfg(feature = "tauri-runtime")]
-use std::sync::Arc;
-
-#[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn host_plugins_list(
     plugins: tauri::State<'_, Arc<HostPlugins>>,
@@ -82,7 +109,17 @@ pub async fn host_plugins_apply(
     plugins: tauri::State<'_, Arc<HostPlugins>>,
     mutation: Mutation,
 ) -> Result<Vec<InstalledPlugin>, AppCommandError> {
-    apply_core(&plugins, &EventEmitter::from_app(&app), mutation)
+    apply_core(&plugins, &EventEmitter::from_app(&app), mutation).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn host_plugins_settings(
+    plugins: tauri::State<'_, Arc<HostPlugins>>,
+    plugin_id: String,
+    request: SettingsRequest,
+) -> Result<PluginSettings, AppCommandError> {
+    settings_core(&plugins, plugin_id, request).await
 }
 
 #[cfg(feature = "tauri-runtime")]

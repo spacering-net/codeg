@@ -61,9 +61,9 @@ function buildDocument(html: string, key: string): string {
     setTimeout(() => clearInterval(interval), ${CLIENT_TIMEOUT_MS});
     announce();
   });
-  const call = async (method, input = null) => {
+  const request = async (operation, input) => {
     await ready;
-    if (typeof method !== "string" || pending.size >= ${MAX_PENDING_CALLS}) {
+    if (pending.size >= ${MAX_PENDING_CALLS}) {
       throw new Error("Invalid or busy plugin method");
     }
     return new Promise((resolve, reject) => {
@@ -76,11 +76,16 @@ function buildDocument(html: string, key: string): string {
         resolve: value => { clearTimeout(timeout); resolve(value); },
         reject: error => { clearTimeout(timeout); reject(error); },
       });
-      try { port.postMessage({ id, method, json: JSON.stringify(input) }); }
+      try { port.postMessage({ id, operation, json: JSON.stringify(input) }); }
       catch (error) { pending.get(id).reject(error); pending.delete(id); }
     });
   };
-  Object.defineProperty(window, "codeg", { value: Object.freeze({ ready, call }) });
+  const call = (method, input = null) => request("call", { method, input });
+  const settings = Object.freeze({
+    read: () => request("settings", { type: "read" }),
+    save: (revision, value) => request("settings", { type: "save", revision, value }),
+  });
+  Object.defineProperty(window, "codeg", { value: Object.freeze({ ready, call, settings }) });
 })();
 </script>
 ${html}`
@@ -181,8 +186,7 @@ function PluginFrame({
         }
         if (
           !Number.isSafeInteger(data?.id) ||
-          typeof data.method !== "string" ||
-          data.method.length > 80 ||
+          (data.operation !== "call" && data.operation !== "settings") ||
           typeof data.json !== "string"
         )
           return
@@ -200,11 +204,13 @@ function PluginFrame({
         }
         activeCalls += 1
         try {
-          const value = await host.call<unknown>("host_plugins_call", {
+          const input: unknown = JSON.parse(data.json)
+          const value = await handleRequest(
+            host,
             pluginId,
-            method: data.method,
-            input: JSON.parse(data.json) as unknown,
-          })
+            data.operation,
+            input
+          )
           port1.postMessage({ id: requestId, ok: true, value })
         } catch (cause) {
           port1.postMessage({
@@ -240,4 +246,33 @@ function PluginFrame({
       className="block h-80 w-full rounded-md border"
     />
   )
+}
+
+function handleRequest(
+  host: Transport,
+  pluginId: string,
+  operation: "call" | "settings",
+  payload: unknown
+) {
+  if (operation === "settings") {
+    return host.call<unknown>("host_plugins_settings", {
+      pluginId,
+      request: payload,
+    })
+  }
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    !("method" in payload) ||
+    typeof payload.method !== "string" ||
+    payload.method.length > 80 ||
+    !("input" in payload)
+  ) {
+    throw new Error("Invalid plugin method")
+  }
+  return host.call<unknown>("host_plugins_call", {
+    pluginId,
+    method: payload.method,
+    input: payload.input,
+  })
 }

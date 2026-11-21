@@ -5,6 +5,18 @@
   "version": "1.0.0",
   "server": { "entry": "inspector.mjs", "methods": ["describe"] },
   "client": { "entry": "inspector.html" },
+  "settings": {
+    "version": 1,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "label": { "type": "string", "minLength": 1, "maxLength": 50 }
+      },
+      "required": ["label"],
+      "additionalProperties": false
+    },
+    "defaults": { "label": "Workspace" }
+  },
   "contributes": {
     "workspacePanels": [
       { "id": "inspect", "title": "Workspace Inspector", "view": "client" }
