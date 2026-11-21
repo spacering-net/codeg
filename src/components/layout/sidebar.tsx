@@ -20,11 +20,12 @@ import {
   Map as MapIcon,
   Menu,
   MessagesSquare,
+  Puzzle,
   SquarePen,
   Zap,
   type LucideIcon,
 } from "lucide-react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions } from "@/contexts/tab-context"
@@ -97,6 +98,11 @@ import {
   SidebarTagFilterSubmenu,
 } from "@/components/conversations/sidebar-tag-filter"
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
+import {
+  selectPluginSidebarItems,
+  useHostPlugins,
+  type PluginSidebarItemPlacement,
+} from "@/lib/host-plugins"
 import { cn } from "@/lib/utils"
 
 // Keyboard-shortcut hint at the trailing edge of the New chat row.
@@ -142,22 +148,27 @@ const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
 function SidebarNavButton({
   icon: Icon,
   label,
+  tooltip,
   onClick,
   active,
   trailing,
+  placement,
 }: {
   icon: LucideIcon
   label: string
+  tooltip?: string
   onClick: () => void
   active?: boolean
   trailing?: ReactNode
+  placement?: PluginSidebarItemPlacement
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      title={label}
+      title={tooltip ?? label}
       aria-current={active ? "page" : undefined}
+      data-sidebar-placement={placement}
       className={cn(
         "group flex h-8 w-full items-center gap-[0.4375rem] rounded-full pl-[0.4375rem] pr-1.5",
         "text-[0.875rem] text-sidebar-foreground outline-none",
@@ -175,13 +186,29 @@ function SidebarNavButton({
 
 export function Sidebar() {
   const t = useTranslations("Folder.sidebar")
+  const locale = useLocale()
   const { isOpen, toggle } = useSidebarContext()
   const { activeFolder } = useActiveFolder()
   const { openNewConversationTab, openChatModeTab } = useTabActions()
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
   const { updatesCount: harnessUpdates } = useHarnessView()
-  const { routeId, setRoute, openConversations } = useWorkbenchRoute()
+  const {
+    routeId,
+    setRoute,
+    openConversations,
+    pluginScreen,
+    openPluginScreen,
+  } = useWorkbenchRoute()
+  const { data: hostPlugins } = useHostPlugins()
+  const headerPluginItems = useMemo(
+    () => selectPluginSidebarItems(hostPlugins, "header", locale),
+    [hostPlugins, locale]
+  )
+  const footerPluginItems = useMemo(
+    () => selectPluginSidebarItems(hostPlugins, "footer", locale),
+    [hostPlugins, locale]
+  )
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
   const { zoomLevel } = useZoomLevel()
@@ -689,6 +716,40 @@ export function Sidebar() {
             }
           />
         )}
+        {headerPluginItems.length > 0 && (
+          <div
+            data-testid="sidebar-plugin-header"
+            className="flex max-h-40 shrink-0 flex-col gap-0.5 overflow-y-auto"
+          >
+            {headerPluginItems.map((item) => {
+              const isActive =
+                routeId === "pluginScreen" &&
+                pluginScreen?.pluginId === item.pluginId &&
+                pluginScreen?.screenId === item.screenId
+              return (
+                <SidebarNavButton
+                  key={item.key}
+                  icon={Puzzle}
+                  label={item.title}
+                  tooltip={`${item.pluginName} · ${item.title}`}
+                  active={isActive}
+                  placement="header"
+                  onClick={() => {
+                    if (isMobile) toggle()
+                    if (openPluginScreen) {
+                      openPluginScreen({
+                        pluginId: item.pluginId,
+                        screenId: item.screenId,
+                      })
+                    } else {
+                      setRoute("pluginScreen")
+                    }
+                  }}
+                />
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {/* On mobile, clicking a conversation card auto-closes the Drawer */}
@@ -716,6 +777,41 @@ export function Sidebar() {
           tagFilter={tagFilter}
         />
       </div>
+
+      {footerPluginItems.length > 0 && (
+        <div
+          data-testid="sidebar-plugin-footer"
+          className="flex max-h-40 shrink-0 flex-col gap-0.5 overflow-y-auto border-t border-border/50 ws-chrome-border px-1.5 py-1.5"
+        >
+          {footerPluginItems.map((item) => {
+            const isActive =
+              routeId === "pluginScreen" &&
+              pluginScreen?.pluginId === item.pluginId &&
+              pluginScreen?.screenId === item.screenId
+            return (
+              <SidebarNavButton
+                key={item.key}
+                icon={Puzzle}
+                label={item.title}
+                tooltip={`${item.pluginName} · ${item.title}`}
+                active={isActive}
+                placement="footer"
+                onClick={() => {
+                  if (isMobile) toggle()
+                  if (openPluginScreen) {
+                    openPluginScreen({
+                      pluginId: item.pluginId,
+                      screenId: item.screenId,
+                    })
+                  } else {
+                    setRoute("pluginScreen")
+                  }
+                }}
+              />
+            )
+          })}
+        </div>
+      )}
     </aside>
   )
 }
