@@ -37,9 +37,22 @@ export type AgentType = BuiltinAgentType | (string & {})
 /** Wire prefix marking a custom (user-registered) ACP agent. */
 export const CUSTOM_AGENT_PREFIX = "custom:"
 
+/** Wire prefix marking a host-plugin-provided ACP agent (`custom:@plugin-<64 lowercase hex>`). */
+export const PLUGIN_PROVIDER_AGENT_PREFIX = "custom:@plugin-"
+
+const PLUGIN_PROVIDER_AGENT_RE = /^custom:@plugin-[0-9a-f]{64}$/
+
 /** True for a user-registered ACP agent. */
 export function isCustomAgentType(agentType: AgentType): boolean {
   return agentType.startsWith(CUSTOM_AGENT_PREFIX)
+}
+
+/**
+ * True for an ACP agent registered at runtime by an enabled host plugin
+ * (mirrors Rust's `is_plugin_provider_id`).
+ */
+export function isPluginProviderAgentType(agentType: AgentType): boolean {
+  return PLUGIN_PROVIDER_AGENT_RE.test(agentType)
 }
 
 /** The registry id behind `custom:<id>`, or `null` for a built-in. */

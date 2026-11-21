@@ -1986,6 +1986,9 @@
     "customAgentRemoveWithData": "記録された会話履歴も削除する",
     "customAgentRemoved": "{name} を削除しました",
     "customAgentBadge": "カスタム",
+    "pluginAgentBadge": "プラグイン",
+    "pluginAgentManagedTitle": "ホストプラグインで管理",
+    "pluginAgentManagedHint": "このエージェントは有効なホストプラグインによって提供されています。「プラグイン」設定から有効化、無効化、更新、またはアンインストールしてください。",
     "customAgentNotLaunchable": "この環境では起動できません: {reason}",
     "zcode": {
       "adapterInfo": "Codeg は {adapterPackage} を ACP ブリッジとして起動します。先に公式 ZCode をインストールしてログインしてください。既存の実行環境と設定を使用します。",

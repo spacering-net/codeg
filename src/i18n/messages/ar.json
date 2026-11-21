@@ -1986,6 +1986,9 @@
     "customAgentRemoveWithData": "حذف سجل المحادثات المسجل أيضًا",
     "customAgentRemoved": "تمت إزالة {name}",
     "customAgentBadge": "مخصص",
+    "pluginAgentBadge": "إضافة",
+    "pluginAgentManagedTitle": "مُدار بواسطة إضافة المضيف",
+    "pluginAgentManagedHint": "يُوفَّر هذا الوكيل من خلال إضافة مضيف مفعَّلة. قم بتفعيلها أو تعطيلها أو تحديثها أو إزالتها من إعدادات الإضافات.",
     "customAgentNotLaunchable": "لا يمكن تشغيل هذا الوكيل هنا: {reason}",
     "zcode": {
       "adapterInfo": "يشغّل Codeg الحزمة {adapterPackage} كجسر ACP. ثبّت ZCode الرسمي وسجّل الدخول أولاً؛ يستخدم بيئته وإعداداته الحالية.",

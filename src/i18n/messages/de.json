@@ -1986,6 +1986,9 @@
     "customAgentRemoveWithData": "Auch den aufgezeichneten Gesprächsverlauf löschen",
     "customAgentRemoved": "{name} entfernt",
     "customAgentBadge": "Eigen",
+    "pluginAgentBadge": "Plugin",
+    "pluginAgentManagedTitle": "Über Host-Plugin verwaltet",
+    "pluginAgentManagedHint": "Dieser Agent wird von einem aktivierten Host-Plugin bereitgestellt. Aktiviere, deaktiviere, aktualisiere oder deinstalliere ihn in den Plugin-Einstellungen.",
     "customAgentNotLaunchable": "Dieser Agent kann hier nicht gestartet werden: {reason}",
     "zcode": {
       "adapterInfo": "Codeg startet {adapterPackage} als ACP-Brücke. Installiere zuerst ZCode und melde dich an; die vorhandene Laufzeit und Konfiguration werden verwendet.",

@@ -1986,6 +1986,9 @@
     "customAgentRemoveWithData": "Excluir também o histórico de conversas registrado",
     "customAgentRemoved": "{name} removido",
     "customAgentBadge": "Personalizado",
+    "pluginAgentBadge": "Plugin",
+    "pluginAgentManagedTitle": "Gerenciado por plugin do host",
+    "pluginAgentManagedHint": "Este agente é fornecido por um plugin do host ativado. Ative, desative, atualize ou desinstale-o nas configurações de Plugins.",
     "customAgentNotLaunchable": "Este agente não pode ser iniciado aqui: {reason}",
     "zcode": {
       "adapterInfo": "O Codeg executa {adapterPackage} como ponte ACP. Instale o ZCode e entre na sua conta primeiro; são usados o ambiente e a configuração existentes.",

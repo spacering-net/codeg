@@ -19,8 +19,10 @@
 import {
   AGENT_COLORS,
   AGENT_LABELS,
+  PLUGIN_PROVIDER_AGENT_PREFIX,
   customAgentId,
   isCustomAgentType,
+  isPluginProviderAgentType,
   type AgentType,
   type BuiltinAgentType,
 } from "@/lib/types"
@@ -259,4 +261,9 @@ function classifyMonoSvg(base64: string): boolean {
   return allBlack || allWhite
 }
 
-export { isCustomAgentType, customAgentId }
+export {
+  PLUGIN_PROVIDER_AGENT_PREFIX,
+  isCustomAgentType,
+  isPluginProviderAgentType,
+  customAgentId,
+}

@@ -1986,6 +1986,9 @@
     "customAgentRemoveWithData": "Supprimer aussi l'historique de conversation enregistré",
     "customAgentRemoved": "{name} supprimé",
     "customAgentBadge": "Personnalisé",
+    "pluginAgentBadge": "Extension",
+    "pluginAgentManagedTitle": "Géré par une extension hôte",
+    "pluginAgentManagedHint": "Cet agent est fourni par une extension hôte activée. Activez-le, désactivez-le, mettez-le à jour ou désinstallez-le depuis les paramètres des extensions.",
     "customAgentNotLaunchable": "Cet agent ne peut pas démarrer ici : {reason}",
     "zcode": {
       "adapterInfo": "Codeg exécute {adapterPackage} comme passerelle ACP. Installez ZCode et connectez-vous d’abord ; son environnement et sa configuration existants sont utilisés.",

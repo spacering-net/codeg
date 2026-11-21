@@ -1986,6 +1986,9 @@
     "customAgentRemoveWithData": "同时删除已记录的会话历史",
     "customAgentRemoved": "已移除 {name}",
     "customAgentBadge": "自定义",
+    "pluginAgentBadge": "插件",
+    "pluginAgentManagedTitle": "由宿主插件管理",
+    "pluginAgentManagedHint": "此智能体由已启用的宿主插件提供，请在「插件」设置中启用、停用、更新或卸载。",
     "customAgentNotLaunchable": "该智能体在此环境无法启动：{reason}",
     "zcode": {
       "adapterInfo": "Codeg 通过 {adapterPackage} 桥接 ACP。请先安装并登录官方 ZCode；桥接器使用其运行时和现有配置。",

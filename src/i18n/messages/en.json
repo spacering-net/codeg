@@ -1986,6 +1986,9 @@
     "customAgentRemoveWithData": "Also delete its recorded conversation history",
     "customAgentRemoved": "Removed {name}",
     "customAgentBadge": "Custom",
+    "pluginAgentBadge": "Plugin",
+    "pluginAgentManagedTitle": "Managed by host plugin",
+    "pluginAgentManagedHint": "This agent is provided by an enabled host plugin. Enable, disable, update, or uninstall it from Plugins settings.",
     "customAgentNotLaunchable": "This agent cannot launch here: {reason}",
     "zcode": {
       "adapterInfo": "Codeg runs {adapterPackage} as an ACP bridge. Install and sign in to official ZCode first; the bridge uses its runtime and existing configuration.",
