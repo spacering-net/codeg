@@ -34,7 +34,9 @@ import { Loader2 } from "lucide-react"
 
 import { ComposerDockStrip } from "@/components/chat/composer-dock-strip"
 import { SessionFailureBanner } from "@/components/chat/session-failure-banner"
+import { PluginInputActivitiesStrip } from "@/components/plugins/plugin-composer-actions"
 import type { ClaudeApiRetryState } from "@/contexts/acp-connections-context"
+import type { HostPluginSessionContext } from "@/lib/host-plugins"
 import type { ConnectionStatus, SessionFailureRecord } from "@/lib/types"
 
 const NO_FAILURES: SessionFailureRecord[] = []
@@ -45,6 +47,9 @@ export interface ComposerStatusStripsProps {
   claudeApiRetry: ClaudeApiRetryState | null
   sessionFailures?: SessionFailureRecord[]
   onSessionFailureDismiss?: (ids: string[]) => void
+  /** Host plugin session context for `contributes.inputActivities`; omitted elsewhere. */
+  pluginContext?: HostPluginSessionContext | null
+  pluginSlotEnabled?: boolean
 }
 
 export function ComposerStatusStrips({
@@ -52,10 +57,19 @@ export function ComposerStatusStrips({
   claudeApiRetry,
   sessionFailures = NO_FAILURES,
   onSessionFailureDismiss,
+  pluginContext = null,
+  pluginSlotEnabled = true,
 }: ComposerStatusStripsProps) {
   const retryLineText = useRetryLineText(claudeApiRetry)
   return (
     <>
+      {pluginContext && (
+        <PluginInputActivitiesStrip
+          sessionContext={pluginContext}
+          enabled={pluginSlotEnabled}
+        />
+      )}
+
       {sessionFailures.length > 0 && (
         <SessionFailureBanner
           failures={sessionFailures}

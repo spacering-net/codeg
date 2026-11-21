@@ -109,7 +109,11 @@
     "pluginSurfaces": "إجراءات الإضافات",
     "morePluginSurfaces": "مزيد من إجراءات الإضافات",
     "pluginDetail": "تفاصيل الإضافة",
-    "activationPanel": "دليل التفعيل"
+    "activationPanel": "دليل التفعيل",
+    "composerActionFailed": "فشل إجراء الإضافة.",
+    "composerWorkspaceRequired": "افتح مجلد مساحة عمل لاستخدام لوحة الإضافة هذه.",
+    "composerPills": "إجراءات الإضافة في المحرر",
+    "sessionActions": "إجراءات الجلسة للإضافة"
   },
   "AppearanceSettings": {
     "sectionTitle": "مظهر السمة",

@@ -109,7 +109,11 @@
     "pluginSurfaces": "Acciones de complementos",
     "morePluginSurfaces": "Más acciones de complementos",
     "pluginDetail": "Detalles del complemento",
-    "activationPanel": "Guía de activación"
+    "activationPanel": "Guía de activación",
+    "composerActionFailed": "Error en la acción del complemento.",
+    "composerWorkspaceRequired": "Abre una carpeta de espacio de trabajo para usar este panel del complemento.",
+    "composerPills": "Acciones de complemento en el editor",
+    "sessionActions": "Acciones de sesión del complemento"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apariencia del tema",

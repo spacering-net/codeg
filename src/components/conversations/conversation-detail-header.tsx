@@ -64,6 +64,7 @@ import {
 import { SessionDetailsDialog } from "./session-details-dialog"
 import { ConversationHeaderTags } from "./conversation-tag-picker"
 import { HostPluginSlot } from "@/components/host-plugin-slot"
+import { usePluginSessionActions } from "@/components/plugins/plugin-composer-actions"
 import { useIsMobile } from "@/hooks/use-mobile"
 import type { HostPluginSessionContext } from "@/lib/host-plugins"
 
@@ -275,6 +276,11 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     setDetails(resolved)
   }, [conversationId, runtimeConversationId, runtimeId])
 
+  const pluginSessionActions = usePluginSessionActions({
+    sessionContext: pluginSessionContext,
+    tabId,
+  })
+
   return (
     // Transparent (no surface class): the title header reads as part of the
     // message canvas below it rather than as a frosted chrome band. With a
@@ -383,10 +389,12 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
               <Trash2 className="h-4 w-4" />
               {t("delete")}
             </DropdownMenuItem>
+            {pluginSessionActions.menuItems}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
 
+      {pluginSessionActions.surfaceDialog}
       <Dialog
         open={renameTarget != null}
         onOpenChange={(o) => {

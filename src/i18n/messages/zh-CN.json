@@ -109,7 +109,11 @@
     "pluginSurfaces": "插件入口",
     "morePluginSurfaces": "更多插件入口",
     "pluginDetail": "插件详情",
-    "activationPanel": "启用引导"
+    "activationPanel": "启用引导",
+    "composerActionFailed": "插件操作失败。",
+    "composerWorkspaceRequired": "请先打开一个工作区文件夹以使用该插件面板。",
+    "composerPills": "插件输入框操作",
+    "sessionActions": "插件会话操作"
   },
   "AppearanceSettings": {
     "sectionTitle": "主题外观",

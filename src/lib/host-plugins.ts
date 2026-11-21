@@ -1,6 +1,14 @@
 "use client"
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import {
   parsePluginThemePalette,
   type PluginThemePalette,
@@ -12,8 +20,173 @@ export type PluginTextTranslations = Record<string, string>
 
 export const MAX_PLUGIN_SCREENS = 16
 export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
+export const MAX_PLUGIN_COMPOSER_PILLS = 16
+export const MAX_PLUGIN_SESSION_ACTIONS = 16
+export const MAX_PLUGIN_INPUT_ACTIVITIES = 8
+export const MAX_COMPOSER_PILL_MENU_ITEMS = 16
+export const MAX_INPUT_ACTIVITY_TITLE_BYTES = 256
+export const MAX_INPUT_ACTIVITY_DETAIL_BYTES = 1024
+export const MAX_COMPOSER_ACTION_NOTICE_CHARS = 512
 
 export type PluginSidebarItemPlacement = "header" | "footer"
+
+export type ComposerContributionScope = "draft" | "session" | "all"
+export type ComposerRuntimeScope = Exclude<ComposerContributionScope, "all">
+
+export type ComposerPillLeafAction =
+  | { kind: "openWorkspacePanel"; panelId: string }
+  | { kind: "openClientSurface"; surfaceId: string }
+  | { kind: "openScreen"; screenId: string }
+  | { kind: "callMethod"; method: string }
+  | {
+      kind: "insertText"
+      text: string
+      textTranslations?: PluginTextTranslations
+    }
+
+export type ResolvedComposerPillLeafAction =
+  | { kind: "openWorkspacePanel"; panelId: string }
+  | {
+      kind: "openClientSurface"
+      surfaceId: string
+      slot: PluginClientSurfaceSlot
+      surfaceTitle: string
+    }
+  | { kind: "openScreen"; screenId: string }
+  | { kind: "callMethod"; method: string }
+  | { kind: "insertText"; text: string }
+
+export interface ComposerPillMenuItem {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  action: ComposerPillLeafAction
+}
+
+export interface ResolvedComposerPillMenuItem {
+  id: string
+  title: string
+  action: ResolvedComposerPillLeafAction
+}
+
+export type ComposerPillAction =
+  | ComposerPillLeafAction
+  | { kind: "menu"; items: ComposerPillMenuItem[] }
+
+export type ResolvedComposerPillAction =
+  | ResolvedComposerPillLeafAction
+  | { kind: "menu"; items: ResolvedComposerPillMenuItem[] }
+
+export interface ComposerPillContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  label?: string
+  labelTranslations?: PluginTextTranslations
+  description?: string
+  descriptionTranslations?: PluginTextTranslations
+  scope?: ComposerContributionScope
+  action: ComposerPillAction
+}
+
+export interface ResolvedPluginComposerPill {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  label?: string
+  description?: string
+  scope: ComposerContributionScope
+  action: ResolvedComposerPillAction
+}
+
+export interface SessionActionContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  description?: string
+  descriptionTranslations?: PluginTextTranslations
+  scope?: ComposerContributionScope
+  action: ComposerPillLeafAction
+}
+
+export interface ResolvedPluginSessionAction {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  description?: string
+  scope: ComposerContributionScope
+  action: ResolvedComposerPillLeafAction
+}
+
+export interface InputActivityContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  method: string
+  scope?: ComposerContributionScope
+}
+
+export interface ResolvedPluginInputActivity {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  method: string
+  scope: ComposerContributionScope
+}
+
+export type ComposerActionInput = {
+  scope: ComposerRuntimeScope
+  folderId: number | null
+  conversationId: number | null
+  locale: string
+  itemId: string
+} & (
+  | { source: "composerPill"; menuItemId?: string }
+  | { source: "sessionAction"; menuItemId?: never }
+)
+
+export interface ComposerActionResult {
+  insertText?: string
+  notice?: string
+}
+
+export interface InputActivityInput {
+  activityId: string
+  scope: ComposerRuntimeScope
+  folderId: number | null
+  conversationId: number | null
+  locale: string
+}
+
+export type InputActivityResult = {
+  visible: boolean
+  tone?: "muted" | "warning"
+  title: string
+  detail?: string
+} | null
+
+export interface ValidatedInputActivity {
+  visible: boolean
+  tone: "muted" | "warning"
+  title: string
+  detail?: string
+}
+
+export interface ActivePluginInputActivity {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  tone: "muted" | "warning"
+  title: string
+  detail?: string
+}
 
 export interface PluginThemeContribution {
   id: string
@@ -174,6 +347,9 @@ export interface InstalledPlugin {
       themes?: PluginThemeContribution[]
       screens?: PluginScreenContribution[]
       sidebarItems?: PluginSidebarItemContribution[]
+      composerPills?: ComposerPillContribution[]
+      sessionActions?: SessionActionContribution[]
+      inputActivities?: InputActivityContribution[]
     }
   }
 }
@@ -358,6 +534,13 @@ function getReadyHostTransportSnapshot(): Transport | null {
   return safeGetTransport()
 }
 
+export function isCurrentReadyHostTransport(
+  transport: Transport | null
+): boolean {
+  if (!transport) return false
+  return getReadyHostTransportSnapshot() === transport
+}
+
 function getNullTransportSnapshot(): null {
   return null
 }
@@ -499,6 +682,18 @@ export function pluginScreenKey(pluginId: string, screenId: string) {
 
 export function pluginSidebarItemKey(pluginId: string, itemId: string) {
   return `${pluginId}:${itemId}`
+}
+
+export function pluginComposerPillKey(pluginId: string, itemId: string) {
+  return `${pluginId}:${itemId}`
+}
+
+export function pluginSessionActionKey(pluginId: string, itemId: string) {
+  return `${pluginId}:${itemId}`
+}
+
+export function pluginInputActivityKey(pluginId: string, activityId: string) {
+  return `${pluginId}:${activityId}`
 }
 
 export function resolvePluginHostScope(
@@ -819,6 +1014,744 @@ export function hostPluginSessionScopeKey(
 }
 
 const utf8Encoder = new TextEncoder()
+
+const COMPOSER_SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+const ACTIVITY_CONTROL_CHAR_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+const NOTICE_CONTROL_CHAR_RE = /[\u0000-\u001f\u007f-\u009f]+/g
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
+function normalizeAndValidateInsertText(raw: unknown): string {
+  if (typeof raw !== "string") {
+    throw new Error("Composer text must be a string")
+  }
+  const normalized = raw.replace(/\r\n?/g, "\n")
+  if (normalized.length === 0) {
+    throw new Error("Composer text must be non-empty")
+  }
+  if (normalized.includes("\0")) {
+    throw new Error("Composer text contains unsupported control characters")
+  }
+  if (
+    utf8Encoder.encode(normalized).byteLength > MAX_PLUGIN_COMPOSER_INSERT_BYTES
+  ) {
+    throw new Error("Composer text exceeds 16 KiB limit")
+  }
+  return normalized
+}
+
+function resolveOptionalLocalizedText(
+  fallback: string | undefined,
+  translations: PluginTextTranslations | undefined,
+  locale?: string
+): string | undefined {
+  if (typeof fallback !== "string") return undefined
+  const trimmed = fallback.trim()
+  if (!trimmed) return undefined
+  const resolved = resolvePluginText(trimmed, translations, locale).trim()
+  return resolved || undefined
+}
+
+function isContributionScope(
+  value: unknown
+): value is ComposerContributionScope {
+  return value === "draft" || value === "session" || value === "all"
+}
+
+function resolveLeafActionForPlugin(
+  plugin: InstalledPlugin,
+  action: ComposerPillLeafAction,
+  declaredPanelIds: ReadonlySet<string>,
+  declaredSurfacesById: ReadonlyMap<
+    string,
+    { slot: PluginClientSurfaceSlot; title: string }
+  >,
+  declaredScreenIds: ReadonlySet<string>,
+  declaredMethods: ReadonlySet<string>,
+  locale?: string
+): ResolvedComposerPillLeafAction | null {
+  if (!action || typeof action !== "object") return null
+  if (action.kind === "openWorkspacePanel") {
+    const panelId =
+      typeof action.panelId === "string" ? action.panelId.trim() : ""
+    if (!panelId || !declaredPanelIds.has(panelId)) return null
+    return { kind: "openWorkspacePanel", panelId }
+  }
+  if (action.kind === "openClientSurface") {
+    const surfaceId =
+      typeof action.surfaceId === "string" ? action.surfaceId.trim() : ""
+    const surface = surfaceId ? declaredSurfacesById.get(surfaceId) : undefined
+    if (!surface) return null
+    return {
+      kind: "openClientSurface",
+      surfaceId,
+      slot: surface.slot,
+      surfaceTitle: surface.title,
+    }
+  }
+  if (action.kind === "openScreen") {
+    const screenId =
+      typeof action.screenId === "string" ? action.screenId.trim() : ""
+    if (!screenId || !declaredScreenIds.has(screenId)) return null
+    return { kind: "openScreen", screenId }
+  }
+  if (action.kind === "callMethod") {
+    const method = typeof action.method === "string" ? action.method.trim() : ""
+    if (
+      !method ||
+      !plugin.manifest.server?.entry?.trim() ||
+      !declaredMethods.has(method)
+    ) {
+      return null
+    }
+    return { kind: "callMethod", method }
+  }
+  if (action.kind === "insertText") {
+    try {
+      const fallbackNormalized = normalizeAndValidateInsertText(action.text)
+      const localized = resolvePluginText(
+        fallbackNormalized,
+        action.textTranslations,
+        locale
+      )
+      const normalized = normalizeAndValidateInsertText(localized)
+      return { kind: "insertText", text: normalized }
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+function buildPluginTargetIndex(plugin: InstalledPlugin, locale?: string) {
+  const declaredPanelIds = new Set(
+    (plugin.manifest.contributes?.workspacePanels ?? [])
+      .map((panel) => (typeof panel.id === "string" ? panel.id.trim() : ""))
+      .filter(Boolean)
+  )
+  const hasClientEntry = Boolean(plugin.manifest.client?.entry?.trim())
+  const declaredSurfacesById = new Map<
+    string,
+    { slot: PluginClientSurfaceSlot; title: string }
+  >()
+  if (hasClientEntry) {
+    for (const surface of plugin.manifest.contributes?.clientSurfaces ?? []) {
+      const id = typeof surface.id === "string" ? surface.id.trim() : ""
+      if (!id || declaredSurfacesById.has(id)) continue
+      if (surface.slot !== "sessionHeader" && surface.slot !== "composer") {
+        continue
+      }
+      const title =
+        resolvePluginText(
+          surface.title,
+          surface.titleTranslations,
+          locale
+        ).trim() || id
+      declaredSurfacesById.set(id, { slot: surface.slot, title })
+    }
+  }
+  const declaredScreenIds = new Set(
+    hasClientEntry
+      ? resolvePluginScreensForPlugin(plugin, locale).map((screen) => screen.id)
+      : []
+  )
+  const declaredMethods = new Set(
+    plugin.manifest.server?.entry?.trim() &&
+      Array.isArray(plugin.manifest.server.methods)
+      ? plugin.manifest.server.methods
+          .map((method) => (typeof method === "string" ? method.trim() : ""))
+          .filter(Boolean)
+      : []
+  )
+  return {
+    declaredPanelIds,
+    declaredSurfacesById,
+    declaredScreenIds,
+    declaredMethods,
+  }
+}
+
+export function selectPluginComposerPills(
+  plugins: readonly InstalledPlugin[] | undefined,
+  scope: ComposerRuntimeScope,
+  locale?: string
+): ResolvedPluginComposerPill[] {
+  if (!plugins?.length) return []
+  const results: ResolvedPluginComposerPill[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled) continue
+    const pills = plugin.manifest.contributes?.composerPills
+    if (!pills?.length) continue
+    const pluginName =
+      resolvePluginText(
+        plugin.manifest.name,
+        plugin.manifest.nameTranslations,
+        locale
+      ).trim() || plugin.manifest.id
+    const {
+      declaredPanelIds,
+      declaredSurfacesById,
+      declaredScreenIds,
+      declaredMethods,
+    } = buildPluginTargetIndex(plugin, locale)
+
+    const seenIds = new Set<string>()
+    let pluginValidCount = 0
+
+    for (const pill of pills) {
+      if (pluginValidCount >= MAX_PLUGIN_COMPOSER_PILLS) break
+      if (
+        typeof pill.id !== "string" ||
+        !COMPOSER_SLUG_RE.test(pill.id) ||
+        seenIds.has(pill.id)
+      ) {
+        continue
+      }
+      const fallbackTitle =
+        typeof pill.title === "string" ? pill.title.trim() : ""
+      if (!fallbackTitle) continue
+      const title = resolvePluginText(
+        fallbackTitle,
+        pill.titleTranslations,
+        locale
+      ).trim()
+      if (!title) continue
+      const label = resolveOptionalLocalizedText(
+        pill.label,
+        pill.labelTranslations,
+        locale
+      )
+      const description = resolveOptionalLocalizedText(
+        pill.description,
+        pill.descriptionTranslations,
+        locale
+      )
+      const pillScope: ComposerContributionScope = pill.scope ?? "all"
+      if (!isContributionScope(pillScope)) continue
+
+      let resolvedAction: ResolvedComposerPillAction | null = null
+      if (pill.action && pill.action.kind === "menu") {
+        const rawItems = pill.action.items
+        if (
+          Array.isArray(rawItems) &&
+          rawItems.length >= 1 &&
+          rawItems.length <= MAX_COMPOSER_PILL_MENU_ITEMS
+        ) {
+          const seenMenuIds = new Set<string>()
+          const menuItems: ResolvedComposerPillMenuItem[] = []
+          let validMenu = true
+          for (const menuItem of rawItems) {
+            if (
+              typeof menuItem.id !== "string" ||
+              !COMPOSER_SLUG_RE.test(menuItem.id) ||
+              seenMenuIds.has(menuItem.id)
+            ) {
+              validMenu = false
+              break
+            }
+            const itemFallbackTitle =
+              typeof menuItem.title === "string" ? menuItem.title.trim() : ""
+            if (!itemFallbackTitle) {
+              validMenu = false
+              break
+            }
+            const itemTitle = resolvePluginText(
+              itemFallbackTitle,
+              menuItem.titleTranslations,
+              locale
+            ).trim()
+            if (!itemTitle) {
+              validMenu = false
+              break
+            }
+            const leaf = resolveLeafActionForPlugin(
+              plugin,
+              menuItem.action,
+              declaredPanelIds,
+              declaredSurfacesById,
+              declaredScreenIds,
+              declaredMethods,
+              locale
+            )
+            if (!leaf) {
+              validMenu = false
+              break
+            }
+            seenMenuIds.add(menuItem.id)
+            menuItems.push({ id: menuItem.id, title: itemTitle, action: leaf })
+          }
+          if (validMenu && menuItems.length > 0) {
+            resolvedAction = { kind: "menu", items: menuItems }
+          }
+        }
+      } else if (pill.action) {
+        resolvedAction = resolveLeafActionForPlugin(
+          plugin,
+          pill.action,
+          declaredPanelIds,
+          declaredSurfacesById,
+          declaredScreenIds,
+          declaredMethods,
+          locale
+        )
+      }
+
+      if (!resolvedAction) continue
+      seenIds.add(pill.id)
+      pluginValidCount += 1
+      if (pillScope !== "all" && pillScope !== scope) continue
+      results.push({
+        key: pluginComposerPillKey(plugin.manifest.id, pill.id),
+        pluginId: plugin.manifest.id,
+        pluginName,
+        id: pill.id,
+        title,
+        ...(label ? { label } : {}),
+        ...(description ? { description } : {}),
+        scope: pillScope,
+        action: resolvedAction,
+      })
+    }
+  }
+  return results
+}
+
+export function selectPluginSessionActions(
+  plugins: readonly InstalledPlugin[] | undefined,
+  scope: ComposerRuntimeScope,
+  locale?: string
+): ResolvedPluginSessionAction[] {
+  if (!plugins?.length) return []
+  const results: ResolvedPluginSessionAction[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled) continue
+    const actions = plugin.manifest.contributes?.sessionActions
+    if (!actions?.length) continue
+    const pluginName =
+      resolvePluginText(
+        plugin.manifest.name,
+        plugin.manifest.nameTranslations,
+        locale
+      ).trim() || plugin.manifest.id
+    const {
+      declaredPanelIds,
+      declaredSurfacesById,
+      declaredScreenIds,
+      declaredMethods,
+    } = buildPluginTargetIndex(plugin, locale)
+
+    const seenIds = new Set<string>()
+    let pluginValidCount = 0
+
+    for (const entry of actions) {
+      if (pluginValidCount >= MAX_PLUGIN_SESSION_ACTIONS) break
+      if (
+        typeof entry.id !== "string" ||
+        !COMPOSER_SLUG_RE.test(entry.id) ||
+        seenIds.has(entry.id)
+      ) {
+        continue
+      }
+      const fallbackTitle =
+        typeof entry.title === "string" ? entry.title.trim() : ""
+      if (!fallbackTitle) continue
+      const title = resolvePluginText(
+        fallbackTitle,
+        entry.titleTranslations,
+        locale
+      ).trim()
+      if (!title) continue
+      const description = resolveOptionalLocalizedText(
+        entry.description,
+        entry.descriptionTranslations,
+        locale
+      )
+      // Session actions default to "session".
+      const entryScope: ComposerContributionScope = entry.scope ?? "session"
+      if (!isContributionScope(entryScope)) continue
+      const resolvedAction = resolveLeafActionForPlugin(
+        plugin,
+        entry.action,
+        declaredPanelIds,
+        declaredSurfacesById,
+        declaredScreenIds,
+        declaredMethods,
+        locale
+      )
+      if (!resolvedAction) continue
+      seenIds.add(entry.id)
+      pluginValidCount += 1
+      if (entryScope !== "all" && entryScope !== scope) continue
+      results.push({
+        key: pluginSessionActionKey(plugin.manifest.id, entry.id),
+        pluginId: plugin.manifest.id,
+        pluginName,
+        id: entry.id,
+        title,
+        ...(description ? { description } : {}),
+        scope: entryScope,
+        action: resolvedAction,
+      })
+    }
+  }
+  return results
+}
+
+export function selectPluginInputActivities(
+  plugins: readonly InstalledPlugin[] | undefined,
+  scope: ComposerRuntimeScope,
+  locale?: string
+): ResolvedPluginInputActivity[] {
+  if (!plugins?.length) return []
+  const results: ResolvedPluginInputActivity[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled) continue
+    const server = plugin.manifest.server
+    if (!server?.entry?.trim() || !Array.isArray(server.methods)) continue
+    const declaredMethods = new Set(
+      server.methods
+        .map((method) => (typeof method === "string" ? method.trim() : ""))
+        .filter(Boolean)
+    )
+    if (declaredMethods.size === 0) continue
+    const activities = plugin.manifest.contributes?.inputActivities
+    if (!activities?.length) continue
+    const pluginName =
+      resolvePluginText(
+        plugin.manifest.name,
+        plugin.manifest.nameTranslations,
+        locale
+      ).trim() || plugin.manifest.id
+
+    const seenIds = new Set<string>()
+    let pluginValidCount = 0
+
+    for (const activity of activities) {
+      if (pluginValidCount >= MAX_PLUGIN_INPUT_ACTIVITIES) break
+      if (
+        typeof activity.id !== "string" ||
+        !COMPOSER_SLUG_RE.test(activity.id) ||
+        seenIds.has(activity.id)
+      ) {
+        continue
+      }
+      const fallbackTitle =
+        typeof activity.title === "string" ? activity.title.trim() : ""
+      const method =
+        typeof activity.method === "string" ? activity.method.trim() : ""
+      if (!fallbackTitle || !method || !declaredMethods.has(method)) continue
+      const title = resolvePluginText(
+        fallbackTitle,
+        activity.titleTranslations,
+        locale
+      ).trim()
+      if (!title) continue
+      const activityScope: ComposerContributionScope = activity.scope ?? "all"
+      if (!isContributionScope(activityScope)) continue
+      seenIds.add(activity.id)
+      pluginValidCount += 1
+      if (activityScope !== "all" && activityScope !== scope) continue
+      results.push({
+        key: pluginInputActivityKey(plugin.manifest.id, activity.id),
+        pluginId: plugin.manifest.id,
+        pluginName,
+        id: activity.id,
+        title,
+        method,
+        scope: activityScope,
+      })
+    }
+  }
+  return results
+}
+
+export function validateComposerActionResult(
+  raw: unknown
+): ComposerActionResult {
+  if (!isPlainObject(raw)) {
+    throw new Error("Invalid composer action result")
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== "insertText" && key !== "notice") {
+      throw new Error(`Unsupported composer action result field: ${key}`)
+    }
+  }
+  const result: ComposerActionResult = {}
+  if (raw.insertText !== undefined) {
+    result.insertText = normalizeAndValidateInsertText(raw.insertText)
+  }
+  if (raw.notice !== undefined) {
+    if (typeof raw.notice !== "string") {
+      throw new Error("Composer action notice must be a string")
+    }
+    const cleaned = raw.notice
+      .replace(NOTICE_CONTROL_CHAR_RE, " ")
+      .trim()
+      .slice(0, MAX_COMPOSER_ACTION_NOTICE_CHARS)
+      .trim()
+    if (cleaned) {
+      result.notice = cleaned
+    }
+  }
+  return result
+}
+
+export function validateInputActivityResult(
+  raw: unknown
+): ValidatedInputActivity | null {
+  if (raw === null) return null
+  if (!isPlainObject(raw)) {
+    throw new Error("Invalid input activity result")
+  }
+  for (const key of Object.keys(raw)) {
+    if (
+      key !== "visible" &&
+      key !== "tone" &&
+      key !== "title" &&
+      key !== "detail"
+    ) {
+      throw new Error(`Unsupported input activity field: ${key}`)
+    }
+  }
+  if (typeof raw.visible !== "boolean") {
+    throw new Error("Input activity visible must be boolean")
+  }
+  const tone = raw.tone ?? "muted"
+  if (tone !== "muted" && tone !== "warning") {
+    throw new Error("Input activity tone must be muted or warning")
+  }
+  if (
+    typeof raw.title !== "string" ||
+    !raw.title.trim() ||
+    ACTIVITY_CONTROL_CHAR_RE.test(raw.title) ||
+    utf8Encoder.encode(raw.title).byteLength > MAX_INPUT_ACTIVITY_TITLE_BYTES
+  ) {
+    throw new Error("Invalid input activity title")
+  }
+  let detail: string | undefined
+  if (raw.detail !== undefined) {
+    if (
+      typeof raw.detail !== "string" ||
+      ACTIVITY_CONTROL_CHAR_RE.test(raw.detail) ||
+      utf8Encoder.encode(raw.detail).byteLength >
+        MAX_INPUT_ACTIVITY_DETAIL_BYTES
+    ) {
+      throw new Error("Invalid input activity detail")
+    }
+    const trimmedDetail = raw.detail.trim()
+    if (trimmedDetail) detail = trimmedDetail
+  }
+  return {
+    visible: raw.visible,
+    tone,
+    title: raw.title.trim(),
+    ...(detail ? { detail } : {}),
+  }
+}
+
+export function usePluginInputActivities({
+  scope,
+  folderId,
+  conversationId,
+  locale,
+  enabled = true,
+}: {
+  scope: ComposerRuntimeScope
+  folderId: number | null
+  conversationId: number | null
+  locale: string
+  enabled?: boolean
+}): ActivePluginInputActivity[] {
+  const hostScope = usePluginHostScope()
+  const { data: plugins, transport } = useHostPlugins(enabled)
+  const activities = useMemo(
+    () =>
+      enabled && hostScope.transportReady && transport
+        ? selectPluginInputActivities(plugins, scope, locale)
+        : [],
+    [enabled, hostScope.transportReady, locale, plugins, scope, transport]
+  )
+
+  const contextKey = `${hostScope.scopeKey}::${scope}::${folderId ?? "none"}::${conversationId ?? "draft"}::${locale}`
+  const [snapshot, setSnapshot] = useState<{
+    transport: Transport
+    contextKey: string
+    results: Record<string, ValidatedInputActivity | null>
+  } | null>(null)
+
+  const generationRef = useRef(0)
+  const liveRef = useRef({
+    enabled,
+    transportReady: hostScope.transportReady,
+    transport,
+    contextKey,
+    activityKeys: new Set(activities.map((a) => a.key)),
+  })
+  useIsomorphicLayoutEffect(() => {
+    liveRef.current = {
+      enabled,
+      transportReady: hostScope.transportReady,
+      transport,
+      contextKey,
+      activityKeys: new Set(activities.map((a) => a.key)),
+    }
+  }, [activities, contextKey, enabled, hostScope.transportReady, transport])
+
+  useEffect(() => {
+    const generation = ++generationRef.current
+    if (
+      !enabled ||
+      !hostScope.transportReady ||
+      !transport ||
+      activities.length === 0 ||
+      typeof transport.call !== "function"
+    ) {
+      return
+    }
+    const capturedTransport = transport
+    const capturedContextKey = contextKey
+    let active = true
+
+    for (const activity of activities) {
+      const input: InputActivityInput = {
+        activityId: activity.id,
+        scope,
+        folderId,
+        conversationId,
+        locale,
+      }
+      void Promise.resolve()
+        .then(() =>
+          capturedTransport.call<unknown>("host_plugins_call", {
+            pluginId: activity.pluginId,
+            method: activity.method,
+            input,
+          })
+        )
+        .then((raw) => {
+          if (!active || generation !== generationRef.current) return
+          const live = liveRef.current
+          if (
+            !live.enabled ||
+            !live.transportReady ||
+            live.transport !== capturedTransport ||
+            live.contextKey !== capturedContextKey ||
+            !isCurrentReadyHostTransport(capturedTransport) ||
+            !live.activityKeys.has(activity.key)
+          ) {
+            return
+          }
+          const validated = validateInputActivityResult(raw)
+          setSnapshot((prev) => {
+            const base =
+              prev &&
+              prev.transport === capturedTransport &&
+              prev.contextKey === capturedContextKey
+                ? prev.results
+                : {}
+            return {
+              transport: capturedTransport,
+              contextKey: capturedContextKey,
+              results: { ...base, [activity.key]: validated },
+            }
+          })
+        })
+        .catch(() => {
+          // Malformed or failing activity calls are silently hidden.
+          if (!active || generation !== generationRef.current) return
+          const live = liveRef.current
+          if (
+            !live.enabled ||
+            !live.transportReady ||
+            live.transport !== capturedTransport ||
+            live.contextKey !== capturedContextKey ||
+            !isCurrentReadyHostTransport(capturedTransport) ||
+            !live.activityKeys.has(activity.key)
+          ) {
+            return
+          }
+          setSnapshot((prev) => {
+            const base =
+              prev &&
+              prev.transport === capturedTransport &&
+              prev.contextKey === capturedContextKey
+                ? prev.results
+                : {}
+            if (base[activity.key] === null) return prev
+            return {
+              transport: capturedTransport,
+              contextKey: capturedContextKey,
+              results: { ...base, [activity.key]: null },
+            }
+          })
+        })
+    }
+
+    return () => {
+      active = false
+      generationRef.current += 1
+    }
+  }, [
+    activities,
+    contextKey,
+    conversationId,
+    enabled,
+    folderId,
+    hostScope.transportReady,
+    locale,
+    scope,
+    transport,
+  ])
+
+  return useMemo(() => {
+    if (
+      !enabled ||
+      !hostScope.transportReady ||
+      !transport ||
+      !snapshot ||
+      snapshot.transport !== transport ||
+      snapshot.contextKey !== contextKey
+    ) {
+      return []
+    }
+    const visible: ActivePluginInputActivity[] = []
+    for (const activity of activities) {
+      const result = snapshot.results[activity.key]
+      if (result && result.visible) {
+        visible.push({
+          key: activity.key,
+          pluginId: activity.pluginId,
+          pluginName: activity.pluginName,
+          id: activity.id,
+          tone: result.tone,
+          title: result.title,
+          ...(result.detail ? { detail: result.detail } : {}),
+        })
+      }
+    }
+    return visible
+  }, [
+    activities,
+    contextKey,
+    enabled,
+    hostScope.transportReady,
+    snapshot,
+    transport,
+  ])
+}
 
 export function validatePluginComposerInsertPayload(payload: unknown): string {
   if (

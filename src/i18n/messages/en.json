@@ -109,7 +109,11 @@
     "pluginSurfaces": "Plugin actions",
     "morePluginSurfaces": "More plugin actions",
     "pluginDetail": "Plugin details",
-    "activationPanel": "Activation guide"
+    "activationPanel": "Activation guide",
+    "composerActionFailed": "Plugin action failed.",
+    "composerWorkspaceRequired": "Open a workspace folder to use this plugin panel.",
+    "composerPills": "Plugin composer actions",
+    "sessionActions": "Plugin session actions"
   },
   "AppearanceSettings": {
     "sectionTitle": "Theme Appearance",

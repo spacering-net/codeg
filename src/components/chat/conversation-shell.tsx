@@ -368,6 +368,8 @@ export function ConversationShell({
         claudeApiRetry={claudeApiRetry}
         sessionFailures={sessionFailures}
         onSessionFailureDismiss={onSessionFailureDismiss}
+        pluginContext={pluginContext}
+        pluginSlotEnabled={pluginSlotEnabled}
       />
     </div>
   )

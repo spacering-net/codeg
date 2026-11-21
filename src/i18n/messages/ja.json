@@ -109,7 +109,11 @@
     "pluginSurfaces": "プラグインアクション",
     "morePluginSurfaces": "その他のプラグインアクション",
     "pluginDetail": "プラグイン詳細",
-    "activationPanel": "有効化ガイド"
+    "activationPanel": "有効化ガイド",
+    "composerActionFailed": "プラグインアクションに失敗しました。",
+    "composerWorkspaceRequired": "このプラグインパネルを使用するにはワークスペースフォルダーを開いてください。",
+    "composerPills": "プラグイン入力アクション",
+    "sessionActions": "プラグインセッションアクション"
   },
   "AppearanceSettings": {
     "sectionTitle": "テーマ外観",

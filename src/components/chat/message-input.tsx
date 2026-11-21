@@ -150,6 +150,7 @@ import { ComposerImageThumbnails } from "@/components/chat/composer/composer-ima
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import { useComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
 import { HostPluginSlot } from "@/components/host-plugin-slot"
+import { PluginComposerPills } from "@/components/plugins/plugin-composer-actions"
 import {
   hostPluginSessionScopeKey,
   type HostPluginSessionContext,
@@ -1577,10 +1578,15 @@ export function MessageInput({
       // empty (and doesn't already end in whitespace).
       const ed = editorRef.current
       const needsSpace = ed != null && !ed.isEmpty()
+      const separator = needsSpace
+        ? appendText.includes("\n")
+          ? "\n"
+          : " "
+        : ""
       editor
         .chain()
         .focus("end")
-        .insertContent(`${needsSpace ? " " : ""}${appendText}`)
+        .insertContent(textToInlineContent(`${separator}${appendText}`))
         .run()
     }
 
@@ -2341,12 +2347,20 @@ export function MessageInput({
                     />
                   )}
                   {pluginContext && (
-                    <HostPluginSlot
-                      slot="composer"
-                      sessionContext={pluginContext}
-                      enabled={pluginSlotEnabled}
-                      onComposerInsertText={handlePluginComposerInsertText}
-                    />
+                    <>
+                      <HostPluginSlot
+                        slot="composer"
+                        sessionContext={pluginContext}
+                        enabled={pluginSlotEnabled}
+                        onComposerInsertText={handlePluginComposerInsertText}
+                      />
+                      <PluginComposerPills
+                        sessionContext={pluginContext}
+                        enabled={pluginSlotEnabled}
+                        disabled={disabled}
+                        onComposerInsertText={handlePluginComposerInsertText}
+                      />
+                    </>
                   )}
                 </div>
                 <div className="shrink-0">{actionButtons}</div>

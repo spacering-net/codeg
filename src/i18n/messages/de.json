@@ -109,7 +109,11 @@
     "pluginSurfaces": "Plugin-Aktionen",
     "morePluginSurfaces": "Weitere Plugin-Aktionen",
     "pluginDetail": "Plugin-Details",
-    "activationPanel": "Aktivierungsanleitung"
+    "activationPanel": "Aktivierungsanleitung",
+    "composerActionFailed": "Plugin-Aktion fehlgeschlagen.",
+    "composerWorkspaceRequired": "Öffne einen Arbeitsbereichsordner, um dieses Plugin-Panel zu verwenden.",
+    "composerPills": "Plugin-Eingabeaktionen",
+    "sessionActions": "Plugin-Sitzungsaktionen"
   },
   "AppearanceSettings": {
     "sectionTitle": "Design-Erscheinungsbild",

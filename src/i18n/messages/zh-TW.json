@@ -109,7 +109,11 @@
     "pluginSurfaces": "外掛入口",
     "morePluginSurfaces": "更多外掛入口",
     "pluginDetail": "外掛詳情",
-    "activationPanel": "啟用引導"
+    "activationPanel": "啟用引導",
+    "composerActionFailed": "外掛操作失敗。",
+    "composerWorkspaceRequired": "請先開啟一個工作區資料夾以使用此外掛面板。",
+    "composerPills": "外掛輸入框操作",
+    "sessionActions": "外掛會話操作"
   },
   "AppearanceSettings": {
     "sectionTitle": "主題外觀",

@@ -109,7 +109,11 @@
     "pluginSurfaces": "Actions des extensions",
     "morePluginSurfaces": "Autres actions des extensions",
     "pluginDetail": "Détails de l’extension",
-    "activationPanel": "Guide d’activation"
+    "activationPanel": "Guide d’activation",
+    "composerActionFailed": "Échec de l’action de l’extension.",
+    "composerWorkspaceRequired": "Ouvrez un dossier d’espace de travail pour utiliser ce panneau d’extension.",
+    "composerPills": "Actions d’extension dans l’éditeur",
+    "sessionActions": "Actions de session d’extension"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",

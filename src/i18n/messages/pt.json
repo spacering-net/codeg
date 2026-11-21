@@ -109,7 +109,11 @@
     "pluginSurfaces": "Ações de plugins",
     "morePluginSurfaces": "Mais ações de plugins",
     "pluginDetail": "Detalhes do plugin",
-    "activationPanel": "Guia de ativação"
+    "activationPanel": "Guia de ativação",
+    "composerActionFailed": "Falha na ação do plugin.",
+    "composerWorkspaceRequired": "Abra uma pasta de espaço de trabalho para usar este painel do plugin.",
+    "composerPills": "Ações de plugin no editor",
+    "sessionActions": "Ações de sessão do plugin"
   },
   "AppearanceSettings": {
     "sectionTitle": "Aparência do tema",

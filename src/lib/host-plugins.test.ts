@@ -7,12 +7,21 @@ import {
   parsePluginThemePalette,
 } from "@/lib/custom-style"
 import {
+  MAX_COMPOSER_PILL_MENU_ITEMS,
+  MAX_INPUT_ACTIVITY_DETAIL_BYTES,
+  MAX_INPUT_ACTIVITY_TITLE_BYTES,
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
+  MAX_PLUGIN_COMPOSER_PILLS,
+  MAX_PLUGIN_INPUT_ACTIVITIES,
   MAX_PLUGIN_SCREENS,
+  MAX_PLUGIN_SESSION_ACTIONS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
+  pluginComposerPillKey,
+  pluginInputActivityKey,
   pluginScreenKey,
+  pluginSessionActionKey,
   pluginSidebarItemKey,
   pluginThemeKey,
   resolvePluginHostScope,
@@ -20,9 +29,14 @@ import {
   resolvePluginScreen,
   resolvePluginText,
   selectPluginClientSurfaces,
+  selectPluginComposerPills,
+  selectPluginInputActivities,
   selectPluginScreens,
+  selectPluginSessionActions,
   selectPluginSidebarItems,
   selectPluginThemes,
+  validateComposerActionResult,
+  validateInputActivityResult,
   validatePluginComposerInsertPayload,
   type InstalledPlugin,
   type PluginTextTranslations,
@@ -908,5 +922,288 @@ describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems
     ).not.toBeNull()
     expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
     expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
+  })
+})
+
+describe("Composer pills, session actions, and input activities", () => {
+  it("loads, scopes, and localizes examples/plugins/composer-pills", () => {
+    const manifestPath = resolve(
+      process.cwd(),
+      "examples/plugins/composer-pills/codeg-plugin.json"
+    )
+    const manifest = JSON.parse(
+      readFileSync(manifestPath, "utf8")
+    ) as InstalledPlugin["manifest"]
+    const plugin: InstalledPlugin = { enabled: true, manifest }
+
+    // Draft scope includes all-scope + draft-scope pills
+    const draftPills = selectPluginComposerPills([plugin], "draft", "zh-CN")
+    expect(draftPills).toHaveLength(3)
+    expect(draftPills[0]).toEqual({
+      key: pluginComposerPillKey("codeg.composer-pills", "review-menu"),
+      pluginId: "codeg.composer-pills",
+      pluginName: "编辑器审查",
+      id: "review-menu",
+      title: "审查工具",
+      label: "审查",
+      scope: "all",
+      action: {
+        kind: "menu",
+        items: [
+          {
+            id: "test-plan",
+            title: "插入测试计划",
+            action: {
+              kind: "insertText",
+              text: "请为这些改动提出测试计划。",
+            },
+          },
+          {
+            id: "checklist",
+            title: "插入审查清单",
+            action: { kind: "callMethod", method: "review-checklist" },
+          },
+        ],
+      },
+    })
+    expect(draftPills[2]?.id).toBe("checklist")
+
+    // Session scope omits draft-only checklist pill
+    const sessionPills = selectPluginComposerPills([plugin], "session", "es")
+    expect(sessionPills.map((p) => p.id)).toEqual(["review-menu", "summarize"])
+    expect(sessionPills[0]?.label).toBe("Revisar")
+
+    // Session actions default to "session" scope
+    expect(selectPluginSessionActions([plugin], "draft", "zh-CN")).toEqual([])
+    expect(selectPluginSessionActions([plugin], "session", "zh-CN")).toEqual([
+      {
+        key: pluginSessionActionKey("codeg.composer-pills", "review-session"),
+        pluginId: "codeg.composer-pills",
+        pluginName: "编辑器审查",
+        id: "review-session",
+        title: "审查此会话",
+        description: "将审查清单插入当前草稿。",
+        scope: "session",
+        action: { kind: "callMethod", method: "review-checklist" },
+      },
+    ])
+
+    // Input activities default to "all" scope
+    expect(selectPluginInputActivities([plugin], "session", "zh-CN")).toEqual([
+      {
+        key: pluginInputActivityKey("codeg.composer-pills", "review-available"),
+        pluginId: "codeg.composer-pills",
+        pluginName: "编辑器审查",
+        id: "review-available",
+        title: "审查清单",
+        method: "review-status",
+        scope: "all",
+      },
+    ])
+  })
+
+  it("enforces caps, same-plugin target checks, insertText limits, and menu constraints", () => {
+    expect(MAX_PLUGIN_COMPOSER_PILLS).toBe(16)
+    expect(MAX_PLUGIN_SESSION_ACTIONS).toBe(16)
+    expect(MAX_PLUGIN_INPUT_ACTIVITIES).toBe(8)
+    expect(MAX_COMPOSER_PILL_MENU_ITEMS).toBe(16)
+
+    const plugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.pills",
+        name: "Acme Pills",
+        version: "1.0.0",
+        server: { entry: "s.mjs", methods: ["own-method"] },
+        client: { entry: "c.html" },
+        contributes: {
+          workspacePanels: [
+            { id: "own-panel", title: "Own", view: "text", text: "ok" },
+          ],
+          commands: [],
+          hooks: [],
+          clientSurfaces: [{ id: "own-surf", title: "Surf", slot: "composer" }],
+          screens: [{ id: "own-screen", title: "Screen" }],
+          composerPills: [
+            {
+              id: "ok-panel",
+              title: "Panel",
+              action: { kind: "openWorkspacePanel", panelId: "own-panel" },
+            },
+            {
+              id: "ok-surf",
+              title: "Surface",
+              action: { kind: "openClientSurface", surfaceId: "own-surf" },
+            },
+            {
+              id: "ok-screen",
+              title: "Screen",
+              action: { kind: "openScreen", screenId: "own-screen" },
+            },
+            // Invalid foreign targets / bad insertText / bad menus rejected
+            {
+              id: "bad-panel",
+              title: "Bad Panel",
+              action: { kind: "openWorkspacePanel", panelId: "other-panel" },
+            },
+            {
+              id: "bad-surf",
+              title: "Bad Surface",
+              action: { kind: "openClientSurface", surfaceId: "other-surf" },
+            },
+            {
+              id: "bad-screen",
+              title: "Bad Screen",
+              action: { kind: "openScreen", screenId: "other-screen" },
+            },
+            {
+              id: "bad-method",
+              title: "Bad Method",
+              action: { kind: "callMethod", method: "other-method" },
+            },
+            {
+              id: "nul-text",
+              title: "NUL",
+              action: { kind: "insertText", text: "a\0b" },
+            },
+            {
+              id: "empty-menu",
+              title: "Empty Menu",
+              action: { kind: "menu", items: [] },
+            },
+            {
+              id: "dup-menu",
+              title: "Dup Menu",
+              action: {
+                kind: "menu",
+                items: [
+                  {
+                    id: "m1",
+                    title: "A",
+                    action: { kind: "insertText", text: "a" },
+                  },
+                  {
+                    id: "m1",
+                    title: "B",
+                    action: { kind: "insertText", text: "b" },
+                  },
+                ],
+              },
+            },
+          ],
+          inputActivities: Array.from({ length: 12 }, (_, i) => ({
+            id: `act-${i + 1}`,
+            title: `Activity ${i + 1}`,
+            method: "own-method",
+          })),
+        },
+      },
+    }
+
+    expect(
+      selectPluginComposerPills([plugin], "session").map((p) => p.id)
+    ).toEqual(["ok-panel", "ok-surf", "ok-screen"])
+    expect(selectPluginInputActivities([plugin], "session")).toHaveLength(8)
+
+    // 16-item cap on pills and sessionActions
+    const capped: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.capped-pills",
+        name: "Capped",
+        version: "1.0.0",
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          composerPills: Array.from({ length: 20 }, (_, i) => ({
+            id: `pill-${i + 1}`,
+            title: `Pill ${i + 1}`,
+            action: { kind: "insertText", text: `text ${i + 1}` },
+          })),
+          sessionActions: Array.from({ length: 20 }, (_, i) => ({
+            id: `act-${i + 1}`,
+            title: `Action ${i + 1}`,
+            action: { kind: "insertText", text: `text ${i + 1}` },
+          })),
+        },
+      },
+    }
+    expect(selectPluginComposerPills([capped], "session")).toHaveLength(16)
+    expect(selectPluginSessionActions([capped], "session")).toHaveLength(16)
+  })
+
+  it("validates ComposerActionResult and InputActivityResult strictly", () => {
+    expect(MAX_INPUT_ACTIVITY_TITLE_BYTES).toBe(256)
+    expect(MAX_INPUT_ACTIVITY_DETAIL_BYTES).toBe(1024)
+
+    expect(
+      validateComposerActionResult({
+        insertText: "line1\r\nline2\rline3",
+        notice: "  Done\twith\nnotice  ",
+      })
+    ).toEqual({
+      insertText: "line1\nline2\nline3",
+      notice: "Done with notice",
+    })
+    expect(() => validateComposerActionResult({ insertText: "" })).toThrow()
+    expect(() => validateComposerActionResult({ insertText: "a\0b" })).toThrow()
+    expect(() =>
+      validateComposerActionResult({
+        insertText: "a".repeat(MAX_PLUGIN_COMPOSER_INSERT_BYTES + 1),
+      })
+    ).toThrow()
+    expect(() => validateComposerActionResult({ extra: 1 })).toThrow()
+
+    expect(validateInputActivityResult(null)).toBeNull()
+    expect(
+      validateInputActivityResult({
+        visible: true,
+        title: "Review checklist available",
+        detail: "Click Review tools to insert.",
+      })
+    ).toEqual({
+      visible: true,
+      tone: "muted",
+      title: "Review checklist available",
+      detail: "Click Review tools to insert.",
+    })
+    expect(
+      validateInputActivityResult({
+        visible: true,
+        tone: "warning",
+        title: "Heads up",
+      })
+    ).toEqual({
+      visible: true,
+      tone: "warning",
+      title: "Heads up",
+    })
+    expect(() =>
+      validateInputActivityResult({
+        visible: true,
+        tone: "danger",
+        title: "Bad tone",
+      })
+    ).toThrow()
+    expect(() =>
+      validateInputActivityResult({
+        visible: true,
+        title: "a".repeat(257),
+      })
+    ).toThrow()
+    expect(() =>
+      validateInputActivityResult({
+        visible: true,
+        title: "ok",
+        detail: "b".repeat(1025),
+      })
+    ).toThrow()
+    expect(() =>
+      validateInputActivityResult({
+        visible: true,
+        title: "bad\ntitle",
+      })
+    ).toThrow()
   })
 })
