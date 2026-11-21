@@ -16,7 +16,7 @@ export interface TimelineItemContext {
   readonly kind: string
   readonly version: number
   readonly itemId: string
-  readonly conversationId: number
+  readonly conversationId: number | null
   readonly data: Json
   readonly locale: string
 }

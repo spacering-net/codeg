@@ -265,6 +265,79 @@ saved `conversationId` and input such as
 `{ "summary": "The review is ready.", "status": "passed" }`. The example
 upserts a `review-result` timeline item for that conversation.
 
+### Transform native timeline items
+
+Declare `contributes.timelineTransformers` with up to 16 entries and unique
+slug IDs. An API version 2 plugin needs both `server.entry` and `client.entry`.
+Each entry has an `id`, an `itemType` of `tool_call` or `assistant_message`,
+a `method` declared in the same plugin's `server.methods`, and
+`rendererKind` and `rendererVersion` matching a renderer in that plugin.
+A `tool_call` transformer can specify `toolNames` to select 1–16 distinct
+names, each nonblank, control-free and at most 128 UTF-8 bytes. Matching is
+case-sensitive. Leave the filter out to consider all tools.
+
+Invoke `host_plugins_timeline_transform` through the current host transport
+using the same flat request body on desktop and at
+`POST /api/host_plugins_timeline_transform`.
+
+```ts
+{
+  pluginId, transformerId, itemType, phase, conversationId?, locale?,
+  item: { id, toolName?, status?, rawInput?, rawOutput?, text? }
+}
+```
+
+Pass `phase: "streaming"` for an evolving source row and `"complete"` for
+finished output or fetched history. `item.id` is the native source row ID
+and must be nonblank and control-free. The serialized JSON `item` limit is
+64 KiB. A supplied conversation ID must identify an existing, non-deleted
+conversation on this host. Omit it or set it to `null` for an unsaved
+session. The locale defaults to `en` and accepts nonblank, control-free
+text up to 128 UTF-8 bytes.
+
+The host verifies plugin availability and registration. An item type or
+tool name that fails the selector returns `{ action: "keep" }` without
+running the method. The method receives `{ transformerId, itemType, phase,
+conversationId, locale, item }` and the plugin's saved settings through the
+usual `handle(method, input, settings)` contract. Fields missing from the
+source snapshot remain absent. The transform call has no append capability.
+Declared `server.rpc` schemas are enforced. JavaScript `undefined` is
+converted to JSON `null` before RPC output validation.
+
+| Method result | Host result and rendering |
+| --- | --- |
+| `null`, `undefined` or `{ action: "keep" }` | `{ action: "keep" }` keeps the native source row. |
+| `{ action: "omit" }` | Hide the source row in the current view. |
+| `{ action: "replace", items: [...] }` | Render 1–4 replacements with the selected plugin's timeline renderer. |
+
+A replacement is `{ id?, kind, version, data }`. `kind` and `version` must
+match the transformer target exactly. Each `data` must fit within 64 KiB
+of JSON and satisfy the renderer's `dataSchema`, when present. Explicit
+IDs must be unique within the response and follow the timeline item slug
+rules. When an ID is omitted, the index identifies that replacement.
+
+The host returns a controlled error on timeout, exception, or invalid output.
+Keep the native row for that snapshot when conversion fails. Transform
+results are ephemeral. The renderer receives the `timelineItem` client
+context, with a nullable `conversationId` for an unsaved session.
+
+Run matching transforms against native rows before splitting text or
+grouping tools. Use stable plugin and registration order and stop at the
+first `omit` or `replace`. Coalesce streaming snapshots to avoid dispatching
+every incremental update. Derive stable replacement keys from the host,
+session, source row, plugin, and transformer, plus the replacement ID or
+index. Keep results and errors local to that host, session and source row.
+Discard superseded replies and withdraw cached replacements on catalog
+changes that disable, replace, or remove the owning plugin. Discard pending
+replies when the session or transport changes. Updates that change the
+transformer declarations require re-enabling the plugin.
+
+Install and enable [Tool Output Card](../examples/plugins/tool-output-card)
+to render live `test-runner` tool calls and shell calls that report Cargo
+test totals or a structured `{ kind: "test-summary", passed, failed }`
+result. The card shows test counts, status and phase in English, Spanish,
+and Simplified Chinese.
+
 ## Persist plugin settings
 
 Declare `settings` with a positive integer `version`, a JSON Schema whose root

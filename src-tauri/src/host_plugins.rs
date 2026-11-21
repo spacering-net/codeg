@@ -22,10 +22,12 @@ pub mod source;
 mod text;
 mod theme;
 mod timeline;
+mod timeline_transform;
 
 pub use settings::Snapshot as PluginSettings;
 use text::{valid_translations, Translations};
 pub use timeline::TimelineItem;
+pub use timeline_transform::{TransformRequest, TransformResult};
 
 pub const CATALOG_CHANGED: &str = "host-plugins://changed";
 const ACTIVITY_CHANGED: &str = "host-plugins://activity";
@@ -107,6 +109,8 @@ struct Contributions {
     sidebar_items: Vec<SidebarItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     timeline_renderers: Vec<timeline::Renderer>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    timeline_transformers: Vec<timeline_transform::Transformer>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -570,7 +574,9 @@ impl HostPlugins {
             || current.client_html != client_html
             || current.manifest.contributes.lifecycle_hooks != manifest.contributes.lifecycle_hooks
             || current.manifest.contributes.timeline_renderers
-                != manifest.contributes.timeline_renderers;
+                != manifest.contributes.timeline_renderers
+            || current.manifest.contributes.timeline_transformers
+                != manifest.contributes.timeline_transformers;
         let settings_changed = current.manifest.settings != manifest.settings;
         let settings = current.settings_for_update(manifest.settings.as_ref())?;
         if current.manifest == manifest
@@ -688,29 +694,19 @@ impl HostPlugins {
         } = invocation;
         let scope = timeline_scope.filter(|_| has_timeline);
         let conversation_id = scope.map(|(conversation_id, _)| conversation_id);
-        let slot = self
-            .runtime_slots
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| {
-                AppCommandError::new(AppErrorCode::TaskExecutionFailed, "Plugin runtime is busy")
-            })?;
-        let result = tokio::task::spawn_blocking(move || {
-            let _slot = slot;
-            runtime::invoke(
-                &entry,
-                &code,
-                &method,
-                &input,
-                settings.as_ref().map(|settings| &settings.value),
-                contract.as_deref(),
-                conversation_id,
-            )
-        })
-        .await
-        .map_err(|_| {
-            AppCommandError::new(AppErrorCode::TaskExecutionFailed, "Plugin runtime stopped")
-        })?;
+        let result = self
+            .run_plugin_task(move || {
+                runtime::invoke(
+                    &entry,
+                    &code,
+                    &method,
+                    &input,
+                    settings.as_ref().map(|settings| &settings.value),
+                    contract.as_deref(),
+                    runtime::InvocationMode::Rpc(conversation_id),
+                )
+            })
+            .await?;
         let output = {
             let guard = self.state.lock().expect("host plugin state lock");
             let state = guard.as_ref().map_err(|error| catalog_error(error))?;
@@ -741,6 +737,27 @@ impl HostPlugins {
             })??;
         }
         Ok(output.value)
+    }
+
+    async fn run_plugin_task<T: Send + 'static>(
+        &self,
+        task: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, AppCommandError> {
+        let slot = self
+            .runtime_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                AppCommandError::new(AppErrorCode::TaskExecutionFailed, "Plugin runtime is busy")
+            })?;
+        tokio::task::spawn_blocking(move || {
+            let _slot = slot;
+            task()
+        })
+        .await
+        .map_err(|_| {
+            AppCommandError::new(AppErrorCode::TaskExecutionFailed, "Plugin runtime stopped")
+        })
     }
 
     pub(crate) fn timeline_list(
@@ -1142,6 +1159,7 @@ impl Manifest {
             screens,
             sidebar_items,
             timeline_renderers: _,
+            timeline_transformers: _,
         } = &self.contributes;
         if !bundled && workspace_panels.is_empty() && themes.is_empty() {
             return Err("A declarative plugin needs a workspace panel or theme".to_owned());
@@ -1251,7 +1269,9 @@ impl Manifest {
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
-        self.compile_timeline_renderers()
+        let renderers = self.compile_timeline_renderers()?;
+        timeline_transform::validate(self, &renderers)?;
+        Ok(renderers)
     }
 }
 

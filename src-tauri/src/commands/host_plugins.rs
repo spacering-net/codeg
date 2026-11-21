@@ -1,4 +1,6 @@
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+#[cfg(feature = "tauri-runtime")]
+use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -7,7 +9,8 @@ use crate::db::{entities::conversation, error::DbError, AppDatabase};
 use crate::host_plugins::source::{self, PluginIndex, Registry};
 use crate::host_plugins::{
     ExpectedPlugin, HostPlugins, InstallPreview, InstalledPlugin, Mutation, PluginSettings,
-    PluginUpdate, SettingsRequest, TimelineItem, CATALOG_CHANGED,
+    PluginUpdate, SettingsRequest, TimelineItem, TransformRequest, TransformResult,
+    CATALOG_CHANGED,
 };
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
@@ -107,6 +110,13 @@ async fn require_saved_conversation(
             "A positive conversation ID is required",
         ));
     }
+    find_saved_conversation(db, conversation_id).await
+}
+
+async fn find_saved_conversation(
+    db: &AppDatabase,
+    conversation_id: i32,
+) -> Result<(), AppCommandError> {
     let conversation = conversation::Entity::find_by_id(conversation_id)
         .filter(conversation::Column::DeletedAt.is_null())
         .one(&db.conn)
@@ -151,6 +161,18 @@ pub async fn timeline_list_core(
                 "Plugin timeline read stopped",
             )
         })?
+}
+
+pub async fn timeline_transform_core(
+    plugins: &HostPlugins,
+    db: &AppDatabase,
+    request: TransformRequest,
+) -> Result<TransformResult, AppCommandError> {
+    request.validate()?;
+    if let Some(conversation_id) = request.conversation_id {
+        find_saved_conversation(db, conversation_id).await?;
+    }
+    plugins.timeline_transform(request).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -222,6 +244,76 @@ pub async fn host_plugins_timeline_list(
     conversation_id: i32,
 ) -> Result<Vec<TimelineItem>, AppCommandError> {
     timeline_list_core(&plugins, &db, conversation_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+fn parse_timeline_transform_body(
+    body: &tauri::ipc::InvokeBody,
+) -> Result<TransformRequest, AppCommandError> {
+    let tauri::ipc::InvokeBody::Json(payload) = body else {
+        return Err(AppCommandError::invalid_input(
+            "Expected a JSON timeline transform request",
+        ));
+    };
+    TransformRequest::deserialize(payload)
+        .map_err(|_| AppCommandError::invalid_input("Invalid timeline transform request"))
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn host_plugins_timeline_transform(
+    db: tauri::State<'_, AppDatabase>,
+    plugins: tauri::State<'_, Arc<HostPlugins>>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<TransformResult, AppCommandError> {
+    timeline_transform_core(
+        &plugins,
+        &db,
+        parse_timeline_transform_body(request.body())?,
+    )
+    .await
+}
+
+#[cfg(all(test, feature = "tauri-runtime"))]
+#[tokio::test]
+async fn host_plugins_timeline_transform_accepts_flat_desktop_payload() {
+    use crate::db::test_helpers::fresh_in_memory_db;
+    use serde_json::json;
+    use tauri::ipc::InvokeBody;
+
+    let data = tempfile::tempdir().unwrap();
+    let plugins = HostPlugins::new(data.path());
+    let db = fresh_in_memory_db().await;
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../examples/plugins/tool-output-card");
+    let preview = plugins
+        .preview_install(source.to_str().unwrap(), Registry::Npm, None)
+        .await
+        .unwrap();
+    let preview = serde_json::to_value(preview).unwrap();
+    let ticket = serde_json::from_value(preview["ticket"].clone()).unwrap();
+    plugins.confirm_install(ticket).unwrap();
+    plugins
+        .apply(Mutation::SetEnabled {
+            id: "codeg.tool-output-card".into(),
+            enabled: true,
+        })
+        .unwrap();
+
+    let payload = json!({
+        "pluginId": "codeg.tool-output-card",
+        "transformerId": "test-output",
+        "itemType": "tool_call",
+        "phase": "streaming",
+        "item": {"id": "source:1", "toolName": "test-runner"},
+    });
+    let body = InvokeBody::Json(payload.clone());
+    let request = parse_timeline_transform_body(&body).unwrap();
+    let value = timeline_transform_core(&plugins, &db, request)
+        .await
+        .unwrap();
+    assert!(matches!(value, TransformResult::Replace { .. }));
+    assert!(parse_timeline_transform_body(&InvokeBody::Json(json!({"request": payload}))).is_err());
 }
 
 #[cfg(feature = "tauri-runtime")]

@@ -9,7 +9,7 @@ use crate::app_state::AppState;
 use crate::host_plugins::source::Registry;
 use crate::host_plugins::{
     ExpectedPlugin, InstallPreview, InstalledPlugin, Mutation, PluginSettings, PluginUpdate,
-    SettingsRequest, TimelineItem, TurnActivity,
+    SettingsRequest, TimelineItem, TransformRequest, TransformResult, TurnActivity,
 };
 
 #[derive(Deserialize)]
@@ -148,6 +148,15 @@ pub async fn timeline_list(
     )
     .await
     .map(Json)
+}
+
+pub async fn timeline_transform(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(request): Json<TransformRequest>,
+) -> Result<Json<TransformResult>, AppCommandError> {
+    crate::commands::host_plugins::timeline_transform_core(&state.host_plugins, &state.db, request)
+        .await
+        .map(Json)
 }
 
 pub async fn client_html(

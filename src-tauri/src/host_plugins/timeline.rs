@@ -15,7 +15,7 @@ use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 const EVENT_CHANNEL: &str = "host-plugins://timeline";
-const MAX_DATA_BYTES: usize = 64 * 1024;
+pub(super) const MAX_DATA_BYTES: usize = 64 * 1024;
 pub(super) const MAX_APPEND_BYTES: usize = MAX_DATA_BYTES + 512;
 pub(super) const MAX_ITEMS: usize = 64;
 const MAX_FILE_BYTES: usize = MAX_ITEMS * MAX_APPEND_BYTES;
@@ -85,14 +85,22 @@ fn valid_kind(kind: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
+pub(super) fn valid_item_id(id: &str) -> bool {
+    id.len() <= 64 && valid_id(id)
+}
+
 fn check_item(id: &str, kind: &str, version: u32, data: &Value) -> Result<(), AppCommandError> {
-    if id.len() > 64 || !valid_id(id) || !valid_kind(kind) || version == 0 {
+    if !valid_item_id(id) || !valid_kind(kind) || version == 0 {
         return Err(invalid("Invalid timeline item ID, kind, or version"));
     }
-    if serde_json::to_vec(data).map_or(true, |bytes| bytes.len() > MAX_DATA_BYTES) {
+    if !valid_data_size(data) {
         return Err(invalid("Timeline item data exceeds 64 KiB"));
     }
     Ok(())
+}
+
+pub(super) fn valid_data_size(data: &Value) -> bool {
+    serde_json::to_vec(data).is_ok_and(|bytes| bytes.len() <= MAX_DATA_BYTES)
 }
 
 #[derive(Deserialize)]

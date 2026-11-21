@@ -8,6 +8,7 @@ use serde_json::Value as Json;
 use super::invalid;
 use super::schema::RpcContract;
 use super::timeline;
+use super::timeline_transform;
 use crate::app_error::{AppCommandError, AppErrorCode};
 
 pub(super) const MAX_MODULE_BYTES: usize = 256 * 1024;
@@ -23,7 +24,22 @@ pub(super) fn call_with_settings(
     settings: Option<&Json>,
     contract: Option<&RpcContract>,
 ) -> Result<Json, AppCommandError> {
-    Ok(invoke(entry, code, method, input, settings, contract, None)?.value)
+    Ok(invoke(
+        entry,
+        code,
+        method,
+        input,
+        settings,
+        contract,
+        InvocationMode::Rpc(None),
+    )?
+    .value)
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum InvocationMode {
+    Rpc(Option<i32>),
+    TimelineTransform,
 }
 
 pub(super) struct Output {
@@ -38,11 +54,21 @@ pub(super) fn invoke(
     input: &Json,
     settings: Option<&Json>,
     contract: Option<&RpcContract>,
-    conversation_id: Option<i32>,
+    mode: InvocationMode,
 ) -> Result<Output, AppCommandError> {
+    let (input_limit, output_limit) = match mode {
+        InvocationMode::Rpc(_) => (MAX_MESSAGE_BYTES, MAX_MESSAGE_BYTES),
+        InvocationMode::TimelineTransform => (
+            timeline_transform::MAX_INPUT_BYTES,
+            timeline_transform::MAX_OUTPUT_BYTES,
+        ),
+    };
     let input_json = serde_json::to_vec(input).map_err(|_| invalid("Invalid plugin input"))?;
-    if input_json.len() > MAX_MESSAGE_BYTES {
-        return Err(invalid("Plugin input exceeds 64 KiB"));
+    if input_json.len() > input_limit {
+        return Err(invalid(match mode {
+            InvocationMode::Rpc(_) => "Plugin input exceeds 64 KiB",
+            InvocationMode::TimelineTransform => "Timeline transform input exceeds its size limit",
+        }));
     }
     if let Some(contract) = contract {
         contract.check_input(method, input)?;
@@ -64,7 +90,7 @@ pub(super) fn invoke(
         let handle: Function<'_> = module.get("handle")?;
         let input = ctx.json_parse(input_json)?;
         let settings = ctx.json_parse(settings)?;
-        let result: Value<'_> = if let Some(conversation_id) = conversation_id {
+        let result: Value<'_> = if let InvocationMode::Rpc(Some(conversation_id)) = mode {
             let host = Object::new(ctx.clone())?;
             host.set("conversationId", conversation_id)?;
             let timeline = Object::new(ctx.clone())?;
@@ -101,6 +127,9 @@ pub(super) fn invoke(
             Some(promise) => resolve(&ctx, promise.clone(), deadline)?,
             None => result,
         };
+        if matches!(mode, InvocationMode::TimelineTransform) && result.is_undefined() {
+            return Ok("null".to_owned());
+        }
         ctx.json_stringify(result)?
             .ok_or_else(|| Error::new_from_js("undefined", "JSON"))?
             .to_string()
@@ -115,8 +144,13 @@ pub(super) fn invoke(
         return Err(invalid(error));
     }
     let output = output.map_err(|_| failed())?;
-    if output.len() > MAX_MESSAGE_BYTES {
-        return Err(invalid("Plugin response exceeds 64 KiB"));
+    if output.len() > output_limit {
+        return Err(invalid(match mode {
+            InvocationMode::Rpc(_) => "Plugin response exceeds 64 KiB",
+            InvocationMode::TimelineTransform => {
+                "Timeline transform response exceeds its size limit"
+            }
+        }));
     }
     let value = serde_json::from_str(&output).map_err(|_| failed())?;
     if let Some(contract) = contract {

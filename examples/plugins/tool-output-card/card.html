@@ -1,0 +1,64 @@
+<style>
+  :root {
+    color-scheme: light dark;
+    font: 14px system-ui;
+  }
+  article {
+    border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  p {
+    margin: 6px 0 0;
+  }
+</style>
+<article>
+  <strong id="status"></strong>
+  <p id="counts"></p>
+  <p id="phase"></p>
+</article>
+<script>
+  const labels = {
+    en: {
+      running: "Running tests",
+      passed: "Tests passed",
+      failed: "Tests failed",
+      streaming: "Live",
+      complete: "Complete",
+      counts: (passed, failed) => `${passed} passed · ${failed} failed`,
+    },
+    es: {
+      running: "Ejecutando pruebas",
+      passed: "Pruebas superadas",
+      failed: "Pruebas fallidas",
+      streaming: "En curso",
+      complete: "Finalizado",
+      counts: (passed, failed) => `${passed} superadas · ${failed} fallidas`,
+    },
+    zh: {
+      running: "正在运行测试",
+      passed: "测试通过",
+      failed: "测试失败",
+      streaming: "实时",
+      complete: "已完成",
+      counts: (passed, failed) => `${passed} 项通过 · ${failed} 项失败`,
+    },
+  }
+
+  window.codeg.ready.then(({ type, kind, version, data, locale }) => {
+    if (type !== "timelineItem" || kind !== "test-result" || version !== 1) {
+      return
+    }
+
+    const language = locale.split("-")[0]
+    const copy = Object.hasOwn(labels, language) ? labels[language] : labels.en
+    const format = new Intl.NumberFormat(locale)
+    document.documentElement.lang = locale
+    document.getElementById("status").textContent = copy[data.status]
+    document.getElementById("counts").textContent = copy.counts(
+      format.format(data.passed),
+      format.format(data.failed)
+    )
+    document.getElementById("phase").textContent = copy[data.phase]
+  })
+</script>
