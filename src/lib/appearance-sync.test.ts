@@ -32,6 +32,8 @@ const DEVICE_LOCAL = new Set([
   appearanceScript.STORAGE_KEY_WORKSPACE_BG_SOURCE_URL,
   // The custom-style escape hatch: a safety switch for THIS machine.
   appearanceScript.STORAGE_KEY_CUSTOM_STYLE_SUSPENDED,
+  // Per-host plugin theme selection: isolated per connected host on this client.
+  appearanceScript.STORAGE_KEY_PLUGIN_THEME,
 ])
 
 beforeEach(() => {
