@@ -8,13 +8,20 @@ import {
 } from "@/lib/custom-style"
 import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
+  MAX_PLUGIN_SCREENS,
+  MAX_PLUGIN_SIDEBAR_ITEMS,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
+  pluginScreenKey,
+  pluginSidebarItemKey,
   pluginThemeKey,
   resolvePluginHostScope,
   resolvePluginHostSurface,
+  resolvePluginScreen,
   resolvePluginText,
   selectPluginClientSurfaces,
+  selectPluginScreens,
+  selectPluginSidebarItems,
   selectPluginThemes,
   validatePluginComposerInsertPayload,
   type InstalledPlugin,
@@ -640,5 +647,266 @@ describe("selectPluginThemes and resolvePluginHostScope", () => {
       scopeKey: "remote:bad",
       transportReady: false,
     })
+  })
+})
+
+describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems", () => {
+  it("requires enabled plugins with client.entry, enforces same-plugin screenId targets, localizes titles, and respects placement", () => {
+    const plugins: InstalledPlugin[] = [
+      {
+        enabled: true,
+        manifest: {
+          id: "codeg.nav",
+          name: "Plugin Navigation",
+          nameTranslations: {
+            es: "Navegación de complementos",
+            "zh-CN": "插件导航",
+          },
+          version: "1.0.0",
+          client: { entry: "navigation.html" },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            screens: [
+              {
+                id: "overview",
+                title: "Plugin Overview",
+                titleTranslations: {
+                  es: "Resumen del complemento",
+                },
+              },
+              {
+                id: "help",
+                title: "Plugin Navigation Help",
+              },
+              {
+                id: "overview",
+                title: "Duplicate Overview",
+              },
+            ],
+            sidebarItems: [
+              {
+                id: "overview-nav",
+                title: "Open Overview",
+                titleTranslations: {
+                  es: "Abrir resumen",
+                },
+                placement: "header",
+                screenId: "overview",
+              },
+              {
+                id: "help-nav",
+                title: "Help",
+                placement: "footer",
+                screenId: "help",
+              },
+              {
+                id: "missing-screen",
+                title: "Broken Target",
+                placement: "header",
+                screenId: "does-not-exist",
+              },
+              {
+                id: "bad-placement",
+                title: "Invalid Placement",
+                placement: "middle" as "header",
+                screenId: "overview",
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.cross",
+          name: "Cross Plugin Attempt",
+          version: "1.0.0",
+          client: { entry: "cross.html" },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            screens: [{ id: "own", title: "Own Screen" }],
+            sidebarItems: [
+              // Must NOT be able to target codeg.nav's "overview" screen
+              {
+                id: "steal",
+                title: "Steal Overview",
+                placement: "header",
+                screenId: "overview",
+              },
+              {
+                id: "valid-own",
+                title: "Own Entry",
+                placement: "footer",
+                screenId: "own",
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.no-client",
+          name: "Server Only",
+          version: "1.0.0",
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            screens: [{ id: "main", title: "Hidden Screen" }],
+            sidebarItems: [
+              {
+                id: "main",
+                title: "Hidden Entry",
+                placement: "header",
+                screenId: "main",
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: false,
+        manifest: {
+          id: "acme.disabled",
+          name: "Disabled Plugin",
+          version: "1.0.0",
+          client: { entry: "disabled.html" },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            screens: [{ id: "main", title: "Disabled Screen" }],
+            sidebarItems: [
+              {
+                id: "main",
+                title: "Disabled Entry",
+                placement: "header",
+                screenId: "main",
+              },
+            ],
+          },
+        },
+      },
+    ]
+
+    expect(selectPluginScreens(plugins, "es-MX")).toEqual([
+      {
+        key: pluginScreenKey("codeg.nav", "overview"),
+        pluginId: "codeg.nav",
+        pluginName: "Navegación de complementos",
+        id: "overview",
+        title: "Resumen del complemento",
+      },
+      {
+        key: pluginScreenKey("codeg.nav", "help"),
+        pluginId: "codeg.nav",
+        pluginName: "Navegación de complementos",
+        id: "help",
+        title: "Plugin Navigation Help",
+      },
+      {
+        key: pluginScreenKey("acme.cross", "own"),
+        pluginId: "acme.cross",
+        pluginName: "Cross Plugin Attempt",
+        id: "own",
+        title: "Own Screen",
+      },
+    ])
+
+    expect(resolvePluginScreen(plugins, "codeg.nav", "overview", "es")).toEqual(
+      {
+        key: "codeg.nav:overview",
+        pluginId: "codeg.nav",
+        pluginName: "Navegación de complementos",
+        id: "overview",
+        title: "Resumen del complemento",
+      }
+    )
+    // Cross-plugin lookup returns null
+    expect(resolvePluginScreen(plugins, "acme.cross", "overview")).toBeNull()
+    expect(resolvePluginScreen(plugins, "acme.disabled", "main")).toBeNull()
+    expect(resolvePluginScreen(plugins, "acme.no-client", "main")).toBeNull()
+
+    expect(selectPluginSidebarItems(plugins, "header", "es")).toEqual([
+      {
+        key: pluginSidebarItemKey("codeg.nav", "overview-nav"),
+        pluginId: "codeg.nav",
+        pluginName: "Navegación de complementos",
+        id: "overview-nav",
+        title: "Abrir resumen",
+        placement: "header",
+        screenId: "overview",
+        screenKey: "codeg.nav:overview",
+        screenTitle: "Resumen del complemento",
+      },
+    ])
+
+    expect(selectPluginSidebarItems(plugins, "footer", "en")).toEqual([
+      {
+        key: pluginSidebarItemKey("codeg.nav", "help-nav"),
+        pluginId: "codeg.nav",
+        pluginName: "Plugin Navigation",
+        id: "help-nav",
+        title: "Help",
+        placement: "footer",
+        screenId: "help",
+        screenKey: "codeg.nav:help",
+        screenTitle: "Plugin Navigation Help",
+      },
+      {
+        key: pluginSidebarItemKey("acme.cross", "valid-own"),
+        pluginId: "acme.cross",
+        pluginName: "Cross Plugin Attempt",
+        id: "valid-own",
+        title: "Own Entry",
+        placement: "footer",
+        screenId: "own",
+        screenKey: "acme.cross:own",
+        screenTitle: "Own Screen",
+      },
+    ])
+  })
+
+  it("enforces the 16-entry cap per plugin for screens and sidebarItems", () => {
+    const manyScreens = Array.from({ length: 20 }, (_, index) => ({
+      id: `screen-${index + 1}`,
+      title: `Screen ${index + 1}`,
+    }))
+    const manySidebarItems = Array.from({ length: 20 }, (_, index) => ({
+      id: `item-${index + 1}`,
+      title: `Item ${index + 1}`,
+      placement: (index % 2 === 0 ? "header" : "footer") as "header" | "footer",
+      screenId: `screen-${index + 1}`,
+    }))
+    const plugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.capped",
+        name: "Capped Plugin",
+        version: "1.0.0",
+        client: { entry: "index.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          screens: manyScreens,
+          sidebarItems: manySidebarItems,
+        },
+      },
+    }
+
+    expect(MAX_PLUGIN_SCREENS).toBe(16)
+    expect(MAX_PLUGIN_SIDEBAR_ITEMS).toBe(16)
+    expect(selectPluginScreens([plugin])).toHaveLength(16)
+    expect(
+      resolvePluginScreen([plugin], "acme.capped", "screen-16")
+    ).not.toBeNull()
+    expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
+    expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
   })
 })

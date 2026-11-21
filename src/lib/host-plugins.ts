@@ -1,13 +1,19 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
 import {
   parsePluginThemePalette,
   type PluginThemePalette,
 } from "@/lib/custom-style"
+import * as transportModule from "@/lib/transport"
 import { getTransport, type Transport } from "@/lib/transport"
 
 export type PluginTextTranslations = Record<string, string>
+
+export const MAX_PLUGIN_SCREENS = 16
+export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
+
+export type PluginSidebarItemPlacement = "header" | "footer"
 
 export interface PluginThemeContribution {
   id: string
@@ -27,8 +33,42 @@ export interface ResolvedPluginTheme {
   dark?: PluginThemePalette
 }
 
+export interface PluginScreenContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+}
+
+export interface PluginSidebarItemContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  placement: PluginSidebarItemPlacement
+  screenId: string
+}
+
+export interface ResolvedPluginScreen {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+}
+
+export interface ResolvedPluginSidebarItem {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  placement: PluginSidebarItemPlacement
+  screenId: string
+  screenKey: string
+  screenTitle: string
+}
+
 export interface PluginHostScope {
-  /** Storage scope identifying the connected host (e.g. "local" or "remote:5"). */
+  /** Storage/host scope identifying the connected host (e.g. "local" or "remote:5"). */
   scopeKey: string
   /** True only when the active transport matches the window's target host. */
   transportReady: boolean
@@ -132,6 +172,8 @@ export interface InstalledPlugin {
       activationPanel?: PluginHostSurfaceContribution
       clientSurfaces?: PluginClientSurfaceContribution[]
       themes?: PluginThemeContribution[]
+      screens?: PluginScreenContribution[]
+      sidebarItems?: PluginSidebarItemContribution[]
     }
   }
 }
@@ -245,8 +287,97 @@ function safeGetTransport(): Transport | null {
   }
 }
 
+function readActiveRemoteConnectionId(): number | null {
+  try {
+    const getter = (
+      transportModule as {
+        getActiveRemoteConnectionId?: () => number | null
+      }
+    ).getActiveRemoteConnectionId
+    return typeof getter === "function" ? getter() : null
+  } catch {
+    return null
+  }
+}
+
+export function subscribeHostTransportChange(
+  onStoreChange: () => void
+): () => void {
+  let unsub = () => {}
+  try {
+    const subscribe = (
+      transportModule as {
+        subscribeTransportChange?: (listener: () => void) => () => void
+      }
+    ).subscribeTransportChange
+    if (typeof subscribe === "function") {
+      unsub = subscribe(onStoreChange)
+    }
+  } catch {
+    // Partial mock in unit tests without subscribeTransportChange.
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("popstate", onStoreChange)
+  }
+  return () => {
+    unsub()
+    if (typeof window !== "undefined") {
+      window.removeEventListener("popstate", onStoreChange)
+    }
+  }
+}
+
+function getHostScopeSnapshot(): string {
+  if (typeof window === "undefined") return "::local"
+  return `${window.location.search}::${readActiveRemoteConnectionId() ?? "local"}`
+}
+
+function getHostScopeServerSnapshot(): string {
+  return "::local"
+}
+
+export function usePluginHostScope(): PluginHostScope {
+  useSyncExternalStore(
+    subscribeHostTransportChange,
+    getHostScopeSnapshot,
+    getHostScopeServerSnapshot
+  )
+  return resolvePluginHostScope(
+    typeof window !== "undefined" ? window.location.search : "",
+    readActiveRemoteConnectionId()
+  )
+}
+
+function getReadyHostTransportSnapshot(): Transport | null {
+  if (typeof window === "undefined") return null
+  const scope = resolvePluginHostScope(
+    window.location.search,
+    readActiveRemoteConnectionId()
+  )
+  if (!scope.transportReady) return null
+  return safeGetTransport()
+}
+
+function getNullTransportSnapshot(): null {
+  return null
+}
+
+/**
+ * Subscribe to the active host transport when ready. Using the ready `Transport`
+ * object identity as the `useSyncExternalStore` snapshot ensures replacing the
+ * transport under the same `remoteConnectionId` (e.g. reconnect / reconfiguration)
+ * immediately re-renders subscribers and clears stale catalogs or iframes.
+ */
+function useReadyHostTransport(enabled = true): Transport | null {
+  return useSyncExternalStore(
+    subscribeHostTransportChange,
+    enabled ? getReadyHostTransportSnapshot : getNullTransportSnapshot,
+    getNullTransportSnapshot
+  )
+}
+
 export function useHostPlugins(enabled = true) {
-  const transport = enabled ? safeGetTransport() : null
+  const transport = useReadyHostTransport(enabled)
   return {
     ...usePluginResource(transport, enabled, loadCatalog, CATALOG_CHANGED),
     transport,
@@ -338,7 +469,7 @@ export function usePluginPanelText(
 }
 
 export function usePluginClientHtml(pluginId: string) {
-  const transport = typeof window !== "undefined" ? getTransport() : null
+  const transport = useReadyHostTransport(true)
   const load = useCallback(
     (host: Transport) =>
       host.call<string>("host_plugins_client_html", { pluginId }),
@@ -360,6 +491,14 @@ export function pluginClientSurfaceKey(pluginId: string, surfaceId: string) {
 
 export function pluginThemeKey(pluginId: string, themeId: string) {
   return `${pluginId}:${themeId}`
+}
+
+export function pluginScreenKey(pluginId: string, screenId: string) {
+  return `${pluginId}:${screenId}`
+}
+
+export function pluginSidebarItemKey(pluginId: string, itemId: string) {
+  return `${pluginId}:${itemId}`
 }
 
 export function resolvePluginHostScope(
@@ -547,6 +686,126 @@ export function selectPluginThemes(
         title,
         ...(hasLight ? { light } : {}),
         ...(hasDark ? { dark } : {}),
+      })
+    }
+  }
+  return items
+}
+
+function resolvePluginScreensForPlugin(
+  plugin: InstalledPlugin,
+  locale?: string
+): ResolvedPluginScreen[] {
+  if (!plugin.enabled || !plugin.manifest.client?.entry?.trim()) return []
+  const screens = plugin.manifest.contributes?.screens
+  if (!screens?.length) return []
+  const pluginName =
+    resolvePluginText(
+      plugin.manifest.name,
+      plugin.manifest.nameTranslations,
+      locale
+    ).trim() || plugin.manifest.id
+  const items: ResolvedPluginScreen[] = []
+  const seenIds = new Set<string>()
+  for (const screen of screens) {
+    if (items.length >= MAX_PLUGIN_SCREENS) break
+    const id = screen.id.trim()
+    const title = resolvePluginText(
+      screen.title,
+      screen.titleTranslations,
+      locale
+    ).trim()
+    if (!id || !title || seenIds.has(id)) continue
+    seenIds.add(id)
+    items.push({
+      key: pluginScreenKey(plugin.manifest.id, id),
+      pluginId: plugin.manifest.id,
+      pluginName,
+      id,
+      title,
+    })
+  }
+  return items
+}
+
+export function selectPluginScreens(
+  plugins: readonly InstalledPlugin[] | undefined,
+  locale?: string
+): ResolvedPluginScreen[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginScreen[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    items.push(...resolvePluginScreensForPlugin(plugin, locale))
+  }
+  return items
+}
+
+export function resolvePluginScreen(
+  plugins: readonly InstalledPlugin[] | undefined,
+  pluginId: string,
+  screenId: string,
+  locale?: string
+): ResolvedPluginScreen | null {
+  if (!plugins?.length) return null
+  const normalizedPluginId = pluginId.trim()
+  const normalizedScreenId = screenId.trim()
+  if (!normalizedPluginId || !normalizedScreenId) return null
+  const plugin = plugins.find((item) => item.manifest.id === normalizedPluginId)
+  if (!plugin) return null
+  const screens = resolvePluginScreensForPlugin(plugin, locale)
+  return screens.find((item) => item.id === normalizedScreenId) ?? null
+}
+
+export function selectPluginSidebarItems(
+  plugins: readonly InstalledPlugin[] | undefined,
+  placement?: PluginSidebarItemPlacement,
+  locale?: string
+): ResolvedPluginSidebarItem[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginSidebarItem[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled || !plugin.manifest.client?.entry?.trim()) continue
+    const sidebarItems = plugin.manifest.contributes?.sidebarItems
+    if (!sidebarItems?.length) continue
+    const pluginScreens = resolvePluginScreensForPlugin(plugin, locale)
+    if (pluginScreens.length === 0) continue
+    const screensById = new Map(pluginScreens.map((s) => [s.id, s]))
+    const seenItemIds = new Set<string>()
+    let pluginValidCount = 0
+    for (const item of sidebarItems) {
+      if (pluginValidCount >= MAX_PLUGIN_SIDEBAR_ITEMS) break
+      const id = item.id.trim()
+      const title = resolvePluginText(
+        item.title,
+        item.titleTranslations,
+        locale
+      ).trim()
+      const screenId = item.screenId.trim()
+      if (!id || !title || !screenId) continue
+      if (item.placement !== "header" && item.placement !== "footer") continue
+      if (seenItemIds.has(id)) continue
+      // Only allow routing to a screen declared by the SAME plugin.
+      const targetScreen = screensById.get(screenId)
+      if (!targetScreen) continue
+      seenItemIds.add(id)
+      pluginValidCount += 1
+      if (placement && item.placement !== placement) continue
+      items.push({
+        key: pluginSidebarItemKey(plugin.manifest.id, id),
+        pluginId: plugin.manifest.id,
+        pluginName: targetScreen.pluginName,
+        id,
+        title,
+        placement: item.placement,
+        screenId: targetScreen.id,
+        screenKey: targetScreen.key,
+        screenTitle: targetScreen.title,
       })
     }
   }

@@ -51,7 +51,9 @@ class FakeMessageChannel {
 
 function createMockTransport() {
   const listeners = new Map<string, Set<(payload: unknown) => void>>()
-  const call = vi.fn(async (method: string) => {
+  const call = vi.fn<
+    (method: string, params?: Record<string, unknown>) => Promise<unknown>
+  >(async (method) => {
     if (method === "host_plugins_client_html") {
       return "<main>plugin-body</main>"
     }
@@ -79,6 +81,7 @@ function createMockTransport() {
   const transport: Transport = {
     call: call as Transport["call"],
     subscribe: subscribe as Transport["subscribe"],
+    isDesktop: () => false,
   }
   return { transport, call, subscribe, emit }
 }
@@ -514,6 +517,13 @@ describe("HostPluginSurface clientSurface context & isolation", () => {
         id: "activation",
       },
     },
+    {
+      label: "screen",
+      context: {
+        type: "screen" as const,
+        id: "overview",
+      },
+    },
   ])(
     "does not expose or accept composer insertion on $label",
     async ({ context }) => {
@@ -562,7 +572,7 @@ describe("HostPluginSurface clientSurface context & isolation", () => {
     }
   )
 
-  it.each(["pluginDetail", "activationPanel"] as const)(
+  it.each(["pluginDetail", "activationPanel", "screen"] as const)(
     "supports host-scoped context, RPC calls, settings, and events on %s",
     async (surfaceType) => {
       const mock = createMockTransport()
