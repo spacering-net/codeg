@@ -10141,7 +10141,7 @@
       "nav": {
         "team": "팀",
         "prefs": "환경설정",
-        "identity": "정체성과 두뇌",
+        "identity": "두뇌와 실행 구성",
         "persona": "페르소나와 메모리",
         "notify": "알림",
         "advanced": "고급",
@@ -11931,6 +11931,9 @@
         "done": "완료",
         "folded": "제가 알아서 할 일 · 방해 정도: {level}",
         "collapse": "접기",
+        "list": "하는 일: {total}개 중 {on}개 켜짐",
+        "listShow": "펼치기",
+        "listHide": "접기",
         "unavailable": "어시스턴트가 실행되는 쪽에서 바꿀 수 있어요."
       }
     },
@@ -12687,7 +12690,8 @@
     },
     "botPage": {
       "primary": "메인 어시스턴트",
-      "worker": "작업 어시스턴트"
+      "worker": "작업 어시스턴트",
+      "chat": "대화하기"
     },
     "noExecutor": "쓸 수 있는 실행 구성이 없어 지금은 직접 작업할 수 없습니다.",
     "setExecutor": "실행 구성 설정"

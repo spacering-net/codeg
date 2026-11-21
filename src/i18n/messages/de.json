@@ -10141,7 +10141,7 @@
       "nav": {
         "team": "Team",
         "prefs": "Präferenzen",
-        "identity": "Identität & Gehirn",
+        "identity": "Gehirn & Ausführungskonfiguration",
         "persona": "Persona & Gedächtnis",
         "notify": "Benachrichtigungen",
         "advanced": "Erweitert",
@@ -11931,6 +11931,9 @@
         "done": "Fertig",
         "folded": "Was ich von selbst tue · Störungen: {level}",
         "collapse": "Einklappen",
+        "list": "Was ich tue: {on} von {total} an",
+        "listShow": "Anzeigen",
+        "listHide": "Einklappen",
         "unavailable": "Das lässt sich dort ändern, wo der Assistent läuft."
       }
     },
@@ -12687,7 +12690,8 @@
     },
     "botPage": {
       "primary": "Hauptassistent",
-      "worker": "Arbeitsassistent"
+      "worker": "Arbeitsassistent",
+      "chat": "Chatten"
     },
     "noExecutor": "Es hat keine nutzbare Ausführungskonfiguration: Es kann vorerst nicht selbst arbeiten.",
     "setExecutor": "Ausführungskonfiguration festlegen"

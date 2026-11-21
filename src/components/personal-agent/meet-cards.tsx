@@ -32,6 +32,7 @@ import {
   Gauge,
   Handshake,
   KeyRound,
+  ListChecks,
   PawPrint,
   Settings2,
   Sparkles,
@@ -661,6 +662,8 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
   const { patch, busy: patching } = useSettingsPatch(null)
   const { busy, failed, act } = useAct(Number(row.ref_id))
   const [unfolded, setUnfolded] = useState(false)
+  // The switches, folded till asked for: ten rows is a long card.
+  const [listOpen, setListOpen] = useState(false)
   const desktop = isDesktop()
   const disabled = readOnly || account == null
 
@@ -671,6 +674,11 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
   }, [t])
 
   const level = account ? disturbOf(account) : "standard"
+  const promisesOn = account
+    ? PROMISES.filter(
+        ({ key, off }) => (account.prefs[key] as unknown as string) !== off
+      ).length
+    : 0
   const done = state === "done"
   // One card, as the settings write it — how much it may disturb, then the
   // switches of what it does unasked (each a row, a hairline between, the
@@ -696,33 +704,64 @@ export function PromisesCard({ item }: { item: NoticeItem }) {
         />
       </SettingCard>
       <SettingCard className={FLAT_GROUP} data-pa-surface data-pa-meet-promises>
-        {PROMISES.map(({ key, on, off }) => {
-          const id = `pa-meet-promise-${row.id}-${key}`
-          const value = account.prefs[key] as unknown as string
-          return (
-            <div key={key} data-pa-promise={key}>
-              <SettingRow
-                className="px-3.5"
-                icon={PREF_ICONS[key]}
-                title={t(`items.${key}.title` as "items.proactive.title")}
-                description={t(`items.${key}.hint` as "items.proactive.hint")}
-                htmlFor={id}
-                control={
-                  <Switch
-                    id={id}
-                    checked={value !== off}
-                    disabled={disabled || patching != null}
-                    onCheckedChange={(checked) =>
-                      void patch([
-                        { key: `prefs.${key}`, value: checked ? on : off },
-                      ])
+        {/* The switches folded under a line of how many are on: the same
+            line, in the same place, open or not. */}
+        <button
+          type="button"
+          onClick={() => setListOpen((o) => !o)}
+          aria-expanded={listOpen}
+          className="flex w-full items-center gap-2 px-3.5 py-3 text-start text-sm leading-5 transition-colors outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          data-pa-meet-promises-toggle
+        >
+          <ListChecks
+            className="size-4 shrink-0 text-muted-foreground"
+            aria-hidden
+          />
+          <span className="min-w-0 flex-1">
+            {t("list", { on: promisesOn, total: PROMISES.length })}
+          </span>
+          <span className="shrink-0 text-xs text-muted-foreground">
+            {listOpen ? t("listHide") : t("listShow")}
+          </span>
+          <ChevronDown
+            className={cn(
+              "size-3.5 shrink-0 text-muted-foreground transition-transform",
+              !listOpen && "-rotate-90 rtl:rotate-90"
+            )}
+            aria-hidden
+          />
+        </button>
+        {listOpen
+          ? PROMISES.map(({ key, on, off }) => {
+              const id = `pa-meet-promise-${row.id}-${key}`
+              const value = account.prefs[key] as unknown as string
+              return (
+                <div key={key} data-pa-promise={key}>
+                  <SettingRow
+                    className="px-3.5"
+                    icon={PREF_ICONS[key]}
+                    title={t(`items.${key}.title` as "items.proactive.title")}
+                    description={t(
+                      `items.${key}.hint` as "items.proactive.hint"
+                    )}
+                    htmlFor={id}
+                    control={
+                      <Switch
+                        id={id}
+                        checked={value !== off}
+                        disabled={disabled || patching != null}
+                        onCheckedChange={(checked) =>
+                          void patch([
+                            { key: `prefs.${key}`, value: checked ? on : off },
+                          ])
+                        }
+                      />
                     }
                   />
-                }
-              />
-            </div>
-          )
-        })}
+                </div>
+              )
+            })
+          : null}
       </SettingCard>
       <SheetActions data-pa-meet-actions>
         <Button

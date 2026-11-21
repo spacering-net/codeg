@@ -1,20 +1,20 @@
 "use client"
 
 /**
- * "Identity & brain", the first tab of an assistant's own page: its name
- * and picture, the agent it runs on with every option picked (the
- * assistant editor's flow and validation), and beside it the executor
- * config its work runs on (D4) — the brain thinks, the executor config does
- * the work. The mode and permissions are chosen here, and codeg runs it as
- * picked. Saved with [Save] — switching the agent starts a new session.
+ * "Brain & executor config", the first tab of an assistant's own page: the
+ * agent it runs on with every option picked (the assistant editor's flow
+ * and validation) — picked from tiles, as the first setup has it — and
+ * under it the executor config its work runs on (D4) — the brain thinks,
+ * the executor config does the work. The mode and permissions are chosen
+ * here, and codeg runs it as picked. Saved with [Save] — switching the
+ * agent starts a new session. Its name and face are the page's head's,
+ * saved there on their own.
  * With no assistant yet, it is the first setup, the page's own screen: its
  * face, its name and its agent, and [Chat with your assistant] — no
  * executor config to pick, a new one made on the brain's agent with its
  * options filled in; when codeg cannot read them nothing is saved and the
  * executor config editor opens, the setup saved again with the one made
- * there. A name or picture saved
- * elsewhere meanwhile (the roster's "Edit basic info") shows here unless
- * the field was changed here.
+ * there.
  */
 
 import { useMemo, useRef, useState } from "react"
@@ -22,7 +22,6 @@ import { useLocale, useTranslations } from "next-intl"
 import {
   AlertTriangle,
   ArrowRight,
-  Bot,
   Brain,
   Loader2,
   MessageCircle,
@@ -61,8 +60,6 @@ import {
   SettingRow,
 } from "@/components/shared/setting-card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { personalAgentSave } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -79,7 +76,6 @@ import { cn } from "@/lib/utils"
 import { useAssistants } from "@/stores/assistants-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
-import { BotFacePicker } from "../bot-face-picker"
 import { SetupAgentTiles } from "./setup-agent-tiles"
 import { SetupFrame } from "./setup-frame"
 import { SetupIdentity } from "./setup-identity"
@@ -124,22 +120,10 @@ export function IdentityPage({
   const locale = useLocale()
   const { agents } = useAcpAgents()
 
-  const savedName = agent?.name ?? ""
-  const savedAvatar = agent?.avatar ?? DEFAULT_AVATAR
-  const [name, setName] = useState(savedName)
-  const [avatar, setAvatar] = useState<BotAvatar>(savedAvatar)
-  // The saved name and picture as the fields last took them: one saved
-  // anew (here or elsewhere) replaces a field still as it was.
-  const [base, setBase] = useState({ name: savedName, avatar: savedAvatar })
-  if (
-    base.name !== savedName ||
-    JSON.stringify(base.avatar) !== JSON.stringify(savedAvatar)
-  ) {
-    setBase({ name: savedName, avatar: savedAvatar })
-    if (name === base.name) setName(savedName)
-    if (JSON.stringify(avatar) === JSON.stringify(base.avatar))
-      setAvatar(savedAvatar)
-  }
+  // The first setup's name and face; one set up has them on its page's
+  // head.
+  const [name, setName] = useState("")
+  const [avatar, setAvatar] = useState<BotAvatar>(DEFAULT_AVATAR)
   const [agentType, setAgentType] = useState<AgentType | null>(
     agent?.agent_type ?? null
   )
@@ -340,8 +324,7 @@ export function IdentityPage({
       // and a save here never takes one of them back.
       await personalAgentSave(
         {
-          name: name.trim(),
-          avatar,
+          ...(agent ? {} : { name: name.trim(), avatar }),
           ...(brain.config ? { agent_config: brain.config } : {}),
           locale,
           ...(pick?.kind === "existing"
@@ -367,9 +350,11 @@ export function IdentityPage({
         // Nothing saved: the editor makes it, and the save goes again.
         setEditor({
           why: message.slice(at + EXECUTOR_OPTIONS_UNAVAILABLE.length),
+          // Named and faced as it is: the field's for the first setup,
+          // what is saved for one set up.
           prefill: {
-            name: name.trim() || tPage("title"),
-            avatar: assistantAvatarOf(avatar),
+            name: (agent ? agent.name : name).trim() || tPage("title"),
+            avatar: assistantAvatarOf(agent ? agent.avatar : avatar),
             agentType,
           },
         })
@@ -383,11 +368,16 @@ export function IdentityPage({
 
   const footerHint = missing.length > 0 ? missingText(missing.length) : null
 
+  // The agents to pick from: the ones turned on, and the one it runs on.
+  const offered = agents.filter((a) => a.enabled || a.agent_type === agentType)
+  const asTiles =
+    offered.length > 0 &&
+    (agentType === null || offered.some((a) => a.agent_type === agentType))
   const agentPick = (
     <AgentSelect
       value={agentType}
       onChange={pickAgent}
-      agents={agents.filter((a) => a.enabled || a.agent_type === agentType)}
+      agents={offered}
       fallbackLabel={savedAgent?.label_snapshot.agent}
       disabled={disabled || saving}
     />
@@ -523,48 +513,31 @@ export function IdentityPage({
           void save()
         }}
       >
-        <SettingCard>
-          {/* Who it is: the avatar its messages carry and its name, side by
-            side as in the assistant editor. A monogram is drawn from the
-            name in effect — the default one while the field is empty. */}
-          <div className="flex items-start gap-3 p-3">
-            <div className="mt-0.5 shrink-0">
-              <BotFacePicker
-                value={avatar}
-                name={name.trim() || tPage("title")}
-                onChange={setAvatar}
+        <SettingCard data-pa-identity-brain>
+          {/* Its agent: the tiles, as the first setup has them — or, for
+              one not among them (gone, or the list still on its way),
+              the list to pick from. */}
+          <div className="flex flex-col gap-2.5 p-3">
+            <div className="flex flex-col gap-0.5 px-0.5">
+              <p className="flex items-center gap-1.5 text-sm font-medium">
+                <Brain className="size-4 text-muted-foreground" aria-hidden />
+                {t("setupBrainAgent")}
+              </p>
+              <p className="text-xs leading-5 text-muted-foreground">
+                {agentType === null ? ta("pickAgentFirst") : t("agentHint")}
+              </p>
+            </div>
+            {asTiles ? (
+              <SetupAgentTiles
+                value={agentType}
+                onChange={pickAgent}
+                agents={offered}
                 disabled={disabled || saving}
               />
-            </div>
-            <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-              <Label htmlFor="pa-name" className="text-sm">
-                {t("name")}
-              </Label>
-              <Input
-                id="pa-name"
-                dir="auto"
-                value={name}
-                maxLength={40}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={t("namePlaceholder")}
-                disabled={disabled || saving}
-                className="h-8 bg-background text-sm"
-              />
-              <span className="text-xs leading-5 text-muted-foreground">
-                {t("nameHint")}
-              </span>
-            </div>
+            ) : (
+              <div className="flex">{agentPick}</div>
+            )}
           </div>
-        </SettingCard>
-        <SettingCard>
-          <SettingRow
-            icon={Bot}
-            title={ta("agentLabel")}
-            description={
-              agentType === null ? ta("pickAgentFirst") : t("agentHint")
-            }
-            control={agentPick}
-          />
           {options}
         </SettingCard>
         {agentType !== null && agentType !== agent.agent_type ? (

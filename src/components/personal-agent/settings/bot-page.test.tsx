@@ -34,13 +34,20 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), message: vi.fn() } }))
 // The identity and persona tabs' editors are tested where they live.
 const identity = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
+  mounts: 0,
 }))
-vi.mock("./identity-page", () => ({
-  IdentityPage: (props: Record<string, unknown>) => {
-    identity.props = props
-    return <div data-testid="identity-page" />
-  },
-}))
+vi.mock("./identity-page", async () => {
+  const { useEffect } = await import("react")
+  return {
+    IdentityPage: (props: Record<string, unknown>) => {
+      identity.props = props
+      useEffect(() => {
+        identity.mounts += 1
+      }, [])
+      return <div data-testid="identity-page" />
+    },
+  }
+})
 vi.mock("../persona-files", () => ({
   PersonaFiles: (props: { botId: number | null; initial: string | null }) => (
     <div data-testid="persona-files" data-initial={props.initial ?? ""} />
@@ -151,6 +158,7 @@ beforeEach(() => {
   ctx.botId = null
   ctx.switching = false
   identity.props = null
+  identity.mounts = 0
   usePersonalAgentUi.setState({ viewBot: null, settings: null, botPage: null })
   usePersonalAgentUi.getState().openBotPage()
 })
@@ -162,7 +170,7 @@ afterEach(() => {
 })
 
 describe("an assistant's own page", () => {
-  it("shows whose it is over its tabs, on “Identity & brain” first", () => {
+  it("shows whose it is beside its tabs, on “Brain & executor config” first", () => {
     draw()
     const head = document.querySelector("[data-pa-bot-page-head]")!
     expect(within(head as HTMLElement).getByRole("heading").textContent).toBe(
@@ -173,13 +181,13 @@ describe("an assistant's own page", () => {
     ).toBe("Primary assistant · Claude Code")
     // No title over a tab's body: the tab names it.
     expect(tabNames()).toEqual([
-      "Identity & brain",
+      "Brain & executor config",
       "Persona & memory",
       "Notifications",
       "Advanced",
     ])
     expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-      "Identity & brain"
+      "Brain & executor config"
     )
     expect(screen.getByTestId("identity-page")).toBeInTheDocument()
     expect(identity.props).toMatchObject({ bot: null, disabled: false })
@@ -217,9 +225,10 @@ describe("an assistant's own page", () => {
         document.querySelector("[data-pa-bot-page-subtitle]")?.textContent
       ).toBe("Work assistant · Claude Code")
     )
-    // Its executor config is on "Identity & brain": no "Execution" tab.
+    // Its executor config is on "Brain & executor config": no "Execution"
+    // tab.
     expect(tabNames()).toEqual([
-      "Identity & brain",
+      "Brain & executor config",
       "Persona & memory",
       "Notifications",
       "Advanced",
@@ -343,7 +352,7 @@ describe("an assistant's own page", () => {
     expect(identity.props).toMatchObject({ disabled: true })
   })
 
-  it("goes back to the conversation from the arrow before its face", () => {
+  it("goes back to the conversation from the arrow in its corner", () => {
     draw()
     const back = document.querySelector<HTMLElement>("[data-pa-bot-page-back]")!
     // An arrow on the head's line, named for a pointer and a screen reader.
@@ -352,6 +361,203 @@ describe("an assistant's own page", () => {
     expect(back.parentElement!.querySelector("h1")?.textContent).toBe("Nova")
     fireEvent.click(back)
     expect(usePersonalAgentUi.getState().botPage).toBeNull()
+  })
+
+  it("goes to its conversation from [Chat with it] under its name", () => {
+    draw()
+    const head = document.querySelector("[data-pa-bot-page-head]")!
+    const chat = head.querySelector<HTMLElement>("[data-pa-bot-page-chat]")!
+    expect(chat.textContent).toBe("Chat with it")
+    fireEvent.click(chat)
+    expect(usePersonalAgentUi.getState().botPage).toBeNull()
+  })
+
+  it("is laid out as the first setup is: who it is on the left, its tabs alone scrolling on the right, one column when narrow", () => {
+    const observers: Array<() => void> = []
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: () => void) {
+          observers.push(cb)
+        }
+        observe() {}
+        disconnect() {}
+      }
+    )
+    let width = 1200
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() => ({ width }) as DOMRect)
+    try {
+      draw()
+      const frame = document.querySelector("[data-pa-bot-frame]")!
+      expect(frame.getAttribute("data-pa-bot-page-layout")).toBe("wide")
+      // Over a wash of its face's colour.
+      expect(frame.getAttribute("data-pa-face")).toBe("blue")
+      expect(frame.querySelector(".pa-setup-wash")).not.toBeNull()
+      const head = document.querySelector("[data-pa-bot-page-head]")!
+      const body = screen.getByTestId("identity-page")
+      const scroller = (el: Element) =>
+        el.closest("[data-overlayscrollbars-initialize]")
+      // The tabs' bodies scroll on their own, not with who it is, and
+      // their row stays put over them.
+      expect(scroller(body)).not.toBeNull()
+      expect(scroller(head)).not.toBe(scroller(body))
+      expect(scroller(body)!.contains(screen.getAllByRole("tab")[0])).toBe(
+        false
+      )
+      // Narrower: one column, who it is over the tabs, scrolling as one —
+      // the tab's body kept as it is (what is being changed on it stays).
+      const mounted = identity.mounts
+      const before = screen.getByTestId("identity-page")
+      width = 700
+      act(() => observers.forEach((o) => o()))
+      expect(identity.mounts).toBe(mounted)
+      expect(screen.getByTestId("identity-page")).toBe(before)
+      expect(frame.getAttribute("data-pa-bot-page-layout")).toBe("narrow")
+      const head2 = document.querySelector("[data-pa-bot-page-head]")!
+      expect(scroller(head2)).toBe(
+        scroller(screen.getByTestId("identity-page"))
+      )
+      expect(
+        head2.compareDocumentPosition(screen.getAllByRole("tab")[0]) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy()
+    } finally {
+      rect.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it("saves a face picked on it at once, shown meanwhile, and takes it back when refused", async () => {
+    let refuse: (e: Error) => void = () => {}
+    api.personalAgentSave.mockImplementationOnce(
+      () => new Promise((_, no) => (refuse = no))
+    )
+    draw()
+    const frame = document.querySelector("[data-pa-bot-frame]")!
+    fireEvent.click(
+      document.querySelector("[data-pa-bot-page-head] [data-pa-face-picker]")!
+    )
+    fireEvent.click(await screen.findByRole("button", { name: "Teal" }))
+    expect(frame.getAttribute("data-pa-face")).toBe("teal")
+    await waitFor(() =>
+      expect(api.personalAgentSave).toHaveBeenCalledWith(
+        {
+          avatar: { kind: "face", shape: "blob", color: "teal" },
+          locale: "en",
+        },
+        null
+      )
+    )
+    await act(async () => refuse(new Error("no")))
+    expect(frame.getAttribute("data-pa-face")).toBe("blue")
+  })
+
+  it("saves faces picked one after another in the order picked, one at a time", async () => {
+    let first: (v: unknown) => void = () => {}
+    api.personalAgentSave
+      .mockImplementationOnce(() => new Promise((ok) => (first = ok)))
+      .mockResolvedValueOnce(undefined)
+    draw()
+    const picker = () =>
+      document.querySelector<HTMLElement>(
+        "[data-pa-bot-page-head] [data-pa-face-picker]"
+      )!
+    fireEvent.click(picker())
+    fireEvent.click(await screen.findByRole("button", { name: "Teal" }))
+    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(1))
+    fireEvent.click(await screen.findByRole("button", { name: "Purple" }))
+    // The second waits for the first to be done.
+    await act(async () => {})
+    expect(api.personalAgentSave).toHaveBeenCalledTimes(1)
+    await act(async () => first(undefined))
+    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(2))
+    expect(api.personalAgentSave.mock.calls[1][0]).toMatchObject({
+      avatar: { color: "purple" },
+    })
+  })
+
+  it("sends only the last face picked, after a page closed and opened again meanwhile too", async () => {
+    let first: (v: unknown) => void = () => {}
+    api.personalAgentSave
+      .mockImplementationOnce(() => new Promise((ok) => (first = ok)))
+      .mockResolvedValue(undefined)
+    // The picker stays open after a pick: opened only when it is not.
+    const pickColor = async (name: string) => {
+      if (!screen.queryByRole("button", { name }))
+        fireEvent.click(
+          document.querySelector(
+            "[data-pa-bot-page-head] [data-pa-face-picker]"
+          )!
+        )
+      fireEvent.click(await screen.findByRole("button", { name }))
+    }
+    draw()
+    await pickColor("Teal")
+    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(1))
+    await pickColor("Purple")
+    // Closed and opened again, a third picked while the first is out.
+    cleanup()
+    draw()
+    await pickColor("Orange")
+    await act(async () => first(undefined))
+    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(2))
+    await act(async () => {})
+    expect(api.personalAgentSave).toHaveBeenCalledTimes(2)
+    expect(api.personalAgentSave.mock.calls[1][0]).toMatchObject({
+      avatar: { color: "orange" },
+    })
+  })
+
+  it("shows a face picked for one assistant on its page only, not on the next one's with the same face", async () => {
+    api.personalAgentSave.mockImplementationOnce(() => new Promise(() => {}))
+    const { rerender } = draw()
+    fireEvent.click(
+      document.querySelector("[data-pa-bot-page-head] [data-pa-face-picker]")!
+    )
+    fireEvent.click(await screen.findByRole("button", { name: "Teal" }))
+    const frame = () => document.querySelector("[data-pa-bot-frame]")!
+    expect(frame().getAttribute("data-pa-face")).toBe("teal")
+    // Another assistant opened, its saved face the same blue as the
+    // first's was.
+    ctx.botId = 7
+    ctx.snapshot = snapshot({ id: 7, name: "Reviewer", kind: "worker" })
+    act(() => usePersonalAgentUi.setState({ viewBot: 7 }))
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <BotPage />
+      </NextIntlClientProvider>
+    )
+    expect(frame().getAttribute("data-pa-face")).toBe("blue")
+  })
+
+  it("renames it where its name is, the name alone saved", async () => {
+    api.personalAgentSave.mockResolvedValueOnce(undefined)
+    draw()
+    const head = document.querySelector("[data-pa-bot-page-head]")!
+    fireEvent.click(head.querySelector("[data-pa-aux-head-name]")!)
+    const field = head.querySelector<HTMLInputElement>(
+      "[data-pa-aux-head-name-input]"
+    )!
+    fireEvent.change(field, { target: { value: "Vega" } })
+    fireEvent.keyDown(field, { key: "Enter" })
+    expect(api.personalAgentSave).toHaveBeenCalledWith(
+      { name: "Vega", locale: "en" },
+      null
+    )
+  })
+
+  it("changes neither its face nor its name while the engine runs elsewhere", () => {
+    ctx.snapshot = snapshot(
+      { id: 1, name: "Nova", kind: "primary" },
+      "elsewhere"
+    )
+    draw()
+    const head = document.querySelector("[data-pa-bot-page-head]")!
+    expect(head.querySelector("[data-pa-face-picker]")).toBeNull()
+    expect(head.querySelector("[data-pa-aux-head-name]")).toBeNull()
+    expect(head.querySelector("h1")?.textContent).toBe("Nova")
   })
 })
 

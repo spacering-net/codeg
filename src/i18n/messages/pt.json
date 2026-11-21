@@ -10141,7 +10141,7 @@
       "nav": {
         "team": "Equipe",
         "prefs": "Preferências",
-        "identity": "Identidade e cérebro",
+        "identity": "Cérebro e configuração de execução",
         "persona": "Persona e memória",
         "notify": "Notificações",
         "advanced": "Avançado",
@@ -11931,6 +11931,9 @@
         "done": "Concluído",
         "folded": "O que vou fazer por conta própria · interrupções: {level}",
         "collapse": "Recolher",
+        "list": "O que faço: {on} de {total} ligadas",
+        "listShow": "Mostrar",
+        "listHide": "Recolher",
         "unavailable": "Isso se muda onde o assistente roda."
       }
     },
@@ -12687,7 +12690,8 @@
     },
     "botPage": {
       "primary": "Assistente principal",
-      "worker": "Assistente de trabalho"
+      "worker": "Assistente de trabalho",
+      "chat": "Conversar"
     },
     "noExecutor": "Não tem uma configuração de execução utilizável: por enquanto não pode trabalhar por conta própria.",
     "setExecutor": "Definir execução"

@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * An assistant's own pages besides "Identity & brain": "Persona & memory"
+ * An assistant's own pages besides "Brain & executor config": "Persona & memory"
  * (its files) and "Advanced" — compaction, the handoff card's budget,
  * dispatch concurrency, the built-in skill (each saved the moment it
  * changes), and the working directory, moved with [Move] since that starts a

@@ -4365,13 +4365,15 @@ div.monaco-diff-editor.side-by-side .editor.modified {
    round the face that breathes slowly and rings that ripple out from it
    (both held still with reduced motion). A black or grey face is a light
    touch of grey, never a cloud. The colour eases over as another face is
-   picked. */
+   picked. An assistant's own page (`data-pa-bot-frame`) has the same wash
+   and glow, without the ripples. */
 @property --pa-setup-tint {
   syntax: "<color>";
   inherits: true;
   initial-value: transparent;
 }
-[data-pa-setup-frame] {
+[data-pa-setup-frame],
+[data-pa-bot-frame] {
   --pa-setup-tint: var(--pa-body, var(--primary));
   --pa-setup-wash: 15%;
   --pa-setup-halo: 0.24;
@@ -4379,7 +4381,9 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   transition: --pa-setup-tint 400ms ease;
 }
 [data-pa-setup-frame][data-pa-face="black"],
-[data-pa-setup-frame][data-pa-face="gray"] {
+[data-pa-setup-frame][data-pa-face="gray"],
+[data-pa-bot-frame][data-pa-face="black"],
+[data-pa-bot-frame][data-pa-face="gray"] {
   --pa-setup-wash: 4%;
   --pa-setup-halo: 0.08;
   --pa-setup-ring: 22%;
@@ -4399,6 +4403,17 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 }
 [dir="rtl"] [data-pa-setup-frame][data-wide] .pa-setup-wash {
   --pa-setup-wash-at: calc(50% + 14.5rem) 50%;
+}
+/* An assistant's own page: behind its face at the top of the column; side
+   by side, in the middle of the left part (two fifths of the width). */
+[data-pa-bot-frame] .pa-setup-wash {
+  --pa-setup-wash-at: 50% 9rem;
+}
+[data-pa-bot-frame][data-wide] .pa-setup-wash {
+  --pa-setup-wash-at: 20% 50%;
+}
+[dir="rtl"] [data-pa-bot-frame][data-wide] .pa-setup-wash {
+  --pa-setup-wash-at: 80% 50%;
 }
 .pa-setup-halo {
   position: absolute;

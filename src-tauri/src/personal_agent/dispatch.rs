@@ -50,7 +50,7 @@ pub const MAX_PROMPT_CHARS: usize = 20_000;
 pub const MAX_DONE_WHEN_CHARS: usize = 4_000;
 /// What an assistant hears when it has nothing to do its work with.
 pub const NO_EXECUTOR: &str = "you cannot start work yourself yet: nothing is set for your work to run \
-     on. Ask the owner to pick it in your settings (Identity & brain); until then, hand the work to \
+     on. Ask the owner to pick it in your settings; until then, hand the work to \
      another assistant with `bot_message`, or tell the owner.";
 /// What an assistant works with, as it reads it: the agent, its mode and
 /// options — never the executor config's name or id.

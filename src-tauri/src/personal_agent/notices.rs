@@ -781,7 +781,7 @@ impl PersonalAgentEngine {
             return e;
         }
         "nothing is set for this assistant's work to run on: pick it in the assistant's settings \
-         (Identity & brain), then try again"
+         (Brain & executor config), then try again"
             .into()
     }
 

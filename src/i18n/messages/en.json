@@ -10140,7 +10140,7 @@
       "nav": {
         "team": "Team",
         "prefs": "Preferences",
-        "identity": "Identity & brain",
+        "identity": "Brain & executor config",
         "persona": "Persona & memory",
         "notify": "Notifications",
         "advanced": "Advanced",
@@ -11931,6 +11931,9 @@
         "done": "Done",
         "folded": "What I'll do on my own · disturbance: {level}",
         "collapse": "Fold",
+        "list": "What I do: {on} of {total} on",
+        "listShow": "Show",
+        "listHide": "Hide",
         "unavailable": "These can be changed where the assistant runs."
       }
     },
@@ -12687,7 +12690,8 @@
     },
     "botPage": {
       "primary": "Primary assistant",
-      "worker": "Work assistant"
+      "worker": "Work assistant",
+      "chat": "Chat with it"
     },
     "noExecutor": "It has no executor config to work on: it cannot do work itself for now.",
     "setExecutor": "Set executor config"

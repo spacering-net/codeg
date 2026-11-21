@@ -10141,7 +10141,7 @@
       "nav": {
         "team": "Equipo",
         "prefs": "Preferencias",
-        "identity": "Identidad y cerebro",
+        "identity": "Cerebro y configuración de ejecución",
         "persona": "Personalidad y memoria",
         "notify": "Avisos",
         "advanced": "Avanzado",
@@ -11931,6 +11931,9 @@
         "done": "Hecho",
         "folded": "Lo que haré por mi cuenta · molestias: {level}",
         "collapse": "Plegar",
+        "list": "Lo que hago: {on} de {total} activadas",
+        "listShow": "Mostrar",
+        "listHide": "Plegar",
         "unavailable": "Se cambia donde se ejecuta el asistente."
       }
     },
@@ -12687,7 +12690,8 @@
     },
     "botPage": {
       "primary": "Asistente principal",
-      "worker": "Asistente de trabajo"
+      "worker": "Asistente de trabajo",
+      "chat": "Hablar con él"
     },
     "noExecutor": "No tiene una configuración de ejecución que usar: por ahora no puede trabajar por su cuenta.",
     "setExecutor": "Configurar ejecución"

@@ -99,13 +99,16 @@ const NAME_MAX = 40
  *  Enter or leaving it saves it, Escape takes it back. A work assistant's
  *  is not left empty (it goes back to what it was); the primary's may be
  *  (it goes by the default one). Not renamed where it runs elsewhere. */
-function HeadName({
+export function HeadName({
   snapshot,
   name,
+  hero = false,
 }: {
   snapshot: PersonalAgentSnapshot
   /** What it goes by now. */
   name: string
+  /** The assistant's own page's: large, its page's heading. */
+  hero?: boolean
 }) {
   const t = useTranslations("PersonalAgent.aux")
   const tPage = useTranslations("PersonalAgent")
@@ -190,22 +193,31 @@ function HeadName({
             commit()
           }
         }}
-        className="h-8 w-full max-w-60 min-w-0 rounded-full border border-input bg-background px-3 text-center text-base leading-6 font-semibold outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+        className={cn(
+          "w-full min-w-0 border border-input bg-background text-center font-semibold outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50",
+          hero
+            ? "h-11 max-w-xs rounded-xl px-3 text-2xl leading-9 tracking-tight"
+            : "h-8 max-w-60 rounded-full px-3 text-base leading-6"
+        )}
       />
     )
   }
+  const Heading = hero ? "h1" : "h2"
   if (!editable) {
     return (
-      <h2
+      <Heading
         title={shown}
-        className="max-w-full truncate text-base leading-6 font-semibold"
+        className={cn(
+          "max-w-full truncate font-semibold",
+          hero ? "text-2xl leading-9 tracking-tight" : "text-base leading-6"
+        )}
       >
         {shown}
-      </h2>
+      </Heading>
     )
   }
   return (
-    <h2 className="flex max-w-full min-w-0">
+    <Heading className="flex max-w-full min-w-0">
       <button
         type="button"
         title={`${shown}\n${t("rename")}`}
@@ -215,11 +227,16 @@ function HeadName({
           ended.current = false
           setDraft(pending ?? saved)
         }}
-        className="h-8 max-w-full min-w-0 truncate rounded-full px-3 text-base leading-6 font-semibold transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
+        className={cn(
+          "max-w-full min-w-0 truncate font-semibold transition-colors outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50",
+          hero
+            ? "h-11 rounded-xl px-3 text-2xl leading-9 tracking-tight hover:bg-muted/70"
+            : "h-8 rounded-full px-3 text-base leading-6"
+        )}
       >
         {shown}
       </button>
-    </h2>
+    </Heading>
   )
 }
 

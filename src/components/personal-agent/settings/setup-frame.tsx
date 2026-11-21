@@ -27,7 +27,7 @@ import type { BotColor } from "@/lib/types"
 const WIDE_REM = 56
 
 /** Whether `el` is at least `rem` root ems wide, kept as it is resized. */
-function useWide(el: React.RefObject<HTMLElement | null>, rem: number) {
+export function useWide(el: React.RefObject<HTMLElement | null>, rem: number) {
   const [wide, setWide] = useState(false)
   useEffect(() => {
     const node = el.current

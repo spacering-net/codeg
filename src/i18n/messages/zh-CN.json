@@ -10140,7 +10140,7 @@
       "nav": {
         "team": "团队",
         "prefs": "偏好",
-        "identity": "身份与大脑",
+        "identity": "大脑与执行配置",
         "persona": "人设与记忆",
         "notify": "通知",
         "advanced": "高级",
@@ -11931,6 +11931,9 @@
         "done": "完成",
         "folded": "我会主动做这些 · 打扰程度：{level}",
         "collapse": "收起",
+        "list": "具体做哪些：开着 {on} 项，共 {total} 项",
+        "listShow": "展开",
+        "listHide": "收起",
         "unavailable": "要在助手运行的那一端改。"
       }
     },
@@ -12687,7 +12690,8 @@
     },
     "botPage": {
       "primary": "主助手",
-      "worker": "工作助手"
+      "worker": "工作助手",
+      "chat": "和它聊天"
     },
     "noExecutor": "它还没有能用的执行配置，暂时不能自己干活。",
     "setExecutor": "设置执行配置"

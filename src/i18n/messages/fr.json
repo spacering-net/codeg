@@ -10141,7 +10141,7 @@
       "nav": {
         "team": "Équipe",
         "prefs": "Préférences",
-        "identity": "Identité et cerveau",
+        "identity": "Cerveau et configuration d'exécution",
         "persona": "Persona et mémoire",
         "notify": "Notifications",
         "advanced": "Avancé",
@@ -11931,6 +11931,9 @@
         "done": "Terminé",
         "folded": "Ce que je ferai de moi-même · dérangement : {level}",
         "collapse": "Replier",
+        "list": "Ce que je fais : {on} sur {total} activés",
+        "listShow": "Afficher",
+        "listHide": "Replier",
         "unavailable": "Cela se change là où tourne l'assistant."
       }
     },
@@ -12687,7 +12690,8 @@
     },
     "botPage": {
       "primary": "Assistant principal",
-      "worker": "Assistant de travail"
+      "worker": "Assistant de travail",
+      "chat": "Discuter"
     },
     "noExecutor": "Il n'a pas de configuration d'exécution utilisable : il ne peut pas travailler lui-même pour l'instant.",
     "setExecutor": "Définir la configuration"

@@ -10141,7 +10141,7 @@
       "nav": {
         "team": "チーム",
         "prefs": "環境設定",
-        "identity": "アイデンティティと頭脳",
+        "identity": "頭脳と実行設定",
         "persona": "ペルソナとメモリ",
         "notify": "通知",
         "advanced": "詳細設定",
@@ -11931,6 +11931,9 @@
         "done": "完了",
         "folded": "自分から行うこと · 通知の多さ：{level}",
         "collapse": "たたむ",
+        "list": "具体的な内容：{total} 件中 {on} 件がオン",
+        "listShow": "表示",
+        "listHide": "たたむ",
         "unavailable": "アシスタントが動いている側で変更できます。"
       }
     },
@@ -12687,7 +12690,8 @@
     },
     "botPage": {
       "primary": "メインアシスタント",
-      "worker": "作業アシスタント"
+      "worker": "作業アシスタント",
+      "chat": "話しかける"
     },
     "noExecutor": "使える実行設定がないため、今は自分で作業できません。",
     "setExecutor": "実行設定を設定"

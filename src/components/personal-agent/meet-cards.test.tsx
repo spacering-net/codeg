@@ -423,9 +423,36 @@ describe("one thing at once", () => {
 describe("what I'll do on my own", () => {
   const open = (data: Record<string, unknown> = {}) =>
     card({ notice: "onboarding", purpose: "promises", state: "open", ...data })
+  /** Its switches, unfolded. */
+  const unfold = () =>
+    fireEvent.click(document.querySelector("[data-pa-meet-promises-toggle]")!)
+
+  it("folds its switches under a line of how many are on, the line staying put as they open and close", () => {
+    ctx.account = account({
+      prefs: { ...DEFAULT_PREFS, brief: "off", followups: "ask" },
+    })
+    draw(open())
+    const promises = document.querySelector("[data-pa-meet-promises]")!
+    const toggle = promises.querySelector<HTMLElement>(
+      "[data-pa-meet-promises-toggle]"
+    )!
+    expect(screen.queryByRole("switch")).toBeNull()
+    expect(toggle.getAttribute("aria-expanded")).toBe("false")
+    expect(toggle.textContent).toContain("What I do: 8 of 10 on")
+    expect(toggle.textContent).toContain("Show")
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute("aria-expanded")).toBe("true")
+    expect(toggle.textContent).toContain("Hide")
+    expect(promises.firstElementChild).toBe(toggle)
+    expect(screen.getAllByRole("switch")).toHaveLength(10)
+    fireEvent.click(toggle)
+    expect(screen.queryByRole("switch")).toBeNull()
+    expect(promises.firstElementChild).toBe(toggle)
+  })
 
   it("sets how much it may disturb and each switch through the preferences", async () => {
     draw(open())
+    unfold()
     fireEvent.click(screen.getByRole("radio", { name: "Fewer" }))
     await waitFor(() =>
       expect(api.personalAgentSettingsPatch).toHaveBeenLastCalledWith(
@@ -451,6 +478,7 @@ describe("what I'll do on my own", () => {
       prefs: { ...DEFAULT_PREFS, wrap: "ask" },
     })
     draw(open())
+    unfold()
     expect(screen.queryByText(/join here as they arrive/)).toBeNull()
     // A wrap-up that asks first is still on.
     expect(
@@ -484,6 +512,7 @@ describe("what I'll do on my own", () => {
 
   it("lays its switches out as the settings do, each group a band of one card", () => {
     draw(open())
+    unfold()
     // The level and the switches, each group a band, a row each.
     const level = document.querySelector("[data-pa-meet-level]")!
     const promises = document.querySelector("[data-pa-meet-promises]")!

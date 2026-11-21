@@ -7,7 +7,7 @@ import {
   waitFor,
 } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import type { PersonalAgentInfo } from "@/lib/types"
@@ -76,11 +76,13 @@ vi.mock("@/components/settings/assistant-editor-dialog", () => ({
 }))
 vi.mock("sonner", () => ({ toast: { message: vi.fn(), error: vi.fn() } }))
 vi.mock("@/contexts/personal-agent-context", () => ({ useBotId: () => null }))
-// The first setup's tiles offer these.
+// The tiles offer these.
+const acp = vi.hoisted(() => ({
+  agents: [] as { agent_type: string; enabled: boolean; available: boolean }[],
+}))
+const CLAUDE = { agent_type: "claude_code", enabled: true, available: true }
 vi.mock("@/hooks/use-acp-agents", () => ({
-  useAcpAgents: () => ({
-    agents: [{ agent_type: "claude_code", enabled: true, available: true }],
-  }),
+  useAcpAgents: () => ({ agents: acp.agents }),
 }))
 // The brain's editors are the assistant editor's, tested there.
 vi.mock("@/components/settings/agent-options-editor", () => ({
@@ -157,6 +159,10 @@ function page(a: PersonalAgentInfo) {
   )
 }
 
+beforeEach(() => {
+  acp.agents = [CLAUDE]
+})
+
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
@@ -172,18 +178,45 @@ const save = () =>
   )
 
 describe("the identity tab", () => {
-  it("takes a name and picture saved elsewhere into a field left as it was, and keeps one being changed", () => {
-    const { rerender } = render(page(agent("Nova")))
-    const name = screen.getByLabelText("Name") as HTMLInputElement
-    expect(name.value).toBe("Nova")
-    // Renamed from the roster's "Edit basic info": the untouched field
-    // follows.
-    rerender(page(agent("Nova 2", "purple")))
-    expect(name.value).toBe("Nova 2")
-    // Being changed here: what the owner typed stays.
-    fireEvent.change(name, { target: { value: "Mine" } })
-    rerender(page(agent("Nova 3")))
-    expect(name.value).toBe("Mine")
+  it("leaves its name and face to the page's head: no field for them, and a save sends neither", async () => {
+    api.personalAgentSave.mockResolvedValue({})
+    render(page(agent("Nova")))
+    expect(screen.queryByLabelText("Name")).toBeNull()
+    expect(document.querySelector("[data-pa-face-picker]")).toBeNull()
+    save()
+    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(1))
+    expect(api.personalAgentSave.mock.calls[0][0]).not.toHaveProperty("name")
+    expect(api.personalAgentSave.mock.calls[0][0]).not.toHaveProperty("avatar")
+  })
+
+  it("picks its brain's agent from tiles, as the first setup does — from the list for one not among them", () => {
+    acp.agents = [
+      CLAUDE,
+      { agent_type: "codex", enabled: true, available: true },
+    ]
+    render(page(agent("Nova")))
+    const brainCard = document.querySelector("[data-pa-identity-brain]")!
+    const tile = brainCard.querySelector(
+      '[data-pa-setup-agent-tile="claude_code"]'
+    )!
+    expect(tile.getAttribute("aria-checked")).toBe("true")
+    expect(
+      brainCard
+        .querySelector('[data-pa-setup-agent-tile="codex"]')!
+        .getAttribute("aria-checked")
+    ).toBe("false")
+    expect(screen.queryByTestId("agent-select")).toBeNull()
+    cleanup()
+    // Its agent gone from the list (or the list not read yet): the list,
+    // which names the one saved.
+    acp.agents = [{ agent_type: "codex", enabled: true, available: true }]
+    render(page(agent("Nova")))
+    expect(screen.getByTestId("agent-select")).toBeInTheDocument()
+    expect(document.querySelector("[data-pa-setup-agent-tile]")).toBeNull()
+    cleanup()
+    acp.agents = []
+    render(page(agent("Nova")))
+    expect(screen.getByTestId("agent-select")).toBeInTheDocument()
   })
 
   it("says when there is nothing for its work to run on, and binds the one picked", async () => {
