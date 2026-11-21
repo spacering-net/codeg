@@ -2,12 +2,20 @@ import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import {
+  CUSTOM_THEME_TOKENS,
+  PLUGIN_THEME_TOKENS,
+  parsePluginThemePalette,
+} from "@/lib/custom-style"
+import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
+  pluginThemeKey,
+  resolvePluginHostScope,
   resolvePluginHostSurface,
   resolvePluginText,
   selectPluginClientSurfaces,
+  selectPluginThemes,
   validatePluginComposerInsertPayload,
   type InstalledPlugin,
   type PluginTextTranslations,
@@ -477,5 +485,160 @@ describe("resolvePluginText and localized *Translations contributions", () => {
         slot: "sessionHeader",
       },
     ])
+  })
+})
+
+describe("selectPluginThemes and resolvePluginHostScope", () => {
+  it("exposes all 31 color tokens from CUSTOM_THEME_TOKENS excluding radius", () => {
+    expect(PLUGIN_THEME_TOKENS).not.toContain("radius")
+    expect(PLUGIN_THEME_TOKENS).toHaveLength(CUSTOM_THEME_TOKENS.length - 1)
+    expect(parsePluginThemePalette({ primary: "#1d4ed8" })).toEqual({
+      primary: "#1d4ed8",
+    })
+    expect(parsePluginThemePalette({ primary: "#123" })).toBeNull()
+    expect(parsePluginThemePalette({ primary: "#11223344" })).toBeNull()
+    expect(
+      parsePluginThemePalette({ primary: "oklch(0.5 0.2 240)" })
+    ).toBeNull()
+    expect(parsePluginThemePalette({ radius: "#112233" } as unknown)).toBeNull()
+  })
+
+  it("selects valid enabled plugin themes (including theme-only plugins), localizes titles, and rejects invalid palettes", () => {
+    const plugins: InstalledPlugin[] = [
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.nord",
+          name: "Nord Suite",
+          nameTranslations: {
+            "zh-CN": "北极套件",
+            es: "Suite Nord",
+          },
+          version: "1.0.0",
+          // Pure theme-only plugin: no client.entry or server.entry
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            themes: [
+              {
+                id: "arctic",
+                title: "Arctic Frost",
+                titleTranslations: {
+                  "zh-CN": "北极霜",
+                  es: "Escarcha Ártica",
+                },
+                light: {
+                  primary: "#5e81ac",
+                  background: "#eceff4",
+                },
+                dark: {
+                  primary: "#88c0d0",
+                  background: "#2e3440",
+                },
+              },
+              {
+                id: "daylight-only",
+                title: "Daylight Only",
+                light: {
+                  primary: "#0284c7",
+                },
+              },
+              {
+                id: "empty-both",
+                title: "Empty Palettes",
+                light: {},
+                dark: {},
+              },
+              {
+                id: "invalid-hex",
+                title: "Invalid Hex",
+                light: {
+                  primary: "#abc",
+                },
+              },
+              {
+                id: "arctic",
+                title: "Duplicate Arctic",
+                light: {
+                  primary: "#000000",
+                },
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: false,
+        manifest: {
+          id: "acme.disabled-theme",
+          name: "Disabled Theme Plugin",
+          version: "1.0.0",
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            themes: [
+              {
+                id: "hidden",
+                title: "Hidden Theme",
+                dark: { primary: "#ff0000" },
+              },
+            ],
+          },
+        },
+      },
+    ]
+
+    expect(selectPluginThemes(plugins, "zh-CN")).toEqual([
+      {
+        key: pluginThemeKey("acme.nord", "arctic"),
+        pluginId: "acme.nord",
+        pluginName: "北极套件",
+        id: "arctic",
+        title: "北极霜",
+        light: {
+          primary: "#5e81ac",
+          background: "#eceff4",
+        },
+        dark: {
+          primary: "#88c0d0",
+          background: "#2e3440",
+        },
+      },
+      {
+        key: pluginThemeKey("acme.nord", "daylight-only"),
+        pluginId: "acme.nord",
+        pluginName: "北极套件",
+        id: "daylight-only",
+        title: "Daylight Only",
+        light: {
+          primary: "#0284c7",
+        },
+      },
+    ])
+  })
+
+  it("gates remote window host scope until activeRemoteConnectionId matches the URL remoteConnectionId", () => {
+    expect(resolvePluginHostScope("", null)).toEqual({
+      scopeKey: "local",
+      transportReady: true,
+    })
+    expect(resolvePluginHostScope("?remoteConnectionId=5", null)).toEqual({
+      scopeKey: "remote:5",
+      transportReady: false,
+    })
+    expect(resolvePluginHostScope("?remoteConnectionId=5", 3)).toEqual({
+      scopeKey: "remote:5",
+      transportReady: false,
+    })
+    expect(resolvePluginHostScope("?remoteConnectionId=5", 5)).toEqual({
+      scopeKey: "remote:5",
+      transportReady: true,
+    })
+    expect(resolvePluginHostScope("?remoteConnectionId=bad", null)).toEqual({
+      scopeKey: "remote:bad",
+      transportReady: false,
+    })
   })
 })
