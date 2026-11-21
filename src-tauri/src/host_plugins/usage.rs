@@ -218,9 +218,13 @@ impl UsageQueryResult {
                 "Usage reports may contain up to 16 accounts",
             ));
         }
+        let mut account_keys = BTreeSet::new();
         for account in &mut result.accounts {
             if !valid_account_key(&account.key) {
                 return Err(invalid_report("The usage account key is invalid"));
+            }
+            if !account_keys.insert(account.key.as_str()) {
+                return Err(invalid_report("Usage account keys must be unique"));
             }
             clean_optional(&mut account.label, MAX_LABEL_CHARS)?;
             clean_optional(&mut account.harness, MAX_SHORT_TEXT_CHARS)?;
@@ -246,11 +250,23 @@ impl UsageReport {
                     return Err(invalid_report("A usage report exceeds its field limits"));
                 }
                 clean_optional(plan_label, MAX_LABEL_CHARS)?;
+                let mut window_ids = BTreeSet::new();
                 for window in windows {
                     window.validate()?;
+                    if !window_ids.insert(window.id.as_str()) {
+                        return Err(invalid_report(
+                            "Usage window IDs must be unique per account",
+                        ));
+                    }
                 }
+                let mut balance_ids = BTreeSet::new();
                 for balance in balances {
                     clean_text(&mut balance.id, MAX_ID_CHARS)?;
+                    if !balance_ids.insert(balance.id.as_str()) {
+                        return Err(invalid_report(
+                            "Usage balance IDs must be unique per account",
+                        ));
+                    }
                     clean_text(&mut balance.label, MAX_LABEL_CHARS)?;
                     clean_text(&mut balance.amount, MAX_LABEL_CHARS)?;
                     clean_optional(&mut balance.unit, MAX_SHORT_TEXT_CHARS)?;

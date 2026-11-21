@@ -22,6 +22,7 @@ export interface UsageQueryResult {
 }
 
 export interface UsageAccount {
+  /** Unique within the query result. */
   key: string
   label?: string
   harness?: string
@@ -40,6 +41,7 @@ export type UsageReport =
   | { status: "error"; error: string }
 
 export interface UsageWindow {
+  /** Unique among the account's windows after control characters are removed. */
   id: string
   label: string
   usedPercent: number
@@ -48,6 +50,7 @@ export interface UsageWindow {
 }
 
 export interface UsageBalance {
+  /** Unique among the account's balances after control characters are removed. */
   id: string
   label: string
   amount: string

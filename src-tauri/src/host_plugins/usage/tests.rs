@@ -141,13 +141,61 @@ fn validates_all_usage_report_statuses_and_removes_control_characters() {
 }
 
 #[test]
+fn rejects_duplicate_usage_account_keys() {
+    let mut value = available();
+    let account = value["accounts"][0].clone();
+    value["accounts"].as_array_mut().unwrap().push(account);
+
+    let error = UsageQueryResult::parse(value).unwrap_err();
+    assert_eq!(error.message, "Usage account keys must be unique");
+}
+
+#[test]
+fn rejects_duplicate_usage_window_ids_after_cleaning() {
+    let mut value = available();
+    let windows = value["accounts"][0]["report"]["windows"]
+        .as_array_mut()
+        .unwrap();
+    let mut duplicate = windows[0].clone();
+    duplicate["id"] = json!("five-\thour");
+    windows.push(duplicate);
+
+    let error = UsageQueryResult::parse(value).unwrap_err();
+    assert_eq!(error.message, "Usage window IDs must be unique per account");
+}
+
+#[test]
+fn rejects_duplicate_usage_balance_ids_after_cleaning() {
+    let mut value = available();
+    let balances = value["accounts"][0]["report"]["balances"]
+        .as_array_mut()
+        .unwrap();
+    let mut duplicate = balances[0].clone();
+    duplicate["id"] = json!("cred\u{0}its");
+    balances.push(duplicate);
+
+    let error = UsageQueryResult::parse(value).unwrap_err();
+    assert_eq!(
+        error.message,
+        "Usage balance IDs must be unique per account"
+    );
+}
+
+#[test]
 fn rejects_oversized_report_arrays_and_invalid_account_keys() {
     let template = available();
-    let account = &template["accounts"][0];
-    UsageQueryResult::parse(json!({ "accounts": vec![account; MAX_ACCOUNTS] })).unwrap();
-    assert!(
-        UsageQueryResult::parse(json!({ "accounts": vec![account; MAX_ACCOUNTS + 1] })).is_err()
-    );
+    let mut accounts: Vec<_> = (0..=MAX_ACCOUNTS)
+        .map(|index| {
+            let mut account = template["accounts"][0].clone();
+            account["key"] = json!(format!("account-{index}"));
+            account
+        })
+        .collect();
+    let extra_account = accounts.pop().unwrap();
+    UsageQueryResult::parse(json!({ "accounts": accounts })).unwrap();
+    accounts.push(extra_account);
+    assert!(UsageQueryResult::parse(json!({ "accounts": accounts })).is_err());
+
     for (field, limit) in [
         ("windows", MAX_WINDOWS),
         ("balances", MAX_BALANCES),
@@ -155,9 +203,20 @@ fn rejects_oversized_report_arrays_and_invalid_account_keys() {
     ] {
         let mut value = template.clone();
         let entry = &template["accounts"][0]["report"][field][0];
-        value["accounts"][0]["report"][field] = json!(vec![entry; limit]);
+        let mut entries: Vec<_> = (0..=limit)
+            .map(|index| {
+                let mut entry = entry.clone();
+                if field != "details" {
+                    entry["id"] = json!(format!("{field}-{index}"));
+                }
+                entry
+            })
+            .collect();
+        let extra_entry = entries.pop().unwrap();
+        value["accounts"][0]["report"][field] = json!(entries);
         UsageQueryResult::parse(value.clone()).unwrap();
-        value["accounts"][0]["report"][field] = json!(vec![entry; limit + 1]);
+        entries.push(extra_entry);
+        value["accounts"][0]["report"][field] = json!(entries);
         assert!(UsageQueryResult::parse(value).is_err(), "{field}");
     }
     for key in [

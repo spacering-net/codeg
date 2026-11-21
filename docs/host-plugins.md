@@ -129,8 +129,9 @@ query supplies no credentials or saved plugin settings.
 
 Return `{ accounts: [...] }` with up to 16 account snapshots. Give each account
 a stable, non-secret `key` of 1 to 128 ASCII letters, digits, dots,
-underscores, or hyphens. Each account has a `report` and can include `label`
-and `harness`. Render report strings as plain display text.
+underscores, or hyphens. Account keys must be unique within the response.
+Each account has a `report` and can include `label` and `harness`. Render
+report strings as plain display text.
 
 | `report.status` | Display data |
 | --- | --- |
@@ -142,7 +143,9 @@ An available report can include up to eight windows, eight balances, and
 16 details. A window's `usedPercent` must be finite and within 0 to 100.
 Each window has `id` and `label`, with optional `resetsAt` and
 `durationSeconds`. A balance has `id`, `label`, `amount`, and optional
-`unit`. A detail has `label` and `value`.
+`unit`. A detail has `label` and `value`. Window IDs must be unique among
+an account's windows, and balance IDs must be unique among its balances.
+Codeg checks ID uniqueness after removing control characters.
 
 The host rejects unknown fields and removes control characters from display
 strings. IDs can contain up to 128 characters. Labels and balance amounts
