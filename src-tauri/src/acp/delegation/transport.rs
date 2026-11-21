@@ -454,6 +454,15 @@ pub enum BrokerMessage {
     Status(BrokerStatusRequest),
     CancelTask(BrokerCancelTaskRequest),
     ResumeTask(BrokerResumeTaskRequest),
+    SessionMessage(BrokerSessionMessageRequest),
+    CreateSession(BrokerCreateSessionRequest),
+    GetCurrentSession {
+        token: String,
+    },
+    ListSessions {
+        token: String,
+        args: ListSessionsArgs,
+    },
     Feedback(BrokerFeedbackRequest),
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
@@ -506,6 +515,69 @@ pub enum BrokerMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerListAssistantsRequest {
     pub token: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListSessionsArgs {
+    #[serde(default)]
+    pub current_folder: bool,
+    pub folder_id: Option<i32>,
+    pub agent_type: Option<crate::models::agent::AgentType>,
+    pub search: Option<String>,
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: u32,
+}
+
+pub async fn client_current_session_round_trip(
+    socket_path: &str,
+    token: String,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::GetCurrentSession { token }).await
+}
+
+pub async fn client_list_sessions_round_trip(
+    socket_path: &str,
+    token: String,
+    args: ListSessionsArgs,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListSessions { token, args }).await
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerCreateSessionRequest {
+    pub token: String,
+    pub agent_type: Option<crate::models::agent::AgentType>,
+    pub title: String,
+    pub message: String,
+    pub folder_path: Option<String>,
+    pub mode_id: Option<String>,
+    #[serde(default)]
+    pub config_values: std::collections::BTreeMap<String, String>,
+}
+
+pub async fn client_create_session_round_trip(
+    socket_path: &str,
+    req: BrokerCreateSessionRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::CreateSession(req)).await
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerSessionMessageRequest {
+    pub token: String,
+    pub conversation_id: i32,
+    pub message: String,
+    pub mode: String,
+    pub reply: bool,
+}
+
+pub async fn client_session_message_round_trip(
+    socket_path: &str,
+    req: BrokerSessionMessageRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::SessionMessage(req)).await
 }
 
 /// The wrapped outcome the main process returns over the same socket.
@@ -1072,6 +1144,32 @@ mod tests {
                 assert_eq!(req.max_messages, Some(20));
             }
             other => panic!("expected SessionInfo variant, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_session_message_round_trip_in_memory() {
+        let (mut a, mut b) = duplex(8 * 1024);
+        write_frame(&mut a, &BrokerMessage::CreateSession(BrokerCreateSessionRequest {
+            token: "tok".into(),
+            agent_type: Some(crate::models::agent::AgentType::ClaudeCode),
+            title: "Conversation C".into(),
+            message: "Continue the story.".into(),
+            folder_path: Some("/projects/story".into()),
+            mode_id: Some("read-only".into()),
+            config_values: [("model".into(), "gpt-6-luna".into())].into(),
+        })).await.unwrap();
+        let got: BrokerMessage = read_frame(&mut b).await.unwrap();
+        match got {
+            BrokerMessage::CreateSession(request) => {
+                assert_eq!(request.title, "Conversation C");
+                assert_eq!(request.agent_type, Some(crate::models::agent::AgentType::ClaudeCode));
+                assert_eq!(request.message, "Continue the story.");
+                assert_eq!(request.folder_path.as_deref(), Some("/projects/story"));
+                assert_eq!(request.mode_id.as_deref(), Some("read-only"));
+                assert_eq!(request.config_values.get("model").map(String::as_str), Some("gpt-6-luna"));
+            }
+            other => panic!("expected CreateSession, got {other:?}"),
         }
     }
 

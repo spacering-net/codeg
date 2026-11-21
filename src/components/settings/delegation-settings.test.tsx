@@ -115,6 +115,27 @@ beforeEach(() => {
 })
 
 describe("DelegationSettingsSection", () => {
+  it("can enable session communication while delegation is off", async () => {
+    mockGetDelegationSettings.mockResolvedValue(settings())
+    mockSetDelegationSettings.mockImplementation(async (value) => value)
+    renderWithIntl()
+    await loaded()
+
+    const toggle = screen.getByLabelText("Session communication")
+    expect(toggle).not.toBeChecked()
+    fireEvent.click(toggle)
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() =>
+      expect(mockSetDelegationSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enabled: false,
+          session_messaging_enabled: true,
+        })
+      )
+    )
+  })
+
   /** The status-bar codeg-mcp popover flips `enabled` on its own, and Save here
    * submits the whole record. A form left open across such a toggle must adopt
    * it, or changing only the depth limit would switch delegation back off. */
@@ -228,6 +249,7 @@ describe("DelegationSettingsSection", () => {
     await waitFor(() => {
       expect(mockSetDelegationSettings).toHaveBeenCalledWith({
         enabled: true,
+        session_messaging_enabled: false,
         depth_limit: 1,
         completed_cache_max_mb: 0,
         agent_defaults: {},
@@ -251,6 +273,7 @@ describe("DelegationSettingsSection", () => {
     await waitFor(() => {
       expect(mockSetDelegationSettings).toHaveBeenCalledWith({
         enabled: true,
+        session_messaging_enabled: false,
         depth_limit: 1,
         completed_cache_max_mb: 512,
         agent_defaults: {},
@@ -274,6 +297,7 @@ describe("DelegationSettingsSection", () => {
     await waitFor(() => {
       expect(mockSetDelegationSettings).toHaveBeenCalledWith({
         enabled: true,
+        session_messaging_enabled: false,
         depth_limit: 5,
         completed_cache_max_mb: 512,
         agent_defaults: {},

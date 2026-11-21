@@ -2,6 +2,7 @@
 //!
 //! These knobs survive across restarts:
 //!   * `delegation.enabled` — feature kill switch (default false)
+//!   * `session_messaging.enabled` — independent session communication (default false)
 //!   * `delegation.depth_limit` — max chain depth a child is allowed to sit at
 //!   * `delegation.agent_defaults` — per-agent spawn overrides (JSON blob)
 //!   * `delegation.completed_cache_max_mb` — per-parent byte budget (in MB) for
@@ -32,6 +33,7 @@ use crate::models::AgentType;
 use crate::web::event_bridge::{emit_event, EventEmitter, DELEGATION_SETTINGS_CHANGED_EVENT};
 
 pub const KEY_DELEGATION_ENABLED: &str = "delegation.enabled";
+pub const KEY_SESSION_MESSAGING_ENABLED: &str = "session_messaging.enabled";
 pub const KEY_DELEGATION_DEPTH: &str = "delegation.depth_limit";
 /// Single JSON-serialized key for the per-agent delegation overrides.
 /// Stored as one blob (rather than one row per agent×option) because the
@@ -60,6 +62,8 @@ pub struct DelegationSocketPath(pub PathBuf);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationSettings {
     pub enabled: bool,
+    #[serde(default)]
+    pub session_messaging_enabled: bool,
     pub depth_limit: u32,
     /// Per-agent default overrides applied by the delegation broker when
     /// codeg-mcp spawns a subagent. Empty map → no overrides anywhere,
@@ -78,6 +82,7 @@ impl Default for DelegationSettings {
     fn default() -> Self {
         Self {
             enabled: false,
+            session_messaging_enabled: false,
             depth_limit: 1,
             agent_defaults: BTreeMap::new(),
             completed_cache_max_mb: DEFAULT_COMPLETED_CACHE_MB,
@@ -89,6 +94,7 @@ impl DelegationSettings {
     fn clamped(self) -> Self {
         Self {
             enabled: self.enabled,
+            session_messaging_enabled: self.session_messaging_enabled,
             depth_limit: self.depth_limit.clamp(DEPTH_MIN, DEPTH_MAX),
             agent_defaults: self
                 .agent_defaults
@@ -104,6 +110,7 @@ impl DelegationSettings {
     fn into_broker_config(self) -> DelegationConfig {
         DelegationConfig {
             enabled: self.enabled,
+            session_messaging_enabled: self.session_messaging_enabled,
             depth_limit: self.depth_limit,
             agent_defaults: self.agent_defaults,
             // MB → bytes. `saturating_mul` guards a pathologically large MB
@@ -118,7 +125,14 @@ impl DelegationSettings {
 /// for any missing or malformed value. Never errors hard — corrupt
 /// persistence is treated as "no preference yet."
 pub async fn load_delegation_settings(conn: &DatabaseConnection) -> DelegationSettings {
-    let mut settings = DelegationSettings::default();
+    let mut settings = DelegationSettings {
+        session_messaging_enabled: app_metadata_service::get_value(conn, KEY_SESSION_MESSAGING_ENABLED)
+            .await
+            .ok()
+            .flatten()
+            .as_deref() == Some("true"),
+        ..DelegationSettings::default()
+    };
     if let Ok(Some(raw)) = app_metadata_service::get_value(conn, KEY_DELEGATION_ENABLED).await {
         if let Ok(v) = raw.parse::<bool>() {
             settings.enabled = v;
@@ -160,7 +174,7 @@ pub async fn apply_persisted_config(conn: &DatabaseConnection, broker: &Delegati
 
 /// Serializes every write to this record within the process. Both writers below
 /// finish by pushing the record onto the broker, and `load_delegation_settings`
-/// reads the four keys in four separate queries — so interleaved writers can
+/// reads the keys in separate queries — so interleaved writers can
 /// leave the database correct while the broker (which is what actually gates a
 /// delegation) settles on a value neither of them intended.
 static DELEGATION_WRITE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
@@ -169,10 +183,10 @@ static DELEGATION_WRITE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
 /// Move only the on/off switch, leaving the depth limit, the cache ceiling and
 /// the per-agent defaults at whatever the database holds.
 ///
-/// [`set_delegation_settings_core`] republishes all four keys, which is right
+/// [`set_delegation_settings_core`] republishes the whole record, which is right
 /// for the settings form and wrong for a caller that only means to flip
 /// `enabled` — the status-bar popover reads the record, flips one bool and
-/// would write the other three back, reverting any concurrent edit to them.
+/// would write the other fields back, reverting any concurrent edit to them.
 pub async fn set_delegation_enabled_core(
     conn: &DatabaseConnection,
     broker: &DelegationBroker,
@@ -199,6 +213,13 @@ pub async fn set_delegation_settings_core(
 ) -> Result<DelegationSettings, AppCommandError> {
     let _guard = DELEGATION_WRITE_LOCK.lock().await;
     let clamped = desired.clamped();
+    app_metadata_service::upsert_value(
+        conn,
+        KEY_SESSION_MESSAGING_ENABLED,
+        &clamped.session_messaging_enabled.to_string(),
+    )
+    .await
+    .map_err(AppCommandError::from)?;
     app_metadata_service::upsert_value(conn, KEY_DELEGATION_ENABLED, &clamped.enabled.to_string())
         .await
         .map_err(AppCommandError::from)?;
@@ -309,6 +330,7 @@ mod tests {
         let db = crate::db::test_helpers::fresh_in_memory_db().await;
         let settings = load_delegation_settings(&db.conn).await;
         assert!(!settings.enabled);
+        assert!(!settings.session_messaging_enabled);
         assert_eq!(settings.depth_limit, 1);
     }
 
@@ -318,6 +340,7 @@ mod tests {
         let broker = make_broker();
         let desired = DelegationSettings {
             enabled: false,
+            session_messaging_enabled: true,
             depth_limit: 3,
             ..DelegationSettings::default()
         };
@@ -325,14 +348,17 @@ mod tests {
             .await
             .unwrap();
         assert!(!saved.enabled);
+        assert!(saved.session_messaging_enabled);
         assert_eq!(saved.depth_limit, 3);
 
         let loaded = load_delegation_settings(&db.conn).await;
         assert_eq!(loaded.enabled, saved.enabled);
+        assert!(loaded.session_messaging_enabled);
         assert_eq!(loaded.depth_limit, saved.depth_limit);
 
         let cfg = broker.config_snapshot().await;
         assert!(!cfg.enabled);
+        assert!(cfg.session_messaging_enabled);
         assert_eq!(cfg.depth_limit, 3);
     }
 

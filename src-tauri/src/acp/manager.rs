@@ -1604,7 +1604,23 @@ impl ConnectionManager {
         // ever clears it) — keeps a rejected prompt from flipping the row to
         // InProgress or broadcasting a phantom user message. The frontend turns
         // this rejection into a queued message above the input box.
-        if turn_in_flight {
+        let session_message = client_message_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with(super::session_messages::PROMPT_ID_PREFIX));
+        if session_message
+            && bound_conversation_id.is_some()
+            && bound_conversation_id != conversation_id
+        {
+            return Err(AcpError::protocol("recipient connection changed conversations"));
+        }
+        let prior_turn_pending = if session_message {
+            let state = state_arc.read().await;
+            state.last_turn_complete_seq > state.settled_turn_seq
+                || state.status == ConnectionStatus::Prompting
+        } else {
+            false
+        };
+        if turn_in_flight || prior_turn_pending {
             // Distinct from `send_prompt_inner`'s send-gate line so a log reader
             // can tell which of the two checks bounced the prompt.
             tracing::debug!(
@@ -3082,7 +3098,7 @@ impl ConnectionManager {
     /// from a clean "ready with no options" snapshot lets the UI tell the
     /// user "the agent never published its options — retry" instead of
     /// silently claiming the agent has nothing to configure.
-    async fn wait_for_session_options(
+    pub(crate) async fn wait_for_session_options(
         &self,
         conn_id: &str,
         timeout: Duration,
@@ -3679,8 +3695,9 @@ impl ConnectionManager {
         }
 
         if native {
-            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks)
-                .await;
+            return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, blocks, None)
+                .await
+                .map(|(item, _)| item);
         }
 
         // The pull tool delivers plain text (`PendingFeedback`), so a draft
@@ -3748,6 +3765,29 @@ impl ConnectionManager {
     ///   injection can cause. The frontend relies on that ordering to tell the
     ///   agent's own copy of the message from the same words sent in an
     ///   earlier round (`suppressPersistedSteeredPrompts`).
+    pub(crate) async fn steer_session_message(
+        &self,
+        conn_id: &str,
+        text: String,
+        message_result: super::session_messages::TurnSender,
+    ) -> Result<SteerOutcome, AcpError> {
+        if text.chars().count() > MAX_FEEDBACK_CHARS {
+            return Err(AcpError::FeedbackDisabled);
+        }
+        let (state, cmd_tx, emitter) = {
+            let connections = self.connections.lock().await;
+            let conn = connections.get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.to_owned()))?;
+            (conn.state.clone(), conn.cmd_tx.clone(), conn.emitter.clone())
+        };
+        if !state.read().await.native_steering_available {
+            return Err(AcpError::FeedbackDisabled);
+        }
+        Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text, None, Some(message_result))
+            .await
+            .map(|(_, outcome)| outcome)
+    }
+
     async fn submit_feedback_native(
         conn_id: &str,
         state: Arc<tokio::sync::RwLock<crate::acp::session_state::SessionState>>,
@@ -3755,7 +3795,8 @@ impl ConnectionManager {
         emitter: EventEmitter,
         text: String,
         blocks: Option<Vec<PromptInputBlock>>,
-    ) -> Result<FeedbackItem, AcpError> {
+        message_result: Option<super::session_messages::TurnSender>,
+    ) -> Result<(FeedbackItem, SteerOutcome), AcpError> {
         // Cheap pre-flight, NOT the authoritative check (that's the loop's
         // idle arm replying `NoActiveTurn`): skip the round-trip when no turn
         // is in flight at all. The counter read alongside it identifies WHICH
@@ -3848,7 +3889,7 @@ impl ConnectionManager {
             .filter(|projected| crate::acp::feedback::attachment_bytes(projected) > 0);
         let conn_id_for_task = conn_id.to_string();
         let handle = tokio::spawn(async move {
-            let outcome: Result<FeedbackItem, AcpError> = async {
+            let outcome: Result<(FeedbackItem, SteerOutcome), AcpError> = async {
                 // Stamped BEFORE the command goes out, so the note's instant is
                 // causally earlier than anything the injection can cause. The
                 // adapter pushes the text to the agent before it answers, and
@@ -3865,6 +3906,7 @@ impl ConnectionManager {
                 cmd_tx
                     .send(ConnectionCommand::Steer {
                         blocks: wire_blocks,
+                        message_result,
                         reply: reply_tx,
                     })
                     .await
@@ -3906,7 +3948,7 @@ impl ConnectionManager {
                     AcpEvent::FeedbackSubmitted { item: item.clone() },
                 )
                 .await;
-                Ok(item)
+                Ok((item, steer))
             }
             .await;
             // Surface real failures even when the caller is gone (the
@@ -10449,7 +10491,7 @@ mod tests {
     ) -> tokio::task::JoinHandle<Vec<PromptInputBlock>> {
         tokio::spawn(async move {
             match rx.recv().await {
-                Some(ConnectionCommand::Steer { blocks, reply }) => {
+                Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                     let _ = reply.send(outcome);
                     blocks
                 }

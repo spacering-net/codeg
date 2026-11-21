@@ -783,6 +783,8 @@
     "generalConfigDescriptionClaude": "Supports quick configuration for API URL, API Key and Claude models, and syncs with native JSON config.",
     "generalConfigDescriptionDefault": "Supports important config input (API URL, API Key, Model) and native JSON config management.",
     "multiAgent": {
+      "sessionMessaging": "Session communication",
+      "sessionMessagingHint": "Allow agents to create independent sessions and message them. Reconnect existing sessions to make the tools available.",
       "title": "Multi-Agent Collaboration",
       "description": "Allow active agents to delegate sub-tasks to other agents.",
       "enable": "Enable delegation",
@@ -3991,6 +3993,13 @@
         "htmlPreviewHide": "Hide preview"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "Send a message to {session}",
+          "send": "Send a session message",
+          "create": "Create a session",
+          "current": "View current session",
+          "list": "Find sessions"
+        },
         "oauth": {
           "waiting": "Waiting for {server} authorization",
           "reconnecting": "Reconnecting {server}…",

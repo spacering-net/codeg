@@ -33,6 +33,7 @@ import {
   toolUse,
 } from "@/lib/activity/__fixtures__/mockup-turn"
 import type { MessageTurn } from "@/lib/types"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { mockTruncateLayout } from "@/test-layout"
 import { CompletedTurnContent } from "../completed-turn-content"
 import { MessageScrollProvider } from "../message-scroll-context"
@@ -358,6 +359,47 @@ describe("activity timeline: the reference turn", () => {
     fireEvent.click(within(mcp).getByRole("button"))
     expect(within(mcp).getByText("args")).toBeTruthy()
     expect(within(mcp).getByText("result")).toBeTruthy()
+  })
+
+  it("shows the destination title and ID on a session message call", () => {
+    const workspace = useAppWorkspaceStore.getState()
+    workspace.applyConversationUpsert({
+      id: 42,
+      folder_id: 1,
+      title: "Web review",
+      title_locked: false,
+      agent_type: "codex",
+      status: "completed",
+      kind: "regular",
+      model: null,
+      git_branch: null,
+      external_id: null,
+      message_count: 0,
+      child_count: 0,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      pinned_at: null,
+    })
+    try {
+      renderSettled(
+        partsOf({
+          ...MOCKUP_ASSISTANT_TURN,
+          blocks: [
+            toolUse("send", "mcp__codeg-mcp__send_to_session", {
+              conversation_id: 42,
+              message: "Ready for review",
+              mode: "queue",
+              reply: false,
+            }),
+          ],
+        })
+      )
+      const row = rowOf("Send a message to Web review")
+      fireEvent.click(within(row).getByRole("button"))
+      expect(within(row).getByText(/"conversation_id": 42/)).toBeTruthy()
+    } finally {
+      useAppWorkspaceStore.setState({ conversations: workspace.conversations })
+    }
   })
 
   it("shows the edited file, its changed lines and counts", () => {

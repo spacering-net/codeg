@@ -147,6 +147,8 @@ pub struct TokenStats {
 
 pub struct DelegationListener {
     pub broker: Arc<DelegationBroker>,
+    pub session_message_db: std::sync::OnceLock<sea_orm::DatabaseConnection>,
+    pub session_creator: std::sync::OnceLock<crate::acp::session_messages::SessionCreator>,
     pub tokens: Arc<TokenRegistry>,
     pub parent_lookup: Arc<dyn ParentSessionLookup>,
     /// Pulls pending live-feedback notes for the `check_user_feedback` tool.
@@ -202,6 +204,8 @@ impl DelegationListener {
         results: Arc<dyn ResultToolAccess>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            session_message_db: std::sync::OnceLock::new(),
+            session_creator: std::sync::OnceLock::new(),
             broker,
             tokens,
             parent_lookup,
@@ -482,6 +486,18 @@ impl DelegationListener {
             }
             BrokerMessage::CancelTask(req) => report_response(self.process_cancel_task(req).await)?,
             BrokerMessage::ResumeTask(req) => report_response(self.process_resume_task(req).await)?,
+            BrokerMessage::CreateSession(req) => BrokerResponse {
+                outcome: self.process_create_session(req).await,
+            },
+            BrokerMessage::SessionMessage(req) => BrokerResponse {
+                outcome: self.process_session_message(req).await,
+            },
+            BrokerMessage::GetCurrentSession { token } => BrokerResponse {
+                outcome: self.process_session_discovery(&token, None).await,
+            },
+            BrokerMessage::ListSessions { token, args } => BrokerResponse {
+                outcome: self.process_session_discovery(&token, Some(args)).await,
+            },
             BrokerMessage::Feedback(req) => {
                 // at-least-once delivery: READ pending notes (no mutation),
                 // WRITE the response, and COMMIT them delivered ONLY on a
@@ -850,6 +866,154 @@ impl DelegationListener {
                 external_handle: req.external_handle,
             })
             .await
+    }
+
+    async fn process_create_session(
+        &self,
+        req: super::transport::BrokerCreateSessionRequest,
+    ) -> Value {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return serde_json::json!({"error": "Session creation is unavailable"});
+        };
+        let config = self.broker.config_snapshot().await;
+        if entry.agent_hosts_tools || !config.session_messaging_enabled {
+            return serde_json::json!({"error": "Session creation is disabled"});
+        }
+        if req.title.trim().is_empty() || req.message.trim().is_empty() {
+            return serde_json::json!({"error": "title and message must not be empty"});
+        }
+        let Some(creator) = self.session_creator.get() else {
+            return serde_json::json!({"error": "Session creation is unavailable"});
+        };
+        match creator
+            .create(&entry.parent_connection_id, req, &config.agent_defaults, &self.broker)
+            .await
+        {
+            Ok((conversation_id, message_id)) => serde_json::json!({
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+            }),
+            Err(error) => serde_json::json!({"error": error}),
+        }
+    }
+
+    async fn process_session_message(
+        &self,
+        req: super::transport::BrokerSessionMessageRequest,
+    ) -> Value {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return serde_json::json!({"error": "Session messaging is unavailable"});
+        };
+        if entry.agent_hosts_tools || !self.broker.config_snapshot().await.session_messaging_enabled {
+            return serde_json::json!({"error": "Session messaging is disabled"});
+        }
+        let Some(sender) = self.parent_lookup.current_conversation_id(&entry.parent_connection_id).await else {
+            return serde_json::json!({"error": "Sender has no active conversation"});
+        };
+        let Some(db) = self.session_message_db.get() else {
+            return serde_json::json!({"error": "Session messaging is unavailable"});
+        };
+        match crate::db::service::session_message_service::enqueue(
+            db, sender, req.conversation_id, req.message, req.mode, req.reply,
+        ).await {
+            Ok(message_id) => serde_json::json!({"message_id": message_id}),
+            Err(error) => serde_json::json!({"error": error.to_string()}),
+        }
+    }
+
+    async fn process_session_discovery(
+        &self,
+        token: &str,
+        args: Option<super::transport::ListSessionsArgs>,
+    ) -> Value {
+        use crate::db::service::{conversation_service, folder_service};
+        use serde_json::json;
+
+        let Some(entry) = self.tokens.lookup(token).await else {
+            return json!({"error": "Session discovery is unavailable"});
+        };
+        if entry.agent_hosts_tools || !self.broker.config_snapshot().await.session_messaging_enabled {
+            return json!({"error": "Session messaging is disabled"});
+        }
+        let Some(conversation_id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return json!({"error": "Caller has no active conversation"});
+        };
+        let Some(db) = self.session_message_db.get() else {
+            return json!({"error": "Session discovery is unavailable"});
+        };
+        let caller = match conversation_service::get_by_id(db, conversation_id).await {
+            Ok(caller) => caller,
+            Err(error) => return json!({"error": error.to_string()}),
+        };
+        let Some(args) = args else {
+            let folder_path = match folder_service::get_folder_by_id(db, caller.folder_id).await {
+                Ok(folder) => folder.map(|folder| folder.path),
+                Err(error) => return json!({"error": error.to_string()}),
+            };
+            return json!({
+                "conversation_id": conversation_id,
+                "folder_id": caller.folder_id,
+                "folder_path": folder_path,
+                "title": caller.title,
+                "agent_type": caller.agent_type,
+                "status": caller.status,
+                "parent_conversation_id": caller.parent_id,
+            });
+        };
+
+        let limit = args.limit.unwrap_or(50);
+        if !(1..=200).contains(&limit) {
+            return json!({"error": "limit must be between 1 and 200"});
+        }
+        if args.current_folder && args.folder_id.is_some() {
+            return json!({"error": "Use either current_folder or folder_id"});
+        }
+        let folder_ids = match args.folder_id {
+            Some(folder_id) => match folder_service::get_folder_by_id(db, folder_id).await {
+                Ok(Some(_)) => Some(vec![folder_id]),
+                Ok(None) => return json!({"sessions": [], "next_offset": null}),
+                Err(error) => return json!({"error": error.to_string()}),
+            },
+            None if args.current_folder => Some(vec![caller.folder_id]),
+            None => None,
+        };
+        let rows = match conversation_service::list_all(
+            db,
+            folder_ids,
+            args.agent_type,
+            args.search,
+            None,
+            None,
+            true,
+        )
+        .await
+        {
+            Ok(rows) => rows,
+            Err(error) => return json!({"error": error.to_string()}),
+        };
+        let offset = args.offset as usize;
+        let limit = limit as usize;
+        let next_offset = offset.checked_add(limit).filter(|next| *next < rows.len());
+        let sessions: Vec<_> = rows
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|row| {
+                json!({
+                    "conversation_id": row.id,
+                    "folder_id": row.folder_id,
+                    "title": row.title,
+                    "agent_type": row.agent_type,
+                    "status": row.status,
+                    "parent_conversation_id": row.parent_id,
+                })
+            })
+            .collect();
+        json!({"sessions": sessions, "next_offset": next_offset})
     }
 
     /// Validate the token and resolve the `check_user_feedback` target: the
