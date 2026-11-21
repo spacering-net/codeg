@@ -816,7 +816,7 @@ mod tauri_app {
                     let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
                     app.manage(plugins.clone());
                     tauri::async_runtime::spawn(async move {
-                        plugins.observe_turns(events, connections, emitter).await;
+                        plugins.observe_sessions(events, connections, emitter).await;
                     });
                 }
                 let derived_data_dir = paths::desktop_data_dir(

@@ -408,7 +408,7 @@ async fn async_main(
         let events = acp_event_bus.subscribe();
         let connections = state.connection_manager.clone_ref();
         let emitter = state.emitter.clone();
-        tokio::spawn(async move { plugins.observe_turns(events, connections, emitter).await });
+        tokio::spawn(async move { plugins.observe_sessions(events, connections, emitter).await });
     }
     state
         .connection_manager

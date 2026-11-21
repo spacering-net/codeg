@@ -16,7 +16,7 @@
     const events = document.getElementById("events")
     window.codeg.events.subscribe(({ event, data }) => {
       const row = document.createElement("li")
-      row.textContent = `${event} · folder #${data.folderId}`
+      row.textContent = `${event} · folder #${data.folderId}${data.stopReason ? ` · ${data.stopReason}` : ""}`
       events.prepend(row)
       if (events.children.length > 20) events.lastElementChild.remove()
     })

@@ -678,8 +678,8 @@ impl HostPlugins {
         changed
     }
 
-    pub async fn observe_turns(
-        &self,
+    pub async fn observe_sessions(
+        self: &Arc<Self>,
         mut events: broadcast::Receiver<std::sync::Arc<EventEnvelope>>,
         connections: ConnectionManager,
         emitter: EventEmitter,
@@ -688,23 +688,57 @@ impl HostPlugins {
             let envelope = match events.recv().await {
                 Ok(envelope) => envelope,
                 Err(broadcast::error::RecvError::Lagged(count)) => {
-                    tracing::debug!(count, "Host plugin turn observer lagged");
+                    tracing::debug!(count, "Host plugin session observer lagged");
                     continue;
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
             };
-            if !matches!(envelope.payload, AcpEvent::TurnComplete { .. }) {
+            let Some(event) = lifecycle::Event::from_session(&envelope.payload) else {
                 continue;
-            }
+            };
             let Some(session) = connections.get_state(&envelope.connection_id).await else {
                 continue;
             };
-            let folder_id = session.read().await.folder_id;
-            if let Some(folder_id) = folder_id {
-                if self.record_turn(folder_id, &envelope.payload) {
-                    emit_event(&emitter, ACTIVITY_CHANGED, folder_id);
-                }
+            let session = session.read().await;
+            let Some(folder_id) = session.folder_id else {
+                continue;
+            };
+            if event == lifecycle::Event::TurnCompleted
+                && self.record_turn(folder_id, &envelope.payload)
+            {
+                emit_event(&emitter, ACTIVITY_CHANGED, folder_id);
             }
+            let detail = match &envelope.payload {
+                AcpEvent::SessionStarted { session_id } => {
+                    serde_json::json!({ "sessionId": session_id })
+                }
+                AcpEvent::TurnComplete { stop_reason, .. } => {
+                    serde_json::json!({ "stopReason": stop_reason })
+                }
+                AcpEvent::PermissionRequest {
+                    request_id, queued, ..
+                } => serde_json::json!({ "requestId": request_id, "queued": queued }),
+                AcpEvent::PermissionResolved {
+                    request_id,
+                    option_id,
+                    origin,
+                    ..
+                } => {
+                    serde_json::json!({ "requestId": request_id, "optionId": option_id, "origin": origin })
+                }
+                _ => serde_json::Value::Null,
+            };
+            self.observe(
+                &emitter,
+                event,
+                serde_json::json!({
+                    "folderId": folder_id,
+                    "conversationId": session.conversation_id,
+                    "connectionId": envelope.connection_id,
+                    "agentType": session.agent_type,
+                    "detail": detail,
+                }),
+            );
         }
     }
 }
@@ -1521,7 +1555,7 @@ mod tests {
         let observed_host = host.clone();
         let observer = tokio::spawn(async move {
             observed_host
-                .observe_turns(events, connections, emitter)
+                .observe_sessions(events, connections, emitter)
                 .await
         });
         bus.send(Arc::new(EventEnvelope {

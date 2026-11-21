@@ -10,7 +10,8 @@
     "lifecycleHooks": [
       { "event": "workspace.open.before", "method": "before-open" },
       { "event": "workspace.open.after", "method": "after-open" },
-      { "event": "workspace.close.after", "method": "after-close" }
+      { "event": "workspace.close.after", "method": "after-close" },
+      { "event": "session.turn.completed", "method": "turn-completed" }
     ]
   }
 }

@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use super::{
     catalog_error, invalid, valid_id, HostPlugins, Invocation, ServerModule, MAX_CONTRIBUTIONS,
 };
+use crate::acp::types::{AcpEvent, ConnectionStatus};
 use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
@@ -23,6 +24,31 @@ pub enum Event {
     OpenAfter,
     #[serde(rename = "workspace.close.after")]
     CloseAfter,
+    #[serde(rename = "session.started")]
+    SessionStarted,
+    #[serde(rename = "session.turn.started")]
+    TurnStarted,
+    #[serde(rename = "session.turn.completed")]
+    TurnCompleted,
+    #[serde(rename = "session.permission.requested")]
+    PermissionRequested,
+    #[serde(rename = "session.permission.resolved")]
+    PermissionResolved,
+}
+
+impl Event {
+    pub(super) fn from_session(payload: &AcpEvent) -> Option<Self> {
+        match payload {
+            AcpEvent::SessionStarted { .. } => Some(Self::SessionStarted),
+            AcpEvent::StatusChanged {
+                status: ConnectionStatus::Prompting,
+            } => Some(Self::TurnStarted),
+            AcpEvent::TurnComplete { .. } => Some(Self::TurnCompleted),
+            AcpEvent::PermissionRequest { .. } => Some(Self::PermissionRequested),
+            AcpEvent::PermissionResolved { .. } => Some(Self::PermissionResolved),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -253,5 +279,91 @@ mod tests {
             plugins.workspace_open_path(alias.clone()).await.unwrap(),
             alias
         );
+    }
+
+    #[tokio::test]
+    async fn live_session_observers_receive_scoped_metadata() {
+        use crate::acp::types::EventEnvelope;
+        use crate::acp::{EventBusMetrics, InternalEventBus};
+        use crate::models::agent::AgentType;
+
+        let data = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let plugins = Arc::new(HostPlugins::new(data.path()));
+        let id = "test.session-hooks";
+        let name = "session.permission.requested";
+        let source = directory.path();
+        std::fs::write(
+            source.join("codeg-plugin.json"),
+            json!({
+                "apiVersion": 2, "id": id, "name": "Session hooks", "version": "1.0.0",
+                "server": { "entry": "session.mjs", "methods": [] },
+                "contributes": { "lifecycleHooks": [{ "event": name, "method": name }] }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("session.mjs"),
+            "export const handle = (_, input) => input;",
+        )
+        .unwrap();
+        let preview = plugins
+            .preview_install(source.to_str().unwrap(), Registry::Npm, None)
+            .await
+            .unwrap();
+        plugins.confirm_install(preview.ticket).unwrap();
+        plugins
+            .apply(Mutation::SetEnabled {
+                id: id.into(),
+                enabled: true,
+            })
+            .unwrap();
+
+        let bus = Arc::new(InternalEventBus::new(Arc::new(EventBusMetrics::default())));
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut outgoing = broadcaster.subscribe();
+        let emitter = EventEmitter::web_only(broadcaster, bus.clone());
+        let connections = crate::app_state::default_connection_manager();
+        connections
+            .insert_test_connection("workspace-session", AgentType::Codex, None, emitter.clone())
+            .await;
+        connections
+            .get_state("workspace-session")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .folder_id = Some(12);
+        let receiver = bus.subscribe();
+        let observer = tokio::spawn(async move {
+            plugins
+                .observe_sessions(receiver, connections, emitter)
+                .await;
+        });
+        bus.send(Arc::new(EventEnvelope {
+            seq: 1,
+            connection_id: "workspace-session".into(),
+            payload: AcpEvent::PermissionRequest {
+                request_id: "request-1".into(),
+                tool_call: json!({"input": "private"}),
+                options: Vec::new(),
+                queued: 1,
+            },
+        }));
+        let event = tokio::time::timeout(Duration::from_secs(1), outgoing.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.channel, EVENT_CHANNEL);
+        assert_eq!(event.payload["event"], name);
+        assert_eq!(event.payload["pluginId"], id);
+        assert_eq!(event.payload["folderId"], 12);
+        assert_eq!(event.payload["data"]["connectionId"], "workspace-session");
+        assert_eq!(
+            event.payload["data"]["detail"],
+            json!({"requestId": "request-1", "queued": 1})
+        );
+        observer.abort();
     }
 }

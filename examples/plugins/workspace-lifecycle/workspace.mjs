@@ -4,5 +4,8 @@ export function handle(method, input) {
       ? { path: input.path.replace(/workspace-alias$/, "workspace-real") }
       : null
   }
+  if (method === "turn-completed") {
+    return { folderId: input.folderId, stopReason: input.detail.stopReason }
+  }
   return { folderId: input.folderId }
 }
