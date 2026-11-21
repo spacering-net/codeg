@@ -106,8 +106,6 @@ export const HostPluginSlot = memo(function HostPluginSlot({
         : null,
     [enabled, opened, scopeKey, surfaces, transport]
   )
-  if (opened && !activeSurface) setOpened(null)
-
   // Permanently clear open state on withdrawal (session/workspace/host switch,
   // offscreen tab, or plugin disable/removal) so the dialog never resurrects
   // when the tab returns or the plugin is re-enabled later.

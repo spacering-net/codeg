@@ -99,6 +99,26 @@ composer. Each entry has a unique `id`, a `title`, and `slot` set to
 the conversation has been saved. The Workspace Inspector example declares one
 entry in each slot.
 
+### Insert text into the composer
+
+An open `composer` contribution can call
+`await window.codeg.composer.insertText(text)` to insert plain text at the
+caret or replace the current selection. Codeg updates the draft through its
+usual editor path and leaves sending to the user. The API accepts up to 16 KiB
+of UTF-8 text after normalizing line endings to `\n`. Empty text and NUL
+characters are rejected. On success it returns `{ inserted: true, length }`,
+where `length` is the normalized JavaScript string length.
+
+```js
+await window.codeg.ready
+await window.codeg.composer.insertText("Summarize the changes in this workspace.")
+```
+
+The method is available only to the active composer contribution. Closing
+the surface, hiding the session or changing the session, workspace, or connected
+host revokes its access. It works for a conversation's composer and the
+composer within its canvas card.
+
 ## Persist plugin settings
 
 Declare `settings` with a positive integer `version`, a JSON Schema whose root
