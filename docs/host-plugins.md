@@ -69,6 +69,10 @@ before enabling it again.
 
 ## Client modules
 
+Include [the browser bridge types](host-plugin-client.d.ts) in your plugin's
+TypeScript project to type-check calls to `window.codeg`. Codeg provides this
+object when it opens the reviewed HTML.
+
 The [Workspace Inspector example](../examples/plugins/workspace-inspector)
 provides its own workspace and plugin settings panels. Install the example
 directory on the connected host and enable it. Use **Show Workspace Inspector**
