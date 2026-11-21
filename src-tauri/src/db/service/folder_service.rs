@@ -255,19 +255,21 @@ pub async fn ensure_folder_for_path(
     conn: &DatabaseConnection,
     path: &str,
 ) -> Result<FolderHistoryEntry, DbError> {
-    ensure_folder_inner(conn, path, None).await
+    ensure_folder_inner(conn, path, None)
+        .await
+        .map(|(row, _)| to_entry(row))
 }
 
-/// [`ensure_folder_for_path`] for a worktree a background producer made under
-/// the root folder `root_id` (a `codeg-cli --worktree` run): a new row is
-/// recorded under that root — closed, as every row this family makes — and an
-/// existing live one is left as it is.
-pub async fn ensure_worktree_folder_closed(
+/// Return a closed registration snapshot and whether the insert created its
+/// first durable identity. A worktree can attach to its root on insertion.
+pub(crate) async fn register_closed_workspace(
     conn: &DatabaseConnection,
     path: &str,
-    root_id: i32,
-) -> Result<FolderHistoryEntry, DbError> {
-    ensure_folder_inner(conn, path, Some(root_id)).await
+    parent_on_insert: Option<i32>,
+) -> Result<(FolderDetail, bool), DbError> {
+    ensure_folder_inner(conn, path, parent_on_insert)
+        .await
+        .map(|(row, created)| (to_detail(row), created))
 }
 
 /// Whether the live folder `folder_id` is open in the workspace.
@@ -283,7 +285,7 @@ async fn ensure_folder_inner(
     conn: &DatabaseConnection,
     path: &str,
     parent_on_insert: Option<i32>,
-) -> Result<FolderHistoryEntry, DbError> {
+) -> Result<(folder::Model, bool), DbError> {
     let now = Utc::now();
 
     let existing = folder::Entity::find()
@@ -291,56 +293,51 @@ async fn ensure_folder_inner(
         .one(conn)
         .await?;
 
-    let model = if let Some(row) = existing {
+    if let Some(row) = existing {
         if row.deleted_at.is_none() {
-            return Ok(to_entry(row));
+            return Ok((row, false));
         }
         let mut active = row.into_active_model();
         active.deleted_at = Set(None);
         active.is_open = Set(false);
         active.updated_at = Set(now);
-        active.update(conn).await?
-    } else {
-        let name = std::path::Path::new(path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| path.to_string());
-        let next_order = next_sort_order(conn).await?;
-        let active = folder::ActiveModel {
-            id: NotSet,
-            name: Set(name),
-            path: Set(path.to_string()),
-            git_branch: Set(None),
-            default_agent_type: Set(None),
-            last_opened_at: Set(now),
-            created_at: Set(now),
-            updated_at: Set(now),
-            deleted_at: Set(None),
-            is_open: Set(false),
-            sort_order: Set(next_order),
-            color: Set(DEFAULT_FOLDER_COLOR.to_string()),
-            parent_id: Set(parent_on_insert),
-            kind: Set(FolderKind::Regular),
-            alias: Set(None),
-            group_id: Set(None),
-        };
-        match active.insert(conn).await {
-            Ok(model) => model,
-            // Another caller made the row meanwhile — the runs of one
-            // `codeg-cli -a x -a y` in a new workspace, started together, say
-            // (`UNIQUE(path)`): the row it made is this caller's too.
-            Err(err) => match folder::Entity::find()
-                .filter(folder::Column::Path.eq(path))
-                .one(conn)
-                .await?
-            {
-                Some(row) if row.deleted_at.is_none() => row,
-                _ => return Err(err.into()),
-            },
-        }
+        return Ok((active.update(conn).await?, false));
+    }
+    let name = std::path::Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string());
+    let next_order = next_sort_order(conn).await?;
+    let active = folder::ActiveModel {
+        id: NotSet,
+        name: Set(name),
+        path: Set(path.to_string()),
+        git_branch: Set(None),
+        default_agent_type: Set(None),
+        last_opened_at: Set(now),
+        created_at: Set(now),
+        updated_at: Set(now),
+        deleted_at: Set(None),
+        is_open: Set(false),
+        sort_order: Set(next_order),
+        color: Set(DEFAULT_FOLDER_COLOR.to_string()),
+        parent_id: Set(parent_on_insert),
+        kind: Set(FolderKind::Regular),
+        alias: Set(None),
+        group_id: Set(None),
     };
-
-    Ok(to_entry(model))
+    match active.insert(conn).await {
+        Ok(model) => Ok((model, true)),
+        // Concurrent runs share the row under UNIQUE(path).
+        Err(err) => match folder::Entity::find()
+            .filter(folder::Column::Path.eq(path))
+            .one(conn)
+            .await?
+        {
+            Some(row) if row.deleted_at.is_none() => Ok((row, false)),
+            _ => Err(err.into()),
+        },
+    }
 }
 
 /// Create a dedicated hidden folder backing a single chat-mode conversation.

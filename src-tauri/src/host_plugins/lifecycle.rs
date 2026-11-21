@@ -387,8 +387,10 @@ mod tests {
     use super::*;
     use crate::commands::folders::{
         close_folder_with_plugins, git_remove_worktree_core, git_worktree_add_with_plugins,
-        open_folder_with_plugins, remove_folder_from_history_core, reopen_folder_with_plugins,
+        open_folder_with_plugins, register_closed_workspace_with_plugins,
+        remove_folder_from_history_core, reopen_folder_with_plugins,
     };
+    use crate::db::service::folder_service;
     use crate::db::test_helpers::fresh_in_memory_db;
     use crate::host_plugins::{source::Registry, Mutation};
     use crate::web::event_bridge::WebEventBroadcaster;
@@ -700,6 +702,59 @@ mod tests {
         .unwrap();
         assert!(legacy.is_none());
         assert!(requested.is_dir());
+    }
+
+    #[tokio::test]
+    async fn closed_background_registration_reports_only_its_first_insert() {
+        let data = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let db = fresh_in_memory_db().await;
+        let state = crate::app_state::AppState::new_for_test(db, data.path().to_owned());
+        install_lifecycle_example(&state.host_plugins, source.path()).await;
+
+        let project = tempfile::tempdir().unwrap();
+        let parent = folder_service::ensure_folder_for_path(
+            &state.db.conn,
+            project.path().to_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        let checkout = project.path().join("checkout");
+        std::fs::create_dir(&checkout).unwrap();
+        let path = checkout.to_str().unwrap();
+        let mut events = state.event_broadcaster.subscribe();
+        let register = || {
+            register_closed_workspace_with_plugins(&state.emitter, &state.db, path, Some(parent.id))
+        };
+        let (first, second) = tokio::try_join!(register(), register()).unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.parent_id, Some(parent.id));
+        assert!(!folder_service::is_open(&state.db.conn, first.id)
+            .await
+            .unwrap());
+
+        let created = tokio::time::timeout(Duration::from_secs(3), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(created.channel, EVENT_CHANNEL);
+        assert_eq!(created.payload["event"], "workspace.create.after");
+        assert_eq!(created.payload["folderId"], first.id);
+        assert_eq!(created.payload["data"]["parentId"], parent.id);
+        assert_eq!(created.payload["data"]["path"], path);
+        folder_service::remove_folder(&state.db.conn, path)
+            .await
+            .unwrap();
+        let reopened = register().await.unwrap();
+        assert_eq!(reopened.id, first.id);
+        assert!(!folder_service::is_open(&state.db.conn, first.id)
+            .await
+            .unwrap());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), events.recv())
+                .await
+                .is_err()
+        );
     }
 
     #[test]

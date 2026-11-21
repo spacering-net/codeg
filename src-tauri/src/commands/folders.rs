@@ -777,6 +777,20 @@ pub async fn open_worktree_folder_core(
     Ok(detail)
 }
 
+pub(crate) async fn register_closed_workspace_with_plugins(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    path: &str,
+    parent_on_insert: Option<i32>,
+) -> Result<FolderDetail, AppCommandError> {
+    let (detail, created) =
+        folder_service::register_closed_workspace(&db.conn, path, parent_on_insert).await?;
+    if let (true, Some(plugins)) = (created, emitter.host_plugins()) {
+        plugins.observe_workspace(emitter, PluginEvent::WorkspaceCreated, &detail);
+    }
+    Ok(detail)
+}
+
 /// Default a worktree folder's alias to the branch checked out at `path`.
 ///
 /// Best-effort in both directions, and deliberately silent:
