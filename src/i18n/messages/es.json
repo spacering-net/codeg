@@ -109,7 +109,9 @@
     "pluginSurfaces": "Acciones de complementos",
     "morePluginSurfaces": "Más acciones de complementos",
     "pluginDetail": "Detalles del complemento",
-    "activationPanel": "Guía de activación"
+    "activationPanel": "Guía de activación",
+    "timelineItems": "Elementos de la línea de tiempo de complementos",
+    "timelineRendererUnavailable": "Este elemento de la línea de tiempo no se puede mostrar porque el renderizador del complemento no está disponible."
   },
   "AppearanceSettings": {
     "sectionTitle": "Apariencia del tema",

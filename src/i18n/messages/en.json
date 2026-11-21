@@ -109,7 +109,9 @@
     "pluginSurfaces": "Plugin actions",
     "morePluginSurfaces": "More plugin actions",
     "pluginDetail": "Plugin details",
-    "activationPanel": "Activation guide"
+    "activationPanel": "Activation guide",
+    "timelineItems": "Plugin timeline items",
+    "timelineRendererUnavailable": "This timeline item cannot be displayed because its plugin renderer is unavailable."
   },
   "AppearanceSettings": {
     "sectionTitle": "Theme Appearance",

@@ -109,7 +109,9 @@
     "pluginSurfaces": "إجراءات الإضافات",
     "morePluginSurfaces": "مزيد من إجراءات الإضافات",
     "pluginDetail": "تفاصيل الإضافة",
-    "activationPanel": "دليل التفعيل"
+    "activationPanel": "دليل التفعيل",
+    "timelineItems": "عناصر الخط الزمني للإضافات",
+    "timelineRendererUnavailable": "يتعذر عرض عنصر الخط الزمني هذا لأن عارض الإضافة غير متاح."
   },
   "AppearanceSettings": {
     "sectionTitle": "مظهر السمة",

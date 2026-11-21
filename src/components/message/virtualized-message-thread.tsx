@@ -124,6 +124,8 @@ interface VirtualizedMessageThreadProps<T> {
   renderItem: (item: T, index: number) => ReactNode
   /** Shown when `items` is empty. */
   emptyState?: ReactNode
+  /** Optional non-virtualized tail rendered inside the scroll viewport below items. */
+  footer?: ReactNode
   /**
    * Hint for the initial height (px) of an unmeasured item.
    * Virtua auto-measures every item once mounted, so this only
@@ -203,6 +205,7 @@ function VirtualizedMessageThreadImpl<T>({
   getItemKey,
   renderItem,
   emptyState,
+  footer,
   itemSize,
   bufferSize = 800,
   gap = 16,
@@ -621,6 +624,7 @@ function VirtualizedMessageThreadImpl<T>({
             {renderRow}
           </Virtualizer>
         )}
+        {footer}
       </MessageThreadContent>
     </MessageScrollProvider>
   )

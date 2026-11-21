@@ -12,8 +12,40 @@ export type PluginTextTranslations = Record<string, string>
 
 export const MAX_PLUGIN_SCREENS = 16
 export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
+export const MAX_PLUGIN_TIMELINE_RENDERERS = 16
 
 export type PluginSidebarItemPlacement = "header" | "footer"
+
+export interface PluginTimelineRendererContribution {
+  kind: string
+  version: number
+  title: string
+  titleTranslations?: PluginTextTranslations
+  dataSchema?: boolean | Record<string, unknown>
+}
+
+export interface ResolvedPluginTimelineRenderer {
+  key: string
+  pluginId: string
+  pluginName: string
+  kind: string
+  version: number
+  title: string
+}
+
+export interface PluginTimelineItem {
+  id: string
+  pluginId: string
+  conversationId: number
+  kind: string
+  version: number
+  data: unknown
+  updatedAt: string
+}
+
+export type PluginTimelineEvent =
+  | { conversationId: number; pluginId: string; item: PluginTimelineItem }
+  | { conversationId: null; pluginId: string; item: null }
 
 export interface PluginThemeContribution {
   id: string
@@ -174,6 +206,7 @@ export interface InstalledPlugin {
       themes?: PluginThemeContribution[]
       screens?: PluginScreenContribution[]
       sidebarItems?: PluginSidebarItemContribution[]
+      timelineRenderers?: PluginTimelineRendererContribution[]
     }
   }
 }
@@ -209,6 +242,7 @@ export interface PluginIndexVersion {
 
 const CATALOG_CHANGED = "host-plugins://changed"
 const ACTIVITY_CHANGED = "host-plugins://activity"
+const TIMELINE_CHANGED = "host-plugins://timeline"
 
 function usePluginResource<T, E>(
   transport: Transport | null,
@@ -358,6 +392,13 @@ function getReadyHostTransportSnapshot(): Transport | null {
   return safeGetTransport()
 }
 
+export function isCurrentReadyHostTransport(
+  transport: Transport | null
+): boolean {
+  if (!transport) return false
+  return getReadyHostTransportSnapshot() === transport
+}
+
 function getNullTransportSnapshot(): null {
   return null
 }
@@ -481,6 +522,124 @@ export function usePluginClientHtml(pluginId: string) {
   }
 }
 
+export function usePluginTimelineItems(
+  conversationId: number | null,
+  enabled = true
+) {
+  const activeEnabled = enabled && conversationId != null
+  const transport = useReadyHostTransport(activeEnabled)
+  const [snapshot, setSnapshot] = useState<{
+    transport: Transport
+    conversationId: number
+    data?: PluginTimelineItem[]
+    error?: unknown
+  }>()
+  const [revision, setRevision] = useState(0)
+  const refresh = useCallback(() => setRevision((previous) => previous + 1), [])
+
+  useEffect(() => {
+    if (!activeEnabled || !transport || conversationId == null) return
+    let active = true
+    let latest = 0
+    let unsubscribeTimeline: (() => void) | undefined
+    let unsubscribeCatalog: (() => void) | undefined
+    const read = () => {
+      if (typeof transport.call !== "function") return
+      if (!isCurrentReadyHostTransport(transport)) return
+      const request = ++latest
+      void Promise.resolve()
+        .then(() =>
+          transport.call<PluginTimelineItem[]>("host_plugins_timeline_list", {
+            conversationId,
+          })
+        )
+        .then(
+          (data) => {
+            if (
+              active &&
+              request === latest &&
+              isCurrentReadyHostTransport(transport)
+            ) {
+              setSnapshot({
+                transport,
+                conversationId,
+                data: Array.isArray(data) ? data : [],
+              })
+            }
+          },
+          (error: unknown) => {
+            if (
+              active &&
+              request === latest &&
+              isCurrentReadyHostTransport(transport)
+            ) {
+              setSnapshot({ transport, conversationId, error })
+            }
+          }
+        )
+    }
+
+    const stopReconnect = transport.onReconnect?.(read)
+    if (typeof transport.subscribe === "function") {
+      void transport
+        .subscribe<PluginTimelineEvent>(TIMELINE_CHANGED, (payload) => {
+          if (
+            !payload ||
+            payload.conversationId === null ||
+            payload.conversationId === conversationId
+          ) {
+            read()
+          }
+        })
+        .then(
+          (stop) => {
+            if (active) {
+              unsubscribeTimeline = stop
+              read()
+            } else {
+              stop()
+            }
+          },
+          () => undefined
+        )
+      void transport
+        .subscribe<unknown>(CATALOG_CHANGED, () => {
+          read()
+        })
+        .then(
+          (stop) => {
+            if (active) {
+              unsubscribeCatalog = stop
+              read()
+            } else {
+              stop()
+            }
+          },
+          () => undefined
+        )
+    }
+    read()
+    return () => {
+      active = false
+      unsubscribeTimeline?.()
+      unsubscribeCatalog?.()
+      stopReconnect?.()
+    }
+  }, [activeEnabled, conversationId, revision, transport])
+
+  return {
+    ...(activeEnabled &&
+    transport &&
+    conversationId != null &&
+    snapshot?.transport === transport &&
+    snapshot.conversationId === conversationId
+      ? { data: snapshot.data, error: snapshot.error }
+      : undefined),
+    refresh,
+    transport,
+  }
+}
+
 export function pluginPanelKey(pluginId: string, panelId: string) {
   return `${pluginId}:${panelId}`
 }
@@ -499,6 +658,14 @@ export function pluginScreenKey(pluginId: string, screenId: string) {
 
 export function pluginSidebarItemKey(pluginId: string, itemId: string) {
   return `${pluginId}:${itemId}`
+}
+
+export function pluginTimelineRendererKey(
+  pluginId: string,
+  kind: string,
+  version: number
+) {
+  return `${pluginId}:${kind}@${version}`
 }
 
 export function resolvePluginHostScope(
@@ -810,6 +977,110 @@ export function selectPluginSidebarItems(
     }
   }
   return items
+}
+
+const PLUGIN_TIMELINE_KIND_RE = /^[a-z][a-z0-9-]{0,31}$/
+
+function resolvePluginTimelineRenderersForPlugin(
+  plugin: InstalledPlugin,
+  locale?: string
+): ResolvedPluginTimelineRenderer[] {
+  if (!plugin.enabled || !plugin.manifest.client?.entry?.trim()) return []
+  const renderers = plugin.manifest.contributes?.timelineRenderers
+  if (!renderers?.length) return []
+  const pluginName =
+    resolvePluginText(
+      plugin.manifest.name,
+      plugin.manifest.nameTranslations,
+      locale
+    ).trim() || plugin.manifest.id
+  const items: ResolvedPluginTimelineRenderer[] = []
+  const seenPairs = new Set<string>()
+  for (const renderer of renderers) {
+    if (items.length >= MAX_PLUGIN_TIMELINE_RENDERERS) break
+    if (
+      typeof renderer.kind !== "string" ||
+      !PLUGIN_TIMELINE_KIND_RE.test(renderer.kind)
+    ) {
+      continue
+    }
+    if (
+      typeof renderer.version !== "number" ||
+      !Number.isSafeInteger(renderer.version) ||
+      renderer.version < 1
+    ) {
+      continue
+    }
+    const fallbackTitle =
+      typeof renderer.title === "string" ? renderer.title.trim() : ""
+    if (!fallbackTitle) continue
+    const title = resolvePluginText(
+      fallbackTitle,
+      renderer.titleTranslations,
+      locale
+    ).trim()
+    if (!title) continue
+    const pairKey = `${renderer.kind}@${renderer.version}`
+    if (seenPairs.has(pairKey)) continue
+    seenPairs.add(pairKey)
+    items.push({
+      key: pluginTimelineRendererKey(
+        plugin.manifest.id,
+        renderer.kind,
+        renderer.version
+      ),
+      pluginId: plugin.manifest.id,
+      pluginName,
+      kind: renderer.kind,
+      version: renderer.version,
+      title,
+    })
+  }
+  return items
+}
+
+export function selectPluginTimelineRenderers(
+  plugins: readonly InstalledPlugin[] | undefined,
+  locale?: string
+): ResolvedPluginTimelineRenderer[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginTimelineRenderer[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    items.push(...resolvePluginTimelineRenderersForPlugin(plugin, locale))
+  }
+  return items
+}
+
+export function resolvePluginTimelineRenderer(
+  plugins: readonly InstalledPlugin[] | undefined,
+  pluginId: string,
+  kind: string,
+  version: number,
+  locale?: string
+): ResolvedPluginTimelineRenderer | null {
+  if (!plugins?.length) return null
+  const normalizedPluginId = pluginId.trim()
+  if (
+    !normalizedPluginId ||
+    typeof kind !== "string" ||
+    !PLUGIN_TIMELINE_KIND_RE.test(kind) ||
+    typeof version !== "number" ||
+    !Number.isSafeInteger(version) ||
+    version < 1
+  ) {
+    return null
+  }
+  const plugin = plugins.find((item) => item.manifest.id === normalizedPluginId)
+  if (!plugin) return null
+  const renderers = resolvePluginTimelineRenderersForPlugin(plugin, locale)
+  return (
+    renderers.find(
+      (renderer) => renderer.kind === kind && renderer.version === version
+    ) ?? null
+  )
 }
 
 export function hostPluginSessionScopeKey(

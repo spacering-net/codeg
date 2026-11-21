@@ -151,9 +151,12 @@ import { unescapeComposerText } from "@/lib/composer-copy-text"
 import { useStickToBottomContext } from "use-stick-to-bottom"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
+import { PluginTimelineItems } from "@/components/conversations/plugin-timeline-items"
 
 interface MessageListViewProps {
   conversationId: number
+  /** Persisted DB conversation ID for plugin timeline items; `null` for drafts. */
+  pluginConversationId?: number | null
   /** This transcript's working directory, including new-chat drafts. */
   imageRoot?: string | null
   agentType: AgentType
@@ -1740,6 +1743,7 @@ const AutoScrollOnSend = memo(function AutoScrollOnSend({
 
 export function MessageListView({
   conversationId,
+  pluginConversationId = null,
   imageRoot,
   agentType,
   availableCommands,
@@ -2679,6 +2683,14 @@ export function MessageListView({
             getItemKey={getThreadItemKey}
             renderItem={renderThreadItem}
             emptyState={emptyState}
+            footer={
+              pluginConversationId != null ? (
+                <PluginTimelineItems
+                  conversationId={pluginConversationId}
+                  enabled={isActive}
+                />
+              ) : undefined
+            }
             scrollApiRef={scrollApiRef}
             hasOlder={hasOlderTurns}
             isLoadingOlder={loadingOlderTurns}

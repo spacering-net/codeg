@@ -17,17 +17,35 @@ import { cn } from "@/lib/utils"
 const useIsomorphicLayoutEffect =
   typeof window !== "undefined" ? useLayoutEffect : useEffect
 
-export type SurfaceContext = { id: string } & (
-  | { type: "workspacePanel"; folderId: number }
-  | { type: "settingsPanel" }
-  | { type: "pluginDetail" }
-  | { type: "activationPanel" }
-  | { type: "screen" }
-  | ({
-      type: "clientSurface"
-      slot: PluginClientSurfaceSlot
-    } & HostPluginSessionContext)
-)
+export type SurfaceContext =
+  | ({ id: string } & (
+      | { type: "workspacePanel"; folderId: number }
+      | { type: "settingsPanel" }
+      | { type: "pluginDetail" }
+      | { type: "activationPanel" }
+      | { type: "screen" }
+      | ({
+          type: "clientSurface"
+          slot: PluginClientSurfaceSlot
+        } & HostPluginSessionContext)
+    ))
+  | {
+      type: "timelineItem"
+      kind: string
+      version: number
+      itemId: string
+      conversationId: number
+      data: unknown
+      updatedAt?: string
+    }
+
+function safeSerializeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "null"
+  } catch {
+    return "null"
+  }
+}
 
 const CLIENT_TIMEOUT_MS = 12_000
 const MAX_PENDING_CALLS = 4
@@ -210,16 +228,28 @@ function PluginFrame({
   onComposerInsertText?: PluginComposerInsertHandler
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
-  const { type, id } = context
+  const type = context.type
+  const id = context.type === "timelineItem" ? undefined : context.id
   const slot = context.type === "clientSurface" ? context.slot : undefined
   const folderId =
     context.type === "workspacePanel" || context.type === "clientSurface"
       ? context.folderId
       : undefined
   const conversationId =
-    context.type === "clientSurface" ? context.conversationId : undefined
+    context.type === "clientSurface" || context.type === "timelineItem"
+      ? context.conversationId
+      : undefined
   const sessionKey =
     context.type === "clientSurface" ? context.sessionKey : undefined
+  const kind = context.type === "timelineItem" ? context.kind : undefined
+  const version = context.type === "timelineItem" ? context.version : undefined
+  const itemId = context.type === "timelineItem" ? context.itemId : undefined
+  const updatedAt =
+    context.type === "timelineItem" ? context.updatedAt : undefined
+  const dataJson =
+    context.type === "timelineItem"
+      ? safeSerializeJson(context.data)
+      : undefined
   const allowComposerInsert =
     type === "clientSurface" &&
     slot === "composer" &&
@@ -249,6 +279,11 @@ function PluginFrame({
     folderId,
     conversationId,
     sessionKey,
+    kind,
+    version,
+    itemId,
+    updatedAt,
+    dataJson,
     allowComposerInsert,
     locale,
     host,
@@ -281,17 +316,27 @@ function PluginFrame({
           port1.postMessage({
             type: "context",
             context:
-              type === "clientSurface"
+              type === "timelineItem"
                 ? {
-                    type,
-                    slot,
-                    id,
-                    folderId: folderId ?? null,
-                    conversationId: conversationId ?? null,
-                    sessionKey,
+                    type: "timelineItem" as const,
+                    kind,
+                    version,
+                    itemId,
+                    conversationId,
+                    data: dataJson !== undefined ? JSON.parse(dataJson) : null,
                     locale,
                   }
-                : { type, id, folderId, locale },
+                : type === "clientSurface"
+                  ? {
+                      type,
+                      slot,
+                      id,
+                      folderId: folderId ?? null,
+                      conversationId: conversationId ?? null,
+                      sessionKey,
+                      locale,
+                    }
+                  : { type, id, folderId, locale },
           })
           void host
             .subscribe<PluginEvent>(LIFECYCLE_EVENT_CHANNEL, (event) => {
@@ -304,6 +349,13 @@ function PluginFrame({
                 } else if (event.folderId != null) {
                   return
                 }
+                if (
+                  event.conversationId != null &&
+                  event.conversationId !== conversationId
+                ) {
+                  return
+                }
+              } else if (type === "timelineItem") {
                 if (
                   event.conversationId != null &&
                   event.conversationId !== conversationId
@@ -356,7 +408,13 @@ function PluginFrame({
             const text = validatePluginComposerInsertPayload(input)
             value = await insertHandler(text)
           } else {
-            value = await handleRequest(host, pluginId, data.operation, input)
+            value = await handleRequest(
+              host,
+              pluginId,
+              data.operation,
+              input,
+              type === "timelineItem" ? conversationId : undefined
+            )
           }
           if (!closed) {
             port1.postMessage({ id: requestId, ok: true, value })
@@ -395,6 +453,10 @@ function PluginFrame({
     folderId,
     conversationId,
     sessionKey,
+    kind,
+    version,
+    itemId,
+    dataJson,
     allowComposerInsert,
     host,
     id,
@@ -420,7 +482,8 @@ function handleRequest(
   host: Transport,
   pluginId: string,
   operation: "call" | "settings",
-  payload: unknown
+  payload: unknown,
+  conversationId?: number | null
 ) {
   if (operation === "settings") {
     return host.call<unknown>("host_plugins_settings", {
@@ -442,5 +505,6 @@ function handleRequest(
     pluginId,
     method: payload.method,
     input: payload.input,
+    ...(conversationId != null ? { conversationId } : {}),
   })
 }

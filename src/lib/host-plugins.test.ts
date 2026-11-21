@@ -10,19 +10,23 @@ import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
+  MAX_PLUGIN_TIMELINE_RENDERERS,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
   pluginScreenKey,
   pluginSidebarItemKey,
   pluginThemeKey,
+  pluginTimelineRendererKey,
   resolvePluginHostScope,
   resolvePluginHostSurface,
   resolvePluginScreen,
   resolvePluginText,
+  resolvePluginTimelineRenderer,
   selectPluginClientSurfaces,
   selectPluginScreens,
   selectPluginSidebarItems,
   selectPluginThemes,
+  selectPluginTimelineRenderers,
   validatePluginComposerInsertPayload,
   type InstalledPlugin,
   type PluginTextTranslations,
@@ -908,5 +912,211 @@ describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems
     ).not.toBeNull()
     expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
     expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
+  })
+})
+
+describe("selectPluginTimelineRenderers & resolvePluginTimelineRenderer", () => {
+  it("loads and localizes the bundled timeline-review example manifest", () => {
+    const manifestPath = resolve(
+      process.cwd(),
+      "examples/plugins/timeline-review/codeg-plugin.json"
+    )
+    const manifest = JSON.parse(
+      readFileSync(manifestPath, "utf8")
+    ) as InstalledPlugin["manifest"]
+    const plugin: InstalledPlugin = { enabled: true, manifest }
+
+    expect(selectPluginTimelineRenderers([plugin], "en")).toEqual([
+      {
+        key: pluginTimelineRendererKey(
+          "codeg.timeline-review",
+          "review-result",
+          1
+        ),
+        pluginId: "codeg.timeline-review",
+        pluginName: "Timeline Review",
+        kind: "review-result",
+        version: 1,
+        title: "Review result",
+      },
+    ])
+
+    expect(
+      resolvePluginTimelineRenderer(
+        [plugin],
+        "codeg.timeline-review",
+        "review-result",
+        1,
+        "zh-CN"
+      )
+    ).toEqual({
+      key: "codeg.timeline-review:review-result@1",
+      pluginId: "codeg.timeline-review",
+      pluginName: "Timeline Review",
+      kind: "review-result",
+      version: 1,
+      title: "审查结果",
+    })
+
+    expect(
+      resolvePluginTimelineRenderer(
+        [plugin],
+        "codeg.timeline-review",
+        "review-result",
+        1,
+        "es"
+      )?.title
+    ).toBe("Resultado de la revisión")
+
+    expect(
+      resolvePluginTimelineRenderer(
+        [plugin],
+        "codeg.timeline-review",
+        "review-result",
+        2,
+        "en"
+      )
+    ).toBeNull()
+  })
+
+  it("validates enabled + client.entry, kind regex, positive integer version, (kind, version) dedupe, and 16-entry cap", () => {
+    expect(MAX_PLUGIN_TIMELINE_RENDERERS).toBe(16)
+
+    const disabledPlugin: InstalledPlugin = {
+      enabled: false,
+      manifest: {
+        id: "acme.disabled",
+        name: "Disabled",
+        version: "1.0.0",
+        client: { entry: "index.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          timelineRenderers: [
+            { kind: "review", version: 1, title: "Disabled Renderer" },
+          ],
+        },
+      },
+    }
+
+    const noClientPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.no-client",
+        name: "No Client",
+        version: "1.0.0",
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          timelineRenderers: [
+            { kind: "review", version: 1, title: "No Client" },
+          ],
+        },
+      },
+    }
+
+    const mixedPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.timeline",
+        name: "Acme Timeline",
+        version: "1.0.0",
+        client: { entry: "ui.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          timelineRenderers: [
+            { kind: "review-result", version: 1, title: "Review v1" },
+            // Same kind + different version allowed
+            { kind: "review-result", version: 2, title: "Review v2" },
+            // Duplicate (kind, version) skipped
+            { kind: "review-result", version: 1, title: "Duplicate v1" },
+            // Invalid kinds rejected
+            { kind: "ReviewResult", version: 1, title: "Uppercase" },
+            { kind: "1-bad", version: 1, title: "Starts with digit" },
+            { kind: "bad_underscore", version: 1, title: "Underscore" },
+            { kind: "a".repeat(33), version: 1, title: "Too long" },
+            // Invalid versions rejected
+            { kind: "zero-ver", version: 0, title: "Zero" },
+            { kind: "neg-ver", version: -1, title: "Negative" },
+            { kind: "float-ver", version: 1.5, title: "Float" },
+            // Blank title rejected even with translations
+            {
+              kind: "blank-title",
+              version: 1,
+              title: "   ",
+              titleTranslations: { "zh-CN": "有翻译无标题" },
+            },
+          ],
+        },
+      },
+    }
+
+    expect(
+      selectPluginTimelineRenderers(
+        [disabledPlugin, noClientPlugin, mixedPlugin],
+        "zh-CN"
+      )
+    ).toEqual([
+      {
+        key: "acme.timeline:review-result@1",
+        pluginId: "acme.timeline",
+        pluginName: "Acme Timeline",
+        kind: "review-result",
+        version: 1,
+        title: "Review v1",
+      },
+      {
+        key: "acme.timeline:review-result@2",
+        pluginId: "acme.timeline",
+        pluginName: "Acme Timeline",
+        kind: "review-result",
+        version: 2,
+        title: "Review v2",
+      },
+    ])
+
+    // 16-renderer cap per plugin
+    const cappedPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.capped-timeline",
+        name: "Capped",
+        version: "1.0.0",
+        client: { entry: "ui.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          timelineRenderers: Array.from({ length: 20 }, (_, index) => ({
+            kind: `kind-${index + 1}`,
+            version: 1,
+            title: `Renderer ${index + 1}`,
+          })),
+        },
+      },
+    }
+
+    const capped = selectPluginTimelineRenderers([cappedPlugin])
+    expect(capped).toHaveLength(16)
+    expect(
+      resolvePluginTimelineRenderer(
+        [cappedPlugin],
+        "acme.capped-timeline",
+        "kind-16",
+        1
+      )
+    ).not.toBeNull()
+    expect(
+      resolvePluginTimelineRenderer(
+        [cappedPlugin],
+        "acme.capped-timeline",
+        "kind-17",
+        1
+      )
+    ).toBeNull()
   })
 })

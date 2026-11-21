@@ -109,7 +109,9 @@
     "pluginSurfaces": "プラグインアクション",
     "morePluginSurfaces": "その他のプラグインアクション",
     "pluginDetail": "プラグイン詳細",
-    "activationPanel": "有効化ガイド"
+    "activationPanel": "有効化ガイド",
+    "timelineItems": "プラグインタイムライン項目",
+    "timelineRendererUnavailable": "このタイムライン項目に対応するプラグインレンダラーが利用できないため表示できません。"
   },
   "AppearanceSettings": {
     "sectionTitle": "テーマ外観",

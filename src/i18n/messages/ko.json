@@ -109,7 +109,9 @@
     "pluginSurfaces": "플러그인 작업",
     "morePluginSurfaces": "더 많은 플러그인 작업",
     "pluginDetail": "플러그인 세부정보",
-    "activationPanel": "활성화 가이드"
+    "activationPanel": "활성화 가이드",
+    "timelineItems": "플러그인 타임라인 항목",
+    "timelineRendererUnavailable": "이 타임라인 항목의 플러그인 렌더러를 사용할 수 없어 표시할 수 없습니다."
   },
   "AppearanceSettings": {
     "sectionTitle": "테마 모양",

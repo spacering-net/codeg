@@ -109,7 +109,9 @@
     "pluginSurfaces": "Plugin-Aktionen",
     "morePluginSurfaces": "Weitere Plugin-Aktionen",
     "pluginDetail": "Plugin-Details",
-    "activationPanel": "Aktivierungsanleitung"
+    "activationPanel": "Aktivierungsanleitung",
+    "timelineItems": "Plugin-Zeitleisteneinträge",
+    "timelineRendererUnavailable": "Dieser Zeitleisteneintrag kann nicht angezeigt werden, da der zugehörige Plugin-Renderer nicht verfügbar ist."
   },
   "AppearanceSettings": {
     "sectionTitle": "Design-Erscheinungsbild",

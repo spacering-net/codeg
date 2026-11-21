@@ -109,7 +109,9 @@
     "pluginSurfaces": "Ações de plugins",
     "morePluginSurfaces": "Mais ações de plugins",
     "pluginDetail": "Detalhes do plugin",
-    "activationPanel": "Guia de ativação"
+    "activationPanel": "Guia de ativação",
+    "timelineItems": "Itens da linha do tempo de plugins",
+    "timelineRendererUnavailable": "Este item da linha do tempo não pode ser exibido porque o renderizador do plugin está indisponível."
   },
   "AppearanceSettings": {
     "sectionTitle": "Aparência do tema",

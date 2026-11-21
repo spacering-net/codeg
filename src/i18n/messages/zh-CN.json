@@ -109,7 +109,9 @@
     "pluginSurfaces": "插件入口",
     "morePluginSurfaces": "更多插件入口",
     "pluginDetail": "插件详情",
-    "activationPanel": "启用引导"
+    "activationPanel": "启用引导",
+    "timelineItems": "插件时间线条目",
+    "timelineRendererUnavailable": "该时间线条目对应的插件渲染器不可用，无法显示。"
   },
   "AppearanceSettings": {
     "sectionTitle": "主题外观",

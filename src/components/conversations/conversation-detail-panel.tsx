@@ -2552,6 +2552,7 @@ const ConversationTabView = memo(function ConversationTabView({
       <ActivityLiveProvider value={activityLive}>
         <MessageListView
           conversationId={effectiveConversationId}
+          pluginConversationId={dbConversationId}
           imageRoot={workingDirForConnection ?? null}
           agentType={selectedAgent}
           availableCommands={connectionCommands}

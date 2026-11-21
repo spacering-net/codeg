@@ -109,7 +109,9 @@
     "pluginSurfaces": "外掛入口",
     "morePluginSurfaces": "更多外掛入口",
     "pluginDetail": "外掛詳情",
-    "activationPanel": "啟用引導"
+    "activationPanel": "啟用引導",
+    "timelineItems": "外掛時間軸項目",
+    "timelineRendererUnavailable": "此時間軸項目對應的外掛渲染器無法使用，因此無法顯示。"
   },
   "AppearanceSettings": {
     "sectionTitle": "主題外觀",

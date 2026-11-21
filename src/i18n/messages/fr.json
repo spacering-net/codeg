@@ -109,7 +109,9 @@
     "pluginSurfaces": "Actions des extensions",
     "morePluginSurfaces": "Autres actions des extensions",
     "pluginDetail": "Détails de l’extension",
-    "activationPanel": "Guide d’activation"
+    "activationPanel": "Guide d’activation",
+    "timelineItems": "Éléments de chronologie des extensions",
+    "timelineRendererUnavailable": "Cet élément de chronologie ne peut pas être affiché car le moteur de rendu de l’extension est indisponible."
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",

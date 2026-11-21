@@ -1109,6 +1109,7 @@ export function CanvasConversationSurface({
           )}
           <MessageListView
             conversationId={effectiveConversationId}
+            pluginConversationId={dbConversationId}
             // The card's own cwd, which it already knows before any
             // conversation row exists — a draft's first reply has no persisted
             // detail to derive a folder from, so without this its screenshots
