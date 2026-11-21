@@ -80,6 +80,7 @@
     "sourceHint": "Codeg 会安装 codeg-plugin.json 清单，插件默认禁用。",
     "reviewInstall": "预览安装",
     "backToSource": "返回",
+    "clientEntry": "客户端入口 · {entry}",
     "serverTrustWarning": "启用后，此插件可以在已连接的主机上运行 JavaScript。请仅安装你信任的模块。",
     "updatedServerDisabled": "{name} 已更新至 {version} 并停用。确认信任新版本后可重新启用。",
     "trustWarning": "请仅安装你信任的来源。启用后，Codeg 会在已连接的主机上应用此清单声明的扩展。",

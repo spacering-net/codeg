@@ -7,6 +7,7 @@ type WorkspacePanel = { id: string; title: string } & (
   | { view: "turnActivity" }
   | { view: "text"; text: string }
   | { view: "serverText"; method: string }
+  | { view: "client" }
 )
 
 export interface InstalledPlugin {
@@ -25,6 +26,7 @@ export interface InstalledPlugin {
     name: string
     version: string
     server?: { entry: string; methods: string[] }
+    client?: { entry: string }
     contributes: {
       workspacePanels: WorkspacePanel[]
       commands: {
@@ -33,6 +35,7 @@ export interface InstalledPlugin {
         action: { type: "openWorkspacePanel"; panelId: string }
       }[]
       hooks: { event: "session.turnCompleted"; action: "recordTurnActivity" }[]
+      settingsPanel?: { id: string; title: string }
     }
   }
 }
@@ -220,6 +223,19 @@ export function usePluginPanelText(
     [pluginId, method, folderId]
   )
   return usePluginResource(transport, true, load, CATALOG_CHANGED)
+}
+
+export function usePluginClientHtml(pluginId: string) {
+  const transport = typeof window !== "undefined" ? getTransport() : null
+  const load = useCallback(
+    (host: Transport) =>
+      host.call<string>("host_plugins_client_html", { pluginId }),
+    [pluginId]
+  )
+  return {
+    ...usePluginResource(transport, true, load, CATALOG_CHANGED),
+    transport,
+  }
 }
 
 export function pluginPanelKey(pluginId: string, panelId: string) {

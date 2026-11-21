@@ -80,6 +80,7 @@
     "sourceHint": "Codeg installiert das Manifest codeg-plugin.json. Das Plugin ist zunächst deaktiviert.",
     "reviewInstall": "Installation prüfen",
     "backToSource": "Zurück",
+    "clientEntry": "Client-Einstiegspunkt · {entry}",
     "serverTrustWarning": "Nach der Aktivierung kann dieses Plugin JavaScript auf dem verbundenen Host ausführen. Installieren Sie nur Module, denen Sie vertrauen.",
     "updatedServerDisabled": "{name} wurde auf {version} aktualisiert und deaktiviert. Aktivieren Sie das Plugin erneut, wenn Sie der neuen Version vertrauen.",
     "trustWarning": "Installieren Sie nur aus vertrauenswürdigen Quellen. Nach der Aktivierung wendet Codeg die im Manifest deklarierten Erweiterungen auf dem verbundenen Host an.",

@@ -80,6 +80,7 @@
     "sourceHint": "Codeg instala el manifiesto codeg-plugin.json. El complemento queda desactivado inicialmente.",
     "reviewInstall": "Revisar instalación",
     "backToSource": "Volver",
+    "clientEntry": "Entrada del cliente · {entry}",
     "serverTrustWarning": "Una vez habilitado, este complemento puede ejecutar JavaScript en el host conectado. Instala solo módulos de confianza.",
     "updatedServerDisabled": "{name} se actualizó a {version} y se deshabilitó. Vuelve a habilitarlo si confías en la nueva versión.",
     "trustWarning": "Instala solo desde fuentes de confianza. Al habilitar el complemento, Codeg aplica las extensiones declaradas en este manifiesto en el host conectado.",
