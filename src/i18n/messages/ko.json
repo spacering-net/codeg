@@ -109,7 +109,11 @@
     "pluginSurfaces": "플러그인 작업",
     "morePluginSurfaces": "더 많은 플러그인 작업",
     "pluginDetail": "플러그인 세부정보",
-    "activationPanel": "활성화 가이드"
+    "activationPanel": "활성화 가이드",
+    "headerActions": "작업 공간 플러그인 작업",
+    "moreHeaderActions": "더 많은 작업 공간 플러그인 작업",
+    "headerActionDone": "{title} 완료됨.",
+    "headerActionFailed": "{title} 실패"
   },
   "AppearanceSettings": {
     "sectionTitle": "테마 모양",

@@ -109,7 +109,11 @@
     "pluginSurfaces": "Actions des extensions",
     "morePluginSurfaces": "Autres actions des extensions",
     "pluginDetail": "Détails de l’extension",
-    "activationPanel": "Guide d’activation"
+    "activationPanel": "Guide d’activation",
+    "headerActions": "Actions des extensions de l’espace de travail",
+    "moreHeaderActions": "Autres actions des extensions de l’espace de travail",
+    "headerActionDone": "{title} terminé.",
+    "headerActionFailed": "Échec de {title}"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",

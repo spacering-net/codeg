@@ -92,6 +92,7 @@ import { useZoomLevel } from "@/hooks/use-appearance"
 import { isDesktop } from "@/lib/platform"
 import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { leftChromeReserve, rightChromeReserve } from "@/lib/window-chrome"
+import { useRightChromeExtraWidth } from "@/components/layout/workspace-header-plugin-actions"
 import {
   acpFork,
   acpStopAsyncTask,
@@ -3012,6 +3013,7 @@ function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
   const { mode, conversationMaximized } = useWorkspaceView()
   const { isMac, isWindows, isLinux } = usePlatform()
   const { zoomLevel } = useZoomLevel()
+  const rightChromeExtra = useRightChromeExtraWidth()
   if (isMobile) return null
   const holdsRight = mode === "conversation" || conversationMaximized
   if (side === "right" && !holdsRight) return null
@@ -3022,7 +3024,8 @@ function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
         : leftChromeReserve(isMac && isDesktop(), zoomLevel)
       : auxOpen
         ? 0
-        : rightChromeReserve(isDesktop() && (isWindows || isLinux), zoomLevel)
+        : rightChromeReserve(isDesktop() && (isWindows || isLinux), zoomLevel) +
+          rightChromeExtra
   return <ChromeReserve width={width} />
 }
 

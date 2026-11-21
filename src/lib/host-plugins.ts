@@ -12,6 +12,7 @@ export type PluginTextTranslations = Record<string, string>
 
 export const MAX_PLUGIN_SCREENS = 16
 export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
+export const MAX_PLUGIN_HEADER_ACTIONS = 16
 
 export type PluginSidebarItemPlacement = "header" | "footer"
 
@@ -65,6 +66,30 @@ export interface ResolvedPluginSidebarItem {
   screenId: string
   screenKey: string
   screenTitle: string
+}
+
+export type PluginHeaderActionTarget =
+  | { type: "openWorkspacePanel"; panelId: string }
+  | { type: "openScreen"; screenId: string }
+  | { type: "callMethod"; method: string }
+
+export interface PluginHeaderActionContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  label?: string
+  labelTranslations?: PluginTextTranslations
+  action: PluginHeaderActionTarget
+}
+
+export interface ResolvedPluginHeaderAction {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  label?: string
+  action: PluginHeaderActionTarget
 }
 
 export interface PluginHostScope {
@@ -174,6 +199,7 @@ export interface InstalledPlugin {
       themes?: PluginThemeContribution[]
       screens?: PluginScreenContribution[]
       sidebarItems?: PluginSidebarItemContribution[]
+      headerActions?: PluginHeaderActionContribution[]
     }
   }
 }
@@ -358,6 +384,12 @@ function getReadyHostTransportSnapshot(): Transport | null {
   return safeGetTransport()
 }
 
+export function isCurrentReadyHostTransport(
+  transport: Transport | null | undefined
+): boolean {
+  return Boolean(transport) && getReadyHostTransportSnapshot() === transport
+}
+
 function getNullTransportSnapshot(): null {
   return null
 }
@@ -499,6 +531,10 @@ export function pluginScreenKey(pluginId: string, screenId: string) {
 
 export function pluginSidebarItemKey(pluginId: string, itemId: string) {
   return `${pluginId}:${itemId}`
+}
+
+export function pluginHeaderActionKey(pluginId: string, actionId: string) {
+  return `${pluginId}:${actionId}`
 }
 
 export function resolvePluginHostScope(
@@ -810,6 +846,160 @@ export function selectPluginSidebarItems(
     }
   }
   return items
+}
+
+export function selectPluginHeaderActions(
+  plugins: readonly InstalledPlugin[] | undefined,
+  locale?: string
+): ResolvedPluginHeaderAction[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginHeaderAction[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled) continue
+    const headerActions = plugin.manifest.contributes?.headerActions
+    if (!Array.isArray(headerActions) || headerActions.length === 0) continue
+
+    const pluginName =
+      resolvePluginText(
+        plugin.manifest.name,
+        plugin.manifest.nameTranslations,
+        locale
+      ).trim() || plugin.manifest.id
+    const hasClientEntry = Boolean(plugin.manifest.client?.entry?.trim())
+    const hasServerEntry = Boolean(plugin.manifest.server?.entry?.trim())
+
+    const validPanelIds = new Set<string>()
+    const workspacePanels = plugin.manifest.contributes?.workspacePanels
+    if (Array.isArray(workspacePanels)) {
+      for (const panel of workspacePanels) {
+        if (!panel || typeof panel.id !== "string") continue
+        const panelId = panel.id.trim()
+        if (!panelId) continue
+        if (panel.view === "client" && !hasClientEntry) continue
+        if (panel.view === "serverText" && !hasServerEntry) continue
+        validPanelIds.add(panelId)
+      }
+    }
+
+    const validScreenIds = new Set(
+      resolvePluginScreensForPlugin(plugin, locale).map((screen) => screen.id)
+    )
+
+    const validMethods = new Set<string>()
+    if (hasServerEntry && Array.isArray(plugin.manifest.server?.methods)) {
+      for (const rawMethod of plugin.manifest.server.methods) {
+        if (typeof rawMethod !== "string") continue
+        const method = rawMethod.trim()
+        if (method) validMethods.add(method)
+      }
+    }
+
+    const seenIds = new Set<string>()
+    let pluginValidCount = 0
+    for (const item of headerActions) {
+      if (pluginValidCount >= MAX_PLUGIN_HEADER_ACTIONS) break
+      if (
+        !item ||
+        typeof item !== "object" ||
+        typeof item.id !== "string" ||
+        typeof item.title !== "string" ||
+        !item.action ||
+        typeof item.action !== "object"
+      ) {
+        continue
+      }
+      const id = item.id.trim()
+      const title = resolvePluginText(
+        item.title,
+        item.titleTranslations,
+        locale
+      ).trim()
+      if (!id || !title || seenIds.has(id)) continue
+
+      let resolvedAction: PluginHeaderActionTarget | null = null
+      if (item.action.type === "openWorkspacePanel") {
+        const panelId =
+          typeof item.action.panelId === "string"
+            ? item.action.panelId.trim()
+            : ""
+        if (panelId && validPanelIds.has(panelId)) {
+          resolvedAction = { type: "openWorkspacePanel", panelId }
+        }
+      } else if (item.action.type === "openScreen") {
+        const screenId =
+          typeof item.action.screenId === "string"
+            ? item.action.screenId.trim()
+            : ""
+        if (screenId && validScreenIds.has(screenId)) {
+          resolvedAction = { type: "openScreen", screenId }
+        }
+      } else if (item.action.type === "callMethod") {
+        const method =
+          typeof item.action.method === "string"
+            ? item.action.method.trim()
+            : ""
+        if (method && validMethods.has(method)) {
+          resolvedAction = { type: "callMethod", method }
+        }
+      }
+      if (!resolvedAction) continue
+
+      let label: string | undefined
+      if (typeof item.label === "string" && item.label.trim().length > 0) {
+        const resolvedLabel = resolvePluginText(
+          item.label,
+          item.labelTranslations,
+          locale
+        ).trim()
+        if (resolvedLabel.length > 0) {
+          label = resolvedLabel
+        }
+      }
+
+      seenIds.add(id)
+      pluginValidCount += 1
+      items.push({
+        key: pluginHeaderActionKey(plugin.manifest.id, id),
+        pluginId: plugin.manifest.id,
+        pluginName,
+        id,
+        title,
+        ...(label ? { label } : {}),
+        action: resolvedAction,
+      })
+    }
+  }
+  return items
+}
+
+const MAX_HEADER_ACTION_FEEDBACK_CHARS = 240
+
+export function formatPluginHeaderActionResult(value: unknown): string | null {
+  let raw: string | null = null
+  if (typeof value === "string") {
+    raw = value
+  } else if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>
+    if (typeof record.message === "string") {
+      raw = record.message
+    } else if (typeof record.text === "string") {
+      raw = record.text
+    } else if (typeof record.summary === "string") {
+      raw = record.summary
+    }
+  } else if (typeof value === "number" || typeof value === "boolean") {
+    raw = String(value)
+  }
+  if (raw === null) return null
+  const normalized = raw.trim()
+  if (!normalized) return null
+  if (normalized.length <= MAX_HEADER_ACTION_FEEDBACK_CHARS) {
+    return normalized
+  }
+  return `${normalized.slice(0, MAX_HEADER_ACTION_FEEDBACK_CHARS - 1)}…`
 }
 
 export function hostPluginSessionScopeKey(

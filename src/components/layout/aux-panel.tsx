@@ -42,6 +42,7 @@ import { AutomationsAuxTab } from "./aux-panel-automations-tab"
 import { TasksAuxTab } from "./aux-panel-tasks-tab"
 import { ForgeAuxTab } from "./aux-panel-forge-tab"
 import { WorkspacePluginPanels } from "./workspace-plugin-panels"
+import { useRightChromeExtraWidth } from "./workspace-header-plugin-actions"
 
 const LAZY_TABS: AuxPanelTab[] = [
   "file_tree",
@@ -188,7 +189,9 @@ export function AuxPanel() {
   // RIGHT end. The strip keeps exactly that much blank, so the title truncates
   // before it can run underneath.
   const winLinuxControls = isDesktop() && (isWindows || isLinux)
-  const rightReserve = rightChromeReserve(winLinuxControls, zoomLevel)
+  const rightChromeExtra = useRightChromeExtraWidth()
+  const rightReserve =
+    rightChromeReserve(winLinuxControls, zoomLevel) + rightChromeExtra
 
   const tabLabel = useCallback(
     (tab: AuxPanelTab) => {

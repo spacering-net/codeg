@@ -109,7 +109,11 @@
     "pluginSurfaces": "外掛入口",
     "morePluginSurfaces": "更多外掛入口",
     "pluginDetail": "外掛詳情",
-    "activationPanel": "啟用引導"
+    "activationPanel": "啟用引導",
+    "headerActions": "工作區外掛操作",
+    "moreHeaderActions": "更多工作區外掛操作",
+    "headerActionDone": "{title} 已完成。",
+    "headerActionFailed": "{title} 執行失敗"
   },
   "AppearanceSettings": {
     "sectionTitle": "主題外觀",

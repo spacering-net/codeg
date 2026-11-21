@@ -109,7 +109,11 @@
     "pluginSurfaces": "插件入口",
     "morePluginSurfaces": "更多插件入口",
     "pluginDetail": "插件详情",
-    "activationPanel": "启用引导"
+    "activationPanel": "启用引导",
+    "headerActions": "工作区插件操作",
+    "moreHeaderActions": "更多工作区插件操作",
+    "headerActionDone": "{title} 已完成。",
+    "headerActionFailed": "{title} 执行失败"
   },
   "AppearanceSettings": {
     "sectionTitle": "主题外观",

@@ -109,7 +109,11 @@
     "pluginSurfaces": "Ações de plugins",
     "morePluginSurfaces": "Mais ações de plugins",
     "pluginDetail": "Detalhes do plugin",
-    "activationPanel": "Guia de ativação"
+    "activationPanel": "Guia de ativação",
+    "headerActions": "Ações de plugins do espaço de trabalho",
+    "moreHeaderActions": "Mais ações de plugins do espaço de trabalho",
+    "headerActionDone": "{title} concluído.",
+    "headerActionFailed": "Falha em {title}"
   },
   "AppearanceSettings": {
     "sectionTitle": "Aparência do tema",

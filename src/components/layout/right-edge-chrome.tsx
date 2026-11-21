@@ -16,6 +16,7 @@ import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useZoomLevel } from "@/hooks/use-appearance"
 import { formatShortcutLabel } from "@/lib/keyboard-shortcuts"
 import { rightChromeClusterWidth } from "@/lib/window-chrome"
+import { WorkspaceHeaderPluginActions } from "./workspace-header-plugin-actions"
 
 /**
  * Contents of the window's fixed top-RIGHT chrome overlay: terminal + aux-panel
@@ -54,11 +55,12 @@ export function RightEdgeChrome() {
   return (
     <div
       className="flex h-full items-center"
-      style={{ width: rightChromeClusterWidth(zoomLevel) }}
+      style={{ minWidth: rightChromeClusterWidth(zoomLevel) }}
     >
       {/* Empty head is a window-drag region; buttons stay flush right. */}
       <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
       <div className="flex items-center gap-1 pr-3">
+        <WorkspaceHeaderPluginActions />
         {isConversations && (
           <>
             <Button

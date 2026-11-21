@@ -85,6 +85,7 @@ import { AuxPanel } from "@/components/layout/aux-panel"
 import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { LeftEdgeChrome } from "@/components/layout/left-edge-chrome"
 import { RightEdgeChrome } from "@/components/layout/right-edge-chrome"
+import { useRightChromeExtraWidth } from "@/components/layout/workspace-header-plugin-actions"
 import { WorkspaceChromeController } from "@/components/layout/workspace-chrome-controller"
 import { MobileWorkspacePanes } from "@/components/layout/mobile-workspace-panes"
 import { WindowControls } from "@/components/layout/window-controls"
@@ -359,8 +360,10 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
   // panel toggles. Each edge column just reserves the overlay's width so its
   // tabs never render underneath. The reserve scales with the app zoom so it
   // tracks the rem-sized overlay buttons (which grow with zoom).
+  const rightChromeExtra = useRightChromeExtraWidth()
   const leftReserve = leftChromeReserve(isMac && isDesktop(), zoomLevel)
-  const rightReserve = rightChromeReserve(winLinuxControls, zoomLevel)
+  const rightReserve =
+    rightChromeReserve(winLinuxControls, zoomLevel) + rightChromeExtra
   // A corner needs reserving only while no side panel covers it, and that
   // width slides in and out with the panel's own toggle (ChromeReserve).
   const leftCornerWidth = sidebarOpen ? 0 : leftReserve

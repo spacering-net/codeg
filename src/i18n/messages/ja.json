@@ -109,7 +109,11 @@
     "pluginSurfaces": "プラグインアクション",
     "morePluginSurfaces": "その他のプラグインアクション",
     "pluginDetail": "プラグイン詳細",
-    "activationPanel": "有効化ガイド"
+    "activationPanel": "有効化ガイド",
+    "headerActions": "ワークスペースのプラグインアクション",
+    "moreHeaderActions": "その他のワークスペースのプラグインアクション",
+    "headerActionDone": "{title} が完了しました。",
+    "headerActionFailed": "{title} に失敗しました"
   },
   "AppearanceSettings": {
     "sectionTitle": "テーマ外観",

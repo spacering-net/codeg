@@ -8,10 +8,13 @@ import {
 } from "@/lib/custom-style"
 import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
+  MAX_PLUGIN_HEADER_ACTIONS,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
+  formatPluginHeaderActionResult,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
+  pluginHeaderActionKey,
   pluginScreenKey,
   pluginSidebarItemKey,
   pluginThemeKey,
@@ -20,6 +23,7 @@ import {
   resolvePluginScreen,
   resolvePluginText,
   selectPluginClientSurfaces,
+  selectPluginHeaderActions,
   selectPluginScreens,
   selectPluginSidebarItems,
   selectPluginThemes,
@@ -908,5 +912,268 @@ describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems
     ).not.toBeNull()
     expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
     expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
+  })
+})
+
+describe("selectPluginHeaderActions and formatPluginHeaderActionResult", () => {
+  it("validates enabled plugins, same-plugin targets, declarative panels, localization, label fallback rules, and rejects cross-plugin targets", () => {
+    const plugins: InstalledPlugin[] = [
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.full",
+          name: "Acme Full",
+          nameTranslations: { es: "Acme Completo", "zh-CN": "Acme 完整版" },
+          version: "1.0.0",
+          client: { entry: "ui.html" },
+          server: { entry: "server.mjs", methods: ["describe"] },
+          contributes: {
+            workspacePanels: [{ id: "notes", title: "Notes", view: "client" }],
+            commands: [],
+            hooks: [],
+            screens: [{ id: "overview", title: "Overview" }],
+            headerActions: [
+              {
+                id: "open-panel",
+                title: "Open Notes",
+                titleTranslations: { es: "Abrir notas" },
+                label: "Notes",
+                labelTranslations: { es: "Notas", "zh-CN": "笔记" },
+                action: { type: "openWorkspacePanel", panelId: "notes" },
+              },
+              {
+                id: "open-panel",
+                title: "Duplicate Open Notes",
+                action: { type: "openWorkspacePanel", panelId: "notes" },
+              },
+              {
+                id: "open-screen",
+                title: "Open Overview",
+                // labelTranslations without fallback label MUST NOT fabricate a label!
+                labelTranslations: { es: "Resumen" },
+                action: { type: "openScreen", screenId: "overview" },
+              },
+              {
+                id: "run-check",
+                title: "Run Check",
+                label: "Check",
+                action: { type: "callMethod", method: "describe" },
+              },
+              {
+                id: "bad-panel",
+                title: "Missing Panel",
+                action: { type: "openWorkspacePanel", panelId: "nope" },
+              },
+              {
+                id: "bad-screen",
+                title: "Missing Screen",
+                action: { type: "openScreen", screenId: "nope" },
+              },
+              {
+                id: "bad-method",
+                title: "Undeclared Method",
+                action: { type: "callMethod", method: "secret" },
+              },
+              {
+                id: "   ",
+                title: "Blank Id",
+                action: { type: "callMethod", method: "describe" },
+              },
+              {
+                id: "blank-title",
+                title: "   ",
+                action: { type: "callMethod", method: "describe" },
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.declarative",
+          name: "Declarative Only",
+          version: "1.0.0",
+          // No client.entry and no server.entry: declarative openWorkspacePanel works,
+          // while openScreen, callMethod, and cross-plugin targets must be rejected.
+          contributes: {
+            workspacePanels: [
+              { id: "summary", title: "Summary", view: "text", text: "Hello" },
+            ],
+            commands: [],
+            hooks: [],
+            screens: [{ id: "overview", title: "Ignored Without Client" }],
+            headerActions: [
+              {
+                id: "show-summary",
+                title: "Show Summary",
+                label: "Summary",
+                action: { type: "openWorkspacePanel", panelId: "summary" },
+              },
+              {
+                id: "steal-panel",
+                title: "Steal Panel",
+                action: { type: "openWorkspacePanel", panelId: "notes" },
+              },
+              {
+                id: "no-client-screen",
+                title: "No Client Screen",
+                action: { type: "openScreen", screenId: "overview" },
+              },
+              {
+                id: "no-server-method",
+                title: "No Server Method",
+                action: { type: "callMethod", method: "describe" },
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: false,
+        manifest: {
+          id: "acme.disabled",
+          name: "Disabled",
+          version: "1.0.0",
+          server: { entry: "s.mjs", methods: ["describe"] },
+          contributes: {
+            workspacePanels: [{ id: "p", title: "P", view: "text", text: "x" }],
+            commands: [],
+            hooks: [],
+            headerActions: [
+              {
+                id: "hidden",
+                title: "Hidden",
+                action: { type: "openWorkspacePanel", panelId: "p" },
+              },
+            ],
+          },
+        },
+      },
+    ]
+
+    expect(selectPluginHeaderActions(plugins, "es-MX")).toEqual([
+      {
+        key: pluginHeaderActionKey("acme.full", "open-panel"),
+        pluginId: "acme.full",
+        pluginName: "Acme Completo",
+        id: "open-panel",
+        title: "Abrir notas",
+        label: "Notas",
+        action: { type: "openWorkspacePanel", panelId: "notes" },
+      },
+      {
+        key: pluginHeaderActionKey("acme.full", "open-screen"),
+        pluginId: "acme.full",
+        pluginName: "Acme Completo",
+        id: "open-screen",
+        title: "Open Overview",
+        action: { type: "openScreen", screenId: "overview" },
+      },
+      {
+        key: pluginHeaderActionKey("acme.full", "run-check"),
+        pluginId: "acme.full",
+        pluginName: "Acme Completo",
+        id: "run-check",
+        title: "Run Check",
+        label: "Check",
+        action: { type: "callMethod", method: "describe" },
+      },
+      {
+        key: pluginHeaderActionKey("acme.declarative", "show-summary"),
+        pluginId: "acme.declarative",
+        pluginName: "Declarative Only",
+        id: "show-summary",
+        title: "Show Summary",
+        label: "Summary",
+        action: { type: "openWorkspacePanel", panelId: "summary" },
+      },
+    ])
+  })
+
+  it("enforces MAX_PLUGIN_HEADER_ACTIONS = 16 per plugin and resolves the bundled header-actions example manifest", () => {
+    expect(MAX_PLUGIN_HEADER_ACTIONS).toBe(16)
+
+    const capped: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.many-actions",
+        name: "Many Actions",
+        version: "1.0.0",
+        contributes: {
+          workspacePanels: [
+            { id: "main", title: "Main", view: "text", text: "ok" },
+          ],
+          commands: [],
+          hooks: [],
+          headerActions: Array.from({ length: 20 }, (_, index) => ({
+            id: `act-${index + 1}`,
+            title: `Action ${index + 1}`,
+            action: { type: "openWorkspacePanel" as const, panelId: "main" },
+          })),
+        },
+      },
+    }
+    const resolvedCapped = selectPluginHeaderActions([capped])
+    expect(resolvedCapped).toHaveLength(16)
+    expect(resolvedCapped[15]?.id).toBe("act-16")
+
+    const manifestPath = resolve(
+      process.cwd(),
+      "examples/plugins/header-actions/codeg-plugin.json"
+    )
+    const manifest = JSON.parse(
+      readFileSync(manifestPath, "utf8")
+    ) as InstalledPlugin["manifest"]
+    const installed: InstalledPlugin = { enabled: true, manifest }
+
+    expect(selectPluginHeaderActions([installed], "zh-CN")).toEqual([
+      {
+        key: "codeg.header-actions:show-panel",
+        pluginId: "codeg.header-actions",
+        pluginName: "Workspace Header Actions",
+        id: "show-panel",
+        title: "打开工作区面板",
+        label: "工作区",
+        action: { type: "openWorkspacePanel", panelId: "workspace" },
+      },
+      {
+        key: "codeg.header-actions:show-overview",
+        pluginId: "codeg.header-actions",
+        pluginName: "Workspace Header Actions",
+        id: "show-overview",
+        title: "打开插件概览",
+        action: { type: "openScreen", screenId: "overview" },
+      },
+      {
+        key: "codeg.header-actions:check-workspace",
+        pluginId: "codeg.header-actions",
+        pluginName: "Workspace Header Actions",
+        id: "check-workspace",
+        title: "检查工作区",
+        label: "检查",
+        action: { type: "callMethod", method: "describe" },
+      },
+    ])
+  })
+
+  it("formats bounded toast feedback from string or object callMethod return values", () => {
+    expect(formatPluginHeaderActionResult("  Workspace #3 is active.  ")).toBe(
+      "Workspace #3 is active."
+    )
+    expect(
+      formatPluginHeaderActionResult({ message: "All checks passed." })
+    ).toBe("All checks passed.")
+    expect(formatPluginHeaderActionResult({ text: "Fallback text" })).toBe(
+      "Fallback text"
+    )
+    expect(formatPluginHeaderActionResult("")).toBeNull()
+    expect(formatPluginHeaderActionResult(null)).toBeNull()
+    expect(formatPluginHeaderActionResult({})).toBeNull()
+    const veryLong = "x".repeat(400)
+    const bounded = formatPluginHeaderActionResult(veryLong)
+    expect(bounded).not.toBeNull()
+    expect(bounded!.length).toBeLessThanOrEqual(240)
+    expect(bounded!.endsWith("…")).toBe(true)
   })
 })

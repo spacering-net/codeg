@@ -109,7 +109,11 @@
     "pluginSurfaces": "Plugin actions",
     "morePluginSurfaces": "More plugin actions",
     "pluginDetail": "Plugin details",
-    "activationPanel": "Activation guide"
+    "activationPanel": "Activation guide",
+    "headerActions": "Workspace plugin actions",
+    "moreHeaderActions": "More workspace plugin actions",
+    "headerActionDone": "{title} completed.",
+    "headerActionFailed": "{title} failed"
   },
   "AppearanceSettings": {
     "sectionTitle": "Theme Appearance",

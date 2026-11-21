@@ -109,7 +109,11 @@
     "pluginSurfaces": "إجراءات الإضافات",
     "morePluginSurfaces": "مزيد من إجراءات الإضافات",
     "pluginDetail": "تفاصيل الإضافة",
-    "activationPanel": "دليل التفعيل"
+    "activationPanel": "دليل التفعيل",
+    "headerActions": "إجراءات إضافات مساحة العمل",
+    "moreHeaderActions": "مزيد من إجراءات إضافات مساحة العمل",
+    "headerActionDone": "اكتمل {title}.",
+    "headerActionFailed": "فشل {title}"
   },
   "AppearanceSettings": {
     "sectionTitle": "مظهر السمة",

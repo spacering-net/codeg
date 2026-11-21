@@ -109,7 +109,11 @@
     "pluginSurfaces": "Acciones de complementos",
     "morePluginSurfaces": "Más acciones de complementos",
     "pluginDetail": "Detalles del complemento",
-    "activationPanel": "Guía de activación"
+    "activationPanel": "Guía de activación",
+    "headerActions": "Acciones de complementos del espacio de trabajo",
+    "moreHeaderActions": "Más acciones de complementos del espacio de trabajo",
+    "headerActionDone": "{title} completado.",
+    "headerActionFailed": "Error en {title}"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apariencia del tema",
