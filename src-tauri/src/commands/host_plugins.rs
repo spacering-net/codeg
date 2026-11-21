@@ -97,6 +97,17 @@ pub async fn host_plugins_activity(
 
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
+pub async fn host_plugins_call(
+    plugins: tauri::State<'_, Arc<HostPlugins>>,
+    plugin_id: String,
+    method: String,
+    input: serde_json::Value,
+) -> Result<serde_json::Value, AppCommandError> {
+    plugins.call(&plugin_id, method, input).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
 pub async fn host_plugins_install_source(
     app: tauri::AppHandle,
     plugins: tauri::State<'_, Arc<HostPlugins>>,

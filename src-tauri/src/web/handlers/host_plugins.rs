@@ -44,6 +44,14 @@ pub struct ActivityParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CallParams {
+    plugin_id: String,
+    method: String,
+    input: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateParams {
     plugin_id: String,
 }
@@ -74,6 +82,17 @@ pub async fn activity(
     state
         .host_plugins
         .activity(&params.plugin_id, params.folder_id)
+        .map(Json)
+}
+
+pub async fn call(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<CallParams>,
+) -> Result<Json<serde_json::Value>, AppCommandError> {
+    state
+        .host_plugins
+        .call(&params.plugin_id, params.method, params.input)
+        .await
         .map(Json)
 }
 
