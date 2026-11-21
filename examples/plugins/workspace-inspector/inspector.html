@@ -1,0 +1,42 @@
+<style>
+  :root {
+    color-scheme: light dark;
+    font: 14px system-ui;
+  }
+  body {
+    margin: 16px;
+  }
+  button {
+    font: inherit;
+    padding: 8px 12px;
+  }
+</style>
+<p id="description" aria-live="polite">Loading workspace context…</p>
+<button id="refresh" type="button" hidden>Refresh workspace details</button>
+<script>
+  window.codeg.ready.then((context) => {
+    const description = document.getElementById("description")
+    const refresh = document.getElementById("refresh")
+    if (context.type === "settingsPanel") {
+      description.textContent =
+        "The Inspector shows the active workspace and display language."
+      return
+    }
+    async function describe() {
+      refresh.disabled = true
+      try {
+        description.textContent = await window.codeg.call("describe", {
+          folderId: context.folderId,
+          locale: context.locale,
+        })
+      } catch (error) {
+        description.textContent = error.message
+      } finally {
+        refresh.disabled = false
+      }
+    }
+    refresh.hidden = false
+    refresh.addEventListener("click", describe)
+    void describe()
+  })
+</script>

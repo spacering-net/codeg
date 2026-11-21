@@ -20,6 +20,7 @@ pub mod source;
 pub const CATALOG_CHANGED: &str = "host-plugins://changed";
 const ACTIVITY_CHANGED: &str = "host-plugins://activity";
 pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+const MAX_CLIENT_HTML_BYTES: usize = 256 * 1024;
 const MAX_PLUGINS: usize = 32;
 const MAX_CONTRIBUTIONS: usize = 16;
 const MAX_TURNS: usize = 128;
@@ -35,6 +36,8 @@ pub struct Manifest {
     version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     server: Option<ServerModule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    client: Option<ClientModule>,
     contributes: Contributions,
 }
 
@@ -45,9 +48,16 @@ struct ServerModule {
     methods: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ClientModule {
+    entry: String,
+}
+
 struct PluginBundle {
     manifest: Manifest,
     server_code: Option<Arc<str>>,
+    client_html: Option<Arc<str>>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -59,6 +69,15 @@ struct Contributions {
     commands: Vec<PluginCommand>,
     #[serde(default)]
     hooks: Vec<Hook>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    settings_panel: Option<SettingsPanel>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsPanel {
+    id: String,
+    title: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -79,6 +98,7 @@ enum PanelView {
     TurnActivity,
     Text,
     ServerText,
+    Client,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -127,6 +147,8 @@ pub struct InstalledPlugin {
     source: Option<source::InstalledSource>,
     #[serde(default, skip_serializing)]
     server_code: Option<Arc<str>>,
+    #[serde(default, skip_serializing)]
+    client_html: Option<Arc<str>>,
     /// An in-flight download may commit only to the installed definition it read.
     /// Toggling the plugin does not replace its definition.
     #[serde(skip)]
@@ -269,6 +291,7 @@ impl HostPlugins {
                 enabled: false,
                 source,
                 server_code: bundle.server_code,
+                client_html: bundle.client_html,
                 revision: Arc::new(()),
                 activation: Arc::new(()),
             },
@@ -365,6 +388,7 @@ impl HostPlugins {
         let PluginBundle {
             manifest,
             server_code,
+            client_html,
         } = bundle;
         if !Arc::ptr_eq(&current.revision, revision) {
             return Err(invalid(
@@ -384,8 +408,10 @@ impl HostPlugins {
             return Err(invalid("The source returned an older plugin version"));
         }
         let version = manifest.version.clone();
-        let runtime_changed =
-            current.manifest.server != manifest.server || current.server_code != server_code;
+        let runtime_changed = current.manifest.server != manifest.server
+            || current.server_code != server_code
+            || current.manifest.client != manifest.client
+            || current.client_html != client_html;
         if current.manifest == manifest
             && current.source.as_ref() == Some(&source)
             && !runtime_changed
@@ -408,6 +434,7 @@ impl HostPlugins {
                 enabled,
                 source: Some(source),
                 server_code,
+                client_html,
                 revision: Arc::new(()),
                 activation: Arc::new(()),
             },
@@ -476,6 +503,17 @@ impl HostPlugins {
             return Err(plugin_not_found());
         }
         result
+    }
+
+    pub fn client_html(&self, id: &str) -> Result<Arc<str>, AppCommandError> {
+        let guard = self.state.lock().expect("host plugin state lock");
+        let state = guard.as_ref().map_err(|error| catalog_error(error))?;
+        state
+            .catalog
+            .get(id)
+            .filter(|plugin| plugin.enabled)
+            .and_then(|plugin| plugin.client_html.clone())
+            .ok_or_else(plugin_not_found)
     }
 
     pub fn activity(
@@ -579,7 +617,8 @@ impl Manifest {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if !matches!((self.api_version, &self.server), (1, None) | (2, Some(_))) {
+        let bundled = self.server.is_some() || self.client.is_some();
+        if !matches!((self.api_version, bundled), (1, false) | (2, true)) {
             return Err(format!(
                 "Unsupported plugin API version: {}",
                 self.api_version
@@ -604,12 +643,20 @@ impl Manifest {
                 return Err("Provide a root .mjs file and 1 to 16 unique plugin methods".to_owned());
             }
         }
+        if self
+            .client
+            .as_ref()
+            .is_some_and(|client| !client.entry.strip_suffix(".html").is_some_and(valid_id))
+        {
+            return Err("Provide a root .html file for the plugin client entry".to_owned());
+        }
         let Contributions {
             workspace_panels,
             commands,
             hooks,
+            settings_panel,
         } = &self.contributes;
-        if (self.server.is_none() && workspace_panels.is_empty())
+        if (!bundled && workspace_panels.is_empty())
             || workspace_panels.len() > MAX_CONTRIBUTIONS
             || commands.len() > MAX_CONTRIBUTIONS
             || hooks.len() > 1
@@ -627,7 +674,8 @@ impl Manifest {
                 (PanelView::TurnActivity, None, None) if !hooks.is_empty() => {}
                 (PanelView::Text, Some(text), None) if !text.trim().is_empty() && text.len() <= 4096 => {}
                 (PanelView::ServerText, None, Some(method)) if self.server.as_ref().is_some_and(|server| server.methods.contains(method)) => {}
-                _ => return Err("Invalid panel data. Provide text, a turn hook, or a registered server method for the selected view.".to_owned()),
+                (PanelView::Client, None, None) if self.client.is_some() => {}
+                _ => return Err("Invalid panel data. Provide text, a turn hook, a registered server method or a client entry for the selected view.".to_owned()),
             }
         }
         let mut command_ids = BTreeSet::new();
@@ -641,20 +689,26 @@ impl Manifest {
                 return Err("Invalid or duplicate command, or unknown target panel".to_owned());
             }
         }
+        if let Some(panel) = settings_panel {
+            if self.client.is_none() || !valid_id(&panel.id) || !valid_label(&panel.title) {
+                return Err(
+                    "A plugin settings panel needs a valid ID, title and client entry".to_owned(),
+                );
+            }
+        }
         Ok(())
     }
 }
 
 impl PluginBundle {
     fn manifest_only(manifest: Manifest) -> Result<Self, AppCommandError> {
-        if manifest.server.is_some() {
-            return Err(invalid(
-                "Review the plugin source to install its server module",
-            ));
+        if manifest.server.is_some() || manifest.client.is_some() {
+            return Err(invalid("Review the plugin source to install its modules"));
         }
         Ok(Self {
             manifest,
             server_code: None,
+            client_html: None,
         })
     }
 }
@@ -689,7 +743,8 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
     };
     // A JSON string can expand each byte to a six-byte escape sequence.
     let max_bytes =
-        ((MAX_MANIFEST_BYTES + runtime::MAX_MODULE_BYTES * 6 + 4096) * MAX_PLUGINS) as u64;
+        ((MAX_MANIFEST_BYTES + (runtime::MAX_MODULE_BYTES + MAX_CLIENT_HTML_BYTES) * 6 + 4096)
+            * MAX_PLUGINS) as u64;
     let mut bytes = Vec::new();
     file.take(max_bytes + 1)
         .read_to_end(&mut bytes)
@@ -711,6 +766,12 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
                 if code.len() <= runtime::MAX_MODULE_BYTES && !code.trim().is_empty() => {}
             _ => return Err("Missing or invalid installed plugin module".to_owned()),
         }
+        match (&plugin.manifest.client, &plugin.client_html) {
+            (None, None) => {}
+            (Some(_), Some(html))
+                if html.len() <= MAX_CLIENT_HTML_BYTES && !html.trim().is_empty() => {}
+            _ => return Err("Missing or invalid installed plugin client module".to_owned()),
+        }
         if result.insert(plugin.manifest.id.clone(), plugin).is_some() {
             return Err("Duplicate installed plugin ID".to_owned());
         }
@@ -725,6 +786,8 @@ fn write_catalog(path: &Path, catalog: &Catalog) -> Result<(), AppCommandError> 
         plugin: &'a InstalledPlugin,
         #[serde(skip_serializing_if = "Option::is_none")]
         server_code: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        client_html: Option<&'a str>,
     }
     let write = || -> Result<(), Box<dyn std::error::Error>> {
         let dir = path.parent().expect("host plugin catalog has a parent");
@@ -735,6 +798,7 @@ fn write_catalog(path: &Path, catalog: &Catalog) -> Result<(), AppCommandError> 
             .map(|plugin| StoredPlugin {
                 plugin,
                 server_code: plugin.server_code.as_deref(),
+                client_html: plugin.client_html.as_deref(),
             })
             .collect();
         serde_json::to_writer(&mut file, &stored)?;
@@ -946,6 +1010,53 @@ mod tests {
         );
         reopened.apply(Mutation::Remove { id: id.into() }).unwrap();
         assert!(reopened.call(id, "summary".into(), input).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn serves_the_reviewed_client_entry_only_while_enabled() {
+        let data = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let id = "codeg.workspace-inspector";
+        let host = HostPlugins::new(data.path());
+        let source = directory.path();
+        let original = include_str!("../../examples/plugins/workspace-inspector/inspector.html");
+        let manifest = include_str!("../../examples/plugins/workspace-inspector/codeg-plugin.json");
+        let module = include_str!("../../examples/plugins/workspace-inspector/inspector.mjs");
+        std::fs::write(source.join("codeg-plugin.json"), manifest).unwrap();
+        std::fs::write(source.join("inspector.mjs"), module).unwrap();
+        let input = source.to_str().unwrap();
+        let registry = source::Registry::Npm;
+        assert!(host.preview_install(input, registry, None).await.is_err());
+
+        let entry = source.join("inspector.html");
+        std::fs::write(&entry, original).unwrap();
+        let preview = host.preview_install(input, registry, None).await.unwrap();
+        std::fs::write(&entry, "<p>Updated client</p>").unwrap();
+        let catalog = host.confirm_install(preview.ticket).unwrap();
+        assert!(!serde_json::to_string(&catalog)
+            .unwrap()
+            .contains("client_html"));
+        assert!(host.client_html(id).is_err());
+        host.apply(Mutation::SetEnabled {
+            id: id.into(),
+            enabled: true,
+        })
+        .unwrap();
+
+        let reopened = HostPlugins::new(data.path());
+        assert_eq!(reopened.client_html(id).unwrap().as_ref(), original);
+        assert!(reopened.update(id).await.unwrap().disabled_for_update);
+        assert!(reopened.client_html(id).is_err());
+        reopened
+            .apply(Mutation::SetEnabled {
+                id: id.into(),
+                enabled: true,
+            })
+            .unwrap();
+        assert_eq!(
+            reopened.client_html(id).unwrap().as_ref(),
+            "<p>Updated client</p>"
+        );
     }
 
     #[test]

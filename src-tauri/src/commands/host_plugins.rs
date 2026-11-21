@@ -108,6 +108,15 @@ pub async fn host_plugins_call(
 
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
+pub async fn host_plugins_client_html(
+    plugins: tauri::State<'_, Arc<HostPlugins>>,
+    plugin_id: String,
+) -> Result<Arc<str>, AppCommandError> {
+    plugins.client_html(&plugin_id)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
 pub async fn host_plugins_install_source(
     app: tauri::AppHandle,
     plugins: tauri::State<'_, Arc<HostPlugins>>,

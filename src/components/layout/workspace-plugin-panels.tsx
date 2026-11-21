@@ -2,6 +2,7 @@
 
 import { useFormatter, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
+import { HostPluginSurface } from "@/components/host-plugin-surface"
 import {
   pluginPanelKey,
   usePluginActivity,
@@ -65,6 +66,13 @@ export function WorkspacePluginPanels({
             pluginId={active.pluginId}
             method={active.panel.method}
             folderId={folderId}
+          />
+        ) : active.panel.view === "client" ? (
+          <HostPluginSurface
+            key={`${active.key}:${folderId}`}
+            pluginId={active.pluginId}
+            title={active.panel.title}
+            context={{ type: "workspacePanel", id: active.panel.id, folderId }}
           />
         ) : (
           <TurnActivity

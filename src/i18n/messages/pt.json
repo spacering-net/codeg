@@ -80,6 +80,7 @@
     "sourceHint": "O Codeg instala o manifesto codeg-plugin.json. O plugin fica desativado por padrão.",
     "reviewInstall": "Revisar instalação",
     "backToSource": "Voltar",
+    "clientEntry": "Entrada do cliente · {entry}",
     "serverTrustWarning": "Ao ativar, este plugin pode executar JavaScript no host conectado. Instale apenas módulos de confiança.",
     "updatedServerDisabled": "{name} foi atualizado para {version} e desativado. Ative-o novamente se confiar na nova versão.",
     "trustWarning": "Instale apenas de fontes confiáveis. Ao ativar o plugin, o Codeg aplica as extensões declaradas neste manifesto no host conectado.",

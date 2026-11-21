@@ -7,10 +7,12 @@ import {
   Globe2,
   Plus,
   RefreshCw,
+  Settings2,
   Trash2,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
+import { HostPluginSurface } from "@/components/host-plugin-surface"
 import {
   Dialog,
   DialogContent,
@@ -148,6 +150,13 @@ export function HostPluginSettings() {
                   </div>
                 )}
               </div>
+              {enabled && manifest.contributes.settingsPanel && (
+                <PluginSettingsPanel
+                  pluginId={manifest.id}
+                  title={manifest.contributes.settingsPanel.title}
+                  panelId={manifest.contributes.settingsPanel.id}
+                />
+              )}
               {source && (
                 <Button
                   size="icon-sm"
@@ -207,6 +216,36 @@ export function HostPluginSettings() {
         </ul>
       )}
     </div>
+  )
+}
+
+function PluginSettingsPanel({
+  pluginId,
+  title,
+  panelId,
+}: {
+  pluginId: string
+  title: string
+  panelId: string
+}) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button size="icon-sm" variant="ghost" title={title} aria-label={title}>
+          <Settings2 />
+        </Button>
+      </DialogTrigger>
+      <DialogContent aria-describedby={undefined}>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+        </DialogHeader>
+        <HostPluginSurface
+          pluginId={pluginId}
+          title={title}
+          context={{ type: "settingsPanel", id: panelId }}
+        />
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -633,6 +672,11 @@ function InstallReview({
         <AlertTriangle className="mt-0.5 size-4 shrink-0" />
         <div className="grid min-w-0 gap-1">
           <p>{t(manifest.server ? "serverTrustWarning" : "trustWarning")}</p>
+          {manifest.client && (
+            <p className="break-all">
+              {t("clientEntry", { entry: manifest.client.entry })}
+            </p>
+          )}
           {manifest.server && (
             <p className="break-all">
               {manifest.server.entry} · {manifest.server.methods.join(", ")}

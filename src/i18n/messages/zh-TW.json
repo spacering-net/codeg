@@ -80,6 +80,7 @@
     "sourceHint": "Codeg 會安裝 codeg-plugin.json 資訊清單，外掛預設停用。",
     "reviewInstall": "預覽安裝",
     "backToSource": "返回",
+    "clientEntry": "用戶端進入點 · {entry}",
     "serverTrustWarning": "啟用後，此外掛可以在已連線的主機上執行 JavaScript。請只安裝你信任的模組。",
     "updatedServerDisabled": "{name} 已更新至 {version} 並停用。確認信任新版本後可重新啟用。",
     "trustWarning": "請只安裝你信任的來源。啟用後，Codeg 會在已連線的主機上套用此資訊清單宣告的擴充功能。",

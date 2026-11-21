@@ -59,6 +59,30 @@ no effect until an update. An update that changes the server entry, declared
 methods or module contents disables a running plugin. Review the new version
 before enabling it again.
 
+## Client modules
+
+The [Workspace Inspector example](../examples/plugins/workspace-inspector)
+provides its own workspace and plugin settings panels. Install the example
+directory on the connected host and enable it. Use **Show Workspace Inspector**
+in workspace quick actions or open **About Workspace Inspector** on its row in
+**Settings → Plugins**.
+
+For a version 2 client contribution, set `client.entry` to a self-contained
+HTML file next to `codeg-plugin.json`. Use a lowercase `.html` filename and keep
+the file under 256 KiB. Set a workspace panel's `view` to `client`, or declare
+`contributes.settingsPanel` with an ID and title. Both surfaces can use the
+same client entry. The installation preview identifies the client file and
+captures it in the reviewed snapshot. Changing the client file or its entry
+on update requires re-enabling the plugin.
+
+The client runs in a sandboxed frame with an opaque origin. Inline scripts,
+inline styles, and data or blob images are available. The frame's content policy
+blocks external resource loads. `window.codeg.ready` resolves with `type`, the
+contribution `id`, the app `locale` and, for a workspace panel, `folderId`.
+`window.codeg.call(method, input)` calls a declared server method on the same
+plugin and connected host. `input` and the result use JSON. Codeg disconnects
+the message port when the contribution closes or is disabled.
+
 ## Install from a source
 
 **Settings → Plugins → Add Plugin** accepts these public sources:

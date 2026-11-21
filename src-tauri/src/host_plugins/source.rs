@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
 use url::Url;
 
+use super::MAX_CLIENT_HTML_BYTES;
 use super::{
     invalid, runtime::MAX_MODULE_BYTES, HostPlugins, InstalledPlugin, Manifest, PluginBundle,
     MAX_MANIFEST_BYTES,
@@ -382,7 +383,12 @@ async fn load_directory(path: PathBuf) -> Result<PluginBundle, AppCommandError> 
             .as_ref()
             .map(|server| read_directory_file(&path, &server.entry, MAX_MODULE_BYTES))
             .transpose()?;
-        bundle(manifest, code)
+        let html = manifest
+            .client
+            .as_ref()
+            .map(|client| read_directory_file(&path, &client.entry, MAX_CLIENT_HTML_BYTES))
+            .transpose()?;
+        bundle(manifest, code, html)
     })
     .await
     .map_err(|_| invalid("Could not read the plugin directory"))?
@@ -411,16 +417,20 @@ fn read_text(reader: impl Read, name: &str, limit: usize) -> Result<String, AppC
     Ok(text)
 }
 
-fn bundle(manifest: Manifest, code: Option<String>) -> Result<PluginBundle, AppCommandError> {
-    if code
-        .as_ref()
-        .is_some_and(|code| code.trim().is_empty() || code.contains('\0'))
-    {
-        return Err(invalid("The plugin server module must contain JavaScript"));
+fn bundle(
+    manifest: Manifest,
+    code: Option<String>,
+    html: Option<String>,
+) -> Result<PluginBundle, AppCommandError> {
+    for module in [&code, &html].into_iter().flatten() {
+        if module.trim().is_empty() || module.contains('\0') {
+            return Err(invalid("A plugin module must contain valid UTF-8 text"));
+        }
     }
     Ok(PluginBundle {
         manifest,
         server_code: code.map(Into::into),
+        client_html: html.map(Into::into),
     })
 }
 
@@ -505,20 +515,31 @@ async fn read_github(
     let url = endpoint("https://raw.githubusercontent.com", &segments);
     let bytes = download(client, url, MAX_MANIFEST_BYTES).await?;
     let manifest = Manifest::parse(&read_text(bytes.as_slice(), FILE_NAME, MAX_MANIFEST_BYTES)?)?;
+    segments.pop();
     let code = if let Some(server) = &manifest.server {
-        segments.pop();
-        segments.push(&server.entry);
-        let url = endpoint("https://raw.githubusercontent.com", &segments);
-        let bytes = download(client, url, MAX_MODULE_BYTES).await?;
-        Some(read_text(
-            bytes.as_slice(),
-            &server.entry,
-            MAX_MODULE_BYTES,
-        )?)
+        Some(github_file(client, &segments, &server.entry, MAX_MODULE_BYTES).await?)
     } else {
         None
     };
-    Ok((bundle(manifest, code)?, sha))
+    let html = if let Some(module) = &manifest.client {
+        Some(github_file(client, &segments, &module.entry, MAX_CLIENT_HTML_BYTES).await?)
+    } else {
+        None
+    };
+    Ok((bundle(manifest, code, html)?, sha))
+}
+
+async fn github_file(
+    client: &reqwest::Client,
+    root: &[&str],
+    name: &str,
+    limit: usize,
+) -> Result<String, AppCommandError> {
+    let mut segments = root.to_vec();
+    segments.push(name);
+    let url = endpoint("https://raw.githubusercontent.com", &segments);
+    let bytes = download(client, url, limit).await?;
+    read_text(bytes.as_slice(), name, limit)
 }
 
 async fn read_npm(
@@ -587,7 +608,12 @@ fn verified_bundle(bytes: &[u8], expected: &[u8]) -> Result<PluginBundle, AppCom
         .as_ref()
         .map(|server| archive_file(bytes, &server.entry, MAX_MODULE_BYTES))
         .transpose()?;
-    bundle(manifest, code)
+    let html = manifest
+        .client
+        .as_ref()
+        .map(|client| archive_file(bytes, &client.entry, MAX_CLIENT_HTML_BYTES))
+        .transpose()?;
+    bundle(manifest, code, html)
 }
 
 fn archive_file(bytes: &[u8], name: &str, limit: usize) -> Result<String, AppCommandError> {

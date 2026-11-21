@@ -52,6 +52,12 @@ pub struct CallParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ClientHtmlParams {
+    plugin_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateParams {
     plugin_id: String,
 }
@@ -94,6 +100,13 @@ pub async fn call(
         .call(&params.plugin_id, params.method, params.input)
         .await
         .map(Json)
+}
+
+pub async fn client_html(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ClientHtmlParams>,
+) -> Result<Json<Arc<str>>, AppCommandError> {
+    state.host_plugins.client_html(&params.plugin_id).map(Json)
 }
 
 pub async fn install_source(

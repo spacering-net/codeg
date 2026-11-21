@@ -1,0 +1,21 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.workspace-inspector",
+  "name": "Workspace Inspector",
+  "version": "1.0.0",
+  "server": { "entry": "inspector.mjs", "methods": ["describe"] },
+  "client": { "entry": "inspector.html" },
+  "contributes": {
+    "workspacePanels": [
+      { "id": "inspect", "title": "Workspace Inspector", "view": "client" }
+    ],
+    "settingsPanel": { "id": "about", "title": "About Workspace Inspector" },
+    "commands": [
+      {
+        "id": "show-inspector",
+        "title": "Show Workspace Inspector",
+        "action": { "type": "openWorkspacePanel", "panelId": "inspect" }
+      }
+    ]
+  }
+}
