@@ -2773,14 +2773,14 @@ export function MessageListView({
             conversationId={conversationId}
             openInDrawer={checksOpenInDrawer}
           >
-            <KnownInvocationsProvider value={knownInvocations}>
-              <PluginTimelineTransformProvider
-                conversationId={pluginConversationId}
-                enabled={isActive}
-              >
+            <PluginTimelineTransformProvider
+              conversationId={pluginConversationId}
+              enabled={isActive}
+            >
+              <KnownInvocationsProvider value={knownInvocations}>
                 {thread}
-              </PluginTimelineTransformProvider>
-            </KnownInvocationsProvider>
+              </KnownInvocationsProvider>
+            </PluginTimelineTransformProvider>
           </MessageChecksProvider>
         </DelegationStatusIndexProvider>
       </ModelLabelProvider>
