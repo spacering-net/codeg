@@ -29,6 +29,7 @@ function header(
       groupId={7}
       name="Work"
       runningCount={0}
+      awaitingCount={0}
       expanded
       onToggle={onToggle}
       themeColor="inherit"

@@ -2231,6 +2231,12 @@
       "statusRunningBadge": "運行中",
       "runningCountBadge": "{count} 個會話進行中",
       "statusCancelledBadge": "已取消",
+      "awaitingCountBadge": "{count, plural, other {# 個會話在等你}}",
+      "statusAwaiting": {
+        "permission": "待你授權",
+        "question": "待你回答",
+        "plan": "待你確認"
+      },
       "originalWorkingDir": "最初執行目錄",
       "cliBadge": "從命令列啟動",
       "conversationCountUnit": "{count} 條",

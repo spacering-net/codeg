@@ -64,6 +64,7 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
   groupId,
   name,
   runningCount,
+  awaitingCount,
   expanded,
   onToggle,
   onRename,
@@ -87,6 +88,13 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
    * badge, and the rows under an open group already answer it.
    */
   runningCount: number
+  /**
+   * How many sessions in the group are parked on the user (see
+   * `conversation-attention`). Outranks `runningCount` in the same slot: a group
+   * whose work is blocked is not just "busy", and that is the difference the
+   * user needs to see from a collapsed heading. Zero renders nothing.
+   */
+  awaitingCount: number
   expanded: boolean
   onToggle?: (groupId: number) => void
   onRename?: (groupId: number, name: string) => void
@@ -224,7 +232,29 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
                       match the spinner on the cards, and nothing at all when
                       none are. A collapsed group is exactly when this is the
                       only way to see that work is under way in there. */}
-            {runningCount > 0 && (
+            {/* Blocked-session badge, ahead of the running one and standing in
+                      for it while any exist — the same rule the folder header and
+                      the cards follow (see `conversation-attention`). Violet with
+                      a breathing pulse: a collapsed group is exactly when this is
+                      the only way to see that something in there is waiting on
+                      the user. */}
+            {awaitingCount > 0 ? (
+              <span
+                title={t("awaitingCountBadge", { count: awaitingCount })}
+                className={cn(
+                  "inline-flex shrink-0 animate-pulse items-center justify-center motion-reduce:animate-none",
+                  "h-[0.9375rem] min-w-[1rem] rounded-[0.3125rem] px-[0.25rem]",
+                  "text-[0.625rem] font-semibold leading-none tabular-nums",
+                  "bg-violet-500/12 text-violet-700",
+                  "dark:bg-violet-400/15 dark:text-violet-300"
+                )}
+              >
+                <span aria-hidden>{awaitingCount}</span>
+                <span className="sr-only">
+                  {t("awaitingCountBadge", { count: awaitingCount })}
+                </span>
+              </span>
+            ) : runningCount > 0 ? (
               <span
                 title={t("runningCountBadge", { count: runningCount })}
                 className={cn(
@@ -240,7 +270,7 @@ export const SidebarFolderGroupHeader = memo(function SidebarFolderGroupHeader({
                   {t("runningCountBadge", { count: runningCount })}
                 </span>
               </span>
-            )}
+            ) : null}
             {/* Same hover-revealed disclosure chevron as the folder
                       header, including `group-focus-within` (focus lands on a
                       child button, not on the `group` element itself). */}

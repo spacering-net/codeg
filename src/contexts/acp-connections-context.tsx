@@ -163,6 +163,14 @@ import {
   saveConfigPreference,
 } from "@/lib/selector-prefs-storage"
 import { rememberAdvertisedCommands } from "@/lib/advertised-commands-store"
+import { blockingPrompts } from "@/lib/blocking-prompts"
+import {
+  buildAttentionIndex,
+  EMPTY_ATTENTION_INDEX,
+  sameAttentionIndex,
+  type AttentionCandidate,
+  type AttentionIndex,
+} from "@/lib/conversation-attention"
 import { rememberModelLabels } from "@/lib/model-label-store"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 
@@ -3445,6 +3453,13 @@ interface InternalStore {
   activeKey: string | null
   keyListeners: Map<string, Set<() => void>>
   activeKeyListeners: Set<() => void>
+  /** Which persisted conversations are parked on the user right now, folded
+   *  from every connection this window holds (see `conversation-attention`).
+   *  Derived, never persisted: it is a property of live connections, not of the
+   *  conversation row. Kept here rather than recomputed per subscriber because
+   *  the sidebar asks about every row it draws. */
+  attention: AttentionIndex
+  attentionListeners: Set<() => void>
 }
 
 // ── Store API for consumers ──
@@ -3462,6 +3477,19 @@ export interface ConnectionStoreApi {
   getActiveKey(): string | null
   subscribeKey(key: string, cb: () => void): () => void
   subscribeActiveKey(cb: () => void): () => void
+  /**
+   * Which persisted conversations are parked on a decision the user has to make
+   * (see `conversation-attention`), for a surface that marks a whole list at
+   * once (the sidebar). Reference-stable between changes, so it is safe as a
+   * `useSyncExternalStore` snapshot; subscribe ONCE at the list level and pass
+   * each row the boolean it needs rather than subscribing per row.
+   *
+   * Only conversations this window holds a connection for are in it. A session
+   * started by an automation or `codeg-cli` in another process, never opened
+   * here, is unknown to this client and never marked.
+   */
+  getAttention(): AttentionIndex
+  subscribeAttention(cb: () => void): () => void
 }
 
 const ConnectionStoreContext = createContext<ConnectionStoreApi | null>(null)
@@ -3938,6 +3966,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     activeKey: null,
     keyListeners: new Map(),
     activeKeyListeners: new Set(),
+    attention: EMPTY_ATTENTION_INDEX,
+    attentionListeners: new Set(),
   })
 
   // connectionId → the contextKeys whose events are routed from the legacy
@@ -4074,6 +4104,42 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   const reconnectRef = useRef<AcpActionsValue["reconnect"] | null>(null)
 
   /**
+   * Rebuild the `conversation → blocking prompt` index from every connection
+   * this window holds, and wake the whole-list subscribers only when the marks
+   * actually changed.
+   *
+   * Called from `dispatch` after each accepted action, so it covers every route
+   * a prompt appears or clears by — the live `question_request` /
+   * `permission_request` / `plan_approval_request` events, their resolutions, a
+   * turn end that clears them, and a snapshot hydrate that arrives while one is
+   * open (the only way a client attaching mid-turn learns of it).
+   *
+   * The conversation id comes off `lastConnectParamsRef`, NOT off an open tab:
+   * a connection outlives its tab (closing a tab whose agent is still busy
+   * keeps it running), and that background case is the whole point. The ref
+   * holds the id `connect()` was given plus the one a first send linked
+   * (`conversation_linked`), both remembered past the surface.
+   */
+  const refreshAttention = useCallback(() => {
+    const store = storeRef.current
+    const candidates: AttentionCandidate[] = []
+    for (const [key, conn] of store.connections) {
+      // A delegated sub-agent's connection is not a row the sidebar lists; its
+      // blocking state belongs to the parent's card, which reads the child
+      // connection directly.
+      if (conn.isDelegationChild) continue
+      candidates.push({
+        conversationId: lastConnectParamsRef.current.get(key)?.conversationId,
+        prompts: blockingPrompts(conn),
+      })
+    }
+    const next = buildAttentionIndex(candidates)
+    if (sameAttentionIndex(store.attention, next)) return
+    store.attention = next
+    for (const cb of store.attentionListeners) cb()
+  }, [])
+
+  /**
    * Fold backend-resolved identity into the remembered connect params.
    *
    * `connect()` records what the CALLER asked for, and for a new conversation
@@ -4096,8 +4162,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       const remembered = lastConnectParamsRef.current.get(contextKey)
       if (!remembered) return
       lastConnectParamsRef.current.set(contextKey, { ...remembered, ...patch })
+      // A connection that was parked on a prompt before its conversation id was
+      // known (a brand-new conversation answers a question in its first turn)
+      // becomes markable exactly now — no `dispatch` follows this event, so
+      // nothing else would fold it in.
+      if (patch.conversationId != null) refreshAttention()
     },
-    []
+    [refreshAttention]
   )
 
   /**
@@ -4237,12 +4308,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     for (const cb of storeRef.current.activeKeyListeners) cb()
   }, [])
 
-  /**
-   * Publish (or retire) the in-flight-`connect()` marker for a key and wake its
-   * subscribers. Rides the SAME per-key listener set as the connections map, so
-   * a surface watching one key observes the pending → entry handover as one
-   * continuous stream rather than two stores it has to reconcile.
-   */
+  // ── Notify helpers ──
   const setConnectPending = useCallback(
     (key: string, info: ConnectPendingInfo | null) => {
       const { connectPending } = storeRef.current
@@ -4388,6 +4454,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
 
       storeRef.current.connections = next
 
+      // Fold the new state into the attention index. A streaming batch moves
+      // no prompt (the deltas touch prose, not the cards), so the two hot paths
+      // skip the walk; every other accepted action may have added, moved or
+      // cleared one.
+      if (
+        action.type !== "STREAM_BATCH" &&
+        action.type !== "BATCH_TOOL_CALL_UPDATES"
+      ) {
+        refreshAttention()
+      }
+
       // Mirror a changed liveMessage into the runtime store OUTSIDE React, so
       // the keep-alive conversation panel no longer has to re-render per
       // streaming token just to run a mirror effect. Fires only when the
@@ -4497,7 +4574,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [discardStreamingKey, notifyKeyListeners, notifyAllKeyListeners]
+    [
+      discardStreamingKey,
+      notifyKeyListeners,
+      notifyAllKeyListeners,
+      refreshAttention,
+    ]
   )
 
   // ── setActiveKey ──
@@ -4553,6 +4635,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         storeRef.current.activeKeyListeners.add(cb)
         return () => {
           storeRef.current.activeKeyListeners.delete(cb)
+        }
+      },
+      getAttention() {
+        return storeRef.current.attention
+      },
+      subscribeAttention(cb: () => void) {
+        const { attentionListeners } = storeRef.current
+        attentionListeners.add(cb)
+        return () => {
+          attentionListeners.delete(cb)
         }
       },
     }

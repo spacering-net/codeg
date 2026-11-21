@@ -22,6 +22,7 @@ import {
   ChevronRight,
   SquareTerminal,
   ListChecks,
+  MessageCircleQuestionMark,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -81,6 +82,7 @@ import { MoveToFolderContextSubmenu } from "./move-to-folder-menu"
 import { AgentIcon } from "@/components/agent-icon"
 import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { useBranchChip, useResolvedTags } from "@/hooks/use-conversation-tags"
+import type { BlockingPromptKind } from "@/lib/blocking-prompts"
 import { useAssistant } from "@/stores/assistants-store"
 
 /**
@@ -223,6 +225,14 @@ interface SidebarConversationCardProps {
   expanded?: boolean
   /** Toggle this conversation's sub-session subtree (lazily loads on expand). */
   onToggleExpand?: (id: number) => void
+  /**
+   * The agent is parked on a decision and will not move until the user acts:
+   * which one, or `null`. Derived from the live connection rather than from
+   * `conversation.status` — see `conversation-attention` — and passed DOWN by
+   * the list, which holds the one subscription. A card subscribing on its own
+   * would put a store listener on every visible row.
+   */
+  awaiting?: BlockingPromptKind | null
 }
 
 export const SidebarConversationCard = memo(function SidebarConversationCard({
@@ -245,6 +255,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   hasChildren = false,
   expanded = false,
   onToggleExpand,
+  awaiting = null,
 }: SidebarConversationCardProps) {
   const t = useTranslations("Folder.conversationCard")
   const ime = useImeGuard()
@@ -356,8 +367,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   ])
 
   const status = conversation.status as ConversationStatus
-  const isRunning = status === "in_progress"
-  const isCancelled = status === "cancelled"
+  // A blocked session is ALSO `in_progress`, so the answer wins the right slot:
+  // "running" is true but useless there, while "waiting for you" is the one
+  // thing the user has to act on. Everything else keeps its old precedence.
+  const isAwaiting = awaiting != null
+  const isRunning = status === "in_progress" && !isAwaiting
+  const isCancelled = status === "cancelled" && !isAwaiting
   const isPinned = conversation.pinned_at != null
   const isCompleted = status === "completed"
 
@@ -472,8 +487,14 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                       )}
                       <ConversationStatusDot
                         status={status}
+                        attention={awaiting}
                         size="sm"
                         className="absolute -right-0.5 -bottom-0.5 ring-2 ring-sidebar"
+                        title={
+                          awaiting
+                            ? tSidebar(`statusAwaiting.${awaiting}`)
+                            : undefined
+                        }
                       />
                     </div>
 
@@ -596,10 +617,41 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                         // Roots swap the badge out for the hover actions; sub-sessions
                         // have no actions, so keep the badge (incl. the running
                         // spinner) visible on hover.
-                        !isSubsession && "group-hover:hidden"
+                        //
+                        // An awaiting chip is the exception among roots: it is the
+                        // one thing on this row the user must act on, and hiding it
+                        // the moment the pointer lands on the row would hide it
+                        // exactly when they are looking for it. The pin/done
+                        // buttons take the space beside it instead.
+                        !isSubsession && !isAwaiting && "group-hover:hidden"
                       )}
                     >
-                      {isRunning ? (
+                      {isAwaiting ? (
+                        // The one state worth interrupting for, so it takes the
+                        // slot the running spinner and the timestamp compete
+                        // for. Worded, not just coloured: the row is one line
+                        // and 6px of violet is not a readable answer to "why
+                        // has this session not moved in ten minutes".
+                        <span
+                          className="relative inline-flex shrink-0 items-center gap-1"
+                          title={tSidebar(`statusAwaiting.${awaiting}`)}
+                        >
+                          <span
+                            className="inline-flex animate-pulse motion-reduce:animate-none"
+                            aria-hidden
+                          >
+                            <MessageCircleQuestionMark className="h-3.5 w-3.5 text-violet-600 dark:text-violet-400" />
+                          </span>
+                          <span
+                            className={cn(
+                              "text-[0.71875rem] font-medium whitespace-nowrap",
+                              "text-violet-700 dark:text-violet-300"
+                            )}
+                          >
+                            {tSidebar(`statusAwaiting.${awaiting}`)}
+                          </span>
+                        </span>
+                      ) : isRunning ? (
                         <span
                           className="relative inline-flex shrink-0 items-center justify-center"
                           title={tSidebar("statusRunningBadge")}

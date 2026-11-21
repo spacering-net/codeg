@@ -19,6 +19,7 @@ import {
   type AttachSessionToSessionDetail,
 } from "@/lib/session-attachment-events"
 import type { DbConversationSummary } from "@/lib/types"
+import type { BlockingPromptKind } from "@/lib/blocking-prompts"
 import enMessages from "@/i18n/messages/en.json"
 import {
   resetAssistantsStore,
@@ -392,6 +393,78 @@ describe("SidebarConversationCard running badge", () => {
     expect(turning?.tagName).toBe("SPAN")
     expect(turning?.querySelector("svg")).not.toBeNull()
     expect(badge.querySelector("svg.animate-spin")).toBeNull()
+  })
+})
+
+describe("SidebarConversationCard awaiting-answer mark", () => {
+  function renderCard(c: DbConversationSummary, awaiting?: BlockingPromptKind) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel="5m"
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+        awaiting={awaiting ?? null}
+      />
+    )
+  }
+
+  it("names which decision is pending, in the row", () => {
+    // The blocked session is ALSO in_progress, so the row would otherwise spin
+    // its amber "running" badge and say nothing about why nothing moves.
+    const { getByText, queryByTitle } = renderCard(
+      { ...conv(1), status: "in_progress" },
+      "question"
+    )
+    expect(getByText("Needs your answer")).toBeTruthy()
+    expect(queryByTitle("Running")).toBeNull()
+  })
+
+  it("shows the right wording for each of the three prompts", () => {
+    for (const [kind, label] of [
+      ["permission", "Needs your permission"],
+      ["question", "Needs your answer"],
+      ["plan", "Needs your approval"],
+    ] as const) {
+      const view = renderCard({ ...conv(2), status: "in_progress" }, kind)
+      expect(view.getByText(label)).toBeTruthy()
+      view.unmount()
+    }
+  })
+
+  it("marks the status dot as well as the slot", () => {
+    // The dot is what the user sees on a row they are scrolling past; the slot
+    // is what explains it once they look. Both carry the mark.
+    const { container } = renderCard(
+      { ...conv(3), status: "in_progress" },
+      "plan"
+    )
+    const dot = container.querySelector("[data-attention]")
+    expect(dot?.getAttribute("data-attention")).toBe("plan")
+  })
+
+  it("leaves a healthy running session exactly as it was", () => {
+    const { getByTitle, container } = renderCard({
+      ...conv(4),
+      status: "in_progress",
+    })
+    expect(getByTitle("Running")).toBeTruthy()
+    expect(container.querySelector("[data-attention]")).toBeNull()
+  })
+
+  it("outranks a cancelled status, which says nothing useful here", () => {
+    // A cancelled row that is somehow still blocked on a prompt: the actionable
+    // state wins the one slot the row has.
+    const { getByText, queryByTitle } = renderCard(
+      { ...conv(5), status: "cancelled" },
+      "permission"
+    )
+    expect(getByText("Needs your permission")).toBeTruthy()
+    expect(queryByTitle("Cancelled")).toBeNull()
   })
 })
 

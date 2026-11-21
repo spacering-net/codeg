@@ -10228,3 +10228,139 @@ describe("hasPrompted: whether a turn has run on the connection", () => {
     expect(hasPrompted()).toBe(false)
   })
 })
+
+describe("AcpConnectionsProvider conversation attention index", () => {
+  async function connectOwner(): Promise<AttachHandlers> {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1", 42)
+    })
+    return latestAttachHandlers()
+  }
+
+  const index = () => h.store!.getAttention()
+
+  it("marks the conversation a question is holding open", async () => {
+    const handlers = await connectOwner()
+    expect(index().size).toBe(0)
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [
+        {
+          id: "q",
+          question: "Which DB?",
+          header: "DB",
+          multi_select: false,
+          options: [],
+        },
+      ],
+    })
+    expect(index().get(42)).toBe("question")
+  })
+
+  it("clears the mark when the question is answered", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [
+        {
+          id: "q",
+          question: "Which DB?",
+          header: "DB",
+          multi_select: false,
+          options: [],
+        },
+      ],
+    })
+    expect(index().get(42)).toBe("question")
+
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "question_resolved",
+      question_id: "q-1",
+    })
+    expect(index().size).toBe(0)
+  })
+
+  it("marks a permission request too, not only a question", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "permission_request",
+      request_id: "req-1",
+      tool_call: {},
+      options: [],
+    })
+    expect(index().get(42)).toBe("permission")
+  })
+
+  it("never marks a connection that serves no conversation row", async () => {
+    // A draft's first turn has no row the sidebar lists, so there is nothing to
+    // mark even though the agent really is blocked.
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "sess-1")
+    })
+    const handlers = latestAttachHandlers()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [
+        {
+          id: "q",
+          question: "Which DB?",
+          header: "DB",
+          multi_select: false,
+          options: [],
+        },
+      ],
+    })
+    expect(index().size).toBe(0)
+  })
+
+  it("wakes whole-list subscribers only when the marks change", async () => {
+    const handlers = await connectOwner()
+    const woke = vi.fn()
+    const off = h.store!.subscribeAttention(woke)
+
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "question_request",
+      question_id: "q-1",
+      questions: [
+        {
+          id: "q",
+          question: "Which DB?",
+          header: "DB",
+          multi_select: false,
+          options: [],
+        },
+      ],
+    })
+    expect(woke).toHaveBeenCalledTimes(1)
+
+    // Prose streaming moves no prompt: the sidebar must not re-render per token.
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "content_delta",
+      text: "thinking…",
+    } as unknown as EventEnvelope)
+    expect(woke).toHaveBeenCalledTimes(1)
+
+    off()
+  })
+})

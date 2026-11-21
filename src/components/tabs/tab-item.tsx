@@ -12,6 +12,7 @@ import {
 } from "@/lib/drag-selection-guard"
 import type { ConversationStatus } from "@/lib/types"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
+import { useAwaitingAnswer } from "@/hooks/use-conversation-attention"
 import {
   ContextMenu,
   ContextMenuContent,
@@ -121,6 +122,11 @@ export const TabItem = memo(function TabItem({
 }: TabItemProps) {
   const t = useTranslations("Folder.tabs")
   const itemRef = useRef<HTMLDivElement>(null)
+  // The tab's own key IS its connection key, so this subscribes to exactly one
+  // connection: a prompt raised in a background tab re-renders that tab's dot
+  // and nothing else. A draft has no conversation row and no connection, so it
+  // can never be parked.
+  const awaiting = useAwaitingAnswer(tab.conversationId == null ? null : tab.id)
 
   const resolvedFolderName = folderName ?? String(tab.folderId)
   const tooltip = folderBranch
@@ -328,6 +334,7 @@ export const TabItem = memo(function TabItem({
           >
             <ConversationStatusDot
               status={tab.status as ConversationStatus | undefined}
+              attention={awaiting}
             />
             <span
               className={cn(

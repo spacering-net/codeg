@@ -2231,6 +2231,12 @@
       "statusRunningBadge": "قيد التشغيل",
       "runningCountBadge": "{count} جلسة قيد التشغيل",
       "statusCancelledBadge": "ملغى",
+      "awaitingCountBadge": "{count, plural, other {# جلسات تنتظرك}}",
+      "statusAwaiting": {
+        "permission": "بانتظار إذنك",
+        "question": "بانتظار إجابتك",
+        "plan": "بانتظار موافقتك"
+      },
       "originalWorkingDir": "دليل العمل الأصلي",
       "cliBadge": "بدأت من سطر الأوامر",
       "conversationCountUnit": "{count} محادثة",

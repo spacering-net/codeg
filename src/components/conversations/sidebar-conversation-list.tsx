@@ -144,6 +144,7 @@ import {
 } from "./sidebar-conversation-grouping"
 import { useRemoteWorkspaceConnections } from "@/hooks/use-remote-workspace-connections"
 import { useSubsessionSync } from "@/hooks/use-subsession-sync"
+import { useConversationAttentionIndex } from "@/hooks/use-conversation-attention"
 import { SidebarSectionHeader } from "./sidebar-section-header"
 import { SidebarFolderGroupHeader } from "./sidebar-folder-group-header"
 import { ConversationManageDialog } from "./conversation-manage-dialog"
@@ -230,6 +231,7 @@ const FolderHeader = memo(function FolderHeader({
   folderAlias,
   folderPath,
   runningCount,
+  awaitingCount,
   expanded,
   themeColor,
   appThemeColor,
@@ -275,6 +277,13 @@ const FolderHeader = memo(function FolderHeader({
    * a total-count chip on every row was noise (expanding shows the rows).
    */
   runningCount: number
+  /**
+   * How many of this group's sessions are parked on the user (see
+   * `conversation-attention`). Outranks `runningCount` in the header: a folder
+   * holding a blocked session is not merely "busy", and saying so is what stops
+   * the user from scrolling past it.
+   */
+  awaitingCount: number
   expanded: boolean
   themeColor: FolderThemeColor
   appThemeColor: ThemeColor
@@ -565,7 +574,30 @@ const FolderHeader = memo(function FolderHeader({
                       amber-600) carries the light-mode fill: at 0.625rem this is
                       small text, and amber-600 on the tinted surface lands near
                       3:1 — under the AA floor amber-700 (~4.7:1) clears. */}
-                  {runningCount > 0 && (
+                  {/* Blocked-session badge, ahead of the running one and taking
+                      its place while any exist: "3 running" beside "1 waiting for
+                      you" reads as two unrelated facts, and only the second is
+                      something the user has to act on. Violet, matching the cards'
+                      own mark (and distinct from amber's "busy"), with a breathing
+                      pulse so it catches the eye in a long list of folders without
+                      relying on colour alone. */}
+                  {awaitingCount > 0 ? (
+                    <span
+                      title={t("awaitingCountBadge", { count: awaitingCount })}
+                      className={cn(
+                        "inline-flex shrink-0 animate-pulse items-center justify-center motion-reduce:animate-none",
+                        "h-[0.9375rem] min-w-[1rem] rounded-[0.3125rem] px-[0.25rem]",
+                        "text-[0.625rem] font-semibold leading-none tabular-nums",
+                        "bg-violet-500/12 text-violet-700",
+                        "dark:bg-violet-400/15 dark:text-violet-300"
+                      )}
+                    >
+                      <span aria-hidden>{awaitingCount}</span>
+                      <span className="sr-only">
+                        {t("awaitingCountBadge", { count: awaitingCount })}
+                      </span>
+                    </span>
+                  ) : runningCount > 0 ? (
                     <span
                       title={t("runningCountBadge", { count: runningCount })}
                       className={cn(
@@ -581,7 +613,7 @@ const FolderHeader = memo(function FolderHeader({
                         {t("runningCountBadge", { count: runningCount })}
                       </span>
                     </span>
-                  )}
+                  ) : null}
                   {/* Disclosure chevron mirrors the section headers: hover-revealed,
                     rotates on expand. The persistent open/closed state still reads
                     from the folder icon on the left, which is why the chevron can
@@ -1009,6 +1041,10 @@ export function SidebarConversationList({
   const refreshFolder = useAppWorkspaceStore((s) => s.refreshFolder)
   const refreshing = loading
   const { activeFolder } = useActiveFolder()
+  // Which conversations are parked on the user (see `conversation-attention`).
+  // ONE subscription for the whole list: each card is then handed a plain value
+  // and a re-render touches only the rows whose mark actually changed.
+  const attention = useConversationAttentionIndex()
 
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)
@@ -1565,6 +1601,22 @@ export function SidebarConversationList({
     }
     return map
   }, [conversations, displayChildToParent])
+
+  // Blocked sessions per display group — same shape and the same "count the FULL
+  // list" rule as the running badge above, so neither the completed filter nor a
+  // pin can hide a folder that is waiting on the user. Derived from the live
+  // attention index rather than from `conversations`, because that is where the
+  // fact lives (see `conversation-attention`).
+  const folderAwaitingCounts = useMemo(() => {
+    const map = new Map<number, number>()
+    if (!attention || attention.size === 0) return map
+    for (const conv of conversations) {
+      if (!attention.has(conv.id)) continue
+      const groupId = displayChildToParent.get(conv.folder_id) ?? conv.folder_id
+      map.set(groupId, (map.get(groupId) ?? 0) + 1)
+    }
+    return map
+  }, [conversations, displayChildToParent, attention])
 
   // The REORDERABLE folders: worktree child folders are excluded (they follow
   // their parent, never reorder on their own). Hidden chat folders never reach
@@ -2883,6 +2935,17 @@ export function SidebarConversationList({
     return total
   }
 
+  // The same fold for the blocked count: a container header summarises its whole
+  // repo family, so a worktree of it waiting on the user must show up there.
+  const containerAwaitingCount = (repoId: number): number => {
+    let total = folderAwaitingCounts.get(repoId) ?? 0
+    const kids = containerChildren.get(repoId)
+    if (kids) {
+      for (const kid of kids) total += folderAwaitingCounts.get(kid) ?? 0
+    }
+    return total
+  }
+
   // The same number one level up: a GROUP's badge is the running sessions across
   // every folder in it. Members are always reorderable top-level folders, so
   // `containerRunningCount` is the right per-member term in both worktree modes
@@ -2896,6 +2959,15 @@ export function SidebarConversationList({
     let total = 0
     for (const memberId of layout.membersByGroup.get(groupId) ?? []) {
       total += containerRunningCount(memberId)
+    }
+    return total
+  }
+
+  // …and for the blocked count, over the same member set.
+  const groupAwaitingCount = (groupId: number): number => {
+    let total = 0
+    for (const memberId of layout.membersByGroup.get(groupId) ?? []) {
+      total += containerAwaitingCount(memberId)
     }
     return total
   }
@@ -2940,6 +3012,9 @@ export function SidebarConversationList({
     const runningCount = isContainer
       ? containerRunningCount(folderId)
       : (folderRunningCounts.get(folderId) ?? 0)
+    const awaitingCount = isContainer
+      ? containerAwaitingCount(folderId)
+      : (folderAwaitingCounts.get(folderId) ?? 0)
     const expanded = isRootGroup
       ? !rootGroupCollapsed.has(folderId)
       : opts.collapsed
@@ -2959,6 +3034,7 @@ export function SidebarConversationList({
         folderAlias={folderEntry?.alias ?? null}
         folderPath={folderEntry?.path ?? ""}
         runningCount={runningCount}
+        awaitingCount={awaitingCount}
         expanded={expanded}
         themeColor={folderThemeColor(folderId)}
         appThemeColor={appThemeColor}
@@ -3076,6 +3152,7 @@ export function SidebarConversationList({
           groupId={row.groupId}
           name={group.name}
           runningCount={groupRunningCount(row.groupId)}
+          awaitingCount={groupAwaitingCount(row.groupId)}
           expanded={row.expanded}
           onToggle={toggleFolderGroup}
           onRename={handleRenameGroup}
@@ -3333,6 +3410,7 @@ export function SidebarConversationList({
         hasChildren={conv.child_count > 0}
         expanded={conversationExpanded.has(conv.id)}
         onToggleExpand={toggleConversation}
+        awaiting={attention?.get(conv.id) ?? null}
       />
     )
   }
@@ -3484,6 +3562,7 @@ export function SidebarConversationList({
                               groupId={groupId}
                               name={group.name}
                               runningCount={groupRunningCount(groupId)}
+                              awaitingCount={groupAwaitingCount(groupId)}
                               expanded={false}
                               themeColor={normalizeFolderThemeColor(
                                 group.color

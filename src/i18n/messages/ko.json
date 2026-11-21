@@ -2231,6 +2231,12 @@
       "statusRunningBadge": "실행 중",
       "runningCountBadge": "{count}개 세션 실행 중",
       "statusCancelledBadge": "취소됨",
+      "awaitingCountBadge": "{count, plural, other {#개 세션이 답변을 기다리는 중}}",
+      "statusAwaiting": {
+        "permission": "권한 대기",
+        "question": "답변 대기",
+        "plan": "승인 대기"
+      },
       "originalWorkingDir": "원래 작업 디렉터리",
       "cliBadge": "명령줄에서 시작됨",
       "conversationCountUnit": "{count}개",

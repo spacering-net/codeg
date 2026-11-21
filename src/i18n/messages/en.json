@@ -2231,6 +2231,12 @@
       "statusRunningBadge": "Running",
       "runningCountBadge": "{count, plural, one {# session running} other {# sessions running}}",
       "statusCancelledBadge": "Cancelled",
+      "awaitingCountBadge": "{count, plural, one {# session waiting on you} other {# sessions waiting on you}}",
+      "statusAwaiting": {
+        "permission": "Needs your permission",
+        "question": "Needs your answer",
+        "plan": "Needs your approval"
+      },
       "originalWorkingDir": "Original working directory",
       "cliBadge": "Started from the command line",
       "conversationCountUnit": "{count, plural, one {# conversation} other {# conversations}}",
