@@ -211,19 +211,12 @@ impl AcpAgentMeta {
     }
 }
 
-/// Launch args for Google Antigravity's ACP server, resolved at compile time.
-///
-/// The ACP registry publishes `--uid=` for the two Linux targets and for
-/// nothing else, and that asymmetry is deliberate: the flag comes from the
-/// binary's linked-in absl `InitGoogle`, which — when the process runs as root
-/// — drops privileges to `nobody` unless told otherwise. Passing it everywhere
-/// would risk a hard "unknown flag" startup error on the Windows build, which
-/// need not link the same initializer.
-const ANTIGRAVITY_LAUNCH_ARGS: &[&str] = if cfg!(target_os = "linux") {
-    &["--uid="]
-} else {
-    &[]
-};
+/// Launch the official Antigravity CLI's embedded ACP server. Pin its app-data
+/// directory to the existing native integration's `antigravity-acp` subtree so
+/// codeg's settings panel, OAuth relay, credentials, and transcript reader keep
+/// sharing the same location (without this flag, the CLI defaults to
+/// `antigravity-cli` and silently separates sessions from the signed-in account).
+const ANTIGRAVITY_LAUNCH_ARGS: &[&str] = &["acp", "--app-data-dir", "antigravity-acp"];
 
 /// Where the Settings page sends a user who has no `kiro-cli` yet. The CLI's
 /// own `/docs/cli/installation/` redirects here.
@@ -445,6 +438,10 @@ pub fn binary_system_dirs(agent_type: AgentType) -> &'static [&'static str] {
         AgentType::MiniMaxCode => &[".minimax-code/bin"],
         #[cfg(windows)]
         AgentType::MiniMaxCode => &[".minimax-code"],
+        #[cfg(not(windows))]
+        AgentType::Antigravity => &[".local/share/antigravity-cli"],
+        #[cfg(windows)]
+        AgentType::Antigravity => &["AppData/Local/agy/bin"],
         _ => &[],
     }
 }
@@ -8800,67 +8797,56 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `fs/read_text_file` for the whole file, so lines of a
             // 16,480,000-byte file reached the model only with the 16 MiB
             // allowance. Google sign-in, Linux and Windows were not run live.
+            // 1.5.13 (`agy acp`): migrated from the legacy Python/PAR
+            // `agy_acp_server` sidecar + `localharness_external` pair to the
+            // official Antigravity CLI's single-binary embedded ACP server
+            // (`agy acp --app-data-dir antigravity-acp`). Unix archives extract
+            // a single `antigravity` executable; Windows releases ship a raw
+            // `.exe` staged via `dir_entry.windows`.
             distribution: AgentDistribution::Binary {
-                version: "1.5.0",
-                // Never resolvable on PATH (there is no standalone CLI by
-                // this name); it exists because `Binary` requires one, and
-                // for dir-tree agents `installed_binary_path` ignores it in
-                // favour of `dir_entry`.
-                cmd: "agy_acp_server",
-                // `--uid=` is an absl/InitGoogle flag ("If root, switch to
-                // this user id (or empty-string not to switch)"), not an ACP
-                // one: without it a root process (Docker) drops to `nobody`.
-                // The ACP registry passes it on Linux ONLY, and so do we —
-                // the Windows build need not link the same InitGoogle, and an
-                // unknown flag is a hard startup error there.
+                version: "1.5.13-5999302598852608",
+                cmd: "agy",
                 args: ANTIGRAVITY_LAUNCH_ARGS,
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.0-darwin-arm64.zip",
+                        url: "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.13-5999302598852608/darwin-arm/cli_mac_arm64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.5.0-darwin-x86_64.zip",
+                        url: "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.13-5999302598852608/darwin-x64/cli_mac_x64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.0-linux-arm64.zip",
+                        url: "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.13-5999302598852608/linux-arm/cli_linux_arm64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.5.0-linux-x86_64.zip",
+                        url: "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.13-5999302598852608/linux-x64/cli_linux_x64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.5.0-windows-arm64.zip",
+                        url: "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.13-5999302598852608/windows-arm/cli_windows_arm64.exe",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.5.0-windows-x86_64.zip",
+                        url: "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.13-5999302598852608/windows-x64/cli_windows_x64.exe",
                         sha256: None,
                     },
                 ],
+                // The official Unix tarballs extract `antigravity` rather than
+                // `agy`, while Windows publishes a raw `.exe` staged to
+                // `dir_entry.windows` by `binary_cache::unpack_download`.
                 dir_entry: Some(BinaryDirEntry {
-                    unix: "agy_acp_server.par",
-                    windows: "agy_acp_server.exe",
-                    // The Go harness the server execs. Required, not just
-                    // chmod'd: without it the server starts and then logs
-                    // "Localharness not found." — a working handshake
-                    // attached to a broken agent, which is worse than a
-                    // failed install. It also invalidates any single-file
-                    // cache left behind by a pre-integration CUSTOM entry
-                    // for `antigravity-acp` (see `required_siblings`).
-                    required_siblings: PlatformFiles {
-                        unix: &["localharness_external"],
-                        windows: &["localharness_external.exe"],
-                    },
+                    unix: "antigravity",
+                    windows: "antigravity.exe",
+                    required_siblings: PlatformFiles::NONE,
                 }),
             },
         },
@@ -9270,13 +9256,11 @@ mod tests {
         }
     }
 
-    // Google Antigravity's archive is FLAT but holds two executables — the
-    // server and the `localharness_external` binary it spawns — so it must
-    // use whole-tree extraction (the single-file copy-out would strand the
-    // harness and the server would log "Localharness not found."). The Linux
-    // targets, and only those, carry the absl `--uid=` flag.
+    // Google Antigravity uses the official CLI's embedded ACP server
+    // (`agy acp --app-data-dir antigravity-acp`) so sessions share the existing
+    // `antigravity-acp` settings, credentials, and transcripts.
     #[test]
-    fn antigravity_pins_dir_tree_binary_and_linux_only_uid_flag() {
+    fn antigravity_pins_official_cli_acp_with_native_settings_dir() {
         let meta = get_agent_meta(AgentType::Antigravity);
         assert!(meta.supports_mcp);
         assert_eq!(registry_id_for(AgentType::Antigravity), "antigravity-acp");
@@ -9289,41 +9273,36 @@ mod tests {
                 dir_entry,
                 ..
             } => {
-                assert_eq!(version, "1.5.0");
-                assert_eq!(cmd, "agy_acp_server");
-                let entry = dir_entry.expect("antigravity must use dir-tree extraction");
-                assert_eq!(entry.unix, "agy_acp_server.par");
-                assert_eq!(entry.windows, "agy_acp_server.exe");
-                // Six targets: upstream added the Intel macOS build in 1.2.1.
+                assert_eq!(version, "1.5.13-5999302598852608");
+                assert_eq!(cmd, "agy");
+                assert_eq!(args, &["acp", "--app-data-dir", "antigravity-acp"]);
+                let entry = dir_entry.expect("official CLI archive entry must be explicit");
+                assert_eq!(entry.unix, "antigravity");
+                assert_eq!(entry.windows, "antigravity.exe");
+                assert!(entry.required_siblings.for_current_platform().is_empty());
                 assert_eq!(platforms.len(), 6);
                 assert!(platforms.iter().any(|p| p.platform == "darwin-x86_64"));
                 for platform in platforms {
                     assert!(
-                        platform.url.contains("/agy-acp-server-1.5.0-"),
+                        platform.url.contains("/antigravity-cli/1.5.13-5999302598852608/"),
                         "{} URL lost the release name: {}",
                         platform.platform,
                         platform.url
                     );
                 }
-                if cfg!(target_os = "linux") {
-                    assert_eq!(args, &["--uid="]);
-                } else {
-                    assert!(args.is_empty(), "--uid= is a Linux-only absl flag");
-                }
-                // The harness must be REQUIRED, not merely chmod'd. It is what
-                // stops a stale single-file cache — which a pre-integration
-                // CUSTOM `antigravity-acp` entry would have written under the
-                // same key, because the archive is flat — from being adopted
-                // and launched without it.
-                let required = entry.required_siblings.for_current_platform();
-                assert_eq!(required.len(), 1);
-                assert!(
-                    required[0].starts_with("localharness_external"),
-                    "unexpected required sibling: {required:?}"
-                );
             }
             other => panic!("expected binary distribution for Antigravity, got {other:?}"),
         }
+        #[cfg(not(windows))]
+        assert_eq!(
+            binary_system_dirs(AgentType::Antigravity),
+            &[".local/share/antigravity-cli"]
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            binary_system_dirs(AgentType::Antigravity),
+            &["AppData/Local/agy/bin"]
+        );
     }
 
     /// A binary agent whose archives are named after an opaque build id rather
