@@ -12,11 +12,13 @@ use uuid::Uuid;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{AcpEvent, EventEnvelope};
 use crate::app_error::{AppCommandError, AppErrorCode};
+use crate::db::AppDatabase;
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 pub mod lifecycle;
 mod runtime;
 mod schema;
+mod services;
 mod settings;
 pub mod source;
 mod text;
@@ -50,6 +52,18 @@ pub struct Manifest {
     client: Option<ClientModule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     settings: Option<settings::Definition>,
+    #[serde(
+        default,
+        deserialize_with = "services::present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    services: Option<services::Services>,
+    #[serde(
+        default,
+        deserialize_with = "services::present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    events: Option<services::EventsManifest>,
     contributes: Contributions,
 }
 
@@ -75,6 +89,7 @@ struct PluginBundle {
     server_code: Option<Arc<str>>,
     client_html: Option<Arc<str>>,
     rpc: RpcContracts,
+    event_contracts: services::EventContracts,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -227,6 +242,8 @@ pub struct InstalledPlugin {
     settings: Option<PluginSettings>,
     #[serde(skip)]
     rpc: RpcContracts,
+    #[serde(skip)]
+    event_contracts: services::EventContracts,
     /// An in-flight download may commit only to the installed definition it read.
     /// Toggling the plugin does not replace its definition.
     #[serde(skip)]
@@ -291,10 +308,12 @@ pub struct TurnActivity {
 }
 
 type Catalog = BTreeMap<String, InstalledPlugin>;
+type SharedPluginState = Arc<Mutex<Result<PluginState, String>>>;
 
 pub struct HostPlugins {
     path: PathBuf,
-    state: Mutex<Result<PluginState, String>>,
+    state: SharedPluginState,
+    db: Option<sea_orm::DatabaseConnection>,
     runtime_slots: Arc<Semaphore>,
     observer_slots: Arc<Semaphore>,
 }
@@ -318,9 +337,17 @@ impl HostPlugins {
         }
         Self {
             path,
-            state: Mutex::new(state),
+            state: Arc::new(Mutex::new(state)),
+            db: None,
             runtime_slots: Arc::new(Semaphore::new(4)),
             observer_slots: Arc::new(Semaphore::new(16)),
+        }
+    }
+
+    pub fn with_database(data_dir: &Path, db: &AppDatabase) -> Self {
+        Self {
+            db: Some(db.conn.clone()),
+            ..Self::new(data_dir)
         }
     }
 
@@ -348,6 +375,9 @@ impl HostPlugins {
         let state = guard.as_mut().map_err(|error| catalog_error(error))?;
         let mut next = state.catalog.clone();
         if let Some(enabled) = enabled {
+            if enabled {
+                services::check_enable(&next, next.get(&id).ok_or_else(plugin_not_found)?)?;
+            }
             let plugin = next.get_mut(&id).ok_or_else(plugin_not_found)?;
             if plugin.enabled == enabled {
                 return Ok(next.into_values().collect());
@@ -366,9 +396,13 @@ impl HostPlugins {
         } else {
             next.remove(&id).ok_or_else(plugin_not_found)?;
         }
+        let disabled = services::disable_unsatisfied(&mut next);
         write_catalog(&self.path, &next)?;
         state.catalog = next;
         if enabled != Some(true) {
+            state.turns.remove(&id);
+        }
+        for id in disabled {
             state.turns.remove(&id);
         }
         Ok(state.catalog.values().cloned().collect())
@@ -397,6 +431,7 @@ impl HostPlugins {
                 client_html: bundle.client_html,
                 settings,
                 rpc: bundle.rpc,
+                event_contracts: bundle.event_contracts,
                 revision: Arc::new(()),
                 activation: Arc::new(()),
             },
@@ -495,6 +530,7 @@ impl HostPlugins {
             server_code,
             client_html,
             rpc,
+            event_contracts,
         } = bundle;
         if !Arc::ptr_eq(&current.revision, revision) {
             return Err(invalid(
@@ -518,7 +554,9 @@ impl HostPlugins {
             || current.server_code != server_code
             || current.manifest.client != manifest.client
             || current.client_html != client_html
-            || current.manifest.contributes.lifecycle_hooks != manifest.contributes.lifecycle_hooks;
+            || current.manifest.contributes.lifecycle_hooks != manifest.contributes.lifecycle_hooks
+            || current.manifest.services != manifest.services
+            || current.manifest.events != manifest.events;
         let settings_changed = current.manifest.settings != manifest.settings;
         let settings = current.settings_for_update(manifest.settings.as_ref())?;
         if current.manifest == manifest
@@ -546,14 +584,19 @@ impl HostPlugins {
                 client_html,
                 settings,
                 rpc,
+                event_contracts,
                 revision: Arc::new(()),
                 activation: Arc::new(()),
             },
         );
+        let disabled = services::disable_unsatisfied(&mut next);
         write_catalog(&self.path, &next)?;
         state.catalog = next;
         if discard_activity {
             state.turns.remove(id);
+        }
+        for id in disabled {
+            state.turns.remove(&id);
         }
         Ok(PluginUpdate {
             updated: true,
@@ -567,6 +610,17 @@ impl HostPlugins {
         id: &str,
         method: String,
         input: serde_json::Value,
+    ) -> Result<serde_json::Value, AppCommandError> {
+        self.call_with_events(id, method, input, &EventEmitter::Noop)
+            .await
+    }
+
+    pub(crate) async fn call_with_events(
+        &self,
+        id: &str,
+        method: String,
+        input: serde_json::Value,
+        emitter: &EventEmitter,
     ) -> Result<serde_json::Value, AppCommandError> {
         let invocation = {
             let guard = self.state.lock().expect("host plugin state lock");
@@ -588,23 +642,15 @@ impl HostPlugins {
             }
             Invocation::new(id, plugin, method).ok_or_else(plugin_not_found)?
         };
-        self.invoke(invocation, input).await
+        self.invoke(invocation, input, emitter).await
     }
 
     async fn invoke(
         &self,
         invocation: Invocation,
         input: serde_json::Value,
+        emitter: &EventEmitter,
     ) -> Result<serde_json::Value, AppCommandError> {
-        let Invocation {
-            id,
-            entry,
-            code,
-            method,
-            activation,
-            settings,
-            contract,
-        } = invocation;
         let slot = self
             .runtime_slots
             .clone()
@@ -612,31 +658,36 @@ impl HostPlugins {
             .map_err(|_| {
                 AppCommandError::new(AppErrorCode::TaskExecutionFailed, "Plugin runtime is busy")
             })?;
-        let result = tokio::task::spawn_blocking(move || {
+        let state = self.state.clone();
+        let output = tokio::task::spawn_blocking(move || {
             let _slot = slot;
-            runtime::call_with_settings(
-                &entry,
-                &code,
-                &method,
-                &input,
-                settings.as_ref().map(|settings| &settings.value),
-                contract.as_deref(),
-            )
+            services::Execution::run(state, invocation, input)
         })
         .await
         .map_err(|_| {
             AppCommandError::new(AppErrorCode::TaskExecutionFailed, "Plugin runtime stopped")
-        })?;
+        })??;
+        if !output.events.is_empty() {
+            tokio::time::timeout_at(
+                output.deadline.into(),
+                services::PublishedEvent::validate_targets(&output.events, self.db.as_ref()),
+            )
+            .await
+            .map_err(|_| runtime::timed_out())??;
+        }
         let guard = self.state.lock().expect("host plugin state lock");
         let state = guard.as_ref().map_err(|error| catalog_error(error))?;
-        if !state
-            .catalog
-            .get(&id)
-            .is_some_and(|plugin| Arc::ptr_eq(&plugin.activation, &activation))
-        {
-            return Err(plugin_not_found());
+        output.check_active(state)?;
+        if !output.events.is_empty() {
+            if Instant::now() >= output.deadline {
+                return Err(runtime::timed_out());
+            }
+            let now = Utc::now();
+            for event in output.events {
+                emit_event(emitter, services::EVENT_CHANNEL, event.into_wire(now));
+            }
         }
-        result
+        Ok(output.value)
     }
 
     pub fn settings(&self, id: &str) -> Result<PluginSettings, AppCommandError> {
@@ -824,6 +875,7 @@ struct Invocation {
     activation: Arc<()>,
     settings: Option<PluginSettings>,
     contract: Option<Arc<schema::RpcContract>>,
+    has_runtime_context: bool,
 }
 
 impl Invocation {
@@ -834,6 +886,12 @@ impl Invocation {
             entry: server.entry.clone(),
             code: plugin.server_code.clone()?,
             contract: plugin.rpc.get(&method).cloned(),
+            has_runtime_context: plugin
+                .manifest
+                .services
+                .as_ref()
+                .is_some_and(services::Services::has_dependencies)
+                || !plugin.event_contracts.is_empty(),
             method,
             activation: plugin.activation.clone(),
             settings: plugin
@@ -1112,6 +1170,7 @@ impl Manifest {
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
+        services::validate_manifest(self)?;
         Ok(())
     }
 }
@@ -1126,6 +1185,7 @@ impl PluginBundle {
             server_code: None,
             client_html: None,
             rpc: BTreeMap::new(),
+            event_contracts: BTreeMap::new(),
         })
     }
 }
@@ -1184,6 +1244,7 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
     for mut plugin in catalog {
         plugin.manifest.validate()?;
         plugin.rpc = plugin.manifest.compile_rpc()?;
+        plugin.event_contracts = services::compile_events(&plugin.manifest)?;
         match (&plugin.manifest.server, &plugin.server_code) {
             (None, None) => {}
             (Some(_), Some(code))
@@ -1220,6 +1281,7 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
             return Err("Duplicate installed plugin ID".to_owned());
         }
     }
+    services::validate_catalog(&result)?;
     Ok(result)
 }
 

@@ -117,11 +117,15 @@ pub async fn call(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<CallParams>,
 ) -> Result<Json<serde_json::Value>, AppCommandError> {
-    state
-        .host_plugins
-        .call(&params.plugin_id, params.method, params.input)
-        .await
-        .map(Json)
+    crate::commands::host_plugins::call_core(
+        &state.host_plugins,
+        &state.emitter,
+        &params.plugin_id,
+        params.method,
+        params.input,
+    )
+    .await
+    .map(Json)
 }
 
 pub async fn client_html(

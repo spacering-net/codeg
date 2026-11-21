@@ -1,3 +1,5 @@
+import type { PluginPublishedEvent } from "./host-plugin-services"
+
 export type Json =
   | null
   | boolean
@@ -36,13 +38,15 @@ export interface PluginSettingsSnapshot {
   readonly value: { [key: string]: Json }
 }
 
-export interface PluginEvent {
+export interface PluginLifecycleEvent {
   readonly pluginId: string
   readonly event: string
   readonly folderId: number | null
   readonly conversationId: number | null
   readonly data: Json
 }
+
+export type PluginEvent = PluginLifecycleEvent | PluginPublishedEvent
 
 export interface CodegClient {
   readonly ready: Promise<ClientContext>

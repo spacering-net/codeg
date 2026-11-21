@@ -711,9 +711,9 @@ pub async fn open_folder_with_plugins(
     db: &AppDatabase,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
-    let mut path = plugins.workspace_open_path(path).await?;
+    let mut path = plugins.open_path_with_events(path, emitter).await?;
     if !folder_service::is_registered_path(&db.conn, &path).await? {
-        path = plugins.workspace_create_path(path).await?;
+        path = plugins.workspace_create_path(path, emitter).await?;
     }
     let (detail, created) =
         folder_service::register_workspace(&db.conn, &path, ParentWrite::Preserve).await?;

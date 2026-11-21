@@ -148,15 +148,24 @@ impl HostPlugins {
     }
 
     pub async fn workspace_open_path(&self, path: String) -> Result<String, AppCommandError> {
-        self.transform_workspace_path(Event::OpenBefore, "open", path)
+        self.open_path_with_events(path, &EventEmitter::Noop).await
+    }
+
+    pub(crate) async fn open_path_with_events(
+        &self,
+        path: String,
+        emitter: &EventEmitter,
+    ) -> Result<String, AppCommandError> {
+        self.transform_workspace_path(Event::OpenBefore, "open", path, emitter)
             .await
     }
 
     pub(crate) async fn workspace_create_path(
         &self,
         path: String,
+        emitter: &EventEmitter,
     ) -> Result<String, AppCommandError> {
-        self.transform_workspace_path(Event::WorkspaceCreateBefore, "create", path)
+        self.transform_workspace_path(Event::WorkspaceCreateBefore, "create", path, emitter)
             .await
     }
 
@@ -165,12 +174,13 @@ impl HostPlugins {
         event: Event,
         operation: &str,
         mut path: String,
+        emitter: &EventEmitter,
     ) -> Result<String, AppCommandError> {
         tokio::time::timeout(TRANSFORM_DEADLINE, async {
             for hook in self.lifecycle_handlers(event) {
                 let source = hook.id.clone();
                 let result = self
-                    .invoke(hook, json!({ "path": path }))
+                    .invoke(hook, json!({ "path": path }), emitter)
                     .await
                     .map_err(|error| {
                         AppCommandError::new(
@@ -240,7 +250,7 @@ impl HostPlugins {
             let _slot = slot;
             for hook in hooks {
                 let plugin_id = hook.id.clone();
-                match host.invoke(hook, input.clone()).await {
+                match host.invoke(hook, input.clone(), &emitter).await {
                     Ok(data) if !data.is_null() => {
                         emit_event(
                             &emitter,

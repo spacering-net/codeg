@@ -429,6 +429,7 @@ fn bundle(
     }
     Ok(PluginBundle {
         rpc: manifest.compile_rpc().map_err(invalid)?,
+        event_contracts: super::services::compile_events(&manifest).map_err(invalid)?,
         manifest,
         server_code: code.map(Into::into),
         client_html: html.map(Into::into),

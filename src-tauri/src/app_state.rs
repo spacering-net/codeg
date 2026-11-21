@@ -251,7 +251,9 @@ impl AppState {
         let broadcaster = Arc::new(WebEventBroadcaster::new());
         let metrics = Arc::new(EventBusMetrics::default());
         let acp_event_bus = Arc::new(InternalEventBus::new(metrics));
-        let host_plugins = Arc::new(crate::host_plugins::HostPlugins::new(&data_dir));
+        let host_plugins = Arc::new(crate::host_plugins::HostPlugins::with_database(
+            &data_dir, &db,
+        ));
         let emitter = EventEmitter::web_only(
             broadcaster.clone(),
             acp_event_bus.clone(),

@@ -828,20 +828,6 @@ mod tauri_app {
                 // plain launch would open a database Tauri's directory does
                 // not hold.
                 let effective_data_dir = paths::resolve_effective_data_dir(&app_data_dir);
-                {
-                    let plugins = std::sync::Arc::new(crate::host_plugins::HostPlugins::new(
-                        &effective_data_dir,
-                    ));
-                    let events = app
-                        .state::<std::sync::Arc<crate::acp::InternalEventBus>>()
-                        .subscribe();
-                    let connections = app.state::<ConnectionManager>().clone_ref();
-                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
-                    app.manage(plugins.clone());
-                    tauri::async_runtime::spawn(async move {
-                        plugins.observe_sessions(events, connections, emitter).await;
-                    });
-                }
                 let derived_data_dir = paths::desktop_data_dir(
                     None,
                     dirs::data_dir().as_deref(),
@@ -925,6 +911,21 @@ mod tauri_app {
                     app_version,
                 ))
                 .map_err(|e| e.to_string())?;
+                {
+                    let plugins = std::sync::Arc::new(crate::host_plugins::HostPlugins::with_database(
+                        &effective_data_dir,
+                        &database,
+                    ));
+                    let events = app
+                        .state::<std::sync::Arc<crate::acp::InternalEventBus>>()
+                        .subscribe();
+                    let connections = app.state::<ConnectionManager>().clone_ref();
+                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
+                    app.manage(plugins.clone());
+                    tauri::async_runtime::spawn(async move {
+                        plugins.observe_sessions(events, connections, emitter).await;
+                    });
+                }
                 app.manage(database);
 
                 // The `codeg-cli` startup put first on PATH (`cli_run::shim`),

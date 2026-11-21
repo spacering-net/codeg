@@ -94,6 +94,18 @@ pub async fn fetch_index_core(url: &str) -> Result<PluginIndex, AppCommandError>
     source::fetch_index(url).await
 }
 
+pub async fn call_core(
+    plugins: &HostPlugins,
+    emitter: &EventEmitter,
+    plugin_id: &str,
+    method: String,
+    input: serde_json::Value,
+) -> Result<serde_json::Value, AppCommandError> {
+    plugins
+        .call_with_events(plugin_id, method, input, emitter)
+        .await
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn host_plugins_list(
@@ -135,12 +147,20 @@ pub async fn host_plugins_activity(
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn host_plugins_call(
+    app: tauri::AppHandle,
     plugins: tauri::State<'_, Arc<HostPlugins>>,
     plugin_id: String,
     method: String,
     input: serde_json::Value,
 ) -> Result<serde_json::Value, AppCommandError> {
-    plugins.call(&plugin_id, method, input).await
+    call_core(
+        &plugins,
+        &EventEmitter::from_app(&app),
+        &plugin_id,
+        method,
+        input,
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]

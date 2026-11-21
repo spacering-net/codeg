@@ -238,6 +238,102 @@ the replacement settings object. Codeg calls the migration when the user
 enables the update, then validates and stores the result together with
 enablement. If it fails, the original value stays available for a later retry.
 
+## Plugin services and published events
+
+API version 2 plugins with `server.entry` can declare top-level `services`
+and `events` alongside `server` and `settings`. See the [author types](host-plugin-services.d.ts).
+
+### Services
+
+`services.provides` lists up to eight `{ name, version, methods,
+description?, descriptionTranslations? }` contracts. Use a unique slug such
+as `workspace.metrics`, an integer version from 1 to 4,294,967,295, and 1–16
+unique methods from this plugin's `server.methods`. A nonempty description
+translation map requires a fallback description.
+
+`services.requires` lists up to eight `{ service, minVersion?, optional? }`
+dependencies, with unique service slugs. `minVersion` defaults to `1` and
+`optional` defaults to `false`. A plugin cannot require a service it provides.
+
+Enable the provider before enabling a plugin with a strong dependency.
+Activation requires an enabled provider at or above each strong dependency's
+minimum version. An `already_exists` error identifies a service name and its
+enabled provider. A `dependency_missing` error lists unavailable services
+and services with insufficient versions. The structured `i18nParams` fields
+are `service` and `providerId` for conflicts, or `missingServices` and
+`incompatibleServices` for dependency failures.
+
+Disabling, removing, or updating a provider can disable its strong
+dependents and their dependents in the same catalog transaction. The
+`host-plugins://changed` event tells clients to refresh their catalog.
+Re-enable a compatible provider, then explicitly re-enable the affected
+plugins in dependency order. Optional dependencies leave the caller enabled.
+
+### Server method context
+
+Plugins that require a service or publish an event receive
+`handle(method, input, settings, ctx)`. Other handlers and `settings.migrate`
+receive the original three arguments.
+
+`ctx.services.call(serviceName, method, input)` synchronously returns a JSON
+value. The service must be a declared dependency. The enabled provider must
+meet the requested version and expose the method in the named service.
+Codeg runs the provider in its own QuickJS sandbox with its own saved
+settings, and checks any `server.rpc` input and output schemas. An unavailable
+optional service or a failed call throws a JavaScript error.
+
+The top-level call and its descendants share the 500 ms execution deadline.
+Each tree allows up to two service hops, eight service calls, and 64 KiB of
+serialized service input and output combined. A service cannot call back
+into a plugin already on the active stack. The regular size limit still
+applies per RPC message.
+
+### Published events
+
+Declare up to 16 `events.publishes` contracts with
+`{ name, scope?, payloadSchema?, description?, descriptionTranslations? }`.
+Use unique slug names such as `metrics.summary`. The optional payload schema
+uses the same JSON Schema rules as server RPCs.
+
+Call `ctx.events.emit(name, payload, target?)` to stage a declared event.
+Payloads are JSON and limited to 16 KiB each. Up to 16 events can be staged
+across a top-level call and its service calls. The scope determines the target.
+
+| Scope | Target |
+| --- | --- |
+| `host` (default) | Omit the target or pass `{}`. |
+| `workspace` | Pass `{ folderId }` for an existing workspace. |
+| `session` | Pass `{ conversationId }` for an existing conversation, optionally with its matching `folderId`. |
+
+The host validates target records and publishes the queued batch in order
+after the outer handler and its RPC output checks succeed. It rechecks the
+activation generations of the caller and successful providers before
+publishing. A failed service call discards its own queued events, even when
+the caller catches the error. A failed top-level call or an invalid target
+record discards the entire batch.
+
+The `host-plugins://plugin-event` channel carries
+`{ pluginId, event, scope, folderId, conversationId, payload, emittedAt }`.
+The host stamps the plugin ID of the emitting handler, including when that
+handler runs as a service provider. Absent IDs appear as `null` and
+`emittedAt` is a UTC timestamp. Events are live notifications on the connected
+host.
+
+To integrate the client bridge, subscribe on the active transport and forward
+the surface's own enabled plugin events through `window.codeg.events.subscribe`.
+Require the matching `folderId` for workspace events, and the matching
+`conversationId` and any supplied `folderId` for session events. Withdraw
+subscriptions when the surface closes, its context changes, or its plugin
+is disabled or removed. Typed events expose `payload`. Existing lifecycle
+observations expose `data`.
+
+Install and enable the [metrics provider](../examples/plugins/service-provider),
+then install and enable the [metrics consumer](../examples/plugins/service-consumer).
+Open **Workspace Metrics** in the right workspace panel and select **Refresh
+metrics**. The consumer calls `workspace.metrics` v1 and publishes
+`metrics.summary` for the active workspace. The examples use English,
+Spanish, and Simplified Chinese.
+
 ## Workspace lifecycle hooks
 
 Declare `contributes.lifecycleHooks` as a list of `{ event, method }` entries.

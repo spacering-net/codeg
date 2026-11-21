@@ -1,0 +1,60 @@
+<style>
+  :root {
+    color-scheme: light dark;
+    font: 14px system-ui;
+  }
+  output {
+    display: block;
+    margin-top: 8px;
+  }
+</style>
+<button type="button" id="refresh"></button>
+<output id="summary" aria-live="polite"></output>
+<script>
+  const labels = {
+    en: {
+      refresh: "Refresh metrics",
+      summary: (count, score) => `${count} sample files · Score ${score}`,
+      failure: "Metrics unavailable",
+    },
+    es: {
+      refresh: "Actualizar métricas",
+      summary: (count, score) =>
+        `${count} archivos de muestra · Puntuación ${score}`,
+      failure: "Métricas no disponibles",
+    },
+    zh: {
+      refresh: "刷新指标",
+      summary: (count, score) => `${count} 个示例文件 · 得分 ${score}`,
+      failure: "指标不可用",
+    },
+  }
+
+  window.codeg.ready.then(({ type, folderId, locale }) => {
+    if (type !== "workspacePanel") return
+    const copy = labels[locale.split("-")[0]] ?? labels.en
+    const button = document.getElementById("refresh")
+    const summary = document.getElementById("summary")
+    const render = ({ fileCount, score }) => {
+      summary.textContent = copy.summary(fileCount, score)
+    }
+
+    document.documentElement.lang = locale
+    button.textContent = copy.refresh
+    button.onclick = async () => {
+      button.disabled = true
+      try {
+        render(await window.codeg.call("refresh", { folderId, fileCount: 7 }))
+      } catch {
+        summary.textContent = copy.failure
+      } finally {
+        button.disabled = false
+      }
+    }
+    window.codeg.events.subscribe((event) => {
+      if (event.event === "metrics.summary" && "payload" in event) {
+        render(event.payload)
+      }
+    })
+  })
+</script>
