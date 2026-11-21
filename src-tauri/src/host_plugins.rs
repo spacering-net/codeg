@@ -19,8 +19,10 @@ mod runtime;
 mod schema;
 mod settings;
 pub mod source;
+mod text;
 
 pub use settings::Snapshot as PluginSettings;
+use text::{valid_translations, Translations};
 
 pub const CATALOG_CHANGED: &str = "host-plugins://changed";
 const ACTIVITY_CHANGED: &str = "host-plugins://activity";
@@ -38,6 +40,8 @@ pub struct Manifest {
     api_version: u32,
     id: String,
     name: String,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    name_translations: Translations,
     version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     server: Option<ServerModule>,
@@ -94,10 +98,12 @@ struct Contributions {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ClientSurface {
     id: String,
     title: String,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    title_translations: Translations,
     slot: ClientSlot,
 }
 
@@ -109,10 +115,12 @@ enum ClientSlot {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SettingsPanel {
     id: String,
     title: String,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    title_translations: Translations,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -120,9 +128,13 @@ struct SettingsPanel {
 struct WorkspacePanel {
     id: String,
     title: String,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    title_translations: Translations,
     view: PanelView,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<String>,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    text_translations: Translations,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     method: Option<String>,
 }
@@ -141,6 +153,8 @@ enum PanelView {
 struct PluginCommand {
     id: String,
     title: String,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    title_translations: Translations,
     action: CommandAction,
 }
 
@@ -908,7 +922,10 @@ impl Manifest {
                 self.api_version
             ));
         }
-        if !valid_id(&self.id) || !valid_label(&self.name) {
+        if !valid_id(&self.id)
+            || !valid_label(&self.name)
+            || !valid_translations(&self.name_translations, valid_label)
+        {
             return Err("Invalid plugin ID or name".to_owned());
         }
         if self.version.len() > 128 || semver::Version::parse(&self.version).is_err() {
@@ -970,12 +987,22 @@ impl Manifest {
         }
         let mut panels = BTreeSet::new();
         for panel in workspace_panels {
-            if !valid_id(&panel.id) || !valid_label(&panel.title) || !panels.insert(&panel.id) {
+            if !valid_id(&panel.id)
+                || !valid_label(&panel.title)
+                || !valid_translations(&panel.title_translations, valid_label)
+                || !panels.insert(&panel.id)
+            {
                 return Err("Invalid or duplicate workspace panel".to_owned());
+            }
+            if !panel.text_translations.is_empty()
+                && (panel.view != PanelView::Text
+                    || !valid_translations(&panel.text_translations, valid_panel_text))
+            {
+                return Err("Invalid translations for workspace panel text".to_owned());
             }
             match (&panel.view, &panel.text, &panel.method) {
                 (PanelView::TurnActivity, None, None) if !hooks.is_empty() => {}
-                (PanelView::Text, Some(text), None) if !text.trim().is_empty() && text.len() <= 4096 => {}
+                (PanelView::Text, Some(text), None) if valid_panel_text(text) => {}
                 (PanelView::ServerText, None, Some(method)) if self.server.as_ref().is_some_and(|server| server.methods.contains(method)) => {}
                 (PanelView::Client, None, None) if self.client.is_some() => {}
                 _ => return Err("Invalid panel data. Provide text, a turn hook, a registered server method or a client entry for the selected view.".to_owned()),
@@ -986,6 +1013,7 @@ impl Manifest {
             let CommandAction::OpenWorkspacePanel { panel_id } = &command.action;
             if !valid_id(&command.id)
                 || !valid_label(&command.title)
+                || !valid_translations(&command.title_translations, valid_label)
                 || !command_ids.insert(&command.id)
                 || !panels.contains(panel_id)
             {
@@ -998,7 +1026,11 @@ impl Manifest {
             ("activation panel", activation_panel),
         ] {
             if let Some(panel) = panel {
-                if self.client.is_none() || !valid_id(&panel.id) || !valid_label(&panel.title) {
+                if self.client.is_none()
+                    || !valid_id(&panel.id)
+                    || !valid_label(&panel.title)
+                    || !valid_translations(&panel.title_translations, valid_label)
+                {
                     return Err(format!(
                         "A plugin {label} needs a valid ID, title and client entry"
                     ));
@@ -1012,6 +1044,7 @@ impl Manifest {
                 || client_surfaces.iter().any(|surface| {
                     !valid_id(&surface.id)
                         || !valid_label(&surface.title)
+                        || !valid_translations(&surface.title_translations, valid_label)
                         || !surface_ids.insert(&surface.id)
                 })
             {
@@ -1059,6 +1092,10 @@ fn valid_id(value: &str) -> bool {
 
 fn valid_label(value: &str) -> bool {
     !value.trim().is_empty() && value.chars().count() <= 100 && !value.chars().any(char::is_control)
+}
+
+fn valid_panel_text(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= 4096
 }
 
 fn load_catalog(path: &Path) -> Result<Catalog, String> {
@@ -1260,6 +1297,58 @@ mod tests {
     }
 
     #[test]
+    fn preserves_localized_manifest_text_after_reopening_the_catalog() {
+        let data = tempfile::tempdir().unwrap();
+        let example = include_str!("../../examples/plugins/localized-notes/codeg-plugin.json");
+        let expected = Manifest::parse(example).unwrap();
+        let host = HostPlugins::new(data.path());
+        install(&host, SAMPLE).unwrap();
+        install(&host, example).unwrap();
+
+        let reopened = HostPlugins::new(data.path());
+        let installed = reopened.list().unwrap();
+        assert_eq!(installed.len(), 2);
+        assert!(installed.iter().any(|plugin| plugin.manifest == expected));
+        let legacy = Manifest::parse(SAMPLE).unwrap();
+        assert!(installed.iter().any(|plugin| plugin.manifest == legacy));
+        let legacy_wire = serde_json::to_value(legacy).unwrap();
+        assert!(legacy_wire["name"].is_string());
+        assert!(legacy_wire.get("nameTranslations").is_none());
+
+        let rendered = serde_json::to_value(expected).unwrap();
+        let original: serde_json::Value = serde_json::from_str(example).unwrap();
+        assert_eq!(rendered["name"], original["name"]);
+        assert_eq!(rendered["nameTranslations"], original["nameTranslations"]);
+        for contribution in ["workspacePanels", "commands"] {
+            assert_eq!(
+                rendered["contributes"][contribution],
+                original["contributes"][contribution]
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_localized_text_in_a_manifest() {
+        use serde_json::json;
+
+        let mut manifest: serde_json::Value = serde_json::from_str(SAMPLE).unwrap();
+        for invalid in [
+            json!({"zh-cn": "Wrong case"}),
+            json!({"zh-Hans-CN": ""}),
+            json!({"en": "Invalid\nlabel"}),
+            json!({"en": "x".repeat(101)}),
+            json!({"en": 1}),
+        ] {
+            manifest["contributes"]["workspacePanels"][0]["titleTranslations"] = invalid;
+            assert!(Manifest::parse(&manifest.to_string()).is_err());
+        }
+        let mut manifest: serde_json::Value = serde_json::from_str(SAMPLE).unwrap();
+        manifest["contributes"]["workspacePanels"][0]["textTranslations"] =
+            json!({"en": "This view has no static text field"});
+        assert!(Manifest::parse(&manifest.to_string()).is_err());
+    }
+
+    #[test]
     fn validates_client_slots_and_exposes_them_in_the_manifest() {
         let surfaces = serde_json::json!([
             { "id": "details", "title": "Session details", "slot": "sessionHeader" },
@@ -1319,7 +1408,10 @@ mod tests {
             } else {
                 "pluginDetail"
             };
-            missing_entry["contributes"].as_object_mut().unwrap().remove(other);
+            missing_entry["contributes"]
+                .as_object_mut()
+                .unwrap()
+                .remove(other);
             assert!(Manifest::parse(&missing_entry.to_string()).is_err());
         }
     }

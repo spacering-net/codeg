@@ -30,6 +30,33 @@ See the [turn activity manifest](../examples/plugins/turn-activity/codeg-plugin.
 for a complete example. Import it in **Settings → Plugins**, then enable it.
 Open a workspace in Codeg to use the panel and command.
 
+## Localized names and labels
+
+Add optional `nameTranslations` beside the manifest `name`, `titleTranslations`
+beside a contribution `title`, or `textTranslations` beside `text` for a
+workspace panel with `view: "text"`. Keep the original string as the fallback.
+
+```json
+{
+  "name": "Workspace Notes",
+  "nameTranslations": { "es": "Notas del espacio de trabajo", "zh-CN": "工作区备注" }
+}
+```
+
+Codeg resolves these strings in each client using the current app language. It
+tries the exact locale, the base language, then the original string. Use locale keys
+such as `en`, `es`, `zh-CN`, or `zh-Hant-TW`, with a lowercase language, an
+optional title-case script, and an optional uppercase or numeric region. Use
+nonempty names and titles of up to 100 characters, and panel text of up to
+4,096 UTF-8 bytes per translation. Keep contribution IDs and references stable
+across languages. Custom HTML surfaces receive the app locale from
+`window.codeg.ready` and can present their own translated content.
+
+Import the [Workspace Notes example](../examples/plugins/localized-notes/codeg-plugin.json)
+and enable it. Open **Show Workspace Notes** in an active workspace, then
+change the app language to Spanish or Chinese to see the translated labels and
+panel text.
+
 ## Version 2 server modules
 
 Install the [Workspace Summary example](../examples/plugins/workspace-summary)
