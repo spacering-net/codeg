@@ -3,10 +3,11 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
     EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
+use std::collections::HashSet;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
-use crate::db::entities::opened_tab;
+use crate::db::entities::{conversation, opened_tab};
 use crate::db::error::DbError;
 use crate::db::service::app_metadata_service;
 use crate::models::agent::AgentType;
@@ -71,6 +72,59 @@ pub async fn list_all_tabs<C: ConnectionTrait>(conn: &C) -> Result<Vec<OpenedTab
             })
         })
         .collect())
+}
+
+/// The conversations open in a workspace tab, as the idle sweep matches them
+/// against connections (see `acp::idle_sweep`). The tab set is shared by
+/// every client, so a conversation stays in it while no device is looking at
+/// it (a laptop asleep, a phone with the browser in the background).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct OpenConversations {
+    /// Conversation ids of the open tabs.
+    pub ids: HashSet<i32>,
+    /// The same conversations' agent sessions (`agent_type` + `external_id`).
+    /// A connection binds its conversation only on its first prompt, so one
+    /// opened from history and only read is matched by its session.
+    pub sessions: HashSet<(AgentType, String)>,
+}
+
+impl OpenConversations {
+    /// Whether a connection works on an open conversation: by its bound
+    /// conversation, or, before its first prompt, by its session.
+    pub fn contains(
+        &self,
+        conversation_id: Option<i32>,
+        agent_type: AgentType,
+        external_id: Option<&str>,
+    ) -> bool {
+        match conversation_id {
+            Some(id) => self.ids.contains(&id),
+            None => external_id
+                .is_some_and(|eid| self.sessions.contains(&(agent_type, eid.to_string()))),
+        }
+    }
+}
+
+/// Read [`OpenConversations`] from the tab set and the conversations in it.
+pub async fn open_conversations<C: ConnectionTrait>(
+    conn: &C,
+) -> Result<OpenConversations, DbError> {
+    let ids: HashSet<i32> = list_all_tabs(conn)
+        .await?
+        .into_iter()
+        .filter_map(|tab| tab.conversation_id)
+        .collect();
+    if ids.is_empty() {
+        return Ok(OpenConversations::default());
+    }
+    let sessions = conversation::Entity::find()
+        .filter(conversation::Column::Id.is_in(ids.iter().copied()))
+        .all(conn)
+        .await?
+        .into_iter()
+        .filter_map(|row| Some((parse_agent_type(&row.agent_type)?, row.external_id?)))
+        .collect();
+    Ok(OpenConversations { ids, sessions })
 }
 
 /// Read the tab set and its version in a single transaction so a concurrent
@@ -249,7 +303,6 @@ async fn retarget_rows<C: ConnectionTrait>(
     conn: &C,
     conversation_ids: &[i32],
 ) -> Result<u64, DbError> {
-    use crate::db::entities::conversation;
     use sea_orm::QuerySelect;
 
     if conversation_ids.is_empty() {

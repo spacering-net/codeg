@@ -5,17 +5,29 @@
 //! close has no server-side hook), and possible on desktop after panics.
 //! The sweep prevents long-lived processes from leaking ACP child
 //! processes, file handles, and memory.
+//!
+//! A conversation still open in a workspace tab is not abandoned, even when
+//! no client is touching its connection: the tab set lives in the database
+//! and is shared by every client, so a laptop that went to sleep or a phone
+//! with the browser in the background leaves the tab open, and the user
+//! picks the conversation up on another device. Its agent is kept. Closing
+//! the tab is the explicit "done", and already ends an idle agent.
 
 use std::time::Duration;
 
+use sea_orm::DatabaseConnection;
+
 use crate::acp::manager::ConnectionManager;
+use crate::db::service::tab_service::{self, OpenConversations};
 
 /// Default idle threshold (3 minutes). Override at startup via
 /// `CODEG_ACP_IDLE_TIMEOUT_SECS`. The sweep only runs against
-/// connections in `Connected` state with no `pending_permission`, and
-/// `last_activity_at` is bumped on every emit and on every frontend
-/// keepalive touch (~30s cadence for open tabs), so an actively-used
-/// or visible connection never qualifies.
+/// connections in `Connected` state with nothing in flight (see
+/// `teardown_blocker`), and `last_activity_at` is bumped on every emit and
+/// on every frontend keepalive touch (~30s cadence while a page shows the
+/// tab), so an actively-used or visible connection never qualifies. A
+/// conversation open in a workspace tab is spared whether or not a page is
+/// touching it.
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 180;
 /// Sweep cadence — runs once per minute. Each tick is a brief lock on the
 /// connections map plus per-state `try_read`s, so a 1-minute interval is
@@ -36,16 +48,20 @@ pub fn idle_timeout_from_env() -> Option<Duration> {
     Some(Duration::from_secs(secs))
 }
 
-/// Long-running task that calls `ConnectionManager::sweep_idle` on a
-/// fixed interval. The caller spawns the returned future onto whichever
-/// runtime they manage (`tokio::spawn` from inside an async context,
-/// `tauri::async_runtime::spawn` from a Tauri `setup` callback that runs
-/// outside the runtime).
+/// Long-running task that calls `ConnectionManager::sweep_idle_except` on a
+/// fixed interval, sparing the conversations open in a workspace tab. When
+/// the tab set cannot be read, the tick spares nothing: a sweep that cannot
+/// see the tabs behaves as it did before they counted.
+///
+/// The caller spawns the returned future onto whichever runtime they manage
+/// (`tokio::spawn` from inside an async context, `tauri::async_runtime::spawn`
+/// from a Tauri `setup` callback that runs outside the runtime).
 ///
 /// Never exits on its own — the caller drops the spawned handle when
 /// shutting down (process exit cleans up everything).
 pub async fn idle_sweep_task(
     manager: ConnectionManager,
+    db: DatabaseConnection,
     idle_timeout: Duration,
     interval: Duration,
 ) {
@@ -56,7 +72,14 @@ pub async fn idle_sweep_task(
     ticker.tick().await;
     loop {
         ticker.tick().await;
-        let n = manager.sweep_idle(idle_timeout).await;
+        let open = match tab_service::open_conversations(&db).await {
+            Ok(open) => open,
+            Err(err) => {
+                tracing::warn!("[ACP] idle sweep could not read open tabs: {err}");
+                OpenConversations::default()
+            }
+        };
+        let n = manager.sweep_idle_except(idle_timeout, &open).await;
         if n > 0 {
             tracing::info!("[ACP] idle sweep disconnected {n} connection(s)");
         }

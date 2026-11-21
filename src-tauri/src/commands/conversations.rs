@@ -5685,6 +5685,70 @@ mod tests {
         assert_eq!(snap.version, 1);
     }
 
+    /// The idle sweep spares agents of the conversations open in a tab, pinned
+    /// or not; a draft tab has no conversation yet and is never stored, and a
+    /// closed tab leaves the set.
+    #[tokio::test]
+    async fn open_conversations_lists_the_conversations_in_open_tabs() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-open-tabs-test").await;
+        let c1 = create_conversation_core(&db.conn, folder_id, AgentType::ClaudeCode, None)
+            .await
+            .expect("c1");
+        let c2 = create_conversation_core(&db.conn, folder_id, AgentType::Codex, None)
+            .await
+            .expect("c2");
+        conversation_service::bind_external_id(&db.conn, c1, "sess-1", &[])
+            .await
+            .expect("external id");
+        let (_broadcaster, emitter) = sync_test_emitter();
+        let preview = OpenedTab {
+            is_pinned: false,
+            ..conv_tab(folder_id, c2, AgentType::Codex)
+        };
+        let draft = OpenedTab {
+            conversation_id: None,
+            ..conv_tab(folder_id, c1, AgentType::Gemini)
+        };
+        save_opened_tabs_core(
+            &db.conn,
+            &emitter,
+            vec![
+                conv_tab(folder_id, c1, AgentType::ClaudeCode),
+                preview,
+                draft,
+            ],
+            0,
+            "win-a".into(),
+        )
+        .await
+        .expect("save");
+
+        let open = crate::db::service::tab_service::open_conversations(&db.conn)
+            .await
+            .expect("open");
+        assert_eq!(open.ids, std::collections::HashSet::from([c1, c2]));
+        assert_eq!(
+            open.sessions,
+            std::collections::HashSet::from([(AgentType::ClaudeCode, "sess-1".to_string())]),
+            "only a conversation with a session has one to match"
+        );
+
+        save_opened_tabs_core(
+            &db.conn,
+            &emitter,
+            vec![conv_tab(folder_id, c2, AgentType::Codex)],
+            1,
+            "win-a".into(),
+        )
+        .await
+        .expect("close c1");
+        let open = crate::db::service::tab_service::open_conversations(&db.conn)
+            .await
+            .expect("open");
+        assert_eq!(open.ids, std::collections::HashSet::from([c2]));
+    }
+
     #[tokio::test]
     async fn save_opened_tabs_core_rejects_stale_version_without_emitting() {
         let db = fresh_in_memory_db().await;

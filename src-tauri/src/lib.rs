@@ -1443,8 +1443,10 @@ mod tauri_app {
                 // (set to `0` to disable).
                 if let Some(idle_timeout) = crate::acp::idle_timeout_from_env() {
                     let cm = app.state::<ConnectionManager>().clone_ref();
+                    let sweep_db = app.state::<db::AppDatabase>().conn.clone();
                     tauri::async_runtime::spawn(crate::acp::idle_sweep_task(
                         cm,
+                        sweep_db,
                         idle_timeout,
                         std::time::Duration::from_secs(crate::acp::SWEEP_INTERVAL_SECS),
                     ));
