@@ -7,7 +7,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react"
 import { useLocale } from "next-intl"
 import {
@@ -78,12 +77,11 @@ import {
   type CustomThemeToken,
 } from "@/lib/custom-style"
 import {
-  resolvePluginHostScope,
   selectPluginThemes,
   useHostPlugins,
+  usePluginHostScope,
   type ResolvedPluginTheme,
 } from "@/lib/host-plugins"
-import * as transportModule from "@/lib/transport"
 import { readableAccent } from "@/lib/readable-accent"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import {
@@ -329,44 +327,6 @@ function useSafeLocale(): string {
     }
     return "en"
   }
-}
-
-function subscribeHostTransportSnapshot(onStoreChange: () => void): () => void {
-  const subscribe = (
-    transportModule as {
-      subscribeTransportChange?: (listener: () => void) => () => void
-    }
-  ).subscribeTransportChange
-  const unsubTransport =
-    typeof subscribe === "function" ? subscribe(onStoreChange) : () => {}
-  if (typeof window !== "undefined") {
-    window.addEventListener("popstate", onStoreChange)
-  }
-  return () => {
-    unsubTransport()
-    if (typeof window !== "undefined") {
-      window.removeEventListener("popstate", onStoreChange)
-    }
-  }
-}
-
-function readActiveRemoteConnectionId(): number | null {
-  const getter = (
-    transportModule as {
-      getActiveRemoteConnectionId?: () => number | null
-    }
-  ).getActiveRemoteConnectionId
-  return typeof getter === "function" ? getter() : null
-}
-
-function getHostTransportSnapshot(): string {
-  const search = typeof window !== "undefined" ? window.location.search : ""
-  const activeId = readActiveRemoteConnectionId()
-  return `${search}::${activeId ?? "local"}`
-}
-
-function getHostTransportServerSnapshot(): string {
-  return "::local"
 }
 
 function readNumber(
@@ -626,15 +586,7 @@ export function AppearanceProvider({
 
   // 插件主题（按已连接 host 隔离持久化，不写进用户的 customTheme / themeColor）。
   const locale = useSafeLocale()
-  useSyncExternalStore(
-    subscribeHostTransportSnapshot,
-    getHostTransportSnapshot,
-    getHostTransportServerSnapshot
-  )
-  const hostScope = resolvePluginHostScope(
-    typeof window !== "undefined" ? window.location.search : "",
-    readActiveRemoteConnectionId()
-  )
+  const hostScope = usePluginHostScope()
   const [pluginThemeMap, setPluginThemeMap] = useState<Record<string, string>>(
     () => parseStoredPluginThemeMap(readStored(STORAGE_KEY_PLUGIN_THEME))
   )
