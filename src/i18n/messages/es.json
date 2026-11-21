@@ -105,7 +105,9 @@
     "enable": "Activar {name}",
     "remove": "Eliminar {name}",
     "choosePanel": "Panel del complemento",
-    "noTurns": "No hay turnos registrados en este espacio de trabajo."
+    "noTurns": "No hay turnos registrados en este espacio de trabajo.",
+    "pluginSurfaces": "Acciones de complementos",
+    "morePluginSurfaces": "Más acciones de complementos"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apariencia del tema",

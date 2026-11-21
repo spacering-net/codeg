@@ -4,12 +4,21 @@ import { useEffect, useMemo, useRef } from "react"
 import { useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { toErrorMessage } from "@/lib/app-error"
-import { usePluginClientHtml } from "@/lib/host-plugins"
+import {
+  usePluginClientHtml,
+  type HostPluginSessionContext,
+  type PluginClientSurfaceSlot,
+} from "@/lib/host-plugins"
 import type { Transport } from "@/lib/transport"
+import { cn } from "@/lib/utils"
 
-type SurfaceContext = { id: string } & (
+export type SurfaceContext = { id: string } & (
   | { type: "workspacePanel"; folderId: number }
   | { type: "settingsPanel" }
+  | ({
+      type: "clientSurface"
+      slot: PluginClientSurfaceSlot
+    } & HostPluginSessionContext)
 )
 
 const CLIENT_TIMEOUT_MS = 12_000
@@ -21,6 +30,7 @@ type PluginEvent = {
   pluginId: string
   event: string
   folderId?: number | null
+  conversationId?: number | null
   data: unknown
 }
 
@@ -114,10 +124,12 @@ export function HostPluginSurface({
   pluginId,
   title,
   context,
+  className,
 }: {
   pluginId: string
   title: string
   context: SurfaceContext
+  className?: string
 }) {
   const t = useTranslations("HostPlugins")
   const locale = useLocale()
@@ -145,6 +157,7 @@ export function HostPluginSurface({
       locale={locale}
       context={context}
       host={transport}
+      className={className}
     />
   )
 }
@@ -156,6 +169,7 @@ function PluginFrame({
   locale,
   html,
   host,
+  className,
 }: {
   pluginId: string
   title: string
@@ -163,11 +177,19 @@ function PluginFrame({
   locale: string
   html: string
   host: Transport
+  className?: string
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const { type, id } = context
+  const slot = context.type === "clientSurface" ? context.slot : undefined
   const folderId =
-    context.type === "workspacePanel" ? context.folderId : undefined
+    context.type === "workspacePanel" || context.type === "clientSurface"
+      ? context.folderId
+      : undefined
+  const conversationId =
+    context.type === "clientSurface" ? context.conversationId : undefined
+  const sessionKey =
+    context.type === "clientSurface" ? context.sessionKey : undefined
   const { handshake, doc } = useMemo(() => {
     const handshake = Array.from(
       crypto.getRandomValues(new Uint8Array(16)),
@@ -176,7 +198,18 @@ function PluginFrame({
     return { handshake, doc: buildDocument(html, handshake) }
     // A context or host change restarts the frame and disconnects the old port.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [html, type, id, folderId, locale, host, pluginId])
+  }, [
+    html,
+    type,
+    id,
+    slot,
+    folderId,
+    conversationId,
+    sessionKey,
+    locale,
+    host,
+    pluginId,
+  ])
 
   useEffect(() => {
     let channel: MessageChannel | undefined
@@ -201,15 +234,37 @@ function PluginFrame({
           connected = true
           port1.postMessage({
             type: "context",
-            context: { type, id, folderId, locale },
+            context:
+              type === "clientSurface"
+                ? {
+                    type,
+                    slot,
+                    id,
+                    folderId: folderId ?? null,
+                    conversationId: conversationId ?? null,
+                    sessionKey,
+                    locale,
+                  }
+                : { type, id, folderId, locale },
           })
           void host
             .subscribe<PluginEvent>(LIFECYCLE_EVENT_CHANNEL, (event) => {
-              if (
-                event.pluginId !== pluginId ||
-                (folderId !== undefined && event.folderId !== folderId)
-              )
-                return
+              if (event.pluginId !== pluginId) return
+              if (type === "workspacePanel") {
+                if (event.folderId !== folderId) return
+              } else if (type === "clientSurface") {
+                if (folderId != null) {
+                  if (event.folderId !== folderId) return
+                } else if (event.folderId != null) {
+                  return
+                }
+                if (
+                  event.conversationId != null &&
+                  event.conversationId !== conversationId
+                ) {
+                  return
+                }
+              }
               port1.postMessage({ type: "event", value: event })
             })
             .then(
@@ -272,7 +327,18 @@ function PluginFrame({
       window.removeEventListener("message", connect)
       channel?.port1.close()
     }
-  }, [handshake, folderId, host, id, locale, pluginId, type])
+  }, [
+    handshake,
+    slot,
+    folderId,
+    conversationId,
+    sessionKey,
+    host,
+    id,
+    locale,
+    pluginId,
+    type,
+  ])
 
   return (
     <iframe
@@ -282,7 +348,7 @@ function PluginFrame({
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
       srcDoc={doc}
-      className="block h-80 w-full rounded-md border"
+      className={cn("block h-80 w-full rounded-md border", className)}
     />
   )
 }

@@ -105,7 +105,9 @@
     "enable": "Enable {name}",
     "remove": "Remove {name}",
     "choosePanel": "Plugin panel",
-    "noTurns": "No turns recorded in this workspace."
+    "noTurns": "No turns recorded in this workspace.",
+    "pluginSurfaces": "Plugin actions",
+    "morePluginSurfaces": "More plugin actions"
   },
   "AppearanceSettings": {
     "sectionTitle": "Theme Appearance",

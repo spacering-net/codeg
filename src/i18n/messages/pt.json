@@ -105,7 +105,9 @@
     "enable": "Ativar {name}",
     "remove": "Remover {name}",
     "choosePanel": "Painel do plugin",
-    "noTurns": "Nenhum turno registrado neste espaço de trabalho."
+    "noTurns": "Nenhum turno registrado neste espaço de trabalho.",
+    "pluginSurfaces": "Ações de plugins",
+    "morePluginSurfaces": "Mais ações de plugins"
   },
   "AppearanceSettings": {
     "sectionTitle": "Aparência do tema",

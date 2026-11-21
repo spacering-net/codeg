@@ -105,7 +105,9 @@
     "enable": "{name} を有効にする",
     "remove": "{name} を削除",
     "choosePanel": "プラグインパネル",
-    "noTurns": "このワークスペースにターンの記録はありません。"
+    "noTurns": "このワークスペースにターンの記録はありません。",
+    "pluginSurfaces": "プラグインアクション",
+    "morePluginSurfaces": "その他のプラグインアクション"
   },
   "AppearanceSettings": {
     "sectionTitle": "テーマ外観",

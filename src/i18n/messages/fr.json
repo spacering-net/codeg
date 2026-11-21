@@ -105,7 +105,9 @@
     "enable": "Activer {name}",
     "remove": "Supprimer {name}",
     "choosePanel": "Panneau de l’extension",
-    "noTurns": "Aucun tour enregistré dans cet espace de travail."
+    "noTurns": "Aucun tour enregistré dans cet espace de travail.",
+    "pluginSurfaces": "Actions des extensions",
+    "morePluginSurfaces": "Autres actions des extensions"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",
