@@ -368,6 +368,10 @@ export function classifyRecentConversation(
   if (ts >= startOf7Days) {
     return "previous7Days"
   }
+  const startOf30Days = startOfToday - 29 * oneDayMs
+  if (ts >= startOf30Days) {
+    return "previous30Days"
+  }
   return "older"
 }
 
@@ -1047,6 +1051,7 @@ export type RecentTimeGroupId =
   | "today"
   | "yesterday"
   | "previous7Days"
+  | "previous30Days"
   | "older"
 
 export interface RecentTimeGroupRow {
@@ -1605,6 +1610,7 @@ export function buildRows(args: {
       "today",
       "yesterday",
       "previous7Days",
+      "previous30Days",
       "older",
     ]
     for (const gid of timeGroupOrder) {

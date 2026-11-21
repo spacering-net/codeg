@@ -2288,7 +2288,7 @@
       "sectionRecent": "最近",
       "focusCurrentChat": "現在のチャットに集中",
       "focusModeActive": "集中モードを終了",
-      "timeGroupPriorities": "優先事項",
+      "timeGroupPriorities": "優先事項（進行中 / 保留中）",
       "timeGroupToday": "今日",
       "timeGroupYesterday": "昨日",
       "timeGroupPrevious7Days": "過去 7 日間",
@@ -2327,7 +2327,9 @@
       "noRecentChats": "最近のチャットはありません",
       "noRecentFolders": "最近のフォルダー会話はありません",
       "noRecentCli": "コマンドラインからの最近の会話はありません",
-      "recentFilterMenuLabel": "最近の表示"
+      "recentFilterMenuLabel": "最近の表示",
+      "timeGroupPrioritiesTooltip": "進行中または確認待ちのアクティブなセッション",
+      "timeGroupPrevious30Days": "過去 30 日間"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",

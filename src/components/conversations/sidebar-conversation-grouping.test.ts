@@ -2061,6 +2061,14 @@ describe("classifyRecentConversation", () => {
     expect(classifyRecentConversation(weekConv, now)).toBe("previous7Days")
   })
 
+  it("classifies previous 30 days conversations", () => {
+    const monthConv = conv(55, 10, {
+      status: "completed",
+      updated_at: new Date("2026-11-05T10:00:00Z").toISOString(),
+    })
+    expect(classifyRecentConversation(monthConv, now)).toBe("previous30Days")
+  })
+
   it("classifies older conversations", () => {
     const oldConv = conv(6, 10, {
       status: "completed",

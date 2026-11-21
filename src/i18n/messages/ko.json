@@ -2288,7 +2288,7 @@
       "sectionRecent": "최근",
       "focusCurrentChat": "현재 대화에 집중",
       "focusModeActive": "집중 모드 종료",
-      "timeGroupPriorities": "우선 순위",
+      "timeGroupPriorities": "우선순위 (진행 중 / 대기 중)",
       "timeGroupToday": "오늘",
       "timeGroupYesterday": "어제",
       "timeGroupPrevious7Days": "지난 7일",
@@ -2327,7 +2327,9 @@
       "noRecentChats": "최근 채팅이 없습니다",
       "noRecentFolders": "최근 폴더 대화가 없습니다",
       "noRecentCli": "명령줄에서 시작한 최근 대화가 없습니다",
-      "recentFilterMenuLabel": "최근 항목 표시"
+      "recentFilterMenuLabel": "최근 항목 표시",
+      "timeGroupPrioritiesTooltip": "진행 중이거나 검토 대기 중인 세션",
+      "timeGroupPrevious30Days": "지난 30일"
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",

@@ -39,6 +39,7 @@ const spies = vi.hoisted(() => ({
   openConversations: vi.fn(),
   // The list's imperative handle, driven by the header buttons.
   scrollToActive: vi.fn(),
+  expandRecentAndScrollToActive: vi.fn(),
   expandAll: vi.fn(),
   collapseAll: vi.fn(),
   // The tag manager the tag filter's footer leads to.
@@ -49,6 +50,7 @@ const spies = vi.hoisted(() => ({
     showWorktrees?: boolean
     showCompleted?: boolean
     showRecent?: boolean
+    focusMode?: boolean
     sectionOrder?: readonly string[]
     tagFilter?: TagFilter
   } | null,
@@ -75,12 +77,14 @@ vi.mock("@/components/conversations/sidebar-conversation-list", async () => {
       showWorktrees?: boolean
       showCompleted?: boolean
       showRecent?: boolean
+      focusMode?: boolean
       sectionOrder?: readonly string[]
       tagFilter?: TagFilter
     }) => {
       spies.listProps = props
       useImperativeHandle(ref, () => ({
         scrollToActive: spies.scrollToActive,
+        expandRecentAndScrollToActive: spies.expandRecentAndScrollToActive,
         expandAll: spies.expandAll,
         collapseAll: spies.collapseAll,
       }))

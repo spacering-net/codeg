@@ -2288,7 +2288,7 @@
       "sectionRecent": "最近",
       "focusCurrentChat": "聚焦当前聊天",
       "focusModeActive": "退出聚焦模式",
-      "timeGroupPriorities": "优先事项",
+      "timeGroupPriorities": "优先事项（进行中 / 待处理）",
       "timeGroupToday": "今天",
       "timeGroupYesterday": "昨天",
       "timeGroupPrevious7Days": "前 7 天",
@@ -2327,7 +2327,9 @@
       "noRecentChats": "没有最近的聊天",
       "noRecentFolders": "没有最近的文件夹会话",
       "noRecentCli": "没有最近从命令行启动的会话",
-      "recentFilterMenuLabel": "最近显示"
+      "recentFilterMenuLabel": "最近显示",
+      "timeGroupPrioritiesTooltip": "包含正在执行中或等待确认的会话",
+      "timeGroupPrevious30Days": "过去 30 天"
     },
     "conversation": {
       "reloadFailed": "会话重新加载失败：{message}",

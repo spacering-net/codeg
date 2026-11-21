@@ -923,6 +923,7 @@ const FolderHeader = memo(function FolderHeader({
 
 export interface SidebarConversationListHandle {
   scrollToActive: () => void
+  expandRecentAndScrollToActive: () => void
   /**
    * Open / close every collapsible group in the list at once, driven by the
    * sidebar header's toggle. "Every" is literal: the folder groups (plus each
@@ -952,6 +953,9 @@ export interface SidebarConversationListProps {
    *  `sectionOrder`. Defaults to off here; the Sidebar passes the user's
    *  preference, whose product default is ON. */
   showRecent?: boolean
+  /** When on, filters the list to only the currently selected conversation and
+   *  its thread / sub-sessions. */
+  focusMode?: boolean
   /** Narrow every section to conversations carrying these tags (see
    *  `matchesTagFilter`). Must be referentially stable — it feeds the bucket
    *  memos. Defaults to no filter. */
@@ -965,6 +969,7 @@ export function SidebarConversationList({
   sectionOrder = DEFAULT_SECTION_ORDER,
   showWorktrees = false,
   showRecent = false,
+  focusMode = false,
   tagFilter = EMPTY_TAG_FILTER,
 }: SidebarConversationListProps & {
   ref?: Ref<SidebarConversationListHandle>
@@ -1416,13 +1421,38 @@ export function SidebarConversationList({
   // running badge answers "is work under way in there", filter or not. With no
   // filter this is `conversations` itself, so nothing downstream changes.
   const tagFilterActive = isTagFilterActive(tagFilter)
-  const shownConversations = useMemo(
+  const baseShownConversations = useMemo(
     () =>
       tagFilterActive
         ? conversations.filter((c) => matchesTagFilter(c, tagFilter))
         : conversations,
     [conversations, tagFilter, tagFilterActive]
   )
+  const shownConversations = useMemo(() => {
+    if (!focusMode || !selectedConversation) return baseShownConversations
+    const activeId = selectedConversation.id
+    const activeConv = conversations.find(
+      (c) =>
+        c.id === activeId && c.agent_type === selectedConversation.agentType
+    )
+    if (!activeConv) return baseShownConversations
+
+    const relatedIds = new Set<number>([activeId])
+    if (activeConv.parent_id != null) {
+      relatedIds.add(activeConv.parent_id)
+    }
+    for (const c of conversations) {
+      if (c.parent_id === activeId) {
+        relatedIds.add(c.id)
+      } else if (
+        activeConv.parent_id != null &&
+        c.parent_id === activeConv.parent_id
+      ) {
+        relatedIds.add(c.id)
+      }
+    }
+    return baseShownConversations.filter((c) => relatedIds.has(c.id))
+  }, [focusMode, selectedConversation, baseShownConversations, conversations])
 
   // Folder grouping source: pinned conversations are surfaced in the dedicated
   // Pinned section, and folderless chat conversations in the dedicated Chat
@@ -1669,7 +1699,7 @@ export function SidebarConversationList({
         rootGroupCollapsed,
         layout,
         groupExpanded: folderGroupExpanded,
-        hideEmptyFolders: tagFilterActive,
+        hideEmptyFolders: tagFilterActive || focusMode,
       }),
     [
       pinned,
@@ -1694,6 +1724,7 @@ export function SidebarConversationList({
       layout,
       folderGroupExpanded,
       tagFilterActive,
+      focusMode,
     ]
   )
 
@@ -1751,6 +1782,16 @@ export function SidebarConversationList({
 
   useImperativeHandle(ref, () => ({
     scrollToActive() {
+      scrollToActiveRef.current()
+    },
+    expandRecentAndScrollToActive() {
+      setSectionCollapsed((prev) => {
+        if (!prev.recent) return prev
+        const next = { ...prev, recent: false }
+        saveSectionCollapsed(next)
+        return next
+      })
+      pendingScrollRef.current = true
       scrollToActiveRef.current()
     },
     expandAll() {
@@ -3205,13 +3246,21 @@ export function SidebarConversationList({
         today: t("timeGroupToday"),
         yesterday: t("timeGroupYesterday"),
         previous7Days: t("timeGroupPrevious7Days"),
+        previous30Days: t("timeGroupPrevious30Days"),
         older: t("timeGroupOlder"),
       }
       const label = timeGroupLabels[row.groupId] || row.groupId
+      const tooltip =
+        row.groupId === "priorities"
+          ? t("timeGroupPrioritiesTooltip")
+          : undefined
       return (
-        <div className="flex items-center justify-between px-3 pt-2.5 pb-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/60 select-none">
-          <span>{label}</span>
-          <span className="font-mono text-[0.625rem] font-normal opacity-70">
+        <div
+          className="flex items-center justify-between px-3 pt-2.5 pb-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/60 select-none"
+          title={tooltip}
+        >
+          <span className="truncate">{label}</span>
+          <span className="font-mono text-[0.625rem] font-normal opacity-70 ml-2 shrink-0">
             {row.count}
           </span>
         </div>

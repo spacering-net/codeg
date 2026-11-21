@@ -286,6 +286,11 @@ export function Sidebar() {
     setFocusMode((prev) => {
       const next = !prev
       saveFocusMode(next)
+      if (next) {
+        setShowRecent(true)
+        saveShowRecent(true)
+        listRef.current?.expandRecentAndScrollToActive()
+      }
       return next
     })
   }, [])
@@ -743,6 +748,7 @@ export function Sidebar() {
           showCompleted={showCompleted}
           showWorktrees={showWorktrees}
           showRecent={showRecent}
+          focusMode={focusMode}
           sortMode={sortMode}
           sectionOrder={sectionOrder}
           tagFilter={tagFilter}

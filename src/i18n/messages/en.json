@@ -2288,7 +2288,7 @@
       "sectionRecent": "Recent",
       "focusCurrentChat": "Focus current chat",
       "focusModeActive": "Exit focus mode",
-      "timeGroupPriorities": "Priorities",
+      "timeGroupPriorities": "Priorities (In Progress / Pending)",
       "timeGroupToday": "Today",
       "timeGroupYesterday": "Yesterday",
       "timeGroupPrevious7Days": "Previous 7 Days",
@@ -2327,7 +2327,9 @@
       "noRecentChats": "No recent chats",
       "noRecentFolders": "No recent folder conversations",
       "noRecentCli": "No recent conversations from the command line",
-      "recentFilterMenuLabel": "Show in Recent"
+      "recentFilterMenuLabel": "Show in Recent",
+      "timeGroupPrioritiesTooltip": "Includes active sessions in progress or awaiting review",
+      "timeGroupPrevious30Days": "Previous 30 Days"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
