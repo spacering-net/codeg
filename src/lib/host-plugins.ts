@@ -13,7 +13,12 @@ export interface InstalledPlugin {
   source?:
     | { type: "directory"; path: string }
     | { type: "gitHub"; repository: string; commit: string; directory?: string }
-    | { type: "npm"; package: string; version: string }
+    | {
+        type: "npm"
+        package: string
+        version: string
+        registry?: "npm" | "mirror"
+      }
   manifest: {
     id: string
     name: string
@@ -141,14 +146,30 @@ export function applyHostPlugin(mutation: PluginMutation) {
   })
 }
 
-export function installHostPluginSource(
+export interface PluginInstallPreview {
+  ticket: string
+  manifest: InstalledPlugin["manifest"]
+  source: NonNullable<InstalledPlugin["source"]>
+}
+
+export function previewHostPluginInstall(
   input: string,
-  registry: "npm" | "mirror"
+  registry: "npm" | "mirror",
+  expected?: { id: string; version: string }
 ) {
-  return getTransport().call<InstalledPlugin[]>("host_plugins_install_source", {
-    input,
-    registry,
-  })
+  return getTransport().call<PluginInstallPreview>(
+    "host_plugins_preview_install",
+    { input, registry, expected }
+  )
+}
+
+export function confirmHostPluginInstall(ticket: string) {
+  return getTransport().call<InstalledPlugin[]>(
+    "host_plugins_confirm_install",
+    {
+      ticket,
+    }
+  )
 }
 
 export function updateHostPlugin(pluginId: string) {

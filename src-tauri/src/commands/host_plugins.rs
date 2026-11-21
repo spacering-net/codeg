@@ -1,6 +1,11 @@
+use uuid::Uuid;
+
 use crate::app_error::AppCommandError;
 use crate::host_plugins::source::{self, PluginIndex, Registry};
-use crate::host_plugins::{HostPlugins, InstalledPlugin, Mutation, PluginUpdate, CATALOG_CHANGED};
+use crate::host_plugins::{
+    ExpectedPlugin, HostPlugins, InstallPreview, InstalledPlugin, Mutation, PluginUpdate,
+    CATALOG_CHANGED,
+};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 pub fn apply_core(
@@ -20,6 +25,25 @@ pub async fn install_source_core(
     registry: Registry,
 ) -> Result<Vec<InstalledPlugin>, AppCommandError> {
     let catalog = source::install(plugins, input, registry).await?;
+    emit_event(emitter, CATALOG_CHANGED, ());
+    Ok(catalog)
+}
+
+pub async fn preview_install_core(
+    plugins: &HostPlugins,
+    input: &str,
+    registry: Registry,
+    expected: Option<ExpectedPlugin>,
+) -> Result<InstallPreview, AppCommandError> {
+    plugins.preview_install(input, registry, expected).await
+}
+
+pub fn confirm_install_core(
+    plugins: &HostPlugins,
+    emitter: &EventEmitter,
+    ticket: Uuid,
+) -> Result<Vec<InstalledPlugin>, AppCommandError> {
+    let catalog = plugins.confirm_install(ticket)?;
     emit_event(emitter, CATALOG_CHANGED, ());
     Ok(catalog)
 }
@@ -97,4 +121,25 @@ pub async fn host_plugins_update(
 #[tauri::command]
 pub async fn host_plugins_fetch_index(url: String) -> Result<PluginIndex, AppCommandError> {
     fetch_index_core(&url).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn host_plugins_preview_install(
+    plugins: tauri::State<'_, Arc<HostPlugins>>,
+    input: String,
+    registry: Registry,
+    expected: Option<ExpectedPlugin>,
+) -> Result<InstallPreview, AppCommandError> {
+    preview_install_core(&plugins, &input, registry, expected).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn host_plugins_confirm_install(
+    app: tauri::AppHandle,
+    plugins: tauri::State<'_, Arc<HostPlugins>>,
+    ticket: Uuid,
+) -> Result<Vec<InstalledPlugin>, AppCommandError> {
+    confirm_install_core(&plugins, &EventEmitter::from_app(&app), ticket)
 }

@@ -49,13 +49,14 @@ For a file on the browser's machine, use **Import Manifest**. The catalog stores
 the manifest and its resolved source. Codeg starts each installed plugin
 disabled. Contributions run through the host APIs described above.
 
-## Trust and permissions
+## Review the installation
 
-Source-installed plugins are trusted code. They run on the connected Codeg host
-with the current user's permissions and may read or modify files and data that
-the host user can access. The Add Plugin dialog shows this warning before every
-source installation. Review the package, repository, or directory source before
-selecting **Install**.
+Select **Review installation** to load and validate the manifest on the
+connected host. Check the plugin name, ID, version, and resolved source. For
+GitHub the review shows the full commit, and for npm it shows the exact package
+version and registry. When you select **Install**, the host commits the reviewed
+manifest from memory. A preview is valid for up to five minutes and can be used
+once. Codeg runs the manifest's declared contributions when you enable the plugin.
 
 ## Update an installed plugin
 
@@ -101,10 +102,9 @@ uses this shape:
 }
 ```
 
-Index metadata is third-party content. Codeg displays the selected source and
-the host-permission warning before installation. The normal source installer
-then resolves the source, verifies its archive or commit, validates the
-`codeg-plugin.json` manifest, and starts the plugin disabled. Index entries may
+Index metadata is third-party content. Codeg resolves the selected source,
+validates the `codeg-plugin.json` manifest, and checks its ID and version against
+the index entry before showing the installation review. Index entries may
 use exact npm versions or GitHub references, while absolute host directories
 and floating npm selectors are rejected by the index validator.
 

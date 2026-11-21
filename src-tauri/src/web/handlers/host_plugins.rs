@@ -2,11 +2,14 @@ use std::sync::Arc;
 
 use axum::{extract::Extension, Json};
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::host_plugins::source::Registry;
-use crate::host_plugins::{InstalledPlugin, Mutation, PluginUpdate, TurnActivity};
+use crate::host_plugins::{
+    ExpectedPlugin, InstallPreview, InstalledPlugin, Mutation, PluginUpdate, TurnActivity,
+};
 
 #[derive(Deserialize)]
 pub struct ApplyParams {
@@ -18,6 +21,18 @@ pub struct InstallSourceParams {
     input: String,
     #[serde(default)]
     registry: Registry,
+}
+
+#[derive(Deserialize)]
+pub struct PreviewInstallParams {
+    input: String,
+    registry: Registry,
+    expected: Option<ExpectedPlugin>,
+}
+
+#[derive(Deserialize)]
+pub struct ConfirmInstallParams {
+    ticket: Uuid,
 }
 
 #[derive(Deserialize)]
@@ -95,4 +110,30 @@ pub async fn fetch_index(
     crate::commands::host_plugins::fetch_index_core(&params.url)
         .await
         .map(Json)
+}
+
+pub async fn preview_install(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<PreviewInstallParams>,
+) -> Result<Json<InstallPreview>, AppCommandError> {
+    crate::commands::host_plugins::preview_install_core(
+        &state.host_plugins,
+        &params.input,
+        params.registry,
+        params.expected,
+    )
+    .await
+    .map(Json)
+}
+
+pub async fn confirm_install(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ConfirmInstallParams>,
+) -> Result<Json<Vec<InstalledPlugin>>, AppCommandError> {
+    crate::commands::host_plugins::confirm_install_core(
+        &state.host_plugins,
+        &state.emitter,
+        params.ticket,
+    )
+    .map(Json)
 }

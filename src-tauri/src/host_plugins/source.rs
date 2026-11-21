@@ -221,6 +221,14 @@ pub async fn install(
     input: &str,
     registry: Registry,
 ) -> Result<Vec<InstalledPlugin>, AppCommandError> {
+    let (manifest, source) = resolve(input, registry).await?;
+    plugins.apply_with_source(Mutation::Install { manifest }, Some(source))
+}
+
+pub(super) async fn resolve(
+    input: &str,
+    registry: Registry,
+) -> Result<(String, InstalledSource), AppCommandError> {
     let source = match parse(input)? {
         Source::Directory(path) => InstalledSource::Directory {
             path: path.to_string_lossy().into_owned(),
@@ -242,8 +250,7 @@ pub async fn install(
             registry: Some(registry),
         },
     };
-    let (manifest, source) = source.refresh().await?;
-    plugins.apply_with_source(Mutation::Install { manifest }, Some(source))
+    source.refresh().await
 }
 
 fn parse(input: &str) -> Result<Source<'_>, AppCommandError> {
