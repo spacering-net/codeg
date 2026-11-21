@@ -1149,6 +1149,7 @@ impl CliRunService {
             .unwrap_or(false);
         if root_open {
             let detail = crate::commands::folders::open_worktree_folder_core(
+                &self.emitter,
                 &self.db,
                 worktree.workspace.clone(),
                 source_folder_id,

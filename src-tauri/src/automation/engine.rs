@@ -678,9 +678,10 @@ impl AutomationEngine {
                     origin: WorktreeOrigin::Automation,
                 }
                 .observe(&self.emitter, PluginEvent::WorktreeCreated);
-                let wt = open_worktree_folder_core(&self.db, wt_path, root_folder_id)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let wt =
+                    open_worktree_folder_core(&self.emitter, &self.db, wt_path, root_folder_id)
+                        .await
+                        .map_err(|e| e.to_string())?;
                 Ok(ResolvedCwd {
                     folder_id: wt.id,
                     working_dir: wt.path,
