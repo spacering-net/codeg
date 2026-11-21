@@ -118,6 +118,13 @@ interface ConversationShellProps {
   showActiveFlow?: boolean
   queue?: QueuedMessage[]
   onEnqueue?: (draft: PromptDraft, modeId: string | null) => void
+  /** `/btw <question>` intercept — see `MessageInputProps.onBtw`. */
+  onBtw?: (question: string) => Promise<boolean>
+  /** The session's newest `/btw` side question, for the strip under the
+   *  composer. `null` renders nothing (the common case). */
+  btwInfo?: { title: string; answering: boolean } | null
+  onOpenBtw?: () => void
+  onDismissBtw?: () => void
   onQueueReorder?: (items: QueuedMessage[]) => void
   onQueueEdit?: (id: string) => void
   onQueueDelete?: (id: string) => void
@@ -206,6 +213,10 @@ export function ConversationShell({
   showActiveFlow,
   queue,
   onEnqueue,
+  onBtw,
+  btwInfo,
+  onOpenBtw,
+  onDismissBtw,
   onQueueReorder,
   onQueueEdit,
   onQueueDelete,
@@ -333,6 +344,7 @@ export function ConversationShell({
               showActiveFlow={showActiveFlow}
               queue={queue}
               onEnqueue={onEnqueue}
+              onBtw={onBtw}
               onQueueReorder={onQueueReorder}
               onQueueEdit={onQueueEdit}
               onQueueDelete={onQueueDelete}
@@ -358,6 +370,9 @@ export function ConversationShell({
         status={status}
         claudeApiRetry={claudeApiRetry}
         sessionFailures={sessionFailures}
+        btw={btwInfo ?? null}
+        onOpenBtw={onOpenBtw}
+        onDismissBtw={onDismissBtw}
         onSessionFailureDismiss={onSessionFailureDismiss}
       />
     </div>

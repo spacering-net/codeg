@@ -2320,7 +2320,8 @@
       "noRecentChats": "没有最近的聊天",
       "noRecentFolders": "没有最近的文件夹会话",
       "noRecentCli": "没有最近从命令行启动的会话",
-      "recentFilterMenuLabel": "最近显示"
+      "recentFilterMenuLabel": "最近显示",
+      "sectionBtw": "侧问"
     },
     "conversation": {
       "reloadFailed": "会话重新加载失败：{message}",
@@ -2421,7 +2422,8 @@
       "markCompleted": "标记为已完成",
       "reopen": "重新打开",
       "expandSubsessions": "展开子会话",
-      "collapseSubsessions": "折叠子会话"
+      "collapseSubsessions": "折叠子会话",
+      "promoteBtw": "转存为普通会话"
     },
     "moveConversation": {
       "menuLabel": "移动到",
@@ -3562,7 +3564,8 @@
         "mentionGroupSession": "会话",
         "mentionGroupCommit": "提交",
         "mentionGroupSkill": "技能",
-        "mentionGroupAssistant": "助手"
+        "mentionGroupAssistant": "助手",
+        "btwDescription": "在本会话的副本里提一个侧问"
       },
       "messageQueue": {
         "addToQueue": "加入队列",
@@ -4313,7 +4316,8 @@
         "retryUnavailable": "没有可重发的消息。",
         "toggleDetails": "展开/收起详情",
         "dismiss": "忽略",
-        "moreIncidents": "另 {count} 条"
+        "moreIncidents": "另 {count} 条",
+        "openStripTitle": "打开"
       },
       "backgroundTasks": {
         "settledFallback": "后台任务已结束（{status}）",
@@ -4360,6 +4364,10 @@
       "proposedPlan": {
         "title": "计划提案",
         "planning": "规划中…"
+      },
+      "btw": {
+        "stripAnswering": "正在回答…",
+        "stripAnswered": "已回答"
       }
     },
     "diffPreview": {
@@ -9920,6 +9928,11 @@
     "errorsPlain": {
       "rateLimited": "SRN 要求 Codeg 稍后再试。",
       "server": "SRN 返回了错误。"
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "该智能体不支持侧问（需要会话分叉与恢复能力）。"
     }
   }
 }

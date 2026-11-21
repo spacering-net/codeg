@@ -497,6 +497,19 @@ pub struct SessionState {
     pub pi_enabled_model_patterns: Option<Vec<String>>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
+    /// Whether this agent can serve `/btw`: a copy fork's child connection
+    /// RESUMES the forked session, so the agent needs fork AND resume.
+    /// Synthesized once at handshake from the advertised capabilities (the
+    /// single-authoritative-bool rule `native_steering_available` follows),
+    /// and read when the advertised-command list is mapped so `/btw` appears
+    /// exactly where it can work. Backend-internal — the frontend learns it
+    /// from the synthesized command's presence, not a flag.
+    pub btw_supported: bool,
+    /// Whether the adapter advertises `sessionCapabilities.close`. Lives on
+    /// the state so the mid-loop `/btw` copy-fork arm — the loop never carried
+    /// the handshake's `supports_close` — can gate its best-effort release of
+    /// the forked session (see `fork_copy_roundtrip`). Backend-internal.
+    pub session_close_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
     pub usage: Option<UsageInfo>,
     /// The follow-up prompt the agent last predicted (`AcpEvent::PromptSuggestion`),
@@ -961,6 +974,8 @@ impl SessionState {
             pi_enabled_model_patterns: None,
             prompt_capabilities: None,
             fork_supported: false,
+            btw_supported: false,
+            session_close_supported: false,
             available_commands: Vec::new(),
             usage: None,
             prompt_suggestion: None,

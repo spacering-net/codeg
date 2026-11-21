@@ -53,6 +53,8 @@ interface ChatInputProps {
   showActiveFlow?: boolean
   queue?: QueuedMessage[]
   onEnqueue?: (draft: PromptDraft, modeId: string | null) => void
+  /** `/btw <question>` intercept — see `MessageInputProps.onBtw`. */
+  onBtw?: (question: string) => Promise<boolean>
   onQueueReorder?: (items: QueuedMessage[]) => void
   onQueueEdit?: (id: string) => void
   onQueueDelete?: (id: string) => void
@@ -129,6 +131,7 @@ export const ChatInput = memo(function ChatInput({
   showActiveFlow,
   queue,
   onEnqueue,
+  onBtw,
   onQueueReorder,
   onQueueEdit,
   onQueueDelete,
@@ -233,6 +236,7 @@ export const ChatInput = memo(function ChatInput({
         isActive={isActive}
         showActiveFlow={showActiveFlow}
         onEnqueue={onEnqueue}
+        onBtw={onBtw}
         editingItemId={editingItemId}
         editingDraftText={editingDraftText}
         editingDraftBlocks={editingDraftBlocks}

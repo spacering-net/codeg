@@ -2320,7 +2320,8 @@
       "noRecentChats": "沒有最近的聊天",
       "noRecentFolders": "沒有最近的資料夾對話",
       "noRecentCli": "沒有最近從命令列啟動的對話",
-      "recentFilterMenuLabel": "最近顯示"
+      "recentFilterMenuLabel": "最近顯示",
+      "sectionBtw": "側問"
     },
     "conversation": {
       "reloadFailed": "會話重新載入失敗：{message}",
@@ -2421,7 +2422,8 @@
       "markCompleted": "標記為已完成",
       "reopen": "重新開啟",
       "expandSubsessions": "展開子會話",
-      "collapseSubsessions": "摺疊子會話"
+      "collapseSubsessions": "摺疊子會話",
+      "promoteBtw": "轉存為一般會話"
     },
     "moveConversation": {
       "menuLabel": "移動到",
@@ -3562,7 +3564,8 @@
         "mentionGroupSession": "工作階段",
         "mentionGroupCommit": "提交",
         "mentionGroupSkill": "技能",
-        "mentionGroupAssistant": "助手"
+        "mentionGroupAssistant": "助手",
+        "btwDescription": "在本會話的副本裡提一個側問"
       },
       "messageQueue": {
         "addToQueue": "加入佇列",
@@ -4313,7 +4316,8 @@
         "retryUnavailable": "沒有可重發的訊息。",
         "toggleDetails": "展開/收合詳情",
         "dismiss": "忽略",
-        "moreIncidents": "另 {count} 條"
+        "moreIncidents": "另 {count} 條",
+        "openStripTitle": "開啟"
       },
       "backgroundTasks": {
         "settledFallback": "背景任務已結束（{status}）",
@@ -4360,6 +4364,10 @@
       "proposedPlan": {
         "title": "計劃提案",
         "planning": "規劃中…"
+      },
+      "btw": {
+        "stripAnswering": "正在回答…",
+        "stripAnswered": "已回答"
       }
     },
     "diffPreview": {
@@ -9920,6 +9928,11 @@
     "errorsPlain": {
       "rateLimited": "SRN 要求 Codeg 稍後再試。",
       "server": "SRN 回傳了錯誤。"
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "該智能體不支持側問（需要會話分叉與還原能力）。"
     }
   }
 }

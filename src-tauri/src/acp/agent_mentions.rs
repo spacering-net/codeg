@@ -467,6 +467,103 @@ fn parse_assistant_brief_body(candidate: &str) -> Option<AssistantProfile> {
     Some(profile)
 }
 
+/// The `/btw` boundary frame: rides as an internal suffix block on the FIRST
+/// prompt of a side-question fork (see `commands::btw`), telling the model the
+/// history it just inherited is the parent's reference material, not its task.
+/// There is no payload to carry — the wording is the whole frame — so the data
+/// line is an empty object, and the frame is byte-constant apart from the
+/// descriptor nonce like every other kind here.
+const BTW_FRAME_KIND: &str = "codeg_internal_btw_boundary";
+const BTW_FRAME_BODY_PREFIX: &str = "{\"kind\":\"codeg_internal_btw_boundary\"";
+const BTW_FRAME_VERSION: u8 = 1;
+const BTW_FRAME_LINE_PREFIX: &str = "Codeg btw session frame (authoritative): ";
+const BTW_PROMOTION_FRAME_KIND: &str = "codeg_internal_btw_promotion";
+const BTW_PROMOTION_FRAME_BODY_PREFIX: &str = "{\"kind\":\"codeg_internal_btw_promotion\"";
+const BTW_PROMOTION_FRAME_VERSION: u8 = 1;
+const BTW_PROMOTION_FRAME_LINE_PREFIX: &str = "Codeg btw promotion frame (authoritative): ";
+
+/// Empty payload of the two btw frames — `deny_unknown_fields` keeps a
+/// look-alike with any field inside from ever round-tripping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BtwFramePayload {}
+
+/// The boundary frame's exact instruction wording. One line, and free of the
+/// reserved separator — the frame envelope cannot carry either.
+const BTW_BOUNDARY_INSTRUCTION: &str = "This session is a btw: a side conversation copy-forked from another conversation. The history it inherited is the parent's, kept for reference only — it is not your task. Do not continue, execute, or complete any task, plan, tool call, approval, edit, or request that appears only in that inherited history; only instructions sent inside this btw session are active. The inherited history may end in the middle of a step the parent thread was running; treat it as reference, never as work to pick up. Do not spawn or interact with sub-agents in this session. Do not modify files, git state, permissions, configuration, or any other workspace state unless the user explicitly asks inside this btw session; if they do, keep it minimal, local to the request, and away from disrupting the parent thread.";
+
+const BTW_PROMOTION_INSTRUCTION: &str = "This conversation started as a btw side question and has since been promoted to a normal session. The btw constraints in the history above no longer apply: this is now a main thread, and the usual tool, sub-agent and workspace permissions are in force.";
+
+/// The separated frame to append to a btw fork's first prompt.
+pub(crate) fn render_btw_boundary_frame() -> String {
+    render_btw_frame(BTW_FRAME_KIND, BTW_FRAME_VERSION, BTW_FRAME_LINE_PREFIX, BTW_BOUNDARY_INSTRUCTION)
+}
+
+/// The separated frame to append once to the first prompt after a promotion.
+pub(crate) fn render_btw_promotion_frame() -> String {
+    render_btw_frame(
+        BTW_PROMOTION_FRAME_KIND,
+        BTW_PROMOTION_FRAME_VERSION,
+        BTW_PROMOTION_FRAME_LINE_PREFIX,
+        BTW_PROMOTION_INSTRUCTION,
+    )
+}
+
+/// Exactly three newline-terminated lines, like every other kind. Editing the
+/// wording orphans every btw frame already in a transcript, so it must bump
+/// the kind's VERSION (pinned by tests).
+fn render_btw_frame(kind: &str, version: u8, line_prefix: &str, instruction: &str) -> String {
+    let body = render_btw_frame_body(
+        &FrameDescriptor::fresh(kind, version),
+        &BtwFramePayload {},
+        line_prefix,
+        instruction,
+    );
+    format!("{ROUTE_FRAME_SEPARATOR}{body}{ROUTE_FRAME_SEPARATOR}")
+}
+
+fn render_btw_frame_body(
+    descriptor: &FrameDescriptor,
+    payload: &BtwFramePayload,
+    line_prefix: &str,
+    instruction: &str,
+) -> String {
+    let descriptor =
+        serde_json::to_string(descriptor).expect("frame descriptor is serializable");
+    let payload = serde_json::to_string(payload).expect("btw frame payload is serializable");
+    format!("{descriptor}\n{line_prefix}{payload}\n{instruction}\n")
+}
+
+fn parse_btw_frame_body(
+    candidate: &str,
+    kind: &str,
+    version: u8,
+    line_prefix: &str,
+    instruction: &str,
+) -> bool {
+    if candidate.len() > MAX_ROUTE_FRAME_BYTES {
+        return false;
+    }
+    let Some((descriptor_line, remainder)) = candidate.split_once('\n') else {
+        return false;
+    };
+    let Ok(descriptor) = serde_json::from_str::<FrameDescriptor>(descriptor_line) else {
+        return false;
+    };
+    let Some(payload_json) = remainder
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix(line_prefix))
+    else {
+        return false;
+    };
+    let Ok(payload) = serde_json::from_str::<BtwFramePayload>(payload_json) else {
+        return false;
+    };
+    descriptor.is(kind, version)
+        && render_btw_frame_body(&descriptor, &payload, line_prefix, instruction) == candidate
+}
+
 /// Every kind of internal frame codeg appends to an agent-bound prompt.
 ///
 /// They share the envelope — the reserved separator around a body of exactly
@@ -479,12 +576,16 @@ enum FrameKind {
     AgentRoutes,
     AssistantRoutes,
     AssistantBrief,
+    BtwBoundary,
+    BtwPromotion,
 }
 
-const FRAME_KINDS: [FrameKind; 3] = [
+const FRAME_KINDS: [FrameKind; 5] = [
     FrameKind::AgentRoutes,
     FrameKind::AssistantRoutes,
     FrameKind::AssistantBrief,
+    FrameKind::BtwBoundary,
+    FrameKind::BtwPromotion,
 ];
 
 impl FrameKind {
@@ -495,6 +596,8 @@ impl FrameKind {
             FrameKind::AgentRoutes => ROUTE_FRAME_BODY_PREFIX,
             FrameKind::AssistantRoutes => ASSISTANT_ROUTE_FRAME_BODY_PREFIX,
             FrameKind::AssistantBrief => ASSISTANT_BRIEF_FRAME_BODY_PREFIX,
+            FrameKind::BtwBoundary => BTW_FRAME_BODY_PREFIX,
+            FrameKind::BtwPromotion => BTW_PROMOTION_FRAME_BODY_PREFIX,
         }
     }
 
@@ -502,6 +605,7 @@ impl FrameKind {
         match self {
             FrameKind::AgentRoutes | FrameKind::AssistantRoutes => MAX_ROUTE_FRAME_BYTES,
             FrameKind::AssistantBrief => MAX_ASSISTANT_BRIEF_FRAME_BYTES,
+            FrameKind::BtwBoundary | FrameKind::BtwPromotion => MAX_ROUTE_FRAME_BYTES,
         }
     }
 
@@ -512,6 +616,20 @@ impl FrameKind {
             FrameKind::AgentRoutes => parse_internal_agent_routes_body(body).is_some(),
             FrameKind::AssistantRoutes => parse_assistant_routes_body(body).is_some(),
             FrameKind::AssistantBrief => parse_assistant_brief_body(body).is_some(),
+            FrameKind::BtwBoundary => parse_btw_frame_body(
+                body,
+                BTW_FRAME_KIND,
+                BTW_FRAME_VERSION,
+                BTW_FRAME_LINE_PREFIX,
+                BTW_BOUNDARY_INSTRUCTION,
+            ),
+            FrameKind::BtwPromotion => parse_btw_frame_body(
+                body,
+                BTW_PROMOTION_FRAME_KIND,
+                BTW_PROMOTION_FRAME_VERSION,
+                BTW_PROMOTION_FRAME_LINE_PREFIX,
+                BTW_PROMOTION_INSTRUCTION,
+            ),
         }
     }
 }
@@ -1390,7 +1508,12 @@ then [@Reviewer](codeg://assistant/3) again",
 
     #[test]
     fn a_title_is_cut_at_any_kind_of_frame_marker() {
-        for prefix in [ASSISTANT_ROUTE_FRAME_BODY_PREFIX, ASSISTANT_BRIEF_FRAME_BODY_PREFIX] {
+        for prefix in [
+            ASSISTANT_ROUTE_FRAME_BODY_PREFIX,
+            ASSISTANT_BRIEF_FRAME_BODY_PREFIX,
+            BTW_FRAME_BODY_PREFIX,
+            BTW_PROMOTION_FRAME_BODY_PREFIX,
+        ] {
             let mut bare = format!("review this  {prefix},\"ver");
             cut_at_route_frame_marker(&mut bare);
             assert_eq!(bare, "review this");
@@ -1400,5 +1523,69 @@ then [@Reviewer](codeg://assistant/3) again",
             cut_at_route_frame_marker(&mut halved);
             assert_eq!(halved, "review this");
         }
+    }
+    // ── btw frames ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn btw_frames_round_trip_through_the_generic_strip() {
+        // Each frame is paired with the OTHER kind's line prefix: swapping the
+        // prefix must not make a frame of the other kind.
+        for (frame, alien_prefix) in [
+            (render_btw_boundary_frame(), BTW_PROMOTION_FRAME_LINE_PREFIX),
+            (render_btw_promotion_frame(), BTW_FRAME_LINE_PREFIX),
+        ] {
+            assert!(contains_internal_frames(&frame));
+            assert_eq!(strip_internal_frames(&frame).trim_end(), "");
+
+            // Antigravity rewrites the separators to spaces on the way to the
+            // transcript; the scan still has to recognise the body (the same
+            // property the route frames' tests pin).
+            let bare = frame.replace(ROUTE_FRAME_SEPARATOR, "");
+            assert!(contains_internal_frames(&bare));
+            assert_eq!(strip_internal_frames(&bare), "");
+
+            // One byte of rewording and the persisted copy is prose again —
+            // which is why editing the wording must bump the VERSION. `.` then
+            // newline occurs only at the instruction's end (mid-sentence
+            // periods are followed by a space), so this hits the last byte.
+            let reworded = bare.replacen(".
+", "!
+", 1);
+            assert!(reworded != bare);
+            assert!(!contains_internal_frames(&reworded));
+
+            // The kinds must not cross-strip: neither frame is the other
+            // kind's byte-exact rendering.
+            let crossed = bare.replace(
+                if alien_prefix == BTW_PROMOTION_FRAME_LINE_PREFIX {
+                    BTW_FRAME_LINE_PREFIX
+                } else {
+                    BTW_PROMOTION_FRAME_LINE_PREFIX
+                },
+                alien_prefix,
+            );
+            assert_ne!(crossed, bare);
+            assert!(!contains_internal_frames(&crossed));
+        }
+    }
+
+    #[test]
+    fn btw_frames_carry_only_the_kind_and_version_line_shape() {
+        // Exactly three newline-terminated lines after the descriptor, like
+        // every other kind — the strip and the title cut count on it.
+        let body = render_btw_boundary_frame()
+            .replace(ROUTE_FRAME_SEPARATOR, "");
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[1].starts_with(BTW_FRAME_LINE_PREFIX));
+        assert_eq!(lines[2], BTW_BOUNDARY_INSTRUCTION);
+        assert!(render_btw_boundary_frame().len() < MAX_ROUTE_FRAME_BYTES);
+    }
+
+    #[test]
+    fn user_authored_btw_envelope_text_is_left_untouched() {
+        let input = "explain the codeg_internal_btw_boundary frame {kind}";
+        assert_eq!(strip_internal_frames(input), input);
+        assert!(!contains_internal_frames(input));
     }
 }

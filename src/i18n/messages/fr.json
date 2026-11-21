@@ -2320,7 +2320,8 @@
       "noRecentChats": "Aucune discussion récente",
       "noRecentFolders": "Aucune conversation de dossier récente",
       "noRecentCli": "Aucune conversation récente depuis la ligne de commande",
-      "recentFilterMenuLabel": "Afficher dans Récents"
+      "recentFilterMenuLabel": "Afficher dans Récents",
+      "sectionBtw": "Questions annexes"
     },
     "conversation": {
       "reloadFailed": "Échec du rechargement de la conversation : {message}",
@@ -2421,7 +2422,8 @@
       "markCompleted": "Marquer comme terminé",
       "reopen": "Rouvrir",
       "expandSubsessions": "Développer les sous-conversations",
-      "collapseSubsessions": "Réduire les sous-conversations"
+      "collapseSubsessions": "Réduire les sous-conversations",
+      "promoteBtw": "Convertir en conversation"
     },
     "moveConversation": {
       "menuLabel": "Déplacer vers",
@@ -3562,7 +3564,8 @@
         "mentionGroupSession": "Sessions",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Compétences",
-        "mentionGroupAssistant": "Assistants"
+        "mentionGroupAssistant": "Assistants",
+        "btwDescription": "Poser une question annexe dans une copie de cette conversation"
       },
       "messageQueue": {
         "addToQueue": "Mettre en file",
@@ -4313,7 +4316,8 @@
         "retryUnavailable": "Aucun message précédent à renvoyer.",
         "toggleDetails": "Afficher/masquer les détails",
         "dismiss": "Ignorer",
-        "moreIncidents": "+{count} autre(s)"
+        "moreIncidents": "+{count} autre(s)",
+        "openStripTitle": "Ouvrir"
       },
       "backgroundTasks": {
         "settledFallback": "Tâche en arrière-plan terminée ({status})",
@@ -4360,6 +4364,10 @@
       "proposedPlan": {
         "title": "Plan proposé",
         "planning": "Planification…"
+      },
+      "btw": {
+        "stripAnswering": "réponse en cours…",
+        "stripAnswered": "répondu"
       }
     },
     "diffPreview": {
@@ -9920,6 +9928,11 @@
     "errorsPlain": {
       "rateLimited": "SRN a demandé à Codeg d'attendre avant de réessayer.",
       "server": "SRN a répondu par une erreur."
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "Cet agent ne prend pas en charge les questions annexes (fourche de session et reprise requises)."
     }
   }
 }

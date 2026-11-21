@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import {
   ComposerStatusStrips,
@@ -167,6 +167,44 @@ describe("ComposerStatusStrips", () => {
         }),
       })
       expect(screen.getByRole("status")).toHaveTextContent(/^retrying 2\/5$/)
+    })
+  })
+  describe("btw strip", () => {
+    it("shows the question and its state, answering first", () => {
+      renderStrips({
+        btw: { title: "btw: what is this fn", answering: true },
+        onOpenBtw: vi.fn(),
+      })
+      const strip = screen.getByRole("status")
+      expect(strip).toHaveTextContent("btw: what is this fn")
+      expect(strip).toHaveTextContent("answering…")
+    })
+
+    it("settles to the answered wording once the turn is over", () => {
+      renderStrips({
+        btw: { title: "btw: what is this fn", answering: false },
+        onOpenBtw: vi.fn(),
+      })
+      expect(screen.getByRole("status")).toHaveTextContent("answered")
+    })
+
+    it("the title opens the side question, the X hides the strip", () => {
+      const onOpenBtw = vi.fn()
+      const onDismissBtw = vi.fn()
+      renderStrips({
+        btw: { title: "btw: what", answering: false },
+        onOpenBtw,
+        onDismissBtw,
+      })
+      fireEvent.click(screen.getByRole("button", { name: "Open" }))
+      expect(onOpenBtw).toHaveBeenCalledTimes(1)
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }))
+      expect(onDismissBtw).toHaveBeenCalledTimes(1)
+    })
+
+    it("no strip when the conversation has no side question", () => {
+      const { container } = renderStrips({ btw: null })
+      expect(container).toBeEmptyDOMElement()
     })
   })
 })

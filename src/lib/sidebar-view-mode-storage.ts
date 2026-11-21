@@ -33,7 +33,12 @@ export const DEFAULT_RECENT_FILTER: SidebarRecentFilter = "all"
 
 /** The reorderable top-level sidebar sections. "Pinned" is deliberately absent:
  *  it is a transient override bucket and always stays on top. */
-export const SIDEBAR_SECTION_IDS = ["folders", "chats", "recent"] as const
+export const SIDEBAR_SECTION_IDS = [
+  "folders",
+  "chats",
+  "btw",
+  "recent",
+] as const
 
 export type SidebarSectionId = (typeof SIDEBAR_SECTION_IDS)[number]
 
@@ -65,6 +70,7 @@ export interface SidebarSectionCollapsed {
   pinned?: boolean
   folders?: boolean
   chats?: boolean
+  btw?: boolean
   recent?: boolean
 }
 
@@ -121,7 +127,11 @@ function isSectionId(value: unknown): value is SidebarSectionId {
  * - anything else (corrupt / absent) → {@link DEFAULT_SECTION_ORDER}.
  */
 export function normalizeSectionOrder(value: unknown): SidebarSectionOrder {
-  if (value === "chats-first") return ["chats", "folders", "recent"]
+  // The legacy strings map to the pre-btw layouts and go through the same
+  // completion, so a section added since is never lost — it lands in the
+  // appended tail, like any absent id.
+  if (value === "chats-first")
+    return normalizeSectionOrder(["chats", "folders", "recent"])
   if (value === "folders-first") return DEFAULT_SECTION_ORDER
   if (!Array.isArray(value)) return DEFAULT_SECTION_ORDER
   const seen = new Set<SidebarSectionId>()

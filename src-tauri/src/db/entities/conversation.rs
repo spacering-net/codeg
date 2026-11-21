@@ -20,8 +20,13 @@ pub enum ConversationStatus {
 /// flat "Chat" section; `loop` belongs to the Loop Engineering workbench and is
 /// excluded from the sidebar list entirely (no write path yet — reserved for
 /// the loop engine); `delegate` is a delegation child nested under its
-/// parent's tool-call view. Invariant: `kind == Delegate` ⟺ `parent_id IS NOT
-/// NULL`. Written once at insert, with one exception: a chat conversation the
+/// parent's tool-call view; `btw` is a `/btw` side-question fork
+/// (`commands::btw`) — like `delegate` it sets `parent_id`, but it renders in
+/// the folder's collapsible "btw" section instead of under the parent's
+/// chevron, and `child_count` / `list_children` count only `delegate` so a
+/// side question never lights the parent's subtree. Promoting clears `kind`
+/// and `parent_id` together, so the lineage invariant holds for every live
+/// row. Written once at insert, with one exception: a chat conversation the
 /// user moves into a project becomes `regular`
 /// (`conversation_service::relocate_conversations`) — it is an ordinary project
 /// conversation from then on.
@@ -37,6 +42,8 @@ pub enum ConversationKind {
     Loop,
     #[sea_orm(string_value = "delegate")]
     Delegate,
+    #[sea_orm(string_value = "btw")]
+    Btw,
 }
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
@@ -92,6 +99,13 @@ pub struct Model {
     /// value from a newer build never stops an older one decoding the row.
     /// See `m20261017_000002_conversation_source`.
     pub source: Option<String>,
+    /// Set once when a `/btw` side-question fork is promoted to a normal
+    /// conversation. The row's next user prompt then carries the btw-promotion
+    /// frame once (see `acp::agent_mentions::render_btw_promotion_frame`), so
+    /// the model learns the side-question constraints are lifted; the flag
+    /// clears the moment that prompt reaches the agent. See
+    /// `m20261121_000001_conversation_btw_promoted`.
+    pub btw_promoted: bool,
 }
 
 /// [`Model::source`] of a conversation a `codeg-cli` run started.

@@ -456,7 +456,10 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
     // delegation children (parent_id set) are not sidebar rows. New rows prepend
     // (most-recent-first); existing rows replace in place to keep their position.
     applyConversationUpsert: (summary) => {
-      if (summary.parent_id != null) return
+      // Delegation children are not sidebar rows — but btw forks are, despite
+      // naming a parent (the sidebar's btw section; see
+      // selectBtwConversationsWithReuse on why they stay root-shaped).
+      if (summary.parent_id != null && summary.kind !== "btw") return
       if (deletedIds.has(summary.id)) return
       const prev = get().conversations
       const idx = prev.findIndex((c) => c.id === summary.id)

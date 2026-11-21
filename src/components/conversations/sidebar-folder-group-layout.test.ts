@@ -452,6 +452,8 @@ describe("buildRows with folder groups", () => {
     foldersExpanded: true,
     chatConversations: [],
     chatsExpanded: true,
+    btwConversations: [],
+    btwExpanded: true,
   }
 
   const layout = buildSidebarLayout({
@@ -579,6 +581,8 @@ describe("buildOwnerHeaderIndex with folder groups", () => {
       foldersExpanded: true,
       chatConversations: [],
       chatsExpanded: true,
+      btwConversations: [],
+      btwExpanded: true,
       layout: buildSidebarLayout({
         folders: [
           folder(1, { sort_order: 1 }),

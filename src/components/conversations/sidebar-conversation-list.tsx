@@ -133,6 +133,7 @@ import {
   reuseSelected,
   reuseSet,
   selectChatConversationsWithReuse,
+  selectBtwConversationsWithReuse,
   selectPinnedWithReuse,
   selectRecentConversationsWithReuse,
   worktreeChildrenByParent,
@@ -1104,6 +1105,7 @@ export function SidebarConversationList({
   const pinnedExpanded = !sectionCollapsed.pinned
   const foldersExpanded = !sectionCollapsed.folders
   const chatsExpanded = !sectionCollapsed.chats
+  const btwExpanded = !sectionCollapsed.btw
   const recentExpanded = !sectionCollapsed.recent
   // Which kinds the Recent section lists (all / chats / folder sessions).
   // Persisted: it is a view preference, not a reading gesture. Hydrated from
@@ -1428,8 +1430,10 @@ export function SidebarConversationList({
   // Pinned section, and folderless chat conversations in the dedicated Chat
   // section, so exclude both here; then apply the completed filter as before.
   const folderConversations = useMemo(() => {
+    // `btw` rows carry a `folder_id` but live in their own section (they name
+    // a parent, and the folder group renders roots) — exclude like chats.
     const base = shownConversations.filter(
-      (c) => c.pinned_at == null && c.kind !== "chat"
+      (c) => c.pinned_at == null && c.kind !== "chat" && c.kind !== "btw"
     )
     if (showCompleted) return base
     return base.filter((c) => c.status !== "completed")
@@ -1439,6 +1443,7 @@ export function SidebarConversationList({
   // first, with reference reuse (so an unrelated status event doesn't rebuild it
   // and defeat the section's memo). Pinned chats live in the Pinned section.
   const chatConvsRef = useRef<DbConversationSummary[]>([])
+  const btwConvsRef = useRef<DbConversationSummary[]>([])
   /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const chatConversations = useMemo(() => {
     const next = selectChatConversationsWithReuse(
@@ -1447,6 +1452,15 @@ export function SidebarConversationList({
       chatConvsRef.current
     )
     chatConvsRef.current = next
+    return next
+  }, [shownConversations, showCompleted])
+  const btwConversations = useMemo(() => {
+    const next = selectBtwConversationsWithReuse(
+      shownConversations,
+      showCompleted,
+      btwConvsRef.current
+    )
+    btwConvsRef.current = next
     return next
   }, [shownConversations, showCompleted])
   /* eslint-enable react-hooks/refs */
@@ -1657,6 +1671,8 @@ export function SidebarConversationList({
         foldersExpanded,
         chatConversations,
         chatsExpanded,
+        btwConversations,
+        btwExpanded,
         recentConversations,
         recentExpanded,
         showRecent,
@@ -1681,6 +1697,8 @@ export function SidebarConversationList({
       foldersExpanded,
       chatConversations,
       chatsExpanded,
+      btwConversations,
+      btwExpanded,
       recentConversations,
       recentExpanded,
       showRecent,

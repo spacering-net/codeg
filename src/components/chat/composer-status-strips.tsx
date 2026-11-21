@@ -30,7 +30,7 @@
 
 import { useMemo } from "react"
 import { useTranslations } from "next-intl"
-import { Loader2 } from "lucide-react"
+import { Loader2, MessagesSquare } from "lucide-react"
 
 import { ComposerDockStrip } from "@/components/chat/composer-dock-strip"
 import { SessionFailureBanner } from "@/components/chat/session-failure-banner"
@@ -45,6 +45,15 @@ export interface ComposerStatusStripsProps {
   claudeApiRetry: ClaudeApiRetryState | null
   sessionFailures?: SessionFailureRecord[]
   onSessionFailureDismiss?: (ids: string[]) => void
+  /** The conversation's newest `/btw` side question (its DB row title is the
+   *  strip's text; the frontend derives this from the workspace store, so the
+   *  strip lives and dies with the row's events, no separate state). */
+  btw?: { title: string; answering: boolean } | null
+  /** Click of the btw strip's title: opens the side question's tab. */
+  onOpenBtw?: () => void
+  /** Close of the btw strip: hides it for this panel view. The conversation
+   *  stays where it always is — the folder's btw section. */
+  onDismissBtw?: () => void
 }
 
 export function ComposerStatusStrips({
@@ -52,7 +61,11 @@ export function ComposerStatusStrips({
   claudeApiRetry,
   sessionFailures = NO_FAILURES,
   onSessionFailureDismiss,
+  btw,
+  onOpenBtw,
+  onDismissBtw,
 }: ComposerStatusStripsProps) {
+  const t = useTranslations("Folder.chat.btw")
   const retryLineText = useRetryLineText(claudeApiRetry)
   return (
     <>
@@ -72,6 +85,27 @@ export function ComposerStatusStrips({
           icon={Loader2}
           iconClassName="animate-spin"
           title={retryLineText}
+        />
+      )}
+
+      {btw && onOpenBtw && (
+        <ComposerDockStrip
+          // Sky: a side question of this conversation, in flight or answered
+          // — a state of the session, not a fault. Its title IS the question
+          // (the row's locked title), so the strip survives locale changes
+          // and matches the btw section's row for the same question.
+          role="status"
+          tone="info"
+          icon={btw.answering ? Loader2 : MessagesSquare}
+          iconClassName={btw.answering ? "animate-spin" : undefined}
+          title={btw.title}
+          meta={
+            <span className="shrink-0 opacity-70">
+              {btw.answering ? t("stripAnswering") : t("stripAnswered")}
+            </span>
+          }
+          onTitleClick={onOpenBtw}
+          onDismiss={onDismissBtw}
         />
       )}
     </>

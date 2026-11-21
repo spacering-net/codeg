@@ -125,6 +125,7 @@ mod tests {
             input_hint: None,
             skill: false,
             skill_path: None,
+            client: false,
         }
     }
 

@@ -114,6 +114,7 @@ import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri
 import {
   applyExpertReference,
   blankLineAfter,
+  extractBtwQuestion,
   isComposerEmpty,
   restampSkillPrefixes,
 } from "@/components/chat/composer/composer-commands"
@@ -229,6 +230,11 @@ interface MessageInputProps {
    *  `isActive` (which still drives auto-focus/connect). */
   showActiveFlow?: boolean
   onEnqueue?: (draft: PromptDraft, modeId: string | null) => void
+  /** Takes the `/btw <question>` side-question draft (codeg's synthesized
+   *  `client` command — see `AvailableCommandInfo.client`). Resolves true when
+   *  the question was handed to the backend; false keeps the text in the
+   *  composer, so a failed creation never eats the question. */
+  onBtw?: (question: string) => Promise<boolean>
   /** Id of the queue item being edited — the stable key for (re)hydration, so
    *  switching between two items with identical display text still reloads. */
   editingItemId?: string | null
@@ -366,6 +372,7 @@ export function MessageInput({
   isActive = false,
   showActiveFlow = false,
   onEnqueue,
+  onBtw,
   editingItemId,
   editingDraftText,
   editingDraftBlocks,
@@ -1662,6 +1669,28 @@ export function MessageInput({
       return
     }
 
+    // `/btw <question>`: codeg's own command, intercepted BEFORE the queue
+    // branches — asking while the parent answers is the case it exists for
+    // (the copy fork reads the settled prefix while the parent streams).
+    // Only the client-synthesized entry is intercepted: an agent's own `/btw`
+    // stays forwarded verbatim, and where the backend offers no entry (no
+    // fork+resume) the text flows on like any unknown slash input.
+    const btwQuestion = extractBtwQuestion(draft.displayText)
+    if (
+      btwQuestion !== null &&
+      onBtw &&
+      slashCommands.some((cmd) => cmd.name === "btw" && cmd.client)
+    ) {
+      void onBtw(btwQuestion).then((consumed) => {
+        if (!consumed) return
+        if (effectiveDraftStorageKey) {
+          clearMessageInputDraftV2(effectiveDraftStorageKey)
+        }
+        resetComposer()
+      })
+      return
+    }
+
     // Prompting mode: enqueue instead of sending
     if (isPrompting && onEnqueue) {
       onEnqueue(draft, showModeSelector ? effectiveModeId : null)
@@ -1694,6 +1723,8 @@ export function MessageInput({
     isPrompting,
     onSaveQueueEdit,
     onEnqueue,
+    onBtw,
+    slashCommands,
     onSend,
     effectiveModeId,
     showModeSelector,

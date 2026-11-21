@@ -79,6 +79,106 @@ pub async fn create_with_delegation(
     .await
 }
 
+/// The row a `/btw` side question gets (see `commands::btw`). A deliberate
+/// sibling of [`create_inner`], not another wrapper over it: this row is born
+/// with its `external_id` (the child connection RESUMES the copy-forked agent
+/// session, never a fresh one), a `title_locked` title (the question is the
+/// name — the auto-title backfill must never rename a side question out from
+/// under the panel that shows it), and the parent's model, so the answer costs
+/// the same as the parent would. Its lineage lives in `parent_id` alone: no
+/// tool-call or delegation ids exist for a user-issued fork, so
+/// `DelegationLink` has nothing to carry.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_btw_fork(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: String,
+    git_branch: Option<String>,
+    model: Option<String>,
+    external_id: String,
+    parent_id: i32,
+) -> Result<conversation::Model, DbError> {
+    let at_str = serde_json::to_value(agent_type)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    let now = Utc::now();
+    let model = conversation::ActiveModel {
+        id: NotSet,
+        folder_id: Set(folder_id),
+        title: Set(Some(title)),
+        title_locked: Set(true),
+        agent_type: Set(at_str),
+        status: Set(conversation::ConversationStatus::InProgress),
+        kind: Set(conversation::ConversationKind::Btw),
+        model: Set(model),
+        git_branch: Set(git_branch),
+        external_id: Set(Some(external_id)),
+        parent_id: Set(Some(parent_id)),
+        parent_tool_use_id: Set(None),
+        delegation_call_id: Set(None),
+        message_count: Set(0),
+        created_at: Set(now),
+        updated_at: Set(now),
+        deleted_at: Set(None),
+        pinned_at: Set(None),
+        origin_cwd: Set(None),
+        assistant_id: Set(None),
+        assistant_snapshot: Set(None),
+        source: Set(None),
+        btw_promoted: Set(false),
+    };
+    Ok(model.insert(conn).await?)
+}
+
+/// Promote a `/btw` row to an ordinary conversation: the lineage clears with
+/// the kind (one row cannot both live in the folder's btw section and stand on
+/// its own), and `btw_promoted` arms the promotion frame for the next user
+/// prompt. Root-only by construction: the caller has just verified the row is
+/// `kind = btw`.
+pub async fn promote_btw(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<(), DbError> {
+    use sea_orm::sea_query::Expr;
+    conversation::Entity::update_many()
+        .col_expr(conversation::Column::Kind, Expr::value(conversation::ConversationKind::Regular))
+        .col_expr(conversation::Column::ParentId, Expr::value(None::<i32>))
+        .col_expr(conversation::Column::BtwPromoted, Expr::value(true))
+        .col_expr(conversation::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::Kind.eq(conversation::ConversationKind::Btw))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// Whether this row owes its next user prompt the btw-promotion frame (see the
+/// `btw_promoted` column). Read-only — [`clear_btw_promotion`] only runs after
+/// the prompt carrying the frame actually reached the agent, so a send that
+/// failed keeps the notice pending instead of swallowing it.
+pub async fn has_btw_promotion_pending(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<bool, DbError> {
+    Ok(conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await?
+        .is_some_and(|row| row.btw_promoted))
+}
+
+pub async fn clear_btw_promotion(conn: &DatabaseConnection, conversation_id: i32) -> Result<(), DbError> {
+    use sea_orm::sea_query::Expr;
+    conversation::Entity::update_many()
+        .col_expr(conversation::Column::BtwPromoted, Expr::value(false))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
 async fn create_inner(
     conn: &DatabaseConnection,
     folder_id: i32,
@@ -135,6 +235,7 @@ async fn create_inner(
         assistant_id: Set(assistant_id),
         assistant_snapshot: Set(assistant_snapshot),
         source: Set(None),
+        btw_promoted: Set(false),
     };
     Ok(model.insert(conn).await?)
 }
@@ -1016,6 +1117,7 @@ impl CarriedOverRow {
             assistant_id: Set(self.assistant_id),
             assistant_snapshot: Set(self.assistant_snapshot),
             source: Set(self.source),
+            btw_promoted: Set(false),
         }
     }
 }
@@ -1506,6 +1608,11 @@ async fn fill_child_counts(
         .column_as(conversation::Column::Id.count(), "cnt")
         .filter(conversation::Column::ParentId.is_in(ids))
         .filter(conversation::Column::DeletedAt.is_null())
+        // Delegation children only: a `/btw` row also names a parent, but it
+        // lives in the folder's btw section, not the parent's subtree, so it
+        // must not light the chevron. Mirrors `list_children` exactly, keeping
+        // "`child_count > 0` iff `list_children` would return rows" true.
+        .filter(conversation::Column::Kind.eq(ConversationKind::Delegate))
         .group_by(conversation::Column::ParentId)
         .into_tuple()
         .all(conn)
@@ -1734,7 +1841,16 @@ pub async fn list_all(
     query = query.filter(conversation::Column::Kind.ne(ConversationKind::Loop));
 
     if !include_children {
-        query = query.filter(conversation::Column::ParentId.is_null());
+        // `btw` is the one kind that carries a `parent_id` yet is NOT a
+        // subtree child: it has no chevron path (counted out of
+        // `list_children`/`child_count` below) and the sidebar shows it in the
+        // folder's "btw" section instead, so the workspace list must return
+        // it like any other root row.
+        query = query.filter(
+            sea_orm::Condition::any()
+                .add(conversation::Column::ParentId.is_null())
+                .add(conversation::Column::Kind.eq(ConversationKind::Btw)),
+        );
     }
 
     match folder_ids {
@@ -1804,6 +1920,9 @@ pub async fn list_children(
     let rows = conversation::Entity::find()
         .filter(conversation::Column::ParentId.eq(parent_conversation_id))
         .filter(conversation::Column::DeletedAt.is_null())
+        // Delegation children only — see `fill_child_counts` for the why, and
+        // for the chevron-equivalence invariant this upholds.
+        .filter(conversation::Column::Kind.eq(ConversationKind::Delegate))
         .order_by_desc(conversation::Column::CreatedAt)
         // Explicit id tie-break so same-timestamp siblings are deterministic and
         // match the frontend re-sort (which tie-breaks id DESC): the raw fetch
@@ -4090,5 +4209,113 @@ mod tests {
             list_live_origin_cwds(&db.conn).await.unwrap(),
             vec!["/tmp/codeg-origins-x".to_string()]
         );
+    }
+
+    // ── btw rows ───────────────────────────────────────────────────────────
+
+    async fn seed_parent_with_btw(
+        conn: &DatabaseConnection,
+        folder_id: i32,
+    ) -> (i32, conversation::Model) {
+        let parent = create(conn, folder_id, AgentType::ClaudeCode, Some("P".into()), None)
+            .await
+            .expect("parent");
+        let btw = create_btw_fork(
+            conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            "btw: what does this fn do".into(),
+            None,
+            Some("opus".into()),
+            "fork-external-1".into(),
+            parent.id,
+        )
+        .await
+        .expect("btw fork");
+        (parent.id, btw)
+    }
+
+    /// The btw section's data path end to end at the row level: the fork is
+    /// born a sidebar root despite its lineage, invisible to the parent's
+    /// child affordances, and promotion moves it out of both.
+    #[tokio::test]
+    async fn btw_row_is_a_root_for_the_list_and_invisible_to_child_queries() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-btw-row-shape").await;
+        let (parent_id, btw) = seed_parent_with_btw(&db.conn, folder).await;
+        assert!(btw.title_locked, "the question is the name — no auto-retitle");
+        assert_eq!(btw.kind, ConversationKind::Btw);
+
+        let rows = list_all(&db.conn, None, None, None, None, None, false)
+            .await
+            .expect("list");
+        let ids: Vec<i32> = rows.iter().map(|r| r.id).collect();
+        assert!(
+            ids.contains(&btw.id),
+            "a btw row must be a list root despite its parent_id: {ids:?}"
+        );
+        let parent_row = rows.iter().find(|r| r.id == parent_id).expect("parent row");
+        assert_eq!(
+            parent_row.child_count, 0,
+            "child_count counts delegation children only"
+        );
+        assert!(
+            list_children(&db.conn, parent_id)
+                .await
+                .expect("children")
+                .is_empty(),
+            "the parent's expander must not claim a btw fork as its child"
+        );
+    }
+
+    #[tokio::test]
+    async fn promotion_clears_lineage_and_arms_the_frame_once() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-btw-promote").await;
+        let (parent_id, btw) = seed_parent_with_btw(&db.conn, folder).await;
+
+        assert!(!has_btw_promotion_pending(&db.conn, btw.id)
+            .await
+            .expect("pending read"));
+        promote_btw(&db.conn, btw.id).await.expect("promote");
+
+        let row = conversation::Entity::find_by_id(btw.id)
+            .one(&db.conn)
+            .await
+            .expect("row")
+            .expect("btw row");
+        assert_eq!(row.kind, ConversationKind::Regular);
+        assert_eq!(row.parent_id, None);
+        assert!(row.btw_promoted);
+        assert!(has_btw_promotion_pending(&db.conn, btw.id)
+            .await
+            .expect("pending read"));
+        clear_btw_promotion(&db.conn, btw.id).await.expect("clear");
+        assert!(!has_btw_promotion_pending(&db.conn, btw.id)
+            .await
+            .expect("pending read"));
+
+        // Promoted out of the btw section into ordinary root rows; the parent
+        // keeps nothing of it.
+        let _ = parent_id;
+    }
+
+    /// Promotion is kind-filtered: a regular row's id must not get its
+    /// `btw_promoted` flag flipped by a stray call (the frame it would arm
+    /// claims a btw origin the conversation never had).
+    #[tokio::test]
+    async fn promote_btw_leaves_rows_that_are_not_btw_alone() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-btw-promote-guard").await;
+        let regular = create(&db.conn, folder, AgentType::ClaudeCode, Some("R".into()), None)
+            .await
+            .expect("regular");
+        promote_btw(&db.conn, regular.id).await.expect("promote no-op");
+        let row = conversation::Entity::find_by_id(regular.id)
+            .one(&db.conn)
+            .await
+            .expect("row")
+            .expect("regular row");
+        assert!(!row.btw_promoted);
     }
 }
