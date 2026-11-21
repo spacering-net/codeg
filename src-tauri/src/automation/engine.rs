@@ -28,7 +28,7 @@ use crate::acp::turn_end_hold;
 use crate::acp::types::{AcpEvent, EventEnvelope, PromptInputBlock};
 use crate::acp::InternalEventBus;
 use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
-use crate::commands::conversations::{create_conversation_core, emit_conversation_upsert};
+use crate::commands::conversations::{create_conversation_with_plugins, emit_conversation_upsert};
 use crate::commands::folders::{
     emit_folder_upsert, get_folder_core, git_checkout, git_is_clean, git_list_branches,
     git_worktree_add_core, open_worktree_folder_core, resolve_worktree_folder_core,
@@ -545,15 +545,21 @@ impl AutomationEngine {
         // title was no more distinguishing anyway: the prompt is fixed, so
         // every run of an automation carried the identical one.
         let title = first_chars(&auto.name, 80);
-        let conversation_id =
-            match create_conversation_core(&self.db.conn, cwd.folder_id, agent_type, Some(title)).await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    let _ = self.manager.disconnect(&conn_id).await;
-                    return Err(e.to_string());
-                }
-            };
+        let conversation_id = match create_conversation_with_plugins(
+            &self.emitter,
+            &self.db.conn,
+            cwd.folder_id,
+            agent_type,
+            Some(title),
+        )
+        .await
+        {
+            Ok(id) => id,
+            Err(e) => {
+                let _ = self.manager.disconnect(&conn_id).await;
+                return Err(e.to_string());
+            }
+        };
         // Strictly before the upsert below: that broadcast is how any client
         // first learns this id, so locking first makes a backfill on this row
         // impossible rather than merely unlikely. Failing to lock only costs

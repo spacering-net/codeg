@@ -10,6 +10,7 @@ use super::{catalog_error, invalid, valid_id, HostPlugins, Invocation, ServerMod
 use crate::acp::session_state::SessionState;
 use crate::acp::types::{AcpEvent, ConnectionStatus};
 use crate::app_error::{AppCommandError, AppErrorCode};
+use crate::db::entities::conversation::{self, ConversationKind};
 use crate::db::entities::folder::FolderKind;
 use crate::models::{AgentType, FolderDetail};
 use crate::web::event_bridge::{emit_event, EventEmitter};
@@ -53,6 +54,85 @@ pub enum Event {
     AgentArchived,
     #[serde(rename = "agent.open.before")]
     AgentOpenBefore,
+    #[serde(rename = "agent.create.before")]
+    AgentCreateBefore,
+    #[serde(rename = "agent.create.after")]
+    AgentCreated,
+}
+
+pub(crate) async fn prepare_agent_title(
+    emitter: &EventEmitter,
+    agent_type: AgentType,
+    folder_id: Option<i32>,
+    kind: ConversationKind,
+    parent_conversation_id: Option<i32>,
+    mut title: Option<String>,
+) -> Result<Option<String>, AppCommandError> {
+    let Some(host) = emitter.host_plugins() else {
+        return Ok(title);
+    };
+    tokio::time::timeout(TRANSFORM_DEADLINE, async {
+        for hook in host.lifecycle_handlers(Event::AgentCreateBefore) {
+            let source = hook.id.clone();
+            let result = host
+                .invoke(
+                    hook,
+                    json!({
+                        "agentType": agent_type,
+                        "folderId": folder_id,
+                        "kind": kind,
+                        "parentConversationId": parent_conversation_id,
+                        "title": title,
+                    }),
+                )
+                .await
+                .map_err(|error| {
+                    AppCommandError::new(
+                        AppErrorCode::TaskExecutionFailed,
+                        format!("Plugin {source} could not prepare the agent"),
+                    )
+                    .with_detail(error.to_string())
+                })?;
+            if result.is_null() {
+                continue;
+            }
+            let bad_title = || invalid(format!("Plugin {source} returned an invalid title"));
+            let replacement: TitleReplacement =
+                serde_json::from_value(result).map_err(|_| bad_title())?;
+            if replacement.title.trim().is_empty()
+                || replacement.title.chars().count() > 200
+                || replacement.title.chars().any(char::is_control)
+            {
+                return Err(bad_title());
+            }
+            title = Some(replacement.title);
+        }
+        Ok(title)
+    })
+    .await
+    .map_err(|_| {
+        AppCommandError::new(
+            AppErrorCode::TaskExecutionFailed,
+            "Agent creation plugin hooks timed out",
+        )
+    })?
+}
+
+pub(crate) fn observe_agent_created(emitter: &EventEmitter, agent: &conversation::Model) {
+    if let Some(host) = emitter.host_plugins() {
+        host.observe(
+            emitter,
+            Event::AgentCreated,
+            json!({
+                "folderId": agent.folder_id,
+                "conversationId": agent.id,
+                "agentType": agent.agent_type,
+                "kind": agent.kind,
+                "parentConversationId": agent.parent_id,
+                "title": agent.title,
+            }),
+        );
+    }
 }
 
 pub(crate) fn observe_agent_close(emitter: &EventEmitter, session: &SessionState, failed: bool) {
@@ -143,6 +223,12 @@ struct PathReplacement {
 #[serde(deny_unknown_fields)]
 struct LaunchReplacement {
     env: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TitleReplacement {
+    title: String,
 }
 
 pub(super) fn validate(
@@ -926,6 +1012,104 @@ mod tests {
         assert_eq!(
             seen,
             BTreeSet::from(["agent.archive.after".into(), "agent.close.after".into()])
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_creation_validates_the_title_before_insert_and_observes_the_saved_row() {
+        use sea_orm::EntityTrait;
+
+        let data = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let db = fresh_in_memory_db().await;
+        let state = crate::app_state::AppState::new_for_test(db, data.path().to_owned());
+        std::fs::write(
+            source.path().join("codeg-plugin.json"),
+            json!({
+                "apiVersion": 2,
+                "id": "test.agent-creation",
+                "name": "Agent Creation",
+                "version": "1.0.0",
+                "server": { "entry": "agent.mjs", "methods": [] },
+                "contributes": { "lifecycleHooks": [
+                    { "event": "agent.create.before", "method": "prepare" },
+                    { "event": "agent.create.after", "method": "created" }
+                ] }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            source.path().join("agent.mjs"),
+            r#"export function handle(method, input) {
+                if (method === "created") return input;
+                return { title: input.title === "reject" ? "\n" : "Prepared title" };
+            }"#,
+        )
+        .unwrap();
+        let preview = state
+            .host_plugins
+            .preview_install(source.path().to_str().unwrap(), Registry::Npm, None)
+            .await
+            .unwrap();
+        state.host_plugins.confirm_install(preview.ticket).unwrap();
+        state
+            .host_plugins
+            .apply(Mutation::SetEnabled {
+                id: "test.agent-creation".into(),
+                enabled: true,
+            })
+            .unwrap();
+
+        let folder = folder_service::add_folder(&state.db.conn, "/test/agent-creation")
+            .await
+            .unwrap();
+        let mut events = state.event_broadcaster.subscribe();
+        let create = |title: &str| {
+            crate::commands::conversations::create_conversation_with_plugins(
+                &state.emitter,
+                &state.db.conn,
+                folder.id,
+                AgentType::Codex,
+                Some(title.to_owned()),
+            )
+        };
+        let error = create("reject").await.unwrap_err();
+        assert!(error.to_string().contains("invalid title"));
+        assert!(conversation::Entity::find()
+            .all(&state.db.conn)
+            .await
+            .unwrap()
+            .is_empty());
+
+        let id = create("original title").await.unwrap();
+        let saved = conversation_service::get_by_id(&state.db.conn, id)
+            .await
+            .unwrap();
+        assert_eq!(saved.title.as_deref(), Some("Prepared title"));
+        let event = tokio::time::timeout(Duration::from_secs(3), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.channel, EVENT_CHANNEL);
+        assert_eq!(event.payload["event"], "agent.create.after");
+        assert_eq!(event.payload["folderId"], folder.id);
+        assert_eq!(event.payload["conversationId"], id);
+        assert_eq!(
+            event.payload["data"],
+            json!({
+                "folderId": folder.id,
+                "conversationId": id,
+                "agentType": "codex",
+                "kind": "regular",
+                "parentConversationId": null,
+                "title": "Prepared title",
+            })
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), events.recv())
+                .await
+                .is_err()
         );
     }
 

@@ -35,6 +35,7 @@ use crate::acp::types::{
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
 use crate::db::service::conversation_service;
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::{observe_agent_created, prepare_agent_title};
 use crate::models::agent::AgentType;
 use crate::web::event_bridge::{emit_with_state, emit_with_state_gated, EventEmitter};
 
@@ -1991,10 +1992,11 @@ impl ConnectionManager {
                         linked_folder_id,
                         parent_conv_for_event,
                         parent_tool_for_event,
+                        created_row,
                     ) = match (conversation_id, folder_id) {
                         // Branch A: caller already owns a row — adopt it. No DB write.
                         (Some(caller_conv_id), Some(caller_folder_id)) => {
-                            (caller_conv_id, caller_folder_id, None, None)
+                            (caller_conv_id, caller_folder_id, None, None, None)
                         }
                         // Function-entry guard rejects this combination.
                         (Some(_), None) => unreachable!(
@@ -2014,11 +2016,26 @@ impl ConnectionManager {
                             let parent_tool_use_id_for_event = task_delegation
                                 .as_ref()
                                 .map(|d| d.parent_tool_use_id.clone());
+                            let kind = if task_delegation.is_some() {
+                                ConversationKind::Delegate
+                            } else {
+                                ConversationKind::Regular
+                            };
+                            let title = prepare_agent_title(
+                                &task_emitter,
+                                agent_type,
+                                Some(folder_id),
+                                kind,
+                                parent_conversation_id_for_event,
+                                seed_title,
+                            )
+                            .await
+                            .map_err(|e| AcpError::protocol(e.to_string()))?;
                             let row = conversation_service::create_with_delegation(
                                 &db_conn,
                                 folder_id,
                                 agent_type,
-                                seed_title,
+                                title,
                                 None,
                                 task_delegation,
                             )
@@ -2029,6 +2046,7 @@ impl ConnectionManager {
                                 folder_id,
                                 parent_conversation_id_for_event,
                                 parent_tool_use_id_for_event,
+                                Some(row),
                             )
                         }
                         (None, None) => {
@@ -2131,6 +2149,9 @@ impl ConnectionManager {
                         },
                     )
                     .await;
+                    if let Some(row) = created_row {
+                        observe_agent_created(&task_emitter, &row);
+                    }
                     // Sidebar sync: a conversation born here (agent path — a
                     // prompt sent without a pre-created row, not the create
                     // button) must reach every client immediately via the global

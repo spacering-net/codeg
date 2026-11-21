@@ -52,6 +52,19 @@ export interface AgentOpenBeforeInput {
   env: Record<string, string>
 }
 
+export interface AgentCreateBeforeInput {
+  agentType: string
+  folderId: number | null
+  kind: "regular" | "chat" | "delegate"
+  parentConversationId: number | null
+  title: string | null
+}
+
+export interface AgentCreatedInput extends AgentCreateBeforeInput {
+  conversationId: number
+  folderId: number
+}
+
 export interface PluginLifecycleInputs {
   "workspace.open.before": { path: string }
   "workspace.open.after": { folderId: number; path: string }
@@ -81,6 +94,8 @@ export interface PluginLifecycleInputs {
   "agent.close.after": AgentClosedInput
   "agent.archive.after": AgentArchivedInput
   "agent.open.before": AgentOpenBeforeInput
+  "agent.create.before": AgentCreateBeforeInput
+  "agent.create.after": AgentCreatedInput
 }
 
 export type PluginLifecycleEvent = keyof PluginLifecycleInputs
@@ -88,9 +103,11 @@ export type PluginLifecycleEvent = keyof PluginLifecycleInputs
 export type PluginLifecycleResult<Event extends PluginLifecycleEvent> =
   Event extends "agent.open.before"
     ? { env: Record<string, string> } | null
-    : Event extends `${string}.before`
-      ? { path: string } | null
-      : PluginJsonValue
+    : Event extends "agent.create.before"
+      ? { title: string } | null
+      : Event extends `${string}.before`
+        ? { path: string } | null
+        : PluginJsonValue
 
 /** A handler routed by the private method name declared in the manifest. */
 export type PluginLifecycleHandler<Event extends PluginLifecycleEvent> = (
