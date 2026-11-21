@@ -20,6 +20,8 @@ const useIsomorphicLayoutEffect =
 export type SurfaceContext = { id: string } & (
   | { type: "workspacePanel"; folderId: number }
   | { type: "settingsPanel" }
+  | { type: "pluginDetail" }
+  | { type: "activationPanel" }
   | ({
       type: "clientSurface"
       slot: PluginClientSurfaceSlot

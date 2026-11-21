@@ -107,7 +107,9 @@
     "choosePanel": "插件面板",
     "noTurns": "当前工作区暂无轮次记录。",
     "pluginSurfaces": "插件入口",
-    "morePluginSurfaces": "更多插件入口"
+    "morePluginSurfaces": "更多插件入口",
+    "pluginDetail": "插件详情",
+    "activationPanel": "启用引导"
   },
   "AppearanceSettings": {
     "sectionTitle": "主题外观",

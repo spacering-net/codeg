@@ -500,6 +500,20 @@ describe("HostPluginSurface clientSurface context & isolation", () => {
         id: "settings",
       },
     },
+    {
+      label: "pluginDetail",
+      context: {
+        type: "pluginDetail" as const,
+        id: "detail",
+      },
+    },
+    {
+      label: "activationPanel",
+      context: {
+        type: "activationPanel" as const,
+        id: "activation",
+      },
+    },
   ])(
     "does not expose or accept composer insertion on $label",
     async ({ context }) => {
@@ -545,6 +559,109 @@ describe("HostPluginSurface clientSurface context & isolation", () => {
         })
       })
       expect(onComposerInsertText).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(["pluginDetail", "activationPanel"] as const)(
+    "supports host-scoped context, RPC calls, settings, and events on %s",
+    async (surfaceType) => {
+      const mock = createMockTransport()
+      mock.call.mockImplementation(
+        async (method: string, params?: Record<string, unknown>) => {
+          if (method === "host_plugins_client_html") {
+            return "<main>host-surface</main>"
+          }
+          if (method === "host_plugins_call") {
+            return { echoed: params }
+          }
+          if (method === "host_plugins_settings") {
+            return { version: 1, revision: 2, value: { ready: true } }
+          }
+          return null
+        }
+      )
+      mockTransportRef.current = mock.transport
+
+      const { getByTitle } = render(
+        withIntl(
+          <HostPluginSurface
+            pluginId="acme.host"
+            title={`Surface ${surfaceType}`}
+            context={{ type: surfaceType, id: `${surfaceType}-id` }}
+          />
+        )
+      )
+
+      const iframe = (await waitFor(() =>
+        getByTitle(`Surface ${surfaceType}`)
+      )) as HTMLIFrameElement
+      await act(async () => {})
+      const session = connectFrame(iframe)
+
+      expect(session.received[0]).toEqual({
+        type: "context",
+        context: {
+          type: surfaceType,
+          id: `${surfaceType}-id`,
+          folderId: undefined,
+          locale: "en",
+        },
+      })
+
+      // Host-scoped RPC call
+      await act(async () => {
+        session.port!.postMessage({
+          id: 1,
+          operation: "call",
+          json: JSON.stringify({ method: "inspect", input: { ping: 1 } }),
+        })
+      })
+      await waitFor(() => {
+        expect(session.received).toContainEqual({
+          id: 1,
+          ok: true,
+          value: {
+            echoed: {
+              pluginId: "acme.host",
+              method: "inspect",
+              input: { ping: 1 },
+            },
+          },
+        })
+      })
+
+      // Host-scoped settings read
+      await act(async () => {
+        session.port!.postMessage({
+          id: 2,
+          operation: "settings",
+          json: JSON.stringify({ type: "read" }),
+        })
+      })
+      await waitFor(() => {
+        expect(session.received).toContainEqual({
+          id: 2,
+          ok: true,
+          value: { version: 1, revision: 2, value: { ready: true } },
+        })
+      })
+
+      // Host-scoped events receive events across workspaces for the same pluginId
+      mock.emit("host-plugins://event", {
+        pluginId: "acme.host",
+        event: "workspace.open.after",
+        folderId: 77,
+        data: { opened: true },
+      })
+      expect(session.received).toContainEqual({
+        type: "event",
+        value: {
+          pluginId: "acme.host",
+          event: "workspace.open.after",
+          folderId: 77,
+          data: { opened: true },
+        },
+      })
     }
   )
 })

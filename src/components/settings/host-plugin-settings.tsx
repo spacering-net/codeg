@@ -1,13 +1,15 @@
 "use client"
 
-import { useRef, useState, type FormEvent } from "react"
+import { useMemo, useRef, useState, type FormEvent } from "react"
 import {
   AlertTriangle,
   FilePlus,
   Globe2,
+  Info,
   Plus,
   RefreshCw,
   Settings2,
+  Sparkles,
   Trash2,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -31,22 +33,54 @@ import {
   fetchHostPluginIndex,
   confirmHostPluginInstall,
   previewHostPluginInstall,
+  resolvePluginHostSurface,
   updateHostPlugin,
   useHostPlugins,
   type InstalledPlugin,
   type PluginIndex,
   type PluginInstallPreview,
   type PluginMutation,
+  type PluginSettingsSurfaceType,
 } from "@/lib/host-plugins"
+import type { Transport } from "@/lib/transport"
 
 export function HostPluginSettings() {
   const t = useTranslations("HostPlugins")
-  const { data, error, refresh } = useHostPlugins()
+  const { data, error, refresh, transport } = useHostPlugins()
   const fileInput = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string>()
   const [notice, setNotice] = useState<string>()
+  const [activeSurface, setActiveSurface] = useState<{
+    pluginId: string
+    type: PluginSettingsSurfaceType
+    panelId: string
+    transport: Transport | null
+  } | null>(null)
   const unavailable = isUnsupportedCommandError(error)
+
+  const resolvedActiveSurface = useMemo(() => {
+    if (!activeSurface || activeSurface.transport !== transport || !data) {
+      return null
+    }
+    const plugin = data.find(
+      (item) => item.manifest.id === activeSurface.pluginId
+    )
+    if (!plugin) return null
+    const panel = resolvePluginHostSurface(plugin, activeSurface.type)
+    if (!panel || panel.id !== activeSurface.panelId) return null
+    return {
+      plugin,
+      type: activeSurface.type,
+      panel,
+    }
+  }, [activeSurface, data, transport])
+
+  // Permanently clear open state on withdrawal (disable, remove, manifest update,
+  // or host switch) so re-enabling a plugin never auto-reopens an old modal.
+  if (activeSurface !== null && !resolvedActiveSurface) {
+    setActiveSurface(null)
+  }
 
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true)
@@ -132,117 +166,215 @@ export function HostPluginSettings() {
         </p>
       ) : (
         <ul className="divide-y border-y">
-          {data.map(({ manifest, enabled, source }) => (
-            <li key={manifest.id} className="flex items-center gap-3 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="break-words text-sm font-medium">
-                  {manifest.name}
-                </div>
-                <div className="break-all text-xs text-muted-foreground">
-                  {manifest.id} · {manifest.version}
-                </div>
-                {source && (
-                  <div
-                    className="break-all text-xs text-muted-foreground"
-                    title={sourceText(source)}
-                  >
-                    {sourceText(source)}
+          {data.map((plugin) => {
+            const { manifest, enabled, source } = plugin
+            const detailSurface = resolvePluginHostSurface(
+              plugin,
+              "pluginDetail"
+            )
+            const activationSurface = resolvePluginHostSurface(
+              plugin,
+              "activationPanel"
+            )
+            const settingsSurface = resolvePluginHostSurface(
+              plugin,
+              "settingsPanel"
+            )
+            return (
+              <li key={manifest.id} className="flex items-center gap-3 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="break-words text-sm font-medium">
+                    {manifest.name}
                   </div>
+                  <div className="break-all text-xs text-muted-foreground">
+                    {manifest.id} · {manifest.version}
+                  </div>
+                  {source && (
+                    <div
+                      className="break-all text-xs text-muted-foreground"
+                      title={sourceText(source)}
+                    >
+                      {sourceText(source)}
+                    </div>
+                  )}
+                </div>
+                {detailSurface && (
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    title={detailSurface.title}
+                    aria-label={detailSurface.title}
+                    onClick={() =>
+                      setActiveSurface({
+                        pluginId: manifest.id,
+                        type: "pluginDetail",
+                        panelId: detailSurface.id,
+                        transport,
+                      })
+                    }
+                  >
+                    <Info />
+                  </Button>
                 )}
-              </div>
-              {enabled && manifest.contributes.settingsPanel && (
-                <PluginSettingsPanel
-                  pluginId={manifest.id}
-                  title={manifest.contributes.settingsPanel.title}
-                  panelId={manifest.contributes.settingsPanel.id}
+                {activationSurface && (
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    title={activationSurface.title}
+                    aria-label={activationSurface.title}
+                    onClick={() =>
+                      setActiveSurface({
+                        pluginId: manifest.id,
+                        type: "activationPanel",
+                        panelId: activationSurface.id,
+                        transport,
+                      })
+                    }
+                  >
+                    <Sparkles />
+                  </Button>
+                )}
+                {settingsSurface && (
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    title={settingsSurface.title}
+                    aria-label={settingsSurface.title}
+                    onClick={() =>
+                      setActiveSurface({
+                        pluginId: manifest.id,
+                        type: "settingsPanel",
+                        panelId: settingsSurface.id,
+                        transport,
+                      })
+                    }
+                  >
+                    <Settings2 />
+                  </Button>
+                )}
+                {source && (
+                  <Button
+                    size="icon-sm"
+                    variant="ghost"
+                    className="text-muted-foreground"
+                    title={t("update", { name: manifest.name })}
+                    aria-label={t("update", { name: manifest.name })}
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        const { updated, version, disabledForUpdate } =
+                          await updateHostPlugin(manifest.id)
+                        setNotice(
+                          disabledForUpdate
+                            ? t("updatedServerDisabled", {
+                                name: manifest.name,
+                                version,
+                              })
+                            : t(updated ? "updated" : "upToDate", {
+                                name: manifest.name,
+                                version,
+                              })
+                        )
+                      })
+                    }
+                  >
+                    <RefreshCw />
+                  </Button>
+                )}
+                <Switch
+                  aria-label={t("enable", { name: manifest.name })}
+                  checked={enabled}
+                  disabled={busy}
+                  onCheckedChange={(next) =>
+                    void apply(() => ({
+                      type: "setEnabled",
+                      id: manifest.id,
+                      enabled: next,
+                    }))
+                  }
                 />
-              )}
-              {source && (
                 <Button
                   size="icon-sm"
                   variant="ghost"
-                  className="text-muted-foreground"
-                  title={t("update", { name: manifest.name })}
-                  aria-label={t("update", { name: manifest.name })}
+                  className="text-muted-foreground hover:text-destructive"
+                  title={t("remove", { name: manifest.name })}
+                  aria-label={t("remove", { name: manifest.name })}
                   disabled={busy}
                   onClick={() =>
-                    void run(async () => {
-                      const { updated, version, disabledForUpdate } =
-                        await updateHostPlugin(manifest.id)
-                      setNotice(
-                        disabledForUpdate
-                          ? t("updatedServerDisabled", {
-                              name: manifest.name,
-                              version,
-                            })
-                          : t(updated ? "updated" : "upToDate", {
-                              name: manifest.name,
-                              version,
-                            })
-                      )
-                    })
+                    void apply(() => ({ type: "remove", id: manifest.id }))
                   }
                 >
-                  <RefreshCw />
+                  <Trash2 />
                 </Button>
-              )}
-              <Switch
-                aria-label={t("enable", { name: manifest.name })}
-                checked={enabled}
-                disabled={busy}
-                onCheckedChange={(next) =>
-                  void apply(() => ({
-                    type: "setEnabled",
-                    id: manifest.id,
-                    enabled: next,
-                  }))
-                }
-              />
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                className="text-muted-foreground hover:text-destructive"
-                title={t("remove", { name: manifest.name })}
-                aria-label={t("remove", { name: manifest.name })}
-                disabled={busy}
-                onClick={() =>
-                  void apply(() => ({ type: "remove", id: manifest.id }))
-                }
-              >
-                <Trash2 />
-              </Button>
-            </li>
-          ))}
+              </li>
+            )
+          })}
         </ul>
+      )}
+      {resolvedActiveSurface && (
+        <PluginSettingsSurfaceDialog
+          plugin={resolvedActiveSurface.plugin}
+          type={resolvedActiveSurface.type}
+          panel={resolvedActiveSurface.panel}
+          onClose={() => setActiveSurface(null)}
+        />
       )}
     </div>
   )
 }
 
-function PluginSettingsPanel({
-  pluginId,
-  title,
-  panelId,
+function PluginSettingsSurfaceDialog({
+  plugin,
+  type,
+  panel,
+  onClose,
 }: {
-  pluginId: string
-  title: string
-  panelId: string
+  plugin: InstalledPlugin
+  type: PluginSettingsSurfaceType
+  panel: { id: string; title: string }
+  onClose: () => void
 }) {
+  const t = useTranslations("HostPlugins")
+  const { manifest, source } = plugin
   return (
-    <Dialog>
-      <DialogTrigger asChild>
-        <Button size="icon-sm" variant="ghost" title={title} aria-label={title}>
-          <Settings2 />
-        </Button>
-      </DialogTrigger>
-      <DialogContent aria-describedby={undefined}>
+    <Dialog
+      open
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) onClose()
+      }}
+    >
+      <DialogContent
+        {...(type === "settingsPanel"
+          ? { "aria-describedby": undefined }
+          : undefined)}
+      >
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle>{panel.title}</DialogTitle>
+          {type !== "settingsPanel" && (
+            <DialogDescription>
+              {manifest.name} ·{" "}
+              {t(type === "pluginDetail" ? "pluginDetail" : "activationPanel")}
+            </DialogDescription>
+          )}
         </DialogHeader>
+        {type === "pluginDetail" && (
+          <div className="grid gap-1 rounded-lg border p-3 text-xs text-muted-foreground">
+            <p className="break-all">
+              {manifest.id} · {manifest.version}
+            </p>
+            {source && <p className="break-all">{sourceText(source)}</p>}
+            {manifest.client && (
+              <p className="break-all">
+                {t("clientEntry", { entry: manifest.client.entry })}
+              </p>
+            )}
+          </div>
+        )}
         <HostPluginSurface
-          pluginId={pluginId}
-          title={title}
-          context={{ type: "settingsPanel", id: panelId }}
+          key={`${manifest.id}:${type}:${panel.id}`}
+          pluginId={manifest.id}
+          title={panel.title}
+          context={{ type, id: panel.id }}
         />
       </DialogContent>
     </Dialog>

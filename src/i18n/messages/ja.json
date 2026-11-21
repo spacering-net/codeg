@@ -107,7 +107,9 @@
     "choosePanel": "プラグインパネル",
     "noTurns": "このワークスペースにターンの記録はありません。",
     "pluginSurfaces": "プラグインアクション",
-    "morePluginSurfaces": "その他のプラグインアクション"
+    "morePluginSurfaces": "その他のプラグインアクション",
+    "pluginDetail": "プラグイン詳細",
+    "activationPanel": "有効化ガイド"
   },
   "AppearanceSettings": {
     "sectionTitle": "テーマ外観",

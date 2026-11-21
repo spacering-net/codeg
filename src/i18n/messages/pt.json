@@ -107,7 +107,9 @@
     "choosePanel": "Painel do plugin",
     "noTurns": "Nenhum turno registrado neste espaço de trabalho.",
     "pluginSurfaces": "Ações de plugins",
-    "morePluginSurfaces": "Mais ações de plugins"
+    "morePluginSurfaces": "Mais ações de plugins",
+    "pluginDetail": "Detalhes do plugin",
+    "activationPanel": "Guia de ativação"
   },
   "AppearanceSettings": {
     "sectionTitle": "Aparência do tema",

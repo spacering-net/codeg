@@ -107,7 +107,9 @@
     "choosePanel": "Panel del complemento",
     "noTurns": "No hay turnos registrados en este espacio de trabajo.",
     "pluginSurfaces": "Acciones de complementos",
-    "morePluginSurfaces": "Más acciones de complementos"
+    "morePluginSurfaces": "Más acciones de complementos",
+    "pluginDetail": "Detalles del complemento",
+    "activationPanel": "Guía de activación"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apariencia del tema",

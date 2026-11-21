@@ -107,7 +107,9 @@
     "choosePanel": "Panneau de l’extension",
     "noTurns": "Aucun tour enregistré dans cet espace de travail.",
     "pluginSurfaces": "Actions des extensions",
-    "morePluginSurfaces": "Autres actions des extensions"
+    "morePluginSurfaces": "Autres actions des extensions",
+    "pluginDetail": "Détails de l’extension",
+    "activationPanel": "Guide d’activation"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",
