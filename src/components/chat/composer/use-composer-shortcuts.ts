@@ -9,11 +9,9 @@ import {
   type RefObject,
 } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { toast } from "sonner"
 
-import { openSettingsWindow, quickMessagesList } from "@/lib/api"
-import type { SettingsSection } from "@/lib/api"
-import { getAgentLabel } from "@/lib/custom-agents"
+import { useSkillNotEnabledToast } from "@/components/chat/use-skill-not-enabled-toast"
+import { quickMessagesList } from "@/lib/api"
 import { getExpertIcon, pickLocalized } from "@/lib/expert-presentation"
 import { getScienceIcon } from "@/lib/science-presentation"
 import { OFFICE_ACTIONS, type OfficeAction } from "@/lib/office-actions"
@@ -181,26 +179,9 @@ export function useComposerShortcuts({
     [agentType, skillStatusReady, enabledIds]
   )
 
-  const notifySkillNotEnabled = useCallback(
-    (skillLabel: string, section: SettingsSection) => {
-      const agentLabel = agentType ? getAgentLabel(agentType) : ""
-      toast.warning(
-        tQa("notEnabled.title", { skill: skillLabel, agent: agentLabel }),
-        {
-          description: tQa("notEnabled.description"),
-          action: {
-            label: tQa("notEnabled.action"),
-            onClick: () => {
-              void openSettingsWindow(section).catch((err) =>
-                console.error(`[${logLabel}] failed to open settings:`, err)
-              )
-            },
-          },
-        }
-      )
-    },
-    [agentType, logLabel, tQa]
-  )
+  // A locked skill opens its pack on the Harness page — the same warning the
+  // welcome page's quick actions give.
+  const notifySkillNotEnabled = useSkillNotEnabledToast(agentType ?? null)
 
   // Insert a skill shortcut: seed the template only into an *empty* composer
   // (never clobber an in-progress draft), then prepend the skill as the leading
@@ -278,7 +259,7 @@ export function useComposerShortcuts({
     (action: OfficeAction) => {
       const label = officeLabel(action)
       if (isSkillLocked(action.skillId)) {
-        notifySkillNotEnabled(label, "office-tools")
+        notifySkillNotEnabled(label, "office")
         return
       }
       insertSkillShortcut(

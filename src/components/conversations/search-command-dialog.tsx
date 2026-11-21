@@ -140,9 +140,12 @@ export function SearchCommandDialog({
     }
   }, [query, agentFilter, doSearch, activeTab])
 
-  // Reset state when dialog closes
+  // Reset state when dialog closes. Kept in an effect because it also resets
+  // the shared file-tree hook (`resetFileTree`), which is not this component's
+  // own state and so cannot be adjusted during render.
   useEffect(() => {
     if (!open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on close alongside the file-tree hook reset
       setQuery("")
       setAgentFilter(null)
       setResults([])

@@ -38,6 +38,27 @@ pub fn build_router_with_proxy_auth(
     static_dir: std::path::PathBuf,
     shutdown_signal: Arc<ShutdownSignal>,
 ) -> Router {
+    build_router_with_srn(
+        state,
+        token,
+        proxy_auth,
+        static_dir,
+        shutdown_signal,
+        crate::srn::web::installed(),
+    )
+}
+
+/// [`build_router_with_proxy_auth`] with Codeg Web's SRN sign-in given
+/// rather than the one this process set up (`srn::web::installed`); `None`
+/// answers "not enabled".
+pub fn build_router_with_srn(
+    state: Arc<AppState>,
+    token: String,
+    proxy_auth: Option<Arc<super::proxy_auth::ProxyJwtAuth>>,
+    static_dir: std::path::PathBuf,
+    shutdown_signal: Arc<ShutdownSignal>,
+    srn_web: Option<Arc<crate::srn::web::SrnWeb>>,
+) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -48,6 +69,7 @@ pub fn build_router_with_proxy_auth(
         proxy: proxy_auth,
     };
     let web_auth_for_ws = web_auth.clone();
+    let web_auth_for_srn = web_auth.clone();
     let token_for_cli_hello = token.clone();
 
     let api = Router::new()
@@ -1126,6 +1148,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::config_sync::config_sync_apply_rollback),
         )
         .route(
+            "/config_sync_mirror_appearance",
+            post(handlers::config_sync::config_sync_mirror_appearance),
+        )
+        .route(
             "/download_workspace_file",
             post(handlers::workspace_files::download_workspace_file),
         )
@@ -1185,6 +1211,86 @@ pub fn build_router_with_proxy_auth(
             post(handlers::mcp::mcp_set_server_apps),
         )
         .route("/mcp_remove_server", post(handlers::mcp::mcp_remove_server))
+        // The MCP engine behind the Harness page. The eight routes above
+        // stay one release longer, for older clients of this server.
+        .route("/mcp_inventory", post(handlers::mcp::mcp_inventory))
+        .route("/mcp_apply", post(handlers::mcp::mcp_apply))
+        .route(
+            "/mcp_parse_snippet",
+            post(handlers::mcp::mcp_parse_snippet),
+        )
+        // ─── Harness catalog (Discover) and the SpaceRing image proxy ───
+        .route("/harness_status", post(handlers::harness::harness_status))
+        .route("/harness_config", post(handlers::harness::harness_config))
+        .route("/harness_list", post(handlers::harness::harness_list))
+        .route("/harness_item", post(handlers::harness::harness_item))
+        .route(
+            "/harness_versions",
+            post(handlers::harness::harness_versions),
+        )
+        .route("/harness_readme", post(handlers::harness::harness_readme))
+        .route("/harness_prompt", post(handlers::harness::harness_prompt))
+        .route("/harness_blob", post(handlers::harness::harness_blob))
+        .route("/srn_asset", post(handlers::harness::srn_asset))
+        // ─── Harness MCP installs and the record of what was installed ───
+        .route(
+            "/harness_mcp_plan",
+            post(handlers::harness_mcp::harness_mcp_plan),
+        )
+        .route(
+            "/harness_mcp_install",
+            post(handlers::harness_mcp::harness_mcp_install),
+        )
+        .route(
+            "/harness_installed",
+            post(handlers::harness_mcp::harness_installed),
+        )
+        .route(
+            "/harness_mcp_uninstall",
+            post(handlers::harness_mcp::harness_mcp_uninstall),
+        )
+        // ─── Harness skill installs ───
+        .route(
+            "/harness_skill_plan",
+            post(handlers::harness_skills::harness_skill_plan),
+        )
+        .route(
+            "/harness_skill_install",
+            post(handlers::harness_skills::harness_skill_install),
+        )
+        .route(
+            "/harness_skill_uninstall",
+            post(handlers::harness_skills::harness_skill_uninstall),
+        )
+        // ─── The update check of what was installed from Harness ───
+        .route(
+            "/harness_updates",
+            post(handlers::harness_updates::harness_updates),
+        )
+        .route(
+            "/harness_check_updates",
+            post(handlers::harness_updates::harness_check_updates),
+        )
+        // ─── Skills engine (Harness page: skills and skill packs) ───
+        .route("/skills_inventory", post(handlers::skills::skills_inventory))
+        .route(
+            "/skills_apply_links",
+            post(handlers::skills::skills_apply_links),
+        )
+        .route("/skills_adopt", post(handlers::skills::skills_adopt))
+        .route(
+            "/skills_repair_link",
+            post(handlers::skills::skills_repair_link),
+        )
+        .route("/skills_backups", post(handlers::skills::skills_backups))
+        .route(
+            "/skills_backup_restore",
+            post(handlers::skills::skills_backup_restore),
+        )
+        .route(
+            "/skills_backup_delete",
+            post(handlers::skills::skills_backup_delete),
+        )
         // ─── Version control settings ───
         .route("/detect_git", post(handlers::version_control::detect_git))
         .route(
@@ -1410,6 +1516,14 @@ pub fn build_router_with_proxy_auth(
             post(handlers::acp::acp_update_deepseek_model_catalog),
         )
         .route(
+            "/acp_load_deepseek_provider_routes",
+            post(handlers::acp::acp_load_deepseek_provider_routes),
+        )
+        .route(
+            "/acp_update_deepseek_provider_routes",
+            post(handlers::acp::acp_update_deepseek_provider_routes),
+        )
+        .route(
             "/acp_validate_pi_command",
             post(handlers::acp::acp_validate_pi_command),
         )
@@ -1600,24 +1714,12 @@ pub fn build_router_with_proxy_auth(
         // ─── Experts ───
         .route("/experts_list", post(handlers::experts::experts_list))
         .route(
-            "/experts_get_install_status",
-            post(handlers::experts::experts_get_install_status),
-        )
-        .route(
             "/experts_list_all_install_statuses",
             post(handlers::experts::experts_list_all_install_statuses),
         )
         .route(
-            "/experts_link_to_agent",
-            post(handlers::experts::experts_link_to_agent),
-        )
-        .route(
             "/experts_apply_links",
             post(handlers::experts::experts_apply_links),
-        )
-        .route(
-            "/experts_unlink_from_agent",
-            post(handlers::experts::experts_unlink_from_agent),
         )
         .route(
             "/experts_read_content",
@@ -1647,32 +1749,16 @@ pub fn build_router_with_proxy_auth(
         // ─── Science ───
         .route("/science_list", post(handlers::science::science_list))
         .route(
-            "/science_get_install_status",
-            post(handlers::science::science_get_install_status),
-        )
-        .route(
             "/science_list_all_install_statuses",
             post(handlers::science::science_list_all_install_statuses),
-        )
-        .route(
-            "/science_link_to_agent",
-            post(handlers::science::science_link_to_agent),
         )
         .route(
             "/science_apply_links",
             post(handlers::science::science_apply_links),
         )
         .route(
-            "/science_unlink_from_agent",
-            post(handlers::science::science_unlink_from_agent),
-        )
-        .route(
             "/science_read_content",
             post(handlers::science::science_read_content),
-        )
-        .route(
-            "/science_open_central_dir",
-            post(handlers::science::science_open_central_dir),
         )
         // ─── Custom skills ───
         .route("/custom_list", post(handlers::custom_skills::custom_list))
@@ -1745,18 +1831,6 @@ pub fn build_router_with_proxy_auth(
         .route(
             "/officecli_sync_skills",
             post(handlers::office_tools::officecli_sync_skills),
-        )
-        .route(
-            "/officecli_skill_link_to_agent",
-            post(handlers::office_tools::officecli_skill_link_to_agent),
-        )
-        .route(
-            "/officecli_skill_unlink_from_agent",
-            post(handlers::office_tools::officecli_skill_unlink_from_agent),
-        )
-        .route(
-            "/officecli_skill_get_install_status",
-            post(handlers::office_tools::officecli_skill_get_install_status),
         )
         .route(
             "/officecli_skill_list_all_install_statuses",
@@ -2206,6 +2280,10 @@ pub fn build_router_with_proxy_auth(
             post(handlers::work_task::work_task_merge_unqueue),
         )
         .route(
+            "/work_task_stop_background_wait",
+            post(handlers::work_task::work_task_stop_background_wait),
+        )
+        .route(
             "/work_task_complete",
             post(handlers::work_task::work_task_complete),
         )
@@ -2509,12 +2587,19 @@ pub fn build_router_with_proxy_auth(
         }
     });
 
+    // Codeg Web's SRN sign-in (`srn::web::routes`): its own instance-access
+    // check on three routes, none on the callback. Merged after the layers
+    // above so the wildcard CORS (meant for Bearer clients) does not cover
+    // it, and matched ahead of the static pages and the API's catch-all.
+    let srn_routes = crate::srn::web::routes::router(srn_web, web_auth_for_srn);
+
     Router::new()
         .nest("/api", api)
         .merge(ws_route)
         .fallback_service(static_files)
         .layer(html_rewrite)
         .layer(cors)
+        .merge(srn_routes)
         .layer(Extension(state))
         .layer(Extension(shutdown_signal))
         // Compress API JSON and static text assets. Allowlist predicate —

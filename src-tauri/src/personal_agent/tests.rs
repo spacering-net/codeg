@@ -18786,12 +18786,13 @@ async fn a_skill_approved_mid_turn_is_the_committed_draft_and_loads_once_the_tur
             workdir::skill_installed(&dir, AgentType::ClaudeCode, "release"),
             "dropped: {dropped}"
         );
-        let installed = crate::commands::acp::preferred_scope_skill_dir(
+        let installed = crate::commands::acp::scoped_skill_dirs(
             AgentType::ClaudeCode,
             crate::acp::types::AgentSkillScope::Project,
             Some(&dir.to_string_lossy()),
         )
         .unwrap()
+        .remove(0)
         .join("release")
         .join("SKILL.md");
         assert_eq!(std::fs::read_to_string(installed).unwrap(), v2, "dropped: {dropped}");

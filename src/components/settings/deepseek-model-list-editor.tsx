@@ -233,6 +233,42 @@ export function rowsForPicks(
   return [...picked, ...rows.filter((row) => !row.id.trim())]
 }
 
+/** The first deepseek-acp release that no longer reads the catalog this
+ *  editor writes. */
+const DEEPSEEK_BUILT_IN_CATALOG_SINCE: readonly [number, number, number] = [
+  0, 10, 0,
+]
+
+/**
+ * Whether the deepseek-acp `version` still takes its model list from
+ * `llm-deepseek.models` in `$DSH_HOME/settings.yaml`, i.e. whether
+ * {@link DeepSeekModelListEditor} has any effect on it.
+ *
+ * Through 0.9.0 the bridge mounted the harness's file-backed settings
+ * provider, so that section overrode the catalog it launches with. 0.10.0
+ * (DSH 0.2) drops that provider: the official route takes the catalog built
+ * into the bridge, and the bridge's own document
+ * (`$DSH_HOME/deepseek-acp/settings.yaml`) holds only `llm-pi-ai` routes. A
+ * list saved here is then still written but never read.
+ *
+ * Only a version that parses as below 0.10.0 counts. Anything else, a missing
+ * or unparseable one included, is treated as the pinned release, which is
+ * later than that.
+ */
+export function deepseekReadsHarnessCatalog(
+  version: string | null | undefined
+): boolean {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version?.trim() ?? "")
+  if (!match) return false
+  const parts = [match[1], match[2], match[3]].map(Number)
+  for (let i = 0; i < 3; i++) {
+    if (parts[i] !== DEEPSEEK_BUILT_IN_CATALOG_SINCE[i]) {
+      return parts[i] < DEEPSEEK_BUILT_IN_CATALOG_SINCE[i]
+    }
+  }
+  return false
+}
+
 /**
  * Editor for the DeepSeek Harness **deployment** model catalog:
  * `llm-deepseek.models` in `$DSH_HOME/settings.yaml`, which the agent's
@@ -244,6 +280,10 @@ export function rowsForPicks(
  * FROM, which is otherwise a hand-edited YAML file: a gateway serving different
  * model ids, an internal deployment, or a dated preview build all need an entry
  * here before they can be picked at all.
+ *
+ * Only deepseek-acp 0.9.0 and earlier read that section; for later releases
+ * the settings page offers the provider-route editor instead, because the
+ * built-in catalog itself cannot be changed there.
  */
 export function DeepSeekModelListEditor({
   launchModel,
@@ -287,8 +327,8 @@ export function DeepSeekModelListEditor({
   }, [])
 
   useEffect(() => {
+    // `loading` starts true, and this mount-only load is its only producer.
     let alive = true
-    setLoading(true)
     void loadDeepSeekModelCatalog()
       .then((next) => {
         if (!alive) return

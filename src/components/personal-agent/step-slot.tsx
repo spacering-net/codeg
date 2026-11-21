@@ -209,6 +209,7 @@ export function StepSlot({
 }) {
   const reduced = useReducedMotion()
   const [shown, setShown] = useState<SlotView | null>(view)
+  // eslint-disable-next-line react-hooks/purity -- when the first view was shown; read only by the pacing effect
   const shownAt = useRef(Date.now())
   const waitingSince = useRef<number | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -237,6 +238,7 @@ export function StepSlot({
       // The same step grew or changed in place.
       clear()
       waitingSince.current = null
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the slot's pacing: what shows follows the step stream on timers
       setShown(view)
       return
     }
@@ -330,6 +332,7 @@ export function StepSlot({
   useEffect(() => {
     mounted.current = true
   }, [])
+  // eslint-disable-next-line react-hooks/refs -- the first paint never animates; mounted flips in an effect after it
   const animate = mounted.current && !reduced
 
   return (

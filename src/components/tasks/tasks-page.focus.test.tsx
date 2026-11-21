@@ -7,6 +7,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
+import { saveTasksTimeFilter } from "@/lib/tasks-board-filter-storage"
 import type { WorkTask } from "@/lib/types"
 import { peekTasksFocus, requestTasksFocus } from "@/lib/workbench-focus"
 
@@ -107,6 +108,7 @@ function mount() {
 
 beforeEach(() => {
   localStorage.clear()
+  saveTasksTimeFilter("all")
   view.tasks = [
     task({ id: 1, folder_id: 1, title: "Fix the login timeout" }),
     task({ id: 2, folder_id: 2, title: "Redesign the landing page" }),

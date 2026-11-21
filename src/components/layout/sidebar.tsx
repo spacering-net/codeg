@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react"
 import {
+  DraftingCompass,
   Crosshair,
   Eye,
   FolderSync,
@@ -30,6 +31,7 @@ import { UserRoundStar } from "@/components/icons/user-round-star"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions } from "@/contexts/tab-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
+import { useHarnessView } from "@/contexts/harness-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { usePrimaryAgent } from "@/contexts/personal-agent-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
@@ -38,6 +40,7 @@ import {
   SidebarConversationList,
   type SidebarConversationListHandle,
 } from "@/components/conversations/sidebar-conversation-list"
+import { HarnessUpdatesBadge } from "@/components/harness/harness-updates-badge"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -125,13 +128,14 @@ const RECENT_HIDDEN: ReadonlySet<SidebarSectionId> = new Set(["recent"])
 
 // Icon per optional nav row. The visibility checkboxes in the view-options menu
 // carry the same glyph as the row they switch, so that group reads as a mirror
-// of the nav block rather than three bare labels.
+// of the nav block rather than a column of bare labels.
 const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
   personalAgent: UserRoundStar,
   automations: Zap,
   tasks: ListTodo,
   forge: LayoutTemplate,
   canvas: MapIcon,
+  harness: DraftingCompass,
 }
 
 /** The personal agent's avatar on its row, in px at 100% zoom: larger than
@@ -248,6 +252,7 @@ export function Sidebar() {
       personalAgentState?.status.unseen ?? 0,
       personalAgentNeedsOwner
     )
+  const { updatesCount: harnessUpdates } = useHarnessView()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
@@ -664,7 +669,7 @@ export function Sidebar() {
             "Navigation items" group — for a workspace that never uses one of
             them, this block is pure noise above the list. The routes stay
             reachable from the status bar's quick-actions menu either way.
-            All three close the mobile Drawer on the way out, like tapping a
+            They all close the mobile Drawer on the way out, like tapping a
             conversation card (handled by the list wrapper below) — otherwise the
             page they just opened stays hidden behind the sidebar. */}
         {isNavItemVisible(navItems, "personalAgent") && (
@@ -772,6 +777,29 @@ export function Sidebar() {
               }
               setRoute("canvas")
             }}
+          />
+        )}
+        {isNavItemVisible(navItems, "harness") && (
+          <SidebarNavButton
+            icon={DraftingCompass}
+            label={t("harness")}
+            active={routeId === "harness"}
+            onClick={() => {
+              if (isMobile) toggle()
+              // Opens on the section the page was last on: which one that is
+              // lives in HarnessViewProvider, not in the route.
+              setRoute("harness")
+            }}
+            trailing={
+              harnessUpdates > 0 ? (
+                // Updates waiting (not a failure): the To-dos chip's primary
+                // tint.
+                <HarnessUpdatesBadge
+                  count={harnessUpdates}
+                  className="ml-auto"
+                />
+              ) : null
+            }
           />
         )}
       </div>

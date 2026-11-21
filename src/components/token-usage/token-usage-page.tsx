@@ -77,6 +77,7 @@ import {
   peakPoint,
   resolveRange,
   shareCardFilename,
+  isSubDayPreset,
   suggestBucket,
   type TokenUsageRangePreset,
 } from "@/lib/token-usage"
@@ -150,9 +151,10 @@ function canCopyImages(): boolean {
 const BREAKDOWN_LIMIT = 7
 
 const RANGE_LABEL_KEYS = {
+  today: "rangeToday",
+  "24h": "range24h",
   "7d": "range7d",
   "30d": "range30d",
-  "90d": "range90d",
   thisMonth: "rangeThisMonth",
   thisYear: "rangeThisYear",
   all: "rangeAll",
@@ -161,10 +163,11 @@ const RANGE_LABEL_KEYS = {
 
 /** The one-click segments; everything else folds into the "more" pill so the
  *  toolbar keeps to one calm row. */
-const HOT_RANGE_PRESETS = ["7d", "30d", "90d"] as const
+const HOT_RANGE_PRESETS = ["today", "24h", "7d", "30d"] as const
 const MORE_RANGE_PRESETS = ["thisMonth", "thisYear", "all", "custom"] as const
 
 const BUCKET_LABEL_KEYS = {
+  hour: "bucketHour",
   day: "bucketDay",
   week: "bucketWeek",
   month: "bucketMonth",
@@ -174,6 +177,7 @@ const BUCKET_LABEL_KEYS = {
  *  labels above — zh renders those as 按天/按周/按月, which is ungrammatical
  *  mid-sentence. */
 const BUCKET_UNIT_KEYS = {
+  hour: "bucketUnitHour",
   day: "bucketUnitDay",
   week: "bucketUnitWeek",
   month: "bucketUnitMonth",
@@ -330,7 +334,7 @@ export function TokenUsagePage() {
   const locale = useLocale()
   const { agents: registeredAgents } = useAcpAgents()
 
-  const [preset, setPreset] = useState<TokenUsageRangePreset>("30d")
+  const [preset, setPreset] = useState<TokenUsageRangePreset>("24h")
   const [custom, setCustom] = useState({ from: "", to: "" })
   const [bucket, setBucket] = useState<TokenUsageBucket>("day")
   const [bucketTouched, setBucketTouched] = useState(false)
@@ -378,10 +382,13 @@ export function TokenUsagePage() {
     previewRoRef.current = ro
   }, [])
   const reqRef = useRef(0)
-  // Frozen at mount so range presets stay anchored to when the page was
-  // opened; reading the clock during render is impure. Same idiom as the
-  // Automations page.
-  const [now] = useState(() => new Date())
+  // The clock the range presets resolve against. Held in state because
+  // reading the clock during render is impure; re-read on a preset switch and
+  // on every refresh (sync, import), so a page left open doesn't keep showing
+  // a stale "last 24 hours" — or yesterday as "today" — after new usage lands.
+  const [now, setNow] = useState(() => new Date())
+  // Bumped to refetch under unchanged filters — see `refresh`.
+  const [refreshTick, setRefreshTick] = useState(0)
 
   const range = useMemo(
     () =>
@@ -392,6 +399,14 @@ export function TokenUsagePage() {
     [preset, now, custom]
   )
 
+  // The fetch keys on the resolved bounds rather than on `now`, so re-reading
+  // the clock only refetches when it actually moves the window (the hour
+  // rolled for "last 24 hours", the day for the day presets) — a refresh of a
+  // clock-independent range like "all" doesn't fire a second request.
+  const rangeStart = range.start
+  const rangeEnd = range.end
+  const tzOffsetMinutes = localTzOffsetMinutes(now)
+
   // The bucket follows the range's suggested default until the user picks one;
   // switching presets re-arms the suggestion (see changePreset). Derived, so
   // there is no effect racing the fetch.
@@ -400,6 +415,7 @@ export function TokenUsagePage() {
   // A preset switch re-applies that preset's natural granularity — a manual
   // bucket choice only sticks within the range it was made for.
   const changePreset = useCallback((next: TokenUsageRangePreset) => {
+    setNow(new Date())
     setPreset(next)
     setBucketTouched(false)
   }, [])
@@ -417,13 +433,13 @@ export function TokenUsagePage() {
     try {
       const [next, nextFacets, nextStatus] = await Promise.all([
         tokenUsageReport({
-          start: range.start,
-          end: range.end,
+          start: rangeStart,
+          end: rangeEnd,
           folderIds: folderIds.length ? folderIds.map(Number) : null,
           agentTypes: agentTypes.length ? agentTypes : null,
           models: models.length ? models : null,
           bucket: effectiveBucket,
-          tzOffsetMinutes: localTzOffsetMinutes(now),
+          tzOffsetMinutes,
           comparePrevious: true,
         }),
         tokenUsageFacets(),
@@ -441,11 +457,32 @@ export function TokenUsagePage() {
     } finally {
       if (id === reqRef.current) setLoading(false)
     }
-  }, [range, folderIds, agentTypes, models, effectiveBucket, now])
+  }, [
+    rangeStart,
+    rangeEnd,
+    folderIds,
+    agentTypes,
+    models,
+    effectiveBucket,
+    tzOffsetMinutes,
+  ])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- report fetch; load() clears the error flag before awaiting
     void load()
-  }, [load])
+  }, [load, refreshTick])
+
+  // Re-read the clock and refetch. Routed through state rather than calling
+  // `load()` directly: a captured `load` still carries the window the old
+  // clock resolved to, and — being the newest request — its answer would
+  // overwrite the fresh one (e.g. a sync that finishes just past the hour
+  // pulling "last 24 hours" back an hour). Going through the effect, the fetch
+  // always runs with the latest filters and the newly resolved window; calls
+  // landing together batch into one render.
+  const refresh = useCallback(() => {
+    setNow(new Date())
+    setRefreshTick((n) => n + 1)
+  }, [])
 
   // Independent of the usage report: the same 24h models.dev catalog the
   // OpenCode settings page already loads. Failures stay quiet and hide the
@@ -464,14 +501,6 @@ export function TokenUsagePage() {
     }
   }, [])
 
-  // Latest-ref so the event subscription below is set up once, not torn down
-  // and re-established on every filter change (`load`'s identity tracks the
-  // filters). Same idiom as tasks-view-context.
-  const loadRef = useRef(load)
-  useEffect(() => {
-    loadRef.current = load
-  }, [load])
-
   // Progress ticks are broadcast, so a sync started from another window (or
   // the web client) drives this progress bar too.
   useEffect(() => {
@@ -481,7 +510,7 @@ export function TokenUsagePage() {
       setProgress(payload.result ? null : payload)
       if (payload.result) {
         setSyncing(false)
-        void loadRef.current()
+        refresh()
       }
     }).then((u) => {
       if (cancelled) u()
@@ -491,7 +520,7 @@ export function TokenUsagePage() {
       cancelled = true
       unsub?.()
     }
-  }, [])
+  }, [refresh])
 
   // An import is the main way new sessions appear while this page is open, and
   // it drops the usage stamp of everything it touched. Refetch so the stale
@@ -500,7 +529,7 @@ export function TokenUsagePage() {
     let unsub: (() => void) | undefined
     let cancelled = false
     void subscribe(CONVERSATIONS_BULK_CHANGED_EVENT, () => {
-      void loadRef.current()
+      refresh()
     }).then((u) => {
       if (cancelled) u()
       else unsub = u
@@ -509,7 +538,7 @@ export function TokenUsagePage() {
       cancelled = true
       unsub?.()
     }
-  }, [])
+  }, [refresh])
 
   const runSync = useCallback(
     async (mode: "incremental" | "full", opts?: { silent?: boolean }) => {
@@ -528,10 +557,10 @@ export function TokenUsagePage() {
       } finally {
         setSyncing(false)
         setProgress(null)
-        await load()
+        refresh()
       }
     },
-    [load, t]
+    [refresh, t]
   )
 
   // Catch the facts up once per page mount when they are behind the
@@ -546,6 +575,7 @@ export function TokenUsagePage() {
     if (autoSyncedRef.current || !status) return
     autoSyncedRef.current = true
     if (status.running || status.stale_conversations === 0) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot backend sync; runSync flips the syncing flag before awaiting
     void runSync("incremental", { silent: true })
   }, [status, runSync])
 
@@ -630,7 +660,25 @@ export function TokenUsagePage() {
   const weekdayLabels = WEEKDAY_KEYS.map((k) => t(k))
 
   const formatBucketLabel = useCallback(
-    (bucketKey: string) => {
+    (bucketKey: string, withDate = false) => {
+      // Hour buckets carry `YYYY-MM-DDTHH` (local). The bare clock time is
+      // enough on the axis; `withDate` adds the day for places that name one
+      // bucket on its own (tooltip, peak), where a rolling 24 hours would
+      // otherwise leave "14:00" ambiguous between yesterday and today.
+      if (bucketKey.length === 13) {
+        const [y, m, d] = bucketKey.slice(0, 10).split("-")
+        const at = new Date(
+          Number(y),
+          Number(m) - 1,
+          Number(d),
+          Number(bucketKey.slice(11))
+        )
+        return at.toLocaleString(locale, {
+          ...(withDate ? { month: "short", day: "numeric" } : {}),
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      }
       // Month buckets carry `YYYY-MM`; day and week buckets carry the first
       // local day of the bucket.
       if (bucketKey.length === 7) {
@@ -654,19 +702,23 @@ export function TokenUsagePage() {
 
   const trendData = useMemo(() => {
     const isDay = report?.bucket === "day"
+    const isHour = report?.bucket === "hour"
     return (report?.series ?? []).map((p) => {
       const [y, m, d] = p.bucket_key.split("-")
       return {
         key: p.bucket_key,
         label: formatBucketLabel(p.bucket_key),
         // Day buckets carry their weekday in the tooltip — too long for the
-        // axis endpoints, exactly right when inspecting one bar.
+        // axis endpoints, exactly right when inspecting one bar. Hour buckets
+        // carry their day for the same reason.
         tooltipLabel: isDay
           ? new Date(Number(y), Number(m) - 1, Number(d)).toLocaleDateString(
               locale,
               { month: "short", day: "numeric", weekday: "short" }
             )
-          : undefined,
+          : isHour
+            ? formatBucketLabel(p.bucket_key, true)
+            : undefined,
         cache: p.cache_read_tokens,
         fresh: Math.max(0, p.total_tokens - p.cache_read_tokens),
         detail: [
@@ -1339,20 +1391,25 @@ export function TokenUsagePage() {
                                 {t("freshTokens")}
                               </span>
                             </div>
-                            <SegmentedFilter
-                              ariaLabel={t("bucketLabel")}
-                              value={effectiveBucket}
-                              onChange={(v) => {
-                                setBucket(v)
-                                setBucketTouched(true)
-                              }}
-                              options={(["day", "week", "month"] as const).map(
-                                (b) => ({
+                            {/* Sub-day ranges only chart in hours — any wider
+                                bucket draws one or two bars — so there is
+                                nothing to choose. */}
+                            {!isSubDayPreset(preset) && (
+                              <SegmentedFilter
+                                ariaLabel={t("bucketLabel")}
+                                value={effectiveBucket}
+                                onChange={(v) => {
+                                  setBucket(v)
+                                  setBucketTouched(true)
+                                }}
+                                options={(
+                                  ["day", "week", "month"] as const
+                                ).map((b) => ({
                                   value: b,
                                   label: t(BUCKET_LABEL_KEYS[b]),
-                                })
-                              )}
-                            />
+                                }))}
+                              />
+                            )}
                           </div>
                         }
                       >
@@ -1372,7 +1429,7 @@ export function TokenUsagePage() {
                                 })}
                                 {": "}
                                 <span className="font-medium text-foreground">
-                                  {formatBucketLabel(peak.bucket_key)} ·{" "}
+                                  {formatBucketLabel(peak.bucket_key, true)} ·{" "}
                                   {formatTokenCount(peak.total_tokens)}
                                 </span>
                               </span>

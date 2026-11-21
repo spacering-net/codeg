@@ -13,8 +13,10 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from "react"
 import { useTranslations } from "next-intl"
@@ -213,6 +215,11 @@ export interface ToolCallInfo {
    */
   images: ToolCallImage[]
 }
+
+type PermissionToolContext = Pick<
+  ToolCallInfo,
+  "tool_call_id" | "title" | "kind" | "raw_input" | "meta"
+>
 
 export interface PendingPermission {
   request_id: string
@@ -549,7 +556,7 @@ export interface ConnectionState {
    * out-of-turn stand-in. Cleared when the next prompting turn starts.
    * `null` when empty (the common case allocates nothing).
    */
-  outOfTurnToolCalls: ReadonlyMap<string, ToolCallInfo> | null
+  outOfTurnToolCalls: ReadonlyMap<string, PermissionToolContext> | null
   /**
    * Whether a turn has run on this connection: it has been `prompting` at
    * least once, or the snapshot it was hydrated from says one has (it is
@@ -1339,7 +1346,7 @@ function fillStrippedEditInput(
 
 function mergePermissionToolCallWithLiveInfo(
   toolCall: unknown,
-  liveInfo: ToolCallInfo | null
+  liveInfo: PermissionToolContext | null
 ): unknown {
   if (!liveInfo) return toolCall
 
@@ -1405,7 +1412,7 @@ function mergePermissionToolCallWithLiveInfo(
 
 function mergePendingPermissionWithLiveInfo(
   pendingPermission: PendingPermission | null,
-  liveInfo: ToolCallInfo | null
+  liveInfo: PermissionToolContext | null
 ): PendingPermission | null {
   if (!pendingPermission || !liveInfo) return pendingPermission
   const permissionCallId = extractPermissionToolCallId(
@@ -1886,9 +1893,9 @@ const overlayFoldRefetchAt = new Map<number, number>()
 /** Upsert one out-of-turn tool-call info into the bounded registry,
  *  evicting the oldest entry past the cap. Returns a fresh map. */
 function recordOutOfTurnToolCall(
-  existing: ReadonlyMap<string, ToolCallInfo> | null,
-  info: ToolCallInfo
-): ReadonlyMap<string, ToolCallInfo> {
+  existing: ReadonlyMap<string, PermissionToolContext> | null,
+  info: PermissionToolContext
+): ReadonlyMap<string, PermissionToolContext> {
   const next = new Map(existing ?? [])
   next.delete(info.tool_call_id)
   next.set(info.tool_call_id, info)
@@ -2525,17 +2532,12 @@ function connectionsReducer(
       // the garbled-timeline bug), but its context is still recorded so a
       // background permission request can render command/diff details.
       if (conn.status !== "prompting") {
-        const info: ToolCallInfo = {
+        const info: PermissionToolContext = {
           tool_call_id: action.tool_call_id,
           title: action.title,
           kind: action.kind,
-          status: action.status,
-          content: action.content,
           raw_input: action.raw_input,
-          ...replaceLiveToolRawOutput(action.raw_output),
-          locations: action.locations,
           meta,
-          images: action.images ?? [],
         }
         const next = new Map(state)
         next.set(action.contextKey, {
@@ -2639,30 +2641,13 @@ function connectionsReducer(
       // flips back.
       if (conn.status !== "prompting") {
         const existing = conn.outOfTurnToolCalls?.get(action.tool_call_id)
-        const merged: ToolCallInfo = existing
-          ? {
-              ...existing,
-              title: action.title ?? existing.title,
-              status: action.status ?? existing.status,
-              content: action.content ?? existing.content,
-              raw_input: action.raw_input ?? existing.raw_input,
-              locations: action.locations ?? existing.locations,
-              meta: action.meta ?? existing.meta,
-              images: action.images !== null ? action.images : existing.images,
-            }
-          : {
-              tool_call_id: action.tool_call_id,
-              title: action.title ?? action.fallback_title,
-              kind: action.fallback_kind,
-              status: action.status ?? "pending",
-              content: action.content,
-              raw_input: action.raw_input,
-              raw_output_chunks: [],
-              raw_output_total_bytes: 0,
-              locations: action.locations,
-              meta: action.meta,
-              images: action.images ?? [],
-            }
+        const merged: PermissionToolContext = {
+          tool_call_id: action.tool_call_id,
+          title: action.title ?? existing?.title ?? action.fallback_title,
+          kind: existing?.kind ?? action.fallback_kind,
+          raw_input: action.raw_input ?? existing?.raw_input ?? null,
+          meta: action.meta ?? existing?.meta ?? null,
+        }
         const next = new Map(state)
         next.set(action.contextKey, {
           ...conn,
@@ -3899,9 +3884,18 @@ type TurnFailurePart =
   | {
       kind: "verdict"
       title: string
+      /** The agent's own account behind the verdict, as the second line. */
+      description?: string
       evidence?: string
       /** Buttons of the verdict's own, for a failure no typed record explains. */
       actions?: NotifyAction[]
+      /**
+       * The verdict restates the warning the agent raised during the turn
+       * (`turn_failed_empty_hook`, whose message is that warning's text):
+       * it takes over that notice's notification instead of raising a second
+       * one, when this text is the one the notice told.
+       */
+      explainedBy?: string
     }
 
 /** A connect failure's notification key: one per surface. */
@@ -3924,6 +3918,9 @@ interface TurnFailureState {
   }
   /** codeg's verdict; `paired` once a typed account carries it. */
   verdict?: { key: string; evidence?: string; paired: boolean }
+  /** The last warning or error notice of the turn: its notification's key and
+   *  its headline, for a verdict that restates it (see `explainedBy`). */
+  lastNotice?: { key: string; title: string }
 }
 
 // ── Provider ──
@@ -4240,8 +4237,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // Set of refs (not callbacks) so unmount cleanup matches the original
   // registration even when caller-side handler identity changes per render.
   // Populated by the `useAcpEvent` hook; read by the primary `acp://event`
-  // listener and the buffered-events replay loop.
-  const eventSubscribersRef = useRef<Set<EventSubscriberRef>>(new Set())
+  // listener and the buffered-events replay loop. The set is created once as
+  // part of the context value (`eventSubscriberApi`), so the provider can hand
+  // it out without reading the ref during render.
+  const [eventSubscriberApi] = useState<AcpEventSubscriberApi>(() => ({
+    subscribers: new Set(),
+  }))
+  const eventSubscribersRef = useRef<Set<EventSubscriberRef>>(
+    eventSubscriberApi.subscribers
+  )
 
   // ── Notify helpers ──
 
@@ -4861,13 +4865,21 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           })
           return
         }
-        const key = state.verdict?.key ?? newKey()
+        const notice = state.lastNotice
+        const key =
+          state.verdict?.key ??
+          (notice &&
+          part.explainedBy !== undefined &&
+          part.explainedBy.trimStart().startsWith(notice.title)
+            ? notice.key
+            : newKey())
         state.verdict = { key, evidence: part.evidence, paired: false }
         state.keys.add(key)
         notify({
           level: "error",
           key,
           title: part.title,
+          description: part.description,
           evidence: part.evidence,
           actions: part.actions,
         })
@@ -4915,6 +4927,21 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           state.verdict?.key === key ? state.verdict.evidence : undefined,
         actions,
       })
+    },
+    []
+  )
+
+  /** A warning or error notice told during the turn: remembered, so a verdict
+   *  that only restates it takes its notification over (see `explainedBy`). */
+  const noteTurnNotice = useCallback(
+    (connectionId: string, key: string, title: string) => {
+      const states = turnFailuresRef.current
+      let state = states.get(connectionId)
+      if (!state) {
+        state = { keys: new Set(), typedKeys: new Map() }
+        states.set(connectionId, state)
+      }
+      state.lastNotice = { key, title }
     },
     []
   )
@@ -5242,6 +5269,15 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // follow a plan or usage update.
         case "turn_failed_empty_metadata":
           return t("backendErrors.turnFailedEmptyMetadata", {
+            agent: agentLabel,
+          })
+        // One of the user's hooks blocked or stopped the turn, as the agent
+        // said in a notice (codex's "UserPromptSubmit hook blocked the
+        // prompt", …). This line leaves the agent's words out — it also goes
+        // to the OS notification, which never carries agent output — and they
+        // ride as the notification's second line (`rawAsDetail`).
+        case "turn_failed_empty_hook":
+          return t("backendErrors.turnFailedEmptyHook", {
             agent: agentLabel,
           })
         case "grok_model_switch_incompatible_agent":
@@ -6045,6 +6081,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
               : notice.title,
             description: notice.description,
           })
+          // An empty turn this notice accounts for ends on a verdict that
+          // restates it (`turn_failed_empty_hook`); that one takes this
+          // notification over rather than telling it twice.
+          if (notice.level !== "info") {
+            noteTurnNotice(
+              nc?.connectionId ?? contextKey,
+              notice.id,
+              notice.title
+            )
+          }
           break
         }
         case "plugin_load_failures": {
@@ -6248,7 +6294,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // code: the message is the agent's own), closes the turn with the
           // failure line (see `TURN_FAILED`). Store state, so even when
           // `quiet`; outside a turn the reducer ignores it.
-          if (isFailedTurnVerdict(e.code)) {
+          if (e.code === "turn_failed_empty_hook") {
+            // A hook stopped the turn before any reply, as the agent said:
+            // its words (the hook's reason included) close the turn, as a
+            // typed record's do.
+            dispatch({
+              type: "TURN_FAILED",
+              contextKey,
+              message: e.message,
+              fromAgent: true,
+            })
+          } else if (isFailedTurnVerdict(e.code)) {
             dispatch({
               type: "TURN_FAILED",
               contextKey,
@@ -6315,6 +6371,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
             notifyTurnFailure(connKey, {
               kind: "verdict",
               title: text,
+              description: reason,
+              explainedBy:
+                e.code === "turn_failed_empty_hook" ? e.message : undefined,
               evidence,
               actions:
                 e.code === "turn_failed_auth_required" && signInAgentType
@@ -6507,6 +6566,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       enqueueStreamingAction,
       flushPendingToolCallUpdates,
       flushStreamingQueue,
+      noteTurnNotice,
       notifyTurnFailure,
       rememberResolvedIdentity,
       reportConfigOptionVerdict,
@@ -7039,6 +7099,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // "responding" with a dead Stop button. `false` means the backend has no
   // live connection under that id, which is exactly the condition to settle.
   useEffect(() => {
+    const pending = new Map<string, Set<string>>()
+    let disposed = false
     const timer = setInterval(() => {
       const currentActiveKey = storeRef.current.activeKey
       const currentOpenTabKeys = heldOpenKeys()
@@ -7059,13 +7121,26 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       if (currentActiveKey) consider(currentActiveKey)
       for (const contextKey of currentOpenTabKeys) consider(contextKey)
       for (const { contextKey, connectionId } of toTouch) {
-        void isConnectionLiveOnBackend(connectionId).then((live) => {
-          if (!live) markConnectionGone(contextKey, connectionId)
-        })
+        // A slow IPC must not leave another unresolved probe on every tick.
+        const contexts = pending.get(connectionId) ?? new Set<string>()
+        if (contexts.has(contextKey)) continue
+        contexts.add(contextKey)
+        pending.set(connectionId, contexts)
+        void isConnectionLiveOnBackend(connectionId)
+          .then((live) => {
+            if (!disposed && !live) markConnectionGone(contextKey, connectionId)
+          })
+          .finally(() => {
+            contexts.delete(contextKey)
+            if (contexts.size === 0) pending.delete(connectionId)
+          })
       }
     }, CONNECTION_KEEPALIVE_INTERVAL_MS)
 
-    return () => clearInterval(timer)
+    return () => {
+      disposed = true
+      clearInterval(timer)
+    }
   }, [heldOpenKeys, isConnectionLiveOnBackend, markConnectionGone])
 
   // ── Idle sweep timer ──
@@ -7949,7 +8024,6 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       waitForListenerReady,
     ]
   )
-  connectRef.current = connect
 
   const disconnect = useCallback(
     async (contextKey: string): Promise<boolean> => {
@@ -8206,7 +8280,13 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     [connect, disconnect, resolveReconnectRequest, waitForConnectSettled]
   )
 
-  reconnectRef.current = reconnect
+  // Synced in a layout effect rather than during render. Every reader runs
+  // after the commit: `connectRef` from a connect() `finally` (async, so past
+  // any awaiting), `reconnectRef` from a toast's Retry click.
+  useLayoutEffect(() => {
+    connectRef.current = connect
+    reconnectRef.current = reconnect
+  })
 
   const dismissConfigStale = useCallback(
     (contextKey: string) => {
@@ -8663,11 +8743,6 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       dismissSessionFailuresAction,
       registerSessionFailureActions,
     ]
-  )
-
-  const eventSubscriberApi = useMemo<AcpEventSubscriberApi>(
-    () => ({ subscribers: eventSubscribersRef.current }),
-    []
   )
 
   return (

@@ -846,7 +846,7 @@ pub async fn canvas_create_board(
     db: tauri::State<'_, AppDatabase>,
     input: CreateCanvasBoard,
 ) -> Result<CanvasBoard, AppCommandError> {
-    canvas_create_board_core(&EventEmitter::Tauri(app), &db, input).await
+    canvas_create_board_core(&EventEmitter::from_app(&app), &db, input).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -857,7 +857,7 @@ pub async fn canvas_update_board(
     board_id: i32,
     patch: CanvasBoardPatchInput,
 ) -> Result<CanvasBoard, AppCommandError> {
-    canvas_update_board_core(&EventEmitter::Tauri(app), &db, board_id, patch).await
+    canvas_update_board_core(&EventEmitter::from_app(&app), &db, board_id, patch).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -868,7 +868,7 @@ pub async fn canvas_delete_board(
     terminals: tauri::State<'_, TerminalManager>,
     board_id: i32,
 ) -> Result<CanvasMutation<Vec<i32>>, AppCommandError> {
-    canvas_delete_board_core(&EventEmitter::Tauri(app), &db, &terminals, board_id).await
+    canvas_delete_board_core(&EventEmitter::from_app(&app), &db, &terminals, board_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -878,7 +878,7 @@ pub async fn canvas_create_node(
     db: tauri::State<'_, AppDatabase>,
     input: CreateCanvasNode,
 ) -> Result<CanvasMutation<CanvasNode>, AppCommandError> {
-    canvas_create_node_core(&EventEmitter::Tauri(app), &db, input).await
+    canvas_create_node_core(&EventEmitter::from_app(&app), &db, input).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -888,7 +888,7 @@ pub async fn canvas_group_into_region(
     db: tauri::State<'_, AppDatabase>,
     input: GroupIntoRegionInput,
 ) -> Result<CanvasMutation<GroupIntoRegionResult>, AppCommandError> {
-    canvas_group_into_region_core(&EventEmitter::Tauri(app), &db, input).await
+    canvas_group_into_region_core(&EventEmitter::from_app(&app), &db, input).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -899,7 +899,7 @@ pub async fn canvas_update_node(
     node_id: i32,
     patch: CanvasNodePatchInput,
 ) -> Result<CanvasMutation<CanvasNode>, AppCommandError> {
-    canvas_update_node_core(&EventEmitter::Tauri(app), &db, node_id, patch).await
+    canvas_update_node_core(&EventEmitter::from_app(&app), &db, node_id, patch).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -909,7 +909,7 @@ pub async fn canvas_move_nodes(
     db: tauri::State<'_, AppDatabase>,
     moves: Vec<CanvasNodeMovePayload>,
 ) -> Result<CanvasMutation<Vec<CanvasNodeMovePayload>>, AppCommandError> {
-    canvas_move_nodes_core(&EventEmitter::Tauri(app), &db, moves).await
+    canvas_move_nodes_core(&EventEmitter::from_app(&app), &db, moves).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -922,7 +922,7 @@ pub async fn canvas_detach_member(
     x: f64,
     y: f64,
 ) -> Result<CanvasMutation<CanvasNode>, AppCommandError> {
-    canvas_detach_member_core(&EventEmitter::Tauri(app), &db, region_id, conversation_id, x, y)
+    canvas_detach_member_core(&EventEmitter::from_app(&app), &db, region_id, conversation_id, x, y)
         .await
 }
 
@@ -934,7 +934,7 @@ pub async fn canvas_delete_node(
     terminals: tauri::State<'_, TerminalManager>,
     node_id: i32,
 ) -> Result<CanvasMutation<()>, AppCommandError> {
-    canvas_delete_node_core(&EventEmitter::Tauri(app), &db, &terminals, node_id).await
+    canvas_delete_node_core(&EventEmitter::from_app(&app), &db, &terminals, node_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -945,7 +945,7 @@ pub async fn canvas_delete_nodes(
     terminals: tauri::State<'_, TerminalManager>,
     node_ids: Vec<i32>,
 ) -> Result<CanvasMutation<Vec<i32>>, AppCommandError> {
-    canvas_delete_nodes_core(&EventEmitter::Tauri(app), &db, &terminals, node_ids).await
+    canvas_delete_nodes_core(&EventEmitter::from_app(&app), &db, &terminals, node_ids).await
 }
 
 #[cfg(test)]

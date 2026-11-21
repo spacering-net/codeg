@@ -29,7 +29,10 @@ vi.mock("@/contexts/tab-context", () => ({
 vi.mock("@/lib/transport", () => ({
   getTransport: () => ({ subscribe: async () => () => {} }),
 }))
-vi.mock("@/lib/deep-link", () => ({ takePendingDeepLink: async () => null }))
+vi.mock("@/lib/deep-link", () => ({
+  takePendingDeepLink: async () => null,
+  takePendingHarnessLink: async () => null,
+}))
 vi.mock("@/contexts/workbench-route-context", () => ({
   useOptionalWorkbenchRoute: () => ({ openConversations: h.openConversations }),
 }))

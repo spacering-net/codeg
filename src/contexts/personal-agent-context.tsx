@@ -455,6 +455,7 @@ function usePersonalAgentStore(
   }, [refreshSnapshot])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the first fetch, paired with the change subscription below
     void refresh()
     let unsub: (() => void) | undefined
     let cancelled = false

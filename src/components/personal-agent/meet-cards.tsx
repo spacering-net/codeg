@@ -375,6 +375,7 @@ export function ConnectCard({ item }: { item: NoticeItem }) {
   useEffect(() => {
     if (picked != null || projects == null) return
     const withAccount = projects.filter((p) => p.account).slice(0, PRESELECT)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the first pick, once, when the fetched project list arrives
     setPicked(
       new Set(
         (withAccount.length > 0 ? withAccount : projects.slice(0, 1)).map(

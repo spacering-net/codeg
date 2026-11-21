@@ -792,6 +792,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
   // "pick a folder" — showing an item of a repository no longer on screen, with
   // a "Start" whose dialog is gated on a folder and so did nothing at all.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- per-repository reset paired with the remote fetch below
     setRemote(null)
     setLoaded(null)
     setCounts({})
@@ -1110,6 +1111,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
   // of its inputs moved meanwhile.
   const paused = embed != null && !embed.active
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- list fetch; fetchPage flips the loading flag before awaiting
     if (readable != null && !paused) void fetchPage()
   }, [readable, fetchPage, paused])
 
@@ -1235,6 +1237,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
   // other tab is reopened, with no visible reason for it.
   useEffect(() => {
     if (supportsSearch(remote?.provider, tab)) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reacts to the asynchronously resolved remote; kept as an effect so list fetches keep their order
     setSearchInput("")
     setSearch("")
   }, [remote?.provider, tab])
@@ -1244,6 +1247,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
   // than leaving the select showing a choice its list no longer contains.
   useEffect(() => {
     if (sortOptionsFor(remote?.provider).some((o) => o.value === sort)) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reacts to the asynchronously resolved remote; kept as an effect so list fetches keep their order
     setPage(1)
     setSort("newest")
   }, [remote?.provider, sort])
@@ -1269,6 +1273,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
   useEffect(() => {
     if (effectiveFolderId == null || readable == null) return
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with the label fetch below
     setLabelOptions([])
     setLabelsTruncated(false)
     forgeListLabels(effectiveFolderId)
@@ -1727,6 +1732,7 @@ export function ForgePage({ embed }: { embed?: ForgePageEmbed } = {}) {
     }
   }, [rows, detail, keyFor, offPageSelected])
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- task-link lookup against the backend
     void refreshLinks()
   }, [refreshLinks])
   useEffect(() => {

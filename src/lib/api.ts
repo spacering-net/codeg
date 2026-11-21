@@ -85,6 +85,8 @@ import type {
   AutomationDraft,
   DeepSeekCatalogModel,
   DeepSeekModelCatalog,
+  DeepSeekProviderRoute,
+  DeepSeekProviderRoutes,
   ForgeAutoScanReport,
   ForgeAutoStatus,
   ForgeApproveResult,
@@ -1005,6 +1007,28 @@ export async function updateDeepSeekModelCatalog(
 }
 
 /**
+ * Read the DeepSeek Harness provider routes — `llm-pi-ai.providers` in the
+ * bridge's own `$DSH_HOME/deepseek-acp/settings.yaml`. While that document does
+ * not exist the routes come from the legacy harness documents the bridge
+ * imports, and `source` says which one.
+ */
+export async function loadDeepSeekProviderRoutes(): Promise<DeepSeekProviderRoutes> {
+  return getTransport().call("acp_load_deepseek_provider_routes", {})
+}
+
+/**
+ * Store the DeepSeek Harness provider routes, replacing `llm-pi-ai.providers`
+ * in the bridge's own document and leaving every other key (and every other
+ * section) alone. `null` — and an empty list — REMOVE the routes, so only the
+ * official DeepSeek route remains.
+ */
+export async function updateDeepSeekProviderRoutes(
+  routes: DeepSeekProviderRoute[] | null
+): Promise<void> {
+  return getTransport().call("acp_update_deepseek_provider_routes", { routes })
+}
+
+/**
  * Validate a user-supplied custom pi binary (BYO-pi): resolve it (path or
  * `PATH`) and best-effort read its `--version`. A not-found binary returns
  * `{ found: false, resolvedPath: null, version: null }` (not an error).
@@ -1644,10 +1668,15 @@ export async function opencodeRemovePlugin(
 export async function acpListAgentSkills(params: {
   agentType: AgentType
   workspacePath?: string | null
+  /** Also list the dangling links under a skill's name (owner `broken`), so
+   *  they can be repaired or removed. Only the Harness page asks: an older
+   *  backend ignores it. */
+  includeBroken?: boolean
 }): Promise<AgentSkillsListResult> {
   return getTransport().call("acp_list_agent_skills", {
     agentType: params.agentType,
     workspacePath: params.workspacePath ?? null,
+    ...(params.includeBroken ? { includeBroken: true } : {}),
   })
 }
 
@@ -1688,6 +1717,12 @@ export async function acpSaveAgentSkill(params: {
   content: string
   workspacePath?: string | null
   layout?: AgentSkillLayout | null
+  /**
+   * A new skill: refused (`id_taken`) when the id is already used in any
+   * directory of the scope or in Codeg's store. Without it an existing skill
+   * of that id is updated.
+   */
+  create?: boolean
 }): Promise<AgentSkillItem> {
   return getTransport().call("acp_save_agent_skill", {
     agentType: params.agentType,
@@ -1696,6 +1731,7 @@ export async function acpSaveAgentSkill(params: {
     content: params.content,
     workspacePath: params.workspacePath ?? null,
     layout: params.layout ?? null,
+    ...(params.create ? { create: true } : {}),
   })
 }
 
@@ -1719,12 +1755,6 @@ export async function expertsList(): Promise<ExpertListItem[]> {
   return getTransport().call("experts_list")
 }
 
-export async function expertsGetInstallStatus(
-  expertId: string
-): Promise<ExpertInstallStatus[]> {
-  return getTransport().call("experts_get_install_status", { expertId })
-}
-
 /** One round-trip snapshot of every (expert, agent) link state for the matrix. */
 export async function expertsListAllInstallStatuses(): Promise<
   ExpertInstallStatus[]
@@ -1737,26 +1767,6 @@ export async function expertsApplyLinks(
   ops: LinkOp[]
 ): Promise<LinkOpResult[]> {
   return getTransport().call("experts_apply_links", { ops })
-}
-
-export async function expertsLinkToAgent(params: {
-  expertId: string
-  agentType: AgentType
-}): Promise<ExpertInstallStatus> {
-  return getTransport().call("experts_link_to_agent", {
-    expertId: params.expertId,
-    agentType: params.agentType,
-  })
-}
-
-export async function expertsUnlinkFromAgent(params: {
-  expertId: string
-  agentType: AgentType
-}): Promise<void> {
-  return getTransport().call("experts_unlink_from_agent", {
-    expertId: params.expertId,
-    agentType: params.agentType,
-  })
 }
 
 export async function expertsReadContent(expertId: string): Promise<string> {
@@ -1775,12 +1785,6 @@ export async function scienceList(): Promise<ScienceListItem[]> {
   return getTransport().call("science_list")
 }
 
-export async function scienceGetInstallStatus(
-  skillId: string
-): Promise<ExpertInstallStatus[]> {
-  return getTransport().call("science_get_install_status", { skillId })
-}
-
 /** One round-trip snapshot of every (science skill, agent) link state. */
 export async function scienceListAllInstallStatuses(): Promise<
   ExpertInstallStatus[]
@@ -1795,32 +1799,8 @@ export async function scienceApplyLinks(
   return getTransport().call("science_apply_links", { ops })
 }
 
-export async function scienceLinkToAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<ExpertInstallStatus> {
-  return getTransport().call("science_link_to_agent", {
-    skillId: params.skillId,
-    agentType: params.agentType,
-  })
-}
-
-export async function scienceUnlinkFromAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<void> {
-  return getTransport().call("science_unlink_from_agent", {
-    skillId: params.skillId,
-    agentType: params.agentType,
-  })
-}
-
 export async function scienceReadContent(skillId: string): Promise<string> {
   return getTransport().call("science_read_content", { skillId })
-}
-
-export async function scienceOpenCentralDir(): Promise<string> {
-  return getTransport().call("science_open_central_dir")
 }
 
 // ─── Custom (user-authored) skills ──────────────────────────────────────
@@ -1940,26 +1920,6 @@ export async function officecliListSkills(): Promise<OfficecliSkill[]> {
 
 export async function officecliSyncSkills(): Promise<SkillSyncReport> {
   return getTransport().call("officecli_sync_skills")
-}
-
-export async function officecliSkillLinkToAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<ExpertInstallStatus> {
-  return getTransport().call("officecli_skill_link_to_agent", params)
-}
-
-export async function officecliSkillUnlinkFromAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<void> {
-  return getTransport().call("officecli_skill_unlink_from_agent", params)
-}
-
-export async function officecliSkillGetInstallStatus(
-  skillId: string
-): Promise<ExpertInstallStatus[]> {
-  return getTransport().call("officecli_skill_get_install_status", { skillId })
 }
 
 /** One round-trip snapshot of every (skill, agent) link state for the matrix. */
@@ -4444,15 +4404,18 @@ export async function openCommitWindow(folderId: number): Promise<void> {
   )
 }
 
+/**
+ * The Settings window's pages a caller can open by name. MCP, Skills and Skill
+ * packs are not among them: they are sections of the workspace's Harness page
+ * (`useOpenHarness`). Kept in step with `resolve_settings_route`
+ * (`commands/windows.rs`) and the web `open_settings_window`
+ * (`web/handlers/folders.rs`), where a name they do not know lands on
+ * Appearance.
+ */
 export type SettingsSection =
   | "general"
   | "appearance"
   | "agents"
-  | "mcp"
-  | "skills"
-  | "experts"
-  | "science"
-  | "office-tools"
   | "collaboration"
   | "browser"
   | "computer-use"
@@ -5127,6 +5090,12 @@ export async function workTaskDeliverPr(
     ...(closes === undefined ? {} : { closes }),
     ...(commitMessage === undefined ? {} : { commitMessage }),
   })
+}
+
+/** Stop waiting for the background work a running task's agent left going
+ *  and settle the task now; whatever is still running is stopped with it. */
+export async function workTaskStopBackgroundWait(id: number): Promise<void> {
+  return getTransport().call("work_task_stop_background_wait", { id })
 }
 
 /** Withdraw a merge waiting in the project's queue; the task stays in review. */

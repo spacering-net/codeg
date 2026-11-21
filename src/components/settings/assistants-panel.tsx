@@ -308,7 +308,7 @@ export function AssistantsPanel({
       }
       setEnabled(assistant, enabled)
     },
-    [disableImpact, setEnabled]
+    [disableImpact, setEnabled, setDisabling]
   )
 
   const duplicate = useCallback(
@@ -423,6 +423,7 @@ export function AssistantsPanel({
             on one screen would only compete. */}
         {empty ? null : (
           <div className="flex shrink-0 items-center gap-2">
+            {/* eslint-disable-next-line react-hooks/refs -- openEditor bumps editorSeq only when a menu item is picked, never during render */}
             {createMenu?.((prefill) => openEditor(null, prefill))}
             <Button
               size="sm"
@@ -529,6 +530,7 @@ export function AssistantsPanel({
               <Plus aria-hidden />
               {t("create")}
             </Button>
+            {/* eslint-disable-next-line react-hooks/refs -- openEditor bumps editorSeq only when a menu item is picked, never during render */}
             {createMenu?.((prefill) => openEditor(null, prefill))}
           </div>
         </div>

@@ -280,6 +280,7 @@ function EditorDialog({
   // The next run as codeg works it out.
   useEffect(() => {
     if (form.trigger !== "schedule" || !form.cron.trim()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- cleared alongside the backend's next-run computation below
       setNextRun(null)
       return
     }

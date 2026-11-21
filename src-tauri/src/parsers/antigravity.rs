@@ -85,7 +85,8 @@ pub(crate) fn resolve_gemini_home() -> PathBuf {
     resolve_gemini_home_for_env(&AgentEnv::inherited())
 }
 
-fn resolve_gemini_home_for_env(env: &AgentEnv) -> PathBuf {
+/// [`resolve_gemini_home`] for the server launched with `env`.
+pub(crate) fn resolve_gemini_home_for_env(env: &AgentEnv) -> PathBuf {
     resolve_gemini_home_from(env.var_os("GEMINI_HOME"), dirs::home_dir())
 }
 

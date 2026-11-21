@@ -38,6 +38,7 @@ import {
   Play,
   RotateCw,
   ListTodo,
+  TimerOff,
   Trash2,
   Undo2,
 } from "lucide-react"
@@ -55,6 +56,7 @@ import {
   workTaskRetry,
   workTaskReturn,
   workTaskStart,
+  workTaskStopBackgroundWait,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import {
@@ -293,6 +295,7 @@ export function TaskDetailSheet({
   const [convAgentType, setConvAgentType] = useState<AgentType | null>(null)
   useEffect(() => {
     if (!open || conversationId == null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the chip owned by the transcript fetch below
       setTokenTotal(null)
       setConvAgentType(null)
       return
@@ -342,6 +345,7 @@ export function TaskDetailSheet({
   useEffect(() => {
     if (!open || taskId == null) return
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- per-open reset paired with the fetch + subscription below
     setEvents([])
     setFiles([])
     setComposerOpen(false)
@@ -385,9 +389,19 @@ export function TaskDetailSheet({
   // anyway" and waive a guard the user never saw refuse anything. (The label
   // and the waiver read the same state, so the two can never disagree; this is
   // about not carrying a decision across the moment it was made.)
-  useEffect(() => {
+  // Adjusted during render rather than in an effect, so no commit ever pairs a
+  // stale refusal with the new box/status; the initial null covers mount.
+  const [dupScope, setDupScope] = useState({
+    composerOpen,
+    status: taskStatus,
+  })
+  if (
+    dupScope.composerOpen !== composerOpen ||
+    dupScope.status !== taskStatus
+  ) {
+    setDupScope({ composerOpen, status: taskStatus })
     setRestartDuplicate(null)
-  }, [composerOpen, task?.status])
+  }
 
   /// A restart that consumed the note closes the box with it, so the text
   /// cannot be silently attached to a second restart the user did not mean.
@@ -698,6 +712,15 @@ export function TaskDetailSheet({
           })
           zoneActions.push(archive(t("actionArchive")))
           break
+      }
+      // A turn held open for its background work — the card's same escape
+      // (see `buildTaskActions`): settle now, ending what still runs.
+      if (task.background_wait) {
+        zoneActions.push({
+          icon: TimerOff,
+          label: t("actionStopBackgroundWait"),
+          onClick: () => run(() => workTaskStopBackgroundWait(task.id)),
+        })
       }
     }
   }
@@ -1866,6 +1889,8 @@ const EVENT_KIND_KEYS = {
   cleanup_failed: "eventCleanupFailed",
   resume_fallback: "eventResumeFallback",
   context_compact: "eventContextCompact",
+  background_wait: "eventBackgroundWait",
+  background_wait_end: "eventBackgroundWaitEnd",
   user_action: "eventUserAction",
   diff_stat: "eventDiffStat",
   forge_writeback: "eventForgeWriteback",
@@ -2066,6 +2091,29 @@ function timelineDetail(event: WorkTaskEvent): string | null {
         before && after ? `${before} → ${after}` : (before ?? str("reason"))
       return (
         [status, span, str("detail"), str("error")]
+          .filter(Boolean)
+          .join(" · ") || null
+      )
+    }
+    case "background_wait": {
+      const tasks = Array.isArray(p.tasks)
+        ? (p.tasks as unknown[]).filter((x) => typeof x === "string")
+        : []
+      return tasks.join(", ") || str("reason")
+    }
+    case "background_wait_end": {
+      const secs = typeof p.waited_secs === "number" ? p.waited_secs : null
+      const waited =
+        secs == null
+          ? null
+          : secs >= 60
+            ? `${Math.floor(secs / 60)}m ${secs % 60}s`
+            : `${secs}s`
+      const leftover = Array.isArray(p.leftover)
+        ? (p.leftover as unknown[]).filter((x) => typeof x === "string")
+        : []
+      return (
+        [str("outcome"), waited, leftover.join(", ") || null]
           .filter(Boolean)
           .join(" · ") || null
       )

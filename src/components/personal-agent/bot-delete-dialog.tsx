@@ -52,6 +52,7 @@ export function BotDeleteDialog({
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset paired with the impact fetch for the assistant now named
     setImpact(null)
     setHandOver(true)
     setDropExecutor(false)

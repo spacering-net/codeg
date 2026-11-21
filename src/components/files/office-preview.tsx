@@ -4,12 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { FileWarning, Loader2 } from "lucide-react"
 
-import {
-  renewOfficeWatch,
-  startOfficeWatch,
-  stopOfficeWatch,
-  openSettingsWindow,
-} from "@/lib/api"
+import { useOpenHarness } from "@/hooks/use-open-harness"
+import { renewOfficeWatch, startOfficeWatch, stopOfficeWatch } from "@/lib/api"
 import {
   isDesktop,
   isRemoteDesktopMode,
@@ -22,8 +18,7 @@ import { extractAppCommandError } from "@/lib/app-error"
 const NOT_INSTALLED = "NOT_INSTALLED"
 
 // One-liner that installs OfficeCLI on the *server* host — shown to web/remote
-// users, for whom an "open Settings" desktop link would point at the wrong
-// machine. Mirrors the command the backend's own installer runs
+// users, for whom the desktop's "open Harness" button is not offered. Mirrors the command the backend's own installer runs
 // (`commands/office_tools.rs`).
 const SERVER_INSTALL_CMD =
   "curl -fsSL https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh | bash"
@@ -92,6 +87,10 @@ export function OfficePreview({
   active?: boolean
 }) {
   const t = useTranslations("Folder.fileWorkspacePanel")
+  // Where OfficeCLI is installed: the Harness page's Skill packs › Office.
+  // Every host of this preview is in the workspace; a window without a
+  // workbench keeps the hint, which names the place, and loses the button.
+  const { available: harnessAvailable, openHarness } = useOpenHarness()
   const [port, setPort] = useState<number | null>(null)
   const [cap, setCap] = useState<string>("")
   // The hold a web page's start took on the watch (none on desktop), named
@@ -310,15 +309,17 @@ export function OfficePreview({
             <div className="max-w-sm text-xs text-muted-foreground">
               {t("officeNotInstalledHint")}
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                openSettingsWindow().catch(() => {})
-              }}
-              className="mt-1 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-primary/8"
-            >
-              {t("officeOpenSettings")}
-            </button>
+            {harnessAvailable && (
+              <button
+                type="button"
+                onClick={() => {
+                  openHarness({ section: "packs", tab: "office" })
+                }}
+                className="mt-1 rounded-md border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-primary/8"
+              >
+                {t("officeOpenHarness")}
+              </button>
+            )}
           </>
         ) : (
           <>

@@ -5,7 +5,8 @@ import { toast } from "sonner"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore, useTabActions } from "@/contexts/tab-context"
 import { useOptionalWorkbenchRoute } from "@/contexts/workbench-route-context"
-import { takePendingDeepLink } from "@/lib/deep-link"
+import { takePendingDeepLink, takePendingHarnessLink } from "@/lib/deep-link"
+import { queueHarnessLink } from "@/lib/harness-link"
 import type { AgentType } from "@/lib/types"
 
 /**
@@ -141,6 +142,12 @@ type FocusRequest = {
  * slot and exactly one of them opens the tab. Nothing can be replayed onto a
  * later mount, and nothing opens twice.
  *
+ * A `codeg://harness/install?ref=…` link travels the same way, in a slot of
+ * its own, behind the same nudge: every drain here takes both slots. What the
+ * Harness slot gives is an item's address, handed on to `HarnessLinkBootstrap`
+ * (which may mount after this, or not at all on this route), which opens it
+ * once the workspace is ready.
+ *
  * Latest workspace state is held in a ref so the single subscription always
  * sees fresh state without re-subscribing on every change. A request that
  * arrives before folders/tabs hydrate is queued and replayed.
@@ -237,6 +244,15 @@ export function PetFocusBridge() {
       attempt()
     }
 
+    // Unlike a conversation target, the address is handed on even when this
+    // bridge has gone in the meantime: it waits outside React for whichever
+    // workspace opens it, and the backend has let go of it already — so a
+    // StrictMode remount, or any other remount, does not lose it.
+    const drainHarnessLink = async () => {
+      const ref = await takePendingHarnessLink()
+      if (ref) queueHarnessLink(ref)
+    }
+
     void (async () => {
       try {
         const { getTransport } = await import("@/lib/transport")
@@ -267,6 +283,7 @@ export function PetFocusBridge() {
           "workspace://deep-link-pending",
           () => {
             void drainDeepLink()
+            void drainHarnessLink()
           }
         )
         if (cancelled) offPending()
@@ -278,7 +295,7 @@ export function PetFocusBridge() {
       // Last, so a link resolved while the subscriptions were still being set
       // up cannot fall between the two: whatever the dropped nudge parked is
       // still sitting in the slot for this call to claim.
-      await drainDeepLink()
+      await Promise.all([drainDeepLink(), drainHarnessLink()])
     })()
 
     return () => {

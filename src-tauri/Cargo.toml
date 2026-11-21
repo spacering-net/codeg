@@ -1,6 +1,6 @@
 [package]
 name = "codeg"
-version = "0.44.0"
+version = "0.47.0"
 description = "Agent Code Generation App"
 authors = ["feitao"]
 edition = "2021"
@@ -249,6 +249,11 @@ tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 # WebSockets dial through the TCP connector its HTTP requests use, Happy
 # Eyeballs included — see `remote_proxy::connect_remote_ws`.
 hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
+# Already in the graph via reqwest; named so the Harness catalog client can
+# tell a pooled connection the server closed under a request
+# (`hyper::Error::is_incomplete_message`) from any other failure, and send
+# that idempotent request once more — see `harness::client::connection_dropped`.
+hyper = "1"
 tower-service = "0.3"
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io", "rt", "compat"] }

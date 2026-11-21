@@ -43,7 +43,8 @@ pub(crate) fn resolve_dsh_home_dir() -> PathBuf {
     resolve_dsh_home_dir_for_env(&AgentEnv::inherited())
 }
 
-fn resolve_dsh_home_dir_for_env(env: &AgentEnv) -> PathBuf {
+/// [`resolve_dsh_home_dir`] for the harness launched with `env`.
+pub(crate) fn resolve_dsh_home_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_dsh_home_from(env.var_os("DSH_HOME"), dirs::home_dir())
 }
 
@@ -117,7 +118,8 @@ pub(crate) fn resolve_deepseek_attachments_root_for_env(env: &AgentEnv) -> PathB
 /// └── <munged cwd>/                     relocatable via DEEPSEEK_ACP_SESSIONS_ROOT)
 ///     └── <session uuid>/
 ///         ├── session.jsonl.zstd       # generation 0 (deepseek-acp <= 0.8.0)
-///         └── session.v3.jsonl.zstd    # generation 3 (deepseek-acp >= 0.9.0)
+///         ├── session.v3.jsonl.zstd    # generation 3 (deepseek-acp 0.9.0)
+///         └── session.v4.jsonl.zstd    # generation 4 (deepseek-acp >= 0.10.0)
 /// ```
 ///
 /// Since 0.9.0 the log is **generation-addressed**: generation 0 keeps the
@@ -136,11 +138,13 @@ pub(crate) fn resolve_deepseek_attachments_root_for_env(env: &AgentEnv) -> PathB
 /// `delegationDepth`). Content comes from:
 ///
 /// - `user/message` — `data.source.kind` separates a real human prompt
-///   (`"user"`) from plugin-injected runtime context (`"plugin"`, skipped).
-///   Since 0.6.0 its `content[]` may hold `image` blocks alongside the text;
-///   a compaction's replacement message rides the same `"plugin"` skip
-///   (`{kind: "plugin", plugin: "compact"}`), so the summary text never shows
-///   up as something the user said.
+///   (`"user"`) from plugin-injected runtime context (`"plugin"` through v3;
+///   v4 names the producer instead — `runtime-context`, `skill-catalog`,
+///   `plan-mode`, `compact-checkpoint`, … — and every kind but `"user"` is
+///   skipped). Since 0.6.0 its `content[]` may hold `image` blocks alongside
+///   the text; a compaction's replacement message rides the same skip
+///   (`{kind: "plugin", plugin: "compact"}` in v3, `compact-checkpoint` in
+///   v4), so the summary text never shows up as something the user said.
 /// - `assistant/message` — the ASSEMBLED assistant message for one step
 ///   (`content[]` of `text` / `reasoning` / `tool-call {id, name, arguments}`
 ///   blocks) plus that step's `usage` (`inputTokens` / `outputTokens` /
@@ -1933,6 +1937,79 @@ mod tests {
             ContentBlock::ToolResult { tool_use_id: Some(id), output_preview: Some(out), .. }
                 if id == "call_from_source" && out == "out"
         ));
+    }
+
+    /// Session-format v4 drops the v3 `{kind: "plugin", plugin}` source and
+    /// names each producer instead (`runtime-context`, `skill-catalog`,
+    /// `plan-mode`, `compact-checkpoint`, …); deepseek-acp 0.11.0 writes the
+    /// first two on every first turn, and its v3→v4 migration rewrites old
+    /// logs the same way. None of them is something the user said, and v4's
+    /// `developer/message` is model plumbing too, so only `kind: "user"`
+    /// reaches the transcript, the title and the message count.
+    #[test]
+    fn v4_named_injection_sources_stay_out_of_the_transcript() {
+        let injected = |seq: u64, source: Value, text: &str| {
+            event(
+                "user/message",
+                seq,
+                1_000 + seq as i64,
+                json!({
+                    "content": [{"type": "text", "text": text}],
+                    "source": source,
+                    "role": "user",
+                    "id": format!("u-{seq}")
+                }),
+            )
+        };
+        let log = [
+            v4_header_line("/w"),
+            event("turn/start", 1, 1_000, json!({"turn": 1})),
+            injected(2, json!({"kind": "user"}), "say hi"),
+            injected(
+                3,
+                json!({"kind": "runtime-context", "form": "snapshot", "sections": []}),
+                "<system-reminder>Current working directory</system-reminder>",
+            ),
+            injected(
+                4,
+                json!({"kind": "skill-catalog", "form": "catalog", "entries": []}),
+                "<system-reminder>A skill is a reusable set</system-reminder>",
+            ),
+            injected(5, json!({"kind": "plan-mode"}), "Plan mode is active"),
+            injected(6, json!({"kind": "compact-checkpoint"}), "Summary of earlier turns"),
+            event(
+                "developer/message",
+                7,
+                1_007,
+                json!({"message": {"role": "developer", "content": [{"type": "text", "text": "internal"}], "id": "d-1"}}),
+            ),
+            event(
+                "assistant/message",
+                8,
+                1_008,
+                json!({
+                    "turn": 1, "step": 1,
+                    "message": {"role": "assistant", "content": [{"type": "text", "text": "hi there"}], "source": {"kind": "model", "model": "deepseek-flash"}, "id": "a-1"}
+                }),
+            ),
+            event("turn/end", 9, 1_009, json!({"turn": 1, "reason": {"kind": "completed"}})),
+        ]
+        .join("\n");
+
+        let sp = parse_session_events(&log, None);
+        let user_texts: Vec<&str> = sp
+            .turns
+            .iter()
+            .filter(|t| matches!(t.role, TurnRole::User))
+            .flat_map(|t| t.blocks.iter())
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(user_texts, ["say hi"]);
+        assert_eq!(sp.first_user_text.as_deref(), Some("say hi"));
+        assert_eq!(sp.turns.len(), 2, "{:?}", sp.turns);
     }
 
     /// DSH 0.2.x reports prompt-cache writes as `cacheWriteTokens` (the key is

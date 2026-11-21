@@ -128,7 +128,7 @@ mod tauri_commands {
     ) -> Result<BackupManifest, AppCommandError> {
         let data_dir = resolve_data_dir(&app)?;
         let (op_id, cancel) = transfer.register_transfer().await;
-        let emitter = EventEmitter::Tauri(app.clone());
+        let emitter = EventEmitter::from_app(&app);
         let inputs = BackupInputs {
             conn: &db.conn,
             data_dir: &data_dir,
@@ -190,7 +190,7 @@ mod tauri_commands {
         let data_dir = resolve_data_dir(&app)?;
         let zip = resolve_prepared_zip(&data_dir, &source_id)?;
         let (op_id, cancel) = transfer.register_transfer().await;
-        let emitter = EventEmitter::Tauri(app.clone());
+        let emitter = EventEmitter::from_app(&app);
         let result =
             stage_restore_core(&zip, &data_dir, &emitter, &op_id, &cancel).await;
         transfer.finish_transfer(&op_id).await;

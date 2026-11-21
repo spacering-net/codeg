@@ -210,7 +210,7 @@ pub async fn create_conversation_tag(
     name: String,
     color: String,
 ) -> Result<ConversationTagDetail, AppCommandError> {
-    create_conversation_tag_core(&EventEmitter::Tauri(app), &db, folder_id, name, color).await
+    create_conversation_tag_core(&EventEmitter::from_app(&app), &db, folder_id, name, color).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -222,7 +222,7 @@ pub async fn update_conversation_tag(
     name: Option<String>,
     color: Option<String>,
 ) -> Result<ConversationTagDetail, AppCommandError> {
-    update_conversation_tag_core(&EventEmitter::Tauri(app), &db, tag_id, name, color).await
+    update_conversation_tag_core(&EventEmitter::from_app(&app), &db, tag_id, name, color).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -232,7 +232,7 @@ pub async fn delete_conversation_tag(
     db: State<'_, AppDatabase>,
     tag_id: i32,
 ) -> Result<(), AppCommandError> {
-    delete_conversation_tag_core(&EventEmitter::Tauri(app), &db, tag_id).await
+    delete_conversation_tag_core(&EventEmitter::from_app(&app), &db, tag_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -242,7 +242,7 @@ pub async fn reorder_conversation_tags(
     db: State<'_, AppDatabase>,
     tag_ids: Vec<i32>,
 ) -> Result<(), AppCommandError> {
-    reorder_conversation_tags_core(&EventEmitter::Tauri(app), &db, tag_ids).await
+    reorder_conversation_tags_core(&EventEmitter::from_app(&app), &db, tag_ids).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -254,7 +254,7 @@ pub async fn update_conversation_tags(
     add: Vec<i32>,
     remove: Vec<i32>,
 ) -> Result<DbConversationSummary, AppCommandError> {
-    update_conversation_tags_core(&EventEmitter::Tauri(app), &db, conversation_id, add, remove)
+    update_conversation_tags_core(&EventEmitter::from_app(&app), &db, conversation_id, add, remove)
         .await
 }
 
@@ -274,7 +274,7 @@ pub async fn update_conversation_branch_tag(
     enabled: bool,
     color: String,
 ) -> Result<ConversationBranchTag, AppCommandError> {
-    update_conversation_branch_tag_core(&EventEmitter::Tauri(app), &db, enabled, color).await
+    update_conversation_branch_tag_core(&EventEmitter::from_app(&app), &db, enabled, color).await
 }
 
 #[cfg(test)]

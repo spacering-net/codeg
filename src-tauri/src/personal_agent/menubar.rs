@@ -470,11 +470,11 @@ mod desktop {
     use std::sync::{Arc, Mutex};
 
     use rand::SeedableRng;
-    use tauri::AppHandle;
     use tokio::sync::watch;
 
     use super::{idle_move, load_frames, scaled, Frame, MenuBarSink, Rgba, TrayView, FACE_FRAMES};
     use crate::commands::windows::{self, TrayBotRow};
+    use crate::web::event_bridge::RetainedAppHandle;
 
     /// The bar's frames are drawn this big (18 pt at 2×).
     const BAR_PX: u32 = 36;
@@ -497,7 +497,9 @@ mod desktop {
 
     /// The desktop's tray and dock.
     pub struct TraySink {
-        app: AppHandle,
+        // The process's one retained handle: this lives on worker threads,
+        // where a bare `AppHandle` must not be cloned or dropped.
+        app: RetainedAppHandle,
         data_dir: PathBuf,
         face: watch::Sender<Option<Frames>>,
         drawn: Mutex<Drawn>,
@@ -505,7 +507,7 @@ mod desktop {
 
     impl TraySink {
         /// The tray's sink, its face animated on its own task.
-        pub fn new(app: AppHandle, data_dir: PathBuf) -> Arc<Self> {
+        pub fn new(app: RetainedAppHandle, data_dir: PathBuf) -> Arc<Self> {
             let (face, rx) = watch::channel(None);
             tokio::spawn(animate(app.clone(), rx));
             Arc::new(Self {
@@ -566,7 +568,7 @@ mod desktop {
 
     /// The tray's face while one is shown: open, and now and then a blink
     /// or a glance (a single picture stays as it is).
-    async fn animate(app: AppHandle, mut rx: watch::Receiver<Option<Frames>>) {
+    async fn animate(app: RetainedAppHandle, mut rx: watch::Receiver<Option<Frames>>) {
         let mut rng = rand::rngs::StdRng::from_entropy();
         loop {
             let frames = rx.borrow_and_update().clone();

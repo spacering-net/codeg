@@ -25,6 +25,7 @@ import {
   resolveRange,
   shareCardFilename,
   startOfLocalDay,
+  startOfLocalHour,
   suggestBucket,
   toLocalDayValue,
 } from "./token-usage"
@@ -127,6 +128,18 @@ describe("resolveRange", () => {
     const range = resolveRange("7d", now)
     expect(range.start).toBe(localMidnightIso(2026, 7, 28))
     expect(range.end).toBe(localMidnightIso(2026, 8, 4))
+  })
+
+  it("makes today the current local day, through to the next midnight", () => {
+    const range = resolveRange("today", now)
+    expect(range.start).toBe(localMidnightIso(2026, 8, 3))
+    expect(range.end).toBe(localMidnightIso(2026, 8, 4))
+  })
+
+  it("makes the last 24 hours 24 whole local hours ending with the current one", () => {
+    const range = resolveRange("24h", now)
+    expect(range.start).toBe(new Date(2026, 7, 2, 15).toISOString())
+    expect(range.end).toBe(new Date(2026, 7, 3, 15).toISOString())
   })
 
   it("anchors 'this month' to the first of the month", () => {
@@ -242,6 +255,44 @@ describe("rangeDefaultMonth", () => {
   })
 })
 
+describe("startOfLocalHour", () => {
+  /** Run `fn` with the process in `tz` (Node re-reads TZ on assignment;
+   *  vitest runs each test file in its own process). */
+  function inTimeZone(tz: string, fn: () => void) {
+    const prev = process.env.TZ
+    process.env.TZ = tz
+    try {
+      fn()
+    } finally {
+      if (prev === undefined) delete process.env.TZ
+      else process.env.TZ = prev
+    }
+  }
+
+  it("keeps the second occurrence of a repeated DST hour", () => {
+    inTimeZone("America/New_York", () => {
+      // 2026-11-01 06:30Z is 01:30 EST — the *second* 01:00 hour of the day.
+      const now = new Date("2026-11-01T06:30:00Z")
+      expect(startOfLocalHour(now).toISOString()).toBe(
+        "2026-11-01T06:00:00.000Z"
+      )
+      const range = resolveRange("24h", now)
+      expect(Date.parse(range.end!)).toBeGreaterThan(now.getTime())
+      expect(range.end).toBe("2026-11-01T07:00:00.000Z")
+      expect(range.start).toBe("2026-10-31T07:00:00.000Z")
+    })
+  })
+
+  it("truncates to the local hour in a half-hour-offset zone", () => {
+    inTimeZone("Asia/Kolkata", () => {
+      // 09:10Z is 14:40 IST; the local hour began at 14:00 IST = 08:30Z.
+      expect(
+        startOfLocalHour(new Date("2026-08-03T09:10:42.123Z")).toISOString()
+      ).toBe("2026-08-03T08:30:00.000Z")
+    })
+  })
+})
+
 describe("suggestBucket", () => {
   const unbounded = { start: null, end: null }
 
@@ -249,7 +300,8 @@ describe("suggestBucket", () => {
     expect(suggestBucket("7d", unbounded)).toBe("day")
     expect(suggestBucket("30d", unbounded)).toBe("day")
     expect(suggestBucket("thisMonth", unbounded)).toBe("day")
-    expect(suggestBucket("90d", unbounded)).toBe("week")
+    expect(suggestBucket("today", unbounded)).toBe("hour")
+    expect(suggestBucket("24h", unbounded)).toBe("hour")
     expect(suggestBucket("thisYear", unbounded)).toBe("month")
     expect(suggestBucket("all", unbounded)).toBe("week")
   })

@@ -45,7 +45,6 @@ export function SlideSlot({
     if (motion !== "enter" || !slot) return
     // No slide to wait for: open as it stands.
     const name = getComputedStyle(slot).animationName
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!name || name === "none") setMotion(null)
   }, [motion])
   useLayoutEffect(() => {

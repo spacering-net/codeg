@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -178,7 +179,11 @@ export function WorkspaceUploadDialog({
   // uploading something the user already discarded.
   const removedIdsRef = useRef<Set<string>>(new Set())
   const onCompleteRef = useRef(onComplete)
-  onCompleteRef.current = onComplete
+  // Only read once an upload has finished (after an await), so syncing it in
+  // a layout effect is always in time.
+  useLayoutEffect(() => {
+    onCompleteRef.current = onComplete
+  })
 
   const [items, setItems] = useState<QueueItem[]>([])
   const [isDragOver, setIsDragOver] = useState(false)
@@ -193,11 +198,16 @@ export function WorkspaceUploadDialog({
   // in-progress edit would feel like the dialog fighting the user.
   const [editableTargetPath, setEditableTargetPath] = useState(targetPath)
   const remoteDesktop = isRemoteDesktopMode()
-  useEffect(() => {
-    if (open) {
-      setEditableTargetPath(targetPath)
-    }
-  }, [open, targetPath])
+  // Re-seed on every (re)open and on a `targetPath` change while open.
+  // Adjusted during render (React's "reset state on prop change" pattern); the
+  // initial state already holds `targetPath`, so mount needs no seeding.
+  const [prevOpen, setPrevOpen] = useState(open)
+  const [prevTargetPath, setPrevTargetPath] = useState(targetPath)
+  if (open !== prevOpen || targetPath !== prevTargetPath) {
+    setPrevOpen(open)
+    setPrevTargetPath(targetPath)
+    if (open) setEditableTargetPath(targetPath)
+  }
 
   useEffect(() => {
     itemsRef.current = items
@@ -292,6 +302,7 @@ export function WorkspaceUploadDialog({
   // removed-ids set on close — it's only meaningful within one session.
   useEffect(() => {
     if (!open && !isBusy) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- close-time reset paired with clearing a ref
       setItems([])
       removedIdsRef.current = new Set()
     }

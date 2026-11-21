@@ -154,6 +154,7 @@ export function BranchPicker({
 
   useEffect(() => {
     if (!open) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- git fetch; loadBranches flips the loading flag before awaiting
     void loadBranches()
     // Re-read HEAD on every open too: the checkout may have moved since the
     // trigger resolved it.
@@ -169,10 +170,14 @@ export function BranchPicker({
   }, [triggerShowsHead, loadHead])
 
   // Drop the cached list when the folder changes so the next open refetches.
-  useEffect(() => {
+  // Adjusted during render rather than in an effect, so the previous folder's
+  // list never paints under the new folder; the initial state covers mount.
+  const [listFolderPath, setListFolderPath] = useState(folderPath)
+  if (folderPath !== listFolderPath) {
+    setListFolderPath(folderPath)
     setBranchList(null)
     setQuery("")
-  }, [folderPath])
+  }
 
   // Clear the (controlled) search on every close — mirrors the conversation
   // picker; onSelect closes via setOpen(false) without firing onOpenChange, so

@@ -13,7 +13,16 @@ vi.mock("@/lib/api", () => ({
   startOfficeWatch: vi.fn(),
   stopOfficeWatch: vi.fn(),
   renewOfficeWatch: vi.fn(),
-  openSettingsWindow: vi.fn(),
+}))
+const harness = vi.hoisted(() => ({
+  available: true,
+  openHarness: vi.fn(),
+}))
+vi.mock("@/hooks/use-open-harness", () => ({
+  useOpenHarness: () => ({
+    available: harness.available,
+    openHarness: harness.openHarness,
+  }),
 }))
 vi.mock("@/lib/transport", () => ({
   isDesktop: vi.fn(),
@@ -21,12 +30,7 @@ vi.mock("@/lib/transport", () => ({
   getServerBaseUrl: vi.fn(),
 }))
 
-import {
-  openSettingsWindow,
-  renewOfficeWatch,
-  startOfficeWatch,
-  stopOfficeWatch,
-} from "@/lib/api"
+import { renewOfficeWatch, startOfficeWatch, stopOfficeWatch } from "@/lib/api"
 import {
   isDesktop,
   isRemoteDesktopMode,
@@ -37,7 +41,6 @@ import { OfficePreview, WATCH_RENEW_INTERVAL_MS } from "./office-preview"
 const mockStart = vi.mocked(startOfficeWatch)
 const mockStop = vi.mocked(stopOfficeWatch)
 const mockRenew = vi.mocked(renewOfficeWatch)
-const mockOpenSettings = vi.mocked(openSettingsWindow)
 const mockIsDesktop = vi.mocked(isDesktop)
 const mockIsRemote = vi.mocked(isRemoteDesktopMode)
 const mockBaseUrl = vi.mocked(getServerBaseUrl)
@@ -46,7 +49,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockStop.mockResolvedValue(undefined)
   mockRenew.mockResolvedValue(true)
-  mockOpenSettings.mockResolvedValue(undefined)
+  harness.available = true
   mockIsRemote.mockReturnValue(false)
   mockBaseUrl.mockReturnValue("https://srv.example")
 })
@@ -210,7 +213,7 @@ describe("OfficePreview", () => {
     expect(mockStop).not.toHaveBeenCalled()
   })
 
-  it("desktop NOT_INSTALLED: offers Open Settings", async () => {
+  it("desktop NOT_INSTALLED: opens Harness on Skill packs › Office", async () => {
     mockIsDesktop.mockReturnValue(true)
     mockIsRemote.mockReturnValue(false)
     mockStart.mockRejectedValue({
@@ -221,9 +224,31 @@ describe("OfficePreview", () => {
 
     render(<OfficePreview rootPath="/root/reports" relPath="a.docx" />)
 
-    const btn = await screen.findByText("officeOpenSettings")
-    fireEvent.click(btn)
-    expect(mockOpenSettings).toHaveBeenCalled()
+    expect(await screen.findByText("officeNotInstalledHint")).toBeTruthy()
+    fireEvent.click(screen.getByText("officeOpenHarness"))
+    expect(harness.openHarness).toHaveBeenCalledTimes(1)
+    expect(harness.openHarness).toHaveBeenCalledWith({
+      section: "packs",
+      tab: "office",
+    })
+  })
+
+  it("desktop NOT_INSTALLED with no workbench: the hint, without the button", async () => {
+    // A window that cannot show the Harness page: the hint names where
+    // OfficeCLI is installed, and there is no button that could do nothing.
+    harness.available = false
+    mockIsDesktop.mockReturnValue(true)
+    mockIsRemote.mockReturnValue(false)
+    mockStart.mockRejectedValue({
+      code: "dependency_missing",
+      message: "officecli is not installed",
+      i18n_params: { watchCode: "NOT_INSTALLED" },
+    })
+
+    render(<OfficePreview rootPath="/root/reports" relPath="a.docx" />)
+
+    expect(await screen.findByText("officeNotInstalledHint")).toBeTruthy()
+    expect(screen.queryByText("officeOpenHarness")).toBeNull()
   })
 
   it("web NOT_INSTALLED: shows the server-side install hint instead", async () => {
@@ -237,7 +262,7 @@ describe("OfficePreview", () => {
     render(<OfficePreview rootPath="/root/reports" relPath="a.docx" />)
 
     expect(await screen.findByText("officeServerInstallHint")).toBeTruthy()
-    expect(screen.queryByText("officeOpenSettings")).toBeNull()
+    expect(screen.queryByText("officeOpenHarness")).toBeNull()
   })
 
   it("retries a failed start when shown again after being kept out of sight", async () => {

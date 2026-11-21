@@ -17,6 +17,7 @@ import {
 import { mergeQueueRanks } from "@/components/tasks/task-acceptance"
 import { TaskCard } from "@/components/tasks/task-card"
 import { searchTerms, taskMatchesSearch } from "@/components/tasks/task-search"
+import { TaskTimeFilter } from "@/components/tasks/task-time-filter"
 import { useTaskDialogs } from "@/components/tasks/use-task-dialogs"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,7 +31,12 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useActiveProjectFolderId } from "@/hooks/use-active-project-folder"
-import { useTasksBoardFilter } from "@/lib/tasks-board-filter-storage"
+import {
+  saveTasksTimeFilter,
+  useTasksBoardFilter,
+  useTasksTimeFilter,
+} from "@/lib/tasks-board-filter-storage"
+import { taskMatchesTimeRange } from "@/lib/tasks-time-filter"
 import { cn } from "@/lib/utils"
 import { requestTasksFocus } from "@/lib/workbench-focus"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -95,6 +101,7 @@ export function TasksAuxTab() {
   // The board's canceled / archived toggles, followed live: one pair of
   // visibility rules for both surfaces.
   const boardFilter = useTasksBoardFilter()
+  const timeFilter = useTasksTimeFilter()
   const [searchInput, setSearchInput] = useState("")
   const terms = useMemo(() => searchTerms(searchInput), [searchInput])
   const searching = terms.length > 0
@@ -122,13 +129,15 @@ export function TasksAuxTab() {
   const columns = useMemo(
     () =>
       groupTasksByColumn(
-        projectTasks.filter((task) =>
-          taskMatchesSearch(task, terms, projectName)
+        projectTasks.filter(
+          (task) =>
+            taskMatchesTimeRange(task, timeFilter, now) &&
+            taskMatchesSearch(task, terms, projectName)
         ),
         boardFilter.showCanceled,
         boardFilter.showArchived
       ),
-    [projectTasks, terms, projectName, boardFilter]
+    [projectTasks, timeFilter, now, terms, projectName, boardFilter]
   )
   // Over ALL tasks: the merge queue is the project's, and a narrowed view must
   // not renumber it (the board computes it the same way).
@@ -197,6 +206,11 @@ export function TasksAuxTab() {
             </InputGroupAddon>
           ) : null}
         </InputGroup>
+        <TaskTimeFilter
+          value={timeFilter}
+          onValueChange={saveTasksTimeFilter}
+          compact
+        />
         <Button
           type="button"
           variant="ghost"
@@ -244,24 +258,36 @@ export function TasksAuxTab() {
           </Button>
         </div>
       ) : shownSections.length === 0 ? (
-        // Tasks exist, but none are left to show: a search narrowed them all
-        // away, or every one is canceled / archived and the board hides those.
+        // Tasks exist, but the current time, search or visibility filters
+        // leave none to show.
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
           <p className="text-xs text-muted-foreground">
             {searching
               ? t("searchNoResults", { query: searchInput.trim() })
               : t("listEmpty")}
           </p>
-          {searching ? (
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              onClick={() => setSearchInput("")}
-            >
-              {t("clearSearch")}
-            </Button>
-          ) : null}
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {searching ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={() => setSearchInput("")}
+              >
+                {t("clearSearch")}
+              </Button>
+            ) : null}
+            {timeFilter !== "all" ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={() => saveTasksTimeFilter("all")}
+              >
+                {t("timeFilterAll")}
+              </Button>
+            ) : null}
+          </div>
         </div>
       ) : (
         <ScrollArea className="min-h-0 flex-1">

@@ -465,7 +465,7 @@ pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 /// for when the installed copy's own package.json cannot be read. A runtime
 /// resolved to this value is marked unconfirmed (`codex_runtime`), so it never
 /// counts as the version a catalog was checked against. Move it with the pin.
-pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.166.0";
+pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.170.0";
 
 /// The npm package the built-in Claude Code entry runs — and the name the
 /// adapter reports as `agentInfo.name` at `initialize`, which is its
@@ -3338,9 +3338,302 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   * #1589 stops the Bun release executable from loading the
             //     project's `.env` and `bunfig.toml`. codeg runs the npm package
             //     under Node, which never loaded them.
+            //
+            // 0.107.0 (2026-11-13) moves the Claude Agent SDK to 0.3.323 (Claude
+            // Code 2.1.322 → 2.1.323); the ACP SDK stays 2.6.0 and
+            // `engines.node` stays ">=22". Measured live as for 0.106.0,
+            // 0.106.0 and 0.107.0 side by side, plus Fast mode turned on
+            // through the gateway, and the window a session on an unknown
+            // model id reports. The frames and transcript records codeg reads
+            // match apart from ids, paths, token counts and timing (a gateway
+            // retry, or an `_auth/status_update` sent later in one run than in
+            // the other), except as (ooooo) says.
+            //
+            // (ooooo) **Two changes codeg shows as they come.**
+            //   * #1602 explains every reason Claude Code gives for turning Fast
+            //     mode off. Through a gateway that authenticates with
+            //     `ANTHROPIC_AUTH_TOKEN`, Claude Code turns it off at the first
+            //     turn with the reason `preference`, which 0.106.0 left
+            //     unexplained. So the toggle went back to off without a word. Now
+            //     a warning notice follows: `Fast mode turned off`, `Not enabled
+            //     for your organization or API gateway.`, which codeg shows as a
+            //     notification. The option's description carries the same reason
+            //     while it is off. codeg replays a saved `fast` = `on` on every
+            //     connect (`apply_preferred_session_options`), so a gateway user
+            //     who once turned it on gets that notice once per session until
+            //     they pick off again. Whether a refused pick should stop being
+            //     replayed is a product call that this bump does not make. Some
+            //     reasons do not last (`network_error`, and `model_not_allowed`
+            //     until the model changes), and the notice carries no reason code.
+            //   * Since 2.1.323, Claude Code takes the window of a model id it
+            //     does not know as 1M instead of 200K, and #1613 makes the
+            //     adapter's placeholder 1M too. Measured with `ANTHROPIC_MODEL`
+            //     set to `my-gateway-model`: `usage_update.size` is 1000000
+            //     where 0.106.0 reported 200000. `claude-sonnet-4-5` stays at
+            //     200000 on both pins. The live gauge reads `size` as it is.
+            //     `parsers::claude` still gives no window for a non-`claude`
+            //     id: the transcript keeps no trace of a gateway's served window
+            //     or `CLAUDE_CODE_DISABLE_1M_CONTEXT`.
+            //
+            // (ppppp) Nothing to change in codeg, each checked:
+            //   * #1610 adds `rateLimit` (`status`, `rateLimitType`,
+            //     `resetsAt`) to the `data` of a prompt that fails with
+            //     `errorKind: "rate_limit"`. codeg reads neither field. It shows
+            //     the error's message, which already names the reset time.
+            //   * #1616 ends a tool call whose response Claude Code took back
+            //     (a refusal fallback) as `failed`, with its own text, where
+            //     0.106.0 left it open and then failed the prompt with
+            //     `incomplete_tool_call`. codeg shows a failed call as it
+            //     comes. Upstream could not trigger the case on demand, and
+            //     neither can the fake API.
+            //   * #1594 gives the AIR `api_retry` warning a `details` line (the
+            //     cause and the wait). The failure strip already shows
+            //     `details`, and each revision replaces the whole record, so the
+            //     terminal revision, which has none, clears it.
+            //   * #1612 drops the 30-second `tool_progress` beats of a slow
+            //     hook, which 0.106.0 put on the tool call they name. It also
+            //     follows the SDK's new title rule (only a `custom-title` /
+            //     `ai-title` record names a session). `parsers::claude` already
+            //     reads titles by record type.
+            //   * #1608 changes only the RFD form of subagent reporting, and
+            //     codeg does not declare `subagents`. AIR output is unchanged.
+            //   * #1615 and #1614 touch only a managed `deniedModels` list
+            //     together with an `availableModels` allowlist, and a log line.
+            //     codeg sends only `modelPicker` in `--settings`.
+            //   * #1599 and #1598 change only the v2 agent. #1601 and #1581
+            //     move code and change nothing.
+            //   * Per its changelog, CLI 2.1.323 also stops offering "don't ask
+            //     again" for Bash writes into `.git` or `.claude`. codeg lists
+            //     the permission options the adapter sends.
+            //
+            // 0.107.3 (over 0.107.1 and 0.107.2, all 2026-11-16) moves the
+            // Claude Agent SDK to 0.3.325 (Claude Code 2.1.323 → 2.1.325) and
+            // the ACP SDK 2.6.0 → 2.7.0; `engines.node` stays ">=22". Measured
+            // live with the same harness, 0.107.0 and 0.107.3 side by side.
+            // The twelve earlier scenarios match apart from timing (a gateway
+            // retry in one run, request order) and the reworded description
+            // of a bundled skill. Four new ones, a `ScheduleWakeup` fire, a
+            // cron fire in a resumed session, Fast mode across a model switch
+            // and mid-turn, and model ids the selector does not list, show
+            // what (qqqqq) and (rrrrr) say. CLI 2.1.325 adds no `type` literal
+            // that looks like a transcript record type; the new ones belong
+            // to its internal view-state machine.
+            //
+            // (qqqqq) **Three fixes codeg gets with the bump, with no change.**
+            //   * #1622 ends the autonomous-turn async task of a cycle that no
+            //     turn claims. A `ScheduleWakeup` or cron fire with no prompt
+            //     open gets its `async_task_spawned` ("Claude is working", "A
+            //     scheduled wakeup fired (set for …)."), but its result has no
+            //     `origin`, so 0.107.0 left the task open. Measured: the row
+            //     stayed `running` after the cycle's reply until the next
+            //     prompt closed it; 0.107.3 completes it with the cycle's
+            //     result. Until then codeg's async-task strip kept the row, and
+            //     `has_live_async_task` exempted the connection from the idle
+            //     sweeps and kept a work task's or automation's turn-end hold
+            //     (`turn_end_hold`) waiting, both up to the background
+            //     keep-alive window.
+            //   * #1623 and #1636 read Claude Code's stream from a session's
+            //     setup response and from a query restart on, not from the
+            //     next prompt. Measured with a durable every-minute cron
+            //     (`CronCreate`): the resumed CLI ran the fire before any
+            //     prompt, and 0.107.0 sent nothing for it. The first prompt
+            //     then took the cron cycle's reply as its own, ended with the
+            //     cron cycle's result, and left its own cycle as a "Claude is
+            //     working" task that never completed. 0.107.3 reports the fire
+            //     as it comes (an autonomous-turn task, "A scheduled task
+            //     fired.", then `completed`), and the prompt gets only its own
+            //     answer. codeg draws such a cycle from the transcript, which
+            //     `background_watch` reads from before the session is
+            //     established, so the early cycle shows like any other one
+            //     outside a turn.
+            //   * #1637 keeps Fast mode on when it is turned on after a model
+            //     switch or during a turn. Measured with
+            //     `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1`: after a switch from
+            //     `opus` to `fable`, turning Fast mode back on was undone at
+            //     the next prompt on 0.107.0 and holds on 0.107.3. Turned on
+            //     mid-turn, it went back off at the turn's end on 0.107.0 (and
+            //     on again a turn later); it stays on on 0.107.3. The switch to
+            //     Fable still drops it at the next prompt without a notice, as
+            //     Claude Code does. codeg replays a saved model before the
+            //     other saved options at connect
+            //     (`order_preferred_config_values`), so a saved Fable and Fast
+            //     mode pair lands on both pins.
+            //
+            // (rrrrr) **#1630 passes a model id that the selector does not list
+            // to Claude Code**, which checks it with a one-token API request
+            // and runs it if the account or gateway serves it. Measured
+            // through the gateway: `claude-opus-4-6` and `claude-fable-5-1`,
+            // which 0.107.0 refused with -32602, are taken and listed; an id
+            // the API answers with 404 is refused with -32602 and Claude
+            // Code's reason ("Model 'gpt-4' not found"). codeg does not send
+            // such ids. Its pickers list only the selector's rows. At connect,
+            // `heal_retired_model_pick` moves a saved pick that the selector
+            // no longer lists to the row that replaced it when codeg
+            // recognizes the rename, and `config_option_rejects_value` still
+            // screens out any other: replaying a stale pick would cost that
+            // API request on every connect. #1633 resolves a preference
+            // without a version (`opus[1m]`) to the newest listed row; the row
+            // values codeg sends resolve exactly, as before.
+            //
+            // (sssss) Nothing to change in codeg, each checked:
+            //   * #1641 (Claude Enterprise plans) and #1609 (the SDK's
+            //     `tokenSource: "none"`) change only the `--hide-claude-auth`
+            //     guard, and codeg does not pass the flag.
+            //   * #1618, #1632 and #1607 change only the v2 agent; codeg speaks
+            //     v1. ACP SDK 2.7.0 (#1629) brings v2's `replay_complete` and
+            //     the unstable schema 1.32.0 additions, which the v1 agent
+            //     does not send to codeg.
+            //   * Per its changelog, CLI 2.1.325 runs sandboxed Bash through
+            //     the normal permission flow by default, offers a bare "Always
+            //     allow" rule in SDK hosts only when saving it would allow that
+            //     command again, and asks before a scheduled task or `/loop`
+            //     runs a skill that declares `allowed-tools` or hooks. codeg
+            //     shows the permission requests and options the adapter sends.
+            //
+            // 0.108.0 (2026-11-17) moves the Claude Agent SDK to 0.3.326
+            // (Claude Code 2.1.325 → 2.1.326); the ACP SDK stays 2.7.0 and
+            // `engines.node` ">=22". Measured live with the same harness,
+            // 0.107.3 and 0.108.0 side by side: the seventeen earlier
+            // scenarios match apart from timing (a gateway connection reset in
+            // one run, request order) and two reworded slash-command
+            // descriptions. `initialize` adds only `mcpCapabilities.acp:
+            // true`, a field the schema crate reads only under its
+            // `unstable_mcp_over_acp` feature, which codeg does not enable.
+            // Three new scenarios (MCP servers through new, resume and load, a
+            // 6 s foreground command, and plan approval with and without the
+            // setting) show what (ttttt) and (uuuuu) say. CLI 2.1.326's new
+            // `type` literals are a Claude Code Remote worker's late-allow
+            // record and stream message, and internal states; none is a record
+            // of a local session's transcript.
+            //
+            // (ttttt) **Two changes codeg gets with the bump, with no change.**
+            //   * #1647 sends a session's MCP servers to the CLI in the SDK's
+            //     initialize request (`--await-initialize`), not in
+            //     `--mcp-config` on its command line. Measured with a stdio
+            //     server shaped like codeg-mcp (a secret in its args, one in
+            //     its env): on 0.107.3 the CLI's command line held both, on
+            //     0.108.0 neither, and the server connected and answered a tool
+            //     call after `session/new`, `session/resume` and `session/load`
+            //     alike. So codeg-mcp's `--token` and the env of the servers
+            //     codeg passes no longer show in the Claude CLI's `ps` line.
+            //     codeg-mcp's own command line still carries `--token`, as
+            //     with every agent. A CLI named by `CLAUDE_CODE_EXECUTABLE`
+            //     keeps `--mcp-config`; codeg does not set it.
+            //   * #1627 offers "Yes, clear context and …" on plan approval only
+            //     when Claude Code's `showClearContextOnPlanAccept` setting is
+            //     on. Measured: 0.108.0 offers `exit-plan-default`,
+            //     `exit-plan-auto`, `exit-plan-bypass` and `reject` by default,
+            //     and `exit-plan-clear-auto` again with the setting. codeg
+            //     renders the options the adapter sends, and keeps the default:
+            //     the clear-context row is the one that truncates a later
+            //     `session/load` at the plan ((dd), still open upstream).
+            //
+            // (uuuuu) **#1587 streams a foreground Bash command's output, but
+            // not to codeg.** The adapter reads the CLI's `local_bash` task
+            // output while the command runs, only for a client that declared
+            // `_meta.terminal_output_delta` and is not AIR. codeg declares no
+            // terminal extension to Claude (`build_client_capabilities`) and is
+            // an AIR client, so declaring it would not help. Measured: the
+            // command's tool call gets its whole output with the result, at
+            // the same frames on 0.107.3 and 0.108.0.
+            //
+            // (vvvvv) Nothing to change in codeg, each checked:
+            //   * #1645 serves MCP servers that a client declares with
+            //     `"type": "acp"` over the ACP connection (`mcp/message`).
+            //     codeg declares no server of that type: codeg-mcp is a stdio
+            //     server, which Claude already supports.
+            //   * #1644 settles a `confirmWithUser` question's tool call, which
+            //     only a client with form elicitation got. codeg does not
+            //     declare form elicitation to Claude.
+            //   * #1638 keeps a workflow agent's permission-request tool call
+            //     out of the main turn's unfinished tools, which failed that
+            //     turn with `incomplete_tool_call` when workflows (codeg's
+            //     ultracode option) run in a permission mode that asks. #1451
+            //     keeps an autonomous result that names the original prompt
+            //     from settling a steered turn early; codeg steers Claude
+            //     natively (`steering_prompt_required_min_version`). #1419
+            //     keeps a malformed Read or Edit path from failing the prompt.
+            //     Each is a fix on paths codeg already takes, checked by the
+            //     adapter's tests; not reproduced live.
+            //
+            // 0.108.1 (2026-11-18) and 0.109.0 (2026-11-19) move the ACP SDK to
+            // 2.8.0 (schema 1.33.0) and the Claude Agent SDK to 0.3.328
+            // (Claude Code 2.1.326 → 2.1.328); `engines.node` stays ">=22".
+            // Measured live with the same harness, 0.108.0 and 0.109.0 side by
+            // side: the twenty earlier scenarios match apart from what
+            // (wwwww) says, timing (a gateway reconnect in one run, request
+            // order), the CLI asking the fake gateway, which refuses titles,
+            // for a session title twice more, one more `last-prompt` record in
+            // an idle session's transcript, and `/code-review`'s reworded
+            // description. A new scenario ran a session with codeg's session
+            // meta (a `modelPicker` row in `options.settings`), with and
+            // without `promptSuggestions: false`, through `session/new`, three
+            // prompts on the picker's row and `session/resume`.
+            //
+            // (wwwww) **Four changes codeg gets with the bump, with no
+            // change.**
+            //   * #1669 sends a session's settings to Claude Code in the SDK's
+            //     initialize request, as #1647 did for MCP servers: Claude Code
+            //     starts with `--await-initialize --initialize-fields=settings`
+            //     and no `--settings`. The settings land in the same tier
+            //     (`flagSettings`). Measured: on 0.109.0 codeg's picker id is no
+            //     longer on the CLI's command line after `session/new` or
+            //     `session/resume`, the row is listed after both, and after
+            //     `session/new` it takes `set_config_option` and reaches the
+            //     gateway as the model. A CLI named by `CLAUDE_CODE_EXECUTABLE`
+            //     keeps `--settings`; codeg does not set it.
+            //   * #1666 sends the config options as model, effort, fast,
+            //     ultracode, mode (mode came first). codeg sets the order
+            //     itself where it matters: the composer ranks model, effort,
+            //     mode, then the rest (`rankOf` in `session-settings.ts`), and
+            //     a connect replays a saved model before the other saved
+            //     options (`order_preferred_config_values`). Only the agent
+            //     options editor, which keeps the agent's order after the
+            //     model, now shows Mode below Fast and Ultracode.
+            //   * #1659 files the Fast option under the `speed` category (it
+            //     was `model_config`, which `map_session_config_category`
+            //     reported as "unknown") and lists Off before On. codeg reads
+            //     only the `model`, `thought_level` and `mode` categories, and
+            //     `onOffValues` reads the on/off pair in either order.
+            //   * #1660 sends the predicted next prompt as ACP's unstable
+            //     `prompt_suggestions_update` to a client that declares
+            //     `session.promptSuggestions`, and asks Claude Code for a
+            //     prediction only for that client or AIR. codeg is an AIR
+            //     client, so it keeps getting `_meta.promptSuggestions`.
+            //     Measured: the same suggestion frames on 0.108.0 and 0.109.0,
+            //     and with `promptSuggestions: false` no prediction request on
+            //     either. codeg declares no capability for the standard update.
+            //     The schema crate (1.12.0) has no variant for it, and it gives
+            //     what the AIR form gives.
+            //
+            // (xxxxx) Nothing to change in codeg, each checked:
+            //   * #1506 checks a `providers/set` gateway's models, and codeg
+            //     never sends `providers/set`.
+            //   * #1603 ends a v1 turn at its result for a client in the
+            //     subagents RFD form, and #1656 answers -32602 to a request that
+            //     names a subagent's child session. codeg declares no
+            //     `subagents`, so it gets neither the RFD form nor child
+            //     session ids.
+            //   * #1604 closes a server tool call (the advisor's) whose reply
+            //     Claude Code gave up on at its stream idle timeout, as
+            //     `failed`, once the next reply starts. The v1 turn no longer
+            //     fails with `incomplete_tool_call` for it. codeg shows the
+            //     card's `failed` status as it shows any other.
+            //   * #1653 concerns MCP-over-ACP (`"type": "acp"`) servers, and
+            //     codeg declares none.
+            //   * ACP SDK 2.8.0 makes `session/fork` refuse a `cursorId`.
+            //     codeg's fork request names none (`fork::build_fork_request`).
+            //     The rest of 2.8.0 is v2.
+            //   * SDK 0.3.327 refuses session options that it cannot send to
+            //     Claude Code (a hook matcher without hooks). codeg sends no
+            //     `hooks` option.
+            //   * CLI 2.1.328 adds an `api-request-resumed` transcript record
+            //     to the `api-request` family. The parser skips it like the
+            //     others (pinned in `parsers::claude`). Its other changes that
+            //     reach an SDK host are fixes on paths codeg already takes.
             distribution: AgentDistribution::Npx {
-                version: "0.106.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.106.0",
+                version: "0.109.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.109.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -4716,9 +5009,126 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `policyCapacityUnavailable` error code falls to the adapter's
             // `provider_error`, so codeg shows a `service` failure offering
             // Retry.
+            //
+            // 2.7.0 keeps `@openai/codex` at ^0.166.0 (a fresh install resolves
+            // the same 0.166.0 binary, so the offline catalog snapshot and
+            // `CODEX_NESTED_VERSION_FALLBACK` stand) and moves the inline
+            // `@agentclientprotocol/sdk` ~2.4.0 → ~2.6.0 (schema 1.31.0).
+            // `engines` is still absent, and the 20.3.0 floor stands: live on
+            // 20.3.0 a session runs a plain and a shell turn, and turns a hook
+            // blocks. Under codeg's exact `clientCapabilities` the 33-scenario
+            // harness replays byte for byte as on 2.6.0, `initialize` included
+            // (bar the version), and so does a live plain and shell turn.
+            //
+            // (aaa) **#767 reports a hook that blocks or stops Codex.** codex's
+            // `hook/completed` with status `blocked` or `stopped` becomes a
+            // `warning` notice for a client with `session.notices`, as codeg
+            // is: "<Event> hook blocked the prompt" (`the tool call`, `the tool
+            // result`, …) or "<Event> hook stopped the turn", described by the
+            // hook's feedback, stop and error entries (not its `context`
+            // ones). Other hook results stay silent, as all of them did before.
+            // Measured live with trusted command hooks that exit 2: a blocked
+            // `UserPromptSubmit` ends the turn `end_turn` with no output and
+            // only the notice, and codex records neither the prompt nor a
+            // reply (just `task_started` / `task_complete`), so the exchange is
+            // gone on reload. A blocked `PreToolUse` shows no tool call live,
+            // only the notice, while the rollout keeps the call with "Command
+            // blocked by PreToolUse hook: …" as its output; the model then
+            // answers. `hook/completed` is transient, so neither is replayed.
+            // Up to 2.6.0 a blocked prompt was a silent empty turn, which codeg
+            // called "sent only status updates and no reply". Now an empty turn
+            // that raised such a notice is put down to the hook
+            // (`EmptyTurnCause::HookStopped`, `turn_failed_empty_hook`, matched
+            // on these titles only by `hook_stop_notice_text`): the failure
+            // line, the work-task failure and the chat-channel reply carry the
+            // notice's words, and the verdict's notification takes over the
+            // notice's instead of telling it twice.
+            //
+            // (bbb) #327 maps a `priority` service tier to Fast mode. codex
+            // normalizes a configured `service_tier = "fast"` to `priority`,
+            // which 2.6.0 read as Fast off, and then every turn sent no tier,
+            // overriding the config. Measured live: with `fast` or `priority`
+            // in config.toml, `fast-mode` now opens `on` and turns send
+            // `priority`; with no tier it opens `off`, even on GPT-6 Sol, whose
+            // catalog `default_service_tier` is `priority` (the adapter reads
+            // the thread's tier, not the catalog's). codeg writes no tier, and a
+            // Fast pick the user makes is replayed as before.
+            //
+            // (ccc) Inert or not adopted. #752 sends the structured plan as an
+            // `items` `plan_update` only to a client with the `plan` capability,
+            // which codeg does not advertise (`build_client_capabilities`), so
+            // codeg still gets `plan`. #755 adds the retry's cause (codex's
+            // `additionalDetails`, e.g. "idle timeout waiting for websocket")
+            // as the AIR retry record's `details`, which the composer's
+            // incident strip already shows. #760 reports delegated tasks as
+            // messages between standard subagent sessions, which codeg does not
+            // use (see (tt)); its replay now draws a collab call through the
+            // session's router, which for codeg is the same tool call as
+            // before, and `sessionCapabilities.subagents` is now advertised
+            // only to AIR clients, which codeg is. Failure and notice ids now
+            // count across prompts: on 2.6.0 the first session-scoped record (one
+            // naming no turn) of every prompt reused one id at revision 1, so
+            // codeg's monotonic merge (`SessionState::apply_event`) dropped
+            // every one after the first.
+            // v2's initial `configOptions` are ignored; codeg speaks v1.
+            //
+            // 2.8.0 moves `@openai/codex` ^0.166.0 → **^0.170.0** (a fresh
+            // install resolves 0.170.0, now `CODEX_NESTED_VERSION_FALLBACK`)
+            // and the inline `@agentclientprotocol/sdk` ~2.6.0 → ~2.8.0.
+            // `engines` is still absent, and the 20.3.0 floor stands: live on
+            // 20.3.0 a session runs a plain and a shell turn, and turns a hook
+            // blocks. Under codeg's exact `clientCapabilities` the 33-scenario
+            // harness replays as on 2.7.0 bar the order of `configOptions`
+            // (see (fff)), and live plain, shell, hook, async-question,
+            // permission-profile, steering and suggestion runs match 2.7.0's
+            // apart from the model list and `mcpCapabilities.acp`.
+            //
+            // (ddd) **codex 0.170's catalog: GPT-6.2 Sol and GPT-6.2 Astra.**
+            // GPT-6.2 Sol is the new default (priority 1, a 500K window), so
+            // a fresh `session/new` now opens on `gpt-6.2-sol` and the AIR
+            // `recommendedValue` follows; GPT-6.2 Astra (272K) is second, and
+            // GPT-6.1 Sol's window rises from 272K to 500K (its
+            // `model_context_window` reads 475000 live, as GPT-6.1 Terra's
+            // does). The offline snapshot is regenerated from the 0.170.0
+            // binary, the context-window fallback
+            // (`parsers::infer_context_window_max_tokens`) puts both Sols on
+            // 475K, and the catalog strictness is re-probed: one new strict
+            // enum, `web_search_provider` (`codex_model_catalog.rs`). The model
+            // placeholders in the settings follow.
+            //
+            // (eee) **codex 0.170 refuses a provider change in its own words.**
+            // Reopening a thread after the configured `model_provider` moved
+            // still answers `session/load` and `session/resume` with a bare
+            // -32603, but `data.details` is no longer the 0.166 sentence
+            // ("This chat uses fake, but your current provider is fake2. …"):
+            // it is the config-load error "failed to load configuration:
+            // Cannot change this thread's model provider from `fake` to
+            // `fake2` on resume.\n\nCheck … any CODEX_CONFIG override." (live).
+            // Unrecognized, that fell to the `session/new` fallback and rebound
+            // the row to an empty session on the new provider; now
+            // `codex_thread_provider_refused` reads it as `provider_mismatch`,
+            // and the banner quotes only the sentence naming both providers.
+            //
+            // (fff) Inert or not adopted. #778 lists session `configOptions`
+            // model, reasoning effort, mode, collaboration mode (2.7.0: mode,
+            // collaboration mode, model, effort); codeg ranks them itself
+            // (`src/lib/session-settings.ts`). #771 serves MCP over the ACP
+            // connection (`initialize` now says `mcpCapabilities.acp: true`
+            // once codex's `mcp_2026_07_28` feature checks out); codeg keeps
+            // codeg-mcp on stdio, which every agent shares, and the bridge
+            // takes only MCP 2026-07-28 servers. #777's background list and
+            // `terminal/cancel`, the replay boundaries and keyed prompt ids are
+            // ACP v2 only; so is the new `plan_removed` after an emptied
+            // checklist, which a v1 client still gets as a `plan` with no
+            // entries (codeg's plan card then draws nothing). #742 (deeply nested JSON) and per-thread
+            // `CODEX_CONFIG` MCP tables (now kept beside the session's servers)
+            // need nothing from codeg. In codex 0.170 itself the rollout gains
+            // only metadata (`history_sequence`, `account_scoped`, …) and a
+            // developer-message part, all ignored by the parser, and every
+            // `config.toml` key codeg writes keeps its shape.
             distribution: AgentDistribution::Npx {
-                version: "2.6.0",
-                package: "@agentclientprotocol/codex-acp@2.6.0",
+                version: "2.8.0",
+                package: "@agentclientprotocol/codex-acp@2.8.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -4990,12 +5400,12 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             description: "The open source coding agent",
             // OpenCode 2. 2.2.0 (2026-10-27) is the first 2.x release on
             // GitHub, and the ACP registry's `opencode` entry moved to it the
-            // same day. This pin is 2.2.7 (2026-11-10), which the registry
-            // entry names too, with the same sha256; GitHub's "latest" still
-            // marks 1.19.5 (2026-10-28). The archives keep the 1.x names and
+            // same day. This pin is 2.3.2 (2026-11-18), which the registry
+            // entry names too, with the same sha256s; GitHub's "latest" now
+            // marks 1.19.6 (2026-11-17). The archives keep the 1.x names and
             // layout, a single `opencode` / `opencode.exe` at the root, and the
             // darwin binaries carry the Developer ID signature 1.18.34
-            // introduced: 2.2.7's darwin-arm64 and darwin-x64 pass `codesign
+            // introduced: 2.3.2's darwin-arm64 and darwin-x64 pass `codesign
             // --verify --strict`.
             //
             // codeg no longer runs 1.x (`opencode_launch` refuses it). 2.x
@@ -5045,11 +5455,13 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // inherit that value (not checked), then with a proxy configured
             // and a `*` bypass list, their Python and curl requests go through
             // the proxy again. And every server process, the private one `acp`
-            // starts and codeg's credential helper alike, runs the
-            // scheduled-prompt loop. It fires prompts only where
-            // `experimental.schedules` is on and schedules exist, from
-            // whichever process holds the 60 s `schedule:leader` lease, and
-            // otherwise does one kv write and delete per start.
+            // starts and codeg's credential helper alike, runs the automation
+            // loop (scheduled prompts until 2.3.1 renamed them). It fires only
+            // where `experimental.automations` (or the older
+            // `experimental.schedules`) is on and automations exist, from
+            // whichever process holds the 60 s `automation:leader` lease, and
+            // otherwise does one kv write and delete per start (read in the
+            // 2.3.2 source).
             //
             // A live A/B against 2.2.0, with codeg's client capabilities and
             // a stdio MCP server handed over on `session/new`, matched on
@@ -5093,7 +5505,9 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // The flags 2.2.6 moved behind `Flag.resolve` (`todo`,
             // `background_compaction`, `media_blob`, `schedules`) stay off in
             // this `latest`-channel build unless `experimental.<flag>`,
-            // `experimental.all_flags` or `OPENCODE_FLAGS` turns them on. A turn
+            // `experimental.all_flags` or `OPENCODE_FLAGS` turns them on
+            // (2.3.1 retired `background_compaction` for `compaction.background`
+            // and renamed `schedules` to `automations`). A turn
             // whose provider host cannot be resolved now retries for up to an
             // hour (read in the source, not run).
             //
@@ -5141,40 +5555,134 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // session hangs and the next prompt gets no answer. `/init` and
             // `/review` go the same way (2.2.0 and 2.2.5 alike), though each
             // is one prompt.
+            //
+            // 2.3.0 (2026-11-13) follows 2.2.7 directly; the registry entry
+            // names it with the same sha256s, the six archives keep one
+            // `opencode` / `opencode.exe` at the root, and both darwin builds
+            // pass `codesign --verify --strict`. Measured over stdio with
+            // codeg's client capabilities against 2.2.7: `initialize` and
+            // `session/new` match apart from the version (the steering and
+            // child-session `_meta`, the model, effort and mode values, the
+            // four slash commands, the tool list), the database schema and its
+            // 59 migrations are unchanged, and `session/load` reads a database
+            // the other version wrote in both directions. Only `translate.ts`
+            // and `turn.ts` of the ACP bridge changed, and none of the
+            // credential and integration routes codeg's helper calls.
+            //
+            // What moved is the sub-agent. `subagent` lost its `background`
+            // input: every launch now returns at once, completed with
+            // `metadata.status: "running"`, and the child's work, and its end,
+            // arrive afterwards as `opencode/session/child_update`, in the
+            // same shapes as 2.2.7's background launches. codeg keys a
+            // background launch on that status, not on the input, so the path
+            // built for them now carries every launch. What is new on the
+            // wire: when the child reports back, OpenCode wakes the parent,
+            // and since 2.3.0 the bridge forwards that turn's updates (2.2.7's
+            // background follow-up dropped them). They come after the
+            // prompt's `end_turn`, with no frame before or after to say where
+            // that turn starts or ends (measured: the answer to the report
+            // arrived 3 s after `end_turn`, then nothing). On the idle loop
+            // the frontend drops such chunks and offers to load the
+            // background activity, which re-reads the session through
+            // `parsers::opencode`; the parser already renders that shape (the
+            // launch, the `<subagent>` notice it settles the card with, and
+            // the parent's answer). Nothing marks the end of such a turn, so
+            // it cannot be shown as a turn of its own the way Grok's is.
+            //
+            // Shell commands now run under the process daemon bundled in the
+            // binary, which 2.3.0 extracts to
+            // `$XDG_CACHE_HOME/opencode/bin/opencode-pty/<version>-<hash>/` on
+            // the first command (2.2.7 never extracted it on this path; when
+            // it cannot start, the server spawns the command itself, as
+            // before). A command is the daemon's child, not the server's, but
+            // the daemon stops with its owner: killing `opencode acp` with a
+            // command running leaves neither alive (measured, as on 2.2.7). A
+            // Stop still ends the call `failed` and kills the command; its
+            // result is now the output so far, where the full output was saved
+            // and `Command interrupted by the user (shell ID: …).`, with
+            // `metadata.interrupted`, where 2.2.7 said `Tool execution
+            // interrupted`, and nothing in codeg reads either text. A stdio
+            // MCP server handed over on `session/new` and called from
+            // code-mode `execute` gives the same frames as on 2.2.7. Read in
+            // the source, not run: every fork now gets a synthetic
+            // `<fork-notice>` row, which the parser skips like any synthetic
+            // row; a report's text may end in a "Background work still
+            // running:" list, and its tag may say `running` while
+            // `metadata.state`, which codeg reads, keeps the real status; and
+            // `/goal`, `/init` and `/review` still answer at once.
+            //
+            // 2.3.2 (2026-11-18) comes 78 minutes after 2.3.1 and adds only a
+            // change to how Responses-API models get the system prompt and a
+            // slimmer structured `webfetch` result, which neither the wire nor
+            // the database carries. Measured over stdio against 2.3.0, set up
+            // the same way: `initialize` (`protocolVersion: 1`) and
+            // `session/new` match apart from the version, as do the scripted
+            // tool turn, Stop, `/compact`, `/goal`, the error texts codeg
+            // classifies and the credential calls, and the MCP server handed
+            // over on `session/new` reaches the model. Three migrations (62 in
+            // all) replace the `schedule` table with `automation`; the session
+            // tables keep their shapes, `session/load` reads the other
+            // version's database in both directions, and 2.3.0 opens a
+            // migrated one without a warning. A request the server fails on
+            // now answers 500 with a JSON `message` (and a `ref`) where it
+            // sent an empty body, and the credential helper shows that message.
+            //
+            // What moved is the shell timeout. A foreground command still
+            // running when its `timeout` runs out (120 s by default, which
+            // `timeout: 0` now means too) is no longer killed with `Exit code:
+            // 143 (SIGTERM)`: the call completes at once as a background
+            // launch, `Command moved to the background (shell ID: …)` with
+            // `metadata.status: "running"`, a `shellID` and no exit, which
+            // codeg already reads as one, and the command's result arrives
+            // later in the stored `<shell>` notice the parser settles the card
+            // with. Such a command outlives Stop (read in the source). The
+            // turn its end wakes is now forwarded after `end_turn`, like a
+            // sub-agent's report and with no frame to mark it either (2.3.0
+            // woke the model but sent nothing; measured: one chunk 4 s after
+            // `end_turn`, then nothing). Background compaction is on by
+            // default (`compaction.background`), and
+            // `experimental.background_compaction`, which the behaviour
+            // section used to write, is dropped without a word; the section
+            // now writes the new key and lists the old one as ignored.
+            // OpenCode again reads a directory's `CLAUDE.md` where it has no
+            // `AGENTS.md`, and `~/.claude/CLAUDE.md` where the global
+            // `AGENTS.md` is missing (measured: the marker reached 2.3.2's
+            // model only), unless `OPENCODE_DISABLE_CLAUDE_CODE` or
+            // `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT` is set; codeg sets neither.
             distribution: AgentDistribution::Binary {
-                version: "2.2.7",
+                version: "2.3.2",
                 cmd: "opencode",
                 args: &["acp"],
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-darwin-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-darwin-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-darwin-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-darwin-x64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-linux-arm64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-linux-arm64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-linux-x64.tar.gz",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-linux-x64.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-windows-arm64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-windows-arm64.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://github.com/anomalyco/opencode/releases/download/v2.2.7/opencode-windows-x64.zip",
+                        url: "https://github.com/anomalyco/opencode/releases/download/v2.3.2/opencode-windows-x64.zip",
                         sha256: None,
                     },
                 ],
@@ -5317,8 +5825,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `~/.local/bin`. The npm global install is the managed/one-click
             // channel codeg's Install button drives.
             distribution: AgentDistribution::Npx {
-                version: "0.23.1",
-                package: "hermes-agent@0.23.1",
+                version: "0.23.2",
+                package: "hermes-agent@0.23.2",
                 cmd: "hermes",
                 args: &["acp"],
                 env: &[],
@@ -5536,8 +6044,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // daemon's job workers.
             //
             // Two behaviours around a Stop, the same in 2.171.0, 2.177.0, 2.177.1,
-            // 2.179.0, 2.179.2, 2.179.3, 2.180.0, 2.181.0, 2.182.0, 2.183.0 and
-            // 2.184.0, need codeg's help.
+            // 2.179.0, 2.179.2, 2.179.3, 2.180.0, 2.181.0, 2.182.0, 2.183.0,
+            // 2.184.0 and 2.185.0, need codeg's help.
             // CodeBuddy answers a `session/prompt` that starts within 500 ms of a
             // `session/cancel` it took mid-turn with `cancelled`, without running
             // the prompt or keeping it in its history, so codeg holds the first
@@ -5817,9 +6325,37 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // summary request, 12.1 s. The headless bundle still has no
             // auto-update scheduler, `--acp` still does not prune sessions, and
             // an install without optional dependencies still runs whole turns.
+            //
+            // 2.185.0 keeps `bin/codebuddy` byte for byte and the inlined ACP
+            // SDK transport (the same module once minified names are
+            // normalized); `package.json` changes only its version.
+            // `initialize` and the unauthenticated `session/new` answer exactly
+            // as 2.184.0 does (`protocolVersion: 1`), the modes,
+            // `thought_level`, `sandbox` and `multitask` values are unchanged,
+            // and no `sessionUpdate` kind, `session/*` method or
+            // `_codebuddy.ai/*` notification came or went. The default model's
+            // id is `default-model` again (was `auto`, still named Auto); a
+            // saved `auto` is no longer listed, so codeg skips it and the
+            // session starts on `default-model`, and 2.185.0 loads a 2.184.0
+            // session on `default-model`. A Read result still ends with the
+            // same tool-hint line, live, in the `session/load` replay and in the
+            // transcript, no other tool's result carries one, and
+            // `strip_read_range_hint` still removes it. A context overflow the
+            // agent fails to recover from now answers with a -32005 "Context
+            // overflow" error (`category: context_overflow`), which codeg shows
+            // like any other (not triggered: a prompt-too-long reply was still
+            // compacted and retried on both). The fs, terminal and permission
+            // requests, the recorded turns (2.184.0's set) and their
+            // transcripts match 2.184.0 apart from the model id, usage numbers
+            // and timing. A stdio server handed over on `session/new` is
+            // started and its tool reaches the model, and one named `codeg-mcp`
+            // still asks once per call, for `DeferExecuteTool`. Of three Stops
+            // during a sub-agent, the cancelled prompt was answered after 60 ms,
+            // 65 ms and, behind the background summary request, 12.1 s. An
+            // install without optional dependencies still runs whole turns.
             distribution: AgentDistribution::Npx {
-                version: "2.184.0",
-                package: "@tencent-ai/codebuddy-code@2.184.0",
+                version: "2.185.0",
+                package: "@tencent-ai/codebuddy-code@2.185.0",
                 cmd: "codebuddy",
                 args: &["--acp"],
                 env: &[],
@@ -6482,9 +7018,65 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // versions wrote alike. An approved or dismissed plan review still
             // settles `ExitPlanMode` `failed` with `isError`, so the 2.6.0
             // workaround above stays.
+            //
+            // 2.6.2 is another patch release, and the mandated check passes
+            // verbatim: `acpMcpServersToConfigRecord` is byte-identical (the
+            // absent-`type` arm still emits `{transport: "stdio", …,
+            // environment_id: "local"}`) and the "does not declare a runtime
+            // identity" throw is still nowhere in the bundle. `package.json`
+            // changes only its version and `engines.node` stays `>=22.19.0`.
+            // 33 of the bundle's ~3600 modules changed and none is in
+            // `packages/acp-server`, a tool, MCP, session-lock or `wire.jsonl`
+            // writer: the feedback service moved into `agent-core-v2` and the
+            // SDK gained feedback calls, request ids are now kept across
+            // turns for error reports, durable-participant replay was
+            // refactored, and a provider entry may carry optional `searchUrl`
+            // and `feedbackUrl` keys (codeg writes neither). The models.dev
+            // `moonshotai`, `moonshotai-cn` and `kimi-code-plan-*` rows are
+            // unchanged, and no plan-review module changed, so (by the source,
+            // not re-run) an answered plan review still settles
+            // `ExitPlanMode` `failed` and the workaround stays. A live A/B
+            // against a fresh 2.6.1, against a stand-in OpenAI endpoint,
+            // matched on `initialize` (`protocolVersion: 1`), `session/new`,
+            // text, Bash (approval and terminal), a stdio MCP tool handed over
+            // on `session/new` (`mcp__probe__ping`), a turn cancelled
+            // mid-tool and the stop reasons, apart from the order of
+            // `terminal/output` and `terminal/kill` around a cancel. Both
+            // versions wrote the same `wire.jsonl` record types and session
+            // files, and 2.6.2 loads a session 2.6.1 wrote with the same
+            // replay as 2.6.1's own.
+            //
+            // 2.6.3 is a patch release, and the mandated check passes verbatim
+            // again. `package.json` changes its version and one
+            // devDependency; the runtime dependencies and `engines.node`
+            // (`>=22.19.0`) are unchanged. 28 of 3677 modules changed. The
+            // only `packages/acp-server` one adds a field to replayed tool
+            // calls, and the replay comes out the same; the Shell-output fix
+            // (#4994) is TUI-only. One fix reaches codeg: a background task
+            // still running when the process died no longer starts a model
+            // turn on `session/load`. 2.6.2 streamed a reply nobody asked for
+            // during the load; 2.6.3 records the task's notification as a turn
+            // with no model call (`turn.ended` gains `stopReason:
+            // "prompt_only"`, which the parser does not read). A user's own
+            // Stop hook now runs after each completed ACP turn (2.6.2 never
+            // ran it), and a blocking one starts a follow-up turn that reaches
+            // `wire.jsonl` but not the live stream; codeg writes no hooks. A
+            // provider stream that ends without a finish event is now retried
+            // (up to 10 attempts, about 2.5 minutes against the stand-in), the
+            // partial text streaming again on each, and the prompt still
+            // answers `end_turn`. A live A/B against a fresh 2.6.2 matched on
+            // `initialize` (`protocolVersion: 1`), `session/new` (the model,
+            // thinking and mode values for all four block shapes, the 14 slash
+            // commands), text, Bash, MCP (`mcp__probe__echo` reached the
+            // server), question, Edit, Skill and deny-rule turns, a turn
+            // cancelled mid-tool, a second prompt mid-turn (`turn.agent_busy`)
+            // and the `wire.jsonl` record types, and 2.6.3 loads a session
+            // 2.6.2 wrote with the same replay as 2.6.2's own. An approved or
+            // dismissed plan review still settles `ExitPlanMode` `failed` with
+            // `isError` (now re-run live), so the workaround stays.
             distribution: AgentDistribution::Npx {
-                version: "2.6.1",
-                package: "@moonshot-ai/kimi-code@2.6.1",
+                version: "2.6.3",
+                package: "@moonshot-ai/kimi-code@2.6.3",
                 cmd: "kimi",
                 args: &["acp"],
                 env: &[],
@@ -6536,10 +7128,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // commands/acp.rs).
             // Public mirrors (e.g. registry.npmmirror.com, a common CN default)
             // lag behind this package and are incomplete: re-checked for the
-            // 1.0.77 bump, its `latest` there is still 0.1.4, which predates the
-            // `grok agent stdio` ACP subcommand. It now lists the 1.0.x releases
-            // up to 1.0.77 except 1.0.75 (404 there), so the pin resolves there,
-            // but an unpinned install there still gets 0.1.4.
+            // 1.0.89 bump, its `latest` there is still 0.1.4, which predates the
+            // `grok agent stdio` ACP subcommand, and it lists 1.0.67 to 1.0.87
+            // but not 1.0.85, 1.0.88 or 1.0.89 (404 there), so this pin resolves
+            // only on registry.npmjs.org.
             //
             // Both concerns are handled by codeg's shared `npm install -g` path
             // (`install_npm_global_package_streaming` in commands/acp.rs), which
@@ -6621,11 +7213,34 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `structuredContent`, as codeg-mcp's do, reaches the model as the
             // text followed by the structured JSON (seen on 1.0.70 and 1.0.77).
             // All six `@xai-official/grok-<os>-<arch>` optional deps are
-            // published at 1.0.77 — they are OPTIONAL, so a platform that lags
+            // published at 1.0.89 — they are OPTIONAL, so a platform that lags
             // would fail only for that platform's users, at run time, in the
             // trampoline. The pin tracks `dist-tags.latest`, NOT the highest
-            // version number, since `alpha` often runs ahead of it; 1.0.77 is
+            // version number, since `alpha` often runs ahead of it; 1.0.89 is
             // both `latest` and `alpha`.
+            //
+            // The 1.0.78–1.0.89 patches change little here: re-probed live
+            // against 1.0.89 with 1.0.77 as the A/B, set up as above, the npm
+            // wrapper differs only in its version pins, `initialize` answers the
+            // same (`protocolVersion: 1`), `session/new` offers the same model
+            // and effort ids and permission option ids, and turns, edits over
+            // `fs/*`, cancel, a background sub-agent (spawned, progress,
+            // finished) and a wire stdio MCP server give the same frames once
+            // normalized. Three small differences, none read by codeg:
+            // `terminal/create`'s env no longer sets `CI=true` (codeg runs those
+            // commands with stdin closed, so one that would prompt gets EOF),
+            // the edit request's session-wide option is now named for the
+            // folder ("Yes, allow edits in <dir>/ for this session"), and
+            // `updates.jsonl` lines add `timestamp_us` beside `timestamp`. A
+            // session 1.0.77 wrote loads and resumes on 1.0.89, and the error
+            // texts codeg matches are unchanged. What moved (1.0.88): a loaded
+            // or resumed session keeps its saved model even when that model is
+            // no longer listed, where 1.0.77 switched it to the default with a
+            // `model_auto_switched` notice; the answer then marks no
+            // `x.ai/sessionConfig` row `selected`, sends no effort rows and
+            // names the saved id only in `models.currentModelId`, which
+            // `synthesize_grok_config_options` now reads instead of falling back
+            // to the first row.
             //
             // Since 1.0.64 a `[model.<id>]` table without a `context_window`
             // takes the window of another table that sends the same model,
@@ -6674,8 +7289,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // not read it, and a frame without the field is never parked, so
             // where it lands changes nothing.
             distribution: AgentDistribution::Npx {
-                version: "1.0.77",
-                package: "@xai-official/grok@1.0.77",
+                version: "1.0.89",
+                package: "@xai-official/grok@1.0.89",
                 cmd: "grok",
                 // Only the ACP subcommand lives here. Grok's ROOT-level launch
                 // flags (`--no-auto-update` always, `--permission-mode <value>`
@@ -6692,7 +7307,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
                 // auto/dontAsk/bypassPermissions/plan).
                 args: &["agent", "stdio"],
                 env: &[],
-                // `@xai-official/grok@1.0.77` declares `engines.node: ">=20"`;
+                // `@xai-official/grok@1.0.89` declares `engines.node: ">=20"`;
                 // surface that in preflight so Node 18 isn't silently accepted.
                 node_required: Some("20.0.0"),
             },
@@ -6891,41 +7506,73 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // Grok agent-host switch and a gated import of Grok sessions in the
             // TUI) is outside the ACP layer.
             //
+            // 2026.11.13-eacade1, checked against b912975: `initialize`, the
+            // unauthenticated `session/new`, `session/list` and `session/load`
+            // answers, the unknown-method error and the files a launch writes
+            // into a fresh home are byte-identical, replayed against
+            // unauthenticated darwin/x64 processes of both builds. The ACP SDK
+            // (0.14.1), the MCP SDK (1.25.1), zod (4.6.7) and the bundled Node
+            // (26.12.1) are unchanged. With minified names, build paths and
+            // chunk numbers normalized, about 150 modules differ on darwin/x64
+            // and linux/x64, most of them because several workspace packages
+            // (`agent-exec`, `agent-kv`, `agent-client`, `hooks`,
+            // `cursor-plugins`) are now bundled file by file rather than
+            // through their `index.js`. Of the 19 ACP modules, the session,
+            // its store and its resources change only for that, plus a
+            // statsig-gated encoding telemetry option handed to the local
+            // executor; the run options, the tool-call presenter and every
+            // string the ACP layer sends are unchanged. Signed out,
+            // `cursor-agent mcp list` and `mcp list-tools` start the same
+            // `~/.cursor/mcp.json` stdio server, in the entry's `cwd` and with
+            // its `env` (and `TMPDIR`, `NODE_DISABLE_COMPILE_CACHE=1`), send
+            // the same MCP `initialize`, list the same tools and reject the
+            // same malformed file as b912975. The `agent.v1` `ToolCall` message
+            // is unchanged, so `parsers::cursor` still names every variant, and
+            // the store's `blobs` / `meta` tables are the same; the `agent.v1`
+            // protobufs only append fields (a turn's and a sent message's
+            // `thread_id`, thread summaries and replies on the conversation
+            // state, `narration` on a thinking message, two exec flags), none
+            // of which the parser reads. Not measured: a signed-in turn, so no
+            // store.db this build wrote was parsed. The rest (threads and
+            // voice calls in the protobufs, plugin marketplaces, the Grok
+            // agent-host switch, the worker, the sandbox's `cd` fallback,
+            // computer use) is outside the ACP layer.
+            //
             // Every pin still has to be triaged in `cursor_acp_retry_compat`.
             distribution: AgentDistribution::Binary {
-                version: "2026.11.11-b912975",
+                version: "2026.11.13-eacade1",
                 cmd: "cursor-agent",
                 args: &["acp"],
                 env: &[],
                 platforms: &[
                     PlatformBinary {
                         platform: "darwin-aarch64",
-                        url: "https://downloads.cursor.com/lab/2026.11.11-b912975/darwin/arm64/agent-cli-package.tar.gz",
+                        url: "https://downloads.cursor.com/lab/2026.11.13-eacade1/darwin/arm64/agent-cli-package.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "darwin-x86_64",
-                        url: "https://downloads.cursor.com/lab/2026.11.11-b912975/darwin/x64/agent-cli-package.tar.gz",
+                        url: "https://downloads.cursor.com/lab/2026.11.13-eacade1/darwin/x64/agent-cli-package.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-aarch64",
-                        url: "https://downloads.cursor.com/lab/2026.11.11-b912975/linux/arm64/agent-cli-package.tar.gz",
+                        url: "https://downloads.cursor.com/lab/2026.11.13-eacade1/linux/arm64/agent-cli-package.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "linux-x86_64",
-                        url: "https://downloads.cursor.com/lab/2026.11.11-b912975/linux/x64/agent-cli-package.tar.gz",
+                        url: "https://downloads.cursor.com/lab/2026.11.13-eacade1/linux/x64/agent-cli-package.tar.gz",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-aarch64",
-                        url: "https://downloads.cursor.com/lab/2026.11.11-b912975/windows/arm64/agent-cli-package.zip",
+                        url: "https://downloads.cursor.com/lab/2026.11.13-eacade1/windows/arm64/agent-cli-package.zip",
                         sha256: None,
                     },
                     PlatformBinary {
                         platform: "windows-x86_64",
-                        url: "https://downloads.cursor.com/lab/2026.11.11-b912975/windows/x64/agent-cli-package.zip",
+                        url: "https://downloads.cursor.com/lab/2026.11.13-eacade1/windows/x64/agent-cli-package.zip",
                         sha256: None,
                     },
                 ],
@@ -7241,9 +7888,48 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // bridge finds `zcode` and a Node with SQLite through `PATH` and
             // `PATHEXT`, hides the backend's console and stops it with
             // `taskkill /T`.
+            //
+            // Bridge 0.85.2, after 0.84.3, 0.85.0 and 0.85.1 (2026-11-13 to
+            // 2026-11-15), changes `package.json` only in its version and its
+            // `smoke` script. Installed fresh on 2026-11-15, 0.84.2 and 0.85.2
+            // resolve the same dependencies (ACP SDK 1.9.0), and `dist/cli.js`
+            // only adds a `doctor` subcommand. Against a stand-in backend given
+            // codeg's env (`ZCODE_BIN`, `ZCODE_NODE`, `ZCODE_ACP_RUNTIME=node`,
+            // `ZCODE_ACP_REMOTE=0`) and capabilities, `initialize`
+            // (`protocolVersion: 1`, apart from the version), `session/new` with
+            // a stdio MCP server, the mode gate (`set_mode`, then
+            // `set_config_option("mode")`) and the backend frames it sends
+            // (`session/create` with the same tool denylist, `session/read`,
+            // `session/setMode`) match 0.84.2's. The `model` option is what
+            // moved, in 0.85.1. Once a session is materialized it lists only the
+            // backend's own model snapshot, labelling a third-party model
+            // `<provider> › <model>`, where 0.84.2 also appended the local
+            // fresh-install default; and a backend read that reports no current
+            // model now drops the `model` option rather than claim that default
+            // (with no model set up locally, the lazy `session/new` answer
+            // omits it too). The first prompt of a lazy session now sends a
+            // `config_option_update` for `model` once the backend session
+            // exists, which codeg applies like any other. Read in the source:
+            // on macOS, when `ZCODE_BIN` is the ZCode desktop app's own
+            // `zcode.cjs` at an audited version (3.18.0 or 3.18.2, pinned by
+            // its SHA-256) and the bridge's own Node can open `node:sqlite`,
+            // `session/new` also starts a separate, short-lived backend to read
+            // the real model list (a `deferred` session it then closes), and
+            // sends it as a `config_option_update` to the client that made the
+            // session, if the session is still an unprompted placeholder; any
+            // other build or platform skips the probe. A bare model id (no
+            // `provider\model`) now switches only if it names one provider's
+            // model; codeg sends the values ZCode offered. The rest runs in the
+            // hub, the serve bridge or the remote endpoint, which codeg's
+            // launch turns off: tombstone retirement and an opt-in hard delete
+            // (`delete.purge` / `ZCODE_ACP_DELETE_PURGE`) behind the remote
+            // delete route (0.84.3), a serve-mode workspace check and a remote
+            // terminal relay off unless `remote.exec.enabled` /
+            // `ZCODE_ACP_REMOTE_EXEC` is set (0.85.0), and that relay's fixes
+            // (0.85.2).
             distribution: AgentDistribution::Npx {
-                version: "0.84.2",
-                package: "zcode-acp-server@0.84.2",
+                version: "0.88.1",
+                package: "zcode-acp-server@0.88.1",
                 cmd: "zcode-acp-server",
                 args: &["server"],
                 env: &[],
@@ -7404,18 +8090,71 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //   跳过列表**要留着**：旧日志里还有那些行，而新形状是 `assistant/message`
             //   自己的一个字段，本来就不会被当成事件行读。
             //
+            // 0.11.0 跳过了 0.10.0，两版合起来看。大动作全在 0.10.0：`dsh-*` 从
+            // 0.1.5-rc.1 整体跳到 0.2.2-rc.3（DSH 0.2），`engines.node` 收紧成
+            // `>=22.19.0`，`node_required` 跟着上调；0.11.0 的依赖与 0.10.0 逐项相同，
+            // 自身只改了三个文件。`initialize` 与 0.9.0 除版本号外逐字段相同（两版
+            // 实测），`@agentclientprotocol/sdk` 仍是 1.4.0。codeg 这边的落点：
+            //
+            // * **设置面板的模型目录失效**。DSH 0.2 删了 `dsh-settings-file`，适配器不再
+            //   把 `$DSH_HOME/settings.yaml` 叠到插件配置上：官方路由直接吃
+            //   `DEEPSEEK_PROVIDER_CONFIG` 里内置的目录，适配器自己的文档改放
+            //   `$DSH_HOME/deepseek-acp/settings.yaml`，而且只装 `llm-pi-ai` 一段。实测：
+            //   同一份两条模型的 `llm-deepseek.models`，0.9.0 的模型下拉换成这两条，
+            //   0.11.0 仍是内置的 `deepseek-flash` / `deepseek-v4-pro`，也没有任何环境
+            //   变量能改这份目录。所以设置页只对低于 0.10.0 的安装显示目录编辑器
+            //   （`deepseekReadsHarnessCatalog`）。0.10.0 及以后显示的是
+            //   `commands::deepseek_settings` 的**路由编辑器**：它写
+            //   `$DSH_HOME/deepseek-acp/settings.yaml` 的 `llm-pi-ai.providers`，
+            //   每条路由把一个 pi-ai provider 的目录加进同一个模型下拉——那是这些
+            //   版本上唯一还能扩充可选模型的入口。codeg 不调用 `providers/*` 那套
+            //   UNSTABLE 协议面，只写同一个文档，行为一致而少一层依赖。
+            // * **官方路由换了协议**：从 OpenAI Chat Completions
+            //   （`{baseURL}/chat/completions`，默认 `https://api.deepseek.com`）换成
+            //   DeepSeek 兼容 Anthropic 的 Messages API（`{root}/v1/messages`，路径
+            //   已以 `/v1` 结尾时不再补，`x-api-key` 鉴权，默认
+            //   `https://api.deepseek.com/anthropic`）。`DEEPSEEK_BASE_URL` 仍按请求
+            //   解析，但填的端点得讲 Messages；面板的占位符与示例改成新默认值。用户
+            //   以前填过的 Chat Completions 网关，升级后会对着 `/v1/messages` 失败——
+            //   这是上游的协议变化，codeg 只能在提示文案里说清楚。
+            // * **凭据优先级反过来**：`--setup` 写进 `$DSH_HOME/.credentials.yaml` 的
+            //   key 现在压过客户端传入的 `DEEPSEEK_API_KEY`（两者不同时适配器在日志里
+            //   提示，`shadowedApiKeyNotice`），面板的 key 提示照此改写。
+            // * **会话日志升到 v4**（`session.v4.jsonl.zstd`）：工具结果从用户消息里的
+            //   `tool-result` 块变成独立的 `role: "tool"` 消息，注入消息的 `source`
+            //   从 `{kind: "plugin", plugin}` 改成按生产者命名的 kind（`runtime-context`、
+            //   `skill-catalog`、`compact-checkpoint`……）。`parsers::deepseek` 早已按
+            //   最高代号选文件、两种工具结果形状都认、只收 `kind: "user"`，所以只补了
+            //   文档与一条 v4 用例。v3 日志只有被写打开时才在旁边生成 v4（v3 留着），
+            //   新出现的 `agent/inbox/spliced`（提示词排队，每条仍另记一条
+            //   `user/message`）、`model/selection`、`llm/retry` 都不渲染。0.11.0
+            //   实写的日志与一份 0.9.0 日志被 0.11.0 迁出的 v4，codeg 都按原样读出。
+            // * `session/list` 的标题索引落在会话根**旁边**
+            //   （`$DSH_HOME/deepseek-acp/session-index-<hash>.json`），不进会话根，
+            //   不影响 `parsers::deepseek` 的目录遍历与备份源。
+            // * 0.11.0 的 `elicitation/create`：问题带 `header` 时，正文进字段的
+            //   `description`（以前只剩标题，正文丢了，上游 issue #10）。codeg 对这类
+            //   表单本来就把 `description` 当问题、`title` 当标签，所以多问题表单的
+            //   正文现在能显示出来，代码不用动；单问题照旧走 `message`。
+            // * 其余不碰 codeg：官方路由多重试一个 `STREAM_CLOSED`，重试时实时流里
+            //   插一行重试提示（只在实时里，历史不显示）；`apply_patch` 走的三个新文件
+            //   系统方法原样转发；模型选择改由 `agent.model` 落盘，恢复与 fork 沿用日志
+            //   里的模型。实测（替身 Anthropic 端点 + codeg 的客户端能力）：文本、bash、
+            //   `session/new` 交来的 stdio MCP 工具三种回合都正常结束。
+            //
             // Keep `version` and `package` moving together: `version` is what
             // the agents list shows as the upgrade target beside the installed
             // version, so a drift leaves the Upgrade button installing one
             // version while the row keeps calling it stale.
             distribution: AgentDistribution::Npx {
-                version: "0.9.0",
-                package: "deepseek-acp@0.9.0",
+                version: "0.11.0",
+                package: "deepseek-acp@0.11.0",
                 cmd: "deepseek-acp",
                 args: &[],
                 env: &[],
-                // package.json declares `engines.node: ">=22"`.
-                node_required: Some("22.0.0"),
+                // package.json declares `engines.node: ">=22.19.0"` (since
+                // 0.10.0; `>=22` before).
+                node_required: Some("22.19.0"),
             },
         },
         AgentType::Qoder => AcpAgentMeta {
@@ -7437,8 +8176,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // "Bypass Permissions" (`bypassPermissions` is accepted as an alias
             // for it, `plan` is rejected) — re-read live on 1.1.64, 1.1.65,
             // 1.1.67, 1.1.71, 1.1.72, 1.1.73, 1.1.74, 1.1.75, 1.1.81, 1.1.83,
-            // 1.1.84, 1.1.86, 1.1.87 and 1.1.88, and nothing in codeg names
-            // them.
+            // 1.1.84, 1.1.86, 1.1.87, 1.1.88 and 1.1.89, and nothing in codeg
+            // names them.
             // Session logs land as
             // `$QODER_CONFIG_DIR/projects/<encoded-cwd>/<sessionId>.jsonl`
             // (default `~/.qoder/...`) in the Claude-Code-style chunk-log
@@ -7673,10 +8412,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // resolves past the cmd wrappers `qoder` points at — they strip
             // inline JSON's quotes on the way to the CLI — and spawns the real
             // CLI directly (see `acp::qoder`). An option `qoder --acp` does
-            // not know makes it exit, but each release tried from 1.1.0 to 1.1.88
+            // not know makes it exit, but each release tried from 1.1.0 to 1.1.91
             // (1.1.0, 1.1.30, 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84,
-            // 1.1.86, 1.1.87, 1.1.88) takes the flag, and 1.1.30 and 1.1.64 open
-            // sessions with it as without it.
+            // 1.1.86, 1.1.87, 1.1.88, 1.1.89, 1.1.91) takes the flag, and 1.1.30 and
+            // 1.1.64 open sessions with it as without it.
             //
             // 1.1.86 follows 1.1.85, which codeg skipped. Both change only the
             // two bundles and the version strings: `postinstall.cjs`, the npm
@@ -7745,6 +8484,65 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // loading, resuming and forking a session 1.1.87 wrote. Every
             // session logs `lazy=false` with the flag.
             //
+            // 1.1.89 changes the two bundles, the version strings and the
+            // vendored qoder-security plugin (0.9.5 to 0.9.6, whose bootstrap
+            // now checks the downloaded scanner against a SHA-256 manifest and
+            // refuses it without one). `postinstall.cjs`, the npm dispatcher,
+            // `bundle/codemode-worker.mjs` and the macOS and Linux ripgrep
+            // binaries are byte-identical (the Windows `rg.exe` again differs
+            // only in its signature), and `engines.node`, the `bin` map and the
+            // dependencies are unchanged. With minified names stripped, the
+            // ACP agent and the 150 KB around it are unchanged apart from one
+            // entry in the capability list it reports to Qoder's own SDK
+            // (`goal_max_turns_unlimited_v1`: `/goal --turns -1` now means no
+            // turn limit). The rest is outside the ACP layer: enterprise BYOK
+            // providers connected directly also take the `openai-responses`
+            // format and are checked directly, server-side experiments also
+            // apply to the SDK surface and are re-applied before each main-model
+            // request, and the bundled `sdk` and memory skills can no longer be
+            // invoked by the model on its own (users still can). Launched as
+            // codeg launches it, against 1.1.88 on the same login, `initialize`
+            // (`protocolVersion: 1`, the same capabilities and
+            // `_meta.qoder.promptQueueing`), `session/new` (the five modes, the
+            // `mode` and `model` options) and the command list match apart from
+            // `security-scan`'s description, every session logs `lazy=false`,
+            // and 1.1.89 lists and loads a session 1.1.88 wrote. No model turn
+            // was run, so the background sub-agent turn and the call a Stop
+            // leaves open were again not re-checked live.
+            //
+            // 1.1.91 follows 1.1.90, which codeg skipped (1.1.90 changes only
+            // the two bundles and the version strings; its fix to reading old
+            // sessions still loads, resumes and forks a 1.1.89 session as
+            // 1.1.89 does). 1.1.91 also changes `bundle/codemode-worker.mjs`
+            // and `postinstall.cjs` (a literal moved into a variable), and adds
+            // `bundle/worker-runtime.mjs`, which the CLI does not reference,
+            // and a `bundle/qoder` copy of the built-in skills; the npm
+            // dispatcher, qoder-security 0.9.6, `engines.node`, the
+            // dependencies and the macOS and Linux ripgrep binaries are
+            // unchanged (the Windows `rg.exe` again differs only in its
+            // signature). Its MCP client first sends each stdio server
+            // `server/discover`; when the server answers "method not found", as
+            // codeg-mcp does, Qoder stops that process and starts a second one
+            // for the usual `initialize`, so codeg-mcp runs twice per session,
+            // the first copy for a few milliseconds and before any tool call.
+            // Without a Qoder login no session opens at all now, even under
+            // `--fake-responses`, so the A/B against 1.1.89 stops at
+            // `initialize` (`protocolVersion: 1`, the same capabilities and
+            // `promptQueueing`), which matches; `session/new` and
+            // `session/list` answer the same "Authentication required" as
+            // before, and every session logs `lazy=false` with the flag. With
+            // minified names stripped, the ACP agent differs in three methods,
+            // none reaching codeg: `authenticate` rejects every method (codeg
+            // sends it to Qoder never), `prompt` uses a client-sent `messageId`
+            // if there is one (codeg sends none), and opening a session no
+            // longer refreshes the account status. A failed prompt's error may
+            // now carry the provider's HTTP status as its code, with a fixed
+            // text for 429; codeg branches on neither. Its update kinds,
+            // `session/*` methods, modes, config option ids, permission
+            // options, `AskUserQuestion` form, `_meta.qoder.toolName`, the
+            // lazy-load gate and the config-dir resolution read the same in the
+            // bundle; the session-level frames were not re-run live on 1.1.91.
+            //
             // `QODER_EXPOSE_TOKEN_USAGE` turns OFF qoder's own token-count
             // redaction, and without it every qoder session reports zero tokens
             // everywhere codeg can see. The CLI passes each response's usage
@@ -7766,9 +8564,10 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // 1.1.67, `Dr` / `qMA` in 1.1.71, `yr` / `VMA` in 1.1.72, `Or` /
             // `m1A` in 1.1.73, `Or` / `_1A` in 1.1.74, `Lr` / `xGA` in 1.1.75,
             // `xr` / `K4A` in 1.1.81, `Ii` / `POA` in 1.1.83, `ki` / `ROA` in
-            // 1.1.84, `Ri` / `QJA` in 1.1.86, `wi` / `bJA` in 1.1.87 and `yi` /
-            // `w9A` in 1.1.88 (the minified names change every build), so
-            // grepping the bundle for
+            // 1.1.84, `Ri` / `QJA` in 1.1.86, `wi` / `bJA` in 1.1.87, `yi` /
+            // `w9A` in 1.1.88, `yi` / `k9A` in 1.1.89 and `xo` / `vtn` in
+            // 1.1.91 (the minified names
+            // change every build), so grepping the bundle for
             // the full literal returns nothing — grep the bare suffix instead,
             // the same trap `parsers::qoder` documents for the config-dir vars.
             //
@@ -7776,8 +8575,8 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // `runtime_env` override it, so a user who wants the redaction back
             // sets `QODER_EXPOSE_TOKEN_USAGE=0` in the agent's env settings.
             distribution: AgentDistribution::Npx {
-                version: "1.1.88",
-                package: "@qoder-ai/qodercli@1.1.88",
+                version: "1.1.91",
+                package: "@qoder-ai/qodercli@1.1.91",
                 cmd: "qoder",
                 // The launch adds `--settings` after these (see 1.1.84 above).
                 args: &["--acp"],
@@ -8353,9 +9152,33 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // gains `deepseek/deepseek-v4.1-flash-ultrafast` (effort off, low,
             // high or max), which 1.88.4 refused as "Unknown model"; no value
             // was dropped and the others keep their order.
+            //
+            // 1.89.1, after 1.89.0, changes in `package.json` only its version
+            // and two dev-only `@byokkit` provider pins, still without install
+            // scripts. Installed fresh on 2026-11-15, 1.88.5 and 1.89.1 resolve
+            // the same dependency versions, and `acp` is still on the updater's
+            // skip list. With the minified names normalized, the ACP server is
+            // unchanged, and `initialize` (`protocolVersion: 1`) and the
+            // signed-out `session/new` answer as 1.88.5 did apart from the
+            // version; with an API key in the environment, `session/new` gives
+            // the same modes and `effort` values and the same default model
+            // (`deepseek/deepseek-v4.1-flash`). The `model` option gains
+            // `claude-fable-5-2`, `google/gemini-4-carbon`, `meta/muse-ember`
+            // and `thinkingmachines/inkling-2-small:free`, and drops
+            // `reflection/beam:free` (the free Beam 1.0, retired) and
+            // `stealth/crouton-alpha`, which the catalog now hides; a saved
+            // pick of either is skipped like any value the list no longer
+            // offers. 1.89.0's background sub-agents that wake the main agent
+            // when they finish, and their panel and ctrl+b, are the terminal
+            // UI's: only the TUI subscribes to those wake-ups, so over ACP a
+            // sub-agent started with `run_in_background` still reports through
+            // the `agent_output` tool, as on 1.88.5. The sub-agent turn limit's
+            // default rises from 100 to 200 everywhere. 1.89.1's startup
+            // announcements are fetched only by the interactive launch, not by
+            // `acp`. No turn was run (no Command Code login on this machine).
             distribution: AgentDistribution::Npx {
-                version: "1.88.5",
-                package: "command-code@1.88.5",
+                version: "1.90.0",
+                package: "command-code@1.90.0",
                 cmd: "command-code",
                 args: &["acp"],
                 env: &[],
@@ -8591,8 +9414,8 @@ mod tests {
         let meta = get_agent_meta(AgentType::Cursor);
         assert_binary_version(
             AgentType::Cursor,
-            "2026.11.11-b912975",
-            "/lab/2026.11.11-b912975/",
+            "2026.11.13-eacade1",
+            "/lab/2026.11.13-eacade1/",
         );
         match meta.distribution {
             AgentDistribution::Binary {
@@ -8882,8 +9705,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.106.0",
-            "@agentclientprotocol/claude-agent-acp@0.106.0",
+            "0.109.0",
+            "@agentclientprotocol/claude-agent-acp@0.109.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -8910,58 +9733,58 @@ mod tests {
         );
         assert_npx_version(
             AgentType::CodeBuddy,
-            "2.184.0",
-            "@tencent-ai/codebuddy-code@2.184.0",
+            "2.185.0",
+            "@tencent-ai/codebuddy-code@2.185.0",
             Some("22.0.0"),
         );
         // Kimi Code must never land on 0.37.0–0.38.0: every session in that
         // range dies on the codeg-mcp stdio entry (see the registry entry).
         assert_npx_version(
             AgentType::KimiCode,
-            "2.6.1",
-            "@moonshot-ai/kimi-code@2.6.1",
+            "2.6.3",
+            "@moonshot-ai/kimi-code@2.6.3",
             Some("22.19.0"),
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.6.0",
-            "@agentclientprotocol/codex-acp@2.6.0",
+            "2.8.0",
+            "@agentclientprotocol/codex-acp@2.8.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));
         assert_npx_version(
             AgentType::Grok,
-            "1.0.77",
-            "@xai-official/grok@1.0.77",
+            "1.0.89",
+            "@xai-official/grok@1.0.89",
             Some("20.0.0"),
         );
         assert_npx_version(
             AgentType::DeepSeek,
-            "0.9.0",
-            "deepseek-acp@0.9.0",
-            Some("22.0.0"),
+            "0.11.0",
+            "deepseek-acp@0.11.0",
+            Some("22.19.0"),
         );
         assert_npx_version(
             AgentType::Qoder,
-            "1.1.88",
-            "@qoder-ai/qodercli@1.1.88",
+            "1.1.91",
+            "@qoder-ai/qodercli@1.1.91",
             Some("20.0.0"),
         );
         assert_npx_version(
             AgentType::CommandCode,
-            "1.88.5",
-            "command-code@1.88.5",
+            "1.90.0",
+            "command-code@1.90.0",
             Some("22.0.0"),
         );
-        assert_binary_version(AgentType::OpenCode, "2.2.7", "/releases/download/v2.2.7/");
+        assert_binary_version(AgentType::OpenCode, "2.3.2", "/releases/download/v2.3.2/");
         // Hermes rides the community npm bridge (upstream retired its PyPI
         // channel at 0.19.0; see the registry entry). The npm package version
         // tracks the upstream version 1:1, and the pin must stay EXACT — the
         // audited wrapper code is only what the pinned version ships.
         assert_npx_version(
             AgentType::Hermes,
-            "0.23.1",
-            "hermes-agent@0.23.1",
+            "0.23.2",
+            "hermes-agent@0.23.2",
             Some("20.0.0"),
         );
     }

@@ -3240,12 +3240,15 @@ pub async fn skill_at(path: &Path, rev: &str, name: &str) -> Option<String> {
 
 /// Where `agent_type` loads project skills from in this working directory.
 fn skill_root(path: &Path, agent_type: crate::models::AgentType) -> Option<PathBuf> {
-    crate::commands::acp::preferred_scope_skill_dir(
+    // The first of them is where a new project skill goes.
+    crate::commands::acp::scoped_skill_dirs(
         agent_type,
         crate::acp::types::AgentSkillScope::Project,
         Some(&path.to_string_lossy()),
     )
-    .ok()
+    .ok()?
+    .into_iter()
+    .next()
 }
 
 /// What decides whether an assistant's process skill loads (7.8): the owner

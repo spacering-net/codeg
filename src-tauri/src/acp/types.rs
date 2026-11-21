@@ -2460,6 +2460,34 @@ pub struct AgentSkillItem {
     /// `~/.codex/skills/.system/*`). Surfaced so the UI can show them but
     /// refuse to edit or delete; the backend also refuses such writes.
     pub read_only: bool,
+    /// Where the entry's link points, when it is a link (symlink or
+    /// junction); `None` for a real folder or file.
+    pub link_target: Option<String>,
+    /// Whose skill this is (see [`AgentSkillOwner`]).
+    pub owner: AgentSkillOwner,
+    /// The pack (`experts`, `science`, `office`, `ui`) when `owner` is `pack`.
+    pub pack: Option<String>,
+    /// A copy Codeg made where no link could be made (Windows); `owner` names
+    /// what it is a copy of.
+    pub codeg_copy: bool,
+}
+
+/// Whose skill an agent's listed skill is.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSkillOwner {
+    /// Codeg linked it from one of its skill packs (read only here).
+    Pack,
+    /// Codeg linked it from a Harness install (read only here).
+    Harness,
+    /// Codeg linked it from a Custom skill (edited in Codeg's store).
+    Custom,
+    /// The agent's own skill, in place.
+    Agent,
+    /// A link to somewhere outside Codeg's store.
+    LinkedElsewhere,
+    /// A link that leads nowhere.
+    Broken,
 }
 
 #[derive(Debug, Clone, Serialize)]

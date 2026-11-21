@@ -592,6 +592,18 @@ pub async fn work_task_cancel_core(
     Ok(())
 }
 
+/// Stop waiting for the background work a running task's agent left going
+/// when its turn ended, and settle the task now: the engine holds such a run
+/// open until that work (and the agent's own follow-up to it) finishes, and
+/// this is the way out when it never will — a dev server, a watcher. The work
+/// still running ends with the agent's connection.
+pub async fn work_task_stop_background_wait_core(id: i32) -> Result<(), DbError> {
+    engine()?
+        .stop_background_wait(id)
+        .await
+        .map_err(DbError::Validation)
+}
+
 /// Dispatch the merge generation: the agent lands the task in its session and
 /// the outcome rides the `task://changed` events (merging → done, or back to
 /// review with a readable error). This awaits only the dispatch (validation +
@@ -1011,7 +1023,7 @@ pub async fn work_task_create(
     db: tauri::State<'_, AppDatabase>,
     draft: WorkTaskDraft,
 ) -> Result<WorkTaskInfo, DbError> {
-    work_task_create_core(&EventEmitter::Tauri(app), &db, draft).await
+    work_task_create_core(&EventEmitter::from_app(&app), &db, draft).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1024,7 +1036,7 @@ pub async fn work_task_update(
     draft: WorkTaskDraft,
 ) -> Result<WorkTaskInfo, DbError> {
     work_task_update_core(
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &db,
         &chat_channel_manager,
         id,
@@ -1041,7 +1053,7 @@ pub async fn work_task_reorder(
     folder_id: i32,
     ordered_ids: Vec<i32>,
 ) -> Result<(), DbError> {
-    work_task_reorder_core(&EventEmitter::Tauri(app), &db, folder_id, ordered_ids).await
+    work_task_reorder_core(&EventEmitter::from_app(&app), &db, folder_id, ordered_ids).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1053,7 +1065,7 @@ pub async fn work_task_delete(
     delete_worktree: Option<bool>,
 ) -> Result<(), DbError> {
     work_task_delete_core(
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &db,
         id,
         delete_worktree.unwrap_or(false),
@@ -1101,7 +1113,7 @@ pub async fn work_task_requeue(
     allow_duplicate_source: Option<bool>,
 ) -> Result<(), DbError> {
     work_task_requeue_core(
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &db,
         id,
         note,
@@ -1119,7 +1131,7 @@ pub async fn work_task_schedule(
     id: i32,
     scheduled_at: Option<String>,
 ) -> Result<(), DbError> {
-    work_task_schedule_core(&EventEmitter::Tauri(app), &db, id, scheduled_at).await
+    work_task_schedule_core(&EventEmitter::from_app(&app), &db, id, scheduled_at).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1145,6 +1157,12 @@ pub async fn work_task_cancel(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_stop_background_wait(id: i32) -> Result<(), DbError> {
+    work_task_stop_background_wait_core(id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn work_task_merge(
     id: i32,
     message: Option<String>,
@@ -1161,7 +1179,7 @@ pub async fn work_task_merge_unqueue(
     db: tauri::State<'_, AppDatabase>,
     id: i32,
 ) -> Result<(), DbError> {
-    work_task_merge_unqueue_core(&EventEmitter::Tauri(app), &db, id).await
+    work_task_merge_unqueue_core(&EventEmitter::from_app(&app), &db, id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1203,7 +1221,7 @@ pub async fn work_task_set_writeback(
     writeback: bool,
     drafts: std::collections::BTreeMap<i64, String>,
 ) -> Result<(), DbError> {
-    work_task_set_writeback_core(&EventEmitter::Tauri(app), &db, id, run_seq, writeback, drafts)
+    work_task_set_writeback_core(&EventEmitter::from_app(&app), &db, id, run_seq, writeback, drafts)
         .await
 }
 
@@ -1215,7 +1233,7 @@ pub async fn work_task_archive(
     id: i32,
     archived: bool,
 ) -> Result<(), DbError> {
-    work_task_archive_core(&EventEmitter::Tauri(app), &db, id, archived).await
+    work_task_archive_core(&EventEmitter::from_app(&app), &db, id, archived).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1226,7 +1244,7 @@ pub async fn work_task_defer(
     id: i32,
     deferred: bool,
 ) -> Result<(), DbError> {
-    work_task_defer_core(&EventEmitter::Tauri(app), &db, id, deferred).await
+    work_task_defer_core(&EventEmitter::from_app(&app), &db, id, deferred).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1298,7 +1316,7 @@ pub async fn work_task_settings_set(
     folder_id: i32,
     settings: WorkTaskFolderSettings,
 ) -> Result<(), DbError> {
-    work_task_settings_set_core(&EventEmitter::Tauri(app), &db, folder_id, settings).await
+    work_task_settings_set_core(&EventEmitter::from_app(&app), &db, folder_id, settings).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1308,7 +1326,7 @@ pub async fn work_task_settings_delete(
     db: tauri::State<'_, AppDatabase>,
     folder_id: i32,
 ) -> Result<(), DbError> {
-    work_task_settings_delete_core(&EventEmitter::Tauri(app), &db, folder_id).await
+    work_task_settings_delete_core(&EventEmitter::from_app(&app), &db, folder_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

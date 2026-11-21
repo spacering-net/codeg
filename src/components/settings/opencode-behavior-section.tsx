@@ -279,11 +279,11 @@ export function OpenCodeBehaviorSection({
         <ToggleRow
           label={t("openCode.behavior.backgroundCompaction")}
           hint={t("openCode.behavior.backgroundCompactionHint")}
-          checked={toggleChecked("experimental.background_compaction")}
+          // Default on since OpenCode 2.3.1. Off saves the tokens an unused
+          // summary costs.
+          checked={toggleChecked("compaction.background")}
           disabled={locked}
-          onChange={(checked) =>
-            handleToggle("experimental.background_compaction", checked)
-          }
+          onChange={(checked) => handleToggle("compaction.background", checked)}
         />
         <ToggleRow
           label={t("openCode.behavior.todo")}

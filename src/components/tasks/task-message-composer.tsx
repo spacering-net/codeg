@@ -234,16 +234,18 @@ export function TaskMessageComposer({
   // sentinel badges. The host gates its send on this, and a pasted file with no
   // path serializes to nothing in the text — counting only images would leave
   // that send disabled with a visible attachment sitting in the box.
-  const attachmentTotal = attach.attachments.length + embeddedBlocks().length
+  //
+  // Counted after each commit rather than during render: the embedded badges
+  // are read off the live editor (a ref), which render must not touch. The
+  // host only cares about the count, so it is told only when the count moves —
+  // never just because its callback got a new identity.
   const reportedTotalRef = useRef(-1)
   useEffect(() => {
+    const attachmentTotal = attach.attachments.length + embeddedBlocks().length
     if (reportedTotalRef.current === attachmentTotal) return
     reportedTotalRef.current = attachmentTotal
     onAttachmentsChange?.(attachmentTotal)
-    // The host only cares about the count; re-firing on a new callback identity
-    // would spam it on every parent render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [attachmentTotal])
+  })
 
   // Seed a stored prompt back into the box (editing a task, applying a
   // template): images return to the strip and bytes-bearing resources get fresh

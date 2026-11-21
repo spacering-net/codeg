@@ -173,6 +173,7 @@ export function PersonalAgentComposer({
   const empty =
     text.trim().length === 0 &&
     attach.attachments.length === 0 &&
+    // eslint-disable-next-line react-hooks/refs -- the pasted files' bytes sit in a ref the editor writes; every edit re-renders, so this reads it fresh
     embeddedBlocks().length === 0
   const canSend = !readOnly && !sending && !empty
   const hasImages = attach.imageAttachments.length > 0
