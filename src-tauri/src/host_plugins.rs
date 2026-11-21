@@ -79,6 +79,23 @@ struct Contributions {
     settings_panel: Option<SettingsPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     lifecycle_hooks: Vec<lifecycle::Registration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    client_surfaces: Vec<ClientSurface>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ClientSurface {
+    id: String,
+    title: String,
+    slot: ClientSlot,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum ClientSlot {
+    SessionHeader,
+    Composer,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -902,6 +919,7 @@ impl Manifest {
             hooks,
             settings_panel,
             lifecycle_hooks,
+            client_surfaces,
         } = &self.contributes;
         if (!bundled && workspace_panels.is_empty())
             || workspace_panels.len() > MAX_CONTRIBUTIONS
@@ -940,6 +958,21 @@ impl Manifest {
             if self.client.is_none() || !valid_id(&panel.id) || !valid_label(&panel.title) {
                 return Err(
                     "A plugin settings panel needs a valid ID, title and client entry".to_owned(),
+                );
+            }
+        }
+        if !client_surfaces.is_empty() {
+            let mut surface_ids = BTreeSet::new();
+            if self.client.is_none()
+                || client_surfaces.len() > MAX_CONTRIBUTIONS
+                || client_surfaces.iter().any(|surface| {
+                    !valid_id(&surface.id)
+                        || !valid_label(&surface.title)
+                        || !surface_ids.insert(&surface.id)
+                })
+            {
+                return Err(
+                    "Client surfaces need a client entry, unique IDs, and valid titles".to_owned(),
                 );
             }
         }
@@ -1178,6 +1211,34 @@ mod tests {
         install(&host, SAMPLE).unwrap();
         assert!(install(&host, SAMPLE).is_err());
         assert_eq!(host.list().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn validates_client_slots_and_exposes_them_in_the_manifest() {
+        let surfaces = serde_json::json!([
+            { "id": "details", "title": "Session details", "slot": "sessionHeader" },
+            { "id": "insert", "title": "Insert snippet", "slot": "composer" }
+        ]);
+        let manifest = serde_json::json!({
+            "apiVersion": 2, "id": "test.client-slots", "name": "Client slots", "version": "1.0.0",
+            "client": { "entry": "slots.html" }, "contributes": { "clientSurfaces": surfaces }
+        });
+        let parsed = Manifest::parse(&manifest.to_string()).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["contributes"]["clientSurfaces"],
+            surfaces
+        );
+
+        let mut missing_entry = manifest.clone();
+        missing_entry.as_object_mut().unwrap().remove("client");
+        missing_entry["apiVersion"] = 1.into();
+        let mut duplicate = manifest.clone();
+        duplicate["contributes"]["clientSurfaces"][1]["id"] = "details".into();
+        let mut unknown = manifest;
+        unknown["contributes"]["clientSurfaces"][0]["slot"] = "unknown".into();
+        for rejected in [missing_entry, duplicate, unknown] {
+            assert!(Manifest::parse(&rejected.to_string()).is_err());
+        }
     }
 
     #[tokio::test]

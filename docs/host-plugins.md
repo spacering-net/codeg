@@ -83,6 +83,14 @@ contribution `id`, the app `locale` and, for a workspace panel, `folderId`.
 plugin and connected host. `input` and the result use JSON. Codeg disconnects
 the message port when the contribution closes or is disabled.
 
+Declare `contributes.clientSurfaces` to add entries to the session header or
+composer. Each entry has a unique `id`, a `title`, and `slot` set to
+`sessionHeader` or `composer`. When a user opens the contribution,
+`window.codeg.ready` resolves with `type: "clientSurface"`, the selected `slot`,
+`folderId` if the session belongs to a workspace, and `conversationId` once
+the conversation has been saved. The Workspace Inspector example declares one
+entry in each slot.
+
 ## Persist plugin settings
 
 Declare `settings` with a positive integer `version`, a JSON Schema whose root
