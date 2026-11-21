@@ -56,7 +56,7 @@ import {
   Settings,
   Zap,
 } from "lucide-react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { HarnessUpdatesBadge } from "@/components/harness/harness-updates-badge"
 import { UserRoundStar } from "@/components/icons/user-round-star"
@@ -79,7 +79,11 @@ import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
 import { openProjectBootWindow } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { BLANK_PAGE_URL } from "@/lib/browser/browser-url"
-import { pluginPanelKey, useHostPlugins } from "@/lib/host-plugins"
+import {
+  pluginPanelKey,
+  resolvePluginText,
+  useHostPlugins,
+} from "@/lib/host-plugins"
 import { useBrowserCapabilities } from "@/lib/browser/use-browser-capabilities"
 import { openPetWindow } from "@/lib/pet/api"
 import { isRemoteDesktopWindow } from "@/lib/platform"
@@ -378,6 +382,7 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
 }
 
 function PluginCommandRows() {
+  const locale = useLocale()
   const { activeFolderId } = useActiveFolder()
   const isChatMode = useIsActiveChatMode()
   const { openConversations } = useWorkbenchRoute()
@@ -390,6 +395,11 @@ function PluginCommandRows() {
       ? manifest.contributes.commands.map((command) => ({
           pluginId: manifest.id,
           command,
+          title: resolvePluginText(
+            command.title,
+            command.titleTranslations,
+            locale
+          ),
         }))
       : []
   )
@@ -398,11 +408,11 @@ function PluginCommandRows() {
   return (
     <>
       <DropdownMenuSeparator />
-      {commands.map(({ pluginId, command }) => (
+      {commands.map(({ pluginId, command, title }) => (
         <MenuRow
           key={`${pluginId}:${command.id}`}
           icon={<Puzzle />}
-          label={command.title}
+          label={title}
           onSelect={() => {
             openConversations()
             openPanel(pluginPanelKey(pluginId, command.action.panelId))

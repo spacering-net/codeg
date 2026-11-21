@@ -11,7 +11,11 @@ import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
-import type { InstalledPlugin } from "@/lib/host-plugins"
+import zhCNMessages from "@/i18n/messages/zh-CN.json"
+import type {
+  InstalledPlugin,
+  PluginTextTranslations,
+} from "@/lib/host-plugins"
 import type { Transport } from "@/lib/transport"
 
 const state = vi.hoisted(() => ({
@@ -86,13 +90,18 @@ function pluginWithSurfaces(
   clientSurfaces: NonNullable<
     InstalledPlugin["manifest"]["contributes"]["clientSurfaces"]
   >,
-  opts?: { enabled?: boolean; clientEntry?: string | null }
+  opts?: {
+    enabled?: boolean
+    clientEntry?: string | null
+    nameTranslations?: PluginTextTranslations
+  }
 ): InstalledPlugin {
   return {
     enabled: opts?.enabled ?? true,
     manifest: {
       id,
       name,
+      nameTranslations: opts?.nameTranslations,
       version: "1.0.0",
       client:
         opts?.clientEntry === null
@@ -108,9 +117,13 @@ function pluginWithSurfaces(
   }
 }
 
-function withIntl(ui: ReactElement) {
+function withIntl(
+  ui: ReactElement,
+  locale = "en",
+  messages: typeof enMessages = enMessages
+) {
   return (
-    <NextIntlClientProvider locale="en" messages={enMessages}>
+    <NextIntlClientProvider locale={locale} messages={messages}>
       {ui}
     </NextIntlClientProvider>
   )
@@ -444,5 +457,93 @@ describe("HostPluginSlot", () => {
         "Solo Inspector"
       )
     ).toBeInTheDocument()
+  })
+
+  it("localizes slot triggers and updates an already-open slot dialog when locale changes", async () => {
+    const mock = createCatalogTransport([
+      pluginWithSurfaces(
+        "acme.i18n-slot",
+        "Session Toolkit",
+        [
+          {
+            id: "audit",
+            slot: "sessionHeader",
+            title: "Audit Session",
+            titleTranslations: {
+              zh: "审计会话（通用）",
+              "zh-CN": "审计会话",
+            },
+          },
+        ],
+        {
+          nameTranslations: {
+            zh: "会话工具包（通用）",
+            "zh-CN": "会话工具包",
+          },
+        }
+      ),
+    ])
+    state.transport = mock.transport
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    const { rerender } = render(
+      withIntl(
+        <HostPluginSlot
+          slot="sessionHeader"
+          sessionContext={{
+            folderId: 8,
+            conversationId: 1,
+            sessionKey: "tab-8",
+          }}
+        />,
+        "en"
+      )
+    )
+
+    const trigger = await screen.findByRole("button", { name: "Audit Session" })
+    await user.click(trigger)
+
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog).toHaveTextContent("Audit Session")
+    expect(dialog).toHaveTextContent("Session Toolkit")
+
+    // Switch to exact zh-CN while open -> keeps dialog open and updates title, description, and iframe
+    rerender(
+      withIntl(
+        <HostPluginSlot
+          slot="sessionHeader"
+          sessionContext={{
+            folderId: 8,
+            conversationId: 1,
+            sessionKey: "tab-8",
+          }}
+        />,
+        "zh-CN",
+        zhCNMessages
+      )
+    )
+    const zhDialog = await screen.findByRole("dialog")
+    expect(zhDialog).toHaveTextContent("审计会话")
+    expect(zhDialog).toHaveTextContent("会话工具包")
+    expect(await within(zhDialog).findByTitle("审计会话")).toBeInTheDocument()
+
+    // Base language fallback (zh-HK -> zh)
+    rerender(
+      withIntl(
+        <HostPluginSlot
+          slot="sessionHeader"
+          sessionContext={{
+            folderId: 8,
+            conversationId: 1,
+            sessionKey: "tab-8",
+          }}
+        />,
+        "zh-HK",
+        zhCNMessages
+      )
+    )
+    const baseDialog = await screen.findByRole("dialog")
+    expect(baseDialog).toHaveTextContent("审计会话（通用）")
+    expect(baseDialog).toHaveTextContent("会话工具包（通用）")
   })
 })
