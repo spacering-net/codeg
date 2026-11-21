@@ -38,11 +38,13 @@ export interface AskQuestionAnswer {
   question: string
   /** The user's raw picks: each entry is one offered option label or a free-text
    *  "Other" answer (empty when nothing was chosen). Partition against the
-   *  question's options with `matchSelections`. */
+   *  question's options with `matchSelections`. DSH's typed `custom` text is
+   *  folded in here too — it is an "Other" answer like any other. */
   selected: string[]
-  /** Present for codex `request_user_input`, whose answers are keyed by the
-   *  question `id` rather than its header/question text; the card matches on it
-   *  when set, otherwise on the header+question signature. */
+  /** Present when the answer is keyed by the question `id` rather than its
+   *  header/question text: codex `request_user_input` and DSH (the `deepseek`
+   *  agent), whose answers carry neither. The card matches on it when set,
+   *  otherwise on the header+question signature. */
   id?: string
 }
 
@@ -176,6 +178,28 @@ function stripCodexOutputWrapper(text: string): string {
   return match ? match[1] : text
 }
 
+/**
+ * Fold an answer's free-text `custom` field into its picks.
+ *
+ * DSH (the `deepseek` agent) splits each answer into the labels it could match
+ * against the offered options (`selected`) and everything the user typed
+ * (`custom`, its entries joined with "\n") — see `answerItem` in
+ * deepseek-harness-acp's `answerers/elicitation.ts`. The split is deliberate:
+ * an empty `custom` is DSH's signal for "no typed answer", which is what its
+ * plan-review pass/fail gate reads. Reading only `selected` therefore showed a
+ * typed "Other" answer as "no selection" even though the model got the text.
+ *
+ * The picks array is the card's one carrier for both kinds of answer (it
+ * partitions them with `matchSelections`), so a typed entry belongs back
+ * beside the labels, in the order DSH joined them.
+ */
+function customPicks(custom: unknown): string[] {
+  if (typeof custom !== "string") return []
+  // An empty `custom` is DSH saying the user typed nothing; a blank line inside
+  // a multi-line one names no answer either.
+  return custom.split("\n").filter((line) => line.trim().length > 0)
+}
+
 function parseAnswers(raw: unknown): AskQuestionAnswer[] {
   if (!Array.isArray(raw)) return []
   const out: AskQuestionAnswer[] = []
@@ -185,10 +209,17 @@ function parseAnswers(raw: unknown): AskQuestionAnswer[] {
     const selected = Array.isArray(obj.selected)
       ? obj.selected.filter((x): x is string => typeof x === "string")
       : []
+    // A typed answer is a pick like any other; `matchSelections` files it as
+    // free text because it names no offered option.
+    selected.push(...customPicks(obj.custom))
     out.push({
       header: asString(obj.header),
       question: asString(obj.question),
       selected,
+      // DSH keys its answers by the question `id` and carries no header or
+      // question text, so dropping the id left the card with nothing to match
+      // an answer to — even a picked option reloaded as unselected.
+      ...(typeof obj.id === "string" && obj.id ? { id: obj.id } : {}),
     })
   }
   return out
