@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,14 +6,12 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{
-    catalog_error, invalid, valid_id, HostPlugins, Invocation, ServerModule, MAX_CONTRIBUTIONS,
-};
+use super::{catalog_error, invalid, valid_id, HostPlugins, Invocation, ServerModule};
 use crate::acp::session_state::SessionState;
 use crate::acp::types::{AcpEvent, ConnectionStatus};
 use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::db::entities::folder::FolderKind;
-use crate::models::FolderDetail;
+use crate::models::{AgentType, FolderDetail};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 pub const EVENT_CHANNEL: &str = "host-plugins://event";
@@ -53,6 +51,8 @@ pub enum Event {
     AgentClosed,
     #[serde(rename = "agent.archive.after")]
     AgentArchived,
+    #[serde(rename = "agent.open.before")]
+    AgentOpenBefore,
 }
 
 pub(crate) fn observe_agent_close(emitter: &EventEmitter, session: &SessionState, failed: bool) {
@@ -139,6 +139,12 @@ struct PathReplacement {
     path: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LaunchReplacement {
+    env: BTreeMap<String, String>,
+}
+
 pub(super) fn validate(
     hooks: &[Registration],
     server: Option<&ServerModule>,
@@ -148,14 +154,12 @@ pub(super) fn validate(
     }
     let server = server.ok_or("Lifecycle hooks need a plugin server module")?;
     let mut events = BTreeSet::new();
-    if hooks.len() > MAX_CONTRIBUTIONS
-        || hooks.iter().any(|hook| {
-            !events.insert(hook.event)
-                || !valid_id(&hook.method)
-                || hook.method == super::settings::MIGRATION_METHOD
-                || server.methods.contains(&hook.method)
-        })
-    {
+    if hooks.iter().any(|hook| {
+        !events.insert(hook.event)
+            || !valid_id(&hook.method)
+            || hook.method == super::settings::MIGRATION_METHOD
+            || server.methods.contains(&hook.method)
+    }) {
         return Err("Declare one private server method per lifecycle event".to_owned());
     }
     Ok(())
@@ -194,6 +198,58 @@ impl HostPlugins {
     ) -> Result<String, AppCommandError> {
         self.transform_workspace_path(Event::WorkspaceCreateBefore, "create", path)
             .await
+    }
+
+    pub(crate) async fn agent_launch_environment(
+        &self,
+        agent_type: AgentType,
+        working_directory: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<BTreeMap<String, String>, AppCommandError> {
+        tokio::time::timeout(TRANSFORM_DEADLINE, async {
+            let mut env = BTreeMap::new();
+            for hook in self.lifecycle_handlers(Event::AgentOpenBefore) {
+                let source = hook.id.clone();
+                let result = self
+                    .invoke(
+                        hook,
+                        json!({
+                            "agentType": agent_type,
+                            "workingDirectory": working_directory,
+                            "sessionId": session_id,
+                            "env": env,
+                        }),
+                    )
+                    .await
+                    .map_err(|error| {
+                        AppCommandError::new(
+                            AppErrorCode::TaskExecutionFailed,
+                            format!("Plugin {source} could not prepare the agent launch"),
+                        )
+                        .with_detail(error.to_string())
+                    })?;
+                if result.is_null() {
+                    continue;
+                }
+                let updated: LaunchReplacement = serde_json::from_value(result).map_err(|_| {
+                    invalid(format!("Plugin {source} must return {{ env }} or null"))
+                })?;
+                if !valid_launch_environment(&updated.env) {
+                    return Err(invalid(format!(
+                        "Plugin {source} returned an invalid CODEG_PLUGIN_ environment"
+                    )));
+                }
+                env = updated.env;
+            }
+            Ok(env)
+        })
+        .await
+        .map_err(|_| {
+            AppCommandError::new(
+                AppErrorCode::TaskExecutionFailed,
+                "Agent launch plugin hooks timed out",
+            )
+        })?
     }
 
     async fn transform_workspace_path(
@@ -346,6 +402,20 @@ impl HostPlugins {
     }
 }
 
+fn valid_launch_environment(env: &BTreeMap<String, String>) -> bool {
+    env.len() <= 16
+        && env.iter().all(|(name, value)| {
+            name.strip_prefix("CODEG_PLUGIN_").is_some_and(|suffix| {
+                !suffix.is_empty()
+                    && name.len() <= 80
+                    && suffix.bytes().all(|byte| {
+                        byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
+                    })
+            }) && value.len() <= 1024
+                && !value.chars().any(char::is_control)
+        })
+}
+
 fn validate_worktree_destination(path: &str, repository: &str) -> Result<String, String> {
     let destination = Path::new(path);
     if !destination.is_absolute()
@@ -418,7 +488,6 @@ mod tests {
     use crate::db::service::folder_service;
     use crate::db::test_helpers::fresh_in_memory_db;
     use crate::host_plugins::{source::Registry, Mutation};
-    use crate::models::AgentType;
     use crate::web::event_bridge::WebEventBroadcaster;
 
     const EXAMPLE_ID: &str = "codeg.workspace-lifecycle";
@@ -858,6 +927,75 @@ mod tests {
             seen,
             BTreeSet::from(["agent.archive.after".into(), "agent.close.after".into()])
         );
+    }
+
+    #[tokio::test]
+    async fn agent_launch_runs_the_enabled_environment_hook_before_spawning() {
+        let data = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let db = fresh_in_memory_db().await;
+        let state = crate::app_state::AppState::new_for_test(db, data.path().to_owned());
+        install_lifecycle_example(&state.host_plugins, source.path()).await;
+
+        let workspace = data.path().join("plugin-launch-demo");
+        let working_directory = workspace.to_str().unwrap();
+        let env = state
+            .host_plugins
+            .agent_launch_environment(AgentType::Codex, Some(working_directory), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            env,
+            BTreeMap::from([("CODEG_PLUGIN_WORKSPACE_LABEL".into(), "Launch demo".into())])
+        );
+        assert!(state
+            .host_plugins
+            .agent_launch_environment(AgentType::Codex, None, None)
+            .await
+            .unwrap()
+            .is_empty());
+
+        state
+            .host_plugins
+            .apply(Mutation::Remove {
+                id: EXAMPLE_ID.into(),
+            })
+            .unwrap();
+        std::fs::write(
+            source.path().join("workspace.mjs"),
+            r#"export function handle() { return { env: { PATH: "unapproved" } } }"#,
+        )
+        .unwrap();
+        let preview = state
+            .host_plugins
+            .preview_install(source.path().to_str().unwrap(), Registry::Npm, None)
+            .await
+            .unwrap();
+        state.host_plugins.confirm_install(preview.ticket).unwrap();
+        state
+            .host_plugins
+            .apply(Mutation::SetEnabled {
+                id: EXAMPLE_ID.into(),
+                enabled: true,
+            })
+            .unwrap();
+        let error = state
+            .connection_manager
+            .spawn_agent(
+                AgentType::Codex,
+                Some(working_directory.into()),
+                None,
+                BTreeMap::new(),
+                "test-window".into(),
+                state.emitter.clone(),
+                None,
+                BTreeMap::new(),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(EXAMPLE_ID));
+        assert!(error.to_string().contains("CODEG_PLUGIN_"));
+        assert!(state.connection_manager.list_connections().await.is_empty());
     }
 
     #[test]

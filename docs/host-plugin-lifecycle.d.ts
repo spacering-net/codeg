@@ -45,6 +45,13 @@ export interface AgentArchivedInput {
   sessionId: string | null
 }
 
+export interface AgentOpenBeforeInput {
+  agentType: string
+  workingDirectory: string | null
+  sessionId: string | null
+  env: Record<string, string>
+}
+
 export interface PluginLifecycleInputs {
   "workspace.open.before": { path: string }
   "workspace.open.after": { folderId: number; path: string }
@@ -73,12 +80,17 @@ export interface PluginLifecycleInputs {
   }>
   "agent.close.after": AgentClosedInput
   "agent.archive.after": AgentArchivedInput
+  "agent.open.before": AgentOpenBeforeInput
 }
 
 export type PluginLifecycleEvent = keyof PluginLifecycleInputs
 
 export type PluginLifecycleResult<Event extends PluginLifecycleEvent> =
-  Event extends `${string}.before` ? { path: string } | null : PluginJsonValue
+  Event extends "agent.open.before"
+    ? { env: Record<string, string> } | null
+    : Event extends `${string}.before`
+      ? { path: string } | null
+      : PluginJsonValue
 
 /** A handler routed by the private method name declared in the manifest. */
 export type PluginLifecycleHandler<Event extends PluginLifecycleEvent> = (

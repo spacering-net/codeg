@@ -207,7 +207,21 @@ client event stream as workspace hooks.
 The permission hooks report state transitions. The user's permission decision
 continues through the standard Codeg approval flow.
 
-## Agent close and archive hooks
+## Agent launch, close, and archive hooks
+
+Register `agent.open.before` to contribute environment variables before Codeg
+launches a new ACP process or resumes a saved session in a fresh process. It
+receives `agentType`, `workingDirectory`, `sessionId` when resuming, and the
+`env` returned by earlier plugin handlers. Return `null` or `{ env }` with the
+complete plugin environment. Codeg accepts up to 16 keys prefixed with
+`CODEG_PLUGIN_`. Use uppercase letters, digits, and underscores after the
+prefix. Values may contain up to 1,024 UTF-8 bytes without control characters.
+
+Existing configured environment values take precedence. The handler receives
+the plugin contributions only. Codeg skips this hook when returning a reused
+connection. Throwing, returning an invalid result, or timing out aborts the
+launch before the process starts. In the Workspace Lifecycle example, launches
+from a directory named `plugin-launch-demo` get a `CODEG_PLUGIN_WORKSPACE_LABEL`.
 
 Register `agent.close.after` to observe the teardown of an ACP connection
 that had a live agent session. Its input has `agentType`, `sessionId`,
