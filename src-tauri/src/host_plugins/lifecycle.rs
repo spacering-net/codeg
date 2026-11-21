@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use super::{
     catalog_error, invalid, valid_id, HostPlugins, Invocation, ServerModule, MAX_CONTRIBUTIONS,
 };
+use crate::acp::session_state::SessionState;
 use crate::acp::types::{AcpEvent, ConnectionStatus};
 use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::db::entities::folder::FolderKind;
@@ -48,6 +49,29 @@ pub enum Event {
     PermissionRequested,
     #[serde(rename = "session.permission.resolved")]
     PermissionResolved,
+    #[serde(rename = "agent.close.after")]
+    AgentClosed,
+    #[serde(rename = "agent.archive.after")]
+    AgentArchived,
+}
+
+pub(crate) fn observe_agent_close(emitter: &EventEmitter, session: &SessionState, failed: bool) {
+    let (Some(host), Some(session_id)) = (emitter.host_plugins(), session.external_id.as_ref())
+    else {
+        return;
+    };
+    host.observe(
+        emitter,
+        Event::AgentClosed,
+        json!({
+            "folderId": session.folder_id,
+            "conversationId": session.conversation_id,
+            "connectionId": session.connection_id,
+            "agentType": session.agent_type,
+            "sessionId": session_id,
+            "outcome": if failed { "error" } else { "closed" },
+        }),
+    );
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -390,9 +414,11 @@ mod tests {
         open_folder_with_plugins, register_closed_workspace_with_plugins,
         remove_folder_from_history_core, reopen_folder_with_plugins,
     };
+    use crate::db::service::conversation_service;
     use crate::db::service::folder_service;
     use crate::db::test_helpers::fresh_in_memory_db;
     use crate::host_plugins::{source::Registry, Mutation};
+    use crate::models::AgentType;
     use crate::web::event_bridge::WebEventBroadcaster;
 
     const EXAMPLE_ID: &str = "codeg.workspace-lifecycle";
@@ -754,6 +780,83 @@ mod tests {
             tokio::time::timeout(Duration::from_millis(250), events.recv())
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_teardown_reports_the_closed_session_and_only_one_archive() {
+        let data = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let db = fresh_in_memory_db().await;
+        let state = crate::app_state::AppState::new_for_test(db, data.path().to_owned());
+        install_lifecycle_example(&state.host_plugins, source.path()).await;
+        let folder = folder_service::add_folder(&state.db.conn, "/test/teardown")
+            .await
+            .unwrap();
+        let conversation =
+            conversation_service::create(&state.db.conn, folder.id, AgentType::Codex, None, None)
+                .await
+                .unwrap();
+        let session_id = "test-teardown-session";
+        conversation_service::bind_external_id(&state.db.conn, conversation.id, session_id, &[])
+            .await
+            .unwrap();
+        let mut events = state.event_broadcaster.subscribe();
+        let mut session = SessionState::new(
+            "closed-connection".into(),
+            AgentType::Codex,
+            None,
+            "main".into(),
+            Some(folder.id),
+        );
+        session.conversation_id = Some(conversation.id);
+        session.external_id = Some(session_id.into());
+        session.status = ConnectionStatus::Disconnected;
+        observe_agent_close(&state.emitter, &session, false);
+
+        let delete = || {
+            crate::commands::conversations::delete_conversation_with_cleanup_core(
+                &state.emitter,
+                &state.db.conn,
+                &state.connection_manager,
+                conversation.id,
+            )
+        };
+        let (first, second) = tokio::join!(delete(), delete());
+        assert_ne!(first.is_ok(), second.is_ok());
+        assert!(
+            conversation_service::get_by_id(&state.db.conn, conversation.id)
+                .await
+                .is_err()
+        );
+
+        let read = async {
+            let mut seen = BTreeSet::new();
+            while seen.len() < 2 {
+                let event = events.recv().await.unwrap();
+                if event.channel != EVENT_CHANNEL {
+                    continue;
+                }
+                assert_eq!(event.payload["folderId"], folder.id);
+                assert_eq!(event.payload["conversationId"], conversation.id);
+                let data = &event.payload["data"];
+                assert_eq!(data["sessionId"], session_id);
+                assert_eq!(data["agentType"], "codex");
+                let event = event.payload["event"].as_str().unwrap();
+                if event == "agent.close.after" {
+                    assert_eq!(data["connectionId"], "closed-connection");
+                    assert_eq!(data["outcome"], "closed");
+                }
+                assert!(seen.insert(event.to_owned()));
+            }
+            seen
+        };
+        let seen = tokio::time::timeout(Duration::from_secs(3), read)
+            .await
+            .unwrap();
+        assert_eq!(
+            seen,
+            BTreeSet::from(["agent.archive.after".into(), "agent.close.after".into()])
         );
     }
 

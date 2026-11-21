@@ -206,6 +206,19 @@ client event stream as workspace hooks.
 The permission hooks report state transitions. The user's permission decision
 continues through the standard Codeg approval flow.
 
+## Agent close and archive hooks
+
+Register `agent.close.after` to observe the teardown of an ACP connection
+that had a live agent session. Its input has `agentType`, `sessionId`,
+`connectionId`, optional `folderId` and `conversationId`, and an `outcome` of
+`closed` or `error`. The payload comes from the connection's own session
+state, including when Codeg has already removed it from the live map.
+
+Register `agent.archive.after` to observe the normal conversation delete
+operation after Codeg saves its archive state. Its input has `folderId`,
+`conversationId`, `agentType` and `sessionId` when known. Concurrent delete
+requests emit the archive hook once for the persisted transition.
+
 ## Install from a source
 
 **Settings → Plugins → Add Plugin** accepts these public sources:
