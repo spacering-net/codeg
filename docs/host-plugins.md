@@ -356,10 +356,20 @@ no saved workspace ID. A worktree is registered at the checkout's actual path.
 Reopening a saved or previously archived folder reuses its workspace ID.
 Closing a workspace keeps the record available in history.
 After hooks run asynchronously. Return a JSON value to publish it to that
-plugin's open client surfaces, or `null` to skip publishing. Subscribe with
-`window.codeg.events.subscribe(({ event, folderId, data }) => { … })`. The call
-returns an unsubscribe function. A workspace client surface receives events for
-its own folder. The stream delivers live events without replay.
+plugin's open client surfaces, or `null` to skip publishing. Check for `data`
+before reading a lifecycle event.
+
+```js
+const unsubscribe = window.codeg.events.subscribe((event) => {
+  if ("data" in event) {
+    console.log(event.event, event.folderId, event.data)
+  }
+})
+```
+
+Call `unsubscribe()` when the listener is no longer needed. A workspace client
+surface receives events for its own folder. The stream delivers live events
+without replay.
 
 Install the [Workspace Lifecycle example](../examples/plugins/workspace-lifecycle)
 and open its **Workspace Events** settings panel. Open or close a folder in a

@@ -38,7 +38,7 @@ export interface PluginSettingsSnapshot {
   readonly value: { [key: string]: Json }
 }
 
-export interface PluginLifecycleEvent {
+export interface PluginClientLifecycleEvent {
   readonly pluginId: string
   readonly event: string
   readonly folderId: number | null
@@ -46,7 +46,7 @@ export interface PluginLifecycleEvent {
   readonly data: Json
 }
 
-export type PluginEvent = PluginLifecycleEvent | PluginPublishedEvent
+export type PluginEvent = PluginClientLifecycleEvent | PluginPublishedEvent
 
 export interface CodegClient {
   readonly ready: Promise<ClientContext>
