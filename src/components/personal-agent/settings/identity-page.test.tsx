@@ -380,6 +380,20 @@ describe("the first setup", () => {
     expect(api.personalAgentSave).not.toHaveBeenCalled()
   })
 
+  it("hangs the line under [Chat] below it, out of the flow, so its coming and going moves nothing", () => {
+    brain.missing = true
+    setup()
+    fireEvent.click(
+      document.querySelector('[data-pa-setup-agent-tile="claude_code"]')!
+    )
+    const line = document.querySelector<HTMLElement>("[data-pa-setup-hint]")!
+    // Hung from [Chat]'s own box, under it.
+    expect(line.className).toMatch(/\babsolute\b/)
+    expect(line.className).toMatch(/\btop-full\b/)
+    expect(line.parentElement).toBe(start().parentElement)
+    expect(line.parentElement!.className).toMatch(/\brelative\b/)
+  })
+
   it("goes side by side when wide enough: its face, name and [Chat] on the left, its agent alone scrolling on the right", () => {
     const observers: Array<() => void> = []
     vi.stubGlobal(

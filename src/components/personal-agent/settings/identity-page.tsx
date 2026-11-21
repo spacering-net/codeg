@@ -97,6 +97,11 @@ const DEFAULT_AVATAR: BotAvatar = {
   color: "black",
 }
 
+/** The first setup's line under [Chat]: hung below it, taking no room —
+ *  the frame's padding under it is its room — so nothing moves for it. */
+const UNDER_START =
+  "absolute inset-x-0 top-full mt-3 text-center text-xs leading-5"
+
 export function IdentityPage({
   agent,
   bot,
@@ -460,7 +465,9 @@ export function IdentityPage({
           </div>
         }
         start={
-          <>
+          // The line under [Chat] hangs below it, out of the flow: coming,
+          // going or changing (a hint, a refusal), it moves nothing above.
+          <div className="relative w-full">
             <Button
               type="submit"
               size="lg"
@@ -480,13 +487,16 @@ export function IdentityPage({
               />
             </Button>
             {disabled ? (
-              <p className="mt-3 text-center text-xs leading-5 text-muted-foreground">
+              <p
+                className={`${UNDER_START} text-muted-foreground`}
+                data-pa-setup-hint
+              >
                 {tPage("readOnly")}
               </p>
             ) : submitError || footerHint ? (
               <p
                 className={cn(
-                  "mt-3 text-center text-xs leading-5",
+                  UNDER_START,
                   submitError ? "text-destructive" : "text-muted-foreground"
                 )}
                 role={submitError ? "alert" : undefined}
@@ -495,7 +505,7 @@ export function IdentityPage({
                 {submitError ?? footerHint}
               </p>
             ) : null}
-          </>
+          </div>
         }
         overlay={executorEditor}
       />
