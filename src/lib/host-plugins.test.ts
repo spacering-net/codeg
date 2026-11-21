@@ -10,11 +10,13 @@ import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
+  MAX_PLUGIN_USAGE_SOURCES,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
   pluginScreenKey,
   pluginSidebarItemKey,
   pluginThemeKey,
+  pluginUsageSourceKey,
   resolvePluginHostScope,
   resolvePluginHostSurface,
   resolvePluginScreen,
@@ -23,6 +25,7 @@ import {
   selectPluginScreens,
   selectPluginSidebarItems,
   selectPluginThemes,
+  selectPluginUsageSources,
   validatePluginComposerInsertPayload,
   type InstalledPlugin,
   type PluginTextTranslations,
@@ -908,5 +911,203 @@ describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems
     ).not.toBeNull()
     expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
     expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
+  })
+})
+
+describe("selectPluginUsageSources", () => {
+  it("loads and localizes the bundled usage-demo example manifest", () => {
+    const manifestPath = resolve(
+      process.cwd(),
+      "examples/plugins/usage-demo/codeg-plugin.json"
+    )
+    const manifest = JSON.parse(
+      readFileSync(manifestPath, "utf8")
+    ) as InstalledPlugin["manifest"]
+    const plugin: InstalledPlugin = { enabled: true, manifest }
+
+    expect(selectPluginUsageSources([plugin], "en")).toEqual([
+      {
+        key: pluginUsageSourceKey("codeg.usage-demo", "demo-quota"),
+        pluginId: "codeg.usage-demo",
+        pluginName: "Usage Demo",
+        id: "demo-quota",
+        title: "Demo quota",
+        provider: "demo",
+        method: "read-usage",
+      },
+    ])
+
+    expect(selectPluginUsageSources([plugin], "zh-CN")).toEqual([
+      {
+        key: "codeg.usage-demo:demo-quota",
+        pluginId: "codeg.usage-demo",
+        pluginName: "Usage Demo",
+        id: "demo-quota",
+        title: "示例额度",
+        provider: "demo",
+        method: "read-usage",
+      },
+    ])
+
+    expect(selectPluginUsageSources([plugin], "es")[0]?.title).toBe(
+      "Cuota de ejemplo"
+    )
+  })
+
+  it("enforces enabled status, server.entry + same-plugin methods, provider regex, and 16-source cap", () => {
+    expect(MAX_PLUGIN_USAGE_SOURCES).toBe(16)
+
+    const disabledPlugin: InstalledPlugin = {
+      enabled: false,
+      manifest: {
+        id: "acme.disabled",
+        name: "Disabled",
+        version: "1.0.0",
+        server: { entry: "usage.mjs", methods: ["read"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          usageSources: [{ id: "u1", title: "Disabled", method: "read" }],
+        },
+      },
+    }
+
+    const noServerPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.no-server",
+        name: "No Server",
+        version: "1.0.0",
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          usageSources: [{ id: "u1", title: "No Server", method: "read" }],
+        },
+      },
+    }
+
+    const mixedPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.usage",
+        name: "Acme Usage",
+        version: "1.0.0",
+        server: { entry: "usage.mjs", methods: ["read-own"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          usageSources: [
+            {
+              id: "valid-provider",
+              title: "Cloud Quota",
+              provider: "0-cloud-pro",
+              method: "read-own",
+            },
+            {
+              id: "valid-no-provider",
+              title: "General Quota",
+              method: "read-own",
+            },
+            // Duplicate id skipped
+            {
+              id: "valid-provider",
+              title: "Duplicate",
+              method: "read-own",
+            },
+            // Undeclared method skipped
+            {
+              id: "foreign-method",
+              title: "Foreign",
+              method: "read-other",
+            },
+            // Invalid providers skipped
+            {
+              id: "bad-upper",
+              title: "Upper",
+              provider: "OpenAI",
+              method: "read-own",
+            },
+            {
+              id: "bad-leading-dash",
+              title: "Dash",
+              provider: "-openai",
+              method: "read-own",
+            },
+            {
+              id: "bad-underscore",
+              title: "Underscore",
+              provider: "my_provider",
+              method: "read-own",
+            },
+            {
+              id: "bad-too-long",
+              title: "Too long",
+              provider: "a".repeat(33),
+              method: "read-own",
+            },
+            // Blank title fallback skipped even with translations
+            {
+              id: "blank-title",
+              title: "   ",
+              titleTranslations: { "zh-CN": "有翻译无默认标题" },
+              method: "read-own",
+            },
+          ],
+        },
+      },
+    }
+
+    expect(
+      selectPluginUsageSources(
+        [disabledPlugin, noServerPlugin, mixedPlugin],
+        "zh-CN"
+      )
+    ).toEqual([
+      {
+        key: "acme.usage:valid-provider",
+        pluginId: "acme.usage",
+        pluginName: "Acme Usage",
+        id: "valid-provider",
+        title: "Cloud Quota",
+        provider: "0-cloud-pro",
+        method: "read-own",
+      },
+      {
+        key: "acme.usage:valid-no-provider",
+        pluginId: "acme.usage",
+        pluginName: "Acme Usage",
+        id: "valid-no-provider",
+        title: "General Quota",
+        method: "read-own",
+      },
+    ])
+
+    const cappedPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.capped-usage",
+        name: "Capped",
+        version: "1.0.0",
+        server: { entry: "usage.mjs", methods: ["read"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          usageSources: Array.from({ length: 20 }, (_, index) => ({
+            id: `usage-${index + 1}`,
+            title: `Usage ${index + 1}`,
+            method: "read",
+          })),
+        },
+      },
+    }
+
+    const capped = selectPluginUsageSources([cappedPlugin])
+    expect(capped).toHaveLength(16)
+    expect(capped[0].id).toBe("usage-1")
+    expect(capped[15].id).toBe("usage-16")
   })
 })

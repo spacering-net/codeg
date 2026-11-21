@@ -109,7 +109,19 @@
     "pluginSurfaces": "Actions des extensions",
     "morePluginSurfaces": "Autres actions des extensions",
     "pluginDetail": "Détails de l’extension",
-    "activationPanel": "Guide d’activation"
+    "activationPanel": "Guide d’activation",
+    "usageSources": "Sources d’utilisation",
+    "usageRefreshAll": "Tout actualiser",
+    "usageRefresh": "Actualiser",
+    "usageRefreshSource": "Actualiser {name}",
+    "usageIdleHint": "Cliquez sur Actualiser pour vérifier l’utilisation actuelle.",
+    "usageNoAccounts": "Aucun compte signalé.",
+    "usageResetsAt": "Réinitialisation : {time}",
+    "usageExpiresAt": "Expiré : {time}",
+    "usageHttpStatus": "HTTP {status}",
+    "usageProblemExpired": "Identifiants expirés",
+    "usageProblemRejected": "Requête refusée",
+    "usageProblemNoQuota": "Aucun quota disponible"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",

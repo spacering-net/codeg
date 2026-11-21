@@ -109,7 +109,19 @@
     "pluginSurfaces": "外掛入口",
     "morePluginSurfaces": "更多外掛入口",
     "pluginDetail": "外掛詳情",
-    "activationPanel": "啟用引導"
+    "activationPanel": "啟用引導",
+    "usageSources": "用量來源",
+    "usageRefreshAll": "全部重新整理",
+    "usageRefresh": "重新整理",
+    "usageRefreshSource": "重新整理 {name}",
+    "usageIdleHint": "點擊重新整理以查看目前用量。",
+    "usageNoAccounts": "未回報帳號資料。",
+    "usageResetsAt": "重設時間：{time}",
+    "usageExpiresAt": "到期時間：{time}",
+    "usageHttpStatus": "HTTP {status}",
+    "usageProblemExpired": "憑證已過期",
+    "usageProblemRejected": "請求遭拒",
+    "usageProblemNoQuota": "無可用額度"
   },
   "AppearanceSettings": {
     "sectionTitle": "主題外觀",

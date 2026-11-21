@@ -109,7 +109,19 @@
     "pluginSurfaces": "Plugin actions",
     "morePluginSurfaces": "More plugin actions",
     "pluginDetail": "Plugin details",
-    "activationPanel": "Activation guide"
+    "activationPanel": "Activation guide",
+    "usageSources": "Usage sources",
+    "usageRefreshAll": "Refresh all",
+    "usageRefresh": "Refresh",
+    "usageRefreshSource": "Refresh {name}",
+    "usageIdleHint": "Click Refresh to check current usage.",
+    "usageNoAccounts": "No accounts reported.",
+    "usageResetsAt": "Resets {time}",
+    "usageExpiresAt": "Expired {time}",
+    "usageHttpStatus": "HTTP {status}",
+    "usageProblemExpired": "Credentials expired",
+    "usageProblemRejected": "Request rejected",
+    "usageProblemNoQuota": "No quota available"
   },
   "AppearanceSettings": {
     "sectionTitle": "Theme Appearance",

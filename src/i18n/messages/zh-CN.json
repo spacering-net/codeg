@@ -109,7 +109,19 @@
     "pluginSurfaces": "插件入口",
     "morePluginSurfaces": "更多插件入口",
     "pluginDetail": "插件详情",
-    "activationPanel": "启用引导"
+    "activationPanel": "启用引导",
+    "usageSources": "用量来源",
+    "usageRefreshAll": "全部刷新",
+    "usageRefresh": "刷新",
+    "usageRefreshSource": "刷新 {name}",
+    "usageIdleHint": "点击刷新查看当前用量。",
+    "usageNoAccounts": "未返回账号数据。",
+    "usageResetsAt": "重置时间：{time}",
+    "usageExpiresAt": "过期时间：{time}",
+    "usageHttpStatus": "HTTP {status}",
+    "usageProblemExpired": "凭据已过期",
+    "usageProblemRejected": "请求被拒绝",
+    "usageProblemNoQuota": "无可用额度"
   },
   "AppearanceSettings": {
     "sectionTitle": "主题外观",

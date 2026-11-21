@@ -1,6 +1,14 @@
 "use client"
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import {
   parsePluginThemePalette,
   type PluginThemePalette,
@@ -12,8 +20,82 @@ export type PluginTextTranslations = Record<string, string>
 
 export const MAX_PLUGIN_SCREENS = 16
 export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
+export const MAX_PLUGIN_USAGE_SOURCES = 16
 
 export type PluginSidebarItemPlacement = "header" | "footer"
+
+export interface PluginUsageSourceContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  provider?: string
+  method: string
+}
+
+export interface ResolvedPluginUsageSource {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  provider?: string
+  method: string
+}
+
+export interface PluginUsageWindow {
+  id: string
+  label: string
+  usedPercent: number
+  resetsAt?: string
+  durationSeconds?: number
+}
+
+export interface PluginUsageBalance {
+  id: string
+  label: string
+  amount: string
+  unit?: string
+}
+
+export interface PluginUsageDetail {
+  label: string
+  value: string
+}
+
+export interface PluginUsageProblem {
+  kind: "expired" | "rejected" | "no_quota"
+  detail?: string
+  expiresAt?: string
+  status?: number
+}
+
+export type PluginUsageReport =
+  | {
+      status: "available"
+      planLabel?: string
+      windows: PluginUsageWindow[]
+      balances?: PluginUsageBalance[]
+      details?: PluginUsageDetail[]
+    }
+  | { status: "unavailable"; problem: PluginUsageProblem }
+  | { status: "error"; error: string }
+
+export interface PluginUsageAccount {
+  key: string
+  label?: string
+  harness?: string
+  report: PluginUsageReport
+}
+
+export interface PluginUsageQueryResult {
+  accounts: PluginUsageAccount[]
+}
+
+export interface PluginUsageSourceState {
+  loading: boolean
+  data?: PluginUsageQueryResult
+  error?: string
+}
 
 export interface PluginThemeContribution {
   id: string
@@ -174,6 +256,7 @@ export interface InstalledPlugin {
       themes?: PluginThemeContribution[]
       screens?: PluginScreenContribution[]
       sidebarItems?: PluginSidebarItemContribution[]
+      usageSources?: PluginUsageSourceContribution[]
     }
   }
 }
@@ -358,6 +441,13 @@ function getReadyHostTransportSnapshot(): Transport | null {
   return safeGetTransport()
 }
 
+export function isCurrentReadyHostTransport(
+  transport: Transport | null
+): boolean {
+  if (!transport) return false
+  return getReadyHostTransportSnapshot() === transport
+}
+
 function getNullTransportSnapshot(): null {
   return null
 }
@@ -499,6 +589,10 @@ export function pluginScreenKey(pluginId: string, screenId: string) {
 
 export function pluginSidebarItemKey(pluginId: string, itemId: string) {
   return `${pluginId}:${itemId}`
+}
+
+export function pluginUsageSourceKey(pluginId: string, sourceId: string) {
+  return `${pluginId}:${sourceId}`
 }
 
 export function resolvePluginHostScope(
@@ -810,6 +904,378 @@ export function selectPluginSidebarItems(
     }
   }
   return items
+}
+
+const PLUGIN_USAGE_PROVIDER_RE = /^[a-z0-9][a-z0-9-]{0,31}$/
+const MAX_CONCURRENT_USAGE_QUERIES = 4
+const MAX_USAGE_ERROR_CHARS = 512
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? useLayoutEffect : useEffect
+
+export function selectPluginUsageSources(
+  plugins: readonly InstalledPlugin[] | undefined,
+  locale?: string
+): ResolvedPluginUsageSource[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginUsageSource[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled) continue
+    const server = plugin.manifest.server
+    if (!server?.entry?.trim() || !Array.isArray(server.methods)) continue
+    const declaredMethods = new Set(
+      server.methods
+        .map((method) => (typeof method === "string" ? method.trim() : ""))
+        .filter(Boolean)
+    )
+    if (declaredMethods.size === 0) continue
+    const usageSources = plugin.manifest.contributes?.usageSources
+    if (!usageSources?.length) continue
+    const pluginName =
+      resolvePluginText(
+        plugin.manifest.name,
+        plugin.manifest.nameTranslations,
+        locale
+      ).trim() || plugin.manifest.id
+    const seenIds = new Set<string>()
+    let pluginValidCount = 0
+    for (const source of usageSources) {
+      if (pluginValidCount >= MAX_PLUGIN_USAGE_SOURCES) break
+      const id = typeof source.id === "string" ? source.id.trim() : ""
+      const fallbackTitle =
+        typeof source.title === "string" ? source.title.trim() : ""
+      const method =
+        typeof source.method === "string" ? source.method.trim() : ""
+      if (!id || !fallbackTitle || !method) continue
+      if (seenIds.has(id) || !declaredMethods.has(method)) continue
+      let provider: string | undefined
+      if (source.provider !== undefined) {
+        if (
+          typeof source.provider !== "string" ||
+          !PLUGIN_USAGE_PROVIDER_RE.test(source.provider)
+        ) {
+          continue
+        }
+        provider = source.provider
+      }
+      const title = resolvePluginText(
+        fallbackTitle,
+        source.titleTranslations,
+        locale
+      ).trim()
+      if (!title) continue
+      seenIds.add(id)
+      pluginValidCount += 1
+      items.push({
+        key: pluginUsageSourceKey(plugin.manifest.id, id),
+        pluginId: plugin.manifest.id,
+        pluginName,
+        id,
+        title,
+        ...(provider ? { provider } : {}),
+        method,
+      })
+    }
+  }
+  return items
+}
+
+function formatUsageQueryError(error: unknown): string {
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "Usage query failed"
+  const cleaned = raw.replace(/[\u0000-\u001f\u007f]+/g, " ").trim()
+  if (!cleaned) return "Usage query failed"
+  return cleaned.slice(0, MAX_USAGE_ERROR_CHARS)
+}
+
+interface StoredUsageEntry {
+  transport: Transport
+  scopeKey: string
+  loading: boolean
+  data?: PluginUsageQueryResult
+  error?: string
+}
+
+interface QueuedUsageTask {
+  source: ResolvedPluginUsageSource
+  transport: Transport
+  scopeKey: string
+  locale: string
+  generation: number
+  seq: number
+}
+
+export function usePluginUsageSources({
+  locale = "en",
+  enabled = true,
+}: {
+  locale?: string
+  enabled?: boolean
+} = {}) {
+  const hostScope = usePluginHostScope()
+  const { data: plugins, transport } = useHostPlugins(enabled)
+  const sources = useMemo(
+    () =>
+      enabled && hostScope.transportReady
+        ? selectPluginUsageSources(plugins, locale)
+        : [],
+    [enabled, hostScope.transportReady, locale, plugins]
+  )
+  const liveSourceKeys = useMemo(
+    () => new Set(sources.map((source) => source.key)),
+    [sources]
+  )
+
+  const [entriesByKey, setEntriesByKey] = useState<
+    Record<string, StoredUsageEntry>
+  >({})
+
+  const generationRef = useRef(0)
+  const seqByKeyRef = useRef(new Map<string, number>())
+  const activeCountRef = useRef(0)
+  const queueRef = useRef<QueuedUsageTask[]>([])
+  const liveRef = useRef({
+    enabled,
+    transportReady: hostScope.transportReady,
+    scopeKey: hostScope.scopeKey,
+    transport,
+    locale,
+    liveSourceKeys,
+  })
+
+  useIsomorphicLayoutEffect(() => {
+    liveRef.current = {
+      enabled,
+      transportReady: hostScope.transportReady,
+      scopeKey: hostScope.scopeKey,
+      transport,
+      locale,
+      liveSourceKeys,
+    }
+  }, [
+    enabled,
+    hostScope.transportReady,
+    hostScope.scopeKey,
+    transport,
+    locale,
+    liveSourceKeys,
+  ])
+
+  // Bump generation & clear pending queue whenever host, transport instance,
+  // or enabled flag changes so in-flight responses are guaranteed discarded.
+  useEffect(() => {
+    generationRef.current += 1
+    queueRef.current = []
+    seqByKeyRef.current.clear()
+  }, [enabled, hostScope.scopeKey, transport])
+
+  // Withdraw sequence tokens for any source removed/disabled in catalog updates.
+  useEffect(() => {
+    for (const key of Array.from(seqByKeyRef.current.keys())) {
+      if (!liveSourceKeys.has(key)) {
+        seqByKeyRef.current.delete(key)
+      }
+    }
+    queueRef.current = queueRef.current.filter((task) =>
+      liveSourceKeys.has(task.source.key)
+    )
+  }, [liveSourceKeys])
+
+  useEffect(() => {
+    const seqByKey = seqByKeyRef.current
+    return () => {
+      generationRef.current += 1
+      queueRef.current = []
+      seqByKey.clear()
+    }
+  }, [])
+
+  const pumpQueueRef = useRef<() => void>(() => {})
+
+  const runTask = useCallback((task: QueuedUsageTask) => {
+    const isTaskStillValid = () => {
+      const live = liveRef.current
+      return (
+        task.generation === generationRef.current &&
+        seqByKeyRef.current.get(task.source.key) === task.seq &&
+        live.enabled &&
+        live.transportReady &&
+        live.scopeKey === task.scopeKey &&
+        live.transport === task.transport &&
+        isCurrentReadyHostTransport(task.transport) &&
+        live.liveSourceKeys.has(task.source.key)
+      )
+    }
+
+    if (!isTaskStillValid() || typeof task.transport.call !== "function") {
+      pumpQueueRef.current()
+      return
+    }
+
+    activeCountRef.current += 1
+    void Promise.resolve()
+      .then(() =>
+        task.transport.call<PluginUsageQueryResult>(
+          "host_plugins_usage_query",
+          {
+            pluginId: task.source.pluginId,
+            sourceId: task.source.id,
+            locale: task.locale,
+          }
+        )
+      )
+      .then(
+        (result) => {
+          if (!isTaskStillValid()) return
+          const accounts = Array.isArray(result?.accounts)
+            ? result.accounts
+            : []
+          setEntriesByKey((previous) => ({
+            ...previous,
+            [task.source.key]: {
+              transport: task.transport,
+              scopeKey: task.scopeKey,
+              loading: false,
+              data: { accounts },
+            },
+          }))
+        },
+        (error: unknown) => {
+          if (!isTaskStillValid()) return
+          const message = formatUsageQueryError(error)
+          setEntriesByKey((previous) => ({
+            ...previous,
+            [task.source.key]: {
+              transport: task.transport,
+              scopeKey: task.scopeKey,
+              loading: false,
+              error: message,
+            },
+          }))
+        }
+      )
+      .finally(() => {
+        activeCountRef.current = Math.max(0, activeCountRef.current - 1)
+        pumpQueueRef.current()
+      })
+  }, [])
+
+  const pumpQueue = useCallback(() => {
+    while (
+      activeCountRef.current < MAX_CONCURRENT_USAGE_QUERIES &&
+      queueRef.current.length > 0
+    ) {
+      const next = queueRef.current.shift()
+      if (next) runTask(next)
+    }
+  }, [runTask])
+
+  useIsomorphicLayoutEffect(() => {
+    pumpQueueRef.current = pumpQueue
+  }, [pumpQueue])
+
+  const querySource = useCallback(
+    (source: ResolvedPluginUsageSource) => {
+      const live = liveRef.current
+      if (
+        !live.enabled ||
+        !live.transportReady ||
+        !live.transport ||
+        !isCurrentReadyHostTransport(live.transport) ||
+        !live.liveSourceKeys.has(source.key)
+      ) {
+        return
+      }
+      const capturedTransport = live.transport
+      const capturedScopeKey = live.scopeKey
+      const generation = generationRef.current
+      const seq = (seqByKeyRef.current.get(source.key) ?? 0) + 1
+      seqByKeyRef.current.set(source.key, seq)
+
+      // Deduplicate queued refresh for the same source key.
+      queueRef.current = queueRef.current.filter(
+        (pending) => pending.source.key !== source.key
+      )
+
+      setEntriesByKey((previous) => {
+        const existing = previous[source.key]
+        const keepData =
+          existing &&
+          existing.transport === capturedTransport &&
+          existing.scopeKey === capturedScopeKey
+            ? existing.data
+            : undefined
+        return {
+          ...previous,
+          [source.key]: {
+            transport: capturedTransport,
+            scopeKey: capturedScopeKey,
+            loading: true,
+            ...(keepData ? { data: keepData } : {}),
+          },
+        }
+      })
+
+      queueRef.current.push({
+        source,
+        transport: capturedTransport,
+        scopeKey: capturedScopeKey,
+        locale: live.locale,
+        generation,
+        seq,
+      })
+      pumpQueue()
+    },
+    [pumpQueue]
+  )
+
+  const refreshAll = useCallback(() => {
+    for (const source of sources) {
+      querySource(source)
+    }
+  }, [querySource, sources])
+
+  const statesByKey = useMemo(() => {
+    const visible: Record<string, PluginUsageSourceState> = {}
+    if (!enabled || !hostScope.transportReady || !transport) return visible
+    for (const source of sources) {
+      const entry = entriesByKey[source.key]
+      if (
+        entry &&
+        entry.transport === transport &&
+        entry.scopeKey === hostScope.scopeKey
+      ) {
+        visible[source.key] = {
+          loading: entry.loading,
+          ...(entry.data ? { data: entry.data } : {}),
+          ...(entry.error ? { error: entry.error } : {}),
+        }
+      }
+    }
+    return visible
+  }, [
+    enabled,
+    entriesByKey,
+    hostScope.scopeKey,
+    hostScope.transportReady,
+    sources,
+    transport,
+  ])
+
+  return {
+    sources,
+    statesByKey,
+    querySource,
+    refreshAll,
+    transportReady: hostScope.transportReady,
+    transport,
+  }
 }
 
 export function hostPluginSessionScopeKey(

@@ -109,7 +109,19 @@
     "pluginSurfaces": "Acciones de complementos",
     "morePluginSurfaces": "Más acciones de complementos",
     "pluginDetail": "Detalles del complemento",
-    "activationPanel": "Guía de activación"
+    "activationPanel": "Guía de activación",
+    "usageSources": "Fuentes de uso",
+    "usageRefreshAll": "Actualizar todo",
+    "usageRefresh": "Actualizar",
+    "usageRefreshSource": "Actualizar {name}",
+    "usageIdleHint": "Haz clic en Actualizar para consultar el uso actual.",
+    "usageNoAccounts": "No se informaron cuentas.",
+    "usageResetsAt": "Se restablece: {time}",
+    "usageExpiresAt": "Venció: {time}",
+    "usageHttpStatus": "HTTP {status}",
+    "usageProblemExpired": "Credenciales vencidas",
+    "usageProblemRejected": "Solicitud rechazada",
+    "usageProblemNoQuota": "Sin cuota disponible"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apariencia del tema",

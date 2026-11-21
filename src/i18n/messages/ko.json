@@ -109,7 +109,19 @@
     "pluginSurfaces": "플러그인 작업",
     "morePluginSurfaces": "더 많은 플러그인 작업",
     "pluginDetail": "플러그인 세부정보",
-    "activationPanel": "활성화 가이드"
+    "activationPanel": "활성화 가이드",
+    "usageSources": "사용량 소스",
+    "usageRefreshAll": "모두 새로고침",
+    "usageRefresh": "새로고침",
+    "usageRefreshSource": "{name} 새로고침",
+    "usageIdleHint": "현재 사용량을 확인하려면 새로고침을 클릭하세요.",
+    "usageNoAccounts": "보고된 계정이 없습니다.",
+    "usageResetsAt": "초기화: {time}",
+    "usageExpiresAt": "만료: {time}",
+    "usageHttpStatus": "HTTP {status}",
+    "usageProblemExpired": "자격 증명이 만료되었습니다",
+    "usageProblemRejected": "요청이 거부되었습니다",
+    "usageProblemNoQuota": "사용 가능한 할당량이 없습니다"
   },
   "AppearanceSettings": {
     "sectionTitle": "테마 모양",

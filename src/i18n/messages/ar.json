@@ -109,7 +109,19 @@
     "pluginSurfaces": "إجراءات الإضافات",
     "morePluginSurfaces": "مزيد من إجراءات الإضافات",
     "pluginDetail": "تفاصيل الإضافة",
-    "activationPanel": "دليل التفعيل"
+    "activationPanel": "دليل التفعيل",
+    "usageSources": "مصادر الاستخدام",
+    "usageRefreshAll": "تحديث الكل",
+    "usageRefresh": "تحديث",
+    "usageRefreshSource": "تحديث {name}",
+    "usageIdleHint": "انقر على تحديث للتحقق من الاستخدام الحالي.",
+    "usageNoAccounts": "لم يتم الإبلاغ عن أي حسابات.",
+    "usageResetsAt": "إعادة التعيين: {time}",
+    "usageExpiresAt": "انتهت الصلاحية: {time}",
+    "usageHttpStatus": "HTTP {status}",
+    "usageProblemExpired": "انتهت صلاحية بيانات الاعتماد",
+    "usageProblemRejected": "تم رفض الطلب",
+    "usageProblemNoQuota": "لا توجد حصة متاحة"
   },
   "AppearanceSettings": {
     "sectionTitle": "مظهر السمة",

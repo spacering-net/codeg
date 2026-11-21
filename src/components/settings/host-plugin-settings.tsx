@@ -15,6 +15,7 @@ import {
 import { useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { HostPluginSurface } from "@/components/host-plugin-surface"
+import { PluginUsageSourcesSection } from "@/components/settings/plugin-usage-sources"
 import {
   Dialog,
   DialogContent,
@@ -35,6 +36,7 @@ import {
   previewHostPluginInstall,
   resolvePluginHostSurface,
   resolvePluginText,
+  selectPluginUsageSources,
   updateHostPlugin,
   useHostPlugins,
   type InstalledPlugin,
@@ -60,6 +62,10 @@ export function HostPluginSettings() {
     transport: Transport | null
   } | null>(null)
   const unavailable = isUnsupportedCommandError(error)
+  const hasUsageSources = useMemo(
+    () => selectPluginUsageSources(data, locale).length > 0,
+    [data, locale]
+  )
 
   const resolvedActiveSurface = useMemo(() => {
     if (!activeSurface || activeSurface.transport !== transport || !data) {
@@ -321,6 +327,7 @@ export function HostPluginSettings() {
           })}
         </ul>
       )}
+      {!unavailable && hasUsageSources && <PluginUsageSourcesSection />}
       {resolvedActiveSurface && (
         <PluginSettingsSurfaceDialog
           plugin={resolvedActiveSurface.plugin}

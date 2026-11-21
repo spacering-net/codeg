@@ -109,7 +109,19 @@
     "pluginSurfaces": "Plugin-Aktionen",
     "morePluginSurfaces": "Weitere Plugin-Aktionen",
     "pluginDetail": "Plugin-Details",
-    "activationPanel": "Aktivierungsanleitung"
+    "activationPanel": "Aktivierungsanleitung",
+    "usageSources": "Nutzungsquellen",
+    "usageRefreshAll": "Alle aktualisieren",
+    "usageRefresh": "Aktualisieren",
+    "usageRefreshSource": "{name} aktualisieren",
+    "usageIdleHint": "Klicke auf Aktualisieren, um die aktuelle Nutzung abzurufen.",
+    "usageNoAccounts": "Keine Konten gemeldet.",
+    "usageResetsAt": "Zurückgesetzt: {time}",
+    "usageExpiresAt": "Abgelaufen: {time}",
+    "usageHttpStatus": "HTTP {status}",
+    "usageProblemExpired": "Anmeldedaten abgelaufen",
+    "usageProblemRejected": "Anfrage abgelehnt",
+    "usageProblemNoQuota": "Kein Kontingent verfügbar"
   },
   "AppearanceSettings": {
     "sectionTitle": "Design-Erscheinungsbild",
