@@ -213,7 +213,9 @@ names a method in the same plugin's `server.methods`.
 ```
 
 Codeg calls the method with the app `locale` and a batch of `workspaces`.
-Each workspace has `folderId`, `parentFolderId`, and `branch`. Return an
+Each workspace has `folderId`, `parentFolderId`, and `branch`. A batch
+contains up to 64 workspaces and fits the 64 KiB JSON request limit.
+Treat a `null` branch as unavailable. Return an
 array with one entry per workspace that needs a badge. An entry contains the
 requested `folderId`, a nonempty plain-text `label` of up to 32 characters and
 an optional `tone` of `muted`, `success`, `warning`, `danger`, or `info`.
