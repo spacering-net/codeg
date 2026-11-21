@@ -529,12 +529,18 @@ describe("ChatInput / MessageInput composer plugin slot", () => {
     act(() => {
       composer.setText("conv-43 draft")
     })
+    await waitFor(() => {
+      expect(loadMessageInputDraftV2("draft-conv-43")).not.toBeNull()
+    })
+    const conv43BaselineDraft = loadMessageInputDraftV2("draft-conv-43")
     // Stale frame attempts to write after conversation switch -> must NOT touch conv-43 draft
     act(() => {
       session1.sendInsertText(1, "STALE_CONV_42")
     })
     expect(composer.getText()).toBe("conv-43 draft")
-    expect(loadMessageInputDraftV2("draft-conv-43")).toBeNull()
+    expect(loadMessageInputDraftV2("draft-conv-43")).toEqual(
+      conv43BaselineDraft
+    )
 
     // 2) Reopen in conv-43, then hide keep-alive tab (pluginSlotEnabled -> false)
     await user.click(screen.getByRole("button", { name: "Templates" }))
