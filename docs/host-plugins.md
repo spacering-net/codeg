@@ -124,7 +124,8 @@ enablement. If it fails, the original value stays available for a later retry.
 
 Declare `contributes.lifecycleHooks` as a list of `{ event, method }` entries.
 The server entry receives these private methods through `handle`. Keep hook
-methods out of `server.methods`.
+methods out of `server.methods`. Use the [lifecycle TypeScript declarations](host-plugin-lifecycle.d.ts)
+to type a handler and its result before bundling your server entry.
 
 | Event | Input | Effect |
 | --- | --- | --- |
