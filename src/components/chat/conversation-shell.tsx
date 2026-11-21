@@ -34,6 +34,7 @@ import { QuestionDialog } from "@/components/chat/question-dialog"
 import { AskQuestionCard } from "@/components/chat/ask-question-card"
 import { PlanApprovalCard } from "@/components/chat/plan-approval-card"
 import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
+import type { HostPluginSessionContext } from "@/lib/host-plugins"
 
 interface ConversationShellProps {
   status: ConnectionStatus | null
@@ -158,6 +159,10 @@ interface ConversationShellProps {
    *  handles' layout maths would be off by the zoom factor, and a card has no
    *  window edge to keep clear. */
   resizableWidth?: boolean
+  /** Workspace + session isolation context for `composer` host plugin surfaces. */
+  pluginContext?: HostPluginSessionContext | null
+  /** Gate host plugin catalog subscription while a keep-alive composer is hidden. */
+  pluginSlotEnabled?: boolean
 }
 
 export function ConversationShell({
@@ -222,6 +227,8 @@ export function ConversationShell({
   injectContent,
   onInjectConsumed,
   resizableWidth = false,
+  pluginContext = null,
+  pluginSlotEnabled = true,
 }: ConversationShellProps) {
   return (
     // The gutter keeps the chat column (transcript and composer alike) off
@@ -349,6 +356,8 @@ export function ConversationShell({
               feedbackAddDisabled={feedbackAddDisabled}
               injectContent={injectContent}
               onInjectConsumed={onInjectConsumed}
+              pluginContext={pluginContext}
+              pluginSlotEnabled={pluginSlotEnabled}
             />
           </div>
         )}

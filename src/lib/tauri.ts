@@ -733,8 +733,19 @@ export async function gitWorktreeAdd(
   path: string,
   branchName: string,
   worktreePath: string
-): Promise<void> {
-  return invoke("git_worktree_add", { path, branchName, worktreePath })
+): Promise<string | null> {
+  const destination = await invoke<string | null | undefined>(
+    "git_worktree_add",
+    {
+      path,
+      branchName,
+      worktreePath,
+      allowPluginDestination: true,
+    }
+  )
+  return typeof destination === "string" && destination.length > 0
+    ? destination
+    : null
 }
 
 export async function gitCheckout(
