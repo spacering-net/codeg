@@ -65,6 +65,21 @@ export interface AgentCreatedInput extends AgentCreateBeforeInput {
   folderId: number
 }
 
+export interface SessionToolCompletedInput {
+  folderId: number | null
+  conversationId: number
+  connectionId: string
+  agentType: string
+  detail: {
+    toolCallId: string
+    kind: "read" | "edit" | "delete" | "move" | "search" | "execute" | "think" | "fetch" | "other"
+    status: "completed" | "failed"
+    outputKind: "text" | "error" | "structured" | "none"
+    outputPreview: string | null
+    previewTruncated: boolean
+  }
+}
+
 export interface PluginLifecycleInputs {
   "workspace.open.before": { path: string }
   "workspace.open.after": { folderId: number; path: string }
@@ -78,6 +93,7 @@ export interface PluginLifecycleInputs {
   "session.started": SessionLifecycleInput<{ sessionId: string }>
   "session.turn.started": SessionLifecycleInput<null>
   "session.turn.completed": SessionLifecycleInput<{ stopReason: string }>
+  "session.tool.completed": SessionToolCompletedInput
   "session.permission.requested": SessionLifecycleInput<{
     requestId: string
     queued: number
