@@ -207,7 +207,30 @@ client event stream as workspace hooks.
 The permission hooks report state transitions. The user's permission decision
 continues through the standard Codeg approval flow.
 
-## Agent launch, close, and archive hooks
+## Agent creation, launch, close, and archive hooks
+
+Register `agent.create.before` to set an initial conversation title. It
+receives `agentType`, `folderId`, `kind`, `parentConversationId`, and the
+proposed `title`. `kind` is `regular`, `chat`, or `delegate`. Folderless chat
+has a `null` `folderId` at this stage. Return `null` to keep the proposed
+title, or `{ title }` with up to 200 characters, at least one non-whitespace
+character, and no control characters. Later hooks receive the preceding
+hook's title. Invalid output, a failed handler, or a timeout aborts creation
+before the conversation row is inserted. Codeg's normal automatic title
+updates can still rename the conversation.
+
+Register `agent.create.after` to observe the new conversation. It receives
+the saved title and IDs, including `conversationId` and a `folderId` that
+identifies the hidden folder for folderless chat. These hooks cover workspace
+and folderless conversations, delegated agents, CLI runs, automation, work
+tasks, and chat-channel tasks. A live ACP connection may already exist when
+the first prompt creates the conversation. In that flow the after hook runs
+once the connection is linked to the row. Importing or forking a conversation
+uses its own lifecycle.
+
+To try the Workspace Lifecycle example, pass `Plugin creation demo` as the
+title to the create-conversation API. The plugin sets the title to
+`Plugin-created agent` and displays the event in its settings panel.
 
 Register `agent.open.before` to contribute environment variables before Codeg
 launches a new ACP process or resumes a saved session in a fresh process. It

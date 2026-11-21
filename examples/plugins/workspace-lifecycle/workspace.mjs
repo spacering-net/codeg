@@ -16,6 +16,11 @@ export function handle(method, input) {
       ? { path: input.path.replace(/-request$/, "-checkout") }
       : null
   }
+  if (method === "before-agent-create") {
+    return input.title === "Plugin creation demo"
+      ? { title: "Plugin-created agent" }
+      : null
+  }
   if (method === "before-agent-open") {
     return /[/\\]plugin-launch-demo$/.test(input.workingDirectory ?? "")
       ? { env: { ...input.env, CODEG_PLUGIN_WORKSPACE_LABEL: "Launch demo" } }

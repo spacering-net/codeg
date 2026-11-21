@@ -910,7 +910,8 @@ impl CliRunService {
             Some(w) => self.worktree_folder(folder.id, w).await?,
             None => folder.id,
         };
-        let conversation_id = crate::commands::conversations::create_conversation_core(
+        let conversation_id = crate::commands::conversations::create_conversation_with_plugins(
+            &self.emitter,
             &self.db.conn,
             folder_id,
             agent_type,

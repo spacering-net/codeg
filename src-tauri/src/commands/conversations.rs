@@ -13,6 +13,7 @@ use crate::db::service::{
 };
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::{observe_agent_created, prepare_agent_title};
 use crate::models::*;
 // Concrete parser type only for `load_thread_name_index`, which is codex's own
 // index reader and not part of the `AgentParser` trait. Every history read goes
@@ -2470,6 +2471,25 @@ pub async fn create_conversation_core(
     agent_type: AgentType,
     title: Option<String>,
 ) -> Result<i32, AppCommandError> {
+    create_conversation_with_plugins(&EventEmitter::Noop, conn, folder_id, agent_type, title).await
+}
+
+pub(crate) async fn create_conversation_with_plugins(
+    emitter: &EventEmitter,
+    conn: &sea_orm::DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+) -> Result<i32, AppCommandError> {
+    let title = prepare_agent_title(
+        emitter,
+        agent_type,
+        Some(folder_id),
+        conversation::ConversationKind::Regular,
+        None,
+        title,
+    )
+    .await?;
     let git_branch = if let Some(folder) = folder_service::get_folder_by_id(conn, folder_id)
         .await
         .map_err(AppCommandError::from)?
@@ -2482,6 +2502,7 @@ pub async fn create_conversation_core(
     let model = conversation_service::create(conn, folder_id, agent_type, title, git_branch)
         .await
         .map_err(AppCommandError::from)?;
+    observe_agent_created(emitter, &model);
     Ok(model.id)
 }
 
@@ -2494,8 +2515,10 @@ pub async fn create_conversation(
     agent_type: AgentType,
     title: Option<String>,
 ) -> Result<i32, AppCommandError> {
-    let id = create_conversation_core(&db.conn, folder_id, agent_type, title).await?;
-    emit_conversation_upsert(&EventEmitter::from_app(&app), &db.conn, id).await;
+    let emitter = EventEmitter::from_app(&app);
+    let id =
+        create_conversation_with_plugins(&emitter, &db.conn, folder_id, agent_type, title).await?;
+    emit_conversation_upsert(&emitter, &db.conn, id).await;
     Ok(id)
 }
 
@@ -2712,6 +2735,34 @@ pub async fn create_chat_conversation_core(
     title: Option<String>,
     existing_dir: Option<&str>,
 ) -> Result<CreateChatConversationResult, AppCommandError> {
+    create_chat_conversation_with_plugins(
+        &EventEmitter::Noop,
+        conn,
+        data_dir,
+        agent_type,
+        title,
+        existing_dir,
+    )
+    .await
+}
+
+pub(crate) async fn create_chat_conversation_with_plugins(
+    emitter: &EventEmitter,
+    conn: &sea_orm::DatabaseConnection,
+    data_dir: &std::path::Path,
+    agent_type: AgentType,
+    title: Option<String>,
+    existing_dir: Option<&str>,
+) -> Result<CreateChatConversationResult, AppCommandError> {
+    let title = prepare_agent_title(
+        emitter,
+        agent_type,
+        None,
+        conversation::ConversationKind::Chat,
+        None,
+        title,
+    )
+    .await?;
     let path = match existing_dir {
         Some(dir) => {
             std::fs::create_dir_all(dir).map_err(AppCommandError::io)?;
@@ -2745,6 +2796,7 @@ pub async fn create_chat_conversation_core(
             }
         };
 
+    observe_agent_created(emitter, &model);
     Ok(CreateChatConversationResult {
         conversation_id: model.id,
         folder_id: folder.id,
@@ -2767,7 +2819,9 @@ pub async fn create_chat_conversation(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let result = create_chat_conversation_core(
+    let emitter = EventEmitter::from_app(&app);
+    let result = create_chat_conversation_with_plugins(
+        &emitter,
         &db.conn,
         &data_dir,
         agent_type,
@@ -2775,7 +2829,7 @@ pub async fn create_chat_conversation(
         existing_dir.as_deref(),
     )
     .await?;
-    emit_conversation_upsert(&EventEmitter::from_app(&app), &db.conn, result.conversation_id).await;
+    emit_conversation_upsert(&emitter, &db.conn, result.conversation_id).await;
     Ok(result)
 }
 

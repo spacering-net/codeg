@@ -36,7 +36,7 @@ use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
 use crate::acp::InternalEventBus;
 use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
 use crate::commands::conversations::{
-    create_conversation_core, emit_conversation_upsert, get_folder_conversation_core,
+    create_conversation_with_plugins, emit_conversation_upsert, get_folder_conversation_core,
 };
 use crate::commands::folders::{
     emit_folder_deleted, emit_folder_upsert, get_folder_core, git_worktree_add_core,
@@ -1478,7 +1478,8 @@ impl TaskEngine {
             task.conversation_id.expect("resumed implies conversation")
         } else {
             let title = conversation_title_for_task(&task.title);
-            let id = match create_conversation_core(
+            let id = match create_conversation_with_plugins(
+                &self.emitter,
                 &self.db.conn,
                 wt.folder_id,
                 agent_type,
