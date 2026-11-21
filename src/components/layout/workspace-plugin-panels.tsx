@@ -1,10 +1,11 @@
 "use client"
 
-import { useFormatter, useTranslations } from "next-intl"
+import { useFormatter, useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { HostPluginSurface } from "@/components/host-plugin-surface"
 import {
   pluginPanelKey,
+  resolvePluginText,
   usePluginActivity,
   usePluginPanelText,
   type InstalledPlugin,
@@ -23,14 +24,21 @@ export function WorkspacePluginPanels({
   onSelect: (key: string) => void
 }) {
   const t = useTranslations("HostPlugins")
-  const panels = plugins.flatMap(({ manifest }) =>
-    manifest.contributes.workspacePanels.map((panel) => ({
+  const locale = useLocale()
+  const panels = plugins.flatMap(({ manifest }) => {
+    const pluginName = resolvePluginText(
+      manifest.name,
+      manifest.nameTranslations,
+      locale
+    )
+    return manifest.contributes.workspacePanels.map((panel) => ({
       key: pluginPanelKey(manifest.id, panel.id),
       pluginId: manifest.id,
-      pluginName: manifest.name,
+      pluginName,
+      title: resolvePluginText(panel.title, panel.titleTranslations, locale),
       panel,
     }))
-  )
+  })
   const active = panels.find((item) => item.key === selected) ?? panels[0]
   if (!active) return null
 
@@ -44,21 +52,23 @@ export function WorkspacePluginPanels({
             value={active.key}
             onChange={(event) => onSelect(event.target.value)}
           >
-            {panels.map(({ key, panel, pluginName }) => (
+            {panels.map(({ key, title, pluginName }) => (
               <option key={key} value={key}>
-                {pluginName} · {panel.title}
+                {pluginName} · {title}
               </option>
             ))}
           </select>
         </div>
       )}
       <div className="space-y-3 px-3 py-3">
-        <h3 className="break-words text-sm font-semibold">
-          {active.panel.title}
-        </h3>
+        <h3 className="break-words text-sm font-semibold">{active.title}</h3>
         {active.panel.view === "text" ? (
           <p className="whitespace-pre-wrap break-words text-sm">
-            {active.panel.text}
+            {resolvePluginText(
+              active.panel.text,
+              active.panel.textTranslations,
+              locale
+            )}
           </p>
         ) : active.panel.view === "serverText" ? (
           <ServerPanelText
@@ -71,7 +81,7 @@ export function WorkspacePluginPanels({
           <HostPluginSurface
             key={`${active.key}:${folderId}`}
             pluginId={active.pluginId}
-            title={active.panel.title}
+            title={active.title}
             context={{ type: "workspacePanel", id: active.panel.id, folderId }}
           />
         ) : (

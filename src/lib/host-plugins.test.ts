@@ -6,9 +6,11 @@ import {
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
   resolvePluginHostSurface,
+  resolvePluginText,
   selectPluginClientSurfaces,
   validatePluginComposerInsertPayload,
   type InstalledPlugin,
+  type PluginTextTranslations,
 } from "@/lib/host-plugins"
 
 function makePlugin(
@@ -357,6 +359,122 @@ describe("resolvePluginHostSurface", () => {
         id: "draft",
         title: "Inspect draft",
         slot: "composer",
+      },
+    ])
+  })
+})
+
+describe("resolvePluginText and localized *Translations contributions", () => {
+  const nameTranslations: PluginTextTranslations = {
+    zh: "工作区检查器（通用中文）",
+    "zh-CN": "工作区检查器",
+    "zh-Hans-CN": "工作区检查器（简体中国）",
+    es: "Inspector del espacio",
+  }
+
+  it("returns plain strings when translations are omitted and follows exact locale > base language > default fallback", () => {
+    expect(resolvePluginText("Plain Title", undefined, "zh-CN")).toBe(
+      "Plain Title"
+    )
+    // Exact regional match beats base language
+    expect(
+      resolvePluginText("Workspace Inspector", nameTranslations, "zh-CN")
+    ).toBe("工作区检查器")
+    // Case-normalized exact match (language[-Script][-REGION])
+    expect(
+      resolvePluginText("Workspace Inspector", nameTranslations, "zh-cn")
+    ).toBe("工作区检查器")
+    expect(
+      resolvePluginText("Workspace Inspector", nameTranslations, "zh-hans-cn")
+    ).toBe("工作区检查器（简体中国）")
+    // Base language fallback when regional variant is absent
+    expect(
+      resolvePluginText("Workspace Inspector", nameTranslations, "zh-TW")
+    ).toBe("工作区检查器（通用中文）")
+    expect(
+      resolvePluginText("Workspace Inspector", nameTranslations, "es-MX")
+    ).toBe("Inspector del espacio")
+    // Default fallback when neither exact nor base language exists
+    expect(
+      resolvePluginText("Workspace Inspector", nameTranslations, "ja-JP")
+    ).toBe("Workspace Inspector")
+    expect(
+      resolvePluginText("Workspace Inspector", nameTranslations, undefined)
+    ).toBe("Workspace Inspector")
+  })
+
+  it("resolves localized host and client surface titles per locale while keeping manifest fields as strings", () => {
+    const plugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.i18n",
+        name: "Workspace Inspector",
+        nameTranslations,
+        version: "1.0.0",
+        client: { entry: "client.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          pluginDetail: {
+            id: "detail",
+            title: "Inspector Details",
+            titleTranslations: {
+              "zh-CN": "检查器详情",
+              es: "Detalles del inspector",
+            },
+          },
+          clientSurfaces: [
+            {
+              id: "hdr",
+              slot: "sessionHeader",
+              title: "Session Check",
+              titleTranslations: {
+                "zh-CN": "会话检查",
+                es: "Revisión de sesión",
+              },
+            },
+          ],
+        },
+      },
+    }
+
+    expect(typeof plugin.manifest.name).toBe("string")
+    expect(resolvePluginHostSurface(plugin, "pluginDetail", "zh-CN")).toEqual({
+      id: "detail",
+      title: "检查器详情",
+    })
+    expect(resolvePluginHostSurface(plugin, "pluginDetail", "es-AR")).toEqual({
+      id: "detail",
+      title: "Detalles del inspector",
+    })
+    expect(resolvePluginHostSurface(plugin, "pluginDetail", "de")).toEqual({
+      id: "detail",
+      title: "Inspector Details",
+    })
+
+    expect(
+      selectPluginClientSurfaces([plugin], "sessionHeader", "zh-CN")
+    ).toEqual([
+      {
+        key: "acme.i18n:hdr",
+        pluginId: "acme.i18n",
+        pluginName: "工作区检查器",
+        id: "hdr",
+        title: "会话检查",
+        slot: "sessionHeader",
+      },
+    ])
+    expect(
+      selectPluginClientSurfaces([plugin], "sessionHeader", "es-ES")
+    ).toEqual([
+      {
+        key: "acme.i18n:hdr",
+        pluginId: "acme.i18n",
+        pluginName: "Inspector del espacio",
+        id: "hdr",
+        title: "Revisión de sesión",
+        slot: "sessionHeader",
       },
     ])
   })

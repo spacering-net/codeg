@@ -3,9 +3,19 @@
 import { useCallback, useEffect, useState } from "react"
 import { getTransport, type Transport } from "@/lib/transport"
 
-type WorkspacePanel = { id: string; title: string } & (
+export type PluginTextTranslations = Record<string, string>
+
+type WorkspacePanel = {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+} & (
   | { view: "turnActivity" }
-  | { view: "text"; text: string }
+  | {
+      view: "text"
+      text: string
+      textTranslations?: PluginTextTranslations
+    }
   | { view: "serverText"; method: string }
   | { view: "client" }
 )
@@ -15,10 +25,17 @@ export type PluginClientSurfaceSlot = "sessionHeader" | "composer"
 export interface PluginClientSurfaceContribution {
   id: string
   title: string
+  titleTranslations?: PluginTextTranslations
   slot: PluginClientSurfaceSlot
 }
 
 export interface PluginHostSurfaceContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+}
+
+export interface ResolvedPluginHostSurface {
   id: string
   title: string
 }
@@ -68,6 +85,7 @@ export interface InstalledPlugin {
   manifest: {
     id: string
     name: string
+    nameTranslations?: PluginTextTranslations
     version: string
     server?: { entry: string; methods: string[] }
     client?: { entry: string }
@@ -76,6 +94,7 @@ export interface InstalledPlugin {
       commands: {
         id: string
         title: string
+        titleTranslations?: PluginTextTranslations
         action: { type: "openWorkspacePanel"; panelId: string }
       }[]
       hooks: { event: "session.turnCompleted"; action: "recordTurnActivity" }[]
@@ -296,22 +315,81 @@ export function pluginClientSurfaceKey(pluginId: string, surfaceId: string) {
   return `${pluginId}:${surfaceId}`
 }
 
+function canonicalizeLocaleTag(tag: string): string {
+  const parts = tag.trim().replace(/_/g, "-").split("-").filter(Boolean)
+  if (parts.length === 0) return ""
+  return parts
+    .map((part, index) => {
+      if (index === 0) return part.toLowerCase()
+      if (part.length === 4) {
+        return part[0].toUpperCase() + part.slice(1).toLowerCase()
+      }
+      if (part.length === 2 || part.length === 3) {
+        return part.toUpperCase()
+      }
+      return part
+    })
+    .join("-")
+}
+
+/**
+ * Resolve a manifest string (`fallback`) with optional sibling `*Translations`
+ * (`Record<string, string>`) for the active UI locale using
+ * `exact locale > base language > default`.
+ */
+export function resolvePluginText(
+  fallback: string,
+  translations?: PluginTextTranslations | null,
+  locale?: string
+): string {
+  if (locale && translations) {
+    const raw = locale.trim()
+    if (raw && typeof translations[raw] === "string" && translations[raw]) {
+      return translations[raw]
+    }
+    const canonical = canonicalizeLocaleTag(raw)
+    if (
+      canonical &&
+      typeof translations[canonical] === "string" &&
+      translations[canonical]
+    ) {
+      return translations[canonical]
+    }
+    const baseLanguage = canonical.split("-")[0]
+    if (
+      baseLanguage &&
+      baseLanguage !== canonical &&
+      typeof translations[baseLanguage] === "string" &&
+      translations[baseLanguage]
+    ) {
+      return translations[baseLanguage]
+    }
+  }
+  return fallback
+}
+
 export function resolvePluginHostSurface(
   plugin: InstalledPlugin,
-  type: PluginSettingsSurfaceType
-): PluginHostSurfaceContribution | null {
+  type: PluginSettingsSurfaceType,
+  locale?: string
+): ResolvedPluginHostSurface | null {
   if (!plugin.enabled || !plugin.manifest.client?.entry?.trim()) return null
   const surface = plugin.manifest.contributes[type]
   if (!surface) return null
   const id = surface.id.trim()
-  const title = surface.title.trim()
+  const title = resolvePluginText(
+    surface.title,
+    surface.titleTranslations,
+    locale
+  ).trim()
   if (!id || !title) return null
   return { id, title }
 }
 
 export function selectPluginClientSurfaces(
   plugins: readonly InstalledPlugin[] | undefined,
-  slot: PluginClientSurfaceSlot
+  slot: PluginClientSurfaceSlot,
+  locale?: string
 ): ResolvedPluginClientSurface[] {
   if (!plugins?.length) return []
   const items: ResolvedPluginClientSurface[] = []
@@ -320,10 +398,19 @@ export function selectPluginClientSurfaces(
     if (!plugin.enabled || !plugin.manifest.client?.entry?.trim()) continue
     const surfaces = plugin.manifest.contributes.clientSurfaces
     if (!surfaces?.length) continue
+    const pluginName = resolvePluginText(
+      plugin.manifest.name,
+      plugin.manifest.nameTranslations,
+      locale
+    ).trim()
     for (const surface of surfaces) {
       if (surface.slot !== slot) continue
       const id = surface.id.trim()
-      const title = surface.title.trim()
+      const title = resolvePluginText(
+        surface.title,
+        surface.titleTranslations,
+        locale
+      ).trim()
       if (!id || !title) continue
       const key = pluginClientSurfaceKey(plugin.manifest.id, id)
       if (seen.has(key)) continue
@@ -331,7 +418,7 @@ export function selectPluginClientSurfaces(
       items.push({
         key,
         pluginId: plugin.manifest.id,
-        pluginName: plugin.manifest.name,
+        pluginName: pluginName || plugin.manifest.id,
         id,
         title,
         slot: surface.slot,

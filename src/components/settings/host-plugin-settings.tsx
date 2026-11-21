@@ -12,7 +12,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { HostPluginSurface } from "@/components/host-plugin-surface"
 import {
@@ -34,6 +34,7 @@ import {
   confirmHostPluginInstall,
   previewHostPluginInstall,
   resolvePluginHostSurface,
+  resolvePluginText,
   updateHostPlugin,
   useHostPlugins,
   type InstalledPlugin,
@@ -46,6 +47,7 @@ import type { Transport } from "@/lib/transport"
 
 export function HostPluginSettings() {
   const t = useTranslations("HostPlugins")
+  const locale = useLocale()
   const { data, error, refresh, transport } = useHostPlugins()
   const fileInput = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
@@ -67,14 +69,14 @@ export function HostPluginSettings() {
       (item) => item.manifest.id === activeSurface.pluginId
     )
     if (!plugin) return null
-    const panel = resolvePluginHostSurface(plugin, activeSurface.type)
+    const panel = resolvePluginHostSurface(plugin, activeSurface.type, locale)
     if (!panel || panel.id !== activeSurface.panelId) return null
     return {
       plugin,
       type: activeSurface.type,
       panel,
     }
-  }, [activeSurface, data, transport])
+  }, [activeSurface, data, locale, transport])
 
   // Permanently clear open state on withdrawal (disable, remove, manifest update,
   // or host switch) so re-enabling a plugin never auto-reopens an old modal.
@@ -168,23 +170,31 @@ export function HostPluginSettings() {
         <ul className="divide-y border-y">
           {data.map((plugin) => {
             const { manifest, enabled, source } = plugin
+            const pluginName = resolvePluginText(
+              manifest.name,
+              manifest.nameTranslations,
+              locale
+            )
             const detailSurface = resolvePluginHostSurface(
               plugin,
-              "pluginDetail"
+              "pluginDetail",
+              locale
             )
             const activationSurface = resolvePluginHostSurface(
               plugin,
-              "activationPanel"
+              "activationPanel",
+              locale
             )
             const settingsSurface = resolvePluginHostSurface(
               plugin,
-              "settingsPanel"
+              "settingsPanel",
+              locale
             )
             return (
               <li key={manifest.id} className="flex items-center gap-3 py-3">
                 <div className="min-w-0 flex-1">
                   <div className="break-words text-sm font-medium">
-                    {manifest.name}
+                    {pluginName}
                   </div>
                   <div className="break-all text-xs text-muted-foreground">
                     {manifest.id} · {manifest.version}
@@ -257,8 +267,8 @@ export function HostPluginSettings() {
                     size="icon-sm"
                     variant="ghost"
                     className="text-muted-foreground"
-                    title={t("update", { name: manifest.name })}
-                    aria-label={t("update", { name: manifest.name })}
+                    title={t("update", { name: pluginName })}
+                    aria-label={t("update", { name: pluginName })}
                     disabled={busy}
                     onClick={() =>
                       void run(async () => {
@@ -267,11 +277,11 @@ export function HostPluginSettings() {
                         setNotice(
                           disabledForUpdate
                             ? t("updatedServerDisabled", {
-                                name: manifest.name,
+                                name: pluginName,
                                 version,
                               })
                             : t(updated ? "updated" : "upToDate", {
-                                name: manifest.name,
+                                name: pluginName,
                                 version,
                               })
                         )
@@ -282,7 +292,7 @@ export function HostPluginSettings() {
                   </Button>
                 )}
                 <Switch
-                  aria-label={t("enable", { name: manifest.name })}
+                  aria-label={t("enable", { name: pluginName })}
                   checked={enabled}
                   disabled={busy}
                   onCheckedChange={(next) =>
@@ -297,8 +307,8 @@ export function HostPluginSettings() {
                   size="icon-sm"
                   variant="ghost"
                   className="text-muted-foreground hover:text-destructive"
-                  title={t("remove", { name: manifest.name })}
-                  aria-label={t("remove", { name: manifest.name })}
+                  title={t("remove", { name: pluginName })}
+                  aria-label={t("remove", { name: pluginName })}
                   disabled={busy}
                   onClick={() =>
                     void apply(() => ({ type: "remove", id: manifest.id }))
@@ -335,7 +345,13 @@ function PluginSettingsSurfaceDialog({
   onClose: () => void
 }) {
   const t = useTranslations("HostPlugins")
+  const locale = useLocale()
   const { manifest, source } = plugin
+  const pluginName = resolvePluginText(
+    manifest.name,
+    manifest.nameTranslations,
+    locale
+  )
   return (
     <Dialog
       open
@@ -352,7 +368,7 @@ function PluginSettingsSurfaceDialog({
           <DialogTitle>{panel.title}</DialogTitle>
           {type !== "settingsPanel" && (
             <DialogDescription>
-              {manifest.name} ·{" "}
+              {pluginName} ·{" "}
               {t(type === "pluginDetail" ? "pluginDetail" : "activationPanel")}
             </DialogDescription>
           )}
@@ -784,11 +800,17 @@ function InstallReview({
   onConfirm: () => void
 }) {
   const t = useTranslations("HostPlugins")
+  const locale = useLocale()
   const { manifest, source } = preview
+  const pluginName = resolvePluginText(
+    manifest.name,
+    manifest.nameTranslations,
+    locale
+  )
   return (
     <section className="grid min-w-0 gap-4" aria-label={t("reviewInstall")}>
       <div className="grid gap-1 rounded-lg border p-3 text-sm">
-        <p className="break-words font-medium">{manifest.name}</p>
+        <p className="break-words font-medium">{pluginName}</p>
         <p className="break-all text-muted-foreground">
           {manifest.id} · {manifest.version}
         </p>

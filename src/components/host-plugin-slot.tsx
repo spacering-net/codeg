@@ -10,7 +10,7 @@ import {
   useState,
 } from "react"
 import { ChevronDown, Puzzle } from "lucide-react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import {
   HostPluginSurface,
   type PluginComposerInsertHandler,
@@ -81,12 +81,13 @@ export const HostPluginSlot = memo(function HostPluginSlot({
   className,
 }: HostPluginSlotProps) {
   const t = useTranslations("HostPlugins")
+  const locale = useLocale()
   const isMobile = useIsMobile()
   const { data, transport } = useHostPlugins(enabled)
 
   const surfaces = useMemo(
-    () => (enabled ? selectPluginClientSurfaces(data, slot) : []),
-    [data, enabled, slot]
+    () => (enabled ? selectPluginClientSurfaces(data, slot, locale) : []),
+    [data, enabled, locale, slot]
   )
   const scopeKey = hostPluginSessionScopeKey(sessionContext)
   const [opened, setOpened] = useState<{

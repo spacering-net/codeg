@@ -13,7 +13,13 @@ import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
-import type { InstalledPlugin } from "@/lib/host-plugins"
+import zhCNMessages from "@/i18n/messages/zh-CN.json"
+import type {
+  InstalledPlugin,
+  PluginHostSurfaceContribution,
+  PluginInstallPreview,
+  PluginTextTranslations,
+} from "@/lib/host-plugins"
 import type { Transport } from "@/lib/transport"
 
 const state = vi.hoisted(() => ({
@@ -29,7 +35,10 @@ vi.mock("@/lib/transport", () => ({
 
 import { HostPluginSettings } from "./host-plugin-settings"
 
-function createSettingsTransport(initialPlugins: InstalledPlugin[]) {
+function createSettingsTransport(
+  initialPlugins: InstalledPlugin[],
+  preview?: PluginInstallPreview
+) {
   let plugins = initialPlugins
   const listeners = new Map<string, Set<(payload: unknown) => void>>()
 
@@ -40,6 +49,10 @@ function createSettingsTransport(initialPlugins: InstalledPlugin[]) {
       }
       if (method === "host_plugins_client_html") {
         return `<main data-plugin="${String(params?.pluginId ?? "")}">client-ui</main>`
+      }
+      if (method === "host_plugins_preview_install") {
+        if (!preview) throw new Error("No install preview configured")
+        return preview
       }
       if (method === "host_plugins_apply") {
         const mutation = params?.mutation as
@@ -96,11 +109,12 @@ function createSettingsTransport(initialPlugins: InstalledPlugin[]) {
 function makePlugin(opts: {
   id: string
   name: string
+  nameTranslations?: PluginTextTranslations
   enabled: boolean
   clientEntry?: string | null
-  pluginDetail?: { id: string; title: string }
-  activationPanel?: { id: string; title: string }
-  settingsPanel?: { id: string; title: string }
+  pluginDetail?: PluginHostSurfaceContribution
+  activationPanel?: PluginHostSurfaceContribution
+  settingsPanel?: PluginHostSurfaceContribution
 }): InstalledPlugin {
   return {
     enabled: opts.enabled,
@@ -108,6 +122,7 @@ function makePlugin(opts: {
     manifest: {
       id: opts.id,
       name: opts.name,
+      nameTranslations: opts.nameTranslations,
       version: "1.2.0",
       client:
         opts.clientEntry === null
@@ -125,9 +140,13 @@ function makePlugin(opts: {
   }
 }
 
-function withIntl(ui: ReactElement) {
+function withIntl(
+  ui: ReactElement,
+  locale = "en",
+  messages: typeof enMessages = enMessages
+) {
   return (
-    <NextIntlClientProvider locale="en" messages={enMessages}>
+    <NextIntlClientProvider locale={locale} messages={messages}>
       {ui}
     </NextIntlClientProvider>
   )
@@ -386,6 +405,96 @@ describe("HostPluginSettings pluginDetail and activationPanel surfaces", () => {
     )
     expect(activationFrame.getAttribute("srcdoc")).toContain(
       "Configure the workspace label used across inspector surfaces."
+    )
+  })
+
+  it("localizes plugin names, install review metadata, and updates an already-open surface on locale switch", async () => {
+    const localizedPlugin = makePlugin({
+      id: "acme.localized",
+      name: "Localized Inspector",
+      nameTranslations: {
+        zh: "本地化检查器（通用）",
+        "zh-CN": "本地化检查器",
+      },
+      enabled: true,
+      pluginDetail: {
+        id: "detail",
+        title: "Localized Details",
+        titleTranslations: {
+          zh: "详情（通用）",
+          "zh-CN": "本地化详情",
+        },
+      },
+      activationPanel: {
+        id: "setup",
+        title: "Localized Setup",
+        titleTranslations: { "zh-CN": "本地化引导" },
+      },
+    })
+    const preview: PluginInstallPreview = {
+      ticket: "ticket-1",
+      manifest: localizedPlugin.manifest,
+      source: {
+        type: "gitHub",
+        repository: "acme/localized",
+        commit: "1234567890abcdef",
+        directory: "plugins/inspector",
+      },
+    }
+    const mock = createSettingsTransport([localizedPlugin], preview)
+    state.transport = mock.transport
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    const { rerender } = render(withIntl(<HostPluginSettings />, "en"))
+
+    expect(await screen.findByText("Localized Inspector")).toBeInTheDocument()
+    const detailTrigger = screen.getByRole("button", {
+      name: "Localized Details",
+    })
+    await user.click(detailTrigger)
+
+    const openDialog = await screen.findByRole("dialog")
+    expect(openDialog).toHaveTextContent("Localized Details")
+    expect(openDialog).toHaveTextContent("Localized Inspector · Plugin details")
+
+    // Switch locale while the detail surface is open -> stays open, updates titles & iframe
+    rerender(withIntl(<HostPluginSettings />, "zh-CN", zhCNMessages))
+
+    const updatedDialog = await screen.findByRole("dialog")
+    expect(updatedDialog).toHaveTextContent("本地化详情")
+    expect(updatedDialog).toHaveTextContent("本地化检查器 · 插件详情")
+    expect(updatedDialog).toHaveTextContent("acme.localized · 1.2.0")
+    expect(
+      await within(updatedDialog).findByTitle("本地化详情")
+    ).toBeInTheDocument()
+
+    // Base language fallback (zh-TW -> zh) keeps the dialog open and falls back to "zh"
+    rerender(withIntl(<HostPluginSettings />, "zh-TW", zhCNMessages))
+    const fallbackDialog = await screen.findByRole("dialog")
+    expect(fallbackDialog).toHaveTextContent("详情（通用）")
+    expect(fallbackDialog).toHaveTextContent("本地化检查器（通用）")
+
+    // Close surface dialog and verify InstallReview renders localized name + source identity
+    await user.keyboard("{Escape}")
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull()
+    })
+
+    rerender(withIntl(<HostPluginSettings />, "zh-CN", zhCNMessages))
+    await user.click(screen.getByRole("button", { name: "添加插件" }))
+    const sourceInput = await screen.findByPlaceholderText(
+      "owner/repo, @scope/package"
+    )
+    await user.type(sourceInput, "acme/localized")
+    await user.click(screen.getByRole("button", { name: "预览安装" }))
+
+    const reviewSection = await screen.findByRole("region", {
+      name: "预览安装",
+    })
+    expect(reviewSection).toHaveTextContent("本地化检查器")
+    expect(reviewSection).toHaveTextContent("acme.localized · 1.2.0")
+    expect(reviewSection).toHaveTextContent(
+      "acme/localized/plugins/inspector#1234567890abcdef"
     )
   })
 })
