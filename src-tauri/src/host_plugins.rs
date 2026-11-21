@@ -14,6 +14,7 @@ use crate::acp::types::{AcpEvent, EventEnvelope};
 use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
+mod composer_pills;
 pub mod lifecycle;
 mod runtime;
 mod schema;
@@ -102,6 +103,12 @@ struct Contributions {
     screens: Vec<HostPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidebar_items: Vec<SidebarItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    composer_pills: Vec<composer_pills::ComposerPill>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    session_actions: Vec<composer_pills::SessionAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    input_activities: Vec<composer_pills::InputActivity>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -1003,9 +1010,20 @@ impl Manifest {
             themes,
             screens,
             sidebar_items,
+            composer_pills,
+            session_actions,
+            ..
         } = &self.contributes;
-        if !bundled && workspace_panels.is_empty() && themes.is_empty() {
-            return Err("A declarative plugin needs a workspace panel or theme".to_owned());
+        if !bundled
+            && workspace_panels.is_empty()
+            && themes.is_empty()
+            && composer_pills.is_empty()
+            && session_actions.is_empty()
+        {
+            return Err(
+                "A declarative plugin needs a workspace panel, theme, composer pill or session action"
+                    .to_owned(),
+            );
         }
         if workspace_panels.len() > MAX_CONTRIBUTIONS
             || commands.len() > MAX_CONTRIBUTIONS
@@ -1112,6 +1130,7 @@ impl Manifest {
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
+        composer_pills::validate(self)?;
         Ok(())
     }
 }

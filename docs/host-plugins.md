@@ -13,6 +13,7 @@ server it is connected to.
 | `commands` | Workspace quick actions | A user-selected command opens a panel owned by the same plugin. |
 | `hooks` | Codeg-managed ACP sessions | `session.turnCompleted` can record completion metadata for a workspace panel. |
 | `themes` | Settings → Appearance | The user selects an installed color palette for light mode, dark mode, or both. |
+| `composerPills`, `sessionActions` | Composer and session context menu | A user-selected item inserts text or opens a workspace panel from the same plugin. |
 
 The manifest is declarative. The host validates identifiers and panel
 references before installation. Plugins can use the views, actions and events
@@ -216,6 +217,81 @@ The method is available only to the active composer contribution. Closing
 the surface, hiding the session or changing the session, workspace, or connected
 host revokes its access. It works for a conversation's composer and the
 composer within its canvas card.
+
+## Composer pills, input activities, and session actions
+
+Declare `contributes.composerPills` for buttons in the active composer,
+`contributes.sessionActions` for entries in its session context menu, and
+`contributes.inputActivities` for status text beside the editor. A plugin can
+declare up to 16 pills, 16 session actions, and 8 input activities. Each entry
+has a slug `id`, a `title`, and optional `titleTranslations`. IDs are unique
+within each contribution array.
+
+Pills and session actions accept `description` and `descriptionTranslations`.
+A pill can also provide `label` and `labelTranslations` for its visible text.
+The localized title is the default visible label. Every nonempty translation
+map needs its corresponding fallback text.
+
+Set `scope` to `draft`, `session`, or `all`. Pills and activities default to
+`all`. Session actions default to `session`. Default scopes may be omitted
+from the catalog. Match the scope to the current composer or context menu.
+The runtime scope is always `draft` or `session`. A draft or an unsaved
+session can have a `null` conversation ID.
+
+Pills and session actions declare `action` by `kind`.
+
+| `kind` | Fields and behavior |
+| --- | --- |
+| `openWorkspacePanel` | Open `panelId` in the active workspace. This needs an active folder. |
+| `openClientSurface` | Open `surfaceId` in its declared slot for the current context. |
+| `openScreen` | Open `screenId` on the connected host. |
+| `callMethod` | Call `method` and apply its result to the active composer. |
+| `insertText` | Insert `text` at the caret or replace the selection. Optional `textTranslations` localize the inserted text. |
+| `menu` | On a pill, show 1–16 `items` with unique slug IDs, titles, optional title translations, and one of the five leaf actions above. |
+
+Navigation targets must be declared in the same plugin's `workspacePanels`,
+`clientSurfaces`, or `screens`. Method targets must be declared in the same
+plugin's `server.methods`. A plugin with only static insertions or declarative
+workspace panels can use API version 1. Server methods and client surfaces
+require the corresponding API version 2 module.
+
+All dynamic calls use `{ pluginId, method, input }` through the connected
+host's `host_plugins_call` command or `POST /api/host_plugins_call` route.
+The host checks plugin availability and method registration, and applies
+any `server.rpc` contracts. For `callMethod`, send
+`{ source, itemId, menuItemId?, scope, folderId, conversationId, locale }`.
+Use `source: "composerPill"` for a pill or its menu item, and
+`source: "sessionAction"` for a session action. Include `menuItemId` only
+when a pill menu item is selected. Use `null` for unavailable IDs.
+
+The method returns `{ insertText?, notice? }`. For manifest text, translations,
+and returned `insertText`, clients normalize CRLF and CR line endings to LF
+and validate the result as nonempty, NUL-free text of at most 16 KiB in UTF-8.
+The host applies the same check to manifest text during installation. The
+editor handles insertion as a draft edit and leaves sending to the user.
+Show `notice` as plain text.
+
+Each input activity declares a `method`. Its input is
+`{ activityId, scope, folderId, conversationId, locale }`, using the same
+context rules. The result is `null` or
+`{ visible, tone?, title, detail? }`. Hide the activity if the result is
+`null` or `visible` is false. The optional `tone` is `muted` or `warning`.
+Display `title` and optional `detail` as plain text, with UTF-8 limits of
+256 and 1,024 bytes respectively and no control characters. Validate dynamic
+results before applying them, including when the plugin omits its RPC schema.
+
+Recompute contributions from the enabled catalog when the active workspace,
+session, composer scope, or connected transport changes. Withdraw items when
+their plugin is disabled, removed, or their context is left. Scope pending
+requests to the transport, plugin, and active composer or session identity.
+Discard superseded results and responses from an old context, including
+after a workspace or host switch, plug-in update, or composer close. Apply
+activity results as display state and run actions only on user selection.
+
+See the [author types](host-plugin-composer-pills.d.ts). Install and enable
+the [Composer Review example](../examples/plugins/composer-pills) to try a
+localized Review tools menu, checklist and summary pills, a session review
+action, and an input activity that appears in a workspace.
 
 ## Persist plugin settings
 

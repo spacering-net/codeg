@@ -1,0 +1,175 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.composer-pills",
+  "name": "Composer Review",
+  "nameTranslations": {
+    "es": "Revisión en el editor",
+    "zh-CN": "编辑器审查"
+  },
+  "version": "1.0.0",
+  "server": {
+    "entry": "pills.mjs",
+    "methods": ["review-checklist", "review-status"],
+    "rpc": {
+      "review-checklist": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "source": { "enum": ["composerPill", "sessionAction"] },
+            "itemId": { "type": "string" },
+            "menuItemId": { "type": "string" },
+            "scope": { "enum": ["draft", "session"] },
+            "folderId": { "type": ["integer", "null"] },
+            "conversationId": { "type": ["integer", "null"] },
+            "locale": { "type": "string" }
+          },
+          "required": [
+            "source",
+            "itemId",
+            "scope",
+            "folderId",
+            "conversationId",
+            "locale"
+          ],
+          "additionalProperties": false
+        },
+        "output": {
+          "type": "object",
+          "properties": {
+            "insertText": { "type": "string", "minLength": 1 },
+            "notice": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "review-status": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "activityId": { "const": "review-available" },
+            "scope": { "enum": ["draft", "session"] },
+            "folderId": { "type": ["integer", "null"] },
+            "conversationId": { "type": ["integer", "null"] },
+            "locale": { "type": "string" }
+          },
+          "required": [
+            "activityId",
+            "scope",
+            "folderId",
+            "conversationId",
+            "locale"
+          ],
+          "additionalProperties": false
+        },
+        "output": {
+          "type": ["null", "object"],
+          "properties": {
+            "visible": { "type": "boolean" },
+            "tone": { "enum": ["muted", "warning"] },
+            "title": { "type": "string", "maxLength": 256 },
+            "detail": { "type": "string", "maxLength": 1024 }
+          },
+          "required": ["visible", "title"],
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "contributes": {
+    "composerPills": [
+      {
+        "id": "review-menu",
+        "title": "Review tools",
+        "titleTranslations": {
+          "es": "Herramientas de revisión",
+          "zh-CN": "审查工具"
+        },
+        "label": "Review",
+        "labelTranslations": { "es": "Revisar", "zh-CN": "审查" },
+        "action": {
+          "kind": "menu",
+          "items": [
+            {
+              "id": "test-plan",
+              "title": "Insert a test plan",
+              "titleTranslations": {
+                "es": "Insertar un plan de pruebas",
+                "zh-CN": "插入测试计划"
+              },
+              "action": {
+                "kind": "insertText",
+                "text": "Propose a test plan for these changes.",
+                "textTranslations": {
+                  "es": "Propón un plan de pruebas para estos cambios.",
+                  "zh-CN": "请为这些改动提出测试计划。"
+                }
+              }
+            },
+            {
+              "id": "checklist",
+              "title": "Insert a review checklist",
+              "titleTranslations": {
+                "es": "Insertar una lista de revisión",
+                "zh-CN": "插入审查清单"
+              },
+              "action": { "kind": "callMethod", "method": "review-checklist" }
+            }
+          ]
+        }
+      },
+      {
+        "id": "summarize",
+        "title": "Ask for a summary",
+        "titleTranslations": {
+          "es": "Pedir un resumen",
+          "zh-CN": "请求总结"
+        },
+        "action": {
+          "kind": "insertText",
+          "text": "Summarize the changes and open questions.",
+          "textTranslations": {
+            "es": "Resume los cambios y las preguntas pendientes.",
+            "zh-CN": "请总结改动与尚待解决的问题。"
+          }
+        }
+      },
+      {
+        "id": "checklist",
+        "title": "Insert a review checklist",
+        "titleTranslations": {
+          "es": "Insertar una lista de revisión",
+          "zh-CN": "插入审查清单"
+        },
+        "scope": "draft",
+        "action": { "kind": "callMethod", "method": "review-checklist" }
+      }
+    ],
+    "sessionActions": [
+      {
+        "id": "review-session",
+        "title": "Review this session",
+        "titleTranslations": {
+          "es": "Revisar esta sesión",
+          "zh-CN": "审查此会话"
+        },
+        "description": "Insert a checklist into the current draft.",
+        "descriptionTranslations": {
+          "es": "Inserta una lista de revisión en el borrador actual.",
+          "zh-CN": "将审查清单插入当前草稿。"
+        },
+        "action": { "kind": "callMethod", "method": "review-checklist" }
+      }
+    ],
+    "inputActivities": [
+      {
+        "id": "review-available",
+        "title": "Review checklist",
+        "titleTranslations": {
+          "es": "Lista de revisión",
+          "zh-CN": "审查清单"
+        },
+        "method": "review-status"
+      }
+    ]
+  }
+}
