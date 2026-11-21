@@ -1,9 +1,38 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import {
+  parsePluginThemePalette,
+  type PluginThemePalette,
+} from "@/lib/custom-style"
 import { getTransport, type Transport } from "@/lib/transport"
 
 export type PluginTextTranslations = Record<string, string>
+
+export interface PluginThemeContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  light?: PluginThemePalette
+  dark?: PluginThemePalette
+}
+
+export interface ResolvedPluginTheme {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  light?: PluginThemePalette
+  dark?: PluginThemePalette
+}
+
+export interface PluginHostScope {
+  /** Storage scope identifying the connected host (e.g. "local" or "remote:5"). */
+  scopeKey: string
+  /** True only when the active transport matches the window's target host. */
+  transportReady: boolean
+}
 
 type WorkspacePanel = {
   id: string
@@ -102,6 +131,7 @@ export interface InstalledPlugin {
       pluginDetail?: PluginHostSurfaceContribution
       activationPanel?: PluginHostSurfaceContribution
       clientSurfaces?: PluginClientSurfaceContribution[]
+      themes?: PluginThemeContribution[]
     }
   }
 }
@@ -159,32 +189,37 @@ function usePluginResource<T, E>(
     let latest = 0
     let unsubscribe: (() => void) | undefined
     const read = () => {
+      if (typeof transport.call !== "function") return
       const request = ++latest
-      void load(transport).then(
-        (data) => {
-          if (active && request === latest)
-            setSnapshot({ transport, load, data })
-        },
-        (error: unknown) => {
-          if (active && request === latest)
-            setSnapshot({ transport, load, error })
-        }
-      )
+      void Promise.resolve()
+        .then(() => load(transport))
+        .then(
+          (data) => {
+            if (active && request === latest)
+              setSnapshot({ transport, load, data })
+          },
+          (error: unknown) => {
+            if (active && request === latest)
+              setSnapshot({ transport, load, error })
+          }
+        )
     }
     const stopReconnect = transport.onReconnect?.(read)
-    void transport
-      .subscribe<E>(event, (payload) => {
-        if (!matches || matches(payload)) read()
-      })
-      .then(
-        (stop) => {
-          if (active) {
-            unsubscribe = stop
-            read()
-          } else stop()
-        },
-        () => undefined
-      )
+    if (typeof transport.subscribe === "function") {
+      void transport
+        .subscribe<E>(event, (payload) => {
+          if (!matches || matches(payload)) read()
+        })
+        .then(
+          (stop) => {
+            if (active) {
+              unsubscribe = stop
+              read()
+            } else stop()
+          },
+          () => undefined
+        )
+    }
     read()
     return () => {
       active = false
@@ -201,9 +236,17 @@ function usePluginResource<T, E>(
   }
 }
 
+function safeGetTransport(): Transport | null {
+  if (typeof window === "undefined") return null
+  try {
+    return getTransport()
+  } catch {
+    return null
+  }
+}
+
 export function useHostPlugins(enabled = true) {
-  const transport =
-    enabled && typeof window !== "undefined" ? getTransport() : null
+  const transport = enabled ? safeGetTransport() : null
   return {
     ...usePluginResource(transport, enabled, loadCatalog, CATALOG_CHANGED),
     transport,
@@ -315,6 +358,41 @@ export function pluginClientSurfaceKey(pluginId: string, surfaceId: string) {
   return `${pluginId}:${surfaceId}`
 }
 
+export function pluginThemeKey(pluginId: string, themeId: string) {
+  return `${pluginId}:${themeId}`
+}
+
+export function resolvePluginHostScope(
+  search: string,
+  activeRemoteId: number | null
+): PluginHostScope {
+  const params = new URLSearchParams(search)
+  const rawRemoteId = params.get("remoteConnectionId")
+  if (rawRemoteId !== null && rawRemoteId.trim() !== "") {
+    const parsed = Number(rawRemoteId)
+    if (!Number.isFinite(parsed)) {
+      return {
+        scopeKey: `remote:${rawRemoteId.trim()}`,
+        transportReady: false,
+      }
+    }
+    return {
+      scopeKey: `remote:${parsed}`,
+      transportReady: activeRemoteId === parsed,
+    }
+  }
+  if (activeRemoteId !== null && Number.isFinite(activeRemoteId)) {
+    return {
+      scopeKey: `remote:${activeRemoteId}`,
+      transportReady: true,
+    }
+  }
+  return {
+    scopeKey: "local",
+    transportReady: true,
+  }
+}
+
 function canonicalizeLocaleTag(tag: string): string {
   const parts = tag.trim().replace(/_/g, "-").split("-").filter(Boolean)
   if (parts.length === 0) return ""
@@ -422,6 +500,53 @@ export function selectPluginClientSurfaces(
         id,
         title,
         slot: surface.slot,
+      })
+    }
+  }
+  return items
+}
+
+export function selectPluginThemes(
+  plugins: readonly InstalledPlugin[] | undefined,
+  locale?: string
+): ResolvedPluginTheme[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginTheme[] = []
+  const seen = new Set<string>()
+  for (const plugin of plugins) {
+    if (!plugin.enabled) continue
+    const themes = plugin.manifest.contributes?.themes
+    if (!themes?.length) continue
+    const pluginName = resolvePluginText(
+      plugin.manifest.name,
+      plugin.manifest.nameTranslations,
+      locale
+    ).trim()
+    for (const theme of themes) {
+      const id = theme.id.trim()
+      const title = resolvePluginText(
+        theme.title,
+        theme.titleTranslations,
+        locale
+      ).trim()
+      if (!id || !title) continue
+      const light = parsePluginThemePalette(theme.light)
+      const dark = parsePluginThemePalette(theme.dark)
+      if (!light || !dark) continue
+      const hasLight = Object.keys(light).length > 0
+      const hasDark = Object.keys(dark).length > 0
+      if (!hasLight && !hasDark) continue
+      const key = pluginThemeKey(plugin.manifest.id, id)
+      if (seen.has(key)) continue
+      seen.add(key)
+      items.push({
+        key,
+        pluginId: plugin.manifest.id,
+        pluginName: pluginName || plugin.manifest.id,
+        id,
+        title,
+        ...(hasLight ? { light } : {}),
+        ...(hasDark ? { dark } : {}),
       })
     }
   }
