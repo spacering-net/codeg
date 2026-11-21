@@ -87,17 +87,21 @@ struct Contributions {
     #[serde(default)]
     hooks: Vec<Hook>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    settings_panel: Option<SettingsPanel>,
+    settings_panel: Option<HostPanel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    plugin_detail: Option<SettingsPanel>,
+    plugin_detail: Option<HostPanel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    activation_panel: Option<SettingsPanel>,
+    activation_panel: Option<HostPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     lifecycle_hooks: Vec<lifecycle::Registration>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     client_surfaces: Vec<ClientSurface>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     themes: Vec<theme::Theme>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    screens: Vec<HostPanel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    sidebar_items: Vec<SidebarItem>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -119,11 +123,29 @@ enum ClientSlot {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct SettingsPanel {
+struct HostPanel {
     id: String,
     title: String,
     #[serde(default, skip_serializing_if = "Translations::is_empty")]
     title_translations: Translations,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SidebarItem {
+    id: String,
+    title: String,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    title_translations: Translations,
+    placement: SidebarPlacement,
+    screen_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum SidebarPlacement {
+    Header,
+    Footer,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -979,6 +1001,8 @@ impl Manifest {
             lifecycle_hooks,
             client_surfaces,
             themes,
+            screens,
+            sidebar_items,
         } = &self.contributes;
         if !bundled && workspace_panels.is_empty() && themes.is_empty() {
             return Err("A declarative plugin needs a workspace panel or theme".to_owned());
@@ -1056,6 +1080,35 @@ impl Manifest {
                     "Client surfaces need a client entry, unique IDs, and valid titles".to_owned(),
                 );
             }
+        }
+        if (!screens.is_empty() || !sidebar_items.is_empty()) && self.client.is_none() {
+            return Err("Plugin screens and sidebar items need a client entry".to_owned());
+        }
+        let mut screen_ids = BTreeSet::new();
+        if screens.len() > MAX_CONTRIBUTIONS
+            || screens.iter().any(|screen| {
+                !valid_id(&screen.id)
+                    || !valid_label(&screen.title)
+                    || !valid_translations(&screen.title_translations, valid_label)
+                    || !screen_ids.insert(&screen.id)
+            })
+        {
+            return Err("Provide up to 16 plugin screens with unique IDs and valid titles".into());
+        }
+        let mut sidebar_ids = BTreeSet::new();
+        if sidebar_items.len() > MAX_CONTRIBUTIONS
+            || sidebar_items.iter().any(|item| {
+                !valid_id(&item.id)
+                    || !valid_label(&item.title)
+                    || !valid_translations(&item.title_translations, valid_label)
+                    || !sidebar_ids.insert(&item.id)
+                    || !screen_ids.contains(&item.screen_id)
+            })
+        {
+            return Err(
+                "Provide up to 16 sidebar items with unique IDs, valid titles and a screen from this plugin"
+                    .into(),
+            );
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
@@ -1378,6 +1431,43 @@ mod tests {
         unknown["contributes"]["clientSurfaces"][0]["slot"] = "unknown".into();
         for rejected in [missing_entry, duplicate, unknown] {
             assert!(Manifest::parse(&rejected.to_string()).is_err());
+        }
+    }
+
+    #[test]
+    fn validates_plugin_navigation_and_limits_targets_to_the_same_manifest() {
+        use serde_json::json;
+
+        let source = include_str!("../../examples/plugins/plugin-navigation/codeg-plugin.json");
+        let manifest: serde_json::Value = serde_json::from_str(source).unwrap();
+        let wire = serde_json::to_value(Manifest::parse(source).unwrap()).unwrap();
+        for key in ["screens", "sidebarItems"] {
+            assert_eq!(wire["contributes"][key], manifest["contributes"][key]);
+            let mut duplicate = manifest.clone();
+            duplicate["contributes"][key][1]["id"] = json!("overview");
+            assert!(Manifest::parse(&duplicate.to_string()).is_err());
+
+            let mut too_many = manifest.clone();
+            let entries = too_many["contributes"][key].as_array_mut().unwrap();
+            let template = entries[0].clone();
+            for i in entries.len()..=MAX_CONTRIBUTIONS {
+                let mut entry = template.clone();
+                entry["id"] = json!(format!("example-{i}"));
+                entries.push(entry);
+            }
+            assert!(Manifest::parse(&too_many.to_string()).is_err());
+        }
+
+        let mut missing_client = manifest.clone();
+        missing_client.as_object_mut().unwrap().remove("client");
+        missing_client["server"] = json!({"entry": "server.mjs", "methods": ["describe"]});
+        let error = Manifest::parse(&missing_client.to_string()).unwrap_err();
+        assert!(error.to_string().contains("need a client entry"));
+
+        for (field, value) in [("screenId", "other.overview"), ("placement", "middle")] {
+            let mut invalid = manifest.clone();
+            invalid["contributes"]["sidebarItems"][0][field] = json!(value);
+            assert!(Manifest::parse(&invalid.to_string()).is_err());
         }
     }
 

@@ -167,6 +167,36 @@ Both contributions open on demand from Settings. The frame receives
 `type: "pluginDetail"` or `type: "activationPanel"` from `window.codeg.ready`
 and can use the same settings, server call, and event APIs as `settingsPanel`.
 
+### Plugin screens and sidebar navigation
+
+Declare `contributes.screens` for full-page client surfaces and
+`contributes.sidebarItems` for entries at the top or bottom of Codeg's sidebar.
+Each item opens a screen declared by the same plugin.
+
+```json
+{
+  "screens": [{ "id": "overview", "title": "Overview" }],
+  "sidebarItems": [
+    {
+      "id": "overview",
+      "title": "Open Overview",
+      "placement": "header",
+      "screenId": "overview"
+    }
+  ]
+}
+```
+
+Each array accepts up to 16 entries with unique IDs within that array.
+`placement` accepts `header` or `footer`. Use `titleTranslations` to translate
+either title. The screen body uses the reviewed `client.entry`, and
+`window.codeg.ready` resolves with `type: "screen"`, its `id`, and the
+app `locale`. Settings, declared server methods, and events use the connected
+host.
+
+Install and enable the [Plugin Navigation example](../examples/plugins/plugin-navigation)
+to open its overview from the sidebar header and its help screen from the footer.
+
 ### Insert text into the composer
 
 An open `composer` contribution can call
