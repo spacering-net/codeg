@@ -14408,7 +14408,9 @@ async fn the_morning_brief_comes_when_the_owner_shows_up_and_is_brought_to_them_
     .unwrap();
     let seg = open_segment(&primary).await;
     let (mut rx, state) = live_connection(&primary, seg, "pa-27a").await;
-    let now = super::clock::now();
+    // The failure waited a while: the brief lists only what has.
+    let now = super::clock::now()
+        + chrono::Duration::minutes(super::brief::NEEDS_SETTLE_MINUTES + 5);
 
     // Away, nothing learned of their hours: it waits for them.
     host.brief_tick_at(now).await;
@@ -14499,6 +14501,90 @@ async fn the_morning_brief_comes_when_the_owner_shows_up_and_is_brought_to_them_
         .0
         .brief
         .is_none());
+}
+
+/// The morning brief lists only what has waited on the owner a while: what
+/// came up minutes ago is where it came up, in front of them.
+#[tokio::test]
+async fn the_morning_brief_leaves_out_what_came_up_just_now() {
+    let (host, w, _tmp) = briefing(owner_here(None)).await;
+    let worker = host.engine_for(Some(w)).await.unwrap();
+    session_dispatch(&worker, DispatchState::Failed, "pa-fresh").await;
+    // Dev asks the owner something, in its own conversation.
+    let seg = open_segment(&worker).await;
+    turn_with(&worker, seg, "w-1", &[], &[]).await;
+    worker
+        .feed_for_test(
+            "w-1",
+            1,
+            AcpEvent::QuestionRequest {
+                question_id: "q1".into(),
+                questions: vec![question("a")],
+            },
+        )
+        .await;
+    // What waits on the owner, and Dev's line: how many of its own wait.
+    let of = |b: &crate::db::entities::personal_agent_brief::Model| {
+        let m: serde_json::Value =
+            serde_json::from_str(b.material.as_deref().unwrap_or("{}")).unwrap();
+        let needs = m["needs"].as_array().map(|a| a.len()).unwrap_or(0);
+        let stuck = m["bots"]
+            .as_array()
+            .and_then(|a| a.iter().find(|l| l["bot_id"] == w))
+            .map(|l| l["stuck"].as_u64().unwrap_or(0))
+            .unwrap_or(0);
+        (needs, stuck)
+    };
+
+    let now = super::clock::now();
+    host.brief_tick_at(now).await;
+    let b = briefs_of(&host, "brief", now).await;
+    assert_eq!(b.len(), 1, "{b:?}");
+    assert_eq!(of(&b[0]), (0, 0), "all of it a moment ago: {b:?}");
+    assert_eq!(b[0].state, "empty", "nothing else to say: no brief");
+
+    // Still waiting the next day: listed then.
+    let next = now + chrono::Duration::days(1);
+    host.brief_tick_at(next).await;
+    let b = briefs_of(&host, "brief", next).await;
+    assert_eq!(b.len(), 1, "{b:?}");
+    assert_eq!(of(&b[0]), (2, 1), "{b:?}");
+}
+
+/// The next brief covers from the moment the last one looked, not from its
+/// row written a moment after: what the last one left out as just come up
+/// in between never falls between the two.
+#[tokio::test]
+async fn a_brief_covers_from_the_moment_the_last_one_looked() {
+    let (host, _w, _tmp) = briefing(owner_here(None)).await;
+    let primary = host.primary();
+    let now = super::clock::now();
+    let tz = primary.owner_tz().await;
+    let yesterday = super::brief::day_key(now - chrono::Duration::days(1), tz);
+    let looked = now - chrono::Duration::hours(20);
+    crate::db::service::personal_agent_brief_service::create(
+        &host.db.conn,
+        crate::db::service::personal_agent_brief_service::NewBrief {
+            bot_id: primary.bot().await,
+            kind: "brief",
+            day: yesterday.clone(),
+            key: format!("brief:{yesterday}"),
+            state: "delivered",
+            since: looked - chrono::Duration::days(1),
+            material: Some(
+                json!({ "kind": "brief", "day": yesterday, "since": looked, "at": looked })
+                    .to_string(),
+            ),
+            batch_id: None,
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    host.brief_tick_at(now).await;
+    let b = briefs_of(&host, "brief", now).await;
+    assert_eq!(b.len(), 1, "{b:?}");
+    assert_eq!(b[0].since, looked, "not the row's created_at");
 }
 
 /// Nothing waiting, nothing since, nothing on the schedule: nothing is
@@ -14636,7 +14722,9 @@ async fn a_brief_goes_after_the_owners_message_in_a_turn_of_its_own() {
     session_dispatch(&worker, DispatchState::Failed, "pa-27o").await;
     let seg = open_segment(&primary).await;
     let (mut rx, state) = live_connection(&primary, seg, "pa-27b").await;
-    let now = super::clock::now();
+    // The failure waited a while: the brief lists only what has.
+    let now = super::clock::now()
+        + chrono::Duration::minutes(super::brief::NEEDS_SETTLE_MINUTES + 5);
     host.brief_tick_at(now).await;
     let msg = primary
         .send_owner_message("what's up?".into(), Vec::new(), None)
@@ -18166,6 +18254,25 @@ async fn a_tidy_up_to_see_first_is_a_draft_applied_whole_or_stale() {
         .find(|r| r.kind == "tidy")
         .expect("waits on the owner");
     assert_eq!(row.state.as_deref(), Some("draft"));
+    // The morning brief has it once it has waited a while: not just made;
+    // in the next one when it was too new for the last; not again after.
+    let made = row.at;
+    let prefs = primary.prefs().await;
+    let tidied_in = |now: chrono::DateTime<chrono::Utc>, since: chrono::DateTime<chrono::Utc>| {
+        let host = host.clone();
+        let prefs = prefs.clone();
+        async move {
+            super::brief::gather(&host.db, &host.manager, "brief", now, since, &prefs)
+                .await
+                .tidied
+                .iter()
+                .any(|v| v["notice_id"] == id)
+        }
+    };
+    let min = chrono::Duration::minutes;
+    assert!(!tidied_in(made + min(5), made - min(600)).await, "just made");
+    assert!(tidied_in(made + min(45), made + min(5)).await, "too new for the last");
+    assert!(!tidied_in(made + min(120), made + min(45)).await, "the last had it");
     // Applied: whole.
     let row = primary.act_on_notice(id, "apply").await.unwrap();
     assert_eq!(

@@ -84,6 +84,8 @@ pub const WRAP_BEFORE_MINUTES: u32 = 30;
 pub const WRAP_ACTIVE_MINUTES: i64 = 10;
 /// The computer is kept awake at most this long after a wrap-up.
 pub const AWAKE_HOURS: i64 = 12;
+/// How long a thing waits on the owner before the morning brief lists it.
+pub const NEEDS_SETTLE_MINUTES: i64 = 30;
 /// A part's lines in the brain's materials, at most.
 const PART_MAX: usize = 12;
 /// Loose ends of each kind, at most.
@@ -312,6 +314,29 @@ impl Material {
     pub fn needs_count(&self) -> usize {
         self.needs.len()
     }
+}
+
+/// When a brief's materials were gathered — the moment it looked, which the
+/// next one covers from, so nothing falls between the two (its row is
+/// written a moment later); when it was written for one without them.
+fn gathered_at(b: &brief_entity::Model) -> DateTime<Utc> {
+    b.material
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .and_then(|v| {
+            v["at"]
+                .as_str()
+                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        })
+        .map(|t| t.with_timezone(&Utc))
+        .unwrap_or(b.created_at)
+}
+
+/// Whether a thing waiting on the owner since `at` has waited long enough
+/// for the morning brief to list it ([`NEEDS_SETTLE_MINUTES`]): what came
+/// up just now is where it came up, in front of them.
+fn settled(now: DateTime<Utc>, at: DateTime<Utc>) -> bool {
+    now - at >= Duration::minutes(NEEDS_SETTLE_MINUTES)
 }
 
 fn cut(text: &str, max: usize) -> String {
@@ -546,7 +571,17 @@ pub async fn gather(
             .map(|p| p.to_string())
             .collect();
         if part("needs") {
-            m.needs = as_values(&view.needs);
+            // Only what has waited a while: what came up just now is where it
+            // came up, in front of the owner — listed here it only says it
+            // again, "waiting 0 minutes" (a question the assistant has just
+            // asked).
+            let waited: Vec<TodayRow> = view
+                .needs
+                .iter()
+                .filter(|r| settled(now, r.at))
+                .cloned()
+                .collect();
+            m.needs = as_values(&waited);
         }
         if part("night") {
             let mut night: Vec<TodayRow> = view.done.clone();
@@ -575,11 +610,16 @@ pub async fn gather(
             m.tonight = as_values(&t);
             rows.extend(tonight);
             // Last night's tidy-ups, a line for each (7.7): their own part,
-            // not again among the rest — a draft since the last brief too.
+            // not again among the rest — a draft since the last brief too,
+            // once it has waited a while as the rest of what waits. One too
+            // new for the last brief (made in the while before it) is this
+            // one's.
             let mut tidied: Vec<TodayRow> = view
                 .done
                 .iter()
-                .chain(view.needs.iter().filter(|r| r.at >= since))
+                .chain(view.needs.iter().filter(|r| {
+                    r.at + Duration::minutes(NEEDS_SETTLE_MINUTES) > since && settled(now, r.at)
+                }))
                 .filter(|r| r.kind == "tidy")
                 .cloned()
                 .collect();
@@ -595,7 +635,7 @@ pub async fn gather(
             m.schedule = as_values(&view.schedule);
         }
         if part("bots") {
-            m.bots = bot_lines(db, &bots, since).await;
+            m.bots = bot_lines(db, &bots, since, now).await;
         }
         if part("loose") {
             m.loose = loose_ends(db, prefs, now, since).await;
@@ -664,6 +704,7 @@ async fn bot_lines(
     db: &AppDatabase,
     bots: &[agent_entity::Model],
     since: DateTime<Utc>,
+    now: DateTime<Utc>,
 ) -> Vec<BotLine> {
     let mut out = Vec::new();
     for b in bots
@@ -696,7 +737,13 @@ async fn bot_lines(
         .map(|d| cut(&d.title, 80))
         .collect();
         let facts = super::live::db_facts(db, b).await;
-        let needs: Vec<_> = facts.needs.iter().filter(|n| !n.mirror).collect();
+        // What waits on the owner, as "waits on the owner" lists it: only
+        // what has waited a while.
+        let needs: Vec<_> = facts
+            .needs
+            .iter()
+            .filter(|n| !n.mirror && settled(now, n.since))
+            .collect();
         out.push(BotLine {
             bot_id: b.id,
             name: display_name(b),
@@ -2203,7 +2250,7 @@ impl EngineHost {
             .ok()
             .flatten()
         {
-            Some(b) => b.created_at.max(floor),
+            Some(b) => gathered_at(&b).max(floor),
             None => (super::today::day_of(now, tz).0 - Duration::days(1)).max(floor),
         };
         let m = gather(&self.db, &self.manager, BRIEF, now, since, prefs).await;
