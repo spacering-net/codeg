@@ -15,6 +15,14 @@ type SurfaceContext = { id: string } & (
 const CLIENT_TIMEOUT_MS = 12_000
 const MAX_PENDING_CALLS = 4
 const MAX_INPUT_BYTES = 64 * 1024
+const LIFECYCLE_EVENT_CHANNEL = "host-plugins://event"
+
+type PluginEvent = {
+  pluginId: string
+  event: string
+  folderId?: number | null
+  data: unknown
+}
 
 const CLIENT_POLICY = [
   "default-src 'none'",
@@ -35,6 +43,7 @@ function buildDocument(html: string, key: string): string {
 (() => {
   const key = ${JSON.stringify(key)};
   const pending = new Map();
+  const subscribers = new Set();
   let seq = 0;
   let port;
   const ready = new Promise(resolve => {
@@ -48,6 +57,10 @@ function buildDocument(html: string, key: string): string {
       port.onmessage = ({ data }) => {
         if (data.type === "context") {
           resolve(Object.freeze(data.context));
+          return;
+        }
+        if (data.type === "event") {
+          for (const listener of subscribers) listener(data.value);
           return;
         }
         const request = pending.get(data.id);
@@ -85,7 +98,13 @@ function buildDocument(html: string, key: string): string {
     read: () => request("settings", { type: "read" }),
     save: (revision, value) => request("settings", { type: "save", revision, value }),
   });
-  Object.defineProperty(window, "codeg", { value: Object.freeze({ ready, call, settings }) });
+  const events = Object.freeze({
+    subscribe(listener) {
+      subscribers.add(listener);
+      return () => subscribers.delete(listener);
+    },
+  });
+  Object.defineProperty(window, "codeg", { value: Object.freeze({ ready, call, settings, events }) });
 })();
 </script>
 ${html}`
@@ -161,6 +180,8 @@ function PluginFrame({
 
   useEffect(() => {
     let channel: MessageChannel | undefined
+    let unsubscribe: (() => void) | undefined
+    let closed = false
     function connect(event: MessageEvent) {
       if (
         channel ||
@@ -182,6 +203,22 @@ function PluginFrame({
             type: "context",
             context: { type, id, folderId, locale },
           })
+          void host
+            .subscribe<PluginEvent>(LIFECYCLE_EVENT_CHANNEL, (event) => {
+              if (
+                event.pluginId !== pluginId ||
+                (folderId !== undefined && event.folderId !== folderId)
+              )
+                return
+              port1.postMessage({ type: "event", value: event })
+            })
+            .then(
+              (stop) => {
+                if (closed) stop()
+                else unsubscribe = stop
+              },
+              () => undefined
+            )
           return
         }
         if (
@@ -230,6 +267,8 @@ function PluginFrame({
     }
     window.addEventListener("message", connect)
     return () => {
+      closed = true
+      unsubscribe?.()
       window.removeEventListener("message", connect)
       channel?.port1.close()
     }

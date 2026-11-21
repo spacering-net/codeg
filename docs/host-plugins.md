@@ -104,6 +104,31 @@ the replacement settings object. Codeg calls the migration when the user
 enables the update, then validates and stores the result together with
 enablement. If it fails, the original value stays available for a later retry.
 
+## Workspace lifecycle hooks
+
+Declare `contributes.lifecycleHooks` as a list of `{ event, method }` entries.
+The server entry receives these private methods through `handle`. Keep hook
+methods out of `server.methods`.
+
+| Event | Input | Effect |
+| --- | --- | --- |
+| `workspace.open.before` | `{ path }` | Runs when a user opens by path. Return `null` to keep the path, or `{ path }` with an absolute replacement. |
+| `workspace.open.after` | `{ folderId, path }` | Observes a completed open by path or reopening a saved folder by ID. |
+| `workspace.close.after` | `{ folderId }` | Observes removing an open folder from the workspace. |
+
+The host applies before hooks in plugin ID order and uses each replacement as
+the next hook's input. An error, invalid response or timeout stops the open.
+After hooks run asynchronously. Return a JSON value to publish it to that
+plugin's open client surfaces, or `null` to skip publishing. Subscribe with
+`window.codeg.events.subscribe(({ event, folderId, data }) => { … })`. The call
+returns an unsubscribe function. A workspace client surface receives events for
+its own folder. The stream delivers live events without replay.
+
+Install the [Workspace Lifecycle example](../examples/plugins/workspace-lifecycle)
+and open its **Workspace Events** settings panel. Open or close a folder in a
+second Codeg window connected to the same host to see the events. Opening
+`workspace-alias` by path opens the sibling `workspace-real` directory.
+
 ## Install from a source
 
 **Settings → Plugins → Add Plugin** accepts these public sources:
