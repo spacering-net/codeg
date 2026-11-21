@@ -1630,6 +1630,11 @@ export function MessageInput({
     historyDraftRef.current = null
   }, [clearAttachments, closeSlashMenu])
 
+  // One `/btw` in flight at a time: the fork RPC takes seconds, and Enter
+  // pressed again in that window would fork the same prefix a second time and
+  // stack a duplicate child row behind the first.
+  const btwInFlightRef = useRef(false)
+
   // Async steering must compare against the current draft, including images
   // added or removed while delivery was awaiting confirmation.
   const currentComposerRef = useRef({
@@ -1674,20 +1679,30 @@ export function MessageInput({
     // (the copy fork reads the settled prefix while the parent streams).
     // Only the client-synthesized entry is intercepted: an agent's own `/btw`
     // stays forwarded verbatim, and where the backend offers no entry (no
-    // fork+resume) the text flows on like any unknown slash input.
+    // fork+resume) the text flows on like any unknown slash input. A draft
+    // carrying anything but text (images, file mentions) is not a plain side
+    // question — the fork request has nowhere to put an attachment, so it
+    // takes the ordinary send path instead of being silently stripped.
     const btwQuestion = extractBtwQuestion(draft.displayText)
     if (
       btwQuestion !== null &&
       onBtw &&
+      draft.blocks.every((block) => block.type === "text") &&
       slashCommands.some((cmd) => cmd.name === "btw" && cmd.client)
     ) {
-      void onBtw(btwQuestion).then((consumed) => {
-        if (!consumed) return
-        if (effectiveDraftStorageKey) {
-          clearMessageInputDraftV2(effectiveDraftStorageKey)
-        }
-        resetComposer()
-      })
+      if (btwInFlightRef.current) return
+      btwInFlightRef.current = true
+      void onBtw(btwQuestion)
+        .then((consumed) => {
+          if (!consumed) return
+          if (effectiveDraftStorageKey) {
+            clearMessageInputDraftV2(effectiveDraftStorageKey)
+          }
+          resetComposer()
+        })
+        .finally(() => {
+          btwInFlightRef.current = false
+        })
       return
     }
 

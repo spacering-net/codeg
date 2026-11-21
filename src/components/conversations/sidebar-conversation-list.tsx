@@ -1552,11 +1552,14 @@ export function SidebarConversationList({
   // Counts the unfiltered-but-non-pinned conversations per display group, so the
   // empty-hint renderer distinguishes a truly empty folder from one whose rows
   // are merely hidden by the completed filter. Pinned conversations are excluded
-  // (they're not in this folder's bucket), matching `byFolder`.
+  // (they're not in this folder's bucket), matching `byFolder`. btw rows are
+  // excluded too: they never render inside the folder list (they sit in the
+  // global btw section), so counting them would hide the empty hint for a
+  // folder that shows nothing.
   const folderTotalCounts = useMemo(() => {
     const map = new Map<number, number>()
     for (const conv of conversations) {
-      if (conv.pinned_at != null) continue
+      if (conv.pinned_at != null || conv.kind === "btw") continue
       const groupId = displayChildToParent.get(conv.folder_id) ?? conv.folder_id
       map.set(groupId, (map.get(groupId) ?? 0) + 1)
     }

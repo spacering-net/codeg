@@ -75,12 +75,24 @@ pub async fn btw_create_core(
                 format!("connection {parent_connection_id} not found"),
             )
         })?;
+    // The command's two ids come from the client: a connection already linked
+    // to a DIFFERENT conversation would fork that conversation's history and
+    // parent it under the row this call names (the strip, the subtree and the
+    // answer would disagree from day one). Unlinked connections (resumed, not
+    // yet prompted) carry no history anyone could be misled about — allowed.
+    if let Some(bound) = launch.conversation_id {
+        if bound != parent_conversation_id {
+            return Err(AppCommandError::invalid_input(format!(
+                "connection {parent_connection_id} serves conversation {bound}, not {parent_conversation_id}"
+            )));
+        }
+    }
     if !launch.btw_supported {
         return Err(AppCommandError::new(
             AppErrorCode::InvalidInput,
             "this agent cannot serve /btw (needs session fork and resume)".to_string(),
         )
-        .with_i18n("errors.btw.unsupportedAgent", Default::default()));
+        .with_i18n("btw.unsupportedAgent", Default::default()));
     }
 
     let fork = manager

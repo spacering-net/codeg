@@ -1242,6 +1242,25 @@ describe("MessageInput /btw intercept", () => {
     )
     expect(loadMessageInputDraftV2(DRAFT_KEY)).not.toBeNull()
   })
+
+  it("makes one fork at a time while the first is still in flight", async () => {
+    // The fork RPC takes seconds and the text is only cleared once it lands,
+    // so Enter sits pressed again inside that window; a second intercept
+    // would fork the same prefix twice and stack a duplicate child row.
+    let resolveBtw: (v: boolean) => void = () => {}
+    const onBtw = vi
+      .fn()
+      .mockImplementation(() => new Promise<boolean>((r) => (resolveBtw = r)))
+    const editor = await mountTyped("/btw slow fork", { onBtw })
+
+    pressEnter(editor)
+    expect(composerHandle.current?.getText()).toBe("/btw slow fork")
+    pressEnter(editor)
+
+    expect(onBtw).toHaveBeenCalledTimes(1)
+    await act(async () => resolveBtw(true))
+    await waitFor(() => expect(composerHandle.current?.getText()).toBe(""))
+  })
 })
 
 // The sidebar's "add to session" drops a session mention — the same reference the

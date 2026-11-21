@@ -4367,7 +4367,8 @@
       },
       "btw": {
         "stripAnswering": "جارٍ الرد…",
-        "stripAnswered": "تم الرد"
+        "stripAnswered": "تم الرد",
+        "stripStopped": "متوقف"
       }
     },
     "diffPreview": {

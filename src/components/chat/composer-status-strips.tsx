@@ -39,16 +39,24 @@ import type { ConnectionStatus, SessionFailureRecord } from "@/lib/types"
 
 const NO_FAILURES: SessionFailureRecord[] = []
 
+/** The conversation's newest `/btw` side question, as the strip shows it (the
+ *  DB row's title is the text; the panel derives this from the workspace store,
+ *  so the strip lives and dies with the row's events, no separate state).
+ *  `state` comes from the row's status: a cancelled btw says stopped, not an
+ *  answer it never gave. */
+export interface BtwStripInfo {
+  title: string
+  state: "answering" | "answered" | "stopped"
+}
+
 export interface ComposerStatusStripsProps {
   /** The session's status — a retry can only be in flight while `prompting`. */
   status: ConnectionStatus | null
   claudeApiRetry: ClaudeApiRetryState | null
   sessionFailures?: SessionFailureRecord[]
   onSessionFailureDismiss?: (ids: string[]) => void
-  /** The conversation's newest `/btw` side question (its DB row title is the
-   *  strip's text; the frontend derives this from the workspace store, so the
-   *  strip lives and dies with the row's events, no separate state). */
-  btw?: { title: string; answering: boolean } | null
+  /** The conversation's newest `/btw` side question, or null. */
+  btw?: BtwStripInfo | null
   /** Click of the btw strip's title: opens the side question's tab. */
   onOpenBtw?: () => void
   /** Close of the btw strip: hides it for this panel view. The conversation
@@ -96,12 +104,16 @@ export function ComposerStatusStrips({
           // and matches the btw section's row for the same question.
           role="status"
           tone="info"
-          icon={btw.answering ? Loader2 : MessagesSquare}
-          iconClassName={btw.answering ? "animate-spin" : undefined}
+          icon={btw.state === "answering" ? Loader2 : MessagesSquare}
+          iconClassName={btw.state === "answering" ? "animate-spin" : undefined}
           title={btw.title}
           meta={
             <span className="shrink-0 opacity-70">
-              {btw.answering ? t("stripAnswering") : t("stripAnswered")}
+              {btw.state === "answering"
+                ? t("stripAnswering")
+                : btw.state === "stopped"
+                  ? t("stripStopped")
+                  : t("stripAnswered")}
             </span>
           }
           onTitleClick={onOpenBtw}

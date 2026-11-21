@@ -4367,7 +4367,8 @@
       },
       "btw": {
         "stripAnswering": "回答中…",
-        "stripAnswered": "回答済み"
+        "stripAnswered": "回答済み",
+        "stripStopped": "中断済み"
       }
     },
     "diffPreview": {

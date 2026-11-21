@@ -4367,7 +4367,8 @@
       },
       "btw": {
         "stripAnswering": "respondiendo…",
-        "stripAnswered": "respondido"
+        "stripAnswered": "respondido",
+        "stripStopped": "Interrumpido"
       }
     },
     "diffPreview": {

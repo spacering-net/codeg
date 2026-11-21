@@ -1126,9 +1126,19 @@ const ConversationTabView = memo(function ConversationTabView({
     )
     return children[0] ?? null
   }, [workspaceConversations, dbConversationId])
+  // Three-state, from the row's status: a btw the agent cancelled (Stop on the
+  // child) must not claim an answer it never gave.
   const btwInfo =
     btwRow && btwRow.id !== dismissedBtwId && btwRow.title !== null
-      ? { title: btwRow.title, answering: btwRow.status === "in_progress" }
+      ? {
+          title: btwRow.title,
+          state:
+            btwRow.status === "in_progress"
+              ? ("answering" as const)
+              : btwRow.status === "cancelled"
+                ? ("stopped" as const)
+                : ("answered" as const),
+        }
       : null
   // `/btw <question>` from the composer (message-input.tsx intercept): the
   // copy fork rides THIS conversation's connection, the answer streams on the
@@ -1138,20 +1148,25 @@ const ConversationTabView = memo(function ConversationTabView({
   // conversation with no row yet: with no history there is nothing to fork.
   const handleBtw = useCallback(
     async (question: string): Promise<boolean> => {
-      if (
-        conn.connectionId === null ||
-        dbConversationId === null ||
-        folderId === 0
-      ) {
+      if (conn.connectionId === null || dbConversationId === null) {
         return false
       }
+      // The child lives in the parent's folder — taken from the row itself,
+      // not this tab's folderId, which is 0 in chat mode (the row is the
+      // truth; the tab's folder is only the fallback for a conversation that
+      // has no row yet, where the fork is refused anyway above).
+      const parentRow = workspaceConversations.find(
+        (c) => c.id === dbConversationId
+      )
+      const targetFolderId = parentRow?.folder_id ?? folderId
+      if (targetFolderId === 0) return false
       try {
         const created = await acpBtwCreate(
           conn.connectionId,
           dbConversationId,
           question
         )
-        openTab(folderId, created.conversationId, selectedAgent)
+        openTab(targetFolderId, created.conversationId, selectedAgent)
         return true
       } catch (e) {
         toast.error(
@@ -1170,6 +1185,7 @@ const ConversationTabView = memo(function ConversationTabView({
       openTab,
       selectedAgent,
       tBtwErrors,
+      workspaceConversations,
     ]
   )
   const handleOpenBtw = useCallback(() => {

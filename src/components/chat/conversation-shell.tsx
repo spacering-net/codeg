@@ -16,7 +16,10 @@ import type {
   AvailableCommandInfo,
   RemoteControlInfo,
 } from "@/lib/types"
-import { ComposerStatusStrips } from "@/components/chat/composer-status-strips"
+import {
+  type BtwStripInfo,
+  ComposerStatusStrips,
+} from "@/components/chat/composer-status-strips"
 import { RemoteControlStrip } from "@/components/chat/remote-control-strip"
 import type {
   PendingPermission,
@@ -122,7 +125,7 @@ interface ConversationShellProps {
   onBtw?: (question: string) => Promise<boolean>
   /** The session's newest `/btw` side question, for the strip under the
    *  composer. `null` renders nothing (the common case). */
-  btwInfo?: { title: string; answering: boolean } | null
+  btwInfo?: BtwStripInfo | null
   onOpenBtw?: () => void
   onDismissBtw?: () => void
   onQueueReorder?: (items: QueuedMessage[]) => void

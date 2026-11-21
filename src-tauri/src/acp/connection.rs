@@ -14060,6 +14060,48 @@ async fn fork_copy_roundtrip(
     })
 }
 
+/// [`fork_copy_roundtrip`] on a task the connection owns, replying on `reply`
+/// when it finishes. Awaiting the roundtrip inside either command loop would
+/// stall that loop for the whole fork RPC — mid-turn especially, the parent's
+/// event pump stops forwarding the streaming turn's tokens until the side
+/// question's fork answered. Spawned, the loop keeps selecting, and the
+/// oneshot still resolves exactly once (a spawn failure — connection already
+/// going down — replies nothing, and the sender sees a closed channel).
+#[allow(clippy::too_many_arguments)] // the same request kit fork_copy_roundtrip needs, plus the reply
+fn spawn_fork_copy(
+    cx: &ConnectionTo<Agent>,
+    sid: SessionId,
+    agent_type: AgentType,
+    cwd: &str,
+    mcp_servers: &[McpServer],
+    claude: &ClaudeSessionOptions,
+    supports_close: bool,
+    reply: oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
+) {
+    let request_cx = cx.clone();
+    let cwd = cwd.to_string();
+    let mcp_servers = mcp_servers.to_vec();
+    let claude = claude.clone();
+    let task = async move {
+        let result = fork_copy_roundtrip(
+            &request_cx,
+            &sid,
+            agent_type,
+            &cwd,
+            &mcp_servers,
+            &claude,
+            supports_close,
+        )
+        .await;
+        let _ = reply.send(result);
+        // Never an error: a spawned task that fails takes the connection down.
+        Ok(())
+    };
+    if let Err(e) = cx.spawn(task) {
+        tracing::debug!("[ACP] not running copy fork: {e}");
+    }
+}
+
 /// Main conversation command loop: wait for frontend commands and process them.
 ///
 /// Map ACP `StopReason` to a stable lowercase string carried in the
@@ -16553,17 +16595,16 @@ async fn run_conversation_loop(
                                         let claude = state.read().await.claude_session_options();
                                         let supports_close =
                                             state.read().await.session_close_supported;
-                                        let result = fork_copy_roundtrip(
+                                        spawn_fork_copy(
                                             &cx,
-                                            &sid,
+                                            sid,
                                             agent_type,
                                             cwd,
                                             mcp_servers,
                                             &claude,
                                             supports_close,
-                                        )
-                                        .await;
-                                        let _ = reply.send(result);
+                                            reply,
+                                        );
                                     }
                                 }
                                 _ => {}
@@ -16825,10 +16866,16 @@ async fn run_conversation_loop(
                 let sid = session.session_id().clone();
                 let claude = state.read().await.claude_session_options();
                 let supports_close = state.read().await.session_close_supported;
-                let result =
-                    fork_copy_roundtrip(&cx, &sid, agent_type, cwd, mcp_servers, &claude, supports_close)
-                        .await;
-                let _ = reply.send(result);
+                spawn_fork_copy(
+                    &cx,
+                    sid,
+                    agent_type,
+                    cwd,
+                    mcp_servers,
+                    &claude,
+                    supports_close,
+                    reply,
+                );
             }
             Some(ConnectionCommand::Disconnect) | None => {
                 break;
@@ -20685,8 +20732,9 @@ fn available_command_infos(
     // exactly where it can be served (fork AND resume — see
     // `SessionState::btw_supported`), so the composer's menu needs no separate
     // capability plumbing: the command is listed or it isn't. An agent that
-    // natively advertises `btw` owns the name (its row wins; the frontend
-    // intercepts on the name either way and never forwards it). The
+    // natively advertises `btw` owns the name (its row wins, and the composer
+    // forwards to it — it intercepts on the `client` flag below, not on the
+    // name). The
     // description is a placeholder — the frontend replaces it with localized
     // text for this name, the same courtesy it already extends advertised
     // labels (see `localizedMessage`).

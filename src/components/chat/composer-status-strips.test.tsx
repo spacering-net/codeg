@@ -172,7 +172,7 @@ describe("ComposerStatusStrips", () => {
   describe("btw strip", () => {
     it("shows the question and its state, answering first", () => {
       renderStrips({
-        btw: { title: "btw: what is this fn", answering: true },
+        btw: { title: "btw: what is this fn", state: "answering" },
         onOpenBtw: vi.fn(),
       })
       const strip = screen.getByRole("status")
@@ -182,17 +182,27 @@ describe("ComposerStatusStrips", () => {
 
     it("settles to the answered wording once the turn is over", () => {
       renderStrips({
-        btw: { title: "btw: what is this fn", answering: false },
+        btw: { title: "btw: what is this fn", state: "answered" },
         onOpenBtw: vi.fn(),
       })
       expect(screen.getByRole("status")).toHaveTextContent("answered")
+    })
+
+    it("a cancelled side question says stopped, not answered", () => {
+      renderStrips({
+        btw: { title: "btw: what is this fn", state: "stopped" },
+        onOpenBtw: vi.fn(),
+      })
+      const strip = screen.getByRole("status")
+      expect(strip).toHaveTextContent("stopped")
+      expect(strip).not.toHaveTextContent("answered")
     })
 
     it("the title opens the side question, the X hides the strip", () => {
       const onOpenBtw = vi.fn()
       const onDismissBtw = vi.fn()
       renderStrips({
-        btw: { title: "btw: what", answering: false },
+        btw: { title: "btw: what", state: "answered" },
         onOpenBtw,
         onDismissBtw,
       })

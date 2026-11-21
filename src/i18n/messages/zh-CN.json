@@ -4367,7 +4367,8 @@
       },
       "btw": {
         "stripAnswering": "正在回答…",
-        "stripAnswered": "已回答"
+        "stripAnswered": "已回答",
+        "stripStopped": "已中断"
       }
     },
     "diffPreview": {

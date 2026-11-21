@@ -4367,7 +4367,8 @@
       },
       "btw": {
         "stripAnswering": "답변 중…",
-        "stripAnswered": "답변 완료"
+        "stripAnswered": "답변 완료",
+        "stripStopped": "중단됨"
       }
     },
     "diffPreview": {

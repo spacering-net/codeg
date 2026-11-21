@@ -680,6 +680,12 @@ pub struct ConnectionLaunchContext {
     pub owner_window_label: String,
     pub working_dir: Option<std::path::PathBuf>,
     pub btw_supported: bool,
+    /// The conversation this connection answers, once linked. Lets a caller
+    /// verify the connection it was handed really serves the conversation it
+    /// is about to fork (see `commands::btw`) — the web API takes both ids
+    /// from the client and would otherwise happily parent one conversation's
+    /// history under another's row.
+    pub conversation_id: Option<i32>,
 }
 
 impl Default for ConnectionManager {
@@ -2731,6 +2737,7 @@ impl ConnectionManager {
             owner_window_label: parent.owner_window_label.clone(),
             working_dir: state.working_dir.clone(),
             btw_supported: state.btw_supported,
+            conversation_id: state.conversation_id,
         })
     }
 
