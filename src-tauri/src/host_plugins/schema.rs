@@ -20,6 +20,10 @@ pub(super) struct RpcContract {
 }
 
 impl RpcDefinition {
+    pub(super) fn input_schema(&self) -> &Value {
+        &self.input
+    }
+
     pub(super) fn compile(&self) -> Result<RpcContract, &'static str> {
         Ok(RpcContract {
             input: Schema::compile(&self.input).map_err(|_| "invalid input JSON Schema")?,

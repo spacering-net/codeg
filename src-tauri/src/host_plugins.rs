@@ -15,6 +15,7 @@ use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 pub mod lifecycle;
+pub(crate) mod model_tools;
 mod runtime;
 mod schema;
 mod settings;
@@ -87,6 +88,8 @@ struct Contributions {
     lifecycle_hooks: Vec<lifecycle::Registration>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     client_surfaces: Vec<ClientSurface>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    model_tools: Vec<model_tools::Declaration>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -952,6 +955,7 @@ impl Manifest {
             settings_panel,
             lifecycle_hooks,
             client_surfaces,
+            model_tools,
         } = &self.contributes;
         if (!bundled && workspace_panels.is_empty())
             || workspace_panels.len() > MAX_CONTRIBUTIONS
@@ -1009,6 +1013,7 @@ impl Manifest {
             }
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
+        model_tools::validate(model_tools, self.server.as_ref())?;
         Ok(())
     }
 }

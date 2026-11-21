@@ -96,12 +96,39 @@ pub struct TokenEntry {
 
 #[derive(Default)]
 pub struct TokenRegistry {
-    inner: RwLock<HashMap<String, TokenEntry>>,
+    inner: RwLock<HashMap<String, RegisteredToken>>,
+}
+
+struct RegisteredToken {
+    entry: TokenEntry,
+    plugin_tools: Option<Arc<crate::host_plugins::model_tools::ModelToolOffers>>,
 }
 
 impl TokenRegistry {
     pub async fn register(&self, token: String, entry: TokenEntry) {
-        self.inner.write().await.insert(token, entry);
+        self.register_with_plugin_tools(token, entry, None).await;
+    }
+
+    pub(crate) async fn register_with_plugin_tools(
+        &self,
+        token: String,
+        entry: TokenEntry,
+        plugin_tools: Option<crate::host_plugins::model_tools::ModelToolOffers>,
+    ) {
+        self.inner.write().await.insert(
+            token,
+            RegisteredToken {
+                entry,
+                plugin_tools: plugin_tools.map(Arc::new),
+            },
+        );
+    }
+
+    async fn plugin_tools(
+        &self,
+        token: &str,
+    ) -> Option<Arc<crate::host_plugins::model_tools::ModelToolOffers>> {
+        self.inner.read().await.get(token)?.plugin_tools.clone()
     }
 
     pub async fn revoke(&self, token: &str) {
@@ -109,14 +136,14 @@ impl TokenRegistry {
     }
 
     pub async fn lookup(&self, token: &str) -> Option<TokenEntry> {
-        self.inner.read().await.get(token).cloned()
+        Some(self.inner.read().await.get(token)?.entry.clone())
     }
 
     /// Drop every token whose `parent_connection_id` matches. Used on parent
     /// connection teardown so a leaked token can't be reused.
     pub async fn revoke_by_parent(&self, parent_connection_id: &str) {
         let mut map = self.inner.write().await;
-        map.retain(|_, entry| entry.parent_connection_id != parent_connection_id);
+        map.retain(|_, record| record.entry.parent_connection_id != parent_connection_id);
     }
 
     /// How many companions are currently reachable, and across how many
@@ -129,7 +156,7 @@ impl TokenRegistry {
         let map = self.inner.read().await;
         let parents: std::collections::HashSet<&str> = map
             .values()
-            .map(|entry| entry.parent_connection_id.as_str())
+            .map(|record| record.entry.parent_connection_id.as_str())
             .collect();
         TokenStats {
             companions: map.len(),
@@ -595,6 +622,30 @@ impl DelegationListener {
             BrokerMessage::ResultSchema(req) => BrokerResponse {
                 outcome: serde_json::json!({ "schema": self.process_result_schema(req).await }),
             },
+            BrokerMessage::PluginTools(req) => BrokerResponse {
+                outcome: serde_json::json!({
+                    "tools": self.tokens.plugin_tools(&req.token).await
+                        .map_or_else(Vec::new, |offers| offers.list())
+                }),
+            },
+            BrokerMessage::PluginToolCall(req) => {
+                let outcome = match self.tokens.plugin_tools(&req.token).await {
+                    Some(offers) => {
+                        let result = offers.call(&req.name, req.arguments).await;
+                        // The parent may have disconnected during the call.
+                        if self.tokens.lookup(&req.token).await.is_none() {
+                            serde_json::json!({ "error": "Plugin tool is unavailable" })
+                        } else {
+                            match result {
+                                Ok(value) => serde_json::json!({ "value": value }),
+                                Err(error) => serde_json::json!({ "error": error.message }),
+                            }
+                        }
+                    }
+                    None => serde_json::json!({ "error": "Plugin tool is unavailable" }),
+                };
+                BrokerResponse { outcome }
+            }
             BrokerMessage::SubmitResult(req) => {
                 let outcome = self.process_submit_result(req).await;
                 BrokerResponse {
@@ -4770,5 +4821,121 @@ mod tests {
             .unwrap()
             .iter()
             .all(|(conn, _)| conn == "parent-conn"));
+    }
+
+    #[tokio::test]
+    async fn plugin_model_tools_are_scoped_to_the_launch_and_activation() {
+        use crate::acp::delegation::transport::{BrokerPluginToolCall, BrokerPluginToolsRequest};
+        use crate::host_plugins::{
+            model_tools::ModelToolOffers, source::Registry, HostPlugins, Mutation,
+        };
+        use serde_json::json;
+
+        let data = tempfile::tempdir().unwrap();
+        let host = Arc::new(HostPlugins::new(data.path()));
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../examples/plugins/model-greeting"
+        );
+        let preview = host
+            .preview_install(path, Registry::Npm, None)
+            .await
+            .unwrap();
+        let ticket = serde_json::from_value(serde_json::to_value(preview).unwrap()["ticket"].clone())
+            .unwrap();
+        host.confirm_install(ticket).unwrap();
+        assert!(ModelToolOffers::new(&host).is_none());
+        let set_enabled = |enabled| {
+            host.apply(Mutation::SetEnabled {
+                id: "codeg.model-greeting".into(),
+                enabled,
+            })
+            .unwrap();
+        };
+        set_enabled(true);
+        let tokens = Arc::new(TokenRegistry::default());
+        let entry = |parent: &str| TokenEntry {
+            parent_connection_id: parent.into(),
+            working_dir: data.path().into(),
+            agent_hosts_tools: true,
+        };
+        tokens
+            .register("unoffered".into(), entry("unoffered"))
+            .await;
+        tokens
+            .register_with_plugin_tools(
+                "offered".into(),
+                entry("offered"),
+                ModelToolOffers::new(&host),
+            )
+            .await;
+        let listener = make_listener(
+            make_broker(Arc::new(MockSpawner::new())).await,
+            tokens.clone(),
+            None,
+        );
+        let list = |token: &str| {
+            serve(
+                listener.clone(),
+                BrokerMessage::PluginTools(BrokerPluginToolsRequest {
+                    token: token.into(),
+                }),
+            )
+        };
+        let listed = list("offered").await;
+        let offer = &listed["tools"][0];
+        assert_eq!(offer["inputSchema"]["required"], json!(["name"]));
+        let name = offer["name"].as_str().unwrap();
+        let call = |token: &str, name: &str, arguments: Value| {
+            serve(
+                listener.clone(),
+                BrokerMessage::PluginToolCall(BrokerPluginToolCall {
+                    token: token.into(),
+                    name: name.into(),
+                    arguments,
+                }),
+            )
+        };
+        assert_eq!(
+            call("offered", name, json!({"name": "Ada"})).await["value"],
+            "Hello, Ada!"
+        );
+        assert!(call("offered", name, json!({"name": 42})).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("schema"));
+        assert!(call("offered", "greet", json!({"name": "Ada"}))
+            .await
+            .get("error")
+            .is_some());
+        assert_eq!(list("unoffered").await["tools"], json!([]));
+        assert!(call("unoffered", name, json!({"name": "Ada"}))
+            .await
+            .get("error")
+            .is_some());
+
+        set_enabled(false);
+        assert_eq!(list("offered").await["tools"], json!([]));
+        set_enabled(true);
+        assert!(call("offered", name, json!({"name": "Ada"}))
+            .await
+            .get("error")
+            .is_some());
+        tokens
+            .register_with_plugin_tools(
+                "fresh".into(),
+                entry("fresh"),
+                ModelToolOffers::new(&host),
+            )
+            .await;
+        assert_eq!(
+            call("fresh", name, json!({"name": "Ada"})).await["value"],
+            "Hello, Ada!"
+        );
+        tokens.revoke_by_parent("fresh").await;
+        assert!(call("fresh", name, json!({"name": "Ada"}))
+            .await
+            .get("error")
+            .is_some());
     }
 }
