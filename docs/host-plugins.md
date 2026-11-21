@@ -132,7 +132,7 @@ methods out of `server.methods`.
 | `workspace.open.after` | `{ folderId, path }` | Observes a completed open by path or reopening a saved folder by ID. |
 | `workspace.close.after` | `{ folderId }` | Observes removing an open folder from the workspace. |
 | `workspace.create.before` | `{ path }` | For a path first registered through the workspace UI, after `workspace.open.before`. Return `null` or an absolute replacement `{ path }`. |
-| `workspace.create.after` | `{ folderId, path, name, parentId }` | Observes first registration of a workspace or an opened worktree workspace. |
+| `workspace.create.after` | `{ folderId, path, name, parentId }` | Observes the first registration of a workspace, including closed workspaces and worktrees registered by CLI runs or delegated agents. |
 | `workspace.archive.after` | `{ folderId, path, name, parentId }` | Observes removing the saved workspace record from history or archiving it through worktree cleanup. |
 
 The host applies before hooks in plugin ID order and uses each replacement as

@@ -764,10 +764,14 @@ impl CliRunService {
             ));
         }
         let workspace = validate_workspace(&req.workspace)?;
-        let folder =
-            crate::db::service::folder_service::ensure_folder_for_path(&self.db.conn, &workspace)
-                .await
-                .map_err(|e| CliError::execution("workspace_unavailable", e.to_string()))?;
+        let folder = crate::commands::folders::register_closed_workspace_with_plugins(
+            &self.emitter,
+            &self.db,
+            &workspace,
+            None,
+        )
+        .await
+        .map_err(|e| CliError::execution("workspace_unavailable", e.to_string()))?;
 
         let assistant = match req.assistant.as_deref() {
             Some(key) => Some(self.resolve_assistant(key).await?),
@@ -1161,10 +1165,11 @@ impl CliRunService {
             crate::commands::folders::emit_folder_upsert(&self.emitter, detail);
             return Ok(id);
         }
-        let entry = folder_service::ensure_worktree_folder_closed(
-            &self.db.conn,
+        let entry = crate::commands::folders::register_closed_workspace_with_plugins(
+            &self.emitter,
+            &self.db,
             &worktree.workspace,
-            root_id,
+            Some(root_id),
         )
         .await
         .map_err(|e| unavailable(e.to_string()))?;
