@@ -109,7 +109,14 @@
     "pluginSurfaces": "外掛入口",
     "morePluginSurfaces": "更多外掛入口",
     "pluginDetail": "外掛詳情",
-    "activationPanel": "啟用引導"
+    "activationPanel": "啟用引導",
+    "newWorkspaceSection": "外掛選項",
+    "newWorkspaceSearching": "正在搜尋…",
+    "newWorkspaceNoMatches": "找不到符合項目。",
+    "newWorkspaceSelectPlaceholder": "請選擇…",
+    "newWorkspaceSearchPlaceholder": "搜尋…",
+    "newWorkspaceActionFailed": "外掛操作失敗。",
+    "newWorkspaceMetadata": "草稿中繼資料"
   },
   "AppearanceSettings": {
     "sectionTitle": "主題外觀",

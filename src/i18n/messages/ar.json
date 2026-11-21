@@ -109,7 +109,14 @@
     "pluginSurfaces": "إجراءات الإضافات",
     "morePluginSurfaces": "مزيد من إجراءات الإضافات",
     "pluginDetail": "تفاصيل الإضافة",
-    "activationPanel": "دليل التفعيل"
+    "activationPanel": "دليل التفعيل",
+    "newWorkspaceSection": "خيارات الإضافة",
+    "newWorkspaceSearching": "جارٍ البحث…",
+    "newWorkspaceNoMatches": "لم يتم العثور على نتائج مطابقة.",
+    "newWorkspaceSelectPlaceholder": "اختر خيارًا…",
+    "newWorkspaceSearchPlaceholder": "بحث…",
+    "newWorkspaceActionFailed": "فشل إجراء الإضافة.",
+    "newWorkspaceMetadata": "البيانات الوصفية للمسودة"
   },
   "AppearanceSettings": {
     "sectionTitle": "مظهر السمة",

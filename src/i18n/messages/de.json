@@ -109,7 +109,14 @@
     "pluginSurfaces": "Plugin-Aktionen",
     "morePluginSurfaces": "Weitere Plugin-Aktionen",
     "pluginDetail": "Plugin-Details",
-    "activationPanel": "Aktivierungsanleitung"
+    "activationPanel": "Aktivierungsanleitung",
+    "newWorkspaceSection": "Plugin-Optionen",
+    "newWorkspaceSearching": "Suche…",
+    "newWorkspaceNoMatches": "Keine Treffer gefunden.",
+    "newWorkspaceSelectPlaceholder": "Option auswählen…",
+    "newWorkspaceSearchPlaceholder": "Suchen…",
+    "newWorkspaceActionFailed": "Plugin-Aktion fehlgeschlagen.",
+    "newWorkspaceMetadata": "Entwurfs-Metadaten"
   },
   "AppearanceSettings": {
     "sectionTitle": "Design-Erscheinungsbild",

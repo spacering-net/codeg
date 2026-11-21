@@ -7,11 +7,21 @@ import {
   parsePluginThemePalette,
 } from "@/lib/custom-style"
 import {
+  MAX_NEW_WORKSPACE_COMBOBOX_OPTIONS,
+  MAX_NEW_WORKSPACE_METADATA_BYTES,
+  MAX_NEW_WORKSPACE_METADATA_KEYS,
+  MAX_NEW_WORKSPACE_METADATA_VALUE_BYTES,
+  MAX_NEW_WORKSPACE_REF_BYTES,
+  MAX_NEW_WORKSPACE_ROOT_PATH_BYTES,
+  MAX_NEW_WORKSPACE_SELECT_OPTIONS,
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
+  MAX_PLUGIN_NEW_WORKSPACE_ITEMS,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
+  applyNewWorkspacePatch,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
+  pluginNewWorkspaceItemKey,
   pluginScreenKey,
   pluginSidebarItemKey,
   pluginThemeKey,
@@ -20,9 +30,13 @@ import {
   resolvePluginScreen,
   resolvePluginText,
   selectPluginClientSurfaces,
+  selectPluginNewWorkspaceItems,
   selectPluginScreens,
   selectPluginSidebarItems,
   selectPluginThemes,
+  validateNewWorkspaceOptionsResult,
+  validateNewWorkspacePatch,
+  validateNewWorkspacePatchResult,
   validatePluginComposerInsertPayload,
   type InstalledPlugin,
   type PluginTextTranslations,
@@ -908,5 +922,302 @@ describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems
     ).not.toBeNull()
     expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
     expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
+  })
+})
+
+describe("New Workspace form items: selector, validation, and patch application", () => {
+  it("loads, filters by target, and localizes examples/plugins/new-workspace-issues", () => {
+    const manifestPath = resolve(
+      process.cwd(),
+      "examples/plugins/new-workspace-issues/codeg-plugin.json"
+    )
+    const manifest = JSON.parse(
+      readFileSync(manifestPath, "utf8")
+    ) as InstalledPlugin["manifest"]
+    const plugin: InstalledPlugin = { enabled: true, manifest }
+
+    const workspaceZh = selectPluginNewWorkspaceItems(
+      [plugin],
+      "workspace",
+      "zh-CN"
+    )
+    expect(workspaceZh).toEqual([
+      {
+        key: pluginNewWorkspaceItemKey("codeg.new-workspace-issues", "issue"),
+        pluginId: "codeg.new-workspace-issues",
+        pluginName: "新工作区工单",
+        id: "issue",
+        title: "工单",
+        description: "根据工单建议分支名。",
+        target: "all",
+        control: {
+          kind: "combobox",
+          searchMethod: "search-issues",
+          placeholder: "按工单 ID 或标题搜索",
+        },
+      },
+    ])
+
+    const worktreeEs = selectPluginNewWorkspaceItems([plugin], "worktree", "es")
+    expect(worktreeEs).toHaveLength(2)
+    expect(worktreeEs[0]?.title).toBe("Incidencia")
+    expect(worktreeEs[1]).toEqual({
+      key: "codeg.new-workspace-issues:draft",
+      pluginId: "codeg.new-workspace-issues",
+      pluginName: "Incidencias para espacios nuevos",
+      id: "draft",
+      title: "Marcar como borrador",
+      target: "worktree",
+      control: {
+        kind: "toggle",
+        defaultValue: false,
+        enabledPatch: { metadata: { "issues.draft": true } },
+        disabledPatch: { metadata: { "issues.draft": null } },
+      },
+    })
+  })
+
+  it("enforces enabled status, server.methods, select option exclusivity, toggle rules, and 16-item cap", () => {
+    expect(MAX_PLUGIN_NEW_WORKSPACE_ITEMS).toBe(16)
+    expect(MAX_NEW_WORKSPACE_COMBOBOX_OPTIONS).toBe(20)
+    expect(MAX_NEW_WORKSPACE_SELECT_OPTIONS).toBe(32)
+
+    const disabledPlugin: InstalledPlugin = {
+      enabled: false,
+      manifest: {
+        id: "acme.disabled",
+        name: "Disabled",
+        version: "1.0.0",
+        server: { entry: "index.mjs", methods: ["search"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          newWorkspaceItems: [
+            {
+              id: "i1",
+              title: "Disabled",
+              control: { kind: "combobox", searchMethod: "search" },
+            },
+          ],
+        },
+      },
+    }
+
+    const mixedPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.nw",
+        name: "Acme NW",
+        version: "1.0.0",
+        server: { entry: "index.mjs", methods: ["search-own", "run-action"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          newWorkspaceItems: [
+            // Valid static select (1 option)
+            {
+              id: "env",
+              title: "Environment",
+              control: {
+                kind: "select",
+                options: [
+                  {
+                    id: "prod",
+                    label: "Production",
+                    patch: { metadata: { env: "prod" } },
+                  },
+                ],
+              },
+            },
+            // Duplicate id rejected
+            {
+              id: "env",
+              title: "Duplicate",
+              control: { kind: "action", method: "run-action" },
+            },
+            // Undeclared method rejected
+            {
+              id: "bad-method",
+              title: "Bad Method",
+              control: { kind: "combobox", searchMethod: "other" },
+            },
+            // Select with both options and optionsMethod rejected
+            {
+              id: "both-select",
+              title: "Both",
+              control: {
+                kind: "select",
+                options: [{ id: "a", label: "A" }],
+                optionsMethod: "search-own",
+              } as never,
+            },
+            // Select with 0 options rejected
+            {
+              id: "empty-select",
+              title: "Empty",
+              control: { kind: "select", options: [] },
+            },
+            // Toggle with no method and empty patch rejected
+            {
+              id: "empty-toggle",
+              title: "Empty Toggle",
+              control: { kind: "toggle", enabledPatch: {} } as never,
+            },
+            // Valid action
+            {
+              id: "suggest",
+              title: "Suggest",
+              control: { kind: "action", method: "run-action" },
+            },
+          ],
+        },
+      },
+    }
+
+    const selected = selectPluginNewWorkspaceItems(
+      [disabledPlugin, mixedPlugin],
+      "workspace"
+    )
+    expect(selected.map((i) => i.id)).toEqual(["env", "suggest"])
+
+    // 16-item per-plugin cap
+    const cappedPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.capped-nw",
+        name: "Capped",
+        version: "1.0.0",
+        server: { entry: "index.mjs", methods: ["act"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          newWorkspaceItems: Array.from({ length: 20 }, (_, i) => ({
+            id: `item-${i + 1}`,
+            title: `Item ${i + 1}`,
+            control: { kind: "action" as const, method: "act" },
+          })),
+        },
+      },
+    }
+    expect(
+      selectPluginNewWorkspaceItems([cappedPlugin], "workspace")
+    ).toHaveLength(16)
+  })
+
+  it("validates dynamic patches, options limits, and applies null-clearing patch semantics", () => {
+    expect(MAX_NEW_WORKSPACE_REF_BYTES).toBe(256)
+    expect(MAX_NEW_WORKSPACE_ROOT_PATH_BYTES).toBe(1024)
+    expect(MAX_NEW_WORKSPACE_METADATA_KEYS).toBe(16)
+    expect(MAX_NEW_WORKSPACE_METADATA_VALUE_BYTES).toBe(512)
+    expect(MAX_NEW_WORKSPACE_METADATA_BYTES).toBe(4 * 1024)
+
+    // Valid patch including explicit null clears
+    const validPatch = validateNewWorkspacePatch({
+      branch: "issue/demo-12",
+      baseRef: null,
+      rootPath: "/tmp/demo-12",
+      metadata: {
+        "issues.id": "DEMO-12",
+        "issues.draft": true,
+        priority: 2,
+        removed: null,
+      },
+    })
+    expect(validPatch).toEqual({
+      branch: "issue/demo-12",
+      baseRef: null,
+      rootPath: "/tmp/demo-12",
+      metadata: {
+        "issues.id": "DEMO-12",
+        "issues.draft": true,
+        priority: 2,
+        removed: null,
+      },
+    })
+
+    // Invalid branch / baseRef
+    expect(() => validateNewWorkspacePatch({ branch: "a..b" })).toThrow()
+    expect(() => validateNewWorkspacePatch({ branch: "feat\0bad" })).toThrow()
+    expect(() => validateNewWorkspacePatch({ baseRef: "-leading" })).toThrow()
+    expect(() =>
+      validateNewWorkspacePatch({ branch: "a".repeat(257) })
+    ).toThrow()
+    // Invalid rootPath
+    expect(() => validateNewWorkspacePatch({ rootPath: "/tmp/a\nb" })).toThrow()
+    expect(() =>
+      validateNewWorkspacePatch({ rootPath: `/${"a".repeat(1024)}` })
+    ).toThrow()
+    // Invalid metadata
+    expect(() =>
+      validateNewWorkspacePatch({ metadata: { "bad key": "x" } })
+    ).toThrow()
+    expect(() =>
+      validateNewWorkspacePatch({ metadata: { ok: "a\0b" } })
+    ).toThrow()
+    expect(() =>
+      validateNewWorkspacePatch({ metadata: { ok: "a".repeat(513) } })
+    ).toThrow()
+    expect(() =>
+      validateNewWorkspacePatch({
+        metadata: Object.fromEntries(
+          Array.from({ length: 17 }, (_, i) => [`k${i}`, "v"])
+        ),
+      })
+    ).toThrow()
+    // Metadata exceeding 4 KiB total JSON
+    expect(() =>
+      validateNewWorkspacePatch({
+        metadata: Object.fromEntries(
+          Array.from({ length: 10 }, (_, i) => [`k${i}`, "x".repeat(500)])
+        ),
+      })
+    ).toThrow()
+
+    // Options limits: 20 for combobox, 32 for select
+    const makeOpts = (n: number) => ({
+      items: Array.from({ length: n }, (_, i) => ({
+        id: `opt-${i}`,
+        label: `Option ${i}`,
+      })),
+    })
+    expect(
+      validateNewWorkspaceOptionsResult(makeOpts(20), "combobox")
+    ).toHaveLength(20)
+    expect(() =>
+      validateNewWorkspaceOptionsResult(makeOpts(21), "combobox")
+    ).toThrow()
+    expect(
+      validateNewWorkspaceOptionsResult(makeOpts(32), "select")
+    ).toHaveLength(32)
+    expect(() =>
+      validateNewWorkspaceOptionsResult(makeOpts(33), "select")
+    ).toThrow()
+
+    // Patch result wrapper
+    expect(validateNewWorkspacePatchResult({})).toBeUndefined()
+    expect(
+      validateNewWorkspacePatchResult({ patch: { branch: "feat/ok" } })
+    ).toEqual({ branch: "feat/ok" })
+
+    // applyNewWorkspacePatch retains omitted fields & clears explicit null fields/keys
+    const initial = {
+      branch: "main",
+      baseRef: "origin/main",
+      rootPath: "/repo/a",
+      metadata: { keep: "yes", drop: "old" },
+    }
+    const merged = applyNewWorkspacePatch(initial, {
+      branch: null,
+      rootPath: "/repo/b",
+      metadata: { drop: null, added: 42 },
+    })
+    expect(merged).toEqual({
+      baseRef: "origin/main",
+      rootPath: "/repo/b",
+      metadata: { keep: "yes", added: 42 },
+    })
   })
 })

@@ -109,7 +109,14 @@
     "pluginSurfaces": "Actions des extensions",
     "morePluginSurfaces": "Autres actions des extensions",
     "pluginDetail": "Détails de l’extension",
-    "activationPanel": "Guide d’activation"
+    "activationPanel": "Guide d’activation",
+    "newWorkspaceSection": "Options de l’extension",
+    "newWorkspaceSearching": "Recherche…",
+    "newWorkspaceNoMatches": "Aucun résultat trouvé.",
+    "newWorkspaceSelectPlaceholder": "Sélectionner une option…",
+    "newWorkspaceSearchPlaceholder": "Rechercher…",
+    "newWorkspaceActionFailed": "Échec de l’action de l’extension.",
+    "newWorkspaceMetadata": "Métadonnées du brouillon"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",

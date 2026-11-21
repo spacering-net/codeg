@@ -109,7 +109,14 @@
     "pluginSurfaces": "Plugin actions",
     "morePluginSurfaces": "More plugin actions",
     "pluginDetail": "Plugin details",
-    "activationPanel": "Activation guide"
+    "activationPanel": "Activation guide",
+    "newWorkspaceSection": "Plugin options",
+    "newWorkspaceSearching": "Searching…",
+    "newWorkspaceNoMatches": "No matches found.",
+    "newWorkspaceSelectPlaceholder": "Select an option…",
+    "newWorkspaceSearchPlaceholder": "Search…",
+    "newWorkspaceActionFailed": "Plugin action failed.",
+    "newWorkspaceMetadata": "Draft metadata"
   },
   "AppearanceSettings": {
     "sectionTitle": "Theme Appearance",

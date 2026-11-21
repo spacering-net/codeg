@@ -109,7 +109,14 @@
     "pluginSurfaces": "플러그인 작업",
     "morePluginSurfaces": "더 많은 플러그인 작업",
     "pluginDetail": "플러그인 세부정보",
-    "activationPanel": "활성화 가이드"
+    "activationPanel": "활성화 가이드",
+    "newWorkspaceSection": "플러그인 옵션",
+    "newWorkspaceSearching": "검색 중…",
+    "newWorkspaceNoMatches": "일치하는 항목이 없습니다.",
+    "newWorkspaceSelectPlaceholder": "옵션 선택…",
+    "newWorkspaceSearchPlaceholder": "검색…",
+    "newWorkspaceActionFailed": "플러그인 작업에 실패했습니다.",
+    "newWorkspaceMetadata": "초안 메타데이터"
   },
   "AppearanceSettings": {
     "sectionTitle": "테마 모양",

@@ -109,7 +109,14 @@
     "pluginSurfaces": "插件入口",
     "morePluginSurfaces": "更多插件入口",
     "pluginDetail": "插件详情",
-    "activationPanel": "启用引导"
+    "activationPanel": "启用引导",
+    "newWorkspaceSection": "插件选项",
+    "newWorkspaceSearching": "正在搜索…",
+    "newWorkspaceNoMatches": "未找到匹配项。",
+    "newWorkspaceSelectPlaceholder": "请选择…",
+    "newWorkspaceSearchPlaceholder": "搜索…",
+    "newWorkspaceActionFailed": "插件操作失败。",
+    "newWorkspaceMetadata": "草稿元数据"
   },
   "AppearanceSettings": {
     "sectionTitle": "主题外观",

@@ -12,8 +12,137 @@ export type PluginTextTranslations = Record<string, string>
 
 export const MAX_PLUGIN_SCREENS = 16
 export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
+export const MAX_PLUGIN_NEW_WORKSPACE_ITEMS = 16
+export const MAX_NEW_WORKSPACE_COMBOBOX_OPTIONS = 20
+export const MAX_NEW_WORKSPACE_SELECT_OPTIONS = 32
+export const MAX_NEW_WORKSPACE_REF_BYTES = 256
+export const MAX_NEW_WORKSPACE_ROOT_PATH_BYTES = 1024
+export const MAX_NEW_WORKSPACE_METADATA_KEYS = 16
+export const MAX_NEW_WORKSPACE_METADATA_VALUE_BYTES = 512
+export const MAX_NEW_WORKSPACE_METADATA_BYTES = 4 * 1024
 
 export type PluginSidebarItemPlacement = "header" | "footer"
+
+export type NewWorkspaceTarget = "workspace" | "worktree" | "all"
+export type NewWorkspaceFormTarget = Exclude<NewWorkspaceTarget, "all">
+export type NewWorkspaceMetadataValue = string | number | boolean | null
+
+export interface NewWorkspacePatch {
+  branch?: string | null
+  baseRef?: string | null
+  rootPath?: string | null
+  metadata?: Record<string, NewWorkspaceMetadataValue>
+}
+
+export interface NewWorkspaceOption {
+  id: string
+  label: string
+  labelTranslations?: PluginTextTranslations
+  description?: string
+  descriptionTranslations?: PluginTextTranslations
+  patch?: NewWorkspacePatch
+}
+
+export interface ResolvedNewWorkspaceOption {
+  id: string
+  label: string
+  description?: string
+  patch?: NewWorkspacePatch
+}
+
+type NewWorkspacePlaceholderFields = {
+  placeholder?: string
+  placeholderTranslations?: PluginTextTranslations
+}
+
+type NewWorkspaceToggleControl = {
+  kind: "toggle"
+  defaultValue?: boolean
+  onChangeMethod?: string
+  enabledPatch?: NewWorkspacePatch
+  disabledPatch?: NewWorkspacePatch
+} & (
+  | { onChangeMethod: string }
+  | { enabledPatch: NewWorkspacePatch }
+  | { disabledPatch: NewWorkspacePatch }
+)
+
+export type NewWorkspaceItemControl =
+  | ({ kind: "combobox"; searchMethod: string } & NewWorkspacePlaceholderFields)
+  | ({
+      kind: "select"
+    } & NewWorkspacePlaceholderFields &
+      (
+        | { options: NewWorkspaceOption[]; optionsMethod?: never }
+        | { options?: never; optionsMethod: string }
+      ))
+  | NewWorkspaceToggleControl
+  | { kind: "action"; method: string }
+
+export interface NewWorkspaceItemContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  description?: string
+  descriptionTranslations?: PluginTextTranslations
+  target?: NewWorkspaceTarget
+  control: NewWorkspaceItemControl
+}
+
+export type ResolvedNewWorkspaceItemControl =
+  | { kind: "combobox"; searchMethod: string; placeholder?: string }
+  | {
+      kind: "select"
+      placeholder?: string
+      options?: ResolvedNewWorkspaceOption[]
+      optionsMethod?: string
+    }
+  | {
+      kind: "toggle"
+      defaultValue: boolean
+      onChangeMethod?: string
+      enabledPatch?: NewWorkspacePatch
+      disabledPatch?: NewWorkspacePatch
+    }
+  | { kind: "action"; method: string }
+
+export interface ResolvedPluginNewWorkspaceItem {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  description?: string
+  target: NewWorkspaceTarget
+  control: ResolvedNewWorkspaceItemControl
+}
+
+export interface NewWorkspaceMethodInput {
+  itemId: string
+  target: NewWorkspaceFormTarget
+  query?: string
+  value?: boolean
+  folderPath?: string
+  baseRef?: string
+  branch?: string
+  metadata?: Record<string, NewWorkspaceMetadataValue>
+  locale: string
+}
+
+export interface NewWorkspaceOptionsResult {
+  items: Pick<NewWorkspaceOption, "id" | "label" | "description" | "patch">[]
+}
+
+export interface NewWorkspacePatchResult {
+  patch?: NewWorkspacePatch
+}
+
+export interface NewWorkspaceDraftState {
+  branch?: string
+  baseRef?: string
+  rootPath?: string
+  metadata: Record<string, Exclude<NewWorkspaceMetadataValue, null>>
+}
 
 export interface PluginThemeContribution {
   id: string
@@ -174,6 +303,7 @@ export interface InstalledPlugin {
       themes?: PluginThemeContribution[]
       screens?: PluginScreenContribution[]
       sidebarItems?: PluginSidebarItemContribution[]
+      newWorkspaceItems?: NewWorkspaceItemContribution[]
     }
   }
 }
@@ -358,6 +488,13 @@ function getReadyHostTransportSnapshot(): Transport | null {
   return safeGetTransport()
 }
 
+export function isCurrentReadyHostTransport(
+  transport: Transport | null
+): boolean {
+  if (!transport) return false
+  return getReadyHostTransportSnapshot() === transport
+}
+
 function getNullTransportSnapshot(): null {
   return null
 }
@@ -498,6 +635,10 @@ export function pluginScreenKey(pluginId: string, screenId: string) {
 }
 
 export function pluginSidebarItemKey(pluginId: string, itemId: string) {
+  return `${pluginId}:${itemId}`
+}
+
+export function pluginNewWorkspaceItemKey(pluginId: string, itemId: string) {
   return `${pluginId}:${itemId}`
 }
 
@@ -819,6 +960,519 @@ export function hostPluginSessionScopeKey(
 }
 
 const utf8Encoder = new TextEncoder()
+
+const NEW_WORKSPACE_SLUG_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+const NEW_WORKSPACE_METADATA_KEY_RE = /^[a-zA-Z0-9._-]{1,64}$/
+const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f-\u009f]/
+const LINE_DISALLOWED_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/
+const REF_FORBIDDEN_CHARS_RE = /[ ~^:?*[\\]/
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
+function isValidNewWorkspaceLine(value: string, maxBytes: number): boolean {
+  return (
+    value.trim().length > 0 &&
+    utf8Encoder.encode(value).byteLength <= maxBytes &&
+    !LINE_DISALLOWED_RE.test(value)
+  )
+}
+
+function isValidNewWorkspaceRef(value: string): boolean {
+  if (!isValidNewWorkspaceLine(value, MAX_NEW_WORKSPACE_REF_BYTES)) {
+    return false
+  }
+  if (
+    value.startsWith("-") ||
+    value.endsWith(".") ||
+    value === "@" ||
+    value.includes("..") ||
+    value.includes("@{") ||
+    REF_FORBIDDEN_CHARS_RE.test(value)
+  ) {
+    return false
+  }
+  return value
+    .split("/")
+    .every(
+      (part) =>
+        part.length > 0 && !part.startsWith(".") && !part.endsWith(".lock")
+    )
+}
+
+function resolveOptionalNewWorkspaceText(
+  fallback: string | undefined,
+  translations: PluginTextTranslations | undefined,
+  locale?: string
+): string | undefined {
+  if (typeof fallback !== "string") return undefined
+  const trimmed = fallback.trim()
+  if (!trimmed) return undefined
+  const resolved = resolvePluginText(trimmed, translations, locale).trim()
+  return resolved || undefined
+}
+
+const PATCH_ALLOWED_KEYS = new Set([
+  "branch",
+  "baseRef",
+  "rootPath",
+  "metadata",
+])
+const OPTION_ALLOWED_KEYS = new Set(["id", "label", "description", "patch"])
+
+export function validateNewWorkspacePatch(raw: unknown): NewWorkspacePatch {
+  if (!isPlainRecord(raw)) {
+    throw new Error("Invalid new workspace patch")
+  }
+  for (const key of Object.keys(raw)) {
+    if (!PATCH_ALLOWED_KEYS.has(key)) {
+      throw new Error(`Unsupported patch field: ${key}`)
+    }
+  }
+
+  const patch: NewWorkspacePatch = {}
+
+  if ("branch" in raw && raw.branch !== undefined) {
+    if (raw.branch === null) {
+      patch.branch = null
+    } else if (
+      typeof raw.branch === "string" &&
+      isValidNewWorkspaceRef(raw.branch)
+    ) {
+      patch.branch = raw.branch
+    } else {
+      throw new Error("Invalid branch suggestion")
+    }
+  }
+
+  if ("baseRef" in raw && raw.baseRef !== undefined) {
+    if (raw.baseRef === null) {
+      patch.baseRef = null
+    } else if (
+      typeof raw.baseRef === "string" &&
+      isValidNewWorkspaceRef(raw.baseRef)
+    ) {
+      patch.baseRef = raw.baseRef
+    } else {
+      throw new Error("Invalid baseRef suggestion")
+    }
+  }
+
+  if ("rootPath" in raw && raw.rootPath !== undefined) {
+    if (raw.rootPath === null) {
+      patch.rootPath = null
+    } else if (
+      typeof raw.rootPath === "string" &&
+      isValidNewWorkspaceLine(raw.rootPath, MAX_NEW_WORKSPACE_ROOT_PATH_BYTES)
+    ) {
+      patch.rootPath = raw.rootPath
+    } else {
+      throw new Error("Invalid rootPath suggestion")
+    }
+  }
+
+  if ("metadata" in raw && raw.metadata !== undefined) {
+    if (!isPlainRecord(raw.metadata)) {
+      throw new Error("Invalid metadata patch")
+    }
+    const entries = Object.entries(raw.metadata)
+    if (entries.length > MAX_NEW_WORKSPACE_METADATA_KEYS) {
+      throw new Error("Too many metadata keys")
+    }
+    const metadata: Record<string, NewWorkspaceMetadataValue> = {}
+    for (const [key, value] of entries) {
+      if (!NEW_WORKSPACE_METADATA_KEY_RE.test(key)) {
+        throw new Error(`Invalid metadata key: ${key}`)
+      }
+      if (value === null || typeof value === "boolean") {
+        metadata[key] = value
+      } else if (typeof value === "number" && Number.isFinite(value)) {
+        metadata[key] = value
+      } else if (typeof value === "string") {
+        if (
+          utf8Encoder.encode(value).byteLength >
+            MAX_NEW_WORKSPACE_METADATA_VALUE_BYTES ||
+          CONTROL_CHAR_RE.test(value)
+        ) {
+          throw new Error(`Invalid metadata value for ${key}`)
+        }
+        metadata[key] = value
+      } else {
+        throw new Error(`Unsupported metadata value for ${key}`)
+      }
+    }
+    if (
+      utf8Encoder.encode(JSON.stringify(metadata)).byteLength >
+      MAX_NEW_WORKSPACE_METADATA_BYTES
+    ) {
+      throw new Error("Metadata patch exceeds 4 KiB limit")
+    }
+    patch.metadata = metadata
+  }
+
+  return patch
+}
+
+function isPatchEmpty(patch: NewWorkspacePatch | undefined): boolean {
+  if (!patch) return true
+  return (
+    !("branch" in patch) &&
+    !("baseRef" in patch) &&
+    !("rootPath" in patch) &&
+    (!patch.metadata || Object.keys(patch.metadata).length === 0)
+  )
+}
+
+export function validateNewWorkspaceOptionsResult(
+  raw: unknown,
+  kind: "combobox" | "select"
+): ResolvedNewWorkspaceOption[] {
+  if (!isPlainRecord(raw) || !Array.isArray(raw.items)) {
+    throw new Error("Invalid new workspace options result")
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== "items") {
+      throw new Error(`Unsupported options result field: ${key}`)
+    }
+  }
+  const maxItems =
+    kind === "combobox"
+      ? MAX_NEW_WORKSPACE_COMBOBOX_OPTIONS
+      : MAX_NEW_WORKSPACE_SELECT_OPTIONS
+  if (raw.items.length > maxItems) {
+    throw new Error(`Too many ${kind} options`)
+  }
+  const seenIds = new Set<string>()
+  const items: ResolvedNewWorkspaceOption[] = []
+  for (const entry of raw.items) {
+    if (!isPlainRecord(entry)) {
+      throw new Error("Invalid option entry")
+    }
+    for (const key of Object.keys(entry)) {
+      if (!OPTION_ALLOWED_KEYS.has(key)) {
+        throw new Error(`Unsupported option field: ${key}`)
+      }
+    }
+    if (
+      typeof entry.id !== "string" ||
+      !NEW_WORKSPACE_SLUG_RE.test(entry.id) ||
+      seenIds.has(entry.id)
+    ) {
+      throw new Error("Invalid or duplicate option id")
+    }
+    if (
+      typeof entry.label !== "string" ||
+      !isValidNewWorkspaceLine(entry.label, 256)
+    ) {
+      throw new Error("Invalid option label")
+    }
+    let description: string | undefined
+    if (entry.description !== undefined) {
+      if (
+        typeof entry.description !== "string" ||
+        !isValidNewWorkspaceLine(entry.description, 512)
+      ) {
+        throw new Error("Invalid option description")
+      }
+      description = entry.description.trim()
+    }
+    const patch =
+      entry.patch !== undefined
+        ? validateNewWorkspacePatch(entry.patch)
+        : undefined
+    seenIds.add(entry.id)
+    items.push({
+      id: entry.id,
+      label: entry.label.trim(),
+      ...(description ? { description } : {}),
+      ...(patch ? { patch } : {}),
+    })
+  }
+  return items
+}
+
+export function validateNewWorkspacePatchResult(
+  raw: unknown
+): NewWorkspacePatch | undefined {
+  if (!isPlainRecord(raw)) {
+    throw new Error("Invalid new workspace patch result")
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== "patch") {
+      throw new Error(`Unsupported patch result field: ${key}`)
+    }
+  }
+  if (raw.patch === undefined) return undefined
+  return validateNewWorkspacePatch(raw.patch)
+}
+
+export function applyNewWorkspacePatch(
+  state: NewWorkspaceDraftState,
+  patch?: NewWorkspacePatch | null
+): NewWorkspaceDraftState {
+  if (!patch) return state
+  let nextBranch = state.branch
+  if ("branch" in patch && patch.branch !== undefined) {
+    nextBranch = patch.branch === null ? undefined : patch.branch
+  }
+  let nextBaseRef = state.baseRef
+  if ("baseRef" in patch && patch.baseRef !== undefined) {
+    nextBaseRef = patch.baseRef === null ? undefined : patch.baseRef
+  }
+  let nextRootPath = state.rootPath
+  if ("rootPath" in patch && patch.rootPath !== undefined) {
+    nextRootPath = patch.rootPath === null ? undefined : patch.rootPath
+  }
+  let nextMetadata = state.metadata
+  if (patch.metadata && Object.keys(patch.metadata).length > 0) {
+    nextMetadata = { ...state.metadata }
+    for (const [key, value] of Object.entries(patch.metadata)) {
+      if (value === null) {
+        delete nextMetadata[key]
+      } else {
+        nextMetadata[key] = value
+      }
+    }
+  }
+  return {
+    ...(nextBranch !== undefined ? { branch: nextBranch } : {}),
+    ...(nextBaseRef !== undefined ? { baseRef: nextBaseRef } : {}),
+    ...(nextRootPath !== undefined ? { rootPath: nextRootPath } : {}),
+    metadata: nextMetadata,
+  }
+}
+
+function resolveStaticSelectOptions(
+  rawOptions: readonly NewWorkspaceOption[],
+  locale?: string
+): ResolvedNewWorkspaceOption[] | null {
+  if (
+    rawOptions.length === 0 ||
+    rawOptions.length > MAX_NEW_WORKSPACE_SELECT_OPTIONS
+  ) {
+    return null
+  }
+  const seenIds = new Set<string>()
+  const resolved: ResolvedNewWorkspaceOption[] = []
+  for (const option of rawOptions) {
+    if (
+      typeof option.id !== "string" ||
+      !NEW_WORKSPACE_SLUG_RE.test(option.id) ||
+      seenIds.has(option.id)
+    ) {
+      return null
+    }
+    const fallbackLabel =
+      typeof option.label === "string" ? option.label.trim() : ""
+    if (!fallbackLabel) return null
+    const label = resolvePluginText(
+      fallbackLabel,
+      option.labelTranslations,
+      locale
+    ).trim()
+    if (!label) return null
+    const description = resolveOptionalNewWorkspaceText(
+      option.description,
+      option.descriptionTranslations,
+      locale
+    )
+    let patch: NewWorkspacePatch | undefined
+    if (option.patch !== undefined) {
+      try {
+        patch = validateNewWorkspacePatch(option.patch)
+      } catch {
+        return null
+      }
+    }
+    seenIds.add(option.id)
+    resolved.push({
+      id: option.id,
+      label,
+      ...(description ? { description } : {}),
+      ...(patch ? { patch } : {}),
+    })
+  }
+  return resolved
+}
+
+export function selectPluginNewWorkspaceItems(
+  plugins: readonly InstalledPlugin[] | undefined,
+  target: NewWorkspaceFormTarget,
+  locale?: string
+): ResolvedPluginNewWorkspaceItem[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginNewWorkspaceItem[] = []
+  const seenPlugins = new Set<string>()
+
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled) continue
+    const contributions = plugin.manifest.contributes?.newWorkspaceItems
+    if (!contributions?.length) continue
+
+    const server = plugin.manifest.server
+    const hasServerEntry = Boolean(server?.entry?.trim())
+    const declaredMethods = new Set(
+      hasServerEntry && Array.isArray(server?.methods)
+        ? server.methods
+            .map((method) => (typeof method === "string" ? method.trim() : ""))
+            .filter(Boolean)
+        : []
+    )
+    const hasMethod = (method: unknown): method is string =>
+      typeof method === "string" &&
+      method.trim().length > 0 &&
+      declaredMethods.has(method.trim())
+
+    const pluginName =
+      resolvePluginText(
+        plugin.manifest.name,
+        plugin.manifest.nameTranslations,
+        locale
+      ).trim() || plugin.manifest.id
+
+    const seenIds = new Set<string>()
+    let pluginValidCount = 0
+
+    for (const item of contributions) {
+      if (pluginValidCount >= MAX_PLUGIN_NEW_WORKSPACE_ITEMS) break
+      if (
+        typeof item.id !== "string" ||
+        !NEW_WORKSPACE_SLUG_RE.test(item.id) ||
+        seenIds.has(item.id)
+      ) {
+        continue
+      }
+      const fallbackTitle =
+        typeof item.title === "string" ? item.title.trim() : ""
+      if (!fallbackTitle) continue
+      const title = resolvePluginText(
+        fallbackTitle,
+        item.titleTranslations,
+        locale
+      ).trim()
+      if (!title) continue
+      const description = resolveOptionalNewWorkspaceText(
+        item.description,
+        item.descriptionTranslations,
+        locale
+      )
+      const itemTarget: NewWorkspaceTarget = item.target ?? "all"
+      if (
+        itemTarget !== "all" &&
+        itemTarget !== "workspace" &&
+        itemTarget !== "worktree"
+      ) {
+        continue
+      }
+
+      const rawControl = item.control
+      if (!rawControl || typeof rawControl !== "object") continue
+      let resolvedControl: ResolvedNewWorkspaceItemControl | null = null
+
+      if (rawControl.kind === "combobox") {
+        if (hasMethod(rawControl.searchMethod)) {
+          const placeholder = resolveOptionalNewWorkspaceText(
+            rawControl.placeholder,
+            rawControl.placeholderTranslations,
+            locale
+          )
+          resolvedControl = {
+            kind: "combobox",
+            searchMethod: rawControl.searchMethod.trim(),
+            ...(placeholder ? { placeholder } : {}),
+          }
+        }
+      } else if (rawControl.kind === "select") {
+        const hasStatic = Array.isArray(rawControl.options)
+        const hasDynamic = rawControl.optionsMethod !== undefined
+        if (hasStatic !== hasDynamic) {
+          const placeholder = resolveOptionalNewWorkspaceText(
+            rawControl.placeholder,
+            rawControl.placeholderTranslations,
+            locale
+          )
+          if (hasStatic) {
+            const options = resolveStaticSelectOptions(
+              rawControl.options!,
+              locale
+            )
+            if (options) {
+              resolvedControl = {
+                kind: "select",
+                options,
+                ...(placeholder ? { placeholder } : {}),
+              }
+            }
+          } else if (hasMethod(rawControl.optionsMethod)) {
+            resolvedControl = {
+              kind: "select",
+              optionsMethod: rawControl.optionsMethod.trim(),
+              ...(placeholder ? { placeholder } : {}),
+            }
+          }
+        }
+      } else if (rawControl.kind === "toggle") {
+        const hasOnChange = rawControl.onChangeMethod !== undefined
+        if (!hasOnChange || hasMethod(rawControl.onChangeMethod)) {
+          try {
+            const enabledPatch =
+              rawControl.enabledPatch !== undefined
+                ? validateNewWorkspacePatch(rawControl.enabledPatch)
+                : undefined
+            const disabledPatch =
+              rawControl.disabledPatch !== undefined
+                ? validateNewWorkspacePatch(rawControl.disabledPatch)
+                : undefined
+            if (
+              hasOnChange ||
+              !isPatchEmpty(enabledPatch) ||
+              !isPatchEmpty(disabledPatch)
+            ) {
+              resolvedControl = {
+                kind: "toggle",
+                defaultValue: rawControl.defaultValue === true,
+                ...(hasOnChange
+                  ? { onChangeMethod: rawControl.onChangeMethod!.trim() }
+                  : {}),
+                ...(enabledPatch ? { enabledPatch } : {}),
+                ...(disabledPatch ? { disabledPatch } : {}),
+              }
+            }
+          } catch {
+            // Invalid static toggle patch — skip item.
+          }
+        }
+      } else if (rawControl.kind === "action") {
+        if (hasMethod(rawControl.method)) {
+          resolvedControl = {
+            kind: "action",
+            method: rawControl.method.trim(),
+          }
+        }
+      }
+
+      if (!resolvedControl) continue
+      seenIds.add(item.id)
+      pluginValidCount += 1
+      if (itemTarget !== "all" && itemTarget !== target) continue
+      items.push({
+        key: pluginNewWorkspaceItemKey(plugin.manifest.id, item.id),
+        pluginId: plugin.manifest.id,
+        pluginName,
+        id: item.id,
+        title,
+        ...(description ? { description } : {}),
+        target: itemTarget,
+        control: resolvedControl,
+      })
+    }
+  }
+
+  return items
+}
 
 export function validatePluginComposerInsertPayload(payload: unknown): string {
   if (

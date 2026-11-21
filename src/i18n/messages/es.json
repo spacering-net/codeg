@@ -109,7 +109,14 @@
     "pluginSurfaces": "Acciones de complementos",
     "morePluginSurfaces": "Más acciones de complementos",
     "pluginDetail": "Detalles del complemento",
-    "activationPanel": "Guía de activación"
+    "activationPanel": "Guía de activación",
+    "newWorkspaceSection": "Opciones del complemento",
+    "newWorkspaceSearching": "Buscando…",
+    "newWorkspaceNoMatches": "No se encontraron coincidencias.",
+    "newWorkspaceSelectPlaceholder": "Selecciona una opción…",
+    "newWorkspaceSearchPlaceholder": "Buscar…",
+    "newWorkspaceActionFailed": "Error en la acción del complemento.",
+    "newWorkspaceMetadata": "Metadatos del borrador"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apariencia del tema",
