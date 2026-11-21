@@ -4360,6 +4360,106 @@ div.monaco-diff-editor.side-by-side .editor.modified {
   --pa-eyes: var(--color-white);
 }
 
+/* Personal agent: the first setup's screen — a soft wash of the face's
+   colour (`--pa-body`; the theme's for a picture) from behind it, a glow
+   round the face that breathes slowly and rings that ripple out from it
+   (both held still with reduced motion). A black or grey face is a light
+   touch of grey, never a cloud. The colour eases over as another face is
+   picked. */
+@property --pa-setup-tint {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+[data-pa-setup-frame] {
+  --pa-setup-tint: var(--pa-body, var(--primary));
+  --pa-setup-wash: 15%;
+  --pa-setup-halo: 0.24;
+  --pa-setup-ring: 40%;
+  transition: --pa-setup-tint 400ms ease;
+}
+[data-pa-setup-frame][data-pa-face="black"],
+[data-pa-setup-frame][data-pa-face="gray"] {
+  --pa-setup-wash: 4%;
+  --pa-setup-halo: 0.08;
+  --pa-setup-ring: 22%;
+}
+.pa-setup-wash {
+  background: radial-gradient(
+    50% 40% at 50% 32%,
+    color-mix(in oklab, var(--pa-setup-tint) var(--pa-setup-wash), transparent),
+    transparent 75%
+  );
+}
+.pa-setup-halo {
+  position: absolute;
+  inset: -22%;
+  border-radius: 9999px;
+  background: var(--pa-setup-tint);
+  opacity: var(--pa-setup-halo);
+  filter: blur(22px);
+  pointer-events: none;
+}
+.pa-setup-ripple {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  pointer-events: none;
+}
+.pa-setup-ripple::before,
+.pa-setup-ripple::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1.5px solid
+    color-mix(in oklab, var(--pa-setup-tint) var(--pa-setup-ring), transparent);
+  opacity: 0;
+}
+@keyframes pa-setup-breathe {
+  0%,
+  100% {
+    transform: scale(0.92);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+@keyframes pa-setup-ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+/* The die beside the name, rolled. */
+@keyframes pa-setup-roll {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(200deg) scale(1.2);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .pa-setup-halo {
+    animation: pa-setup-breathe 4.5s ease-in-out infinite;
+  }
+  .pa-setup-ripple::before,
+  .pa-setup-ripple::after {
+    animation: pa-setup-ripple 4s cubic-bezier(0.2, 0.6, 0.35, 1) infinite;
+  }
+  .pa-setup-ripple::after {
+    animation-delay: 2s;
+  }
+}
+
 /* Personal agent: an assistant's face colour (10.7), on its conversation
    (`data-pa-face`): once for the light theme and once for the dark, with
    the text that reads on it. With "follow the assistant's colour" on

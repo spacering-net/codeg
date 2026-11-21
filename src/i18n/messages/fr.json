@@ -9904,12 +9904,6 @@
     "viewSession": "Voir la session",
     "viewSessionHint": "La transcription complète de la session en cours, en direct.",
     "sessionTitle": "Session {seq} · transcription complète",
-    "setup": {
-      "title": "Configurer votre agent personnel",
-      "description": "Votre agent personnel comprend ce que vous voulez, confie le travail aux assistants que vous avez configurés, en assure le suivi et s'en souvient. Pour commencer, choisissez l'agent sur lequel il s'exécute.",
-      "action": "Choisir son agent",
-      "manageExecutors": "Gérer les configurations d'exécution"
-    },
     "errors": {
       "engineElsewhere": "L'agent personnel s'exécute dans un autre processus codeg sur ce répertoire de données ; cette page est en lecture seule ici."
     },
@@ -10082,8 +10076,14 @@
       }
     },
     "settings": {
-      "setupTitle": "Configurer votre agent personnel",
-      "setupDescription": "Choisissez l'agent sur lequel s'exécute votre agent personnel, avec toutes ses options. Vous pourrez en changer plus tard ; la chronologie continue.",
+      "setupStart": "Discuter avec votre agent",
+      "setupAskName": "Vous me donnez un nom ?",
+      "setupHello": "Bonjour, je suis {name} !",
+      "setupRandomName": "Choisir un nom au hasard",
+      "setupNames": "Nova|Juno|Milo|Pixel|Orbit|Mochi|Kiki|Atlas|Luna|Momo|Ziggy|Bean",
+      "setupMoreAgents": "Plus ({count})",
+      "setupFewerAgents": "Moins",
+      "setupNoAgents": "Aucun agent n’est encore disponible : installez-en un dans les Paramètres.",
       "tabPersona": "Persona et mémoire",
       "name": "Nom",
       "nameHint": "Le nom et l’image qu’il porte sur sa page et dans ses messages ; l’agent connaît aussi son nom. Sans nom, le nom par défaut est utilisé.",
@@ -12678,8 +12678,7 @@
     },
     "botPage": {
       "primary": "Assistant principal",
-      "worker": "Assistant de travail",
-      "notSetUp": "Pas encore configuré"
+      "worker": "Assistant de travail"
     },
     "noExecutor": "Il n'a pas de configuration d'exécution utilisable : il ne peut pas travailler lui-même pour l'instant.",
     "setExecutor": "Définir la configuration"

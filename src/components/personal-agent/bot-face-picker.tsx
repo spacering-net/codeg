@@ -24,6 +24,7 @@ import {
 import type {
   BotAvatar as BotAvatarValue,
   BotColor,
+  BotLook,
   BotShape,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -187,8 +188,17 @@ export function BotFacePicker({
   onChange,
   disabled,
   size = 48,
-}: FacePickerProps & { size?: number }) {
+  look,
+  align = "start",
+}: FacePickerProps & {
+  size?: number
+  /** Alive, as the roster's faces are: it blinks and glances about. */
+  look?: BotLook
+  align?: "start" | "center"
+}) {
   const t = useTranslations("PersonalAgent.bots.face")
+  // The pencil grows with a large face, so it still reads as its badge.
+  const large = size >= 72
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -200,16 +210,21 @@ export function BotFacePicker({
           data-pa-face-picker
           className="group/avatar relative shrink-0 rounded-full outline-none ring-offset-background transition focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
         >
-          <BotAvatar avatar={value} name={name} size={size} />
+          <BotAvatar avatar={value} name={name} size={size} look={look} />
           <span
             aria-hidden
-            className="absolute -end-0.5 -bottom-0.5 flex size-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors group-hover/avatar:text-foreground"
+            className={cn(
+              "absolute flex items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors group-hover/avatar:text-foreground",
+              large
+                ? "end-0.5 bottom-0.5 size-7"
+                : "-end-0.5 -bottom-0.5 size-5"
+            )}
           >
-            <Pencil className="size-2.5" />
+            <Pencil className={large ? "size-3.5" : "size-2.5"} />
           </span>
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 p-3">
+      <PopoverContent align={align} className="w-72 p-3">
         <BotFaceChoices
           value={value}
           name={name}

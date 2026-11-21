@@ -9904,12 +9904,6 @@
     "viewSession": "Sitzung ansehen",
     "viewSessionHint": "Das vollständige Protokoll der aktuellen Sitzung, live.",
     "sessionTitle": "Sitzung {seq} · vollständiges Protokoll",
-    "setup": {
-      "title": "Richte deinen persönlichen Agenten ein",
-      "description": "Dein persönlicher Agent versteht, was du willst, gibt die Arbeit an die von dir eingerichteten Assistenten ab, verfolgt sie weiter und merkt sich alles. Wähle zum Start den Agenten, auf dem er läuft.",
-      "action": "Seinen Agenten wählen",
-      "manageExecutors": "Ausführungskonfigurationen verwalten"
-    },
     "errors": {
       "engineElsewhere": "Der persönliche Agent läuft in einem anderen codeg-Prozess mit diesem Datenverzeichnis; diese Seite ist hier schreibgeschützt."
     },
@@ -10082,8 +10076,14 @@
       }
     },
     "settings": {
-      "setupTitle": "Richte deinen persönlichen Agenten ein",
-      "setupDescription": "Wähle den Agenten, auf dem dein persönlicher Agent läuft, mit allen Optionen. Du kannst ihn später wechseln; die Zeitleiste läuft weiter.",
+      "setupStart": "Mit deinem Agenten chatten",
+      "setupAskName": "Gibst du mir einen Namen?",
+      "setupHello": "Hallo, ich bin {name}!",
+      "setupRandomName": "Zufälligen Namen wählen",
+      "setupNames": "Nova|Juno|Milo|Pixel|Orbit|Mochi|Kiki|Atlas|Luna|Momo|Ziggy|Bean",
+      "setupMoreAgents": "Mehr ({count})",
+      "setupFewerAgents": "Weniger",
+      "setupNoAgents": "Noch kein Agent verfügbar: Installiere zuerst einen in den Einstellungen.",
       "tabPersona": "Persona & Gedächtnis",
       "name": "Name",
       "nameHint": "Name und Bild, mit denen er auf seiner Seite und in seinen Nachrichten erscheint; der Agent kennt seinen Namen auch. Ohne Namen gilt der Standardname.",
@@ -12678,8 +12678,7 @@
     },
     "botPage": {
       "primary": "Hauptassistent",
-      "worker": "Arbeitsassistent",
-      "notSetUp": "Noch nicht eingerichtet"
+      "worker": "Arbeitsassistent"
     },
     "noExecutor": "Es hat keine nutzbare Ausführungskonfiguration: Es kann vorerst nicht selbst arbeiten.",
     "setExecutor": "Ausführungskonfiguration festlegen"

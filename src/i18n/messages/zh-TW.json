@@ -9904,12 +9904,6 @@
     "viewSession": "檢視底層會話",
     "viewSessionHint": "目前會話段的完整記錄，即時更新。",
     "sessionTitle": "第 {seq} 段 · 完整記錄",
-    "setup": {
-      "title": "設定你的個人助手",
-      "description": "個人助手負責理解你的意圖、把工作派給你設定的角色助手、跟進並記住。先選擇它執行的 agent。",
-      "action": "選擇 agent",
-      "manageExecutors": "管理執行配置"
-    },
     "errors": {
       "engineElsewhere": "個人助手在同一資料目錄的另一個 codeg 處理程序中執行，本頁在這裡為唯讀。"
     },
@@ -10082,8 +10076,14 @@
       }
     },
     "settings": {
-      "setupTitle": "設定你的個人助手",
-      "setupDescription": "選擇個人助手執行的 agent 和全部選項。之後可以切換，時間軸保持連續。",
+      "setupStart": "與助手對話",
+      "setupAskName": "幫我取個名字吧？",
+      "setupHello": "嗨，我是「{name}」！",
+      "setupRandomName": "隨機取個名字",
+      "setupNames": "小橙|阿星|糰子|小滿|知了|米粒|阿福|小七|糯米|布丁|芝麻|可可",
+      "setupMoreAgents": "更多（{count}）",
+      "setupFewerAgents": "收起",
+      "setupNoAgents": "還沒有可用的 agent：先在設定裡安裝一個。",
       "tabPersona": "人設與記憶",
       "name": "名稱",
       "nameHint": "它在頁面和訊息裡顯示的名字和頭像；助手也知道自己叫這個名字。名字留空則使用預設名稱。",
@@ -12678,8 +12678,7 @@
     },
     "botPage": {
       "primary": "主助手",
-      "worker": "工作助手",
-      "notSetUp": "還沒設定"
+      "worker": "工作助手"
     },
     "noExecutor": "它還沒有能用的執行配置，暫時不能自己做事。",
     "setExecutor": "設定執行配置"

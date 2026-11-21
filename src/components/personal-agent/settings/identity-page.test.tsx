@@ -75,19 +75,32 @@ vi.mock("@/components/settings/assistant-editor-dialog", () => ({
 }))
 vi.mock("sonner", () => ({ toast: { message: vi.fn(), error: vi.fn() } }))
 vi.mock("@/contexts/personal-agent-context", () => ({ useBotId: () => null }))
+// The first setup's tiles offer these.
 vi.mock("@/hooks/use-acp-agents", () => ({
-  useAcpAgents: () => ({ agents: [] }),
+  useAcpAgents: () => ({
+    agents: [{ agent_type: "claude_code", enabled: true, available: true }],
+  }),
 }))
 // The brain's editors are the assistant editor's, tested there.
 vi.mock("@/components/settings/agent-options-editor", () => ({
-  AgentSelect: () => <div data-testid="agent-select" />,
+  AgentSelect: ({ onChange }: { onChange: (a: string) => void }) => (
+    <button
+      type="button"
+      data-testid="agent-select"
+      onClick={() => onChange("claude_code")}
+    />
+  ),
   OptionBlock: ({ children }: { children: React.ReactNode }) => children,
   RequiredOptionRow: () => null,
   optionValueLabel: () => null,
 }))
 // The brain's options as the agent answers them: none read by default;
 // `ready` with a required one not picked, when a test says so.
-const brain = vi.hoisted(() => ({ missing: false, pickModel: false }))
+const brain = vi.hoisted(() => ({
+  missing: false,
+  pickModel: false,
+  ready: false,
+}))
 vi.mock("@/components/settings/required-agent-options", () => ({
   RequiredOptionsSection: () => null,
   useRequiredOptionsGate: () => ({
@@ -95,7 +108,9 @@ vi.mock("@/components/settings/required-agent-options", () => ({
       ? { kind: "pick-model" }
       : brain.missing
         ? { kind: "ready", rows: [{ kind: "select", id: "model" }] }
-        : { kind: "unavailable-agent" },
+        : brain.ready
+          ? { kind: "ready", rows: [] }
+          : { kind: "unavailable-agent" },
     probe: { loading: false, reload: vi.fn() },
   }),
 }))
@@ -108,6 +123,10 @@ vi.mock("@/components/settings/assistant-agent-config", async (orig) => {
     rowMark: () => null,
   }
 })
+
+import { toast } from "sonner"
+
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { IdentityPage } from "./identity-page"
 
@@ -143,6 +162,7 @@ afterEach(() => {
   assistants.list = []
   brain.missing = false
   brain.pickModel = false
+  brain.ready = false
 })
 
 const save = () =>
@@ -264,5 +284,88 @@ describe("the identity tab", () => {
     const draft = api.personalAgentSave.mock.calls[0][0]
     expect(draft).toMatchObject({ executor_assistant_id: 5 })
     expect(draft).not.toHaveProperty("agent_config")
+  })
+})
+
+describe("the first setup", () => {
+  const setup = (props: { disabled?: boolean; onSaved?: () => void } = {}) =>
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <IdentityPage
+          agent={null}
+          bot={null}
+          disabled={props.disabled ?? false}
+          onSaved={props.onSaved}
+        />
+      </NextIntlClientProvider>
+    )
+  const start = () =>
+    document.querySelector<HTMLButtonElement>("[data-pa-setup-start]")!
+
+  it("takes its face, its name and its agent — no executor config to pick — and goes on to its conversation", async () => {
+    brain.ready = true
+    api.personalAgentSave.mockResolvedValue({})
+    // Come in by a link to its persona: the page asked for waits on the
+    // setup, which goes on to the conversation all the same.
+    usePersonalAgentUi.getState().openBotPage("persona")
+    const onSaved = vi.fn()
+    setup({ onSaved })
+    expect(document.querySelector("[data-pa-setup]")).not.toBeNull()
+    expect(screen.queryByTestId("executor-pick")).toBeNull()
+    expect(start().textContent).toBe("Chat with your agent")
+    fireEvent.click(
+      document.querySelector('[data-pa-setup-agent-tile="claude_code"]')!
+    )
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: " Nova " },
+    })
+    fireEvent.click(start())
+    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(1))
+    // Its work runs on a new executor config on the brain's agent.
+    expect(api.personalAgentSave.mock.calls[0][0]).toMatchObject({
+      name: "Nova",
+      executor_new: true,
+      agent_config: { agent_type: "claude_code" },
+    })
+    await waitFor(() => expect(onSaved).toHaveBeenCalled())
+    expect(usePersonalAgentUi.getState().botPage).toBeNull()
+    // The conversation opening says it is set up; no toast besides.
+    expect(toast.message).not.toHaveBeenCalled()
+  })
+
+  it("asks for its agent first", async () => {
+    setup()
+    fireEvent.click(start())
+    expect(await screen.findByRole("alert")).toHaveTextContent(/agent/i)
+    expect(api.personalAgentSave).not.toHaveBeenCalled()
+  })
+
+  it("opens the executor config editor when the agent's options cannot be read, and saves again with the one made", async () => {
+    brain.ready = true
+    api.personalAgentSave
+      .mockRejectedValueOnce(
+        new Error("executor options unavailable: the agent did not answer")
+      )
+      .mockResolvedValueOnce({})
+    setup()
+    fireEvent.click(
+      document.querySelector('[data-pa-setup-agent-tile="claude_code"]')!
+    )
+    fireEvent.click(start())
+    const editor = await screen.findByTestId("executor-editor")
+    expect(editor.getAttribute("data-agent")).toBe("claude_code")
+    // The default name while the field is empty.
+    expect(editor.getAttribute("data-name")).toBe("Personal agent")
+    fireEvent.click(editor)
+    await waitFor(() => expect(api.personalAgentSave).toHaveBeenCalledTimes(2))
+    expect(api.personalAgentSave.mock.calls[1][0]).toMatchObject({
+      executor_assistant_id: 9,
+    })
+  })
+
+  it("is read-only while the engine runs elsewhere", () => {
+    setup({ disabled: true })
+    expect(start()).toBeDisabled()
+    expect(screen.getByText(/read-only here/)).toBeInTheDocument()
   })
 })

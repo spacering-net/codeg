@@ -9904,12 +9904,6 @@
     "viewSession": "Ver sessão",
     "viewSessionHint": "A transcrição completa da sessão atual, ao vivo.",
     "sessionTitle": "Sessão {seq} · transcrição completa",
-    "setup": {
-      "title": "Configure seu agente pessoal",
-      "description": "Seu agente pessoal entende o que você quer, repassa o trabalho aos assistentes que você configurou, acompanha e se lembra. Para começar, escolha o agente em que ele roda.",
-      "action": "Escolher o agente",
-      "manageExecutors": "Gerenciar configurações de execução"
-    },
     "errors": {
       "engineElsewhere": "O agente pessoal roda em outro processo do codeg neste diretório de dados; esta página é somente leitura aqui."
     },
@@ -10082,8 +10076,14 @@
       }
     },
     "settings": {
-      "setupTitle": "Configure seu agente pessoal",
-      "setupDescription": "Escolha o agente em que seu agente pessoal roda, com todas as opções. Você pode trocá-lo depois; a linha do tempo continua.",
+      "setupStart": "Converse com seu agente",
+      "setupAskName": "Me dá um nome?",
+      "setupHello": "Oi, eu sou {name}!",
+      "setupRandomName": "Escolher um nome aleatório",
+      "setupNames": "Nova|Juno|Milo|Pixel|Orbit|Mochi|Kiki|Atlas|Luna|Momo|Ziggy|Bean",
+      "setupMoreAgents": "Mais ({count})",
+      "setupFewerAgents": "Menos",
+      "setupNoAgents": "Ainda não há nenhum agente disponível: instale um nas Configurações primeiro.",
       "tabPersona": "Persona e memória",
       "name": "Nome",
       "nameHint": "O nome e a imagem com que aparece na própria página e nas mensagens; o agente também sabe o próprio nome. Nome vazio usa o padrão.",
@@ -12678,8 +12678,7 @@
     },
     "botPage": {
       "primary": "Assistente principal",
-      "worker": "Assistente de trabalho",
-      "notSetUp": "Ainda não configurado"
+      "worker": "Assistente de trabalho"
     },
     "noExecutor": "Não tem uma configuração de execução utilizável: por enquanto não pode trabalhar por conta própria.",
     "setExecutor": "Definir execução"

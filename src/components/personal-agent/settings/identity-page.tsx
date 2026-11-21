@@ -7,17 +7,27 @@
  * config its work runs on (D4) — the brain thinks, the executor config does
  * the work. The mode and permissions are chosen here, and codeg runs it as
  * picked. Saved with [Save] — switching the agent starts a new session.
- * With no assistant yet, it is the first setup: a new executor config on
- * the brain's agent by default, its options filled in; when codeg cannot
- * read them nothing is saved and the executor config editor opens, the
- * setup saved again with the one made there. A name or picture saved
+ * With no assistant yet, it is the first setup, the page's own screen: its
+ * face, its name and its agent, and [Chat with your assistant] — no
+ * executor config to pick, a new one made on the brain's agent with its
+ * options filled in; when codeg cannot read them nothing is saved and the
+ * executor config editor opens, the setup saved again with the one made
+ * there. A name or picture saved
  * elsewhere meanwhile (the roster's "Edit basic info") shows here unless
  * the field was changed here.
  */
 
 import { useMemo, useRef, useState } from "react"
 import { useLocale, useTranslations } from "next-intl"
-import { AlertTriangle, Bot, Loader2, Sparkles, Workflow } from "lucide-react"
+import {
+  AlertTriangle,
+  ArrowRight,
+  Bot,
+  Loader2,
+  MessageCircle,
+  Sparkles,
+  Workflow,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import {
@@ -66,8 +76,12 @@ import {
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useAssistants } from "@/stores/assistants-store"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { BotFacePicker } from "../bot-face-picker"
+import { SetupAgentTiles } from "./setup-agent-tiles"
+import { SetupFrame } from "./setup-frame"
+import { SetupIdentity } from "./setup-identity"
 import {
   assistantAvatarOf,
   choiceOf,
@@ -328,7 +342,11 @@ export function IdentityPage({
       )
       setAgentTouched(false)
       setExecutor(null)
-      toast.message(t("saved"))
+      // The first setup says so by opening its conversation — whatever page
+      // was asked for on the way in (a link to its persona, say): it shows
+      // once there is an assistant.
+      if (agent) toast.message(t("saved"))
+      else usePersonalAgentUi.getState().showConversation()
       onSaved?.()
     } catch (error) {
       const message = toErrorMessage(error)
@@ -354,6 +372,130 @@ export function IdentityPage({
   const footerHint =
     missing.length > 0 ? ta("missingCount", { count: missing.length }) : null
 
+  const agentPick = (
+    <AgentSelect
+      value={agentType}
+      onChange={pickAgent}
+      agents={agents.filter((a) => a.enabled || a.agent_type === agentType)}
+      fallbackLabel={savedAgent?.label_snapshot.agent}
+      disabled={disabled || saving}
+    />
+  )
+  const options =
+    agentType !== null ? (
+      <RequiredOptionsSection
+        gate={gate}
+        loading={probe.loading}
+        saved={agentTouched ? null : savedAgent}
+        driftCount={driftCount}
+        renderRow={renderRow}
+        onRetry={() => probe.reload()}
+      />
+    ) : null
+  // Outside the form: the editor's own submit, bubbling through its portal,
+  // never saves this page.
+  const executorEditor = editor ? (
+    <AssistantEditorDialog
+      open
+      onOpenChange={(o) => {
+        if (!o) setEditor(null)
+      }}
+      assistant={null}
+      prefill={editor.prefill}
+      extraSection={
+        <p className="px-1 text-xs leading-5 text-muted-foreground">
+          {tx("editorNote", { why: editor.why })}
+        </p>
+      }
+      onSaved={(made) => {
+        setEditor(null)
+        setExecutor({ kind: "existing", id: made.id })
+        void save(made.id)
+      }}
+    />
+  ) : null
+
+  if (!agent) {
+    return (
+      <SetupFrame face={avatar.kind === "face" ? avatar.color : null}>
+        <form
+          className="flex w-full flex-col items-center"
+          data-pa-settings-page="identity"
+          data-pa-setup
+          onSubmit={(event) => {
+            event.preventDefault()
+            void save()
+          }}
+        >
+          <SetupIdentity
+            avatar={avatar}
+            name={name}
+            onAvatar={setAvatar}
+            onName={setName}
+            disabled={disabled || saving}
+          />
+          {/* Its agent: the tiles, its options under them once picked. */}
+          <div
+            className="mt-9 w-full overflow-hidden rounded-2xl border border-border/70 bg-background/80"
+            data-pa-setup-agent
+          >
+            <div className="flex flex-col gap-2.5 p-3">
+              <p className="flex items-center gap-1.5 px-0.5 text-xs font-medium text-muted-foreground">
+                <Bot className="size-3.5" aria-hidden />
+                {ta("agentLabel")}
+              </p>
+              <SetupAgentTiles
+                value={agentType}
+                onChange={pickAgent}
+                agents={agents.filter((a) => a.enabled)}
+                disabled={disabled || saving}
+              />
+            </div>
+            {options ? (
+              <div className="divide-y divide-border/60 border-t border-border/60">
+                {options}
+              </div>
+            ) : null}
+          </div>
+          <Button
+            type="submit"
+            size="lg"
+            disabled={disabled || saving}
+            className="group/start mt-5 h-11 w-full rounded-full text-[0.9375rem]"
+            data-pa-setup-start
+          >
+            {saving ? (
+              <Loader2 className="animate-spin" aria-hidden />
+            ) : (
+              <MessageCircle aria-hidden />
+            )}
+            {t("setupStart")}
+            <ArrowRight
+              className="transition-transform group-hover/start:translate-x-0.5 rtl:rotate-180 rtl:group-hover/start:-translate-x-0.5"
+              aria-hidden
+            />
+          </Button>
+          {disabled ? (
+            <p className="mt-3 text-center text-xs leading-5 text-muted-foreground">
+              {tPage("readOnly")}
+            </p>
+          ) : submitError || footerHint ? (
+            <p
+              className={cn(
+                "mt-3 text-center text-xs leading-5",
+                submitError ? "text-destructive" : "text-muted-foreground"
+              )}
+              role={submitError ? "alert" : undefined}
+            >
+              {submitError ?? footerHint}
+            </p>
+          ) : null}
+        </form>
+        {executorEditor}
+      </SetupFrame>
+    )
+  }
+
   return (
     <>
       <form
@@ -364,11 +506,6 @@ export function IdentityPage({
           void save()
         }}
       >
-        {agent ? null : (
-          <p className="text-sm leading-6 text-pretty text-muted-foreground">
-            {t("setupDescription")}
-          </p>
-        )}
         <SettingCard>
           {/* Who it is: the avatar its messages carry and its name, side by
             side as in the assistant editor. A monogram is drawn from the
@@ -409,30 +546,11 @@ export function IdentityPage({
             description={
               agentType === null ? ta("pickAgentFirst") : t("agentHint")
             }
-            control={
-              <AgentSelect
-                value={agentType}
-                onChange={pickAgent}
-                agents={agents.filter(
-                  (a) => a.enabled || a.agent_type === agentType
-                )}
-                fallbackLabel={savedAgent?.label_snapshot.agent}
-                disabled={disabled || saving}
-              />
-            }
+            control={agentPick}
           />
-          {agentType !== null ? (
-            <RequiredOptionsSection
-              gate={gate}
-              loading={probe.loading}
-              saved={agentTouched ? null : savedAgent}
-              driftCount={driftCount}
-              renderRow={renderRow}
-              onRetry={() => probe.reload()}
-            />
-          ) : null}
+          {options}
         </SettingCard>
-        {agent && agentType !== null && agentType !== agent.agent_type ? (
+        {agentType !== null && agentType !== agent.agent_type ? (
           <SettingNote icon={Sparkles}>{t("switchNote")}</SettingNote>
         ) : null}
         <SettingCard>
@@ -484,28 +602,7 @@ export function IdentityPage({
           </Button>
         </div>
       </form>
-      {/* Outside the form: the editor's own submit, bubbling through its
-          portal, never saves this page. */}
-      {editor ? (
-        <AssistantEditorDialog
-          open
-          onOpenChange={(o) => {
-            if (!o) setEditor(null)
-          }}
-          assistant={null}
-          prefill={editor.prefill}
-          extraSection={
-            <p className="px-1 text-xs leading-5 text-muted-foreground">
-              {tx("editorNote", { why: editor.why })}
-            </p>
-          }
-          onSaved={(made) => {
-            setEditor(null)
-            setExecutor({ kind: "existing", id: made.id })
-            void save(made.id)
-          }}
-        />
-      ) : null}
+      {executorEditor}
     </>
   )
 }

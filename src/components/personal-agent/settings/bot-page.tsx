@@ -5,8 +5,8 @@
  * kept beside it: its face, its name and what it is, over its tabs —
  * "Identity & brain" (the executor config its work runs on there too),
  * "Persona & memory", "Notifications", "Advanced". The arrow before its face goes back to the
- * conversation, and so does picking an assistant on the roster. With no
- * assistant set up yet, it is the first setup: the identity tab alone.
+ * conversation, and so does picking an assistant on the roster. (With no
+ * assistant set up yet the page shows the first setup instead.)
  *
  * Whose it is shows at once — the roster has every assistant's face and
  * name — while the tabs wait for the assistant to be read: never another's
@@ -24,7 +24,6 @@ import {
   usePersonalAgent,
   usePersonalAgentSwitch,
 } from "@/contexts/personal-agent-context"
-import type { BotAvatar as BotAvatarValue } from "@/lib/types"
 import { useRoster } from "@/stores/personal-agent-roster-store"
 import {
   usePersonalAgentUi,
@@ -39,13 +38,6 @@ import { AdvancedPage, PersonaPage } from "./own-pages"
 
 /** The face in the page's head, in px at 100% zoom. */
 const HEAD_FACE = 48
-
-/** The face of an assistant not set up yet (as the identity page's). */
-const SETUP_FACE: BotAvatarValue = {
-  kind: "face",
-  shape: "blob",
-  color: "black",
-}
 
 /** The column the head and the tabs' content share. */
 const COLUMN = "mx-auto w-full max-w-3xl px-4 sm:px-6"
@@ -75,30 +67,18 @@ export function BotPage() {
   const look = useBotLook(entry?.id ?? agent?.id ?? null)
   const readOnly = read != null && read.status.engine !== "here"
 
-  const name = setUp ? botName(entry ?? agent) : t("setupTitle")
+  // Not known yet (an assistant being read with no roster yet): nothing.
+  const name = setUp ? botName(entry ?? agent) : ""
   const role = worker ? tp("worker") : tp("primary")
   const brain = agent?.label_snapshot.agent ?? null
-  const subtitle = setUp
-    ? [role, brain].filter(Boolean).join(" · ")
-    : tp("notSetUp")
+  const subtitle = setUp ? [role, brain].filter(Boolean).join(" · ") : ""
 
   const tabs: BotTab[] = ["identity", "persona", "notify", "advanced"]
   const asked = open?.tab ?? "identity"
   const tab = tabs.includes(asked) ? asked : "identity"
 
   const body = (which: BotTab) => {
-    if (!read) return null
-    if (!agent) {
-      // Not set up: the first setup, whatever tab was asked for.
-      return (
-        <IdentityPage
-          key="setup"
-          agent={null}
-          bot={botId}
-          disabled={readOnly}
-        />
-      )
-    }
+    if (!agent) return null
     switch (which) {
       case "identity":
         return (
@@ -152,7 +132,7 @@ export function BotPage() {
               <ArrowLeft className="rtl:rotate-180" aria-hidden />
             </Button>
             <BotAvatar
-              avatar={entry?.avatar ?? agent?.avatar ?? SETUP_FACE}
+              avatar={entry?.avatar ?? agent?.avatar ?? null}
               name={name}
               size={HEAD_FACE}
               star={setUp && kind === "primary"}

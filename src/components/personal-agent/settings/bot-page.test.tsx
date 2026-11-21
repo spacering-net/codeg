@@ -319,17 +319,18 @@ describe("an assistant's own page", () => {
     ).not.toContain("Claude Code")
   })
 
-  it("is the first setup with no assistant yet", () => {
+  // The first setup is the page's own screen, never this one: with no
+  // assistant known, it shows no name, no tabs and no settings.
+  it("shows nothing of an assistant while none is known", () => {
     usePersonalAgentRoster.setState({ entries: [] })
     api.personalAgentBots.mockResolvedValue([])
     ctx.snapshot = snapshot(null)
     draw()
     expect(
       document.querySelector("[data-pa-bot-page-head] h1")?.textContent
-    ).toBe("Set up your personal agent")
+    ).toBe("")
     expect(screen.queryAllByRole("tab")).toEqual([])
-    expect(screen.getByTestId("identity-page")).toBeInTheDocument()
-    expect(identity.props).toMatchObject({ agent: null })
+    expect(screen.queryByTestId("identity-page")).toBeNull()
   })
 
   it("is read-only while the engine runs elsewhere", () => {

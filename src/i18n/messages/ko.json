@@ -9904,12 +9904,6 @@
     "viewSession": "세션 보기",
     "viewSessionHint": "현재 세션의 전체 기록을 실시간으로 보여 줍니다.",
     "sessionTitle": "세션 {seq} · 전체 기록",
-    "setup": {
-      "title": "개인 에이전트 설정하기",
-      "description": "개인 에이전트는 원하는 바를 파악해 설정해 둔 어시스턴트에게 작업을 맡기고, 진행 상황을 챙기며 기억합니다. 먼저 실행할 에이전트를 고르세요.",
-      "action": "에이전트 선택",
-      "manageExecutors": "실행 구성 관리"
-    },
     "errors": {
       "engineElsewhere": "개인 에이전트가 이 데이터 디렉터리를 사용하는 다른 codeg 프로세스에서 실행 중입니다. 여기서는 이 페이지가 읽기 전용입니다."
     },
@@ -10082,8 +10076,14 @@
       }
     },
     "settings": {
-      "setupTitle": "개인 에이전트 설정하기",
-      "setupDescription": "개인 에이전트가 실행될 에이전트와 모든 옵션을 고르세요. 나중에 바꿔도 타임라인은 그대로 이어집니다.",
+      "setupStart": "에이전트와 대화하기",
+      "setupAskName": "이름을 지어 줄래요?",
+      "setupHello": "안녕하세요, 저는 {name}입니다!",
+      "setupRandomName": "이름 추천받기",
+      "setupNames": "노바|밀로|모찌|루나|키키|픽셀|아틀라스|주노|모모|콩이|두부|별이",
+      "setupMoreAgents": "더 보기 ({count})",
+      "setupFewerAgents": "접기",
+      "setupNoAgents": "아직 사용할 수 있는 에이전트가 없어요. 먼저 설정에서 설치하세요.",
       "tabPersona": "페르소나와 메모리",
       "name": "이름",
       "nameHint": "페이지와 메시지에 표시되는 이름과 아바타입니다. 에이전트도 자기 이름을 압니다. 이름을 비워 두면 기본 이름을 씁니다.",
@@ -12678,8 +12678,7 @@
     },
     "botPage": {
       "primary": "메인 어시스턴트",
-      "worker": "작업 어시스턴트",
-      "notSetUp": "아직 설정하지 않음"
+      "worker": "작업 어시스턴트"
     },
     "noExecutor": "쓸 수 있는 실행 구성이 없어 지금은 직접 작업할 수 없습니다.",
     "setExecutor": "실행 구성 설정"

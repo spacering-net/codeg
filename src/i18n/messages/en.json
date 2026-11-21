@@ -9904,12 +9904,6 @@
     "viewSession": "View session",
     "viewSessionHint": "The current session's full transcript, live.",
     "sessionTitle": "Session {seq} · full transcript",
-    "setup": {
-      "title": "Set up your personal agent",
-      "description": "Your personal agent understands what you want, hands the work to the assistants you configured, follows it up and remembers. Pick the agent it runs on to start.",
-      "action": "Choose its agent",
-      "manageExecutors": "Manage executor configs"
-    },
     "errors": {
       "engineElsewhere": "The personal agent runs in another codeg process on this data directory; this page is read-only here."
     },
@@ -10082,8 +10076,14 @@
       }
     },
     "settings": {
-      "setupTitle": "Set up your personal agent",
-      "setupDescription": "Pick the agent your personal agent runs on, with every option. You can switch it later; the timeline carries on.",
+      "setupStart": "Chat with your agent",
+      "setupAskName": "Give me a name?",
+      "setupHello": "Hi, I'm {name}!",
+      "setupRandomName": "Pick a name for me",
+      "setupNames": "Nova|Juno|Milo|Pixel|Orbit|Mochi|Kiki|Atlas|Luna|Momo|Ziggy|Bean",
+      "setupMoreAgents": "More ({count})",
+      "setupFewerAgents": "Fewer",
+      "setupNoAgents": "No agent is available yet: install one in Settings first.",
       "name": "Name",
       "nameHint": "The name and picture it goes by on its page and in its messages; the agent knows the name too. An empty name uses the default.",
       "namePlaceholder": "Personal agent",
@@ -12678,8 +12678,7 @@
     },
     "botPage": {
       "primary": "Primary assistant",
-      "worker": "Work assistant",
-      "notSetUp": "Not set up yet"
+      "worker": "Work assistant"
     },
     "noExecutor": "It has no executor config to work on: it cannot do work itself for now.",
     "setExecutor": "Set executor config"

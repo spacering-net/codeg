@@ -9904,12 +9904,6 @@
     "viewSession": "Ver sesión",
     "viewSessionHint": "La transcripción completa de la sesión actual, en directo.",
     "sessionTitle": "Sesión {seq} · transcripción completa",
-    "setup": {
-      "title": "Configura tu agente personal",
-      "description": "Tu agente personal entiende lo que quieres, asigna el trabajo a los asistentes que configuraste, le da seguimiento y lo recuerda. Para empezar, elige el agente sobre el que funciona.",
-      "action": "Elegir su agente",
-      "manageExecutors": "Gestionar configuraciones de ejecución"
-    },
     "errors": {
       "engineElsewhere": "El agente personal se ejecuta en otro proceso de codeg con este directorio de datos; aquí esta página es de solo lectura."
     },
@@ -10082,8 +10076,14 @@
       }
     },
     "settings": {
-      "setupTitle": "Configura tu agente personal",
-      "setupDescription": "Elige el agente sobre el que funciona tu agente personal, con todas sus opciones. Puedes cambiarlo más adelante; la línea de tiempo continúa.",
+      "setupStart": "Habla con tu agente",
+      "setupAskName": "¿Me pones un nombre?",
+      "setupHello": "¡Hola, soy {name}!",
+      "setupRandomName": "Elegir un nombre al azar",
+      "setupNames": "Nova|Juno|Milo|Pixel|Orbit|Mochi|Kiki|Atlas|Luna|Momo|Ziggy|Bean",
+      "setupMoreAgents": "Más ({count})",
+      "setupFewerAgents": "Menos",
+      "setupNoAgents": "Aún no hay ningún agente disponible: instala uno primero en Ajustes.",
       "tabPersona": "Personalidad y memoria",
       "name": "Nombre",
       "nameHint": "El nombre y la imagen con los que aparece en su página y en sus mensajes; el agente también conoce su nombre. Si dejas el nombre vacío, se usa el predeterminado.",
@@ -12678,8 +12678,7 @@
     },
     "botPage": {
       "primary": "Asistente principal",
-      "worker": "Asistente de trabajo",
-      "notSetUp": "Aún sin configurar"
+      "worker": "Asistente de trabajo"
     },
     "noExecutor": "No tiene una configuración de ejecución que usar: por ahora no puede trabajar por su cuenta.",
     "setExecutor": "Configurar ejecución"

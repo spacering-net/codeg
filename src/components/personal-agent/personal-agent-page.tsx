@@ -45,7 +45,6 @@ import { ChevronDown } from "lucide-react"
 import { toast } from "sonner"
 
 import { SessionLinkOpenerContext } from "@/components/ai-elements/session-link-opener"
-import { UserRoundStar } from "@/components/icons/user-round-star"
 import { LiveTranscriptView } from "@/components/message/live-transcript-view"
 import {
   AlertDialog,
@@ -112,6 +111,7 @@ import { usePersonalAgentAttachment } from "./live-turn"
 import { MessageList } from "./message-list"
 import { replyState } from "./message-items"
 import { BotPage } from "./settings/bot-page"
+import { IdentityPage } from "./settings/identity-page"
 import { SettingsView } from "./settings/settings-view"
 import {
   PageScopeContext,
@@ -368,7 +368,6 @@ export function PersonalAgentPage() {
   const setWorkOpen = usePersonalAgentUi((s) => s.setWorkOpen)
   const settingsOpen = usePersonalAgentUi((s) => s.settings != null)
   const botPageOpen = usePersonalAgentUi((s) => s.botPage != null)
-  const openSettings = usePersonalAgentUi((s) => s.openSettings)
   const openBotPage = usePersonalAgentUi((s) => s.openBotPage)
   // A page over the conversation: the panel stands aside for it.
   const pageOver = settingsOpen || botPageOpen
@@ -495,37 +494,16 @@ export function PersonalAgentPage() {
   if (!snapshot || loading) return <ConversationSkeleton />
 
   if (!agent && settingsOpen) return <SettingsView />
-  // The first setup: the identity tab of the page it will have.
-  if (!agent && botPageOpen) return <BotPage />
-
+  // The first setup: its own screen, whatever page was asked for — its face,
+  // its name and its agent, and on to its conversation.
   if (!agent) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
-        <UserRoundStar className="size-8 text-muted-foreground" aria-hidden />
-        <h2 className="text-base font-semibold text-foreground">
-          {t("setup.title")}
-        </h2>
-        <p className="max-w-md text-sm text-muted-foreground">
-          {t("setup.description")}
-        </p>
-        {snapshot.status.engine === "here" ? (
-          <Button onClick={() => openBotPage("identity")}>
-            {t("setup.action")}
-          </Button>
-        ) : (
-          <p className="text-xs text-muted-foreground">{t("readOnly")}</p>
-        )}
-        {/* Executor configs are not the assistant's: someone who only
-              @-delegates manages them here too. */}
-        <Button
-          variant="ghost"
-          size="sm"
-          data-pa-manage-executors
-          onClick={() => openSettings("executors")}
-        >
-          {t("setup.manageExecutors")}
-        </Button>
-      </div>
+      <IdentityPage
+        key="setup"
+        agent={null}
+        bot={null}
+        disabled={snapshot.status.engine !== "here"}
+      />
     )
   }
 
