@@ -1840,7 +1840,7 @@ impl TaskEngine {
         // own branch, so the names it was fetched under can go.
         self.drop_pr_fetch_refs(task, root).await;
 
-        let wt = open_worktree_folder_core(&self.db, wt_path, task.folder_id)
+        let wt = open_worktree_folder_core(&self.emitter, &self.db, wt_path, task.folder_id)
             .await
             .map_err(|e| e.to_string())?;
         work_task_service::attach_worktree(
@@ -2043,14 +2043,17 @@ impl TaskEngine {
             return None;
         }
         self.observe_worktree(root, &path, Some(branch), PluginEvent::WorktreeCreated);
-        let wt = match open_worktree_folder_core(&self.db, path.clone(), task.folder_id).await {
-            Ok(wt) => wt,
-            Err(e) => {
-                // The checkout exists but has no folder row; the fresh-mint
-                // fallback will collide on the path and suffix itself, so the
-                // launch still proceeds.
-                tracing::warn!(
-                    "[work_task] task {}: recreated worktree at {path} but could not open \
+        let wt =
+            match open_worktree_folder_core(&self.emitter, &self.db, path.clone(), task.folder_id)
+                .await
+            {
+                Ok(wt) => wt,
+                Err(e) => {
+                    // The checkout exists but has no folder row; the fresh-mint
+                    // fallback will collide on the path and suffix itself, so the
+                    // launch still proceeds.
+                    tracing::warn!(
+                        "[work_task] task {}: recreated worktree at {path} but could not open \
                      its folder: {e}",
                     task.id
                 );
@@ -10653,9 +10656,14 @@ mod tests {
 
         let db = fresh_in_memory_db().await;
         let root_id = seed_folder(&db, "/tmp/repo").await;
-        let wt = open_worktree_folder_core(&db, "/tmp/repo-task-1".to_string(), root_id)
-            .await
-            .expect("worktree folder");
+        let wt = open_worktree_folder_core(
+            &EventEmitter::Noop,
+            &db,
+            "/tmp/repo-task-1".to_string(),
+            root_id,
+        )
+        .await
+        .expect("worktree folder");
         let conv = conversation_service::create(&db.conn, wt.id, AgentType::ClaudeCode, None, None)
             .await
             .expect("conversation");
@@ -10768,9 +10776,14 @@ mod tests {
 
         let db = fresh_in_memory_db().await;
         let root_id = seed_folder(&db, "/tmp/repo3").await;
-        let wt = open_worktree_folder_core(&db, "/tmp/repo3-task-1".to_string(), root_id)
-            .await
-            .expect("worktree folder");
+        let wt = open_worktree_folder_core(
+            &EventEmitter::Noop,
+            &db,
+            "/tmp/repo3-task-1".to_string(),
+            root_id,
+        )
+        .await
+        .expect("worktree folder");
         let conv = conversation_service::create(&db.conn, wt.id, AgentType::ClaudeCode, None, None)
             .await
             .expect("conversation");

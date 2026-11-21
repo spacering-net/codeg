@@ -11,6 +11,8 @@ use super::{
 };
 use crate::acp::types::{AcpEvent, ConnectionStatus};
 use crate::app_error::{AppCommandError, AppErrorCode};
+use crate::db::entities::folder::FolderKind;
+use crate::models::FolderDetail;
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 pub const EVENT_CHANNEL: &str = "host-plugins://event";
@@ -24,6 +26,12 @@ pub enum Event {
     OpenAfter,
     #[serde(rename = "workspace.close.after")]
     CloseAfter,
+    #[serde(rename = "workspace.create.before")]
+    WorkspaceCreateBefore,
+    #[serde(rename = "workspace.create.after")]
+    WorkspaceCreated,
+    #[serde(rename = "workspace.archive.after")]
+    WorkspaceArchived,
     #[serde(rename = "worktree.create.after")]
     WorktreeCreated,
     #[serde(rename = "worktree.archive.after")]
@@ -91,7 +99,7 @@ pub(super) struct Registration {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OpenRequest {
+struct WorkspacePath {
     path: String,
 }
 
@@ -139,9 +147,27 @@ impl HostPlugins {
             .collect()
     }
 
-    pub async fn workspace_open_path(&self, mut path: String) -> Result<String, AppCommandError> {
+    pub async fn workspace_open_path(&self, path: String) -> Result<String, AppCommandError> {
+        self.transform_workspace_path(Event::OpenBefore, "open", path)
+            .await
+    }
+
+    pub(crate) async fn workspace_create_path(
+        &self,
+        path: String,
+    ) -> Result<String, AppCommandError> {
+        self.transform_workspace_path(Event::WorkspaceCreateBefore, "create", path)
+            .await
+    }
+
+    async fn transform_workspace_path(
+        &self,
+        event: Event,
+        operation: &str,
+        mut path: String,
+    ) -> Result<String, AppCommandError> {
         tokio::time::timeout(TRANSFORM_DEADLINE, async {
-            for hook in self.lifecycle_handlers(Event::OpenBefore) {
+            for hook in self.lifecycle_handlers(event) {
                 let source = hook.id.clone();
                 let result = self
                     .invoke(hook, json!({ "path": path }))
@@ -149,14 +175,14 @@ impl HostPlugins {
                     .map_err(|error| {
                         AppCommandError::new(
                             AppErrorCode::TaskExecutionFailed,
-                            format!("Plugin {source} could not open the workspace"),
+                            format!("Plugin {source} could not {operation} the workspace"),
                         )
                         .with_detail(error.to_string())
                     })?;
                 if result.is_null() {
                     continue;
                 }
-                let updated: OpenRequest = serde_json::from_value(result).map_err(|_| {
+                let updated: WorkspacePath = serde_json::from_value(result).map_err(|_| {
                     invalid(format!(
                         "Plugin {source} returned an invalid workspace path"
                     ))
@@ -177,6 +203,26 @@ impl HostPlugins {
                 "Workspace plugin hooks timed out",
             )
         })?
+    }
+
+    pub(crate) fn observe_workspace(
+        self: &Arc<Self>,
+        emitter: &EventEmitter,
+        event: Event,
+        folder: &FolderDetail,
+    ) {
+        if folder.kind == FolderKind::Regular {
+            self.observe(
+                emitter,
+                event,
+                json!({
+                    "folderId": folder.id,
+                    "path": folder.path,
+                    "name": folder.name,
+                    "parentId": folder.parent_id
+                }),
+            );
+        }
     }
 
     pub fn observe(self: &Arc<Self>, emitter: &EventEmitter, event: Event, input: Value) {
@@ -223,7 +269,7 @@ mod tests {
     use super::*;
     use crate::commands::folders::{
         close_folder_with_plugins, git_remove_worktree_core, git_worktree_add_with_plugins,
-        open_folder_with_plugins,
+        open_folder_with_plugins, remove_folder_from_history_core, reopen_folder_with_plugins,
     };
     use crate::db::test_helpers::fresh_in_memory_db;
     use crate::host_plugins::{source::Registry, Mutation};
@@ -293,7 +339,7 @@ mod tests {
             .await
             .unwrap();
         let mut received = BTreeSet::new();
-        while received.len() < 2 {
+        while received.len() < 3 {
             let event = tokio::time::timeout(Duration::from_secs(1), stream.recv())
                 .await
                 .unwrap()
@@ -308,7 +354,8 @@ mod tests {
             received,
             BTreeSet::from([
                 "workspace.open.after".into(),
-                "workspace.close.after".into()
+                "workspace.close.after".into(),
+                "workspace.create.after".into()
             ])
         );
         plugins
@@ -321,6 +368,79 @@ mod tests {
         assert_eq!(
             plugins.workspace_open_path(alias.clone()).await.unwrap(),
             alias
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_creation_and_archive_are_scoped_to_persisted_transitions() {
+        let data = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let db = fresh_in_memory_db().await;
+        let state = crate::app_state::AppState::new_for_test(db, data.path().to_owned());
+        install_lifecycle_example(&state.host_plugins, source.path()).await;
+        let mut events = state.event_broadcaster.subscribe();
+        let alias = source.path().join("workspace-create-alias");
+        let real = source.path().join("workspace-real");
+        std::fs::create_dir(&real).unwrap();
+        let open = || {
+            open_folder_with_plugins(
+                &state.host_plugins,
+                &state.emitter,
+                &state.db,
+                alias.to_string_lossy().into_owned(),
+            )
+        };
+        let (first, concurrent) = tokio::join!(open(), open());
+        let folder = first.unwrap();
+        assert_eq!(folder.path, real.to_string_lossy());
+        assert_eq!(concurrent.unwrap().id, folder.id);
+
+        close_folder_with_plugins(&state.host_plugins, &state.emitter, &state.db, folder.id)
+            .await
+            .unwrap();
+        reopen_folder_with_plugins(&state.host_plugins, &state.emitter, &state.db, folder.id)
+            .await
+            .unwrap();
+        let archive =
+            || remove_folder_from_history_core(&state.emitter, &state.db, folder.path.clone());
+        let (first, second) = tokio::join!(archive(), archive());
+        first.unwrap();
+        second.unwrap();
+        assert!(
+            crate::db::service::folder_service::get_folder_by_id(&state.db.conn, folder.id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(real.is_dir());
+        assert_eq!(open().await.unwrap().id, folder.id);
+
+        let mut counts = std::collections::BTreeMap::new();
+        let observe = async {
+            while counts.values().sum::<usize>() < 7 {
+                let event = events.recv().await.unwrap();
+                if event.channel == EVENT_CHANNEL {
+                    assert_eq!(event.payload["pluginId"], EXAMPLE_ID);
+                    assert_eq!(event.payload["folderId"], folder.id);
+                    let name = event.payload["event"].as_str().unwrap();
+                    if matches!(name, "workspace.create.after" | "workspace.archive.after") {
+                        assert_eq!(event.payload["data"]["path"], folder.path);
+                    }
+                    *counts.entry(name.to_owned()).or_default() += 1;
+                }
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(3), observe)
+            .await
+            .unwrap();
+        assert_eq!(
+            counts,
+            std::collections::BTreeMap::from([
+                ("workspace.archive.after".to_owned(), 1),
+                ("workspace.close.after".to_owned(), 1),
+                ("workspace.create.after".to_owned(), 1),
+                ("workspace.open.after".to_owned(), 4),
+            ])
         );
     }
 
