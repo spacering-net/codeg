@@ -65,55 +65,6 @@ pub(crate) struct ModelToolOffers {
     tools: BTreeMap<String, ModelTool>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::host_plugins::Manifest;
-
-    #[test]
-    fn validates_model_tools_with_object_rpc_contracts() {
-        let source = include_str!("../../../examples/plugins/model-greeting/codeg-plugin.json");
-        let manifest: Value = serde_json::from_str(source).unwrap();
-        let parsed = Manifest::parse(source).unwrap();
-        assert_eq!(
-            serde_json::to_value(parsed).unwrap()["contributes"]["modelTools"],
-            manifest["contributes"]["modelTools"]
-        );
-        for (field, value) in [
-            ("id", json!("other.greet")),
-            ("id", json!("x".repeat(33))),
-            ("description", json!("")),
-            ("method", json!("not-declared")),
-        ] {
-            let mut invalid = manifest.clone();
-            invalid["contributes"]["modelTools"][0][field] = value;
-            assert!(Manifest::parse(&invalid.to_string()).is_err(), "{field}");
-        }
-        let mut duplicate = manifest.clone();
-        let tool = duplicate["contributes"]["modelTools"][0].clone();
-        duplicate["contributes"]["modelTools"]
-            .as_array_mut()
-            .unwrap()
-            .push(tool);
-        assert!(Manifest::parse(&duplicate.to_string()).is_err());
-
-        let mut without_contract = manifest.clone();
-        without_contract["server"]
-            .as_object_mut()
-            .unwrap()
-            .remove("rpc");
-        assert!(Manifest::parse(&without_contract.to_string()).is_err());
-
-        let mut string_input = manifest;
-        string_input["server"]["rpc"]["greet"]["input"] = json!({ "type": "string" });
-        assert!(Manifest::parse(&string_input.to_string()).is_err());
-        assert_ne!(
-            tool_name("test.one", "greet"),
-            tool_name("test.two", "greet")
-        );
-    }
-}
-
 impl ModelToolOffers {
     pub(crate) fn new(host: &Arc<HostPlugins>) -> Option<Self> {
         let guard = host.state.lock().expect("host plugin state lock");
@@ -184,5 +135,54 @@ impl ModelToolOffers {
                 .ok_or_else(plugin_not_found)?
         };
         self.host.invoke(invocation, input).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host_plugins::Manifest;
+
+    #[test]
+    fn validates_model_tools_with_object_rpc_contracts() {
+        let source = include_str!("../../../examples/plugins/model-greeting/codeg-plugin.json");
+        let manifest: Value = serde_json::from_str(source).unwrap();
+        let parsed = Manifest::parse(source).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["contributes"]["modelTools"],
+            manifest["contributes"]["modelTools"]
+        );
+        for (field, value) in [
+            ("id", json!("other.greet")),
+            ("id", json!("x".repeat(33))),
+            ("description", json!("")),
+            ("method", json!("not-declared")),
+        ] {
+            let mut invalid = manifest.clone();
+            invalid["contributes"]["modelTools"][0][field] = value;
+            assert!(Manifest::parse(&invalid.to_string()).is_err(), "{field}");
+        }
+        let mut duplicate = manifest.clone();
+        let tool = duplicate["contributes"]["modelTools"][0].clone();
+        duplicate["contributes"]["modelTools"]
+            .as_array_mut()
+            .unwrap()
+            .push(tool);
+        assert!(Manifest::parse(&duplicate.to_string()).is_err());
+
+        let mut without_contract = manifest.clone();
+        without_contract["server"]
+            .as_object_mut()
+            .unwrap()
+            .remove("rpc");
+        assert!(Manifest::parse(&without_contract.to_string()).is_err());
+
+        let mut string_input = manifest;
+        string_input["server"]["rpc"]["greet"]["input"] = json!({ "type": "string" });
+        assert!(Manifest::parse(&string_input.to_string()).is_err());
+        assert_ne!(
+            tool_name("test.one", "greet"),
+            tool_name("test.two", "greet")
+        );
     }
 }
