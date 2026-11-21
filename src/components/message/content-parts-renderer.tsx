@@ -24,6 +24,10 @@ import { useChatMotion } from "@/hooks/use-chat-motion"
 import { JsonRenderScope } from "@/components/ai-elements/json-render-pre"
 import { ActivityTimeline } from "./activity/activity-timeline"
 import type { ActivityFoot } from "./activity/timeline-foot"
+import {
+  PluginTimelineReplacementCards,
+  useTransformedAssistantParts,
+} from "./plugin-timeline-transform"
 import { CodexVisualizeCard } from "./codex-visualize-card"
 import {
   ContextCompactionCard,
@@ -248,6 +252,8 @@ interface ContentPartsRendererProps {
   parts: AdaptedContentPart[]
   role?: MessageRole
   isStreaming?: boolean
+  /** Skip plugin timeline transforms when an ancestor turn component already ran them. */
+  skipPluginTransform?: boolean
 }
 
 /**
@@ -298,6 +304,13 @@ function renderPart(
     case "turn-error":
       return (
         <TurnErrorPart key={`turn-error-${keyId}`} message={part.message} />
+      )
+    case "plugin-timeline-replacement":
+      return (
+        <PluginTimelineReplacementCards
+          key={`plugin-replace-${part.scopeKey}-${part.conversationId ?? "draft"}-${part.pluginId}-${part.transformerId}-${part.sourceItemId}`}
+          part={part}
+        />
       )
     default:
       return null
@@ -354,14 +367,19 @@ export const ActivityParts = memo(function ActivityParts({
 const AssistantActivity = memo(function AssistantActivity({
   parts,
   isStreaming,
+  skipPluginTransform = false,
 }: {
   parts: AdaptedContentPart[]
   isStreaming: boolean
+  skipPluginTransform?: boolean
 }) {
   const render = useAssistantRenderPart(isStreaming)
+  const transformedParts = useTransformedAssistantParts(parts, isStreaming, {
+    skip: skipPluginTransform,
+  })
   const model = useMemo(
-    () => buildActivity(parts, { isStreaming }),
-    [parts, isStreaming]
+    () => buildActivity(transformedParts, { isStreaming }),
+    [transformedParts, isStreaming]
   )
   return (
     <div className="space-y-4">
@@ -387,11 +405,18 @@ export const ContentPartsRenderer = memo(function ContentPartsRenderer({
   parts,
   role,
   isStreaming = false,
+  skipPluginTransform = false,
 }: ContentPartsRendererProps) {
   // Anything the agent produced is drawn as its activity. A "tool" turn (a
   // viewer that passes the transcript's roles through) is agent output too.
   if (role !== "user" && role !== "system") {
-    return <AssistantActivity parts={parts} isStreaming={isStreaming} />
+    return (
+      <AssistantActivity
+        parts={parts}
+        isStreaming={isStreaming}
+        skipPluginTransform={skipPluginTransform}
+      />
+    )
   }
   return (
     <div className="space-y-4">

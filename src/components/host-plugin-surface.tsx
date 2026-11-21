@@ -34,7 +34,7 @@ export type SurfaceContext =
       kind: string
       version: number
       itemId: string
-      conversationId: number
+      conversationId: number | null
       data: unknown
       updatedAt?: string
     }
@@ -322,7 +322,7 @@ function PluginFrame({
                     kind,
                     version,
                     itemId,
-                    conversationId,
+                    conversationId: conversationId ?? null,
                     data: dataJson !== undefined ? JSON.parse(dataJson) : null,
                     locale,
                   }

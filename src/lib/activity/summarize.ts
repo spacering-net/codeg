@@ -140,6 +140,13 @@ export function summarizeActivity(steps: ActivityStep[]): ActivitySummary {
       running = true
       return
     }
+    if (step.type === "plugin-replacement") {
+      if (step.part.sourceType === "tool_call") {
+        stepCount += 1
+        if (step.part.sourceStatus === "running") running = true
+      }
+      return
+    }
     if (step.type !== "tool") return
 
     const { tool, part } = step

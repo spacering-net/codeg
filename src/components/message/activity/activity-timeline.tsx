@@ -10,6 +10,7 @@ import {
   type RefObject,
 } from "react"
 import { useTranslations } from "next-intl"
+import { PlugIcon } from "lucide-react"
 
 import type { AdaptedContentPart } from "@/lib/adapters/ai-elements-adapter"
 import { hasVisibleAnswer, rowIdentity } from "@/lib/activity/build-activity"
@@ -124,6 +125,7 @@ function estimateItemHeight(
     case "plan":
       return 6 * rem
     case "image":
+    case "plugin-replacement":
       return 12 * rem
     case "goal":
       return 4 * rem
@@ -435,6 +437,17 @@ function StepView({ step, tail }: { step: ActivityStep; tail: boolean }) {
               })
             }
           />
+        </HostedRow>
+      )
+    case "plugin-replacement":
+      return (
+        <HostedRow
+          stepKey={step.key}
+          icon={PlugIcon}
+          status={step.part.sourceStatus ?? "succeeded"}
+          kindLabel={step.part.rendererTitle}
+        >
+          {renderPart(step.part, step.key)}
         </HostedRow>
       )
   }

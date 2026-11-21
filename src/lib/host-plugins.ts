@@ -1,6 +1,13 @@
 "use client"
 
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import {
   parsePluginThemePalette,
   type PluginThemePalette,
@@ -13,8 +20,95 @@ export type PluginTextTranslations = Record<string, string>
 export const MAX_PLUGIN_SCREENS = 16
 export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
 export const MAX_PLUGIN_TIMELINE_RENDERERS = 16
+export const MAX_PLUGIN_TIMELINE_TRANSFORMERS = 16
+export const MAX_TIMELINE_TRANSFORM_REPLACEMENTS = 4
+export const MAX_TIMELINE_TRANSFORM_TOOL_NAMES = 16
+export const MAX_TIMELINE_TRANSFORM_TOOL_NAME_BYTES = 128
+export const MAX_TIMELINE_TRANSFORM_ITEM_BYTES = 64 * 1024
 
 export type PluginSidebarItemPlacement = "header" | "footer"
+
+export type TimelineSourceType = "tool_call" | "assistant_message"
+
+export type TimelineTransformPhase = "streaming" | "complete"
+
+export type TimelineTransformer = {
+  id: string
+  rendererKind: string
+  rendererVersion: number
+  method: string
+} & (
+  | {
+      itemType: "tool_call"
+      toolNames?: string[]
+    }
+  | {
+      itemType: "assistant_message"
+      toolNames?: never
+    }
+)
+
+export interface ResolvedPluginTimelineTransformer {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  itemType: TimelineSourceType
+  toolNames?: string[]
+  rendererKind: string
+  rendererVersion: number
+  rendererTitle: string
+  method: string
+}
+
+export interface TimelineSourceItem {
+  id: string
+  toolName?: string
+  status?: string
+  rawInput?: unknown
+  rawOutput?: unknown
+  text?: string
+}
+
+export interface TimelineTransformRequest {
+  pluginId: string
+  transformerId: string
+  itemType: TimelineSourceType
+  phase: TimelineTransformPhase
+  conversationId?: number | null
+  locale?: string
+  item: TimelineSourceItem
+}
+
+export interface TimelineReplacement {
+  id?: string
+  kind: string
+  version: number
+  data: unknown
+}
+
+export type TimelineTransformResult =
+  | { action: "keep" }
+  | { action: "omit" }
+  | { action: "replace"; items: TimelineReplacement[] }
+
+export type PluginTimelineTransformOutcome =
+  | { action: "keep" }
+  | {
+      action: "omit"
+      pluginId: string
+      transformerId: string
+    }
+  | {
+      action: "replace"
+      pluginId: string
+      pluginName: string
+      transformerId: string
+      rendererKind: string
+      rendererVersion: number
+      rendererTitle: string
+      items: TimelineReplacement[]
+    }
 
 export interface PluginTimelineRendererContribution {
   kind: string
@@ -207,6 +301,7 @@ export interface InstalledPlugin {
       screens?: PluginScreenContribution[]
       sidebarItems?: PluginSidebarItemContribution[]
       timelineRenderers?: PluginTimelineRendererContribution[]
+      timelineTransformers?: TimelineTransformer[]
     }
   }
 }
@@ -668,6 +763,13 @@ export function pluginTimelineRendererKey(
   return `${pluginId}:${kind}@${version}`
 }
 
+export function pluginTimelineTransformerKey(
+  pluginId: string,
+  transformerId: string
+) {
+  return `${pluginId}:${transformerId}`
+}
+
 export function resolvePluginHostScope(
   search: string,
   activeRemoteId: number | null
@@ -1081,6 +1183,609 @@ export function resolvePluginTimelineRenderer(
       (renderer) => renderer.kind === kind && renderer.version === version
     ) ?? null
   )
+}
+
+const PLUGIN_TIMELINE_SLUG_RE = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/
+
+function hasControlChars(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i)
+    if (code <= 0x1f || code === 0x7f) return true
+  }
+  return false
+}
+
+function validTimelinePlainText(
+  value: unknown,
+  maxBytes: number
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    !hasControlChars(value) &&
+    utf8Encoder.encode(value).byteLength <= maxBytes
+  )
+}
+
+function validTimelineSlug(value: unknown): value is string {
+  return typeof value === "string" && PLUGIN_TIMELINE_SLUG_RE.test(value)
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+export function selectPluginTimelineTransformers(
+  plugins: readonly InstalledPlugin[] | undefined,
+  itemType?: TimelineSourceType,
+  toolName?: string,
+  locale?: string
+): ResolvedPluginTimelineTransformer[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginTimelineTransformer[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (
+      !plugin.enabled ||
+      !plugin.manifest.server?.entry?.trim() ||
+      !plugin.manifest.client?.entry?.trim()
+    ) {
+      continue
+    }
+    const transformers = plugin.manifest.contributes?.timelineTransformers
+    if (!transformers?.length) continue
+    const renderers = resolvePluginTimelineRenderersForPlugin(plugin, locale)
+    if (renderers.length === 0) continue
+    const rendererByPair = new Map(
+      renderers.map((renderer) => [
+        `${renderer.kind}@${renderer.version}`,
+        renderer,
+      ])
+    )
+    const serverMethods = new Set(plugin.manifest.server.methods ?? [])
+    const seenIds = new Set<string>()
+    let pluginValidCount = 0
+
+    for (const transformer of transformers) {
+      if (pluginValidCount >= MAX_PLUGIN_TIMELINE_TRANSFORMERS) break
+      if (!validTimelineSlug(transformer.id) || seenIds.has(transformer.id)) {
+        continue
+      }
+      if (
+        transformer.itemType !== "tool_call" &&
+        transformer.itemType !== "assistant_message"
+      ) {
+        continue
+      }
+      if (
+        typeof transformer.method !== "string" ||
+        !serverMethods.has(transformer.method)
+      ) {
+        continue
+      }
+      if (
+        typeof transformer.rendererKind !== "string" ||
+        typeof transformer.rendererVersion !== "number" ||
+        !Number.isSafeInteger(transformer.rendererVersion) ||
+        transformer.rendererVersion < 1
+      ) {
+        continue
+      }
+      const renderer = rendererByPair.get(
+        `${transformer.rendererKind}@${transformer.rendererVersion}`
+      )
+      if (!renderer) continue
+
+      let validToolNames: string[] | undefined
+      const rawToolNames = (transformer as { toolNames?: unknown }).toolNames
+      if (rawToolNames !== undefined) {
+        if (
+          transformer.itemType !== "tool_call" ||
+          !Array.isArray(rawToolNames)
+        ) {
+          continue
+        }
+        if (
+          rawToolNames.length === 0 ||
+          rawToolNames.length > MAX_TIMELINE_TRANSFORM_TOOL_NAMES
+        ) {
+          continue
+        }
+        const uniqueToolNames = new Set<string>()
+        let allNamesValid = true
+        for (const name of rawToolNames) {
+          if (
+            !validTimelinePlainText(
+              name,
+              MAX_TIMELINE_TRANSFORM_TOOL_NAME_BYTES
+            ) ||
+            uniqueToolNames.has(name)
+          ) {
+            allNamesValid = false
+            break
+          }
+          uniqueToolNames.add(name)
+        }
+        if (!allNamesValid) continue
+        validToolNames = [...uniqueToolNames]
+      }
+
+      seenIds.add(transformer.id)
+      pluginValidCount += 1
+
+      if (itemType !== undefined && transformer.itemType !== itemType) {
+        continue
+      }
+      if (itemType === "tool_call" && validToolNames) {
+        if (
+          typeof toolName !== "string" ||
+          !validToolNames.includes(toolName)
+        ) {
+          continue
+        }
+      }
+
+      items.push({
+        key: pluginTimelineTransformerKey(plugin.manifest.id, transformer.id),
+        pluginId: plugin.manifest.id,
+        pluginName: renderer.pluginName,
+        id: transformer.id,
+        itemType: transformer.itemType,
+        ...(validToolNames ? { toolNames: validToolNames } : {}),
+        rendererKind: renderer.kind,
+        rendererVersion: renderer.version,
+        rendererTitle: renderer.title,
+        method: transformer.method,
+      })
+    }
+  }
+  return items
+}
+
+export function validateTimelineTransformResult(
+  raw: unknown,
+  expectedKind: string,
+  expectedVersion: number
+): TimelineTransformResult {
+  if (raw === null || raw === undefined) {
+    return { action: "keep" }
+  }
+  if (!isPlainRecord(raw)) {
+    throw new Error("Invalid timeline transform result")
+  }
+  const keys = Object.keys(raw)
+  const action = raw.action
+  if (action === "keep" || action === "omit") {
+    if (keys.length !== 1) {
+      throw new Error("Unexpected fields in timeline transform result")
+    }
+    return { action }
+  }
+  if (action !== "replace") {
+    throw new Error("Unsupported timeline transform action")
+  }
+  if (keys.some((key) => key !== "action" && key !== "items")) {
+    throw new Error("Unexpected fields in timeline transform replacement")
+  }
+  const rawItems = raw.items
+  if (
+    !Array.isArray(rawItems) ||
+    rawItems.length === 0 ||
+    rawItems.length > MAX_TIMELINE_TRANSFORM_REPLACEMENTS
+  ) {
+    throw new Error("Timeline transform replace requires 1 to 4 items")
+  }
+  const seenIds = new Set<string>()
+  const validated: TimelineReplacement[] = []
+  for (const entry of rawItems) {
+    if (!isPlainRecord(entry)) {
+      throw new Error("Timeline transform replacement item must be an object")
+    }
+    for (const key of Object.keys(entry)) {
+      if (
+        key !== "id" &&
+        key !== "kind" &&
+        key !== "version" &&
+        key !== "data"
+      ) {
+        throw new Error("Unexpected field in timeline replacement item")
+      }
+    }
+    if (entry.kind !== expectedKind || entry.version !== expectedVersion) {
+      throw new Error("Timeline replacement renderer kind or version mismatch")
+    }
+    let id: string | undefined
+    if (entry.id !== undefined) {
+      if (!validTimelineSlug(entry.id) || seenIds.has(entry.id)) {
+        throw new Error("Invalid or duplicate timeline replacement item ID")
+      }
+      seenIds.add(entry.id)
+      id = entry.id
+    }
+    if (!("data" in entry) || entry.data === undefined) {
+      throw new Error("Timeline replacement item requires data")
+    }
+    let serialized: string
+    try {
+      serialized = JSON.stringify(entry.data)
+    } catch {
+      throw new Error("Timeline replacement item data is not JSON-serializable")
+    }
+    if (
+      typeof serialized !== "string" ||
+      utf8Encoder.encode(serialized).byteLength >
+        MAX_TIMELINE_TRANSFORM_ITEM_BYTES
+    ) {
+      throw new Error("Timeline replacement item data exceeds 64 KiB")
+    }
+    validated.push({
+      ...(id !== undefined ? { id } : {}),
+      kind: expectedKind,
+      version: expectedVersion,
+      data: entry.data,
+    })
+  }
+  return { action: "replace", items: validated }
+}
+
+function truncateUtf8(
+  value: string,
+  maxBytes: number,
+  keep: "head" | "tail"
+): string {
+  if (maxBytes <= 0) return ""
+  if (utf8Encoder.encode(value).byteLength <= maxBytes) return value
+  let low = 0
+  let high = value.length
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2)
+    const slice =
+      keep === "tail" ? value.slice(value.length - mid) : value.slice(0, mid)
+    if (utf8Encoder.encode(slice).byteLength <= maxBytes) {
+      low = mid
+    } else {
+      high = mid - 1
+    }
+  }
+  return keep === "tail" ? value.slice(value.length - low) : value.slice(0, low)
+}
+
+function serializedUtf8Bytes(value: unknown): number | null {
+  try {
+    const json = JSON.stringify(value)
+    if (typeof json !== "string") return null
+    return utf8Encoder.encode(json).byteLength
+  } catch {
+    return null
+  }
+}
+
+export function prepareTimelineTransformItem(
+  item: TimelineSourceItem
+): TimelineSourceItem | null {
+  if (!validTimelinePlainText(item.id, MAX_TIMELINE_TRANSFORM_ITEM_BYTES)) {
+    return null
+  }
+  const cleaned: TimelineSourceItem = { id: item.id }
+  if (item.toolName !== undefined) cleaned.toolName = item.toolName
+  if (item.status !== undefined) cleaned.status = item.status
+  if (item.rawInput !== undefined) cleaned.rawInput = item.rawInput
+  if (item.rawOutput !== undefined) cleaned.rawOutput = item.rawOutput
+  if (item.text !== undefined) cleaned.text = item.text
+
+  let size = serializedUtf8Bytes(cleaned)
+  if (size !== null && size <= MAX_TIMELINE_TRANSFORM_ITEM_BYTES) {
+    return cleaned
+  }
+
+  // Fit oversized payloads within the 64 KiB wire cap, keeping the tail of
+  // command output (where test summaries appear) and the head of prose text.
+  const budget = MAX_TIMELINE_TRANSFORM_ITEM_BYTES - 1024
+  const trimmed: TimelineSourceItem = { id: cleaned.id }
+  if (cleaned.toolName !== undefined) trimmed.toolName = cleaned.toolName
+  if (cleaned.status !== undefined) trimmed.status = cleaned.status
+  if (typeof cleaned.rawOutput === "string") {
+    trimmed.rawOutput = truncateUtf8(
+      cleaned.rawOutput,
+      Math.floor(budget * 0.75),
+      "tail"
+    )
+  } else if (cleaned.rawOutput !== undefined) {
+    const outputSize = serializedUtf8Bytes(cleaned.rawOutput)
+    if (outputSize !== null && outputSize <= Math.floor(budget * 0.75)) {
+      trimmed.rawOutput = cleaned.rawOutput
+    }
+  }
+  if (typeof cleaned.text === "string") {
+    trimmed.text = truncateUtf8(cleaned.text, Math.floor(budget * 0.75), "head")
+  }
+  if (cleaned.rawInput !== undefined) {
+    const withInput = { ...trimmed, rawInput: cleaned.rawInput }
+    const withInputSize = serializedUtf8Bytes(withInput)
+    if (
+      withInputSize !== null &&
+      withInputSize <= MAX_TIMELINE_TRANSFORM_ITEM_BYTES
+    ) {
+      trimmed.rawInput = cleaned.rawInput
+    }
+  }
+  size = serializedUtf8Bytes(trimmed)
+  if (size === null || size > MAX_TIMELINE_TRANSFORM_ITEM_BYTES) {
+    return null
+  }
+  return trimmed
+}
+
+export interface RunPluginTimelineTransformsOptions {
+  transport: Transport
+  transformers: readonly ResolvedPluginTimelineTransformer[]
+  itemType: TimelineSourceType
+  phase: TimelineTransformPhase
+  conversationId: number | null
+  locale?: string
+  item: TimelineSourceItem
+  isActive: () => boolean
+}
+
+export async function runPluginTimelineTransforms({
+  transport,
+  transformers,
+  itemType,
+  phase,
+  conversationId,
+  locale,
+  item,
+  isActive,
+}: RunPluginTimelineTransformsOptions): Promise<{
+  outcome: PluginTimelineTransformOutcome
+  error?: unknown
+} | null> {
+  if (transformers.length === 0 || typeof transport.call !== "function") {
+    return { outcome: { action: "keep" } }
+  }
+  const wireItem = prepareTimelineTransformItem(item)
+  if (!wireItem) {
+    return { outcome: { action: "keep" } }
+  }
+  const normalizedLocale =
+    locale && validTimelinePlainText(locale, 128) ? locale : undefined
+  let lastError: unknown
+
+  for (const transformer of transformers) {
+    if (!isActive() || !isCurrentReadyHostTransport(transport)) {
+      return null
+    }
+    try {
+      const request: TimelineTransformRequest = {
+        pluginId: transformer.pluginId,
+        transformerId: transformer.id,
+        itemType,
+        phase,
+        ...(conversationId != null ? { conversationId } : {}),
+        ...(normalizedLocale ? { locale: normalizedLocale } : {}),
+        item: wireItem,
+      }
+      const raw = await transport.call<unknown>(
+        "host_plugins_timeline_transform",
+        { ...request }
+      )
+      if (!isActive() || !isCurrentReadyHostTransport(transport)) {
+        return null
+      }
+      const validated = validateTimelineTransformResult(
+        raw,
+        transformer.rendererKind,
+        transformer.rendererVersion
+      )
+      if (validated.action === "omit") {
+        return {
+          outcome: {
+            action: "omit",
+            pluginId: transformer.pluginId,
+            transformerId: transformer.id,
+          },
+        }
+      }
+      if (validated.action === "replace") {
+        return {
+          outcome: {
+            action: "replace",
+            pluginId: transformer.pluginId,
+            pluginName: transformer.pluginName,
+            transformerId: transformer.id,
+            rendererKind: transformer.rendererKind,
+            rendererVersion: transformer.rendererVersion,
+            rendererTitle: transformer.rendererTitle,
+            items: validated.items,
+          },
+        }
+      }
+    } catch (error: unknown) {
+      if (!isActive() || !isCurrentReadyHostTransport(transport)) {
+        return null
+      }
+      lastError = error
+    }
+  }
+
+  return {
+    outcome: { action: "keep" },
+    ...(lastError !== undefined ? { error: lastError } : {}),
+  }
+}
+
+export interface UsePluginTimelineTransformOptions {
+  enabled?: boolean
+  plugins: readonly InstalledPlugin[] | undefined
+  transport: Transport | null
+  scopeKey: string
+  itemType: TimelineSourceType
+  phase: TimelineTransformPhase
+  conversationId: number | null
+  locale?: string
+  item: TimelineSourceItem | null
+  streamingDebounceMs?: number
+}
+
+const KEEP_OUTCOME: PluginTimelineTransformOutcome = { action: "keep" }
+
+export function usePluginTimelineTransform({
+  enabled = true,
+  plugins,
+  transport,
+  scopeKey,
+  itemType,
+  phase,
+  conversationId,
+  locale,
+  item,
+  streamingDebounceMs = 120,
+}: UsePluginTimelineTransformOptions): {
+  outcome: PluginTimelineTransformOutcome
+  error?: unknown
+} {
+  const matchingTransformers = useMemo(
+    () =>
+      enabled && item
+        ? selectPluginTimelineTransformers(
+            plugins,
+            itemType,
+            item.toolName,
+            locale
+          )
+        : [],
+    [enabled, item, itemType, locale, plugins]
+  )
+  const transformerSignature = useMemo(
+    () =>
+      matchingTransformers
+        .map(
+          (t) =>
+            `${t.key}:${t.rendererKind}@${t.rendererVersion}:${t.method}:${t.rendererTitle}`
+        )
+        .join("|"),
+    [matchingTransformers]
+  )
+  const wireItem = useMemo(
+    () => (item ? prepareTimelineTransformItem(item) : null),
+    [item]
+  )
+  const itemJson = useMemo(
+    () => (wireItem ? JSON.stringify(wireItem) : ""),
+    [wireItem]
+  )
+  const snapshotKey =
+    enabled && transport && wireItem && matchingTransformers.length > 0
+      ? `${scopeKey}|${conversationId ?? "draft"}|${itemType}|${phase}|${locale ?? ""}|${transformerSignature}|${itemJson}`
+      : ""
+
+  const [snapshot, setSnapshot] = useState<{
+    transport: Transport
+    scopeKey: string
+    conversationId: number | null
+    sourceItemId: string
+    outcome: PluginTimelineTransformOutcome
+    error?: unknown
+  }>()
+  const requestSeqRef = useRef(0)
+
+  useEffect(() => {
+    if (
+      !enabled ||
+      !transport ||
+      !wireItem ||
+      matchingTransformers.length === 0 ||
+      !snapshotKey
+    ) {
+      return
+    }
+    let active = true
+    const seq = ++requestSeqRef.current
+    const isCurrent = () => active && requestSeqRef.current === seq
+
+    const execute = () => {
+      void runPluginTimelineTransforms({
+        transport,
+        transformers: matchingTransformers,
+        itemType,
+        phase,
+        conversationId,
+        locale,
+        item: wireItem,
+        isActive: isCurrent,
+      }).then((result) => {
+        if (!result || !isCurrent()) return
+        setSnapshot({
+          transport,
+          scopeKey,
+          conversationId,
+          sourceItemId: wireItem.id,
+          outcome: result.outcome,
+          error: result.error,
+        })
+      })
+    }
+
+    if (phase === "streaming" && streamingDebounceMs > 0) {
+      const timer = setTimeout(execute, streamingDebounceMs)
+      return () => {
+        active = false
+        clearTimeout(timer)
+      }
+    }
+    execute()
+    return () => {
+      active = false
+    }
+  }, [
+    conversationId,
+    enabled,
+    itemType,
+    locale,
+    matchingTransformers,
+    phase,
+    scopeKey,
+    snapshotKey,
+    streamingDebounceMs,
+    transport,
+    wireItem,
+  ])
+
+  if (
+    !enabled ||
+    !transport ||
+    !wireItem ||
+    matchingTransformers.length === 0 ||
+    !snapshot ||
+    snapshot.transport !== transport ||
+    snapshot.scopeKey !== scopeKey ||
+    snapshot.conversationId !== conversationId ||
+    snapshot.sourceItemId !== wireItem.id
+  ) {
+    return { outcome: KEEP_OUTCOME }
+  }
+
+  if (
+    snapshot.outcome.action === "replace" ||
+    snapshot.outcome.action === "omit"
+  ) {
+    const owner = snapshot.outcome
+    const stillRegistered = matchingTransformers.some(
+      (transformer) =>
+        transformer.pluginId === owner.pluginId &&
+        transformer.id === owner.transformerId
+    )
+    if (!stillRegistered) {
+      return { outcome: KEEP_OUTCOME }
+    }
+  }
+
+  return {
+    outcome: snapshot.outcome,
+    ...(snapshot.error !== undefined ? { error: snapshot.error } : {}),
+  }
 }
 
 export function hostPluginSessionScopeKey(

@@ -152,6 +152,7 @@ import { useStickToBottomContext } from "use-stick-to-bottom"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { MarkdownImageProvider } from "@/components/ai-elements/markdown-local-image"
 import { PluginTimelineItems } from "@/components/conversations/plugin-timeline-items"
+import { PluginTimelineTransformProvider } from "./plugin-timeline-transform"
 
 interface MessageListViewProps {
   conversationId: number
@@ -2773,7 +2774,12 @@ export function MessageListView({
             openInDrawer={checksOpenInDrawer}
           >
             <KnownInvocationsProvider value={knownInvocations}>
-              {thread}
+              <PluginTimelineTransformProvider
+                conversationId={pluginConversationId}
+                enabled={isActive}
+              >
+                {thread}
+              </PluginTimelineTransformProvider>
             </KnownInvocationsProvider>
           </MessageChecksProvider>
         </DelegationStatusIndexProvider>

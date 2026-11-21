@@ -11,12 +11,19 @@ import {
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
   MAX_PLUGIN_TIMELINE_RENDERERS,
+  MAX_PLUGIN_TIMELINE_TRANSFORMERS,
+  MAX_TIMELINE_TRANSFORM_ITEM_BYTES,
+  MAX_TIMELINE_TRANSFORM_REPLACEMENTS,
+  MAX_TIMELINE_TRANSFORM_TOOL_NAMES,
+  MAX_TIMELINE_TRANSFORM_TOOL_NAME_BYTES,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
   pluginScreenKey,
   pluginSidebarItemKey,
   pluginThemeKey,
   pluginTimelineRendererKey,
+  pluginTimelineTransformerKey,
+  prepareTimelineTransformItem,
   resolvePluginHostScope,
   resolvePluginHostSurface,
   resolvePluginScreen,
@@ -27,7 +34,9 @@ import {
   selectPluginSidebarItems,
   selectPluginThemes,
   selectPluginTimelineRenderers,
+  selectPluginTimelineTransformers,
   validatePluginComposerInsertPayload,
+  validateTimelineTransformResult,
   type InstalledPlugin,
   type PluginTextTranslations,
 } from "@/lib/host-plugins"
@@ -1118,5 +1127,535 @@ describe("selectPluginTimelineRenderers & resolvePluginTimelineRenderer", () => 
         1
       )
     ).toBeNull()
+  })
+})
+
+describe("selectPluginTimelineTransformers, validateTimelineTransformResult & prepareTimelineTransformItem", () => {
+  it("loads, localizes, and filters the bundled tool-output-card example manifest", () => {
+    const manifestPath = resolve(
+      process.cwd(),
+      "examples/plugins/tool-output-card/codeg-plugin.json"
+    )
+    const manifest = JSON.parse(
+      readFileSync(manifestPath, "utf8")
+    ) as InstalledPlugin["manifest"]
+    const plugin: InstalledPlugin = { enabled: true, manifest }
+
+    expect(
+      selectPluginTimelineTransformers([plugin], "tool_call", "bash", "en")
+    ).toEqual([
+      {
+        key: pluginTimelineTransformerKey(
+          "codeg.tool-output-card",
+          "test-output"
+        ),
+        pluginId: "codeg.tool-output-card",
+        pluginName: "Tool Output Card",
+        id: "test-output",
+        itemType: "tool_call",
+        toolNames: ["test-runner", "bash", "Bash", "exec_command"],
+        rendererKind: "test-result",
+        rendererVersion: 1,
+        rendererTitle: "Test result",
+        method: "transform-tests",
+      },
+    ])
+
+    expect(
+      selectPluginTimelineTransformers([plugin], "tool_call", "Bash", "zh-CN")
+    ).toMatchObject([
+      {
+        pluginId: "codeg.tool-output-card",
+        rendererTitle: "测试结果",
+      },
+    ])
+
+    expect(
+      selectPluginTimelineTransformers(
+        [plugin],
+        "tool_call",
+        "exec_command",
+        "es"
+      )
+    ).toMatchObject([
+      {
+        rendererTitle: "Resultado de las pruebas",
+      },
+    ])
+
+    // Case-sensitive matching: "BASH" or unrelated tool names do not match.
+    expect(
+      selectPluginTimelineTransformers([plugin], "tool_call", "BASH", "en")
+    ).toEqual([])
+    expect(
+      selectPluginTimelineTransformers([plugin], "tool_call", "Read", "en")
+    ).toEqual([])
+    expect(
+      selectPluginTimelineTransformers([plugin], "tool_call", undefined, "en")
+    ).toEqual([])
+    expect(
+      selectPluginTimelineTransformers(
+        [plugin],
+        "assistant_message",
+        undefined,
+        "en"
+      )
+    ).toEqual([])
+  })
+
+  it("enforces enabled, server+client entries, same-plugin renderer & method, toolNames rules, and 16-item cap", () => {
+    expect(MAX_PLUGIN_TIMELINE_TRANSFORMERS).toBe(16)
+    expect(MAX_TIMELINE_TRANSFORM_REPLACEMENTS).toBe(4)
+    expect(MAX_TIMELINE_TRANSFORM_TOOL_NAMES).toBe(16)
+    expect(MAX_TIMELINE_TRANSFORM_TOOL_NAME_BYTES).toBe(128)
+
+    const disabledPlugin: InstalledPlugin = {
+      enabled: false,
+      manifest: {
+        id: "acme.disabled",
+        name: "Disabled",
+        version: "1.0.0",
+        server: { entry: "server.mjs", methods: ["tx"] },
+        client: { entry: "ui.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          timelineRenderers: [{ kind: "card", version: 1, title: "Card" }],
+          timelineTransformers: [
+            {
+              id: "t1",
+              itemType: "tool_call",
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx",
+            },
+          ],
+        },
+      },
+    }
+
+    const noServerPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.no-server",
+        name: "No Server",
+        version: "1.0.0",
+        client: { entry: "ui.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          timelineRenderers: [{ kind: "card", version: 1, title: "Card" }],
+          timelineTransformers: [
+            {
+              id: "t1",
+              itemType: "tool_call",
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx",
+            },
+          ],
+        },
+      },
+    }
+
+    const noClientPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.no-client",
+        name: "No Client",
+        version: "1.0.0",
+        server: { entry: "server.mjs", methods: ["tx"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          timelineRenderers: [{ kind: "card", version: 1, title: "Card" }],
+          timelineTransformers: [
+            {
+              id: "t1",
+              itemType: "tool_call",
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx",
+            },
+          ],
+        },
+      },
+    }
+
+    const otherPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.other",
+        name: "Other",
+        version: "1.0.0",
+        server: { entry: "server.mjs", methods: ["other-method"] },
+        client: { entry: "ui.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          timelineRenderers: [
+            { kind: "other-card", version: 1, title: "Other Card" },
+          ],
+        },
+      },
+    }
+
+    const mixedPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.mixed",
+        name: "Mixed",
+        version: "1.0.0",
+        server: { entry: "server.mjs", methods: ["tx-tool", "tx-msg"] },
+        client: { entry: "ui.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          timelineRenderers: [{ kind: "card", version: 1, title: "Card" }],
+          timelineTransformers: [
+            // Valid wildcard tool_call transformer
+            {
+              id: "all-tools",
+              itemType: "tool_call",
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx-tool",
+            },
+            // Duplicate ID ignored
+            {
+              id: "all-tools",
+              itemType: "tool_call",
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx-tool",
+            },
+            // Cross-plugin renderer rejected
+            {
+              id: "cross-renderer",
+              itemType: "tool_call",
+              rendererKind: "other-card",
+              rendererVersion: 1,
+              method: "tx-tool",
+            },
+            // Undeclared server method rejected
+            {
+              id: "bad-method",
+              itemType: "tool_call",
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "other-method",
+            },
+            // assistant_message with toolNames rejected
+            {
+              id: "bad-assistant",
+              itemType: "assistant_message",
+              toolNames: ["bash"],
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx-msg",
+            } as unknown as NonNullable<
+              InstalledPlugin["manifest"]["contributes"]["timelineTransformers"]
+            >[number],
+            // Empty toolNames rejected
+            {
+              id: "empty-names",
+              itemType: "tool_call",
+              toolNames: [],
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx-tool",
+            },
+            // Duplicate toolNames rejected
+            {
+              id: "dup-names",
+              itemType: "tool_call",
+              toolNames: ["bash", "bash"],
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx-tool",
+            },
+            // Control char or >128 bytes toolName rejected
+            {
+              id: "ctrl-name",
+              itemType: "tool_call",
+              toolNames: ["bad\nname"],
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx-tool",
+            },
+            {
+              id: "long-name",
+              itemType: "tool_call",
+              toolNames: ["a".repeat(129)],
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx-tool",
+            },
+            // Valid assistant_message transformer
+            {
+              id: "format-reply",
+              itemType: "assistant_message",
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx-msg",
+            },
+          ],
+        },
+      },
+    }
+
+    const plugins = [
+      disabledPlugin,
+      noServerPlugin,
+      noClientPlugin,
+      otherPlugin,
+      mixedPlugin,
+    ]
+    expect(
+      selectPluginTimelineTransformers(plugins, "tool_call", "any-tool")
+    ).toEqual([
+      {
+        key: "acme.mixed:all-tools",
+        pluginId: "acme.mixed",
+        pluginName: "Mixed",
+        id: "all-tools",
+        itemType: "tool_call",
+        rendererKind: "card",
+        rendererVersion: 1,
+        rendererTitle: "Card",
+        method: "tx-tool",
+      },
+    ])
+    expect(
+      selectPluginTimelineTransformers(plugins, "assistant_message")
+    ).toEqual([
+      {
+        key: "acme.mixed:format-reply",
+        pluginId: "acme.mixed",
+        pluginName: "Mixed",
+        id: "format-reply",
+        itemType: "assistant_message",
+        rendererKind: "card",
+        rendererVersion: 1,
+        rendererTitle: "Card",
+        method: "tx-msg",
+      },
+    ])
+
+    // 16-transformer cap per plugin is counted before itemType/toolName filtering
+    const cappedPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.capped",
+        name: "Capped",
+        version: "1.0.0",
+        server: { entry: "server.mjs", methods: ["tx"] },
+        client: { entry: "ui.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          timelineRenderers: [{ kind: "card", version: 1, title: "Card" }],
+          timelineTransformers: [
+            ...Array.from({ length: 16 }, (_, index) => ({
+              id: `tool-${index + 1}`,
+              itemType: "tool_call" as const,
+              toolNames: ["bash"],
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx",
+            })),
+            {
+              id: "assistant-17",
+              itemType: "assistant_message" as const,
+              rendererKind: "card",
+              rendererVersion: 1,
+              method: "tx",
+            },
+          ],
+        },
+      },
+    }
+
+    expect(
+      selectPluginTimelineTransformers([cappedPlugin], "tool_call", "bash")
+    ).toHaveLength(16)
+    expect(
+      selectPluginTimelineTransformers([cappedPlugin], "assistant_message")
+    ).toEqual([])
+  })
+
+  it("validates timeline transform results and rejects malformed outputs", () => {
+    expect(validateTimelineTransformResult(null, "test-result", 1)).toEqual({
+      action: "keep",
+    })
+    expect(
+      validateTimelineTransformResult(undefined, "test-result", 1)
+    ).toEqual({ action: "keep" })
+    expect(
+      validateTimelineTransformResult({ action: "keep" }, "test-result", 1)
+    ).toEqual({ action: "keep" })
+    expect(
+      validateTimelineTransformResult({ action: "omit" }, "test-result", 1)
+    ).toEqual({ action: "omit" })
+    expect(
+      validateTimelineTransformResult(
+        {
+          action: "replace",
+          items: [
+            {
+              id: "summary",
+              kind: "test-result",
+              version: 1,
+              data: { passed: 3, failed: 0 },
+            },
+            {
+              kind: "test-result",
+              version: 1,
+              data: { passed: 1, failed: 1 },
+            },
+          ],
+        },
+        "test-result",
+        1
+      )
+    ).toEqual({
+      action: "replace",
+      items: [
+        {
+          id: "summary",
+          kind: "test-result",
+          version: 1,
+          data: { passed: 3, failed: 0 },
+        },
+        {
+          kind: "test-result",
+          version: 1,
+          data: { passed: 1, failed: 1 },
+        },
+      ],
+    })
+
+    // Rejects unknown fields, empty/oversized replacement arrays, kind/version mismatch, duplicate IDs, >64 KiB data
+    expect(() =>
+      validateTimelineTransformResult(
+        { action: "keep", extra: true },
+        "test-result",
+        1
+      )
+    ).toThrow()
+    expect(() =>
+      validateTimelineTransformResult(
+        { action: "replace", items: [] },
+        "test-result",
+        1
+      )
+    ).toThrow()
+    expect(() =>
+      validateTimelineTransformResult(
+        {
+          action: "replace",
+          items: Array.from({ length: 5 }, (_, i) => ({
+            id: `item-${i}`,
+            kind: "test-result",
+            version: 1,
+            data: {},
+          })),
+        },
+        "test-result",
+        1
+      )
+    ).toThrow()
+    expect(() =>
+      validateTimelineTransformResult(
+        {
+          action: "replace",
+          items: [{ kind: "other-kind", version: 1, data: {} }],
+        },
+        "test-result",
+        1
+      )
+    ).toThrow()
+    expect(() =>
+      validateTimelineTransformResult(
+        {
+          action: "replace",
+          items: [{ kind: "test-result", version: 2, data: {} }],
+        },
+        "test-result",
+        1
+      )
+    ).toThrow()
+    expect(() =>
+      validateTimelineTransformResult(
+        {
+          action: "replace",
+          items: [
+            { id: "dup", kind: "test-result", version: 1, data: {} },
+            { id: "dup", kind: "test-result", version: 1, data: {} },
+          ],
+        },
+        "test-result",
+        1
+      )
+    ).toThrow()
+    expect(() =>
+      validateTimelineTransformResult(
+        {
+          action: "replace",
+          items: [{ id: "Bad ID", kind: "test-result", version: 1, data: {} }],
+        },
+        "test-result",
+        1
+      )
+    ).toThrow()
+    expect(() =>
+      validateTimelineTransformResult(
+        {
+          action: "replace",
+          items: [
+            {
+              kind: "test-result",
+              version: 1,
+              data: { blob: "x".repeat(MAX_TIMELINE_TRANSFORM_ITEM_BYTES) },
+            },
+          ],
+        },
+        "test-result",
+        1
+      )
+    ).toThrow()
+  })
+
+  it("prepares source items cleanly and preserves the tail of oversized tool output", () => {
+    expect(prepareTimelineTransformItem({ id: "   " })).toBeNull()
+    expect(prepareTimelineTransformItem({ id: "bad\nid" })).toBeNull()
+
+    const sparse = prepareTimelineTransformItem({
+      id: "call-1",
+      toolName: "bash",
+      rawOutput: undefined,
+    })
+    expect(sparse).toEqual({ id: "call-1", toolName: "bash" })
+    expect("rawOutput" in sparse!).toBe(false)
+
+    const tail = "test result: ok. 12 passed; 0 failed"
+    const oversized = `${"x".repeat(80_000)}\n${tail}`
+    const prepared = prepareTimelineTransformItem({
+      id: "call-big",
+      toolName: "bash",
+      rawOutput: oversized,
+    })
+    expect(prepared).not.toBeNull()
+    expect(typeof prepared?.rawOutput).toBe("string")
+    expect(prepared?.rawOutput as string).toContain(tail)
+    expect(
+      new TextEncoder().encode(JSON.stringify(prepared)).byteLength
+    ).toBeLessThanOrEqual(MAX_TIMELINE_TRANSFORM_ITEM_BYTES)
   })
 })

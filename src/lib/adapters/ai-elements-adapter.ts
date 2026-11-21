@@ -166,6 +166,27 @@ export type AdaptedProposedPlanPart = {
   isStreaming: boolean
 }
 
+export type AdaptedPluginTimelineReplacementPart = {
+  type: "plugin-timeline-replacement"
+  sourceItemId: string
+  sourceType: "tool_call" | "assistant_message"
+  sourceStatus?: "running" | "succeeded" | "failed"
+  pluginId: string
+  pluginName: string
+  transformerId: string
+  rendererKind: string
+  rendererVersion: number
+  rendererTitle: string
+  items: {
+    id?: string
+    kind: string
+    version: number
+    data: unknown
+  }[]
+  scopeKey: string
+  conversationId: number | null
+}
+
 export type AdaptedContentPart =
   | { type: "text"; text: string }
   | AdaptedToolCallPart
@@ -204,6 +225,7 @@ export type AdaptedContentPart =
   | AdaptedGeneratedImagePart
   | AdaptedPlanPart
   | AdaptedProposedPlanPart
+  | AdaptedPluginTimelineReplacementPart
   /**
    * The turn FAILED, in the agent's own words (`turn_error` block) — drawn as
    * one muted line closing the round, never as a reply.
@@ -2048,6 +2070,8 @@ export function isTurnAnswerPart(part: AdaptedContentPart): boolean {
     case "generated-image":
     case "turn-error":
       return true
+    case "plugin-timeline-replacement":
+      return part.sourceType === "assistant_message"
     case "reasoning":
     case "tool-call":
     case "tool-result":
