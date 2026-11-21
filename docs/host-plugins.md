@@ -212,7 +212,8 @@ The selection is saved per connected host. If the contribution is withdrawn,
 the sidebar returns to its conversation list.
 
 Install and enable [Focus Notes](../examples/plugins/focus-notes), then select
-it from the sidebar's view options. Use the form to save a note on that host.
+it from the sidebar's view options. Enter a note and select **Save note** to
+save it on that host.
 
 ### Insert text into the composer
 
