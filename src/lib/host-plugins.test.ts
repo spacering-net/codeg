@@ -10,10 +10,17 @@ import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
+  MAX_PLUGIN_SLASH_COMMANDS,
+  MAX_PLUGIN_SLASH_COMMAND_ARGS_BYTES,
+  MAX_PLUGIN_SLASH_COMMAND_MESSAGE_CHARS,
+  buildPluginSlashCommandInput,
   hostPluginSessionScopeKey,
+  matchPluginSlashCommandText,
+  parsePluginSlashCommandOutput,
   pluginClientSurfaceKey,
   pluginScreenKey,
   pluginSidebarItemKey,
+  pluginSlashCommandKey,
   pluginThemeKey,
   resolvePluginHostScope,
   resolvePluginHostSurface,
@@ -22,6 +29,7 @@ import {
   selectPluginClientSurfaces,
   selectPluginScreens,
   selectPluginSidebarItems,
+  selectPluginSlashCommands,
   selectPluginThemes,
   validatePluginComposerInsertPayload,
   type InstalledPlugin,
@@ -908,5 +916,375 @@ describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems
     ).not.toBeNull()
     expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
     expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
+  })
+})
+
+describe("scoped host plugin slash commands", () => {
+  const workspaceDraft = {
+    folderId: 7,
+    conversationId: null,
+    sessionKey: "draft-1",
+  }
+  const savedWorkspace = {
+    folderId: 7,
+    conversationId: 42,
+    sessionKey: "tab-1",
+  }
+  const savedFolderless = {
+    folderId: null,
+    conversationId: 99,
+    sessionKey: "chat-1",
+  }
+  const folderlessDraft = {
+    folderId: null,
+    conversationId: null,
+    sessionKey: "chat-draft",
+  }
+
+  it("selects enabled commands by scope, preserves stable catalog order, resolves collisions to first eligible, respects built-in reserved names, and caps at 16", () => {
+    const plugins: InstalledPlugin[] = [
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.first",
+          name: "First Plugin",
+          nameTranslations: { "zh-CN": "首个插件" },
+          version: "1.0.0",
+          server: { entry: "first.mjs", methods: ["run-first"] },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            slashCommands: [
+              {
+                name: "shared",
+                description: "First session shared",
+                descriptionTranslations: { "zh-CN": "首个会话共享命令" },
+                argumentHint: "[tag]",
+                scope: "session",
+                method: "run-first",
+              },
+              {
+                name: "built-in-cmd",
+                description: "Should yield to built-in",
+                scope: "workspace",
+                method: "run-first",
+              },
+              {
+                name: "undeclared",
+                description: "Missing method",
+                scope: "workspace",
+                method: "not-in-methods",
+              },
+              {
+                name: "BadUpper",
+                description: "Invalid name",
+                scope: "workspace",
+                method: "run-first",
+              },
+              {
+                name: "has.dot",
+                description: "Invalid dot",
+                scope: "workspace",
+                method: "run-first",
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.second",
+          name: "Second Plugin",
+          version: "1.0.0",
+          server: { entry: "second.mjs", methods: ["run-second"] },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            slashCommands: [
+              {
+                name: "shared",
+                description: "Second workspace shared",
+                scope: "workspace",
+                method: "run-second",
+              },
+              {
+                name: "ws-only",
+                description: "Workspace check",
+                argumentHint: "[label]",
+                scope: "workspace",
+                method: "run-second",
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: false,
+        manifest: {
+          id: "acme.disabled",
+          name: "Disabled",
+          version: "1.0.0",
+          server: { entry: "disabled.mjs", methods: ["run"] },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            slashCommands: [
+              {
+                name: "hidden",
+                description: "Disabled command",
+                scope: "workspace",
+                method: "run",
+              },
+            ],
+          },
+        },
+      },
+    ]
+
+    const reserved = new Set(["built-in-cmd"])
+
+    // Workspace draft: acme.first's session-only "shared" is ineligible, so
+    // acme.second's workspace "shared" becomes the first valid eligible entry.
+    expect(
+      selectPluginSlashCommands(plugins, workspaceDraft, "zh-CN", reserved)
+    ).toEqual([
+      {
+        key: pluginSlashCommandKey("acme.second", "shared"),
+        pluginId: "acme.second",
+        pluginName: "Second Plugin",
+        name: "shared",
+        description: "Second workspace shared",
+        scope: "workspace",
+        method: "run-second",
+      },
+      {
+        key: pluginSlashCommandKey("acme.second", "ws-only"),
+        pluginId: "acme.second",
+        pluginName: "Second Plugin",
+        name: "ws-only",
+        description: "Workspace check",
+        argumentHint: "[label]",
+        scope: "workspace",
+        method: "run-second",
+      },
+    ])
+
+    // Saved workspace: both are eligible, so catalog-first acme.first wins "shared".
+    expect(
+      selectPluginSlashCommands(plugins, savedWorkspace, "zh-CN", reserved)
+    ).toEqual([
+      {
+        key: pluginSlashCommandKey("acme.first", "shared"),
+        pluginId: "acme.first",
+        pluginName: "首个插件",
+        name: "shared",
+        description: "首个会话共享命令",
+        argumentHint: "[tag]",
+        scope: "session",
+        method: "run-first",
+      },
+      {
+        key: pluginSlashCommandKey("acme.second", "ws-only"),
+        pluginId: "acme.second",
+        pluginName: "Second Plugin",
+        name: "ws-only",
+        description: "Workspace check",
+        argumentHint: "[label]",
+        scope: "workspace",
+        method: "run-second",
+      },
+    ])
+
+    // Saved folderless chat: only session commands qualify.
+    expect(
+      selectPluginSlashCommands(plugins, savedFolderless, "en", reserved).map(
+        (cmd) => cmd.key
+      )
+    ).toEqual(["acme.first:shared"])
+
+    // Folderless draft: neither workspace nor session qualifies.
+    expect(
+      selectPluginSlashCommands(plugins, folderlessDraft, "en", reserved)
+    ).toEqual([])
+
+    // 16 commands max per plugin
+    const capped: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.capped",
+        name: "Capped",
+        version: "1.0.0",
+        server: { entry: "cap.mjs", methods: ["run"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          slashCommands: Array.from({ length: 20 }, (_, i) => ({
+            name: `cmd-${i + 1}`,
+            description: `Command ${i + 1}`,
+            scope: "workspace" as const,
+            method: "run",
+          })),
+        },
+      },
+    }
+    expect(MAX_PLUGIN_SLASH_COMMANDS).toBe(16)
+    expect(selectPluginSlashCommands([capped], workspaceDraft)).toHaveLength(16)
+  })
+
+  it("loads and resolves the bundled composer-commands example manifest", () => {
+    const manifestPath = resolve(
+      process.cwd(),
+      "examples/plugins/composer-commands/codeg-plugin.json"
+    )
+    const manifest = JSON.parse(
+      readFileSync(manifestPath, "utf8")
+    ) as InstalledPlugin["manifest"]
+    const installed: InstalledPlugin = { enabled: true, manifest }
+
+    expect(
+      selectPluginSlashCommands([installed], workspaceDraft, "zh-CN")
+    ).toEqual([
+      {
+        key: "codeg.composer-commands:workspace-check",
+        pluginId: "codeg.composer-commands",
+        pluginName: "Composer Commands",
+        name: "workspace-check",
+        description: "显示处理此命令的工作区",
+        argumentHint: "[label]",
+        scope: "workspace",
+        method: "show-context",
+      },
+    ])
+    expect(
+      selectPluginSlashCommands([installed], savedFolderless, "zh-CN")
+    ).toEqual([
+      {
+        key: "codeg.composer-commands:session-check",
+        pluginId: "codeg.composer-commands",
+        pluginName: "Composer Commands",
+        name: "session-check",
+        description: "显示处理此命令的会话",
+        argumentHint: "[label]",
+        scope: "session",
+        method: "show-context",
+      },
+    ])
+  })
+
+  it("matches exact plain-text commands, enforces 8 KiB UTF-8 args & scope payloads, and validates outputs", () => {
+    const commands = [
+      {
+        key: "p:workspace-check",
+        pluginId: "p",
+        pluginName: "Plugin",
+        name: "workspace-check",
+        description: "Check workspace",
+        scope: "workspace" as const,
+        method: "show-context",
+      },
+      {
+        key: "p:session-check",
+        pluginId: "p",
+        pluginName: "Plugin",
+        name: "session-check",
+        description: "Check session",
+        scope: "session" as const,
+        method: "show-context",
+      },
+    ]
+
+    expect(
+      matchPluginSlashCommandText(
+        "  /workspace-check   hello world  ",
+        commands
+      )
+    ).toEqual({ command: commands[0], args: "hello world" })
+    expect(matchPluginSlashCommandText("/workspace-check", commands)).toEqual({
+      command: commands[0],
+      args: "",
+    })
+    expect(
+      matchPluginSlashCommandText("/workspace-check-extra hi", commands)
+    ).toBeNull()
+    expect(
+      matchPluginSlashCommandText("hello /workspace-check", commands)
+    ).toBeNull()
+    expect(matchPluginSlashCommandText("/WORKSPACE-CHECK", commands)).toBeNull()
+
+    // Workspace command always sends conversationId: null even in saved workspace conversations
+    expect(
+      buildPluginSlashCommandInput(commands[0], "  hi  ", savedWorkspace)
+    ).toEqual({
+      ok: true,
+      input: {
+        name: "workspace-check",
+        args: "hi",
+        folderId: 7,
+        conversationId: null,
+      },
+    })
+    // Session command in folderless chat sends folderId: null
+    expect(
+      buildPluginSlashCommandInput(commands[1], "  hi  ", savedFolderless)
+    ).toEqual({
+      ok: true,
+      input: {
+        name: "session-check",
+        args: "hi",
+        folderId: null,
+        conversationId: 99,
+      },
+    })
+    // Session command in draft is out of scope
+    expect(
+      buildPluginSlashCommandInput(commands[1], "hi", workspaceDraft)
+    ).toEqual({ ok: false, reason: "outOfScope" })
+
+    // 8 KiB UTF-8 limit on trimmed args
+    expect(MAX_PLUGIN_SLASH_COMMAND_ARGS_BYTES).toBe(8 * 1024)
+    expect(
+      buildPluginSlashCommandInput(
+        commands[0],
+        "a".repeat(8 * 1024),
+        workspaceDraft
+      ).ok
+    ).toBe(true)
+    expect(
+      buildPluginSlashCommandInput(
+        commands[0],
+        "中".repeat(2731), // 8193 UTF-8 bytes (> 8192)
+        workspaceDraft
+      )
+    ).toEqual({ ok: false, reason: "argsTooLong" })
+
+    // Output validation
+    expect(parsePluginSlashCommandOutput(null)).toEqual({
+      ok: true,
+      message: null,
+    })
+    expect(
+      parsePluginSlashCommandOutput({ message: "  Workspace 7 — ok\r\n" })
+    ).toEqual({ ok: true, message: "Workspace 7 — ok" })
+    expect(parsePluginSlashCommandOutput({ message: "   " })).toEqual({
+      ok: false,
+    })
+    expect(parsePluginSlashCommandOutput({ message: "bad\0nul" })).toEqual({
+      ok: false,
+    })
+    expect(
+      parsePluginSlashCommandOutput({
+        message: "x".repeat(MAX_PLUGIN_SLASH_COMMAND_MESSAGE_CHARS + 1),
+      })
+    ).toEqual({ ok: false })
+    expect(
+      parsePluginSlashCommandOutput({ message: "ok", extra: true })
+    ).toEqual({ ok: false })
+    expect(parsePluginSlashCommandOutput("plain")).toEqual({ ok: false })
+    expect(parsePluginSlashCommandOutput(undefined)).toEqual({ ok: false })
   })
 })
