@@ -106,11 +106,14 @@ use crate::models::agent::AgentType;
 /// header.
 const AUTH_PROMPT_MARKER: &str = "Open the following link to authenticate the ACP server: ";
 
-/// The only redirect host the agent ever uses (`_LOOPBACK_HOST` in
-/// `credential_manager.py`, chosen there so the target "does not depend on
-/// IPv4/IPv6 name resolution"). Enforced rather than assumed — see the module
-/// docs on `finish`.
-const LOOPBACK_PREFIX: &str = "http://127.0.0.1:";
+/// Diagnostic line the Go CLI (1.5.x) emits right before invoking the OS
+/// browser opener. Filtered out of failure hints just like `AUTH_PROMPT_MARKER`.
+const CLI_AUTH_REDIRECT_MARKER: &str = "Opening browser for ACP sign-in ";
+
+/// The legacy Python server binds `127.0.0.1` while the Go CLI (1.5.x) binds
+/// `localhost`. Both (plus `[::1]`) are verified in [`is_loopback_redirect`]
+/// after parsing the authority so no non-loopback host is ever contacted.
+const LOOPBACK_PREFIX: &str = "http://";
 
 /// How long to wait for the child's `initialize` answer. The same 60 s the ACP
 /// probe path allows, and for the same reason: this binary is CPython inside a
@@ -565,13 +568,21 @@ async fn start_claimed(
     // CPython's block buffer for a piped stdout and never reaches us — see the
     // module docs. It is the whole reason this flow can see the link at all.
     sign_in_env.push(("PYTHONUNBUFFERED".to_string(), "1".to_string()));
-    // Point `webbrowser` at a no-op so it cannot do something worse than
-    // nothing. On a server with a TEXT browser installed (`lynx`, `w3m`,
-    // `links`) CPython picks a `GenericBrowser` and **`wait()`s on it**, so the
-    // agent would block on a terminal browser wired to the ACP pipes. An empty
-    // value is not an option: the spawn layer reads that as "remove the
-    // variable" and the search runs anyway.
-    if let Some(noop) = noop_browser() {
+    // Capture the authorization URL when the 1.5.x Go CLI invokes `open` /
+    // `xdg-open` (which carries its real client_id, PKCE code_challenge, and
+    // server-verified state), while also suppressing any desktop/text browser
+    // launch for both the Go CLI and legacy Python server.
+    let browser_shim = BrowserCaptureShim::create();
+    if let Some(shim) = browser_shim.as_ref() {
+        sign_in_env.push((
+            BROWSER_CAPTURE_FILE_ENV.to_string(),
+            shim.capture_file.to_string_lossy().into_owned(),
+        ));
+        sign_in_env.push((
+            "BROWSER".to_string(),
+            shim.browser_path.to_string_lossy().into_owned(),
+        ));
+    } else if let Some(noop) = noop_browser() {
         sign_in_env.push(("BROWSER".to_string(), noop));
     }
 
@@ -582,7 +593,13 @@ async fn start_claimed(
         url: mut url_rx,
         stderr: tail,
         scratch,
-    } = spawn_agent(runtime_env, sign_in_env).await?;
+    } = spawn_agent(
+        runtime_env,
+        sign_in_env,
+        browser_shim.as_ref().map(|shim| shim.bin_dir.as_path()),
+        browser_shim.as_ref().map(|shim| shim.capture_file.clone()),
+    )
+    .await?;
 
     // `initialize` first, and its answer awaited before `authenticate` goes
     // out. Not just protocol politeness: it keeps the URL `print` — which the
@@ -757,6 +774,8 @@ struct AgentChild {
 async fn spawn_agent(
     runtime_env: &BTreeMap<String, String>,
     extra_env: Vec<(String, String)>,
+    prepend_path_dir: Option<&std::path::Path>,
+    browser_capture_file: Option<PathBuf>,
 ) -> Result<AgentChild, AcpError> {
     let binary = resolve_binary()?;
     // Same per-launch temp isolation the session path gets, and for the same
@@ -770,6 +789,9 @@ async fn spawn_agent(
         scratch.as_ref().map(|s| s.path()),
     );
     env.extend(extra_env);
+    if let Some(dir) = prepend_path_dir {
+        prepend_dir_to_env_path(&mut env, dir);
+    }
 
     let mut command = crate::process::tokio_command(&binary);
     command
@@ -827,6 +849,12 @@ async fn spawn_agent(
 
     let (response_tx, responses) = mpsc::unbounded_channel::<serde_json::Value>();
     let (url_sink, url) = AuthUrlSink::new();
+    if let Some(capture_file) = browser_capture_file {
+        tokio::spawn(watch_captured_browser_url(
+            capture_file,
+            Arc::downgrade(&url_sink.0),
+        ));
+    }
     tokio::spawn(read_agent_stdout(stdout, response_tx, url_sink.clone()));
 
     // Redacted on write and bounded, so it is safe to put in an error message.
@@ -1144,7 +1172,7 @@ pub async fn sign_out(runtime_env: &BTreeMap<String, String>) -> Result<(), AcpE
 
 /// [`sign_out`] with the slot already held.
 async fn sign_out_claimed(runtime_env: &BTreeMap<String, String>) -> Result<(), AcpError> {
-    let mut agent = spawn_agent(runtime_env, Vec::new()).await?;
+    let mut agent = spawn_agent(runtime_env, Vec::new(), None, None).await?;
     let outcome = request_logout(&mut agent).await;
     // Reaped once here rather than on each early return inside: unlike a
     // sign-in, `logout` opens no listener and holds no port, so the only thing
@@ -1297,10 +1325,15 @@ fn is_loopback_redirect(redirect_uri: &str) -> bool {
         return false;
     };
     // `127.0.0.1:8080@evil.example` parses as a host of `evil.example` under
-    // RFC 3986 userinfo rules, so the port must be digits and the authority
-    // must end right there.
-    let port = rest.split('/').next().unwrap_or(rest);
-    !port.is_empty() && port.chars().all(|c| c.is_ascii_digit())
+    // RFC 3986 userinfo rules, so split out the authority strictly and require
+    // a known loopback host followed by an all-digit port.
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let Some((host, port)) = authority.rsplit_once(':') else {
+        return false;
+    };
+    matches!(host, "127.0.0.1" | "localhost" | "[::1]")
+        && !port.is_empty()
+        && port.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Perform the redirect against the agent's one-shot listener.
@@ -1418,7 +1451,9 @@ fn stderr_hint(stderr: &StderrTail) -> String {
         .lines
         .iter()
         .map(String::as_str)
-        .filter(|line| !line.contains(AUTH_PROMPT_MARKER))
+        .filter(|line| {
+            !line.contains(AUTH_PROMPT_MARKER) && !line.contains(CLI_AUTH_REDIRECT_MARKER)
+        })
         .collect();
     if lines.is_empty() {
         return String::new();
@@ -1628,12 +1663,132 @@ fn resolve_binary() -> Result<PathBuf, AcpError> {
         tracing::info!("[ACP][Antigravity] sign-in using cached binary {version}");
         return Ok(path);
     }
-    crate::commands::acp::resolve_system_agent_binary(cmd).ok_or_else(|| {
-        AcpError::SdkNotInstalled(format!(
-            "{} is not installed. Please install it in Agent Settings.",
-            meta.name
-        ))
-    })
+    crate::commands::acp::resolve_system_agent_binary_for(AgentType::Antigravity, cmd).ok_or_else(
+        || {
+            AcpError::SdkNotInstalled(format!(
+                "{} is not installed. Please install it in Agent Settings.",
+                meta.name
+            ))
+        },
+    )
+}
+
+const BROWSER_CAPTURE_FILE_ENV: &str = "CODEG_AGY_CAPTURE_URL_FILE";
+
+/// Per-attempt Unix shim directory (`open` / `xdg-open`, also set as `BROWSER`)
+/// that intercepts the exact OAuth authorization URL passed to the OS browser
+/// opener by the 1.5.x Go CLI (carrying its real `client_id`, PKCE
+/// `code_challenge`, and server-verified `state`) without opening a desktop
+/// browser. Dropped automatically once `start_claimed` finishes waiting for the
+/// URL.
+#[cfg_attr(not(unix), allow(dead_code))]
+struct BrowserCaptureShim {
+    #[cfg(unix)]
+    _dir: tempfile::TempDir,
+    bin_dir: PathBuf,
+    browser_path: PathBuf,
+    capture_file: PathBuf,
+}
+
+impl BrowserCaptureShim {
+    fn create() -> Option<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let dir = tempfile::Builder::new()
+                .prefix("codeg-agy-browser-")
+                .tempdir()
+                .ok()?;
+            let bin_dir = dir.path().join("bin");
+            std::fs::create_dir_all(&bin_dir).ok()?;
+            let capture_file = dir.path().join("auth-url.txt");
+            let script = format!(
+                "#!/bin/sh\n\
+                 url=\"$1\"\n\
+                 case \"$url\" in\n\
+                   https://*)\n\
+                     tmp=\"${{{BROWSER_CAPTURE_FILE_ENV}}}.tmp.$$\"\n\
+                     printf '%s\\n' \"$url\" > \"$tmp\" && mv -f \"$tmp\" \"${{{BROWSER_CAPTURE_FILE_ENV}}}\"\n\
+                     ;;\n\
+                 esac\n\
+                 exit 0\n"
+            );
+            let mut browser_path = None;
+            for name in ["open", "xdg-open"] {
+                let path = bin_dir.join(name);
+                std::fs::write(&path, &script).ok()?;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).ok()?;
+                if browser_path.is_none() {
+                    browser_path = Some(path);
+                }
+            }
+            Some(Self {
+                _dir: dir,
+                bin_dir,
+                browser_path: browser_path?,
+                capture_file,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+}
+
+fn prepend_dir_to_env_path(env: &mut Vec<(String, String)>, dir: &std::path::Path) {
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let dir_str = dir.to_string_lossy();
+    if let Some((_, existing)) = env
+        .iter_mut()
+        .find(|(key, _)| key.eq_ignore_ascii_case("PATH"))
+    {
+        if existing.is_empty() {
+            *existing = dir_str.into_owned();
+        } else {
+            *existing = format!("{dir_str}{sep}{existing}");
+        }
+        return;
+    }
+    let inherited = std::env::var("PATH").unwrap_or_default();
+    let value = if inherited.is_empty() {
+        dir_str.into_owned()
+    } else {
+        format!("{dir_str}{sep}{inherited}")
+    };
+    env.push(("PATH".to_string(), value));
+}
+
+/// Poll the per-attempt browser-capture file while the child's stdio pumps are
+/// still alive. Holds only a [`std::sync::Weak`] handle to the [`AuthUrlSink`]
+/// slot so it can never keep the oneshot open after stdout/stderr close.
+async fn watch_captured_browser_url(
+    capture_file: PathBuf,
+    slot: std::sync::Weak<std::sync::Mutex<Option<oneshot::Sender<String>>>>,
+) {
+    let mut interval = tokio::time::interval(Duration::from_millis(50));
+    loop {
+        interval.tick().await;
+        let Some(strong) = slot.upgrade() else {
+            return;
+        };
+        if strong.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+            return;
+        }
+        let Ok(raw) = tokio::fs::read_to_string(&capture_file).await else {
+            continue;
+        };
+        let url = raw.trim();
+        if !url.starts_with("https://") {
+            continue;
+        }
+        let mut guard = strong.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(url.to_string());
+        }
+        return;
+    }
 }
 
 /// The launch flags the registry pins for this platform.
@@ -2093,8 +2248,56 @@ mod tests {
     #[test]
     fn rejects_a_userinfo_disguised_authority() {
         assert!(!is_loopback_redirect("http://127.0.0.1:80@evil.example/"));
+        assert!(!is_loopback_redirect(
+            "http://localhost:80@evil.example/auth/callback"
+        ));
         assert!(!is_loopback_redirect("http://127.0.0.1:/"));
+        assert!(!is_loopback_redirect("http://localhost/auth/callback"));
         assert!(is_loopback_redirect("http://127.0.0.1:54926/"));
+        assert!(is_loopback_redirect("http://localhost:49675/auth/callback"));
+        assert!(is_loopback_redirect("http://[::1]:49675/auth/callback"));
+    }
+
+    #[test]
+    fn antigravity_launch_args_pin_native_acp_app_data_dir() {
+        assert_eq!(
+            antigravity_launch_args(),
+            vec!["acp", "--app-data-dir", "antigravity-acp"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn browser_capture_shim_delivers_real_oauth_url_without_opening_browser() {
+        let shim = BrowserCaptureShim::create().expect("unix shim should initialize");
+        let (sink, rx) = AuthUrlSink::new();
+        tokio::spawn(watch_captured_browser_url(
+            shim.capture_file.clone(),
+            Arc::downgrade(&sink.0),
+        ));
+
+        let expected = "https://accounts.google.com/o/oauth2/auth?client_id=test\
+            &code_challenge=pkce123&code_challenge_method=S256\
+            &redirect_uri=http%3A%2F%2Flocalhost%3A49675%2Fauth%2Fcallback&state=srvstate";
+        let status = tokio::process::Command::new(&shim.browser_path)
+            .arg(expected)
+            .env(BROWSER_CAPTURE_FILE_ENV, &shim.capture_file)
+            .status()
+            .await
+            .expect("shim should execute");
+        assert!(status.success());
+
+        let captured = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .expect("shim URL should arrive promptly")
+            .expect("channel should deliver URL");
+        assert_eq!(captured, expected);
+        assert_eq!(
+            extract_redirect_uri(&captured).unwrap(),
+            "http://localhost:49675/auth/callback"
+        );
+        assert_eq!(query_param(&captured, "state").as_deref(), Some("srvstate"));
+        drop(sink);
     }
 
     #[test]
