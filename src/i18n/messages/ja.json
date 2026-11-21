@@ -109,7 +109,12 @@
     "pluginSurfaces": "プラグインアクション",
     "morePluginSurfaces": "その他のプラグインアクション",
     "pluginDetail": "プラグイン詳細",
-    "activationPanel": "有効化ガイド"
+    "activationPanel": "有効化ガイド",
+    "commandScopeGlobal": "グローバル",
+    "commandScopeWorkspace": "ワークスペース",
+    "commandScopeSession": "セッション",
+    "commandDone": "{title} が完了しました。",
+    "commandFailed": "{title} に失敗しました"
   },
   "AppearanceSettings": {
     "sectionTitle": "テーマ外観",
@@ -2592,8 +2597,10 @@
       "dialogTitleWithFolder": "検索 — {name}",
       "tabConversations": "会話",
       "tabFiles": "ファイル",
+      "tabCommands": "コマンド",
       "placeholder": "会話を検索...",
       "filePlaceholder": "ファイルまたはディレクトリを検索...",
+      "commandPlaceholder": "プラグインコマンドを検索...",
       "allAgents": "すべて",
       "searching": "検索中...",
       "typeToSearch": "入力して会話を検索",

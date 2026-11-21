@@ -109,7 +109,12 @@
     "pluginSurfaces": "外掛入口",
     "morePluginSurfaces": "更多外掛入口",
     "pluginDetail": "外掛詳情",
-    "activationPanel": "啟用引導"
+    "activationPanel": "啟用引導",
+    "commandScopeGlobal": "全域",
+    "commandScopeWorkspace": "工作區",
+    "commandScopeSession": "會話",
+    "commandDone": "{title} 已完成。",
+    "commandFailed": "{title} 執行失敗"
   },
   "AppearanceSettings": {
     "sectionTitle": "主題外觀",
@@ -2592,8 +2597,10 @@
       "dialogTitleWithFolder": "搜尋 — {name}",
       "tabConversations": "會話",
       "tabFiles": "檔案",
+      "tabCommands": "命令",
       "placeholder": "搜尋會話...",
       "filePlaceholder": "搜尋檔案或目錄...",
+      "commandPlaceholder": "搜尋外掛命令...",
       "allAgents": "全部",
       "searching": "搜尋中...",
       "typeToSearch": "輸入關鍵字搜尋會話",

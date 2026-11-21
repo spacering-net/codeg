@@ -109,7 +109,12 @@
     "pluginSurfaces": "Acciones de complementos",
     "morePluginSurfaces": "Más acciones de complementos",
     "pluginDetail": "Detalles del complemento",
-    "activationPanel": "Guía de activación"
+    "activationPanel": "Guía de activación",
+    "commandScopeGlobal": "Global",
+    "commandScopeWorkspace": "Espacio de trabajo",
+    "commandScopeSession": "Sesión",
+    "commandDone": "{title} completado.",
+    "commandFailed": "Error en {title}"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apariencia del tema",
@@ -2592,8 +2597,10 @@
       "dialogTitleWithFolder": "Buscar — {name}",
       "tabConversations": "Conversaciones",
       "tabFiles": "Archivos",
+      "tabCommands": "Comandos",
       "placeholder": "Buscar conversaciones...",
       "filePlaceholder": "Buscar archivos o directorios...",
+      "commandPlaceholder": "Buscar comandos de complementos...",
       "allAgents": "Todo",
       "searching": "Buscando...",
       "typeToSearch": "Escribe para buscar conversaciones",

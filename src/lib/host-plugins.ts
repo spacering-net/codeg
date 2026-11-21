@@ -12,6 +12,9 @@ export type PluginTextTranslations = Record<string, string>
 
 export const MAX_PLUGIN_SCREENS = 16
 export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
+export const MAX_PLUGIN_COMMANDS = 16
+export const MAX_PLUGIN_COMMAND_KEYWORDS = 8
+export const MAX_PLUGIN_COMMAND_KEYWORD_CHARS = 32
 
 export type PluginSidebarItemPlacement = "header" | "footer"
 
@@ -65,6 +68,41 @@ export interface ResolvedPluginSidebarItem {
   screenId: string
   screenKey: string
   screenTitle: string
+}
+
+export type PluginCommandScope = "global" | "workspace" | "session"
+
+export type PluginCommandAction =
+  | { type: "openWorkspacePanel"; panelId: string }
+  | { type: "openScreen"; screenId: string }
+  | { type: "callMethod"; method: string }
+
+export interface PluginCommandContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  description?: string
+  descriptionTranslations?: PluginTextTranslations
+  keywords?: string[]
+  scope?: PluginCommandScope
+  action: PluginCommandAction
+}
+
+export interface ResolvedPluginCommand {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  description?: string
+  keywords: string[]
+  scope: PluginCommandScope
+  action: PluginCommandAction
+}
+
+export interface PluginCommandContext {
+  folderId: number | null
+  conversationId: number | null
 }
 
 export interface PluginHostScope {
@@ -160,12 +198,7 @@ export interface InstalledPlugin {
     client?: { entry: string }
     contributes: {
       workspacePanels: WorkspacePanel[]
-      commands: {
-        id: string
-        title: string
-        titleTranslations?: PluginTextTranslations
-        action: { type: "openWorkspacePanel"; panelId: string }
-      }[]
+      commands: PluginCommandContribution[]
       hooks: { event: "session.turnCompleted"; action: "recordTurnActivity" }[]
       settingsPanel?: PluginHostSurfaceContribution
       pluginDetail?: PluginHostSurfaceContribution
@@ -358,6 +391,12 @@ function getReadyHostTransportSnapshot(): Transport | null {
   return safeGetTransport()
 }
 
+export function isCurrentReadyHostTransport(
+  transport: Transport | null | undefined
+): boolean {
+  return Boolean(transport) && getReadyHostTransportSnapshot() === transport
+}
+
 function getNullTransportSnapshot(): null {
   return null
 }
@@ -499,6 +538,10 @@ export function pluginScreenKey(pluginId: string, screenId: string) {
 
 export function pluginSidebarItemKey(pluginId: string, itemId: string) {
   return `${pluginId}:${itemId}`
+}
+
+export function pluginCommandKey(pluginId: string, commandId: string) {
+  return `${pluginId}:${commandId}`
 }
 
 export function resolvePluginHostScope(
@@ -810,6 +853,227 @@ export function selectPluginSidebarItems(
     }
   }
   return items
+}
+
+export function selectPluginCommands(
+  plugins: readonly InstalledPlugin[] | undefined,
+  context: PluginCommandContext,
+  locale?: string
+): ResolvedPluginCommand[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginCommand[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled) continue
+    const commands = plugin.manifest.contributes?.commands
+    if (!Array.isArray(commands) || commands.length === 0) continue
+
+    const pluginName =
+      resolvePluginText(
+        plugin.manifest.name,
+        plugin.manifest.nameTranslations,
+        locale
+      ).trim() || plugin.manifest.id
+    const hasClientEntry = Boolean(plugin.manifest.client?.entry?.trim())
+    const hasServerEntry = Boolean(plugin.manifest.server?.entry?.trim())
+
+    const validPanelIds = new Set<string>()
+    const workspacePanels = plugin.manifest.contributes?.workspacePanels
+    if (Array.isArray(workspacePanels)) {
+      for (const panel of workspacePanels) {
+        if (!panel || typeof panel.id !== "string") continue
+        const panelId = panel.id.trim()
+        if (!panelId) continue
+        if (panel.view === "client" && !hasClientEntry) continue
+        if (panel.view === "serverText" && !hasServerEntry) continue
+        validPanelIds.add(panelId)
+      }
+    }
+
+    const validScreenIds = new Set(
+      resolvePluginScreensForPlugin(plugin, locale).map((screen) => screen.id)
+    )
+
+    const validMethods = new Set<string>()
+    if (hasServerEntry && Array.isArray(plugin.manifest.server?.methods)) {
+      for (const rawMethod of plugin.manifest.server.methods) {
+        if (typeof rawMethod !== "string") continue
+        const method = rawMethod.trim()
+        if (method) validMethods.add(method)
+      }
+    }
+
+    const seenIds = new Set<string>()
+    let pluginValidCount = 0
+    for (const command of commands) {
+      if (pluginValidCount >= MAX_PLUGIN_COMMANDS) break
+      if (
+        !command ||
+        typeof command !== "object" ||
+        typeof command.id !== "string" ||
+        typeof command.title !== "string" ||
+        !command.action ||
+        typeof command.action !== "object"
+      ) {
+        continue
+      }
+
+      const rawScope = command.scope
+      if (
+        rawScope !== undefined &&
+        rawScope !== "global" &&
+        rawScope !== "workspace" &&
+        rawScope !== "session"
+      ) {
+        continue
+      }
+      const scope: PluginCommandScope = rawScope ?? "workspace"
+
+      const id = command.id.trim()
+      const title = resolvePluginText(
+        command.title,
+        command.titleTranslations,
+        locale
+      ).trim()
+      if (!id || !title || seenIds.has(id)) continue
+
+      let resolvedAction: PluginCommandAction | null = null
+      if (command.action.type === "openWorkspacePanel") {
+        if (scope === "global") continue
+        const panelId =
+          typeof command.action.panelId === "string"
+            ? command.action.panelId.trim()
+            : ""
+        if (panelId && validPanelIds.has(panelId)) {
+          resolvedAction = { type: "openWorkspacePanel", panelId }
+        }
+      } else if (command.action.type === "openScreen") {
+        const screenId =
+          typeof command.action.screenId === "string"
+            ? command.action.screenId.trim()
+            : ""
+        if (screenId && validScreenIds.has(screenId)) {
+          resolvedAction = { type: "openScreen", screenId }
+        }
+      } else if (command.action.type === "callMethod") {
+        const method =
+          typeof command.action.method === "string"
+            ? command.action.method.trim()
+            : ""
+        if (method && validMethods.has(method)) {
+          resolvedAction = { type: "callMethod", method }
+        }
+      }
+      if (!resolvedAction) continue
+
+      let description: string | undefined
+      if (
+        typeof command.description === "string" &&
+        command.description.trim().length > 0
+      ) {
+        const resolvedDesc = resolvePluginText(
+          command.description,
+          command.descriptionTranslations,
+          locale
+        ).trim()
+        if (resolvedDesc.length > 0) {
+          description = resolvedDesc
+        }
+      }
+
+      const keywords: string[] = []
+      if (Array.isArray(command.keywords)) {
+        const seenKeywords = new Set<string>()
+        for (const rawKeyword of command.keywords) {
+          if (keywords.length >= MAX_PLUGIN_COMMAND_KEYWORDS) break
+          if (typeof rawKeyword !== "string") continue
+          const kw = rawKeyword.trim()
+          if (
+            !kw ||
+            Array.from(kw).length > MAX_PLUGIN_COMMAND_KEYWORD_CHARS ||
+            seenKeywords.has(kw)
+          ) {
+            continue
+          }
+          seenKeywords.add(kw)
+          keywords.push(kw)
+        }
+      }
+
+      // Per-plugin 16-command cap counts valid commands BEFORE scope visibility filtering.
+      seenIds.add(id)
+      pluginValidCount += 1
+
+      // Visibility checks against active context.
+      if (scope === "workspace" && context.folderId === null) continue
+      if (scope === "session" && context.conversationId === null) continue
+      if (
+        resolvedAction.type === "openWorkspacePanel" &&
+        context.folderId === null
+      ) {
+        continue
+      }
+
+      items.push({
+        key: pluginCommandKey(plugin.manifest.id, id),
+        pluginId: plugin.manifest.id,
+        pluginName,
+        id,
+        title,
+        ...(description ? { description } : {}),
+        keywords,
+        scope,
+        action: resolvedAction,
+      })
+    }
+  }
+  return items
+}
+
+export function matchesPluginCommandQuery(
+  command: ResolvedPluginCommand,
+  query: string
+): boolean {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return true
+  const haystack = [
+    command.title,
+    command.description ?? "",
+    command.pluginName,
+    ...command.keywords,
+  ]
+    .join(" ")
+    .toLowerCase()
+  return tokens.every((token) => haystack.includes(token))
+}
+
+const MAX_COMMAND_FEEDBACK_CHARS = 240
+
+export function formatPluginCommandResult(value: unknown): string | null {
+  let raw: string | null = null
+  if (typeof value === "string") {
+    raw = value
+  } else if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>
+    if (typeof record.message === "string") {
+      raw = record.message
+    } else if (typeof record.text === "string") {
+      raw = record.text
+    } else if (typeof record.summary === "string") {
+      raw = record.summary
+    }
+  } else if (typeof value === "number" || typeof value === "boolean") {
+    raw = String(value)
+  }
+  if (raw === null) return null
+  const normalized = raw.trim()
+  if (!normalized) return null
+  if (normalized.length <= MAX_COMMAND_FEEDBACK_CHARS) {
+    return normalized
+  }
+  return `${normalized.slice(0, MAX_COMMAND_FEEDBACK_CHARS - 1)}…`
 }
 
 export function hostPluginSessionScopeKey(

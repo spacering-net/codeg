@@ -109,7 +109,12 @@
     "pluginSurfaces": "Plugin actions",
     "morePluginSurfaces": "More plugin actions",
     "pluginDetail": "Plugin details",
-    "activationPanel": "Activation guide"
+    "activationPanel": "Activation guide",
+    "commandScopeGlobal": "Global",
+    "commandScopeWorkspace": "Workspace",
+    "commandScopeSession": "Session",
+    "commandDone": "{title} completed.",
+    "commandFailed": "{title} failed"
   },
   "AppearanceSettings": {
     "sectionTitle": "Theme Appearance",
@@ -2592,8 +2597,10 @@
       "dialogTitleWithFolder": "Search — {name}",
       "tabConversations": "Conversations",
       "tabFiles": "Files",
+      "tabCommands": "Commands",
       "placeholder": "Search conversations...",
       "filePlaceholder": "Search files or directories...",
+      "commandPlaceholder": "Search plugin commands...",
       "allAgents": "All",
       "searching": "Searching...",
       "typeToSearch": "Type to search conversations",

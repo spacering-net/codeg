@@ -109,7 +109,12 @@
     "pluginSurfaces": "Actions des extensions",
     "morePluginSurfaces": "Autres actions des extensions",
     "pluginDetail": "Détails de l’extension",
-    "activationPanel": "Guide d’activation"
+    "activationPanel": "Guide d’activation",
+    "commandScopeGlobal": "Global",
+    "commandScopeWorkspace": "Espace de travail",
+    "commandScopeSession": "Session",
+    "commandDone": "{title} terminé.",
+    "commandFailed": "Échec de {title}"
   },
   "AppearanceSettings": {
     "sectionTitle": "Apparence du thème",
@@ -2592,8 +2597,10 @@
       "dialogTitleWithFolder": "Rechercher — {name}",
       "tabConversations": "Conversations",
       "tabFiles": "Fichiers",
+      "tabCommands": "Commandes",
       "placeholder": "Rechercher des conversations...",
       "filePlaceholder": "Rechercher des fichiers ou répertoires...",
+      "commandPlaceholder": "Rechercher des commandes d’extensions...",
       "allAgents": "Tout",
       "searching": "Recherche...",
       "typeToSearch": "Tapez pour rechercher des conversations",

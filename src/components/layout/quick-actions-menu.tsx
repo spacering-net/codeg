@@ -40,6 +40,7 @@
 
 import { useCallback, useState } from "react"
 import {
+  AppWindow,
   DraftingCompass,
   FolderGit2,
   FolderOpen,
@@ -56,7 +57,7 @@ import {
   Settings,
   Zap,
 } from "lucide-react"
-import { useLocale, useTranslations } from "next-intl"
+import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { HarnessUpdatesBadge } from "@/components/harness/harness-updates-badge"
 import { UserRoundStar } from "@/components/icons/user-round-star"
@@ -68,22 +69,16 @@ import {
 } from "@/components/layout/status-bar-menu-rows"
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu"
 import { useAutomationsView } from "@/contexts/automations-view-context"
-import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useOptionalAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useHarnessView } from "@/contexts/harness-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useOptionalWorkspaceActions } from "@/contexts/workspace-context"
 import { useRemoteWorkspaceConnections } from "@/hooks/use-remote-workspace-connections"
-import { useIsActiveChatMode } from "@/hooks/use-is-active-chat-mode"
+import { useScopedPluginCommands } from "@/hooks/use-scoped-plugin-commands"
 import { openProjectBootWindow } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { BLANK_PAGE_URL } from "@/lib/browser/browser-url"
-import {
-  pluginPanelKey,
-  resolvePluginText,
-  useHostPlugins,
-} from "@/lib/host-plugins"
 import { useBrowserCapabilities } from "@/lib/browser/use-browser-capabilities"
 import { openPetWindow } from "@/lib/pet/api"
 import { isRemoteDesktopWindow } from "@/lib/platform"
@@ -382,43 +377,58 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
 }
 
 function PluginCommandRows() {
-  const locale = useLocale()
-  const { activeFolderId } = useActiveFolder()
-  const isChatMode = useIsActiveChatMode()
-  const { openConversations } = useWorkbenchRoute()
+  const { openConversations, openPluginScreen } = useWorkbenchRoute()
   const openPanel = useOptionalAuxPanelContext()?.openPluginPanel
-  const { data } = useHostPlugins(
-    activeFolderId !== null && !isChatMode && Boolean(openPanel)
+  const { commands, executeCommand, scopeLabel } = useScopedPluginCommands({
+    enabled: true,
+    allowAfterUnmount: true,
+    openConversations,
+    openPluginScreen,
+    openPluginPanel: openPanel,
+  })
+  const visibleCommands = commands.filter(
+    (command) =>
+      command.action.type !== "openWorkspacePanel" || Boolean(openPanel)
   )
-  const commands = data?.flatMap(({ enabled, manifest }) =>
-    enabled
-      ? manifest.contributes.commands.map((command) => ({
-          pluginId: manifest.id,
-          command,
-          title: resolvePluginText(
-            command.title,
-            command.titleTranslations,
-            locale
-          ),
-        }))
-      : []
-  )
-  if (!openPanel || !commands?.length) return null
+  if (visibleCommands.length === 0) return null
 
   return (
     <>
       <DropdownMenuSeparator />
-      {commands.map(({ pluginId, command, title }) => (
-        <MenuRow
-          key={`${pluginId}:${command.id}`}
-          icon={<Puzzle />}
-          label={title}
-          onSelect={() => {
-            openConversations()
-            openPanel(pluginPanelKey(pluginId, command.action.panelId))
-          }}
-        />
-      ))}
+      {visibleCommands.map((command) => {
+        const icon =
+          command.action.type === "openScreen" ? (
+            <AppWindow />
+          ) : command.action.type === "callMethod" ? (
+            <Zap />
+          ) : (
+            <Puzzle />
+          )
+        return (
+          <MenuRow
+            key={command.key}
+            icon={icon}
+            label={
+              command.description ? (
+                <>
+                  <span className="block truncate">{command.title}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {command.description}
+                  </span>
+                </>
+              ) : (
+                command.title
+              )
+            }
+            trailing={
+              <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[0.625rem] leading-none font-medium text-muted-foreground">
+                {scopeLabel(command.scope)}
+              </span>
+            }
+            onSelect={() => executeCommand(command)}
+          />
+        )
+      })}
     </>
   )
 }

@@ -7,11 +7,17 @@ import {
   parsePluginThemePalette,
 } from "@/lib/custom-style"
 import {
+  MAX_PLUGIN_COMMANDS,
+  MAX_PLUGIN_COMMAND_KEYWORDS,
+  MAX_PLUGIN_COMMAND_KEYWORD_CHARS,
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
+  formatPluginCommandResult,
   hostPluginSessionScopeKey,
+  matchesPluginCommandQuery,
   pluginClientSurfaceKey,
+  pluginCommandKey,
   pluginScreenKey,
   pluginSidebarItemKey,
   pluginThemeKey,
@@ -20,6 +26,7 @@ import {
   resolvePluginScreen,
   resolvePluginText,
   selectPluginClientSurfaces,
+  selectPluginCommands,
   selectPluginScreens,
   selectPluginSidebarItems,
   selectPluginThemes,
@@ -908,5 +915,315 @@ describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems
     ).not.toBeNull()
     expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
     expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
+  })
+})
+
+describe("selectPluginCommands, keyword matching, and result formatting", () => {
+  it("supports legacy workspace commands, enforces all 3 scopes, rejects global+openWorkspacePanel and cross-plugin targets, and localizes title/description", () => {
+    const plugins: InstalledPlugin[] = [
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.palette",
+          name: "Acme Palette",
+          nameTranslations: { es: "Paleta Acme", "zh-CN": "Acme 命令板" },
+          version: "1.0.0",
+          client: { entry: "guide.html" },
+          server: { entry: "commands.mjs", methods: ["describe-context"] },
+          contributes: {
+            workspacePanels: [
+              { id: "notes", title: "Notes", view: "text", text: "Notes" },
+            ],
+            screens: [{ id: "guide", title: "Guide" }],
+            hooks: [],
+            commands: [
+              // Legacy command without scope -> defaults to workspace
+              {
+                id: "legacy-notes",
+                title: "Show Notes",
+                titleTranslations: { es: "Mostrar notas" },
+                action: { type: "openWorkspacePanel", panelId: "notes" },
+              },
+              {
+                id: "open-guide",
+                title: "Open Guide",
+                titleTranslations: { es: "Abrir guía" },
+                description: "Read the command guide.",
+                descriptionTranslations: { es: "Lee la guía de comandos." },
+                keywords: [
+                  "help",
+                  "guide",
+                  "guide",
+                  "  ",
+                  "x".repeat(33),
+                  "k3",
+                  "k4",
+                  "k5",
+                  "k6",
+                  "k7",
+                  "k8",
+                  "k9-beyond-cap",
+                ],
+                scope: "global",
+                action: { type: "openScreen", screenId: "guide" },
+              },
+              {
+                id: "global-panel-forbidden",
+                title: "Illegal Global Panel",
+                scope: "global",
+                action: { type: "openWorkspacePanel", panelId: "notes" },
+              },
+              {
+                id: "session-panel",
+                title: "Session Panel",
+                // descriptionTranslations without description MUST NOT fabricate description
+                descriptionTranslations: { es: "No fabricar" },
+                scope: "session",
+                action: { type: "openWorkspacePanel", panelId: "notes" },
+              },
+              {
+                id: "session-rpc",
+                title: "Inspect Session",
+                keywords: ["session", "inspect"],
+                scope: "session",
+                action: { type: "callMethod", method: "describe-context" },
+              },
+              {
+                id: "bad-method",
+                title: "Undeclared Method",
+                scope: "global",
+                action: { type: "callMethod", method: "unknown" },
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.other",
+          name: "Other Plugin",
+          version: "1.0.0",
+          // No client.entry or server.entry: cross-plugin targets & missing entries rejected
+          contributes: {
+            workspacePanels: [],
+            screens: [{ id: "guide", title: "No Client" }],
+            hooks: [],
+            commands: [
+              {
+                id: "steal-panel",
+                title: "Steal Panel",
+                scope: "workspace",
+                action: { type: "openWorkspacePanel", panelId: "notes" },
+              },
+              {
+                id: "steal-screen",
+                title: "Steal Screen",
+                scope: "global",
+                action: { type: "openScreen", screenId: "guide" },
+              },
+              {
+                id: "steal-method",
+                title: "Steal Method",
+                scope: "global",
+                action: { type: "callMethod", method: "describe-context" },
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: false,
+        manifest: {
+          id: "acme.disabled",
+          name: "Disabled",
+          version: "1.0.0",
+          client: { entry: "a.html" },
+          contributes: {
+            workspacePanels: [],
+            screens: [{ id: "s", title: "S" }],
+            hooks: [],
+            commands: [
+              {
+                id: "hidden",
+                title: "Hidden",
+                scope: "global",
+                action: { type: "openScreen", screenId: "s" },
+              },
+            ],
+          },
+        },
+      },
+    ]
+
+    expect(MAX_PLUGIN_COMMANDS).toBe(16)
+    expect(MAX_PLUGIN_COMMAND_KEYWORDS).toBe(8)
+    expect(MAX_PLUGIN_COMMAND_KEYWORD_CHARS).toBe(32)
+
+    // 1) Global only (no folder, no conversation)
+    const globalOnly = selectPluginCommands(
+      plugins,
+      { folderId: null, conversationId: null },
+      "es-MX"
+    )
+    expect(globalOnly).toEqual([
+      {
+        key: pluginCommandKey("acme.palette", "open-guide"),
+        pluginId: "acme.palette",
+        pluginName: "Paleta Acme",
+        id: "open-guide",
+        title: "Abrir guía",
+        description: "Lee la guía de comandos.",
+        keywords: ["help", "guide", "k3", "k4", "k5", "k6", "k7", "k8"],
+        scope: "global",
+        action: { type: "openScreen", screenId: "guide" },
+      },
+    ])
+
+    // 2) Folderless chat session (folderId: null, conversationId: 42):
+    //    shows global + session callMethod, hides workspace AND hides session openWorkspacePanel!
+    const chatSession = selectPluginCommands(
+      plugins,
+      { folderId: null, conversationId: 42 },
+      "es"
+    )
+    expect(chatSession.map((c) => c.id)).toEqual(["open-guide", "session-rpc"])
+
+    // 3) Workspace without saved conversation (folderId: 1, conversationId: null):
+    //    shows global + legacy workspace command, hides session commands!
+    const workspaceOnly = selectPluginCommands(
+      plugins,
+      { folderId: 1, conversationId: null },
+      "es"
+    )
+    expect(workspaceOnly.map((c) => c.id)).toEqual([
+      "legacy-notes",
+      "open-guide",
+    ])
+    expect(workspaceOnly[0]?.scope).toBe("workspace")
+
+    // 4) Workspace with saved conversation (folderId: 1, conversationId: 42):
+    //    shows all 4 valid commands, and session-panel has no fabricated description.
+    const fullContext = selectPluginCommands(
+      plugins,
+      { folderId: 1, conversationId: 42 },
+      "es"
+    )
+    expect(fullContext.map((c) => c.id)).toEqual([
+      "legacy-notes",
+      "open-guide",
+      "session-panel",
+      "session-rpc",
+    ])
+    expect(
+      fullContext.find((c) => c.id === "session-panel")?.description
+    ).toBeUndefined()
+
+    // Query matching covers title, description, pluginName, and keywords
+    expect(matchesPluginCommandQuery(globalOnly[0], "guide")).toBe(true)
+    expect(matchesPluginCommandQuery(globalOnly[0], "comandos")).toBe(true)
+    expect(matchesPluginCommandQuery(globalOnly[0], "paleta k8")).toBe(true)
+    expect(matchesPluginCommandQuery(globalOnly[0], "k9-beyond-cap")).toBe(
+      false
+    )
+  })
+
+  it("counts the 16-command per-plugin cap before scope filtering and resolves bundled command-palette & legacy turn-activity examples", () => {
+    const cappedPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.capped",
+        name: "Capped",
+        version: "1.0.0",
+        client: { entry: "ui.html" },
+        contributes: {
+          workspacePanels: [
+            { id: "main", title: "Main", view: "text", text: "ok" },
+          ],
+          screens: [{ id: "guide", title: "Guide" }],
+          hooks: [],
+          commands: [
+            ...Array.from({ length: 16 }, (_, idx) => ({
+              id: `ws-${idx + 1}`,
+              title: `Workspace ${idx + 1}`,
+              scope: "workspace" as const,
+              action: { type: "openWorkspacePanel" as const, panelId: "main" },
+            })),
+            {
+              id: "global-17",
+              title: "Global Beyond 16",
+              scope: "global" as const,
+              action: { type: "openScreen" as const, screenId: "guide" },
+            },
+          ],
+        },
+      },
+    }
+
+    // 17th command is dropped by the cap even when the first 16 are filtered out by scope!
+    expect(
+      selectPluginCommands([cappedPlugin], {
+        folderId: null,
+        conversationId: null,
+      })
+    ).toEqual([])
+    expect(
+      selectPluginCommands([cappedPlugin], {
+        folderId: 1,
+        conversationId: null,
+      })
+    ).toHaveLength(16)
+
+    // Bundled command-palette example manifest
+    const paletteManifest = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          "examples/plugins/command-palette/codeg-plugin.json"
+        ),
+        "utf8"
+      )
+    ) as InstalledPlugin["manifest"]
+    const paletteCommands = selectPluginCommands(
+      [{ enabled: true, manifest: paletteManifest }],
+      { folderId: 5, conversationId: 10 },
+      "zh-CN"
+    )
+    expect(paletteCommands.map((c) => [c.id, c.scope, c.title])).toEqual([
+      ["open-guide", "global", "打开命令指南"],
+      ["show-notes", "workspace", "显示工作区备注"],
+      ["check-workspace", "workspace", "检查工作区上下文"],
+      ["check-session", "session", "检查会话上下文"],
+    ])
+    expect(paletteCommands[0]?.description).toBe("查看示例命令的使用位置。")
+
+    // Legacy turn-activity example manifest (no scope field)
+    const legacyManifest = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          "examples/plugins/turn-activity/codeg-plugin.json"
+        ),
+        "utf8"
+      )
+    ) as InstalledPlugin["manifest"]
+    expect(
+      selectPluginCommands(
+        [{ enabled: true, manifest: legacyManifest }],
+        { folderId: 1, conversationId: null },
+        "en"
+      )
+    ).toEqual([
+      expect.objectContaining({
+        id: "open-activity",
+        scope: "workspace",
+        action: { type: "openWorkspacePanel", panelId: "activity" },
+      }),
+    ])
+
+    // Result formatting bounds long strings and supports { message }
+    expect(formatPluginCommandResult("  Workspace #5  ")).toBe("Workspace #5")
+    expect(formatPluginCommandResult({ message: "Done!" })).toBe("Done!")
+    expect(formatPluginCommandResult("a".repeat(300))?.length).toBe(240)
   })
 })

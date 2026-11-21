@@ -109,7 +109,12 @@
     "pluginSurfaces": "إجراءات الإضافات",
     "morePluginSurfaces": "مزيد من إجراءات الإضافات",
     "pluginDetail": "تفاصيل الإضافة",
-    "activationPanel": "دليل التفعيل"
+    "activationPanel": "دليل التفعيل",
+    "commandScopeGlobal": "عام",
+    "commandScopeWorkspace": "مساحة العمل",
+    "commandScopeSession": "الجلسة",
+    "commandDone": "اكتمل {title}.",
+    "commandFailed": "فشل {title}"
   },
   "AppearanceSettings": {
     "sectionTitle": "مظهر السمة",
@@ -2592,8 +2597,10 @@
       "dialogTitleWithFolder": "بحث — {name}",
       "tabConversations": "المحادثات",
       "tabFiles": "الملفات",
+      "tabCommands": "الأوامر",
       "placeholder": "البحث في المحادثات...",
       "filePlaceholder": "البحث في الملفات أو المجلدات...",
+      "commandPlaceholder": "البحث في أوامر الإضافات...",
       "allAgents": "الكل",
       "searching": "جارٍ البحث...",
       "typeToSearch": "اكتب للبحث في المحادثات",

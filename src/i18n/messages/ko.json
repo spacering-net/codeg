@@ -109,7 +109,12 @@
     "pluginSurfaces": "플러그인 작업",
     "morePluginSurfaces": "더 많은 플러그인 작업",
     "pluginDetail": "플러그인 세부정보",
-    "activationPanel": "활성화 가이드"
+    "activationPanel": "활성화 가이드",
+    "commandScopeGlobal": "전역",
+    "commandScopeWorkspace": "작업 공간",
+    "commandScopeSession": "세션",
+    "commandDone": "{title} 완료됨.",
+    "commandFailed": "{title} 실패"
   },
   "AppearanceSettings": {
     "sectionTitle": "테마 모양",
@@ -2592,8 +2597,10 @@
       "dialogTitleWithFolder": "검색 — {name}",
       "tabConversations": "대화",
       "tabFiles": "파일",
+      "tabCommands": "명령",
       "placeholder": "대화 검색...",
       "filePlaceholder": "파일 또는 디렉토리 검색...",
+      "commandPlaceholder": "플러그인 명령 검색...",
       "allAgents": "전체",
       "searching": "검색 중...",
       "typeToSearch": "입력하여 대화를 검색하세요",

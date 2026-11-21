@@ -109,7 +109,12 @@
     "pluginSurfaces": "插件入口",
     "morePluginSurfaces": "更多插件入口",
     "pluginDetail": "插件详情",
-    "activationPanel": "启用引导"
+    "activationPanel": "启用引导",
+    "commandScopeGlobal": "全局",
+    "commandScopeWorkspace": "工作区",
+    "commandScopeSession": "会话",
+    "commandDone": "{title} 已完成。",
+    "commandFailed": "{title} 执行失败"
   },
   "AppearanceSettings": {
     "sectionTitle": "主题外观",
@@ -2592,8 +2597,10 @@
       "dialogTitleWithFolder": "搜索 — {name}",
       "tabConversations": "会话",
       "tabFiles": "文件",
+      "tabCommands": "命令",
       "placeholder": "搜索会话...",
       "filePlaceholder": "搜索文件或目录...",
+      "commandPlaceholder": "搜索插件命令...",
       "allAgents": "全部",
       "searching": "搜索中...",
       "typeToSearch": "输入关键词搜索会话",
