@@ -1359,7 +1359,10 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
             <UserMessageTaskButton parts={group.parts} />
             <UserMessageCopyButton parts={group.parts} />
             <MessageContent>
-              <CollapsibleUserMessage parts={group.parts} />
+              <CollapsibleUserMessage
+                parts={group.parts}
+                timestamp={sourceTurns?.[0]?.timestamp}
+              />
             </MessageContent>
           </div>
         ) : (

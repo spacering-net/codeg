@@ -3993,6 +3993,13 @@
         "htmlPreviewHide": "إخفاء المعاينة"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "إرسال رسالة إلى {session}",
+          "send": "إرسال رسالة إلى جلسة",
+          "create": "إنشاء جلسة",
+          "current": "عرض الجلسة الحالية",
+          "list": "البحث عن جلسات"
+        },
         "oauth": {
           "waiting": "بانتظار تفويض {server}",
           "reconnecting": "جارٍ إعادة الاتصال بـ {server}…",

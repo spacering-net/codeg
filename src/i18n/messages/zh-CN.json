@@ -3993,6 +3993,13 @@
         "htmlPreviewHide": "收起预览"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "发消息给会话：{session}",
+          "send": "发送会话消息",
+          "create": "创建会话",
+          "current": "查看当前会话",
+          "list": "查找会话"
+        },
         "oauth": {
           "waiting": "等待 {server} 授权",
           "reconnecting": "正在重新连接 {server}…",

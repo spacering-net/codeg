@@ -3993,6 +3993,13 @@
         "htmlPreviewHide": "收起預覽"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "傳訊息給工作階段：{session}",
+          "send": "傳送工作階段訊息",
+          "create": "建立工作階段",
+          "current": "查看目前工作階段",
+          "list": "尋找工作階段"
+        },
         "oauth": {
           "waiting": "等待 {server} 授權",
           "reconnecting": "正在重新連線 {server}…",

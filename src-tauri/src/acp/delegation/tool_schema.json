@@ -47,6 +47,29 @@
     }
   },
   {
+    "name": "get_current_session",
+    "description": "Read your own Codeg conversation information: conversation ID, title, agent type, status, folder ID and path, and parent conversation ID if present. The conversation_id can be used by another session with send_to_session.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+    "annotations": { "readOnlyHint": true }
+  },
+  {
+    "name": "list_sessions",
+    "description": "Find Codeg conversations, including delegation children, and their conversation IDs for send_to_session. Searches all workspace folders by default. Use current_folder for your own folder or folder_id for a specific folder. Results are most recently updated first. Pass next_offset as offset to get the next page. Use get_current_session to identify yourself.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "current_folder": { "type": "boolean", "description": "Search only the calling session's Codeg folder. Use this instead of folder_id." },
+        "folder_id": { "type": "integer", "minimum": 1, "description": "Search only this Codeg folder." },
+        "agent_type": { "type": "string", "description": "Filter by agent type, e.g. codex or claude_code." },
+        "search": { "type": "string", "description": "Filter by text in the conversation title." },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 },
+        "offset": { "type": "integer", "minimum": 0, "default": 0 }
+      },
+      "additionalProperties": false
+    },
+    "annotations": { "readOnlyHint": true }
+  },
+  {
     "name": "create_session",
     "description": "Create an independent Codeg conversation. Provide title and message. By default it uses the current conversation's agent type and folder. Use this when the user asks to create separate conversations, have multiple sessions chat, or take turns continuing a story. Returns conversation_id after starting the first message. The conversation has its own history and stays available after the creator finishes. The first answer is sent back automatically. Use send_to_session with reply=true for later messages. Finish your turn after creating or sending so the automatic answers can arrive as visible incoming messages and start the next turn; do not poll get_session_info for answers.",
     "inputSchema": {

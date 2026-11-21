@@ -1,7 +1,7 @@
 "use client"
 
 import { memo, useMemo } from "react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { ChevronDown, ChevronUp } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -117,11 +117,15 @@ export function splitSessionMessageSource(parts: AdaptedContentPart[]): {
  */
 export const CollapsibleUserMessage = memo(function CollapsibleUserMessage({
   parts,
+  timestamp,
 }: {
   parts: AdaptedContentPart[]
+  timestamp?: string
 }) {
+  const locale = useLocale()
   const t = useTranslations("Folder.chat.messageList")
   const message = useMemo(() => splitSessionMessageSource(parts), [parts])
+  const receivedAt = message.source && timestamp ? Date.parse(timestamp) : NaN
   const { contentRef, contentId, isOverflowing, expanded, toggle } =
     useCollapsibleOverflow<HTMLDivElement>(message.parts)
 
@@ -130,7 +134,23 @@ export const CollapsibleUserMessage = memo(function CollapsibleUserMessage({
   return (
     <>
       {message.source && (
-        <SessionMessageSource id={message.source} anchor={message.anchor} />
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          <SessionMessageSource id={message.source} anchor={message.anchor} />
+          {Number.isFinite(receivedAt) && (
+            <time
+              dateTime={timestamp}
+              title={new Intl.DateTimeFormat(locale, {
+                dateStyle: "medium",
+                timeStyle: "medium",
+              }).format(receivedAt)}
+              className="text-xs text-muted-foreground tabular-nums"
+            >
+              {new Intl.DateTimeFormat(locale, {
+                timeStyle: "medium",
+              }).format(receivedAt)}
+            </time>
+          )}
+        </div>
       )}
       <div
         ref={contentRef}

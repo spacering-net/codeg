@@ -456,6 +456,13 @@ pub enum BrokerMessage {
     ResumeTask(BrokerResumeTaskRequest),
     SessionMessage(BrokerSessionMessageRequest),
     CreateSession(BrokerCreateSessionRequest),
+    GetCurrentSession {
+        token: String,
+    },
+    ListSessions {
+        token: String,
+        args: ListSessionsArgs,
+    },
     Feedback(BrokerFeedbackRequest),
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
@@ -508,6 +515,34 @@ pub enum BrokerMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerListAssistantsRequest {
     pub token: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListSessionsArgs {
+    #[serde(default)]
+    pub current_folder: bool,
+    pub folder_id: Option<i32>,
+    pub agent_type: Option<crate::models::agent::AgentType>,
+    pub search: Option<String>,
+    pub limit: Option<u32>,
+    #[serde(default)]
+    pub offset: u32,
+}
+
+pub async fn client_current_session_round_trip(
+    socket_path: &str,
+    token: String,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::GetCurrentSession { token }).await
+}
+
+pub async fn client_list_sessions_round_trip(
+    socket_path: &str,
+    token: String,
+    args: ListSessionsArgs,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListSessions { token, args }).await
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

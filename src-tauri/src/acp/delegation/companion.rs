@@ -323,7 +323,9 @@ impl CompanionFeatures {
             | "get_delegation_status"
             | "cancel_delegation"
             | "resume_delegation" => self.delegation,
-            "send_to_session" | "create_session" => self.session_messaging,
+            "send_to_session" | "create_session" | "get_current_session" | "list_sessions" => {
+                self.session_messaging
+            }
             _ => false,
         }
     }
@@ -1116,6 +1118,31 @@ async fn build_tools_call_spawn(
             let round_trip =
                 Box::pin(async move { client_session_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_session_result).await
+        }
+        "get_current_session" => {
+            let token = ctx.token.clone();
+            let round_trip = Box::pin(async move {
+                super::transport::client_current_session_round_trip(&socket, token).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
+        }
+        "list_sessions" => {
+            let parsed = if arguments.is_null() {
+                Ok(super::transport::ListSessionsArgs::default())
+            } else {
+                serde_json::from_value(arguments)
+            };
+            let args = match parsed {
+                Ok(args) => args,
+                Err(error) => {
+                    return LineAction::Respond(err(id, -32602, format!("list_sessions: {error}")));
+                }
+            };
+            let token = ctx.token.clone();
+            let round_trip = Box::pin(async move {
+                super::transport::client_list_sessions_round_trip(&socket, token, args).await
+            });
+            register_and_spawn(inflight, id, None, round_trip, render_session_action).await
         }
         "create_session" => {
             let mut input = arguments.clone();

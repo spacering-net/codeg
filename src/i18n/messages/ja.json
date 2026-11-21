@@ -3993,6 +3993,13 @@
         "htmlPreviewHide": "プレビューを閉じる"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "セッション「{session}」にメッセージを送信",
+          "send": "セッションにメッセージを送信",
+          "create": "セッションを作成",
+          "current": "現在のセッションを表示",
+          "list": "セッションを検索"
+        },
         "oauth": {
           "waiting": "{server} の認可を待機中",
           "reconnecting": "{server} に再接続中…",

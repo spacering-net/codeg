@@ -193,9 +193,11 @@ describe("CollapsibleUserMessage", () => {
     ).not.toHaveClass("collapsed-content-fade")
   })
 
-  it("renders a session source separately from the message", () => {
+  it("renders the session source and receipt time separately from the message", () => {
+    const timestamp = "2026-01-01T12:34:56Z"
     renderWithIntl(
       <CollapsibleUserMessage
+        timestamp={timestamp}
         parts={[
           {
             type: "text",
@@ -204,7 +206,11 @@ describe("CollapsibleUserMessage", () => {
         ]}
       />
     )
-    expect(screen.getByText("Conversation #42")).toBeInTheDocument()
+    const source = screen.getByText("Conversation #42")
+    expect(source.parentElement?.querySelector("time")).toHaveAttribute(
+      "datetime",
+      timestamp
+    )
     expect(screen.getByText("hello")).toBeInTheDocument()
     expect(screen.queryByText(/Codeg message from/)).not.toBeInTheDocument()
   })

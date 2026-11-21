@@ -3993,6 +3993,13 @@
         "htmlPreviewHide": "미리보기 닫기"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "{session} 세션에 메시지 보내기",
+          "send": "세션 메시지 보내기",
+          "create": "세션 만들기",
+          "current": "현재 세션 보기",
+          "list": "세션 찾기"
+        },
         "oauth": {
           "waiting": "{server} 승인 대기 중",
           "reconnecting": "{server}에 다시 연결 중…",

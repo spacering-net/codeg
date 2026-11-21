@@ -3993,6 +3993,13 @@
         "htmlPreviewHide": "Vorschau ausblenden"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "Nachricht an {session} senden",
+          "send": "Nachricht an eine Sitzung senden",
+          "create": "Sitzung erstellen",
+          "current": "Aktuelle Sitzung anzeigen",
+          "list": "Sitzungen suchen"
+        },
         "oauth": {
           "waiting": "Warten auf Autorisierung für {server}",
           "reconnecting": "Verbindung zu {server} wird wiederhergestellt…",

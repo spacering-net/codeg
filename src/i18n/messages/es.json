@@ -3993,6 +3993,13 @@
         "htmlPreviewHide": "Ocultar vista previa"
       },
       "activity": {
+        "sessionCall": {
+          "sendTo": "Enviar un mensaje a {session}",
+          "send": "Enviar un mensaje a una sesión",
+          "create": "Crear una sesión",
+          "current": "Ver la sesión actual",
+          "list": "Buscar sesiones"
+        },
         "oauth": {
           "waiting": "Esperando autorización de {server}",
           "reconnecting": "Reconectando con {server}…",
