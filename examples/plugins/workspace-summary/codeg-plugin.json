@@ -3,7 +3,21 @@
   "id": "codeg.workspace-summary",
   "name": "Workspace Summary",
   "version": "1.0.0",
-  "server": { "entry": "summary.mjs", "methods": ["summary"] },
+  "server": {
+    "entry": "summary.mjs",
+    "methods": ["summary"],
+    "rpc": {
+      "summary": {
+        "input": {
+          "type": "object",
+          "properties": { "folderId": { "type": "integer" } },
+          "required": ["folderId"],
+          "additionalProperties": false
+        },
+        "output": { "type": "string" }
+      }
+    }
+  },
   "contributes": {
     "workspacePanels": [
       {

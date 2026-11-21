@@ -3,11 +3,11 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::invalid;
+use super::schema::Schema;
 use crate::app_error::AppCommandError;
 
 pub(super) const MAX_SETTINGS_BYTES: usize = 16 * 1024;
 pub(super) const MIGRATION_METHOD: &str = "settings.migrate";
-const SCHEMA_URL: &str = "https://codeg.invalid/plugin-settings.json";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -49,19 +49,12 @@ impl Definition {
 
     pub(super) fn check_value(&self, value: &Value) -> Result<(), AppCommandError> {
         check_size(value)?;
-        let mut compiler = boon::Compiler::new();
-        compiler.set_default_draft(boon::Draft::V2020_12);
-        compiler.use_loader(Box::new(NoExternalSchemas));
-        compiler
-            .add_resource(SCHEMA_URL, self.schema.clone())
-            .map_err(|_| invalid("Could not read the plugin settings schema"))?;
-        let mut schemas = boon::Schemas::new();
-        let index = compiler
-            .compile(SCHEMA_URL, &mut schemas)
+        let schema = Schema::compile(&self.schema)
             .map_err(|_| invalid("Invalid plugin settings JSON Schema"))?;
-        schemas
-            .validate(value, index)
-            .map_err(|_| invalid("Plugin settings do not match their JSON Schema"))
+        if !schema.matches(value) {
+            return Err(invalid("Plugin settings do not match their JSON Schema"));
+        }
+        Ok(())
     }
 }
 
@@ -74,12 +67,4 @@ pub(super) fn check_size(value: &Value) -> Result<(), AppCommandError> {
         ));
     }
     Ok(())
-}
-
-struct NoExternalSchemas;
-
-impl boon::UrlLoader for NoExternalSchemas {
-    fn load(&self, _url: &str) -> Result<Value, Box<dyn std::error::Error>> {
-        Err("Plugin settings schemas may only reference their own definitions".into())
-    }
 }

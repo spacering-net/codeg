@@ -16,6 +16,7 @@ use crate::web::event_bridge::{emit_event, EventEmitter};
 
 pub mod lifecycle;
 mod runtime;
+mod schema;
 mod settings;
 pub mod source;
 
@@ -52,7 +53,11 @@ pub struct Manifest {
 struct ServerModule {
     entry: String,
     methods: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    rpc: BTreeMap<String, schema::RpcDefinition>,
 }
+
+type RpcContracts = BTreeMap<String, Arc<schema::RpcContract>>;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -64,6 +69,7 @@ struct PluginBundle {
     manifest: Manifest,
     server_code: Option<Arc<str>>,
     client_html: Option<Arc<str>>,
+    rpc: RpcContracts,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -176,6 +182,8 @@ pub struct InstalledPlugin {
     client_html: Option<Arc<str>>,
     #[serde(default, skip_serializing)]
     settings: Option<PluginSettings>,
+    #[serde(skip)]
+    rpc: RpcContracts,
     /// An in-flight download may commit only to the installed definition it read.
     /// Toggling the plugin does not replace its definition.
     #[serde(skip)]
@@ -345,6 +353,7 @@ impl HostPlugins {
                 server_code: bundle.server_code,
                 client_html: bundle.client_html,
                 settings,
+                rpc: bundle.rpc,
                 revision: Arc::new(()),
                 activation: Arc::new(()),
             },
@@ -442,6 +451,7 @@ impl HostPlugins {
             manifest,
             server_code,
             client_html,
+            rpc,
         } = bundle;
         if !Arc::ptr_eq(&current.revision, revision) {
             return Err(invalid(
@@ -492,6 +502,7 @@ impl HostPlugins {
                 server_code,
                 client_html,
                 settings,
+                rpc,
                 revision: Arc::new(()),
                 activation: Arc::new(()),
             },
@@ -549,6 +560,7 @@ impl HostPlugins {
             method,
             activation,
             settings,
+            contract,
         } = invocation;
         let slot = self
             .runtime_slots
@@ -565,6 +577,7 @@ impl HostPlugins {
                 &method,
                 &input,
                 settings.as_ref().map(|settings| &settings.value),
+                contract.as_deref(),
             )
         })
         .await
@@ -767,6 +780,7 @@ struct Invocation {
     method: String,
     activation: Arc<()>,
     settings: Option<PluginSettings>,
+    contract: Option<Arc<schema::RpcContract>>,
 }
 
 impl Invocation {
@@ -776,6 +790,7 @@ impl Invocation {
             id: id.to_owned(),
             entry: server.entry.clone(),
             code: plugin.server_code.clone()?,
+            contract: plugin.rpc.get(&method).cloned(),
             method,
             activation: plugin.activation.clone(),
             settings: plugin
@@ -849,6 +864,7 @@ impl InstalledPlugin {
             settings::MIGRATION_METHOD,
             &serde_json::json!({ "fromVersion": old.version, "toVersion": definition.version, "value": old.value }),
             None,
+            None,
         )?;
         definition.check_value(&value)?;
         self.settings = Some(PluginSettings::new(definition.version, value));
@@ -857,6 +873,19 @@ impl InstalledPlugin {
 }
 
 impl Manifest {
+    fn compile_rpc(&self) -> Result<RpcContracts, String> {
+        self.server
+            .iter()
+            .flat_map(|server| &server.rpc)
+            .map(|(method, definition)| {
+                definition
+                    .compile()
+                    .map(|contract| (method.clone(), Arc::new(contract)))
+                    .map_err(|error| format!("Plugin method {method} has an {error}"))
+            })
+            .collect()
+    }
+
     fn parse(text: &str) -> Result<Self, AppCommandError> {
         if text.len() > MAX_MANIFEST_BYTES {
             return Err(invalid("Plugin manifest exceeds 64 KiB"));
@@ -895,6 +924,9 @@ impl Manifest {
                 return Err(
                     "Provide a root .mjs file and up to 16 unique plugin methods".to_owned(),
                 );
+            }
+            if server.rpc.keys().any(|method| !methods.contains(method)) {
+                return Err("RPC contracts must name declared server methods".to_owned());
             }
         }
         if let Some(definition) = &self.settings {
@@ -990,6 +1022,7 @@ impl PluginBundle {
             manifest,
             server_code: None,
             client_html: None,
+            rpc: BTreeMap::new(),
         })
     }
 }
@@ -1043,6 +1076,7 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
     let mut result = Catalog::new();
     for mut plugin in catalog {
         plugin.manifest.validate()?;
+        plugin.rpc = plugin.manifest.compile_rpc()?;
         match (&plugin.manifest.server, &plugin.server_code) {
             (None, None) => {}
             (Some(_), Some(code))
@@ -1239,6 +1273,80 @@ mod tests {
         for rejected in [missing_entry, duplicate, unknown] {
             assert!(Manifest::parse(&rejected.to_string()).is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn enforces_rpc_schemas_across_install_call_and_restart() {
+        use serde_json::{json, Value};
+
+        let data = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let manifest_path = source.path().join("codeg-plugin.json");
+        let source_dir = source.path().to_str().unwrap();
+        let id = "test.typed-rpc";
+        let mut manifest = json!({
+            "apiVersion": 2, "id": id, "name": "Typed RPC", "version": "1.0.0",
+            "server": {
+                "entry": "echo.mjs", "methods": ["echo", "legacy"],
+                "rpc": { "echo": {
+                    "input": { "$ref": "#/$defs/message", "$defs": {"message": {"type": "integer"}} },
+                    "output": { "type": "integer" }
+                }}
+            },
+            "contributes": {}
+        });
+        std::fs::write(source.path().join("echo.mjs"),
+            "export const handle = (method, value) => method === 'echo' && value === 0 ? 'wrong result' : value;").unwrap();
+        let plugins = HostPlugins::new(data.path());
+        let mut remote_schema = manifest.clone();
+        remote_schema["server"]["rpc"]["echo"]["input"] =
+            json!({"$ref":"https://example.invalid/schema"});
+        std::fs::write(&manifest_path, remote_schema.to_string()).unwrap();
+        let error = plugins
+            .preview_install(source_dir, source::Registry::Npm, None)
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("invalid input JSON Schema"));
+
+        std::fs::write(&manifest_path, manifest.to_string()).unwrap();
+        let preview = plugins
+            .preview_install(source_dir, source::Registry::Npm, None)
+            .await
+            .unwrap();
+        plugins.confirm_install(preview.ticket).unwrap();
+        plugins
+            .apply(Mutation::SetEnabled {
+                id: id.into(),
+                enabled: true,
+            })
+            .unwrap();
+        let reopened = HostPlugins::new(data.path());
+        assert_eq!(
+            reopened.call(id, "echo".into(), json!(2)).await.unwrap(),
+            json!(2)
+        );
+        assert_eq!(
+            reopened
+                .call(id, "legacy".into(), Value::Null)
+                .await
+                .unwrap(),
+            Value::Null
+        );
+        let bad_input = reopened
+            .call(id, "echo".into(), json!("2"))
+            .await
+            .unwrap_err();
+        assert!(matches!(bad_input.code, AppErrorCode::InvalidInput));
+        let bad_output = reopened
+            .call(id, "echo".into(), json!(0))
+            .await
+            .unwrap_err();
+        assert!(matches!(bad_output.code, AppErrorCode::TaskExecutionFailed));
+
+        manifest["server"]["rpc"]["echo"]["output"] = json!({"type":"string"});
+        std::fs::write(&manifest_path, manifest.to_string()).unwrap();
+        assert!(reopened.update(id).await.unwrap().disabled_for_update);
     }
 
     #[tokio::test]
