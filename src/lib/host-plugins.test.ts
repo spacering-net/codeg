@@ -10,19 +10,30 @@ import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
+  MAX_PLUGIN_WORKSPACE_ROW_BADGES,
+  MAX_WORKSPACE_ROW_BADGE_LABEL_CHARS,
+  WORKSPACE_ROW_BADGE_BATCH_SIZE,
+  WORKSPACE_ROW_BADGE_TONES,
+  buildWorkspaceRowBadgeInputs,
+  chunkWorkspaceRowBadgeInputs,
   hostPluginSessionScopeKey,
+  parseWorkspaceRowBadgeResults,
+  parseWorkspaceRowBadgeTone,
   pluginClientSurfaceKey,
   pluginScreenKey,
   pluginSidebarItemKey,
   pluginThemeKey,
+  pluginWorkspaceRowBadgeKey,
   resolvePluginHostScope,
   resolvePluginHostSurface,
   resolvePluginScreen,
   resolvePluginText,
+  sanitizeWorkspaceRowBadgeLabel,
   selectPluginClientSurfaces,
   selectPluginScreens,
   selectPluginSidebarItems,
   selectPluginThemes,
+  selectPluginWorkspaceRowBadges,
   validatePluginComposerInsertPayload,
   type InstalledPlugin,
   type PluginTextTranslations,
@@ -908,5 +919,294 @@ describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems
     ).not.toBeNull()
     expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
     expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
+  })
+})
+
+describe("workspace row badges manifest selection, validation, and batching", () => {
+  it("selects enabled workspace row badges only when method is declared in the same plugin server.methods, localizes titles, and caps at 16", () => {
+    const plugins: InstalledPlugin[] = [
+      {
+        enabled: true,
+        manifest: {
+          id: "codeg.badges",
+          name: "Workspace Row Badges",
+          nameTranslations: {
+            es: "Insignias de espacio de trabajo",
+            "zh-CN": "工作区行徽标",
+          },
+          version: "1.0.0",
+          server: {
+            entry: "badges.mjs",
+            methods: ["worktree-badges", "status-badges"],
+          },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            workspaceRowBadges: [
+              {
+                id: "worktree",
+                title: "Git worktree",
+                titleTranslations: {
+                  es: "Árbol de trabajo de Git",
+                },
+                method: "worktree-badges",
+              },
+              {
+                id: "worktree",
+                title: "Duplicate worktree badge",
+                method: "worktree-badges",
+              },
+              {
+                id: "undeclared",
+                title: "Missing method",
+                method: "not-declared",
+              },
+              {
+                id: "status",
+                title: "Repo status",
+                method: "status-badges",
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.cross-method",
+          name: "Cross Method Attempt",
+          version: "1.0.0",
+          server: {
+            entry: "other.mjs",
+            methods: ["own-method"],
+          },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            workspaceRowBadges: [
+              // Must NOT allow calling another plugin's method name if not declared on this plugin
+              {
+                id: "steal",
+                title: "Steal",
+                method: "worktree-badges",
+              },
+              {
+                id: "own",
+                title: "Own Badge",
+                method: "own-method",
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.no-server",
+          name: "No Server",
+          version: "1.0.0",
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            workspaceRowBadges: [
+              { id: "nope", title: "Nope", method: "worktree-badges" },
+            ],
+          },
+        },
+      },
+      {
+        enabled: false,
+        manifest: {
+          id: "acme.disabled",
+          name: "Disabled",
+          version: "1.0.0",
+          server: { entry: "disabled.mjs", methods: ["disabled-badges"] },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            workspaceRowBadges: [
+              { id: "off", title: "Off", method: "disabled-badges" },
+            ],
+          },
+        },
+      },
+    ]
+
+    expect(selectPluginWorkspaceRowBadges(plugins, "es-MX")).toEqual([
+      {
+        key: pluginWorkspaceRowBadgeKey("codeg.badges", "worktree"),
+        pluginId: "codeg.badges",
+        pluginName: "Insignias de espacio de trabajo",
+        id: "worktree",
+        title: "Árbol de trabajo de Git",
+        method: "worktree-badges",
+      },
+      {
+        key: pluginWorkspaceRowBadgeKey("codeg.badges", "status"),
+        pluginId: "codeg.badges",
+        pluginName: "Insignias de espacio de trabajo",
+        id: "status",
+        title: "Repo status",
+        method: "status-badges",
+      },
+      {
+        key: pluginWorkspaceRowBadgeKey("acme.cross-method", "own"),
+        pluginId: "acme.cross-method",
+        pluginName: "Cross Method Attempt",
+        id: "own",
+        title: "Own Badge",
+        method: "own-method",
+      },
+    ])
+
+    const capped: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.capped",
+        name: "Capped",
+        version: "1.0.0",
+        server: { entry: "badges.mjs", methods: ["batch"] },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          workspaceRowBadges: Array.from({ length: 20 }, (_, index) => ({
+            id: `badge-${index + 1}`,
+            title: `Badge ${index + 1}`,
+            method: "batch",
+          })),
+        },
+      },
+    }
+    expect(MAX_PLUGIN_WORKSPACE_ROW_BADGES).toBe(16)
+    expect(selectPluginWorkspaceRowBadges([capped])).toHaveLength(16)
+  })
+
+  it("reads and resolves the bundled workspace-row-badges example manifest", () => {
+    const manifestPath = resolve(
+      process.cwd(),
+      "examples/plugins/workspace-row-badges/codeg-plugin.json"
+    )
+    const manifest = JSON.parse(
+      readFileSync(manifestPath, "utf8")
+    ) as InstalledPlugin["manifest"]
+    const installed: InstalledPlugin = { enabled: true, manifest }
+
+    expect(selectPluginWorkspaceRowBadges([installed], "es")).toEqual([
+      {
+        key: "codeg.workspace-row-badges:worktree",
+        pluginId: "codeg.workspace-row-badges",
+        pluginName: "Workspace Row Badges",
+        id: "worktree",
+        title: "Árbol de trabajo de Git",
+        method: "worktree-badges",
+      },
+    ])
+  })
+
+  it("validates badge labels (<=32 Unicode chars, no whitespace/control anomalies) and tones", () => {
+    expect(MAX_WORKSPACE_ROW_BADGE_LABEL_CHARS).toBe(32)
+    expect(WORKSPACE_ROW_BADGE_TONES).toEqual([
+      "muted",
+      "success",
+      "warning",
+      "danger",
+      "info",
+    ])
+
+    expect(sanitizeWorkspaceRowBadgeLabel("Git")).toBe("Git")
+    expect(sanitizeWorkspaceRowBadgeLabel("PR #42")).toBe("PR #42")
+    expect(sanitizeWorkspaceRowBadgeLabel("a".repeat(32))).toBe("a".repeat(32))
+    // 32 emoji = 64 UTF-16 code units, 32 Unicode scalar values -> allowed
+    expect(sanitizeWorkspaceRowBadgeLabel("🚀".repeat(32))).toBe(
+      "🚀".repeat(32)
+    )
+    // 33 Unicode scalar values -> rejected
+    expect(sanitizeWorkspaceRowBadgeLabel("a".repeat(33))).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("🚀".repeat(33))).toBeNull()
+
+    // Empty, whitespace-only, leading/trailing whitespace, control/bidi/separator chars -> rejected
+    expect(sanitizeWorkspaceRowBadgeLabel("")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("   ")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel(" Git")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("Git ")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("line1\nline2")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("line1\rline2")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("col1\tcol2")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("nul\0byte")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("\x1b[31mred")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("sep\u2028break")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("\u200b")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("bidi\u202espoof")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel("\ufeffbom")).toBeNull()
+    expect(sanitizeWorkspaceRowBadgeLabel(123)).toBeNull()
+
+    expect(parseWorkspaceRowBadgeTone(undefined)).toBe("muted")
+    for (const tone of WORKSPACE_ROW_BADGE_TONES) {
+      expect(parseWorkspaceRowBadgeTone(tone)).toBe(tone)
+    }
+    expect(parseWorkspaceRowBadgeTone("rainbow")).toBeNull()
+    expect(parseWorkspaceRowBadgeTone(null)).toBeNull()
+    expect(parseWorkspaceRowBadgeTone(42)).toBeNull()
+  })
+
+  it("parses batch results strictly: requested IDs only, deduped, ignoring malformed items", () => {
+    const allowed = new Set([1, 2, 3])
+    expect(parseWorkspaceRowBadgeResults({ not: "array" }, allowed).size).toBe(
+      0
+    )
+
+    const parsed = parseWorkspaceRowBadgeResults(
+      [
+        null,
+        "bad",
+        { folderId: 999, label: "Unrequested", tone: "info" },
+        { folderId: 1, label: "First", tone: "success" },
+        { folderId: 1, label: "Duplicate", tone: "danger" },
+        { folderId: 2, label: "bad\nlabel", tone: "warning" },
+        { folderId: 2, label: "Valid after bad" },
+        { folderId: 3, label: "Bad tone", tone: "neon" },
+      ],
+      allowed
+    )
+
+    expect(Array.from(parsed.entries())).toEqual([
+      [1, { label: "First", tone: "success" }],
+      [2, { label: "Valid after bad", tone: "muted" }],
+    ])
+  })
+
+  it("builds real workspace inputs excluding chat folders and chunks into bounded batches", () => {
+    const folders = [
+      { id: 1, parent_id: null, git_branch: "old-main", kind: "local" },
+      { id: 2, parent_id: 1, git_branch: "feat/wt", kind: "local" },
+      { id: 3, parent_id: null, git_branch: "detached-old", kind: "local" },
+      { id: 4, parent_id: null, git_branch: null, kind: "chat" },
+      { id: 1, parent_id: null, git_branch: "dup", kind: "local" },
+    ]
+    const branches = new Map<number, string | null>([
+      [1, "main"],
+      [3, null],
+    ])
+
+    const inputs = buildWorkspaceRowBadgeInputs(folders, branches)
+    expect(inputs).toEqual([
+      { folderId: 1, parentFolderId: null, branch: "main" },
+      { folderId: 2, parentFolderId: 1, branch: "feat/wt" },
+      { folderId: 3, parentFolderId: null, branch: null },
+    ])
+
+    expect(WORKSPACE_ROW_BADGE_BATCH_SIZE).toBe(64)
+    const many = Array.from({ length: 130 }, (_, index) => ({
+      folderId: index + 1,
+      parentFolderId: null,
+      branch: null,
+    }))
+    const chunks = chunkWorkspaceRowBadgeInputs(many)
+    expect(chunks.map((batch) => batch.length)).toEqual([64, 64, 2])
   })
 })
