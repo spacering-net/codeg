@@ -576,7 +576,7 @@ mod tests {
             .await
             .unwrap();
         let preview = serde_json::to_value(preview).unwrap();
-        let ticket = preview["ticket"].as_str().unwrap().to_owned();
+        let ticket = preview["ticket"].as_str().unwrap().parse().unwrap();
         state.host_plugins.confirm_install(ticket).unwrap();
         state
             .host_plugins
