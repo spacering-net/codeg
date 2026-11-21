@@ -2492,6 +2492,7 @@ pub fn build_router_with_srn(
         .route("/host_plugins_activity", post(handlers::host_plugins::activity))
         .route("/host_plugins_call", post(handlers::host_plugins::call))
         .route("/host_plugins_client_html", post(handlers::host_plugins::client_html))
+        .route("/host_plugins_settings", post(handlers::host_plugins::settings))
         .route(
             "/host_plugins_install_source",
             post(handlers::host_plugins::install_source),

@@ -13,13 +13,35 @@
 </style>
 <p id="description" aria-live="polite">Loading workspace context…</p>
 <button id="refresh" type="button" hidden>Refresh workspace details</button>
+<div id="preferences" hidden>
+  <p><label for="workspace-label">Workspace label</label></p>
+  <input id="workspace-label" maxlength="50" />
+  <button id="save" type="button">Save</button>
+</div>
 <script>
-  window.codeg.ready.then((context) => {
+  window.codeg.ready.then(async (context) => {
     const description = document.getElementById("description")
     const refresh = document.getElementById("refresh")
     if (context.type === "settingsPanel") {
-      description.textContent =
-        "The Inspector shows the active workspace and display language."
+      const field = document.getElementById("workspace-label")
+      const save = document.getElementById("save")
+      let snapshot = await window.codeg.settings.read()
+      field.value = snapshot.value.label
+      document.getElementById("preferences").hidden = false
+      description.textContent = ""
+      save.addEventListener("click", async () => {
+        save.disabled = true
+        try {
+          snapshot = await window.codeg.settings.save(snapshot.revision, {
+            label: field.value,
+          })
+          description.textContent = "Saved"
+        } catch (error) {
+          description.textContent = error.message
+        } finally {
+          save.disabled = false
+        }
+      })
       return
     }
     async function describe() {

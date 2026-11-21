@@ -11,16 +11,18 @@ const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 const MEMORY_LIMIT: usize = 16 * 1024 * 1024;
 const EXECUTION_LIMIT: Duration = Duration::from_millis(500);
 
-pub(super) fn call(
+pub(super) fn call_with_settings(
     entry: &str,
     code: &str,
     method: &str,
     input: &Json,
+    settings: Option<&Json>,
 ) -> Result<Json, AppCommandError> {
     let input = serde_json::to_vec(input).map_err(|_| invalid("Invalid plugin input"))?;
     if input.len() > MAX_MESSAGE_BYTES {
         return Err(invalid("Plugin input exceeds 64 KiB"));
     }
+    let settings = serde_json::to_vec(&settings).map_err(|_| invalid("Invalid plugin settings"))?;
 
     let deadline = Instant::now() + EXECUTION_LIMIT;
     let runtime = Runtime::new().map_err(|_| failed())?;
@@ -34,7 +36,8 @@ pub(super) fn call(
         resolve(&ctx, initialized, deadline)?;
         let handle: Function<'_> = module.get("handle")?;
         let input = ctx.json_parse(input)?;
-        let result: Value<'_> = handle.call((method, input))?;
+        let settings = ctx.json_parse(settings)?;
+        let result: Value<'_> = handle.call((method, input, settings))?;
         let result = match result.as_promise() {
             Some(promise) => resolve(&ctx, promise.clone(), deadline)?,
             None => result,
@@ -86,11 +89,12 @@ mod tests {
 
     #[test]
     fn resolves_json_promises_without_ambient_host_apis() {
-        let output = call(
+        let output = call_with_settings(
             "fixture.mjs",
             "export async function handle(method, input) { return [method, input, typeof fetch, typeof process]; }",
             "echo",
             &json!({ "value": 42 }),
+            None,
         ).unwrap();
         assert_eq!(
             output,
@@ -100,11 +104,12 @@ mod tests {
 
     #[test]
     fn interrupts_a_nonterminating_handler() {
-        let error = call(
+        let error = call_with_settings(
             "fixture.mjs",
             "export function handle() { while (true) {} }",
             "loop",
             &Json::Null,
+            None,
         )
         .unwrap_err();
         assert!(error.to_string().contains("execution time limit"));
@@ -116,7 +121,7 @@ mod tests {
             "export const handle = () => 'a'.repeat(65536)",
             "import fs from 'node:fs'; export const handle = () => fs",
         ] {
-            assert!(call("fixture.mjs", code, "test", &Json::Null).is_err());
+            assert!(call_with_settings("fixture.mjs", code, "test", &Json::Null, None).is_err());
         }
     }
 }

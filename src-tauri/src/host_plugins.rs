@@ -15,7 +15,10 @@ use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 mod runtime;
+mod settings;
 pub mod source;
+
+pub use settings::Snapshot as PluginSettings;
 
 pub const CATALOG_CHANGED: &str = "host-plugins://changed";
 const ACTIVITY_CHANGED: &str = "host-plugins://activity";
@@ -38,6 +41,8 @@ pub struct Manifest {
     server: Option<ServerModule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     client: Option<ClientModule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    settings: Option<settings::Definition>,
     contributes: Contributions,
 }
 
@@ -149,6 +154,8 @@ pub struct InstalledPlugin {
     server_code: Option<Arc<str>>,
     #[serde(default, skip_serializing)]
     client_html: Option<Arc<str>>,
+    #[serde(default, skip_serializing)]
+    settings: Option<PluginSettings>,
     /// An in-flight download may commit only to the installed definition it read.
     /// Toggling the plugin does not replace its definition.
     #[serde(skip)]
@@ -192,6 +199,16 @@ pub enum Mutation {
     Install { manifest: String },
     SetEnabled { id: String, enabled: bool },
     Remove { id: String },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum SettingsRequest {
+    Read,
+    Save {
+        revision: Uuid,
+        value: serde_json::Value,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -262,6 +279,15 @@ impl HostPlugins {
             if plugin.enabled == enabled {
                 return Ok(next.into_values().collect());
             }
+            if enabled && plugin.needs_settings_migration() {
+                let _slot = self.runtime_slots.try_acquire().map_err(|_| {
+                    AppCommandError::new(
+                        AppErrorCode::TaskExecutionFailed,
+                        "Plugin runtime is busy",
+                    )
+                })?;
+                plugin.migrate_settings()?;
+            }
             plugin.enabled = enabled;
             plugin.activation = Arc::new(());
         } else {
@@ -284,6 +310,10 @@ impl HostPlugins {
         let state = state.as_mut().map_err(|error| catalog_error(error))?;
         let mut next = state.catalog.clone();
         check_install(&next, &bundle.manifest.id)?;
+        let settings =
+            bundle.manifest.settings.as_ref().map(|definition| {
+                PluginSettings::new(definition.version, definition.defaults.clone())
+            });
         next.insert(
             bundle.manifest.id.clone(),
             InstalledPlugin {
@@ -292,6 +322,7 @@ impl HostPlugins {
                 source,
                 server_code: bundle.server_code,
                 client_html: bundle.client_html,
+                settings,
                 revision: Arc::new(()),
                 activation: Arc::new(()),
             },
@@ -412,6 +443,8 @@ impl HostPlugins {
             || current.server_code != server_code
             || current.manifest.client != manifest.client
             || current.client_html != client_html;
+        let settings_changed = current.manifest.settings != manifest.settings;
+        let settings = current.settings_for_update(manifest.settings.as_ref())?;
         if current.manifest == manifest
             && current.source.as_ref() == Some(&source)
             && !runtime_changed
@@ -422,8 +455,8 @@ impl HostPlugins {
                 disabled_for_update: false,
             });
         }
-        let enabled = current.enabled && !runtime_changed;
-        let disabled_for_update = current.enabled && runtime_changed;
+        let enabled = current.enabled && !runtime_changed && !settings_changed;
+        let disabled_for_update = current.enabled && !enabled;
         let discard_activity =
             !enabled || manifest.contributes.hooks != current.manifest.contributes.hooks;
         let mut next = state.catalog.clone();
@@ -435,6 +468,7 @@ impl HostPlugins {
                 source: Some(source),
                 server_code,
                 client_html,
+                settings,
                 revision: Arc::new(()),
                 activation: Arc::new(()),
             },
@@ -457,7 +491,7 @@ impl HostPlugins {
         method: String,
         input: serde_json::Value,
     ) -> Result<serde_json::Value, AppCommandError> {
-        let (entry, code, activation) = {
+        let (entry, code, activation, settings) = {
             let guard = self.state.lock().expect("host plugin state lock");
             let state = guard.as_ref().map_err(|error| catalog_error(error))?;
             let plugin = state
@@ -476,7 +510,18 @@ impl HostPlugins {
                 ));
             }
             let code = plugin.server_code.clone().ok_or_else(plugin_not_found)?;
-            (server.entry.clone(), code, plugin.activation.clone())
+            let settings = plugin
+                .manifest
+                .settings
+                .as_ref()
+                .and(plugin.settings.as_ref())
+                .cloned();
+            (
+                server.entry.clone(),
+                code,
+                plugin.activation.clone(),
+                settings,
+            )
         };
         let slot = self
             .runtime_slots
@@ -487,7 +532,13 @@ impl HostPlugins {
             })?;
         let result = tokio::task::spawn_blocking(move || {
             let _slot = slot;
-            runtime::call(&entry, &code, &method, &input)
+            runtime::call_with_settings(
+                &entry,
+                &code,
+                &method,
+                &input,
+                settings.as_ref().map(|settings| &settings.value),
+            )
         })
         .await
         .map_err(|_| {
@@ -503,6 +554,49 @@ impl HostPlugins {
             return Err(plugin_not_found());
         }
         result
+    }
+
+    pub fn settings(&self, id: &str) -> Result<PluginSettings, AppCommandError> {
+        let guard = self.state.lock().expect("host plugin state lock");
+        let state = guard.as_ref().map_err(|error| catalog_error(error))?;
+        state
+            .catalog
+            .get(id)
+            .filter(|plugin| plugin.enabled && plugin.manifest.settings.is_some())
+            .and_then(|plugin| plugin.settings.clone())
+            .ok_or_else(plugin_not_found)
+    }
+
+    pub fn save_settings(
+        &self,
+        id: &str,
+        revision: Uuid,
+        value: serde_json::Value,
+    ) -> Result<PluginSettings, AppCommandError> {
+        let mut guard = self.state.lock().expect("host plugin state lock");
+        let state = guard.as_mut().map_err(|error| catalog_error(error))?;
+        let mut next = state.catalog.clone();
+        let plugin = next
+            .get_mut(id)
+            .filter(|plugin| plugin.enabled)
+            .ok_or_else(plugin_not_found)?;
+        let definition = plugin
+            .manifest
+            .settings
+            .as_ref()
+            .ok_or_else(plugin_not_found)?;
+        let old = plugin.settings.as_ref().ok_or_else(plugin_not_found)?;
+        if old.revision != revision {
+            return Err(invalid(
+                "Plugin settings changed. Read the current settings before saving.",
+            ));
+        }
+        definition.check_value(&value)?;
+        let settings = PluginSettings::new(definition.version, value);
+        plugin.settings = Some(settings.clone());
+        write_catalog(&self.path, &next)?;
+        state.catalog = next;
+        Ok(settings)
     }
 
     pub fn client_html(&self, id: &str) -> Result<Arc<str>, AppCommandError> {
@@ -605,6 +699,74 @@ impl HostPlugins {
     }
 }
 
+impl InstalledPlugin {
+    fn settings_for_update(
+        &self,
+        definition: Option<&settings::Definition>,
+    ) -> Result<Option<PluginSettings>, AppCommandError> {
+        let Some(definition) = definition else {
+            return Ok(self.settings.clone());
+        };
+        let Some(old) = &self.settings else {
+            return Ok(Some(PluginSettings::new(
+                definition.version,
+                definition.defaults.clone(),
+            )));
+        };
+        if definition.version < old.version {
+            return Err(invalid(
+                "The update declares an older settings schema version",
+            ));
+        }
+        if definition.version == old.version || !definition.migrate {
+            definition.check_value(&old.value)?;
+            if self.manifest.settings.as_ref() == Some(definition) {
+                return Ok(Some(old.clone()));
+            }
+            return Ok(Some(PluginSettings::new(
+                definition.version,
+                old.value.clone(),
+            )));
+        }
+        // The update remains disabled until an explicit enable runs the migration.
+        Ok(Some(old.clone()))
+    }
+
+    fn needs_settings_migration(&self) -> bool {
+        self.manifest
+            .settings
+            .as_ref()
+            .zip(self.settings.as_ref())
+            .is_some_and(|(definition, old)| definition.version != old.version)
+    }
+
+    fn migrate_settings(&mut self) -> Result<(), AppCommandError> {
+        let Some((definition, old)) = self.manifest.settings.as_ref().zip(self.settings.as_ref())
+        else {
+            return Ok(());
+        };
+        if definition.version == old.version {
+            return Ok(());
+        }
+        let (server, code) = self
+            .manifest
+            .server
+            .as_ref()
+            .zip(self.server_code.as_deref())
+            .ok_or_else(|| invalid("The plugin settings migration needs a server module"))?;
+        let value = runtime::call_with_settings(
+            &server.entry,
+            code,
+            settings::MIGRATION_METHOD,
+            &serde_json::json!({ "fromVersion": old.version, "toVersion": definition.version, "value": old.value }),
+            None,
+        )?;
+        definition.check_value(&value)?;
+        self.settings = Some(PluginSettings::new(definition.version, value));
+        Ok(())
+    }
+}
+
 impl Manifest {
     fn parse(text: &str) -> Result<Self, AppCommandError> {
         if text.len() > MAX_MANIFEST_BYTES {
@@ -635,13 +797,23 @@ impl Manifest {
             if !server.entry.strip_suffix(".mjs").is_some_and(valid_id)
                 || server.methods.is_empty()
                 || server.methods.len() > MAX_CONTRIBUTIONS
-                || !server
-                    .methods
-                    .iter()
-                    .all(|method| valid_id(method) && methods.insert(method))
+                || !server.methods.iter().all(|method| {
+                    valid_id(method)
+                        && method != settings::MIGRATION_METHOD
+                        && methods.insert(method)
+                })
             {
                 return Err("Provide a root .mjs file and 1 to 16 unique plugin methods".to_owned());
             }
+        }
+        if let Some(definition) = &self.settings {
+            if !bundled || (definition.migrate && self.server.is_none()) {
+                return Err(
+                    "Plugin settings need a module and executable migrations need a server entry"
+                        .to_owned(),
+                );
+            }
+            definition.validate().map_err(|error| error.to_string())?;
         }
         if self
             .client
@@ -742,9 +914,11 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
         Err(error) => return Err(error.to_string()),
     };
     // A JSON string can expand each byte to a six-byte escape sequence.
-    let max_bytes =
-        ((MAX_MANIFEST_BYTES + (runtime::MAX_MODULE_BYTES + MAX_CLIENT_HTML_BYTES) * 6 + 4096)
-            * MAX_PLUGINS) as u64;
+    let max_bytes = ((MAX_MANIFEST_BYTES
+        + (runtime::MAX_MODULE_BYTES + MAX_CLIENT_HTML_BYTES) * 6
+        + settings::MAX_SETTINGS_BYTES
+        + 4096)
+        * MAX_PLUGINS) as u64;
     let mut bytes = Vec::new();
     file.take(max_bytes + 1)
         .read_to_end(&mut bytes)
@@ -758,7 +932,7 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
         return Err("Too many installed host plugins".to_owned());
     }
     let mut result = Catalog::new();
-    for plugin in catalog {
+    for mut plugin in catalog {
         plugin.manifest.validate()?;
         match (&plugin.manifest.server, &plugin.server_code) {
             (None, None) => {}
@@ -771,6 +945,26 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
             (Some(_), Some(html))
                 if html.len() <= MAX_CLIENT_HTML_BYTES && !html.trim().is_empty() => {}
             _ => return Err("Missing or invalid installed plugin client module".to_owned()),
+        }
+        if let Some(settings) = &plugin.settings {
+            settings::check_size(&settings.value).map_err(|error| error.to_string())?;
+            if let Some(definition) = &plugin.manifest.settings {
+                if definition.version < settings.version
+                    || (plugin.enabled && definition.version != settings.version)
+                {
+                    return Err("The installed plugin settings version is invalid".to_owned());
+                }
+                if definition.version == settings.version {
+                    definition
+                        .check_value(&settings.value)
+                        .map_err(|error| error.to_string())?;
+                }
+            }
+        } else if let Some(definition) = &plugin.manifest.settings {
+            plugin.settings = Some(PluginSettings::new(
+                definition.version,
+                definition.defaults.clone(),
+            ));
         }
         if result.insert(plugin.manifest.id.clone(), plugin).is_some() {
             return Err("Duplicate installed plugin ID".to_owned());
@@ -788,6 +982,8 @@ fn write_catalog(path: &Path, catalog: &Catalog) -> Result<(), AppCommandError> 
         server_code: Option<&'a str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         client_html: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        settings: Option<&'a PluginSettings>,
     }
     let write = || -> Result<(), Box<dyn std::error::Error>> {
         let dir = path.parent().expect("host plugin catalog has a parent");
@@ -799,6 +995,7 @@ fn write_catalog(path: &Path, catalog: &Catalog) -> Result<(), AppCommandError> 
                 plugin,
                 server_code: plugin.server_code.as_deref(),
                 client_html: plugin.client_html.as_deref(),
+                settings: plugin.settings.as_ref(),
             })
             .collect();
         serde_json::to_writer(&mut file, &stored)?;
@@ -1056,6 +1253,93 @@ mod tests {
         assert_eq!(
             reopened.client_html(id).unwrap().as_ref(),
             "<p>Updated client</p>"
+        );
+    }
+
+    #[tokio::test]
+    async fn settings_are_validated_and_migrated_when_an_update_is_enabled() {
+        let data = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let id = "codeg.workspace-inspector";
+        let host = HostPlugins::new(data.path());
+        let source = directory.path();
+        let path = source.join("codeg-plugin.json");
+        let module = source.join("inspector.mjs");
+        let enable = || Mutation::SetEnabled {
+            id: id.into(),
+            enabled: true,
+        };
+        let mut manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../examples/plugins/workspace-inspector/codeg-plugin.json"
+        ))
+        .unwrap();
+        std::fs::write(&path, manifest.to_string()).unwrap();
+        std::fs::write(
+            &module,
+            include_str!("../../examples/plugins/workspace-inspector/inspector.mjs"),
+        )
+        .unwrap();
+        std::fs::write(source.join("inspector.html"), "<p>Test</p>").unwrap();
+        let preview = host
+            .preview_install(source.to_str().unwrap(), source::Registry::Npm, None)
+            .await
+            .unwrap();
+        host.confirm_install(preview.ticket).unwrap();
+        host.apply(enable()).unwrap();
+
+        let defaults = host.settings(id).unwrap();
+        assert_eq!(defaults.value, serde_json::json!({"label":"Workspace"}));
+        assert!(host
+            .save_settings(id, defaults.revision, serde_json::json!({"label":42}))
+            .is_err());
+        let saved = host
+            .save_settings(
+                id,
+                defaults.revision,
+                serde_json::json!({"label":"Project"}),
+            )
+            .unwrap();
+        assert!(host
+            .save_settings(id, defaults.revision, defaults.value)
+            .is_err());
+        assert_eq!(
+            HostPlugins::new(data.path()).settings(id).unwrap().revision,
+            saved.revision
+        );
+
+        manifest["version"] = serde_json::json!("2.0.0");
+        manifest["settings"] = serde_json::json!({
+            "version": 2, "migrate": true, "defaults": {"name": "Workspace"},
+            "schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"], "additionalProperties": false}
+        });
+        std::fs::write(&path, manifest.to_string()).unwrap();
+        std::fs::write(&module, "export const handle = () => null").unwrap();
+        assert!(host.update(id).await.unwrap().disabled_for_update);
+        assert!(host.apply(enable()).is_err());
+        assert!(!host.list().unwrap()[0].enabled);
+
+        std::fs::write(&module, "export function handle(method, input, settings) { if (method === 'settings.migrate') return {name: input.value.label}; return settings.name; }").unwrap();
+        assert!(host.update(id).await.unwrap().updated);
+        let reopened = HostPlugins::new(data.path());
+        reopened.apply(enable()).unwrap();
+        let settings = reopened.settings(id).unwrap();
+        assert_eq!(settings.version, 2);
+        assert_eq!(settings.value, serde_json::json!({"name":"Project"}));
+        assert_ne!(settings.revision, saved.revision);
+        assert!(reopened
+            .call(
+                id,
+                settings::MIGRATION_METHOD.into(),
+                serde_json::Value::Null
+            )
+            .await
+            .is_err());
+        assert_eq!(
+            reopened
+                .call(id, "describe".into(), serde_json::Value::Null)
+                .await
+                .unwrap(),
+            "Project"
         );
     }
 
