@@ -1,0 +1,28 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.workspace-lifecycle",
+  "name": "Workspace Lifecycle",
+  "version": "1.6.0",
+  "server": { "entry": "workspace.mjs", "methods": [] },
+  "client": { "entry": "events.html" },
+  "contributes": {
+    "settingsPanel": { "id": "events", "title": "Workspace Events" },
+    "lifecycleHooks": [
+      { "event": "workspace.open.before", "method": "before-open" },
+      { "event": "workspace.open.after", "method": "after-open" },
+      { "event": "workspace.close.after", "method": "after-close" },
+      { "event": "workspace.create.before", "method": "before-create" },
+      { "event": "workspace.create.after", "method": "after-create" },
+      { "event": "workspace.archive.after", "method": "after-archive" },
+      { "event": "worktree.create.before", "method": "before-worktree" },
+      { "event": "worktree.create.after", "method": "worktree-created" },
+      { "event": "worktree.archive.after", "method": "worktree-archived" },
+      { "event": "session.turn.completed", "method": "turn-completed" },
+      { "event": "agent.create.before", "method": "before-agent-create" },
+      { "event": "agent.create.after", "method": "agent-created" },
+      { "event": "agent.open.before", "method": "before-agent-open" },
+      { "event": "agent.close.after", "method": "agent-closed" },
+      { "event": "agent.archive.after", "method": "agent-archived" }
+    ]
+  }
+}

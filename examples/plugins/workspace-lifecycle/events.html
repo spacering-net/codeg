@@ -1,0 +1,25 @@
+<style>
+  :root {
+    color-scheme: light dark;
+    font: 14px system-ui;
+  }
+  li {
+    overflow-wrap: anywhere;
+  }
+</style>
+<p id="status" role="status">Connecting…</p>
+<ol id="events"></ol>
+<script>
+  window.codeg.ready.then(() => {
+    document.getElementById("status").textContent =
+      "Listening for workspace, worktree, agent, and turn events."
+    const events = document.getElementById("events")
+    window.codeg.events.subscribe(({ event, data }) => {
+      const row = document.createElement("li")
+      const details = [event, data.folderId && `folder #${data.folderId}`, data.path, data.title, data.stopReason]
+      row.textContent = details.filter(Boolean).join(" · ")
+      events.prepend(row)
+      if (events.children.length > 20) events.lastElementChild.remove()
+    })
+  })
+</script>
