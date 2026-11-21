@@ -8871,10 +8871,11 @@ async fn a_held_back_question_is_told_when_the_setting_hands_it_to_the_owner() {
     let id = session_dispatch(&engine, DispatchState::Running, "c-hb").await;
     let bus = Arc::new(crate::acp::InternalEventBus::new(Arc::new(crate::acp::EventBusMetrics::default())));
     let mut sub = bus.subscribe();
-    let emitter = EventEmitter::WebOnly {
-        broadcaster: Arc::new(crate::web::event_bridge::WebEventBroadcaster::new()),
-        bus: bus.clone(),
-    };
+    let emitter = EventEmitter::web_only(
+        Arc::new(crate::web::event_bridge::WebEventBroadcaster::new()),
+        bus.clone(),
+        None,
+    );
     let _rx = engine
         .manager
         .insert_test_connection_live("c-hb", AgentType::ClaudeCode, None, emitter)
@@ -8949,10 +8950,11 @@ async fn a_card_raised_between_the_setting_and_the_hand_off_tells_the_owner_once
     let id = session_dispatch(&engine, DispatchState::Running, "c-hb2").await;
     let bus = Arc::new(crate::acp::InternalEventBus::new(Arc::new(crate::acp::EventBusMetrics::default())));
     let mut sub = bus.subscribe();
-    let emitter = EventEmitter::WebOnly {
-        broadcaster: Arc::new(crate::web::event_bridge::WebEventBroadcaster::new()),
-        bus: bus.clone(),
-    };
+    let emitter = EventEmitter::web_only(
+        Arc::new(crate::web::event_bridge::WebEventBroadcaster::new()),
+        bus.clone(),
+        None,
+    );
     let _rx = engine
         .manager
         .insert_test_connection_live("c-hb2", AgentType::ClaudeCode, None, emitter)

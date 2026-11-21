@@ -12,11 +12,12 @@
 <script>
   window.codeg.ready.then(() => {
     document.getElementById("status").textContent =
-      "Listening for workspace opens and closes."
+      "Listening for workspace, worktree, and turn events."
     const events = document.getElementById("events")
     window.codeg.events.subscribe(({ event, data }) => {
       const row = document.createElement("li")
-      row.textContent = `${event} · folder #${data.folderId}${data.stopReason ? ` · ${data.stopReason}` : ""}`
+      const details = [event, data.folderId && `folder #${data.folderId}`, data.path, data.stopReason]
+      row.textContent = details.filter(Boolean).join(" · ")
       events.prepend(row)
       if (events.children.length > 20) events.lastElementChild.remove()
     })

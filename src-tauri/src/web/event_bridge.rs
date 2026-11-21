@@ -5,6 +5,7 @@ use serde::{ser::SerializeStruct, Serialize, Serializer};
 use tokio::sync::{broadcast, RwLock};
 
 use crate::acp::{AcpEvent, EventBusMetrics, EventEnvelope, InternalEventBus, SessionState};
+use crate::host_plugins::HostPlugins;
 
 /// Broadcast-delivered event.
 ///
@@ -124,6 +125,7 @@ pub enum EventEmitter {
     WebOnly {
         broadcaster: Arc<WebEventBroadcaster>,
         bus: Arc<InternalEventBus>,
+        host_plugins: Option<Arc<HostPlugins>>,
     },
     /// Silent no-op emitter — drops all events. Used when streaming progress
     /// is not needed (e.g. legacy non-streaming call paths).
@@ -145,8 +147,30 @@ impl EventEmitter {
     /// Convenience constructor for the standalone server runtime path.
     /// Mirrors how `Tauri` resolves the same two pieces of state via
     /// `app.try_state`.
-    pub fn web_only(broadcaster: Arc<WebEventBroadcaster>, bus: Arc<InternalEventBus>) -> Self {
-        EventEmitter::WebOnly { broadcaster, bus }
+    pub fn web_only(
+        broadcaster: Arc<WebEventBroadcaster>,
+        bus: Arc<InternalEventBus>,
+        host_plugins: Option<Arc<HostPlugins>>,
+    ) -> Self {
+        EventEmitter::WebOnly {
+            broadcaster,
+            bus,
+            host_plugins,
+        }
+    }
+
+    /// The same plugin catalog that serves calls for the connected host.
+    pub(crate) fn host_plugins(&self) -> Option<Arc<HostPlugins>> {
+        match self {
+            #[cfg(feature = "tauri-runtime")]
+            EventEmitter::Tauri(app) => {
+                use tauri::Manager;
+                app.try_state::<Arc<HostPlugins>>()
+                    .map(|state| Arc::clone(&state))
+            }
+            EventEmitter::WebOnly { host_plugins, .. } => host_plugins.clone(),
+            EventEmitter::Noop => None,
+        }
     }
 
     /// Resolve the `InternalEventBus` for ACP-typed event delivery.
@@ -181,7 +205,7 @@ impl EventEmitter {
     pub fn test_web_only(broadcaster: Arc<WebEventBroadcaster>) -> Self {
         let metrics = Arc::new(EventBusMetrics::default());
         let bus = Arc::new(InternalEventBus::new(metrics));
-        EventEmitter::WebOnly { broadcaster, bus }
+        Self::web_only(broadcaster, bus, None)
     }
 }
 

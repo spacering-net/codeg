@@ -1706,7 +1706,7 @@ mod tests {
 
         let bus = Arc::new(InternalEventBus::new(Arc::new(EventBusMetrics::default())));
         let broadcaster = Arc::new(WebEventBroadcaster::new());
-        let emitter = EventEmitter::web_only(broadcaster.clone(), bus.clone());
+        let emitter = EventEmitter::web_only(broadcaster.clone(), bus.clone(), None);
         let mut changes = broadcaster.subscribe();
         let connections = crate::app_state::default_connection_manager();
         connections

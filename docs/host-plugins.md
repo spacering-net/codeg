@@ -145,6 +145,26 @@ and open its **Workspace Events** settings panel. Open or close a folder in a
 second Codeg window connected to the same host to see the events. Opening
 `workspace-alias` by path opens the sibling `workspace-real` directory.
 
+## Worktree lifecycle hooks
+
+Declare `worktree.create.after` to observe new checkouts made through the
+desktop or Web workspace, per-run automations, work tasks, or `codeg-cli run
+--worktree`. Recreating a task checkout from its saved branch also emits this
+event. Declare `worktree.archive.after` to observe removals from the workspace
+or task cleanup and the checkout removed after a failed CLI launch.
+
+Both hooks receive `{ folderId, repositoryPath, path, branch, origin }`.
+`folderId` identifies the owning project when known. `path` is the checkout
+path, `branch` may be `null`, and `origin` is `workspace`, `automation`, `task`,
+or `cli`. The archive event refers to the checkout. A branch can survive
+archive. These are live observer hooks and use the same client event stream
+as workspace hooks. Changes made directly in an external Git process are
+outside this stream.
+
+With the Workspace Lifecycle example enabled, create and remove a worktree
+from a test repository. The example's settings panel shows the checkout path
+for both events.
+
 ## Live session hooks
 
 Plugins can observe Codeg-managed ACP sessions associated with a workspace.
