@@ -22,7 +22,8 @@ export function handle(method, input) {
   if (
     method === "after-create" ||
     method === "after-archive" ||
-    method.startsWith("worktree-")
+    method.startsWith("worktree-") ||
+    method.startsWith("agent-")
   ) {
     return input
   }
