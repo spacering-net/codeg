@@ -14,6 +14,7 @@ const SECTION_ORDER_KEY = "workspace:sidebar-section-order"
 const SECTION_COLLAPSED_KEY = "workspace:sidebar-section-collapsed"
 const CONVERSATION_EXPANDED_KEY = "workspace:sidebar-conversation-expanded"
 const TAG_FILTER_KEY = "workspace:sidebar-tag-filter"
+const FOCUS_MODE_KEY = "workspace:sidebar-focus-mode"
 
 export type SidebarSortMode = "created" | "updated"
 
@@ -496,6 +497,29 @@ export function saveTagFilter(filter: TagFilter): void {
       TAG_FILTER_KEY,
       JSON.stringify({ tagIds: filter.tagIds, mode: filter.mode })
     )
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Whether the sidebar is in focus mode (focusing on priority & recent active chats).
+ *  Defaults to false. */
+export function loadFocusMode(): boolean {
+  if (typeof window === "undefined") return false
+  try {
+    const raw = localStorage.getItem(FOCUS_MODE_KEY)
+    if (raw === "true") return true
+    if (raw === "false") return false
+  } catch {
+    /* ignore */
+  }
+  return false
+}
+
+export function saveFocusMode(value: boolean): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(FOCUS_MODE_KEY, String(value))
   } catch {
     /* ignore */
   }

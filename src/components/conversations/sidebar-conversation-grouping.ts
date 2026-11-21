@@ -341,6 +341,36 @@ export function selectChatConversationsWithReuse(
  *
  * `prev` is the array returned last call (threaded via a ref by the caller).
  */
+export function classifyRecentConversation(
+  conv: DbConversationSummary,
+  now: number
+): RecentTimeGroupId {
+  if (conv.status === "in_progress" || conv.status === "pending_review") {
+    return "priorities"
+  }
+  const ts = parseTimestamp(conv.updated_at || conv.created_at)
+  if (!ts) return "older"
+  const nowDate = new Date(now)
+  const startOfToday = new Date(
+    nowDate.getFullYear(),
+    nowDate.getMonth(),
+    nowDate.getDate()
+  ).getTime()
+  if (ts >= startOfToday) {
+    return "today"
+  }
+  const oneDayMs = 24 * 60 * 60 * 1000
+  const startOfYesterday = startOfToday - oneDayMs
+  if (ts >= startOfYesterday) {
+    return "yesterday"
+  }
+  const startOf7Days = startOfToday - 6 * oneDayMs
+  if (ts >= startOf7Days) {
+    return "previous7Days"
+  }
+  return "older"
+}
+
 export function selectRecentConversationsWithReuse(
   conversations: readonly DbConversationSummary[],
   showCompleted: boolean,
@@ -1012,6 +1042,19 @@ export interface RecentEmptyRow {
  * Retiring it there would take the only way out of a fully expanded list away
  * exactly when the list is longest.
  */
+export type RecentTimeGroupId =
+  | "priorities"
+  | "today"
+  | "yesterday"
+  | "previous7Days"
+  | "older"
+
+export interface RecentTimeGroupRow {
+  kind: "recent-time-group"
+  groupId: RecentTimeGroupId
+  count: number
+}
+
 export interface RecentMoreRow {
   kind: "recent-more"
   remaining: number
@@ -1095,6 +1138,7 @@ export type SidebarRow =
   | ChatsEmptyRow
   | FoldersEmptyRow
   | RecentEmptyRow
+  | RecentTimeGroupRow
   | RecentMoreRow
   | SubsessionLoadingRow
 
@@ -1323,6 +1367,8 @@ export function buildRows(args: {
    * omitted keeps every folder, as before.
    */
   hideEmptyFolders?: boolean
+  /** Current timestamp for time-based classification. Defaults to Date.now(). */
+  currentTime?: number
 }): SidebarRow[] {
   const {
     pinned,
@@ -1347,6 +1393,7 @@ export function buildRows(args: {
     layout,
     groupExpanded = EMPTY_GROUP_EXPANDED,
     hideEmptyFolders = false,
+    currentTime = Date.now(),
   } = args
   const rows: SidebarRow[] = []
 
@@ -1547,17 +1594,51 @@ export function buildRows(args: {
       recentLimit == null
         ? recentConversations
         : recentConversations.slice(0, Math.max(0, recentLimit))
-    for (const conv of shown) {
-      pushConversationRow(
-        rows,
-        conv,
-        0,
-        conversationExpanded,
-        childrenByParent,
-        childrenLoading,
-        true
-      )
+
+    // Group shown conversations into time segments
+    const timeGroupBuckets = new Map<
+      RecentTimeGroupId,
+      DbConversationSummary[]
+    >()
+    const timeGroupOrder: readonly RecentTimeGroupId[] = [
+      "priorities",
+      "today",
+      "yesterday",
+      "previous7Days",
+      "older",
+    ]
+    for (const gid of timeGroupOrder) {
+      timeGroupBuckets.set(gid, [])
     }
+
+    for (const conv of shown) {
+      const gid = classifyRecentConversation(conv, currentTime)
+      timeGroupBuckets.get(gid)?.push(conv)
+    }
+
+    for (const gid of timeGroupOrder) {
+      const bucket = timeGroupBuckets.get(gid)
+      if (!bucket || bucket.length === 0) continue
+
+      rows.push({
+        kind: "recent-time-group",
+        groupId: gid,
+        count: bucket.length,
+      })
+
+      for (const conv of bucket) {
+        pushConversationRow(
+          rows,
+          conv,
+          0,
+          conversationExpanded,
+          childrenByParent,
+          childrenLoading,
+          true
+        )
+      }
+    }
+
     const remaining = recentConversations.length - shown.length
     // The gate is "more than a page is on screen", not "recentLimit is past a
     // page": a raised limit outlives the conversations it revealed (delete them

@@ -19,6 +19,7 @@ import {
   reuseSet,
   selectChatConversationsWithReuse,
   selectPinnedWithReuse,
+  classifyRecentConversation,
   selectRecentConversationsWithReuse,
   worktreeChildrenByParent,
   worktreeHeaderAlias,
@@ -2017,5 +2018,54 @@ describe("buildRows under a tag filter (hideEmptyFolders)", () => {
         })
       )
     ).toEqual(["section:folders:1", "folder-group:1", "folder:20", "conv:7"])
+  })
+})
+
+describe("classifyRecentConversation", () => {
+  const now = new Date("2026-11-21T12:00:00Z").getTime()
+
+  it("classifies in_progress or pending_review as priorities", () => {
+    const running = conv(1, 10, {
+      status: "in_progress",
+      updated_at: new Date("2026-11-01T00:00:00Z").toISOString(),
+    })
+    const review = conv(2, 10, {
+      status: "pending_review",
+      updated_at: new Date("2026-11-01T00:00:00Z").toISOString(),
+    })
+    expect(classifyRecentConversation(running, now)).toBe("priorities")
+    expect(classifyRecentConversation(review, now)).toBe("priorities")
+  })
+
+  it("classifies today conversations", () => {
+    const todayConv = conv(3, 10, {
+      status: "completed",
+      updated_at: new Date("2026-11-21T08:00:00Z").toISOString(),
+    })
+    expect(classifyRecentConversation(todayConv, now)).toBe("today")
+  })
+
+  it("classifies yesterday conversations", () => {
+    const yesterdayConv = conv(4, 10, {
+      status: "completed",
+      updated_at: new Date("2026-11-20T15:00:00Z").toISOString(),
+    })
+    expect(classifyRecentConversation(yesterdayConv, now)).toBe("yesterday")
+  })
+
+  it("classifies previous 7 days conversations", () => {
+    const weekConv = conv(5, 10, {
+      status: "completed",
+      updated_at: new Date("2026-11-17T10:00:00Z").toISOString(),
+    })
+    expect(classifyRecentConversation(weekConv, now)).toBe("previous7Days")
+  })
+
+  it("classifies older conversations", () => {
+    const oldConv = conv(6, 10, {
+      status: "completed",
+      updated_at: new Date("2026-10-01T10:00:00Z").toISOString(),
+    })
+    expect(classifyRecentConversation(oldConv, now)).toBe("older")
   })
 })

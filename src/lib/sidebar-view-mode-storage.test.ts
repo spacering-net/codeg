@@ -12,6 +12,8 @@ import {
   loadSectionOrder,
   loadShowRecent,
   loadTagFilter,
+  loadFocusMode,
+  saveFocusMode,
   moveSectionInOrder,
   normalizeSectionOrder,
   saveNavItemVisibility,
@@ -302,5 +304,27 @@ describe("tag filter persistence", () => {
       JSON.stringify({ tagIds: [4, "x", 4, 9], mode: "weird" })
     )
     expect(loadTagFilter()).toEqual({ tagIds: [4, 9], mode: "any" })
+  })
+})
+
+describe("focusMode storage", () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it("defaults to false when empty", () => {
+    expect(loadFocusMode()).toBe(false)
+  })
+
+  it("round-trips true and false", () => {
+    saveFocusMode(true)
+    expect(loadFocusMode()).toBe(true)
+    saveFocusMode(false)
+    expect(loadFocusMode()).toBe(false)
+  })
+
+  it("ignores garbage values", () => {
+    localStorage.setItem("workspace:sidebar-focus-mode", "not-a-boolean")
+    expect(loadFocusMode()).toBe(false)
   })
 })

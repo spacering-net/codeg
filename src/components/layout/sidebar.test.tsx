@@ -889,3 +889,38 @@ describe("Sidebar — Section order control", () => {
     expect(spies.listProps?.showRecent).toBe(false)
   })
 })
+
+describe("Sidebar — Focus mode toggle", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    mockState.activeFolder = { id: 7, path: "/x" }
+  })
+
+  it("renders the focus button and toggles focus mode state", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+
+    const focusBtn = screen.getByRole("button", { name: "Focus current chat" })
+    expect(focusBtn).toBeTruthy()
+    expect(focusBtn).toHaveAttribute("aria-pressed", "false")
+
+    await user.click(focusBtn)
+    expect(screen.getByRole("button", { name: "Exit focus mode" })).toBeTruthy()
+    expect(localStorage.getItem("workspace:sidebar-focus-mode")).toBe("true")
+
+    await user.click(screen.getByRole("button", { name: "Exit focus mode" }))
+    expect(
+      screen.getByRole("button", { name: "Focus current chat" })
+    ).toBeTruthy()
+    expect(localStorage.getItem("workspace:sidebar-focus-mode")).toBe("false")
+  })
+
+  it("hydrates stored focus mode on mount", () => {
+    localStorage.setItem("workspace:sidebar-focus-mode", "true")
+    renderSidebar()
+    expect(screen.getByRole("button", { name: "Exit focus mode" })).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Exit focus mode" })
+    ).toHaveAttribute("aria-pressed", "true")
+  })
+})

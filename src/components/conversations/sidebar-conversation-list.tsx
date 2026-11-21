@@ -3199,6 +3199,24 @@ export function SidebarConversationList({
         </div>
       )
     }
+    if (row.kind === "recent-time-group") {
+      const timeGroupLabels: Record<string, string> = {
+        priorities: t("timeGroupPriorities"),
+        today: t("timeGroupToday"),
+        yesterday: t("timeGroupYesterday"),
+        previous7Days: t("timeGroupPrevious7Days"),
+        older: t("timeGroupOlder"),
+      }
+      const label = timeGroupLabels[row.groupId] || row.groupId
+      return (
+        <div className="flex items-center justify-between px-3 pt-2.5 pb-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/60 select-none">
+          <span>{label}</span>
+          <span className="font-mono text-[0.625rem] font-normal opacity-70">
+            {row.count}
+          </span>
+        </div>
+      )
+    }
     if (row.kind === "recent-more") {
       // Footer of the paged Recent section — a row, not a hint: each click
       // reveals another page. Its geometry is the conversation card's, so the
@@ -3352,6 +3370,7 @@ export function SidebarConversationList({
     if (row.kind === "folders-empty") return "folders-empty"
     if (row.kind === "recent-empty") return "recent-empty"
     if (row.kind === "recent-more") return "recent-more"
+    if (row.kind === "recent-time-group") return `recent-group-${row.groupId}`
     const prefix = row.recent ? "recent-" : ""
     if (row.kind === "subsession-loading") {
       return `${prefix}subloading-${row.parentId}`
