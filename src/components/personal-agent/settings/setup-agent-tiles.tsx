@@ -58,7 +58,7 @@ export function SetupAgentTiles({
     <div className="flex flex-col gap-2">
       <div
         role="radiogroup"
-        aria-label={ta("agentLabel")}
+        aria-label={t("setupBrainAgent")}
         className="grid grid-cols-3 gap-2"
       >
         {shown.map((a) => {

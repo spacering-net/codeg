@@ -125,6 +125,10 @@ describe("picking its agent on the first setup", () => {
 
   it("shows the installed ones first, the first few of them, the rest a click away", () => {
     render(<Tiles agents={many} />)
+    // Read out by what the agent is for, as its card's title says it.
+    expect(
+      screen.getByRole("radiogroup", { name: "Agent for its brain" })
+    ).toBeInTheDocument()
     expect(tiles()).toEqual([
       "claude_code",
       "codex",
