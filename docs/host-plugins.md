@@ -113,6 +113,49 @@ no effect until an update. An update that changes the server entry, declared
 methods or module contents disables a running plugin. Review the new version
 before enabling it again.
 
+## Plugin usage sources
+
+Declare up to 16 entries in `contributes.usageSources`. Each source has a
+unique `id`, a `title`, optional `titleTranslations`, and a `method` from the
+same plugin's `server.methods`. A source requires `server.entry`. An optional
+`provider` identifies a provider group and uses up to 32 lowercase ASCII
+letters, digits, or hyphens, starting with a letter or digit.
+
+Invoke `host_plugins_usage_query` with `{ pluginId, sourceId, locale? }`
+through the desktop command or `POST /api/host_plugins_usage_query`. Codeg
+calls the declared method of the enabled plugin with `{ sourceId, locale }`.
+The locale follows the localized label rules and defaults to `en`. The
+query supplies no credentials or saved plugin settings.
+
+Return `{ accounts: [...] }` with up to 16 account snapshots. Give each account
+a stable, non-secret `key` of 1 to 128 ASCII letters, digits, dots,
+underscores, or hyphens. Each account has a `report` and can include `label`
+and `harness`. Render report strings as plain display text.
+
+| `report.status` | Display data |
+| --- | --- |
+| `available` | `windows`, optional `planLabel`, `balances`, and `details` |
+| `unavailable` | `problem` with `kind` set to `expired`, `rejected`, or `no_quota`, plus optional `detail`, `expiresAt`, and HTTP `status` |
+| `error` | An `error` message suitable for display |
+
+An available report can include up to eight windows, eight balances, and
+16 details. A window's `usedPercent` must be finite and within 0 to 100.
+Each window has `id` and `label`, with optional `resetsAt` and
+`durationSeconds`. A balance has `id`, `label`, `amount`, and optional
+`unit`. A detail has `label` and `value`.
+
+The host rejects unknown fields and removes control characters from display
+strings. IDs can contain up to 128 characters. Labels and balance amounts
+can contain up to 120. Harness names, units, and timestamp strings can
+contain up to 64. Detail values, problem descriptions, and error messages
+can contain up to 512. Keep credentials and provider response bodies out of
+all report fields.
+
+Install and enable the [Usage Demo example](../examples/plugins/usage-demo)
+and query source `demo-quota` from `codeg.usage-demo`. It returns a five-hour
+window, a weekly window, a balance, and account details. The
+[author types](host-plugin-usage-sources.d.ts) describe the wire contract.
+
 ## Client modules
 
 Include [the browser bridge types](host-plugin-client.d.ts) in your plugin's

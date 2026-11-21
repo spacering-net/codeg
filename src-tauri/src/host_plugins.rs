@@ -21,9 +21,11 @@ mod settings;
 pub mod source;
 mod text;
 mod theme;
+mod usage;
 
 pub use settings::Snapshot as PluginSettings;
 use text::{valid_translations, Translations};
+pub use usage::UsageQueryResult;
 
 pub const CATALOG_CHANGED: &str = "host-plugins://changed";
 const ACTIVITY_CHANGED: &str = "host-plugins://activity";
@@ -102,6 +104,8 @@ struct Contributions {
     screens: Vec<HostPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidebar_items: Vec<SidebarItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    usage_sources: Vec<usage::UsageSource>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -576,17 +580,7 @@ impl HostPlugins {
                 .get(id)
                 .filter(|plugin| plugin.enabled)
                 .ok_or_else(plugin_not_found)?;
-            let server = plugin
-                .manifest
-                .server
-                .as_ref()
-                .ok_or_else(plugin_not_found)?;
-            if !server.methods.contains(&method) {
-                return Err(AppCommandError::not_found(
-                    "Plugin method is not registered",
-                ));
-            }
-            Invocation::new(id, plugin, method).ok_or_else(plugin_not_found)?
+            Invocation::public_method(id, plugin, method)?
         };
         self.invoke(invocation, input).await
     }
@@ -827,6 +821,24 @@ struct Invocation {
 }
 
 impl Invocation {
+    fn public_method(
+        id: &str,
+        plugin: &InstalledPlugin,
+        method: String,
+    ) -> Result<Self, AppCommandError> {
+        let server = plugin
+            .manifest
+            .server
+            .as_ref()
+            .ok_or_else(plugin_not_found)?;
+        if !server.methods.contains(&method) {
+            return Err(AppCommandError::not_found(
+                "Plugin method is not registered",
+            ));
+        }
+        Self::new(id, plugin, method).ok_or_else(plugin_not_found)
+    }
+
     fn new(id: &str, plugin: &InstalledPlugin, method: String) -> Option<Self> {
         let server = plugin.manifest.server.as_ref()?;
         Some(Self {
@@ -1003,6 +1015,7 @@ impl Manifest {
             themes,
             screens,
             sidebar_items,
+            usage_sources,
         } = &self.contributes;
         if !bundled && workspace_panels.is_empty() && themes.is_empty() {
             return Err("A declarative plugin needs a workspace panel or theme".to_owned());
@@ -1112,6 +1125,7 @@ impl Manifest {
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
+        usage::validate_sources(usage_sources, self.server.as_ref())?;
         Ok(())
     }
 }

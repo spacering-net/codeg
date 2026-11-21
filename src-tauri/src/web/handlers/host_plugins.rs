@@ -9,7 +9,7 @@ use crate::app_state::AppState;
 use crate::host_plugins::source::Registry;
 use crate::host_plugins::{
     ExpectedPlugin, InstallPreview, InstalledPlugin, Mutation, PluginSettings, PluginUpdate,
-    SettingsRequest, TurnActivity,
+    SettingsRequest, TurnActivity, UsageQueryResult,
 };
 
 #[derive(Deserialize)]
@@ -49,6 +49,14 @@ pub struct CallParams {
     plugin_id: String,
     method: String,
     input: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UsageQueryParams {
+    plugin_id: String,
+    source_id: String,
+    locale: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -122,6 +130,20 @@ pub async fn call(
         .call(&params.plugin_id, params.method, params.input)
         .await
         .map(Json)
+}
+
+pub async fn usage_query(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<UsageQueryParams>,
+) -> Result<Json<UsageQueryResult>, AppCommandError> {
+    crate::commands::host_plugins::usage_query_core(
+        &state.host_plugins,
+        &params.plugin_id,
+        &params.source_id,
+        params.locale.as_deref(),
+    )
+    .await
+    .map(Json)
 }
 
 pub async fn client_html(

@@ -5,7 +5,7 @@ use crate::app_error::AppCommandError;
 use crate::host_plugins::source::{self, PluginIndex, Registry};
 use crate::host_plugins::{
     ExpectedPlugin, HostPlugins, InstallPreview, InstalledPlugin, Mutation, PluginSettings,
-    PluginUpdate, SettingsRequest, CATALOG_CHANGED,
+    PluginUpdate, SettingsRequest, UsageQueryResult, CATALOG_CHANGED,
 };
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
@@ -94,6 +94,15 @@ pub async fn fetch_index_core(url: &str) -> Result<PluginIndex, AppCommandError>
     source::fetch_index(url).await
 }
 
+pub async fn usage_query_core(
+    plugins: &HostPlugins,
+    plugin_id: &str,
+    source_id: &str,
+    locale: Option<&str>,
+) -> Result<UsageQueryResult, AppCommandError> {
+    plugins.usage_query(plugin_id, source_id, locale).await
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn host_plugins_list(
@@ -141,6 +150,17 @@ pub async fn host_plugins_call(
     input: serde_json::Value,
 ) -> Result<serde_json::Value, AppCommandError> {
     plugins.call(&plugin_id, method, input).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn host_plugins_usage_query(
+    plugins: tauri::State<'_, Arc<HostPlugins>>,
+    plugin_id: String,
+    source_id: String,
+    locale: Option<String>,
+) -> Result<UsageQueryResult, AppCommandError> {
+    usage_query_core(&plugins, &plugin_id, &source_id, locale.as_deref()).await
 }
 
 #[cfg(feature = "tauri-runtime")]

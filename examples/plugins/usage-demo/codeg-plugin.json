@@ -1,0 +1,18 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.usage-demo",
+  "name": "Usage Demo",
+  "version": "1.0.0",
+  "server": { "entry": "usage.mjs", "methods": ["read-usage"] },
+  "contributes": {
+    "usageSources": [
+      {
+        "id": "demo-quota",
+        "title": "Demo quota",
+        "titleTranslations": { "es": "Cuota de ejemplo", "zh-CN": "示例额度" },
+        "provider": "demo",
+        "method": "read-usage"
+      }
+    ]
+  }
+}

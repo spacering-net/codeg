@@ -8,11 +8,15 @@ static LOCALE: LazyLock<Regex> = LazyLock::new(|| {
 
 pub(super) type Translations = BTreeMap<String, String>;
 
+pub(super) fn valid_locale(locale: &str) -> bool {
+    LOCALE.is_match(locale)
+}
+
 pub(super) fn valid_translations(
     translations: &Translations,
     validate: impl Fn(&str) -> bool,
 ) -> bool {
     translations
         .iter()
-        .all(|(locale, value)| LOCALE.is_match(locale) && validate(value))
+        .all(|(locale, value)| valid_locale(locale) && validate(value))
 }
