@@ -22,6 +22,7 @@ export type ClientContext = Surface &
           | "screen"
           | "sidebarView"
       }
+    | { readonly type: "filePanel"; readonly fileName: string }
     | {
         readonly type: "clientSurface"
         readonly slot: "sessionHeader" | "composer"
@@ -61,6 +62,10 @@ export interface CodegClient {
   /** Available while the active composer contribution is open. */
   readonly composer?: {
     insertText(text: string): Promise<{ inserted: true; length: number }>
+  }
+  /** Available while the selected file panel is open for a text file. */
+  readonly file?: {
+    readText(): Promise<{ text: string }>
   }
 }
 

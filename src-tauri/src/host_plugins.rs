@@ -104,6 +104,8 @@ struct Contributions {
     sidebar_items: Vec<SidebarItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidebar_views: Vec<HostPanel>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    file_panels: Vec<FilePanel>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -130,6 +132,16 @@ struct HostPanel {
     title: String,
     #[serde(default, skip_serializing_if = "Translations::is_empty")]
     title_translations: Translations,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct FilePanel {
+    id: String,
+    title: String,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    title_translations: Translations,
+    extensions: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -1006,6 +1018,7 @@ impl Manifest {
             screens,
             sidebar_items,
             sidebar_views,
+            file_panels,
         } = &self.contributes;
         if !bundled && workspace_panels.is_empty() && themes.is_empty() {
             return Err("A declarative plugin needs a workspace panel or theme".to_owned());
@@ -1129,10 +1142,41 @@ impl Manifest {
                 );
             }
         }
+        if !file_panels.is_empty() {
+            let mut panel_ids = BTreeSet::new();
+            if self.client.is_none()
+                || file_panels.len() > MAX_CONTRIBUTIONS
+                || file_panels.iter().any(|panel| {
+                    let mut extensions = BTreeSet::new();
+                    !valid_id(&panel.id)
+                        || !valid_label(&panel.title)
+                        || !valid_translations(&panel.title_translations, valid_label)
+                        || !panel_ids.insert(&panel.id)
+                        || panel.extensions.is_empty()
+                        || panel.extensions.len() > MAX_CONTRIBUTIONS
+                        || panel.extensions.iter().any(|extension| {
+                            !valid_file_panel_extension(extension) || !extensions.insert(extension)
+                        })
+                })
+            {
+                return Err(
+                    "File panels need a client entry, unique IDs, valid titles and 1 to 16 unique file extensions"
+                        .into(),
+                );
+            }
+        }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
         Ok(())
     }
+}
+
+fn valid_file_panel_extension(extension: &str) -> bool {
+    let mut bytes = extension.bytes();
+    let is_alphanumeric = |byte: u8| byte.is_ascii_lowercase() || byte.is_ascii_digit();
+    extension.len() <= 16
+        && bytes.next().is_some_and(is_alphanumeric)
+        && bytes.all(|byte| is_alphanumeric(byte) || matches!(byte, b'+' | b'-'))
 }
 
 impl PluginBundle {
@@ -1523,6 +1567,52 @@ mod tests {
         missing_client["server"] = json!({ "entry": "server.mjs", "methods": ["read"] });
         let error = Manifest::parse(&missing_client.to_string()).unwrap_err();
         assert!(error.message.contains("Sidebar views need a client entry"));
+    }
+
+    #[test]
+    fn validates_file_panels_and_requires_a_client_entry() {
+        use serde_json::json;
+
+        let source = include_str!("../../examples/plugins/json-outline/codeg-plugin.json");
+        let manifest: serde_json::Value = serde_json::from_str(source).unwrap();
+        let rendered = serde_json::to_value(Manifest::parse(source).unwrap()).unwrap();
+        assert_eq!(
+            rendered["contributes"]["filePanels"],
+            manifest["contributes"]["filePanels"]
+        );
+        for (field, value) in [
+            ("id", json!("with/slash")),
+            ("title", json!("")),
+            ("titleTranslations", json!({ "es": "" })),
+            ("extensions", json!([])),
+            ("extensions", json!(["json", "json"])),
+            ("extensions", json!([".json"])),
+            ("extensions", json!(["JSON"])),
+            ("extensions", json!(["-json"])),
+            ("extensions", json!(["é"])),
+            ("extensions", json!(["a".repeat(17)])),
+            (
+                "extensions",
+                json!((0..17).map(|i| format!("ext{i}")).collect::<Vec<_>>()),
+            ),
+        ] {
+            let mut invalid = manifest.clone();
+            invalid["contributes"]["filePanels"][0][field] = value;
+            assert!(Manifest::parse(&invalid.to_string()).is_err(), "{field}");
+        }
+        let mut duplicate = manifest.clone();
+        let panel = duplicate["contributes"]["filePanels"][0].clone();
+        duplicate["contributes"]["filePanels"]
+            .as_array_mut()
+            .unwrap()
+            .push(panel);
+        assert!(Manifest::parse(&duplicate.to_string()).is_err());
+
+        let mut missing_client = manifest;
+        missing_client.as_object_mut().unwrap().remove("client");
+        missing_client["server"] = json!({ "entry": "server.mjs", "methods": ["read"] });
+        let error = Manifest::parse(&missing_client.to_string()).unwrap_err();
+        assert!(error.message.contains("File panels need a client entry"));
     }
 
     #[test]
