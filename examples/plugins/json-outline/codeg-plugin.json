@@ -1,0 +1,17 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.json-outline",
+  "name": "JSON Outline",
+  "version": "1.0.0",
+  "client": { "entry": "outline.html" },
+  "contributes": {
+    "filePanels": [
+      {
+        "id": "outline",
+        "title": "JSON Outline",
+        "titleTranslations": { "zh-CN": "JSON 大纲", "es": "Estructura JSON" },
+        "extensions": ["json"]
+      }
+    ]
+  }
+}
