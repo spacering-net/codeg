@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { type ReactElement } from "react"
 import {
   act,
@@ -301,5 +303,89 @@ describe("HostPluginSettings pluginDetail and activationPanel surfaces", () => {
       expect(screen.queryByRole("dialog")).toBeNull()
       expect(screen.getByText("No plugins installed.")).toBeInTheDocument()
     })
+  })
+
+  it("renders the workspace-inspector 1.1.0 example pluginDetail, activationPanel, and settingsPanel surfaces", async () => {
+    const manifest = JSON.parse(
+      readFileSync(
+        resolve(
+          process.cwd(),
+          "examples/plugins/workspace-inspector/codeg-plugin.json"
+        ),
+        "utf8"
+      )
+    ) as InstalledPlugin["manifest"]
+    const html = readFileSync(
+      resolve(
+        process.cwd(),
+        "examples/plugins/workspace-inspector/inspector.html"
+      ),
+      "utf8"
+    )
+    const mock = createSettingsTransport([
+      {
+        enabled: true,
+        source: {
+          type: "directory",
+          path: "/examples/plugins/workspace-inspector",
+        },
+        manifest,
+      },
+    ])
+    mock.call.mockImplementation(async (method: string) => {
+      if (method === "host_plugins_list") {
+        return [
+          {
+            enabled: true,
+            source: {
+              type: "directory",
+              path: "/examples/plugins/workspace-inspector",
+            },
+            manifest,
+          },
+        ]
+      }
+      if (method === "host_plugins_client_html") {
+        return html
+      }
+      return null
+    })
+    state.transport = mock.transport
+
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    render(withIntl(<HostPluginSettings />))
+
+    const detailBtn = await screen.findByRole("button", {
+      name: "Workspace Inspector Details",
+    })
+    const activationBtn = screen.getByRole("button", {
+      name: "Set Up Workspace Inspector",
+    })
+    expect(
+      screen.getByRole("button", { name: "About Workspace Inspector" })
+    ).toBeInTheDocument()
+
+    await user.click(detailBtn)
+    const detailDialog = await screen.findByRole("dialog")
+    const detailFrame = await within(detailDialog).findByTitle(
+      "Workspace Inspector Details"
+    )
+    expect(detailFrame.getAttribute("srcdoc")).toContain(
+      "Scopes: workspacePanel, settingsPanel, pluginDetail, activationPanel, sessionHeader, composer"
+    )
+
+    await user.keyboard("{Escape}")
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull()
+    })
+
+    await user.click(activationBtn)
+    const activationDialog = await screen.findByRole("dialog")
+    const activationFrame = await within(activationDialog).findByTitle(
+      "Set Up Workspace Inspector"
+    )
+    expect(activationFrame.getAttribute("srcdoc")).toContain(
+      "Configure the workspace label used across inspector surfaces."
+    )
   })
 })

@@ -13,6 +13,7 @@
 </style>
 <p id="description" aria-live="polite">Loading workspace context…</p>
 <button id="refresh" type="button" hidden>Refresh workspace details</button>
+<button id="insert" type="button" hidden>Insert into draft</button>
 <div id="preferences" hidden>
   <p><label for="workspace-label">Workspace label</label></p>
   <input id="workspace-label" maxlength="50" />
@@ -22,20 +23,28 @@
   window.codeg.ready.then(async (context) => {
     const description = document.getElementById("description")
     const refresh = document.getElementById("refresh")
-    if (context.type === "clientSurface") {
-      const conversation = context.conversationId ?? "Draft"
-      const placement =
-        context.slot === "composer" ? "Composer" : "Session header"
-      description.textContent = `${placement} · ${conversation}`
+    if (context.type === "pluginDetail") {
+      try {
+        const snapshot = await window.codeg.settings.read()
+        description.textContent = `Scopes: workspacePanel, settingsPanel, pluginDetail, activationPanel, sessionHeader, composer · Label: ${snapshot.value.label} · ${context.locale}`
+      } catch (error) {
+        description.textContent = error.message
+      }
       return
     }
-    if (context.type === "settingsPanel") {
+    if (
+      context.type === "settingsPanel" ||
+      context.type === "activationPanel"
+    ) {
       const field = document.getElementById("workspace-label")
       const save = document.getElementById("save")
       let snapshot = await window.codeg.settings.read()
       field.value = snapshot.value.label
       document.getElementById("preferences").hidden = false
-      description.textContent = ""
+      description.textContent =
+        context.type === "activationPanel"
+          ? "Configure the workspace label used across inspector surfaces."
+          : ""
       save.addEventListener("click", async () => {
         save.disabled = true
         try {
@@ -49,6 +58,35 @@
           save.disabled = false
         }
       })
+      return
+    }
+    if (context.type === "clientSurface") {
+      const conversation = context.conversationId ?? "Draft"
+      const placement =
+        context.slot === "composer" ? "Composer" : "Session header"
+      const summary = `${placement} · ${conversation}`
+      description.textContent = summary
+      if (context.slot === "composer" && window.codeg.composer) {
+        const insert = document.getElementById("insert")
+        insert.hidden = false
+        insert.addEventListener("click", async () => {
+          insert.disabled = true
+          try {
+            const text = Number.isInteger(context.folderId)
+              ? await window.codeg.call("describe", {
+                  folderId: context.folderId,
+                  locale: context.locale,
+                })
+              : summary
+            await window.codeg.composer.insertText(text)
+            description.textContent = `Inserted: ${text}`
+          } catch (error) {
+            description.textContent = error.message
+          } finally {
+            insert.disabled = false
+          }
+        })
+      }
       return
     }
     async function describe() {
@@ -66,6 +104,6 @@
     }
     refresh.hidden = false
     refresh.addEventListener("click", describe)
-    void describe()
+    await describe()
   })
 </script>
