@@ -197,6 +197,23 @@ host.
 Install and enable the [Plugin Navigation example](../examples/plugins/plugin-navigation)
 to open its overview from the sidebar header and its help screen from the footer.
 
+### Sidebar views
+
+Declare `contributes.sidebarViews` to offer an alternative view in the
+sidebar's content area. The user chooses a view in the sidebar's view options.
+Each item has an `id`, `title`, and optional `titleTranslations`. Declare up
+to 16 views with unique IDs in the same plugin and include `client.entry`.
+
+Selecting a view opens its reviewed HTML entry and resolves
+`window.codeg.ready` with `type: "sidebarView"`, the contribution `id`, and
+the app `locale`. It uses the connected host's RPC, settings, and event APIs.
+The sidebar header and footer remain available along with the view picker.
+The selection is saved per connected host. If the contribution is withdrawn,
+the sidebar returns to its conversation list.
+
+Install and enable [Focus Notes](../examples/plugins/focus-notes), then select
+it from the sidebar's view options. Use the form to save a note on that host.
+
 ### Insert text into the composer
 
 An open `composer` contribution can call
