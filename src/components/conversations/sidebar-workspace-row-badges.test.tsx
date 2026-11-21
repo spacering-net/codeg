@@ -4,7 +4,9 @@ import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { SidebarConversationList } from "./sidebar-conversation-list"
 import {
+  MAX_WORKSPACE_ROW_BADGE_INPUT_BYTES,
   WORKSPACE_ROW_BADGE_BATCH_SIZE,
+  WORKSPACE_ROW_BADGE_MAX_CONCURRENCY,
   type InstalledPlugin,
   type WorkspaceRowBadgeInput,
 } from "@/lib/host-plugins"
@@ -857,5 +859,386 @@ describe("SidebarConversationList workspace row badges", () => {
     })
     expect(container.textContent).not.toContain("Remote A")
     expect(container.textContent).not.toContain("LocalLeak")
+  })
+
+  it("bounds method-group concurrency below the 4-slot host limit so 6+ badge methods never hit busy and isolates failing groups", async () => {
+    seedWorkspaces([makeFolder(1, "alpha", { git_branch: "main" })])
+
+    const plugins: InstalledPlugin[] = Array.from({ length: 6 }, (_, index) =>
+      makeBadgePlugin({
+        id: `acme.badge-${index + 1}`,
+        methods: [`method-${index + 1}`],
+        badges: [
+          {
+            id: `b-${index + 1}`,
+            title: `Badge ${index + 1}`,
+            method: `method-${index + 1}`,
+          },
+        ],
+      })
+    )
+
+    const HOST_RUNTIME_SLOTS = 4
+    let inFlight = 0
+    let maxConcurrent = 0
+    let busyErrors = 0
+    const pendingGates = new Map<
+      string,
+      ReturnType<
+        typeof deferred<{ folderId: number; label: string; tone?: string }[]>
+      >
+    >()
+
+    const host = createMockHostTransport(plugins, async ({ pluginId }) => {
+      inFlight += 1
+      maxConcurrent = Math.max(maxConcurrent, inFlight)
+      if (inFlight > HOST_RUNTIME_SLOTS) {
+        inFlight -= 1
+        busyErrors += 1
+        throw new Error("Plugin runtime is busy")
+      }
+      const gate =
+        deferred<{ folderId: number; label: string; tone?: string }[]>()
+      pendingGates.set(pluginId, gate)
+      try {
+        return await gate.promise
+      } finally {
+        inFlight -= 1
+      }
+    })
+    transportCtl.currentTransport = host.transport
+
+    const { container } = renderList({ showWorktrees: false })
+
+    // Fixed worker pool starts at most WORKSPACE_ROW_BADGE_MAX_CONCURRENCY (2) groups at once
+    await waitFor(() => {
+      expect(pendingGates.size).toBe(WORKSPACE_ROW_BADGE_MAX_CONCURRENCY)
+    })
+    expect(badgeCalls(host)).toHaveLength(WORKSPACE_ROW_BADGE_MAX_CONCURRENCY)
+    expect(maxConcurrent).toBe(WORKSPACE_ROW_BADGE_MAX_CONCURRENCY)
+
+    // Drain all 6 groups step by step, verifying concurrency never exceeds 2
+    for (let index = 1; index <= 6; index += 1) {
+      const pluginId = `acme.badge-${index}`
+      await waitFor(() => {
+        expect(pendingGates.has(pluginId)).toBe(true)
+      })
+      await act(async () => {
+        pendingGates
+          .get(pluginId)!
+          .resolve([{ folderId: 1, label: `B${index}`, tone: "info" }])
+        await Promise.resolve()
+      })
+    }
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll('[data-slot="plugin-workspace-row-badge"]')
+      ).toHaveLength(6)
+    })
+
+    expect(busyErrors).toBe(0)
+    expect(maxConcurrent).toBe(WORKSPACE_ROW_BADGE_MAX_CONCURRENCY)
+    expect(maxConcurrent).toBeLessThanOrEqual(HOST_RUNTIME_SLOTS)
+    for (let index = 1; index <= 6; index += 1) {
+      expect(container.textContent).toContain(`B${index}`)
+    }
+  })
+
+  it("does not launch queued method groups after cancellation and isolates failing methods from queued peers", async () => {
+    seedWorkspaces([makeFolder(1, "alpha", { git_branch: "main" })])
+
+    const plugins: InstalledPlugin[] = Array.from({ length: 6 }, (_, index) =>
+      makeBadgePlugin({
+        id: `acme.queue-${index + 1}`,
+        methods: [`m-${index + 1}`],
+        badges: [
+          {
+            id: `q-${index + 1}`,
+            title: `Queue ${index + 1}`,
+            method: `m-${index + 1}`,
+          },
+        ],
+      })
+    )
+
+    const startedPlugins: string[] = []
+    const gates = new Map<
+      string,
+      ReturnType<
+        typeof deferred<{ folderId: number; label: string; tone?: string }[]>
+      >
+    >()
+
+    const host = createMockHostTransport(plugins, async ({ pluginId }) => {
+      startedPlugins.push(pluginId)
+      if (pluginId === "acme.queue-1") {
+        throw new Error("plugin 1 crashed")
+      }
+      const gate =
+        deferred<{ folderId: number; label: string; tone?: string }[]>()
+      gates.set(pluginId, gate)
+      return await gate.promise
+    })
+    transportCtl.currentTransport = host.transport
+
+    const { container } = renderList({ showWorktrees: false })
+
+    // Group 1 throws immediately; worker 1 isolates the error and picks up group 3
+    // while worker 2 holds group 2. Groups 4..6 remain queued.
+    await waitFor(() => {
+      expect(gates.has("acme.queue-2")).toBe(true)
+      expect(gates.has("acme.queue-3")).toBe(true)
+    })
+    expect(startedPlugins).toEqual([
+      "acme.queue-1",
+      "acme.queue-2",
+      "acme.queue-3",
+    ])
+
+    // Cancel by removing all plugins and flushing the catalog update before groups 4..6 start
+    host.setCatalog([])
+    await act(async () => {
+      host.emit("host-plugins://changed")
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      gates
+        .get("acme.queue-2")!
+        .resolve([{ folderId: 1, label: "Stale2", tone: "danger" }])
+      gates
+        .get("acme.queue-3")!
+        .resolve([{ folderId: 1, label: "Stale3", tone: "danger" }])
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // Queued groups 4..6 MUST NOT have been invoked after cancellation
+    expect(startedPlugins).toEqual([
+      "acme.queue-1",
+      "acme.queue-2",
+      "acme.queue-3",
+    ])
+    expect(
+      container.querySelectorAll('[data-slot="plugin-workspace-row-badge"]')
+    ).toHaveLength(0)
+    expect(container.textContent).not.toContain("Stale2")
+    expect(container.textContent).not.toContain("Stale3")
+  })
+
+  it("respects the 64 KiB UTF-8 JSON input limit across long multi-byte branches without mutating normal branch names", async () => {
+    const encoder = new TextEncoder()
+    const longPrefix = `feat/多字节分支-${"汉".repeat(400)}-🌿`
+    const folders = Array.from({ length: 64 }, (_, index) =>
+      makeFolder(index + 1, `repo-${index + 1}`, {
+        git_branch: `${longPrefix}-${index + 1}`,
+      })
+    )
+    seedWorkspaces(folders)
+
+    const plugin = makeBadgePlugin({
+      badges: [{ id: "branch", title: "Branch", method: "worktree-badges" }],
+    })
+    const seenBranches = new Map<number, string | null>()
+    const batchByteSizes: number[] = []
+
+    const host = createMockHostTransport([plugin], ({ input }) => {
+      const payloadBytes = encoder.encode(JSON.stringify(input)).byteLength
+      batchByteSizes.push(payloadBytes)
+      if (payloadBytes > MAX_WORKSPACE_ROW_BADGE_INPUT_BYTES) {
+        throw new Error("Plugin input exceeds 64 KiB")
+      }
+      for (const ws of input.workspaces) {
+        seenBranches.set(ws.folderId, ws.branch)
+      }
+      return input.workspaces
+        .filter((ws) => ws.folderId === 1 || ws.folderId === 64)
+        .map((ws) => ({
+          folderId: ws.folderId,
+          label: `Fit-${ws.folderId}`,
+          tone: "success",
+        }))
+    })
+    transportCtl.currentTransport = host.transport
+
+    const { container } = renderList({ showWorktrees: false })
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Fit-1")
+      expect(container.textContent).toContain("Fit-64")
+    })
+
+    expect(batchByteSizes.length).toBeGreaterThan(1)
+    for (const bytes of batchByteSizes) {
+      expect(bytes).toBeLessThanOrEqual(MAX_WORKSPACE_ROW_BADGE_INPUT_BYTES)
+    }
+    expect(seenBranches.size).toBe(64)
+    expect(seenBranches.get(1)).toBe(`${longPrefix}-1`)
+    expect(seenBranches.get(64)).toBe(`${longPrefix}-64`)
+  })
+
+  it("enforces the concurrency cap across consecutive refresh epochs on the same transport without blocking a different transport", async () => {
+    seedWorkspaces([makeFolder(1, "alpha", { git_branch: "v1" })])
+
+    const plugins: InstalledPlugin[] = Array.from({ length: 3 }, (_, index) =>
+      makeBadgePlugin({
+        id: `acme.epoch-${index + 1}`,
+        methods: [`m-${index + 1}`],
+        badges: [
+          {
+            id: `e-${index + 1}`,
+            title: `Epoch ${index + 1}`,
+            method: `m-${index + 1}`,
+          },
+        ],
+      })
+    )
+
+    const HOST_RUNTIME_SLOTS = 4
+    let inFlightA = 0
+    let maxConcurrentA = 0
+    let busyErrorsA = 0
+    const callLogA: Array<{
+      pluginId: string
+      branch: string | null
+      gate: ReturnType<
+        typeof deferred<{ folderId: number; label: string; tone?: string }[]>
+      >
+    }> = []
+
+    const hostA = createMockHostTransport(
+      plugins,
+      async ({ pluginId, input }) => {
+        inFlightA += 1
+        maxConcurrentA = Math.max(maxConcurrentA, inFlightA)
+        if (inFlightA > HOST_RUNTIME_SLOTS) {
+          inFlightA -= 1
+          busyErrorsA += 1
+          throw new Error("Plugin runtime is busy")
+        }
+        const gate =
+          deferred<{ folderId: number; label: string; tone?: string }[]>()
+        callLogA.push({
+          pluginId,
+          branch: input.workspaces[0]?.branch ?? null,
+          gate,
+        })
+        try {
+          return await gate.promise
+        } finally {
+          inFlightA -= 1
+        }
+      }
+    )
+    transportCtl.currentTransport = hostA.transport
+
+    const { container } = renderList({ showWorktrees: false })
+
+    // Epoch 1 starts 2 in-flight RPCs; group 3 stays queued.
+    await waitFor(() => {
+      expect(callLogA).toHaveLength(2)
+    })
+    expect(inFlightA).toBe(2)
+
+    // Consecutive refreshes (host-plugins://changed + branch updates) while
+    // epoch 1's 2 RPCs are STILL in flight must NOT stack new RPCs on top.
+    await act(async () => {
+      hostA.emit("host-plugins://changed")
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    act(() => {
+      useAppWorkspaceStore.getState().setBranch(1, "v2")
+    })
+    await act(async () => {
+      hostA.emit("host-plugins://changed")
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    act(() => {
+      useAppWorkspaceStore.getState().setBranch(1, "v3")
+    })
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // Still only the original 2 in-flight calls on hostA — no cross-epoch overflow!
+    expect(callLogA).toHaveLength(2)
+    expect(inFlightA).toBe(2)
+    expect(maxConcurrentA).toBe(WORKSPACE_ROW_BADGE_MAX_CONCURRENCY)
+    expect(busyErrorsA).toBe(0)
+
+    // Settling epoch 1's stale calls releases the 2 slots to the latest epoch (v3),
+    // skipping all cancelled queued groups from epochs 1 and 2.
+    await act(async () => {
+      callLogA[0]!.gate.resolve([
+        { folderId: 1, label: "StaleV1-A", tone: "danger" },
+      ])
+      callLogA[1]!.gate.resolve([
+        { folderId: 1, label: "StaleV1-B", tone: "danger" },
+      ])
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(callLogA).toHaveLength(4)
+    })
+    expect(callLogA[2]!.branch).toBe("v3")
+    expect(callLogA[3]!.branch).toBe("v3")
+    expect(maxConcurrentA).toBe(WORKSPACE_ROW_BADGE_MAX_CONCURRENCY)
+    expect(container.textContent).not.toContain("StaleV1")
+
+    // Drain epoch 3's first 2 calls -> triggers epoch 3's 3rd call -> all 3 render
+    await act(async () => {
+      callLogA[2]!.gate.resolve([{ folderId: 1, label: "V3-1", tone: "info" }])
+      callLogA[3]!.gate.resolve([{ folderId: 1, label: "V3-2", tone: "info" }])
+      await Promise.resolve()
+    })
+    await waitFor(() => {
+      expect(callLogA).toHaveLength(5)
+    })
+    expect(callLogA[4]!.branch).toBe("v3")
+    await act(async () => {
+      callLogA[4]!.gate.resolve([{ folderId: 1, label: "V3-3", tone: "info" }])
+      await Promise.resolve()
+    })
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll('[data-slot="plugin-workspace-row-badge"]')
+      ).toHaveLength(3)
+    })
+    expect(container.textContent).toContain("V3-1")
+    expect(container.textContent).toContain("V3-2")
+    expect(container.textContent).toContain("V3-3")
+    expect(maxConcurrentA).toBe(WORKSPACE_ROW_BADGE_MAX_CONCURRENCY)
+    expect(busyErrorsA).toBe(0)
+
+    // Now start 2 hung RPCs on hostA, then switch to a DIFFERENT Transport (hostB):
+    // hostB MUST start immediately without waiting for hostA's hung RPCs to settle.
+    act(() => {
+      useAppWorkspaceStore.getState().setBranch(1, "v4-hung-on-A")
+    })
+    await waitFor(() => {
+      expect(callLogA).toHaveLength(7)
+    })
+    expect(inFlightA).toBe(2)
+
+    const hostB = createMockHostTransport([plugins[0]!], () => [
+      { folderId: 1, label: "FreshOnHostB", tone: "success" },
+    ])
+    transportCtl.currentTransport = hostB.transport
+    act(() => {
+      transportCtl.notify()
+    })
+
+    // hostB resolves immediately even while hostA still has 2 unsettled in-flight RPCs
+    await waitFor(() => {
+      expect(container.textContent).toContain("FreshOnHostB")
+    })
+    expect(inFlightA).toBe(2)
   })
 })

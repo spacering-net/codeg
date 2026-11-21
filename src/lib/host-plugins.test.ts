@@ -11,8 +11,10 @@ import {
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
   MAX_PLUGIN_WORKSPACE_ROW_BADGES,
+  MAX_WORKSPACE_ROW_BADGE_INPUT_BYTES,
   MAX_WORKSPACE_ROW_BADGE_LABEL_CHARS,
   WORKSPACE_ROW_BADGE_BATCH_SIZE,
+  WORKSPACE_ROW_BADGE_MAX_CONCURRENCY,
   WORKSPACE_ROW_BADGE_TONES,
   buildWorkspaceRowBadgeInputs,
   chunkWorkspaceRowBadgeInputs,
@@ -1201,6 +1203,8 @@ describe("workspace row badges manifest selection, validation, and batching", ()
     ])
 
     expect(WORKSPACE_ROW_BADGE_BATCH_SIZE).toBe(64)
+    expect(MAX_WORKSPACE_ROW_BADGE_INPUT_BYTES).toBe(64 * 1024)
+    expect(WORKSPACE_ROW_BADGE_MAX_CONCURRENCY).toBe(2)
     const many = Array.from({ length: 130 }, (_, index) => ({
       folderId: index + 1,
       parentFolderId: null,
@@ -1208,5 +1212,68 @@ describe("workspace row badges manifest selection, validation, and batching", ()
     }))
     const chunks = chunkWorkspaceRowBadgeInputs(many)
     expect(chunks.map((batch) => batch.length)).toEqual([64, 64, 2])
+  })
+
+  it("splits batches by actual UTF-8 JSON byte budget (64 KiB) for long multi-byte branches while keeping normal branches intact", () => {
+    const encoder = new TextEncoder()
+    // 400 CJK characters = 400 UTF-16 code units, 1200 UTF-8 bytes per branch.
+    // 64 entries fit within UTF-16 string length < 64k, but UTF-8 JSON exceeds 64 KiB.
+    const longMultibyteBranch = `feature/多字节分支-${"中".repeat(400)}-🚀`
+    const workspaces = Array.from({ length: 64 }, (_, index) => ({
+      folderId: index + 1,
+      parentFolderId: index % 2 === 0 ? null : 1,
+      branch: `${longMultibyteBranch}-${index + 1}`,
+    }))
+
+    const singlePayloadBytes = encoder.encode(
+      JSON.stringify({ locale: "zh-CN", workspaces })
+    ).byteLength
+    expect(singlePayloadBytes).toBeGreaterThan(
+      MAX_WORKSPACE_ROW_BADGE_INPUT_BYTES
+    )
+
+    const batches = chunkWorkspaceRowBadgeInputs(workspaces, {
+      locale: "zh-CN",
+    })
+    expect(batches.length).toBeGreaterThan(1)
+
+    for (const batch of batches) {
+      expect(batch.length).toBeGreaterThan(0)
+      expect(batch.length).toBeLessThanOrEqual(WORKSPACE_ROW_BADGE_BATCH_SIZE)
+      const bytes = encoder.encode(
+        JSON.stringify({ locale: "zh-CN", workspaces: batch })
+      ).byteLength
+      expect(bytes).toBeLessThanOrEqual(MAX_WORKSPACE_ROW_BADGE_INPUT_BYTES)
+    }
+
+    // All 64 normal multi-byte branches must be preserved verbatim in order
+    expect(batches.flat()).toEqual(workspaces)
+
+    // Pathological single-workspace branch exceeding 64 KiB alone omits the branch (null)
+    // instead of truncating it into a different-looking branch name
+    const extreme = [
+      {
+        folderId: 1,
+        parentFolderId: null,
+        branch: "🚀".repeat(20_000),
+      },
+    ]
+    const extremeBatches = chunkWorkspaceRowBadgeInputs(extreme, {
+      locale: "en",
+    })
+    expect(extremeBatches).toHaveLength(1)
+    expect(extremeBatches[0]).toEqual([
+      {
+        folderId: 1,
+        parentFolderId: null,
+        branch: null,
+      },
+    ])
+    const extremeBytes = encoder.encode(
+      JSON.stringify({ locale: "en", workspaces: extremeBatches[0] })
+    ).byteLength
+    expect(extremeBytes).toBeLessThanOrEqual(
+      MAX_WORKSPACE_ROW_BADGE_INPUT_BYTES
+    )
   })
 })
