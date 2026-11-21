@@ -102,6 +102,50 @@ struct Contributions {
     screens: Vec<HostPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidebar_items: Vec<SidebarItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    attachment_sources: Vec<AttachmentSource>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AttachmentSource {
+    id: String,
+    title: String,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    title_translations: Translations,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_attachment_source_field",
+        skip_serializing_if = "Option::is_none"
+    )]
+    picker_title: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_attachment_source_field",
+        skip_serializing_if = "Option::is_none"
+    )]
+    picker_title_translations: Option<Translations>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_attachment_source_field",
+        skip_serializing_if = "Option::is_none"
+    )]
+    search_placeholder: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_attachment_source_field",
+        skip_serializing_if = "Option::is_none"
+    )]
+    search_placeholder_translations: Option<Translations>,
+    method: String,
+}
+
+fn deserialize_attachment_source_field<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -1003,6 +1047,7 @@ impl Manifest {
             themes,
             screens,
             sidebar_items,
+            attachment_sources,
         } = &self.contributes;
         if !bundled && workspace_panels.is_empty() && themes.is_empty() {
             return Err("A declarative plugin needs a workspace panel or theme".to_owned());
@@ -1109,6 +1154,47 @@ impl Manifest {
                 "Provide up to 16 sidebar items with unique IDs, valid titles and a screen from this plugin"
                     .into(),
             );
+        }
+        if attachment_sources.len() > MAX_CONTRIBUTIONS {
+            return Err("Provide up to 16 attachment sources".into());
+        }
+        let mut attachment_source_ids = BTreeSet::new();
+        for source in attachment_sources {
+            if !valid_id(&source.id)
+                || !valid_label(&source.title)
+                || !valid_translations(&source.title_translations, valid_label)
+                || !attachment_source_ids.insert(&source.id)
+            {
+                return Err("Invalid or duplicate attachment source".into());
+            }
+            for (label, translations) in [
+                (
+                    source.picker_title.as_deref(),
+                    source.picker_title_translations.as_ref(),
+                ),
+                (
+                    source.search_placeholder.as_deref(),
+                    source.search_placeholder_translations.as_ref(),
+                ),
+            ] {
+                if label.is_some_and(|value| !valid_label(value))
+                    || translations.is_some_and(|translations| {
+                        label.is_none() || !valid_translations(translations, valid_label)
+                    })
+                {
+                    return Err("Invalid attachment source picker text or translations".into());
+                }
+            }
+            if !self
+                .server
+                .as_ref()
+                .is_some_and(|server| server.methods.contains(&source.method))
+            {
+                return Err(
+                    "An attachment source must use a declared server method from this plugin"
+                        .into(),
+                );
+            }
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
@@ -1285,6 +1371,8 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = include_str!("../../examples/plugins/turn-activity/codeg-plugin.json");
+    const ISSUE_ATTACHMENTS: &str =
+        include_str!("../../examples/plugins/issue-attachments/codeg-plugin.json");
     const ID: &str = "codeg.turn-activity";
 
     fn install(
@@ -1469,6 +1557,209 @@ mod tests {
             invalid["contributes"]["sidebarItems"][0][field] = json!(value);
             assert!(Manifest::parse(&invalid.to_string()).is_err());
         }
+    }
+
+    #[test]
+    fn attachment_sources_round_trip_and_are_omitted_from_existing_manifests() {
+        use serde_json::{json, Value};
+
+        let mut example: Value = serde_json::from_str(ISSUE_ATTACHMENTS).unwrap();
+        let parsed = Manifest::parse(ISSUE_ATTACHMENTS).unwrap();
+        let serialized = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(
+            serialized["contributes"]["attachmentSources"],
+            example["contributes"]["attachmentSources"]
+        );
+        assert_eq!(Manifest::parse(&serialized.to_string()).unwrap(), parsed);
+
+        let source = example["contributes"]["attachmentSources"][0]
+            .as_object_mut()
+            .unwrap();
+        for field in [
+            "titleTranslations",
+            "pickerTitle",
+            "pickerTitleTranslations",
+            "searchPlaceholder",
+            "searchPlaceholderTranslations",
+        ] {
+            source.remove(field);
+        }
+        let minimal = Manifest::parse(&example.to_string()).unwrap();
+        assert_eq!(
+            serde_json::to_value(minimal).unwrap()["contributes"]["attachmentSources"],
+            example["contributes"]["attachmentSources"]
+        );
+
+        let legacy = Manifest::parse(SAMPLE).unwrap();
+        let mut serialized = serde_json::to_value(&legacy).unwrap();
+        assert!(serialized["contributes"].get("attachmentSources").is_none());
+        serialized["contributes"]["attachmentSources"] = json!([]);
+        assert_eq!(Manifest::parse(&serialized.to_string()).unwrap(), legacy);
+    }
+
+    #[test]
+    fn limits_attachment_sources_and_rejects_duplicate_or_invalid_ids() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(ISSUE_ATTACHMENTS).unwrap();
+        let template = example["contributes"]["attachmentSources"][0].clone();
+        let mut manifest = example.clone();
+        let sources = (0..MAX_CONTRIBUTIONS).map(|index| {
+            let mut source = template.clone();
+            source["id"] = json!(format!("issues-{index}"));
+            source
+        });
+        manifest["contributes"]["attachmentSources"] = Value::Array(sources.collect());
+        Manifest::parse(&manifest.to_string()).unwrap();
+        manifest["contributes"]["attachmentSources"]
+            .as_array_mut()
+            .unwrap()
+            .push(template.clone());
+        assert!(Manifest::parse(&manifest.to_string()).is_err());
+
+        let mut duplicate = example.clone();
+        duplicate["contributes"]["attachmentSources"] = json!([template, template]);
+        assert!(Manifest::parse(&duplicate.to_string()).is_err());
+
+        let mut invalid_id = example;
+        invalid_id["contributes"]["attachmentSources"][0]["id"] = json!("invalid/id");
+        assert!(Manifest::parse(&invalid_id.to_string()).is_err());
+    }
+
+    #[test]
+    fn attachment_sources_require_a_method_from_the_same_server_module() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(ISSUE_ATTACHMENTS).unwrap();
+        for method in ["", "another-plugin.search"] {
+            let mut undeclared = example.clone();
+            undeclared["contributes"]["attachmentSources"][0]["method"] = json!(method);
+            assert!(Manifest::parse(&undeclared.to_string()).is_err());
+        }
+
+        let mut missing_server = example.clone();
+        missing_server.as_object_mut().unwrap().remove("server");
+        missing_server["client"] = json!({ "entry": "client.html" });
+        let error = Manifest::parse(&missing_server.to_string()).unwrap_err();
+        assert!(error.message.contains("declared server method"));
+
+        let mut missing_entry = example;
+        missing_entry["server"]
+            .as_object_mut()
+            .unwrap()
+            .remove("entry");
+        assert!(Manifest::parse(&missing_entry.to_string()).is_err());
+    }
+
+    #[test]
+    fn attachment_source_text_and_translations_need_valid_fallbacks() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(ISSUE_ATTACHMENTS).unwrap();
+        for field in ["title", "pickerTitle", "searchPlaceholder"] {
+            let mut manifest = example.clone();
+            manifest["contributes"]["attachmentSources"][0][field] = json!(" \t");
+            assert!(Manifest::parse(&manifest.to_string()).is_err(), "{field}");
+        }
+        for field in [
+            "titleTranslations",
+            "pickerTitleTranslations",
+            "searchPlaceholderTranslations",
+        ] {
+            let mut manifest = example.clone();
+            manifest["contributes"]["attachmentSources"][0][field] = json!({ "es": "" });
+            assert!(Manifest::parse(&manifest.to_string()).is_err(), "{field}");
+        }
+        for field in ["pickerTitle", "searchPlaceholder"] {
+            let mut manifest = example.clone();
+            manifest["contributes"]["attachmentSources"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(Manifest::parse(&manifest.to_string()).is_err(), "{field}");
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_attachment_source_fields_and_invalid_types() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(ISSUE_ATTACHMENTS).unwrap();
+        for (field, invalid) in [
+            ("endpoint", json!("unknown")),
+            ("method", json!(42)),
+            ("pickerTitle", json!(null)),
+            ("searchPlaceholder", json!(42)),
+            ("pickerTitleTranslations", json!(null)),
+            ("searchPlaceholderTranslations", json!({ "es": 42 })),
+        ] {
+            let mut manifest = example.clone();
+            manifest["contributes"]["attachmentSources"][0][field] = invalid;
+            assert!(Manifest::parse(&manifest.to_string()).is_err(), "{field}");
+        }
+    }
+
+    #[tokio::test]
+    async fn searches_installed_issue_attachment_source() {
+        use serde_json::json;
+
+        let data = tempfile::tempdir().unwrap();
+        let host = HostPlugins::new(data.path());
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/issue-attachments");
+        let preview = host
+            .preview_install(source.to_str().unwrap(), source::Registry::Npm, None)
+            .await
+            .unwrap();
+        let id = preview.manifest.id.clone();
+        let method = preview.manifest.contributes.attachment_sources[0]
+            .method
+            .clone();
+        host.confirm_install(preview.ticket).unwrap();
+        host.apply(Mutation::SetEnabled {
+            id: id.clone(),
+            enabled: true,
+        })
+        .unwrap();
+
+        let search_input = |query: &str| json!({ "query": query, "folderId": 42, "conversationId": null, "locale": "es" });
+        let output = host
+            .call(&id, method.clone(), search_input("  demo-104 "))
+            .await
+            .unwrap();
+        assert_eq!(
+            output,
+            json!({
+                "items": [{
+                    "id": "issue-104",
+                    "identifier": "DEMO-104",
+                    "title": "Document the first-run workflow",
+                    "subtitle": "Docs · Open",
+                    "url": "https://example.com/issues/DEMO-104",
+                    "text": "DEMO-104 · Document the first-run workflow\n\nAdd instructions for creating a workspace and opening a first session.",
+                    "resourceType": "issue"
+                }]
+            })
+        );
+        let output = host
+            .call(&id, method.clone(), search_input("docs import"))
+            .await
+            .unwrap();
+        assert_eq!(output["items"].as_array().unwrap().len(), 1);
+        assert_eq!(output["items"][0]["identifier"], "DEMO-112");
+        assert_eq!(
+            host.call(&id, method.clone(), search_input("no match"))
+                .await
+                .unwrap(),
+            json!({ "items": [] })
+        );
+
+        host.apply(Mutation::SetEnabled {
+            id: id.clone(),
+            enabled: false,
+        })
+        .unwrap();
+        assert!(host.call(&id, method, search_input("docs")).await.is_err());
     }
 
     #[test]

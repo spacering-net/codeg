@@ -217,6 +217,36 @@ the surface, hiding the session or changing the session, workspace, or connected
 host revokes its access. It works for a conversation's composer and the
 composer within its canvas card.
 
+## Composer attachment sources
+
+Declare up to 16 entries in `contributes.attachmentSources` to add searchable
+sources to the composer's attachment menu. Each entry has a unique `id`, a
+`title`, and a `method` declared in the same plugin's `server.methods`.
+Attachment sources require a reviewed `server.entry`.
+Optional `pickerTitle` and `searchPlaceholder` customize the picker. Use
+`titleTranslations`, `pickerTitleTranslations`, and
+`searchPlaceholderTranslations` to localize those fields. A picker title or
+search placeholder needs a nonempty fallback when its translations are
+present.
+
+Codeg searches through `host_plugins_call` with
+`{ query, folderId, conversationId, locale }`. The IDs are `null` when their
+workspace or saved conversation is absent. Return `{ items: [...] }` with
+`id`, `title`, and `text` on each item. Add `identifier`, `subtitle`, `url`,
+or `resourceType` as optional metadata.
+
+The picker accepts up to 20 results. Each `text` snapshot has a 16 KiB UTF-8
+limit and may not contain NUL characters. An optional `url` must use HTTP or
+HTTPS. Searches also use the server module's shared JSON message limit.
+Selecting a result attaches its text snapshot to the current composer draft.
+Disabling the plugin, switching conversations, or replacing the host Transport
+invalidates previous search results.
+
+Install and enable the [Issue Attachments example](../examples/plugins/issue-attachments),
+then open **Example Issues** from the composer's attachment menu and search
+for `DEMO-104` or `docs`. The [author types](host-plugin-attachment-sources.d.ts)
+describe the manifest, search input, and search output.
+
 ## Persist plugin settings
 
 Declare `settings` with a positive integer `version`, a JSON Schema whose root
