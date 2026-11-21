@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JSON Outline</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px system-ui; }
+    body { margin: 0; padding: 16px; }
+    h1, li, p { overflow-wrap: anywhere; }
+  </style>
+  <h1>JSON Outline</h1>
+  <p role="status"></p>
+  <ul></ul>
+  <script type="module">
+    const title = document.querySelector("h1")
+    const status = document.querySelector("p")
+    const list = document.querySelector("ul")
+
+    function describe(value) {
+      if (value === null) return "null"
+      if (Array.isArray(value)) return `array · ${value.length} items`
+      if (typeof value === "object") return `object · ${Object.keys(value).length} keys`
+      return typeof value
+    }
+
+    try {
+      const { fileName } = await window.codeg.ready
+      title.textContent = fileName
+      const { text } = await window.codeg.file.readText()
+      const value = JSON.parse(text)
+      status.textContent = describe(value)
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        for (const [key, item] of Object.entries(value)) {
+          const row = document.createElement("li")
+          row.textContent = `${key} · ${describe(item)}`
+          list.append(row)
+        }
+      }
+    } catch (error) {
+      status.textContent = error.message
+    }
+  </script>
+</html>

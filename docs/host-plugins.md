@@ -215,6 +215,31 @@ Install and enable [Focus Notes](../examples/plugins/focus-notes), then select
 it from the sidebar's view options. Enter a note and select **Save note** to
 save it on that host.
 
+### File panels
+
+Declare `contributes.filePanels` to add a read-only view to matching text files
+in the workspace file editor. For example:
+
+```json
+{
+  "filePanels": [
+    { "id": "outline", "title": "JSON Outline", "extensions": ["json"] }
+  ]
+}
+```
+
+Include `client.entry` and declare up to 16 panels with unique IDs. Each panel
+accepts `titleTranslations` and 1 to 16 unique lowercase ASCII extensions without
+leading dots. Extensions match the final suffix of the file name
+case-insensitively. Users open a panel from the file editor's view selector.
+
+The reviewed HTML receives `{ type: "filePanel", id, fileName, locale }` from
+`window.codeg.ready`. Call `await window.codeg.file.readText()` to read
+`{ text }` for the open file. The method takes no path, accepts up to 64 KiB of
+UTF-8 text, and is available while the panel is selected for that file. Use the
+[JSON Outline example](../examples/plugins/json-outline) to view the structure
+of an open JSON file.
+
 ### Insert text into the composer
 
 An open `composer` contribution can call
