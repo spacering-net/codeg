@@ -3588,12 +3588,19 @@ export async function gitWorktreeAdd(
   path: string,
   branchName: string,
   worktreePath: string
-): Promise<void> {
-  return getTransport().call("git_worktree_add", {
-    path,
-    branchName,
-    worktreePath,
-  })
+): Promise<string | null> {
+  const destination = await getTransport().call<string | null | undefined>(
+    "git_worktree_add",
+    {
+      path,
+      branchName,
+      worktreePath,
+      allowPluginDestination: true,
+    }
+  )
+  return typeof destination === "string" && destination.trim()
+    ? destination
+    : null
 }
 
 export async function gitCheckout(
