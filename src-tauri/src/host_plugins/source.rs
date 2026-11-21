@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
 use url::Url;
 
-use super::{invalid, HostPlugins, InstalledPlugin, Mutation, MAX_MANIFEST_BYTES};
+use super::{
+    invalid, runtime::MAX_MODULE_BYTES, HostPlugins, InstalledPlugin, Manifest, PluginBundle,
+    MAX_MANIFEST_BYTES,
+};
 use crate::app_error::{AppCommandError, AppErrorCode};
 
 const FILE_NAME: &str = "codeg-plugin.json";
@@ -168,8 +171,8 @@ pub enum InstalledSource {
 }
 
 impl InstalledSource {
-    pub(super) async fn refresh(mut self) -> Result<(String, Self), AppCommandError> {
-        let manifest = match &mut self {
+    pub(super) async fn refresh(mut self) -> Result<(PluginBundle, Self), AppCommandError> {
+        let bundle = match &mut self {
             Self::Directory { path } => load_directory(directory_path(path)?).await?,
             Self::GitHub {
                 repository,
@@ -198,7 +201,7 @@ impl InstalledSource {
                 manifest
             }
         };
-        Ok((manifest, self))
+        Ok((bundle, self))
     }
 }
 
@@ -221,14 +224,14 @@ pub async fn install(
     input: &str,
     registry: Registry,
 ) -> Result<Vec<InstalledPlugin>, AppCommandError> {
-    let (manifest, source) = resolve(input, registry).await?;
-    plugins.apply_with_source(Mutation::Install { manifest }, Some(source))
+    let (bundle, source) = resolve(input, registry).await?;
+    plugins.install(PluginBundle::manifest_only(bundle.manifest)?, Some(source))
 }
 
 pub(super) async fn resolve(
     input: &str,
     registry: Registry,
-) -> Result<(String, InstalledSource), AppCommandError> {
+) -> Result<(PluginBundle, InstalledSource), AppCommandError> {
     let source = match parse(input)? {
         Source::Directory(path) => InstalledSource::Directory {
             path: path.to_string_lossy().into_owned(),
@@ -370,34 +373,55 @@ fn valid_part(part: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || b"._-+".contains(&byte))
 }
 
-async fn load_directory(path: PathBuf) -> Result<String, AppCommandError> {
-    tokio::task::spawn_blocking(move || read_directory(&path))
-        .await
-        .map_err(|_| invalid("Could not read the plugin directory"))?
+async fn load_directory(path: PathBuf) -> Result<PluginBundle, AppCommandError> {
+    tokio::task::spawn_blocking(move || {
+        let manifest =
+            Manifest::parse(&read_directory_file(&path, FILE_NAME, MAX_MANIFEST_BYTES)?)?;
+        let code = manifest
+            .server
+            .as_ref()
+            .map(|server| read_directory_file(&path, &server.entry, MAX_MODULE_BYTES))
+            .transpose()?;
+        bundle(manifest, code)
+    })
+    .await
+    .map_err(|_| invalid("Could not read the plugin directory"))?
 }
 
-fn read_directory(path: &Path) -> Result<String, AppCommandError> {
-    let manifest = path.join(FILE_NAME);
-    let metadata = std::fs::symlink_metadata(&manifest)
-        .map_err(|_| invalid("The host directory does not contain codeg-plugin.json"))?;
+fn read_directory_file(path: &Path, name: &str, limit: usize) -> Result<String, AppCommandError> {
+    let file = path.join(name);
+    let metadata = std::fs::symlink_metadata(&file)
+        .map_err(|_| invalid(format!("The host directory does not contain {name}")))?;
     if !metadata.is_file() {
-        return Err(invalid("codeg-plugin.json must be a regular file"));
+        return Err(invalid(format!("{name} must be a regular file")));
     }
-    let file =
-        std::fs::File::open(manifest).map_err(|_| invalid("Could not open codeg-plugin.json"))?;
-    read_manifest(file)
+    let file = std::fs::File::open(file).map_err(|_| invalid(format!("Could not open {name}")))?;
+    read_text(file, name, limit)
 }
 
-fn read_manifest(reader: impl Read) -> Result<String, AppCommandError> {
+fn read_text(reader: impl Read, name: &str, limit: usize) -> Result<String, AppCommandError> {
     let mut text = String::new();
     reader
-        .take(MAX_MANIFEST_BYTES as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_string(&mut text)
-        .map_err(|_| invalid("Could not read codeg-plugin.json as UTF-8"))?;
-    if text.len() > MAX_MANIFEST_BYTES {
-        return Err(invalid("Plugin manifest exceeds 64 KiB"));
+        .map_err(|_| invalid(format!("Could not read {name} as UTF-8")))?;
+    if text.len() > limit {
+        return Err(invalid(format!("{name} exceeds its size limit")));
     }
     Ok(text)
+}
+
+fn bundle(manifest: Manifest, code: Option<String>) -> Result<PluginBundle, AppCommandError> {
+    if code
+        .as_ref()
+        .is_some_and(|code| code.trim().is_empty() || code.contains('\0'))
+    {
+        return Err(invalid("The plugin server module must contain JavaScript"));
+    }
+    Ok(PluginBundle {
+        manifest,
+        server_code: code.map(Into::into),
+    })
 }
 
 fn client() -> Result<reqwest::Client, AppCommandError> {
@@ -459,7 +483,7 @@ async fn read_github(
     repository: &str,
     reference: &str,
     directory: &str,
-) -> Result<(String, String), AppCommandError> {
+) -> Result<(PluginBundle, String), AppCommandError> {
     #[derive(Deserialize)]
     struct Commit {
         sha: String,
@@ -480,7 +504,21 @@ async fn read_github(
     segments.push(FILE_NAME);
     let url = endpoint("https://raw.githubusercontent.com", &segments);
     let bytes = download(client, url, MAX_MANIFEST_BYTES).await?;
-    Ok((read_manifest(bytes.as_slice())?, sha))
+    let manifest = Manifest::parse(&read_text(bytes.as_slice(), FILE_NAME, MAX_MANIFEST_BYTES)?)?;
+    let code = if let Some(server) = &manifest.server {
+        segments.pop();
+        segments.push(&server.entry);
+        let url = endpoint("https://raw.githubusercontent.com", &segments);
+        let bytes = download(client, url, MAX_MODULE_BYTES).await?;
+        Some(read_text(
+            bytes.as_slice(),
+            &server.entry,
+            MAX_MODULE_BYTES,
+        )?)
+    } else {
+        None
+    };
+    Ok((bundle(manifest, code)?, sha))
 }
 
 async fn read_npm(
@@ -488,7 +526,7 @@ async fn read_npm(
     registry: Registry,
     package: &str,
     selector: &str,
-) -> Result<(String, String), AppCommandError> {
+) -> Result<(PluginBundle, String), AppCommandError> {
     #[derive(Deserialize)]
     struct Package {
         name: String,
@@ -531,39 +569,46 @@ async fn read_npm(
         .filter(|hash| hash.len() == 64)
         .ok_or_else(|| invalid("Registry package is missing valid SHA-512 integrity"))?;
     let bytes = download(client, tarball, MAX_ARCHIVE_BYTES).await?;
-    let manifest = tokio::task::spawn_blocking(move || verified_manifest(&bytes, &expected))
+    let bundle = tokio::task::spawn_blocking(move || verified_bundle(&bytes, &expected))
         .await
         .map_err(|_| invalid("Could not read the plugin archive"))??;
-    Ok((manifest, package_info.version))
+    Ok((bundle, package_info.version))
 }
 
-fn verified_manifest(bytes: &[u8], expected: &[u8]) -> Result<String, AppCommandError> {
+fn verified_bundle(bytes: &[u8], expected: &[u8]) -> Result<PluginBundle, AppCommandError> {
     if &Sha512::digest(bytes)[..] != expected {
         return Err(invalid(
             "Downloaded plugin package failed its integrity check",
         ));
     }
-    manifest_from_archive(bytes)
+    let manifest = Manifest::parse(&archive_file(bytes, FILE_NAME, MAX_MANIFEST_BYTES)?)?;
+    let code = manifest
+        .server
+        .as_ref()
+        .map(|server| archive_file(bytes, &server.entry, MAX_MODULE_BYTES))
+        .transpose()?;
+    bundle(manifest, code)
 }
 
-fn manifest_from_archive(bytes: &[u8]) -> Result<String, AppCommandError> {
+fn archive_file(bytes: &[u8], name: &str, limit: usize) -> Result<String, AppCommandError> {
     let mut archive =
         tar::Archive::new(GzDecoder::new(Cursor::new(bytes)).take(MAX_UNPACKED_BYTES));
     let malformed = |_| invalid("Could not read the plugin archive");
-    let mut manifest = None;
+    let path = format!("package/{name}");
+    let mut contents = None;
     for entry in archive.entries().map_err(malformed)? {
         let entry = entry.map_err(malformed)?;
-        if entry.path_bytes().as_ref() != b"package/codeg-plugin.json" {
+        if entry.path_bytes().as_ref() != path.as_bytes() {
             continue;
         }
-        if manifest.is_some() || !entry.header().entry_type().is_file() {
-            return Err(invalid(
-                "Plugin package must contain one regular codeg-plugin.json",
-            ));
+        if contents.is_some() || !entry.header().entry_type().is_file() {
+            return Err(invalid(format!(
+                "Plugin package must contain one regular {name}"
+            )));
         }
-        manifest = Some(read_manifest(entry)?);
+        contents = Some(read_text(entry, name, limit)?);
     }
-    manifest.ok_or_else(|| invalid("Plugin package does not contain codeg-plugin.json"))
+    contents.ok_or_else(|| invalid(format!("Plugin package does not contain {name}")))
 }
 
 fn network(message: impl Into<String>) -> AppCommandError {
@@ -712,16 +757,29 @@ mod tests {
         let path = "package/codeg-plugin.json";
         let package = archive(&[path, "package/index.js"], SAMPLE);
         assert_eq!(
-            verified_manifest(&package, &Sha512::digest(&package)).unwrap(),
-            SAMPLE
+            verified_bundle(&package, &Sha512::digest(&package))
+                .unwrap()
+                .manifest,
+            Manifest::parse(SAMPLE).unwrap()
         );
-        assert!(verified_manifest(&package, &[0; 64]).is_err());
-        assert!(manifest_from_archive(&archive(&[path, path], SAMPLE)).is_err());
-        assert!(
-            manifest_from_archive(&archive(&["package/sub/codeg-plugin.json"], SAMPLE)).is_err()
-        );
-        assert!(
-            manifest_from_archive(&archive(&[path], &"x".repeat(MAX_MANIFEST_BYTES + 1))).is_err()
-        );
+        assert!(verified_bundle(&package, &[0; 64]).is_err());
+        assert!(archive_file(
+            &archive(&[path, path], SAMPLE),
+            FILE_NAME,
+            MAX_MANIFEST_BYTES
+        )
+        .is_err());
+        assert!(archive_file(
+            &archive(&["package/sub/codeg-plugin.json"], SAMPLE),
+            FILE_NAME,
+            MAX_MANIFEST_BYTES
+        )
+        .is_err());
+        assert!(archive_file(
+            &archive(&[path], &"x".repeat(MAX_MANIFEST_BYTES + 1)),
+            FILE_NAME,
+            MAX_MANIFEST_BYTES
+        )
+        .is_err());
     }
 }

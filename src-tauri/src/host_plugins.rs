@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Semaphore};
 use uuid::Uuid;
 
 use crate::acp::manager::ConnectionManager;
@@ -14,6 +14,7 @@ use crate::acp::types::{AcpEvent, EventEnvelope};
 use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
+mod runtime;
 pub mod source;
 
 pub const CATALOG_CHANGED: &str = "host-plugins://changed";
@@ -32,7 +33,21 @@ pub struct Manifest {
     id: String,
     name: String,
     version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    server: Option<ServerModule>,
     contributes: Contributions,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ServerModule {
+    entry: String,
+    methods: Vec<String>,
+}
+
+struct PluginBundle {
+    manifest: Manifest,
+    server_code: Option<Arc<str>>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -54,6 +69,8 @@ struct WorkspacePanel {
     view: PanelView,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    method: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -61,6 +78,7 @@ struct WorkspacePanel {
 enum PanelView {
     TurnActivity,
     Text,
+    ServerText,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -107,16 +125,22 @@ pub struct InstalledPlugin {
     enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source: Option<source::InstalledSource>,
+    #[serde(default, skip_serializing)]
+    server_code: Option<Arc<str>>,
     /// An in-flight download may commit only to the installed definition it read.
     /// Toggling the plugin does not replace its definition.
     #[serde(skip)]
     revision: Arc<()>,
+    #[serde(skip)]
+    activation: Arc<()>,
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginUpdate {
     pub updated: bool,
     version: String,
+    disabled_for_update: bool,
 }
 
 #[derive(Deserialize)]
@@ -136,7 +160,7 @@ pub struct InstallPreview {
 struct PendingInstall {
     ticket: Uuid,
     created: Instant,
-    manifest: String,
+    bundle: PluginBundle,
     source: source::InstalledSource,
 }
 
@@ -161,6 +185,7 @@ type Catalog = BTreeMap<String, InstalledPlugin>;
 pub struct HostPlugins {
     path: PathBuf,
     state: Mutex<Result<PluginState, String>>,
+    runtime_slots: Arc<Semaphore>,
 }
 
 struct PluginState {
@@ -183,6 +208,7 @@ impl HostPlugins {
         Self {
             path,
             state: Mutex::new(state),
+            runtime_slots: Arc::new(Semaphore::new(4)),
         }
     }
 
@@ -198,50 +224,57 @@ impl HostPlugins {
     }
 
     pub fn apply(&self, mutation: Mutation) -> Result<Vec<InstalledPlugin>, AppCommandError> {
-        self.apply_with_source(mutation, None)
+        let (id, enabled) = match mutation {
+            Mutation::Install { manifest } => {
+                let bundle = PluginBundle::manifest_only(Manifest::parse(&manifest)?)?;
+                return self.install(bundle, None);
+            }
+            Mutation::SetEnabled { id, enabled } => (id, Some(enabled)),
+            Mutation::Remove { id } => (id, None),
+        };
+        let mut guard = self.state.lock().expect("host plugin state lock");
+        let state = guard.as_mut().map_err(|error| catalog_error(error))?;
+        let mut next = state.catalog.clone();
+        if let Some(enabled) = enabled {
+            let plugin = next.get_mut(&id).ok_or_else(plugin_not_found)?;
+            if plugin.enabled == enabled {
+                return Ok(next.into_values().collect());
+            }
+            plugin.enabled = enabled;
+            plugin.activation = Arc::new(());
+        } else {
+            next.remove(&id).ok_or_else(plugin_not_found)?;
+        }
+        write_catalog(&self.path, &next)?;
+        state.catalog = next;
+        if enabled != Some(true) {
+            state.turns.remove(&id);
+        }
+        Ok(state.catalog.values().cloned().collect())
     }
 
-    fn apply_with_source(
+    fn install(
         &self,
-        mutation: Mutation,
+        bundle: PluginBundle,
         source: Option<source::InstalledSource>,
     ) -> Result<Vec<InstalledPlugin>, AppCommandError> {
         let mut state = self.state.lock().expect("host plugin state lock");
         let state = state.as_mut().map_err(|error| catalog_error(error))?;
         let mut next = state.catalog.clone();
-        let discard = match mutation {
-            Mutation::Install { manifest } => {
-                let manifest = Manifest::parse(&manifest)?;
-                check_install(&next, &manifest.id)?;
-                next.insert(
-                    manifest.id.clone(),
-                    InstalledPlugin {
-                        manifest,
-                        enabled: false,
-                        source,
-                        revision: Arc::new(()),
-                    },
-                );
-                None
-            }
-            Mutation::SetEnabled { id, enabled } => {
-                let plugin = next.get_mut(&id).ok_or_else(plugin_not_found)?;
-                if plugin.enabled == enabled {
-                    return Ok(next.into_values().collect());
-                }
-                plugin.enabled = enabled;
-                (!enabled).then_some(id)
-            }
-            Mutation::Remove { id } => {
-                next.remove(&id).ok_or_else(plugin_not_found)?;
-                Some(id)
-            }
-        };
+        check_install(&next, &bundle.manifest.id)?;
+        next.insert(
+            bundle.manifest.id.clone(),
+            InstalledPlugin {
+                manifest: bundle.manifest,
+                enabled: false,
+                source,
+                server_code: bundle.server_code,
+                revision: Arc::new(()),
+                activation: Arc::new(()),
+            },
+        );
         write_catalog(&self.path, &next)?;
         state.catalog = next;
-        if let Some(id) = discard {
-            state.turns.remove(&id);
-        }
         Ok(state.catalog.values().cloned().collect())
     }
 
@@ -251,8 +284,8 @@ impl HostPlugins {
         registry: source::Registry,
         expected: Option<ExpectedPlugin>,
     ) -> Result<InstallPreview, AppCommandError> {
-        let (text, source) = source::resolve(input, registry).await?;
-        let manifest = Manifest::parse(&text)?;
+        let (bundle, source) = source::resolve(input, registry).await?;
+        let manifest = bundle.manifest.clone();
         if expected.is_some_and(|expected| {
             expected.id != manifest.id || expected.version != manifest.version
         }) {
@@ -274,7 +307,7 @@ impl HostPlugins {
         state.pending_installs.push_back(PendingInstall {
             ticket,
             created: Instant::now(),
-            manifest: text,
+            bundle,
             source: source.clone(),
         });
         Ok(InstallPreview {
@@ -301,12 +334,7 @@ impl HostPlugins {
                     invalid("This installation preview expired. Review the source again.")
                 })?
         };
-        self.apply_with_source(
-            Mutation::Install {
-                manifest: pending.manifest,
-            },
-            Some(pending.source),
-        )
+        self.install(pending.bundle, Some(pending.source))
     }
 
     pub async fn update(&self, id: &str) -> Result<PluginUpdate, AppCommandError> {
@@ -320,20 +348,24 @@ impl HostPlugins {
                 .ok_or_else(|| invalid("Install the plugin from a source to receive updates"))?;
             (plugin.revision.clone(), source)
         };
-        let (manifest, source) = source.refresh().await?;
-        self.replace(id, &revision, Manifest::parse(&manifest)?, source)
+        let (bundle, source) = source.refresh().await?;
+        self.replace(id, &revision, bundle, source)
     }
 
     fn replace(
         &self,
         id: &str,
         revision: &Arc<()>,
-        manifest: Manifest,
+        bundle: PluginBundle,
         source: source::InstalledSource,
     ) -> Result<PluginUpdate, AppCommandError> {
         let mut guard = self.state.lock().expect("host plugin state lock");
         let state = guard.as_mut().map_err(|error| catalog_error(error))?;
         let current = state.catalog.get(id).ok_or_else(plugin_not_found)?;
+        let PluginBundle {
+            manifest,
+            server_code,
+        } = bundle;
         if !Arc::ptr_eq(&current.revision, revision) {
             return Err(invalid(
                 "The installed plugin changed while checking for an update. Try again.",
@@ -352,21 +384,32 @@ impl HostPlugins {
             return Err(invalid("The source returned an older plugin version"));
         }
         let version = manifest.version.clone();
-        if current.manifest == manifest && current.source.as_ref() == Some(&source) {
+        let runtime_changed =
+            current.manifest.server != manifest.server || current.server_code != server_code;
+        if current.manifest == manifest
+            && current.source.as_ref() == Some(&source)
+            && !runtime_changed
+        {
             return Ok(PluginUpdate {
                 updated: false,
                 version,
+                disabled_for_update: false,
             });
         }
-        let discard_activity = manifest.contributes.hooks != current.manifest.contributes.hooks;
+        let enabled = current.enabled && !runtime_changed;
+        let disabled_for_update = current.enabled && runtime_changed;
+        let discard_activity =
+            !enabled || manifest.contributes.hooks != current.manifest.contributes.hooks;
         let mut next = state.catalog.clone();
         next.insert(
             id.to_owned(),
             InstalledPlugin {
                 manifest,
-                enabled: current.enabled,
+                enabled,
                 source: Some(source),
+                server_code,
                 revision: Arc::new(()),
+                activation: Arc::new(()),
             },
         );
         write_catalog(&self.path, &next)?;
@@ -377,7 +420,62 @@ impl HostPlugins {
         Ok(PluginUpdate {
             updated: true,
             version,
+            disabled_for_update,
         })
+    }
+
+    pub async fn call(
+        &self,
+        id: &str,
+        method: String,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, AppCommandError> {
+        let (entry, code, activation) = {
+            let guard = self.state.lock().expect("host plugin state lock");
+            let state = guard.as_ref().map_err(|error| catalog_error(error))?;
+            let plugin = state
+                .catalog
+                .get(id)
+                .filter(|plugin| plugin.enabled)
+                .ok_or_else(plugin_not_found)?;
+            let server = plugin
+                .manifest
+                .server
+                .as_ref()
+                .ok_or_else(plugin_not_found)?;
+            if !server.methods.contains(&method) {
+                return Err(AppCommandError::not_found(
+                    "Plugin method is not registered",
+                ));
+            }
+            let code = plugin.server_code.clone().ok_or_else(plugin_not_found)?;
+            (server.entry.clone(), code, plugin.activation.clone())
+        };
+        let slot = self
+            .runtime_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                AppCommandError::new(AppErrorCode::TaskExecutionFailed, "Plugin runtime is busy")
+            })?;
+        let result = tokio::task::spawn_blocking(move || {
+            let _slot = slot;
+            runtime::call(&entry, &code, &method, &input)
+        })
+        .await
+        .map_err(|_| {
+            AppCommandError::new(AppErrorCode::TaskExecutionFailed, "Plugin runtime stopped")
+        })?;
+        let guard = self.state.lock().expect("host plugin state lock");
+        let state = guard.as_ref().map_err(|error| catalog_error(error))?;
+        if !state
+            .catalog
+            .get(id)
+            .is_some_and(|plugin| Arc::ptr_eq(&plugin.activation, &activation))
+        {
+            return Err(plugin_not_found());
+        }
+        result
     }
 
     pub fn activity(
@@ -481,7 +579,7 @@ impl Manifest {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.api_version != 1 {
+        if !matches!((self.api_version, &self.server), (1, None) | (2, Some(_))) {
             return Err(format!(
                 "Unsupported plugin API version: {}",
                 self.api_version
@@ -493,12 +591,25 @@ impl Manifest {
         if self.version.len() > 128 || semver::Version::parse(&self.version).is_err() {
             return Err("Invalid plugin version. Use semantic versioning.".to_owned());
         }
+        if let Some(server) = &self.server {
+            let mut methods = BTreeSet::new();
+            if !server.entry.strip_suffix(".mjs").is_some_and(valid_id)
+                || server.methods.is_empty()
+                || server.methods.len() > MAX_CONTRIBUTIONS
+                || !server
+                    .methods
+                    .iter()
+                    .all(|method| valid_id(method) && methods.insert(method))
+            {
+                return Err("Provide a root .mjs file and 1 to 16 unique plugin methods".to_owned());
+            }
+        }
         let Contributions {
             workspace_panels,
             commands,
             hooks,
         } = &self.contributes;
-        if workspace_panels.is_empty()
+        if (self.server.is_none() && workspace_panels.is_empty())
             || workspace_panels.len() > MAX_CONTRIBUTIONS
             || commands.len() > MAX_CONTRIBUTIONS
             || hooks.len() > 1
@@ -512,10 +623,11 @@ impl Manifest {
             if !valid_id(&panel.id) || !valid_label(&panel.title) || !panels.insert(&panel.id) {
                 return Err("Invalid or duplicate workspace panel".to_owned());
             }
-            match (&panel.view, &panel.text) {
-                (PanelView::TurnActivity, None) if !hooks.is_empty() => {}
-                (PanelView::Text, Some(text)) if !text.trim().is_empty() && text.len() <= 4096 => {}
-                _ => return Err("A text panel needs text up to 4 KiB and a turn activity panel needs a turn hook".to_owned()),
+            match (&panel.view, &panel.text, &panel.method) {
+                (PanelView::TurnActivity, None, None) if !hooks.is_empty() => {}
+                (PanelView::Text, Some(text), None) if !text.trim().is_empty() && text.len() <= 4096 => {}
+                (PanelView::ServerText, None, Some(method)) if self.server.as_ref().is_some_and(|server| server.methods.contains(method)) => {}
+                _ => return Err("Invalid panel data. Provide text, a turn hook, or a registered server method for the selected view.".to_owned()),
             }
         }
         let mut command_ids = BTreeSet::new();
@@ -530,6 +642,20 @@ impl Manifest {
             }
         }
         Ok(())
+    }
+}
+
+impl PluginBundle {
+    fn manifest_only(manifest: Manifest) -> Result<Self, AppCommandError> {
+        if manifest.server.is_some() {
+            return Err(invalid(
+                "Review the plugin source to install its server module",
+            ));
+        }
+        Ok(Self {
+            manifest,
+            server_code: None,
+        })
     }
 }
 
@@ -561,7 +687,9 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Catalog::new()),
         Err(error) => return Err(error.to_string()),
     };
-    let max_bytes = ((MAX_MANIFEST_BYTES + 4096) * MAX_PLUGINS) as u64;
+    // A JSON string can expand each byte to a six-byte escape sequence.
+    let max_bytes =
+        ((MAX_MANIFEST_BYTES + runtime::MAX_MODULE_BYTES * 6 + 4096) * MAX_PLUGINS) as u64;
     let mut bytes = Vec::new();
     file.take(max_bytes + 1)
         .read_to_end(&mut bytes)
@@ -577,6 +705,12 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
     let mut result = Catalog::new();
     for plugin in catalog {
         plugin.manifest.validate()?;
+        match (&plugin.manifest.server, &plugin.server_code) {
+            (None, None) => {}
+            (Some(_), Some(code))
+                if code.len() <= runtime::MAX_MODULE_BYTES && !code.trim().is_empty() => {}
+            _ => return Err("Missing or invalid installed plugin module".to_owned()),
+        }
         if result.insert(plugin.manifest.id.clone(), plugin).is_some() {
             return Err("Duplicate installed plugin ID".to_owned());
         }
@@ -585,11 +719,25 @@ fn load_catalog(path: &Path) -> Result<Catalog, String> {
 }
 
 fn write_catalog(path: &Path, catalog: &Catalog) -> Result<(), AppCommandError> {
+    #[derive(Serialize)]
+    struct StoredPlugin<'a> {
+        #[serde(flatten)]
+        plugin: &'a InstalledPlugin,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        server_code: Option<&'a str>,
+    }
     let write = || -> Result<(), Box<dyn std::error::Error>> {
         let dir = path.parent().expect("host plugin catalog has a parent");
         std::fs::create_dir_all(dir)?;
         let mut file = tempfile::NamedTempFile::new_in(dir)?;
-        serde_json::to_writer(&mut file, &catalog.values().collect::<Vec<_>>())?;
+        let stored: Vec<_> = catalog
+            .values()
+            .map(|plugin| StoredPlugin {
+                plugin,
+                server_code: plugin.server_code.as_deref(),
+            })
+            .collect();
+        serde_json::to_writer(&mut file, &stored)?;
         file.flush()?;
         file.as_file().sync_all()?;
         file.persist(path)?;
@@ -730,6 +878,76 @@ mod tests {
         assert!(host.list().unwrap().is_empty());
     }
 
+    #[tokio::test]
+    async fn runs_only_an_enabled_snapshot_and_disables_changed_executable_updates() {
+        let data = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = include_str!("../../examples/plugins/workspace-summary/codeg-plugin.json");
+        let code = include_str!("../../examples/plugins/workspace-summary/summary.mjs");
+        let id = "codeg.workspace-summary";
+        let input = serde_json::json!({ "folderId": 42 });
+        let registry = source::Registry::Npm;
+        let path = directory.path().to_str().unwrap();
+        let entry = directory.path().join("summary.mjs");
+        std::fs::write(directory.path().join("codeg-plugin.json"), manifest).unwrap();
+        let host = HostPlugins::new(data.path());
+
+        assert!(install(&host, manifest).is_err());
+        assert!(host.preview_install(path, registry, None).await.is_err());
+        std::fs::write(&entry, code).unwrap();
+        assert!(source::install(&host, path, registry).await.is_err());
+        let preview = host.preview_install(path, registry, None).await.unwrap();
+        std::fs::write(&entry, "export const handle = () => 'changed';").unwrap();
+        let catalog = host.confirm_install(preview.ticket).unwrap();
+        assert!(serde_json::to_string(&catalog)
+            .unwrap()
+            .find("server_code")
+            .is_none());
+        assert!(host
+            .call(id, "summary".into(), input.clone())
+            .await
+            .is_err());
+        host.apply(Mutation::SetEnabled {
+            id: id.into(),
+            enabled: true,
+        })
+        .unwrap();
+
+        let reopened = HostPlugins::new(data.path());
+        assert!(reopened
+            .call(id, "unknown".into(), input.clone())
+            .await
+            .is_err());
+        assert_eq!(
+            reopened
+                .call(id, "summary".into(), input.clone())
+                .await
+                .unwrap(),
+            "Workspace #42\nGenerated by the Workspace Summary plugin."
+        );
+        let update = reopened.update(id).await.unwrap();
+        assert!(update.updated && update.disabled_for_update);
+        assert!(reopened
+            .call(id, "summary".into(), input.clone())
+            .await
+            .is_err());
+        reopened
+            .apply(Mutation::SetEnabled {
+                id: id.into(),
+                enabled: true,
+            })
+            .unwrap();
+        assert_eq!(
+            reopened
+                .call(id, "summary".into(), input.clone())
+                .await
+                .unwrap(),
+            "changed"
+        );
+        reopened.apply(Mutation::Remove { id: id.into() }).unwrap();
+        assert!(reopened.call(id, "summary".into(), input).await.is_err());
+    }
+
     #[test]
     fn a_failed_write_leaves_the_catalog_and_activity_unchanged() {
         let dir = tempfile::tempdir().unwrap();
@@ -808,20 +1026,30 @@ mod tests {
             path: dir.path().to_str().unwrap().to_owned(),
         };
         let installed = host
-            .apply_with_source(
-                Mutation::Install {
-                    manifest: SAMPLE.into(),
-                },
+            .install(
+                PluginBundle::manifest_only(Manifest::parse(SAMPLE).unwrap()).unwrap(),
                 Some(source.clone()),
             )
             .unwrap();
         let revision = &installed[0].revision;
         set_enabled(&host, true);
         let updated = Manifest::parse(&SAMPLE.replace("1.0.0", "1.1.0")).unwrap();
-        host.replace(ID, revision, updated.clone(), source.clone())
-            .unwrap();
+        host.replace(
+            ID,
+            revision,
+            PluginBundle::manifest_only(updated.clone()).unwrap(),
+            source.clone(),
+        )
+        .unwrap();
         assert!(host.list().unwrap()[0].enabled);
-        assert!(host.replace(ID, revision, updated, source).is_err());
+        assert!(host
+            .replace(
+                ID,
+                revision,
+                PluginBundle::manifest_only(updated).unwrap(),
+                source
+            )
+            .is_err());
     }
 
     #[tokio::test]

@@ -80,6 +80,8 @@
     "sourceHint": "Codeg installs the codeg-plugin.json manifest and starts the plugin disabled.",
     "reviewInstall": "Review installation",
     "backToSource": "Back",
+    "serverTrustWarning": "When enabled, this plugin can run JavaScript on the connected host. Only install modules you trust.",
+    "updatedServerDisabled": "{name} was updated to {version} and disabled. Enable it again when you trust the new version.",
     "trustWarning": "Install only sources you trust. When enabled, Codeg applies the contributions declared in this manifest on the connected host.",
     "discover": "Discover Plugins",
     "indexDescription": "Enter the HTTPS URL of a trusted plugin index to browse plugins and versions.",

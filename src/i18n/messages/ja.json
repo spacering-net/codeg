@@ -80,6 +80,8 @@
     "sourceHint": "Codeg は codeg-plugin.json をインストールします。プラグインは既定で無効です。",
     "reviewInstall": "インストール内容を確認",
     "backToSource": "戻る",
+    "serverTrustWarning": "有効にすると、プラグインは接続先ホストで JavaScript を実行できます。信頼できるモジュールだけをインストールしてください。",
+    "updatedServerDisabled": "{name} を {version} に更新し、無効にしました。新しいバージョンを信頼できる場合は再度有効にしてください。",
     "trustWarning": "信頼できるソースだけをインストールしてください。有効にすると、Codeg はこのマニフェストに記載された拡張機能を接続先ホストに適用します。",
     "discover": "プラグインを探す",
     "indexDescription": "信頼できるプラグインインデックスの HTTPS URL を入力して、プラグインとバージョンを確認します。",

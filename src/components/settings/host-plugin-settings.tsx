@@ -158,14 +158,18 @@ export function HostPluginSettings() {
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
-                      const { updated, version } = await updateHostPlugin(
-                        manifest.id
-                      )
+                      const { updated, version, disabledForUpdate } =
+                        await updateHostPlugin(manifest.id)
                       setNotice(
-                        t(updated ? "updated" : "upToDate", {
-                          name: manifest.name,
-                          version,
-                        })
+                        disabledForUpdate
+                          ? t("updatedServerDisabled", {
+                              name: manifest.name,
+                              version,
+                            })
+                          : t(updated ? "updated" : "upToDate", {
+                              name: manifest.name,
+                              version,
+                            })
                       )
                     })
                   }
@@ -627,7 +631,14 @@ function InstallReview({
       </div>
       <div className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
         <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-        <span>{t("trustWarning")}</span>
+        <div className="grid min-w-0 gap-1">
+          <p>{t(manifest.server ? "serverTrustWarning" : "trustWarning")}</p>
+          {manifest.server && (
+            <p className="break-all">
+              {manifest.server.entry} · {manifest.server.methods.join(", ")}
+            </p>
+          )}
+        </div>
       </div>
       <DialogFooter>
         <Button variant="outline" disabled={busy} onClick={onBack}>

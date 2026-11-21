@@ -30,6 +30,35 @@ See the [turn activity manifest](../examples/plugins/turn-activity/codeg-plugin.
 for a complete example. Import it in **Settings → Plugins**, then enable it.
 Open a workspace in Codeg to use the panel and command.
 
+## Version 2 server modules
+
+Install the [Workspace Summary example](../examples/plugins/workspace-summary)
+using its directory on the connected host. Enable it, then run **Show Workspace
+Summary** from workspace quick actions. Its panel displays text returned by the
+plugin's JavaScript module.
+
+Set `apiVersion` to `2` and declare `server.entry` and `server.methods` in
+`codeg-plugin.json`. Bundle dependencies into one UTF-8 `.mjs` file of up to
+256 KiB next to the manifest. The entry name uses lowercase letters, digits,
+dashes and dots, starting with a letter. Export `handle(method, input)` and
+return a JSON value or a promise that resolves to a JSON value. Codeg calls
+only declared methods of enabled plugins. A `serverText` workspace panel
+passes `{ folderId }` to its registered method and displays the returned
+string as plain text.
+
+Each call runs in a fresh QuickJS context on the connected host. The context
+provides ECMAScript built-ins. Files, processes, network requests, external
+imports and Codeg credentials are unavailable. Calls have a 500 ms execution
+budget, a 16 MiB engine memory limit and a 64 KiB limit per JSON message.
+The host serves up to four concurrent module calls. Choose trusted sources
+when installing modules.
+
+Source review captures the module alongside its validated manifest. Confirming
+installs that same snapshot, and editing the source directory afterwards has
+no effect until an update. An update that changes the server entry, declared
+methods or module contents disables a running plugin. Review the new version
+before enabling it again.
+
 ## Install from a source
 
 **Settings → Plugins → Add Plugin** accepts these public sources:
@@ -70,7 +99,8 @@ with no saved registry, Codeg uses the official npm registry.
 
 Codeg verifies the same plugin ID and rejects older manifest or npm package
 versions. A GitHub reference advancing to a new commit updates the stored source
-even if the manifest is identical. A successful update keeps the enabled state.
+even if the manifest is identical. A successful update keeps the enabled state
+when the server module and its declaration are unchanged.
 An update that changes the turn hook clears the plugin's in-memory turn activity.
 Other connected clients receive a catalog change notification after the update.
 For plugins imported as standalone files, remove the plugin and import the new

@@ -6,6 +6,7 @@ import { getTransport, type Transport } from "@/lib/transport"
 type WorkspacePanel = { id: string; title: string } & (
   | { view: "turnActivity" }
   | { view: "text"; text: string }
+  | { view: "serverText"; method: string }
 )
 
 export interface InstalledPlugin {
@@ -23,6 +24,7 @@ export interface InstalledPlugin {
     id: string
     name: string
     version: string
+    server?: { entry: string; methods: string[] }
     contributes: {
       workspacePanels: WorkspacePanel[]
       commands: {
@@ -173,10 +175,11 @@ export function confirmHostPluginInstall(ticket: string) {
 }
 
 export function updateHostPlugin(pluginId: string) {
-  return getTransport().call<{ updated: boolean; version: string }>(
-    "host_plugins_update",
-    { pluginId }
-  )
+  return getTransport().call<{
+    updated: boolean
+    version: string
+    disabledForUpdate?: boolean
+  }>("host_plugins_update", { pluginId })
 }
 
 export function fetchHostPluginIndex(url: string) {
@@ -195,6 +198,28 @@ export function usePluginActivity(pluginId: string, folderId: number) {
     [folderId]
   )
   return usePluginResource(transport, true, load, ACTIVITY_CHANGED, matches)
+}
+
+export function usePluginPanelText(
+  pluginId: string,
+  method: string,
+  folderId: number
+) {
+  const transport = typeof window === "undefined" ? null : getTransport()
+  const load = useCallback(
+    async (host: Transport) => {
+      const value = await host.call<unknown>("host_plugins_call", {
+        pluginId,
+        method,
+        input: { folderId },
+      })
+      if (typeof value !== "string")
+        throw new Error("Expected plugin panel text")
+      return value
+    },
+    [pluginId, method, folderId]
+  )
+  return usePluginResource(transport, true, load, CATALOG_CHANGED)
 }
 
 export function pluginPanelKey(pluginId: string, panelId: string) {

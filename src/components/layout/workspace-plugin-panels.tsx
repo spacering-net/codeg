@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import {
   pluginPanelKey,
   usePluginActivity,
+  usePluginPanelText,
   type InstalledPlugin,
 } from "@/lib/host-plugins"
 import { toErrorMessage } from "@/lib/app-error"
@@ -58,6 +59,13 @@ export function WorkspacePluginPanels({
           <p className="whitespace-pre-wrap break-words text-sm">
             {active.panel.text}
           </p>
+        ) : active.panel.view === "serverText" ? (
+          <ServerPanelText
+            key={`${active.key}:${folderId}`}
+            pluginId={active.pluginId}
+            method={active.panel.method}
+            folderId={folderId}
+          />
         ) : (
           <TurnActivity
             key={`${active.key}:${folderId}`}
@@ -66,6 +74,42 @@ export function WorkspacePluginPanels({
           />
         )}
       </div>
+    </div>
+  )
+}
+
+function ServerPanelText({
+  pluginId,
+  method,
+  folderId,
+}: {
+  pluginId: string
+  method: string
+  folderId: number
+}) {
+  const t = useTranslations("HostPlugins")
+  const { data, error, refresh } = usePluginPanelText(
+    pluginId,
+    method,
+    folderId
+  )
+  if (error) return <PanelError error={error} retry={refresh} />
+  if (data === undefined) {
+    return <p className="text-xs text-muted-foreground">{t("loading")}</p>
+  }
+  return <p className="whitespace-pre-wrap break-words text-sm">{data}</p>
+}
+
+function PanelError({ error, retry }: { error: unknown; retry: () => void }) {
+  const t = useTranslations("HostPlugins")
+  return (
+    <div className="space-y-2">
+      <p role="alert" className="break-words text-xs text-destructive">
+        {toErrorMessage(error)}
+      </p>
+      <Button size="xs" variant="outline" onClick={retry}>
+        {t("retry")}
+      </Button>
     </div>
   )
 }
@@ -80,18 +124,7 @@ function TurnActivity({
   const t = useTranslations("HostPlugins")
   const format = useFormatter()
   const { data, error, refresh } = usePluginActivity(pluginId, folderId)
-  if (error) {
-    return (
-      <div className="space-y-2">
-        <p role="alert" className="break-words text-xs text-destructive">
-          {toErrorMessage(error)}
-        </p>
-        <Button size="xs" variant="outline" onClick={refresh}>
-          {t("retry")}
-        </Button>
-      </div>
-    )
-  }
+  if (error) return <PanelError error={error} retry={refresh} />
   if (!data?.length) {
     return (
       <p className="text-xs text-muted-foreground">
