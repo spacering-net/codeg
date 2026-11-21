@@ -16,6 +16,7 @@ const SECTION_COLLAPSED_KEY = "workspace:sidebar-section-collapsed"
 const CONVERSATION_EXPANDED_KEY = "workspace:sidebar-conversation-expanded"
 const TAG_FILTER_KEY = "workspace:sidebar-tag-filter"
 export const RECENT_GROUPING_MODE_KEY = "workspace:sidebar-recent-grouping-mode"
+export const SIDEBAR_PLUGIN_VIEW_KEY = "workspace:sidebar-plugin-view"
 
 export type SidebarSortMode = "created" | "updated"
 
@@ -567,4 +568,56 @@ export function saveRecentGroupingMode(mode: SidebarRecentGroupingMode): void {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * Selected custom plugin sidebar view, stored per connected host scope
+ * (`"local"`, `"remote:<id>"`). Absent entry = default Conversations view.
+ */
+export function loadSidebarPluginViewMap(): Record<string, string> {
+  if (typeof window === "undefined") return {}
+  try {
+    const raw = localStorage.getItem(SIDEBAR_PLUGIN_VIEW_KEY)
+    if (!raw) return {}
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {}
+    }
+    const result: Record<string, string> = {}
+    for (const [scopeKey, value] of Object.entries(
+      parsed as Record<string, unknown>
+    )) {
+      if (typeof value === "string" && value.trim()) {
+        result[scopeKey] = value.trim()
+      }
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+export function saveSidebarPluginView(
+  scopeKey: string,
+  viewKey: string | null
+): Record<string, string> {
+  const next = loadSidebarPluginViewMap()
+  const normalized = viewKey?.trim() || null
+  if (normalized) {
+    next[scopeKey] = normalized
+  } else {
+    delete next[scopeKey]
+  }
+  if (typeof window !== "undefined") {
+    try {
+      if (Object.keys(next).length === 0) {
+        localStorage.removeItem(SIDEBAR_PLUGIN_VIEW_KEY)
+      } else {
+        localStorage.setItem(SIDEBAR_PLUGIN_VIEW_KEY, JSON.stringify(next))
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return next
 }

@@ -12,6 +12,7 @@ export type PluginTextTranslations = Record<string, string>
 
 export const MAX_PLUGIN_SCREENS = 16
 export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
+export const MAX_PLUGIN_SIDEBAR_VIEWS = 16
 
 export type PluginSidebarItemPlacement = "header" | "footer"
 
@@ -65,6 +66,20 @@ export interface ResolvedPluginSidebarItem {
   screenId: string
   screenKey: string
   screenTitle: string
+}
+
+export interface PluginSidebarViewContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+}
+
+export interface ResolvedPluginSidebarView {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
 }
 
 export interface PluginHostScope {
@@ -174,6 +189,7 @@ export interface InstalledPlugin {
       themes?: PluginThemeContribution[]
       screens?: PluginScreenContribution[]
       sidebarItems?: PluginSidebarItemContribution[]
+      sidebarViews?: PluginSidebarViewContribution[]
     }
   }
 }
@@ -501,6 +517,10 @@ export function pluginSidebarItemKey(pluginId: string, itemId: string) {
   return `${pluginId}:${itemId}`
 }
 
+export function pluginSidebarViewKey(pluginId: string, viewId: string) {
+  return `${pluginId}:${viewId}`
+}
+
 export function resolvePluginHostScope(
   search: string,
   activeRemoteId: number | null
@@ -810,6 +830,67 @@ export function selectPluginSidebarItems(
     }
   }
   return items
+}
+
+export function selectPluginSidebarViews(
+  plugins: readonly InstalledPlugin[] | undefined,
+  locale?: string
+): ResolvedPluginSidebarView[] {
+  if (!plugins?.length) return []
+  const items: ResolvedPluginSidebarView[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled || !plugin.manifest.client?.entry?.trim()) continue
+    const sidebarViews = plugin.manifest.contributes?.sidebarViews
+    if (!sidebarViews?.length) continue
+    const pluginName =
+      resolvePluginText(
+        plugin.manifest.name,
+        plugin.manifest.nameTranslations,
+        locale
+      ).trim() || plugin.manifest.id
+    const seenIds = new Set<string>()
+    let pluginValidCount = 0
+    for (const view of sidebarViews) {
+      if (pluginValidCount >= MAX_PLUGIN_SIDEBAR_VIEWS) break
+      if (typeof view.id !== "string" || typeof view.title !== "string") {
+        continue
+      }
+      const id = view.id.trim()
+      const title = resolvePluginText(
+        view.title,
+        view.titleTranslations,
+        locale
+      ).trim()
+      if (!id || !title || seenIds.has(id)) continue
+      seenIds.add(id)
+      pluginValidCount += 1
+      items.push({
+        key: pluginSidebarViewKey(plugin.manifest.id, id),
+        pluginId: plugin.manifest.id,
+        pluginName,
+        id,
+        title,
+      })
+    }
+  }
+  return items
+}
+
+export function resolvePluginSidebarView(
+  plugins: readonly InstalledPlugin[] | undefined,
+  viewKey: string | null | undefined,
+  locale?: string
+): ResolvedPluginSidebarView | null {
+  const normalized = viewKey?.trim()
+  if (!normalized) return null
+  return (
+    selectPluginSidebarViews(plugins, locale).find(
+      (item) => item.key === normalized
+    ) ?? null
+  )
 }
 
 export function hostPluginSessionScopeKey(

@@ -10,18 +10,22 @@ import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
+  MAX_PLUGIN_SIDEBAR_VIEWS,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
   pluginScreenKey,
   pluginSidebarItemKey,
+  pluginSidebarViewKey,
   pluginThemeKey,
   resolvePluginHostScope,
   resolvePluginHostSurface,
   resolvePluginScreen,
+  resolvePluginSidebarView,
   resolvePluginText,
   selectPluginClientSurfaces,
   selectPluginScreens,
   selectPluginSidebarItems,
+  selectPluginSidebarViews,
   selectPluginThemes,
   validatePluginComposerInsertPayload,
   type InstalledPlugin,
@@ -908,5 +912,149 @@ describe("selectPluginScreens, resolvePluginScreen, and selectPluginSidebarItems
     ).not.toBeNull()
     expect(resolvePluginScreen([plugin], "acme.capped", "screen-17")).toBeNull()
     expect(selectPluginSidebarItems([plugin])).toHaveLength(16)
+  })
+})
+
+describe("selectPluginSidebarViews and resolvePluginSidebarView", () => {
+  it("requires enabled plugins with client.entry, localizes titles, deduplicates ids, and enforces the 16-view cap", () => {
+    const plugins: InstalledPlugin[] = [
+      {
+        enabled: true,
+        manifest: {
+          id: "codeg.focus-notes",
+          name: "Focus Notes",
+          nameTranslations: { "zh-CN": "专注笔记" },
+          version: "1.0.0",
+          client: { entry: "notes.html" },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            sidebarViews: [
+              {
+                id: "focus-notes",
+                title: "Focus Notes",
+                titleTranslations: {
+                  "zh-CN": "专注笔记",
+                  es: "Notas de enfoque",
+                },
+              },
+              {
+                id: "focus-notes",
+                title: "Duplicate",
+              },
+              {
+                id: "   ",
+                title: "Blank id",
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.no-client",
+          name: "No Client",
+          version: "1.0.0",
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            sidebarViews: [{ id: "hidden", title: "Hidden" }],
+          },
+        },
+      },
+      {
+        enabled: false,
+        manifest: {
+          id: "acme.disabled",
+          name: "Disabled",
+          version: "1.0.0",
+          client: { entry: "disabled.html" },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            sidebarViews: [{ id: "off", title: "Off" }],
+          },
+        },
+      },
+    ]
+
+    expect(selectPluginSidebarViews(plugins, "es-MX")).toEqual([
+      {
+        key: pluginSidebarViewKey("codeg.focus-notes", "focus-notes"),
+        pluginId: "codeg.focus-notes",
+        pluginName: "Focus Notes",
+        id: "focus-notes",
+        title: "Notas de enfoque",
+      },
+    ])
+    expect(
+      resolvePluginSidebarView(
+        plugins,
+        "codeg.focus-notes:focus-notes",
+        "zh-CN"
+      )
+    ).toEqual({
+      key: "codeg.focus-notes:focus-notes",
+      pluginId: "codeg.focus-notes",
+      pluginName: "专注笔记",
+      id: "focus-notes",
+      title: "专注笔记",
+    })
+    expect(resolvePluginSidebarView(plugins, "acme.disabled:off")).toBeNull()
+    expect(
+      resolvePluginSidebarView(plugins, "acme.no-client:hidden")
+    ).toBeNull()
+
+    const capped: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.many-views",
+        name: "Many Views",
+        version: "1.0.0",
+        client: { entry: "views.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          sidebarViews: Array.from({ length: 20 }, (_, i) => ({
+            id: `view-${i + 1}`,
+            title: `View ${i + 1}`,
+          })),
+        },
+      },
+    }
+    expect(MAX_PLUGIN_SIDEBAR_VIEWS).toBe(16)
+    expect(selectPluginSidebarViews([capped])).toHaveLength(16)
+    expect(
+      resolvePluginSidebarView([capped], "acme.many-views:view-16")
+    ).not.toBeNull()
+    expect(
+      resolvePluginSidebarView([capped], "acme.many-views:view-17")
+    ).toBeNull()
+  })
+
+  it("loads and resolves the bundled focus-notes example manifest", () => {
+    const manifestPath = resolve(
+      process.cwd(),
+      "examples/plugins/focus-notes/codeg-plugin.json"
+    )
+    const manifest = JSON.parse(
+      readFileSync(manifestPath, "utf8")
+    ) as InstalledPlugin["manifest"]
+    const installed: InstalledPlugin = { enabled: true, manifest }
+
+    expect(selectPluginSidebarViews([installed], "es")).toEqual([
+      {
+        key: "codeg.focus-notes:focus-notes",
+        pluginId: "codeg.focus-notes",
+        pluginName: "Focus Notes",
+        id: "focus-notes",
+        title: "Notas de enfoque",
+      },
+    ])
   })
 })
