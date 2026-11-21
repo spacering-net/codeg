@@ -5,6 +5,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { AuxPanelTab } from "@/lib/aux-panel-tab-order"
+import type { InstalledPlugin } from "@/lib/host-plugins"
 
 // jsdom has no layout, so Motion can never decide that a dragged tab crossed
 // its neighbour. The fake keeps the wiring that matters here — the order the
@@ -99,6 +100,13 @@ const scene = vi.hoisted(() => ({
   provider: null as "github" | "gitlab" | "gitea" | null,
   /** Every folder the panel asked the forge lookup about, in order. */
   providerAsked: [] as (number | null)[],
+  plugins: [] as InstalledPlugin[],
+}))
+vi.mock("@/lib/host-plugins", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host-plugins")>()),
+  useHostPlugins: (enabled: boolean) => ({
+    data: enabled ? scene.plugins : undefined,
+  }),
 }))
 // A live selection and open state, so a press on the rail really switches the
 // panel, and a click that closes it really does.
@@ -250,6 +258,7 @@ describe("AuxPanel", () => {
       mobile: false,
       provider: null,
       providerAsked: [],
+      plugins: [],
     })
     motion.onReorder = null
     motion.dragStart.clear()
@@ -268,6 +277,49 @@ describe("AuxPanel", () => {
     expect(rail()).toHaveAttribute("role", "tablist")
     expect(rail()).toHaveAttribute("aria-orientation", "vertical")
     expect(rail()).toBeVisible()
+  })
+
+  it("renders the enabled plugin contribution and withdraws it after disable", () => {
+    scene.initialTab = "plugins"
+    scene.plugins = [
+      {
+        enabled: true,
+        manifest: {
+          id: "test.notes",
+          name: "Notes",
+          version: "1.0.0",
+          contributes: {
+            workspacePanels: [
+              {
+                id: "notes",
+                title: "Notes",
+                view: "text",
+                text: "Workspace notes",
+              },
+            ],
+            commands: [],
+            hooks: [],
+          },
+        },
+      },
+    ]
+    const view = renderPanel()
+    expect(screen.getByRole("tab", { name: "Plugins" })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
+    expect(screen.getByText("Workspace notes")).toBeVisible()
+
+    scene.plugins = [{ ...scene.plugins[0], enabled: false }]
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <AuxPanel />
+      </NextIntlClientProvider>
+    )
+    expect(screen.queryByRole("tab", { name: "Plugins" })).toBeNull()
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(
+      "Session Details"
+    )
   })
 
   it("titles the strip with the selected tab where the tabs used to be", () => {

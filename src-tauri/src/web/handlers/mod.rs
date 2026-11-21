@@ -2,6 +2,7 @@ pub mod acp;
 pub mod app_update;
 pub mod assistants;
 pub mod automation;
+pub mod host_plugins;
 pub mod canvas;
 pub mod cli_access;
 pub mod background;

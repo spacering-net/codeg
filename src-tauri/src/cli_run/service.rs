@@ -40,6 +40,7 @@ use crate::acp::{InternalEventBus, SessionState};
 use crate::db::entities::conversation::{self, ConversationStatus};
 use crate::db::service::{assistant_service, conversation_service, folder_service};
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::Event as PluginEvent;
 use crate::models::agent::AgentType;
 use crate::models::assistant::AssistantInfo;
 use crate::web::event_bridge::EventEmitter;
@@ -753,10 +754,14 @@ impl CliRunService {
             ));
         }
         let workspace = validate_workspace(&req.workspace)?;
-        let folder =
-            crate::db::service::folder_service::ensure_folder_for_path(&self.db.conn, &workspace)
-                .await
-                .map_err(|e| CliError::execution("workspace_unavailable", e.to_string()))?;
+        let folder = crate::commands::folders::register_closed_workspace_with_plugins(
+            &self.emitter,
+            &self.db,
+            &workspace,
+            None,
+        )
+        .await
+        .map_err(|e| CliError::execution("workspace_unavailable", e.to_string()))?;
 
         let assistant = match req.assistant.as_deref() {
             Some(key) => Some(self.resolve_assistant(key).await?),
@@ -820,8 +825,10 @@ impl CliRunService {
         // away again (`fail_launch`).
         let worktree = match req.worktree.as_deref() {
             Some(name) => {
-                let made = super::worktree::create(&workspace, name, &run.id).await?;
+                let made =
+                    super::worktree::create(&workspace, name, &run.id, Some(&self.emitter)).await?;
                 run.inner.lock().await.worktree = Some(made.clone());
+                made.observe(&self.emitter, PluginEvent::WorktreeCreated);
                 self.check_stopped(run).await?;
                 Some(made)
             }
@@ -903,7 +910,8 @@ impl CliRunService {
             Some(w) => self.worktree_folder(folder.id, w).await?,
             None => folder.id,
         };
-        let conversation_id = crate::commands::conversations::create_conversation_core(
+        let conversation_id = crate::commands::conversations::create_conversation_with_plugins(
+            &self.emitter,
             &self.db.conn,
             folder_id,
             agent_type,
@@ -1097,7 +1105,9 @@ impl CliRunService {
             self.converge_cancelled(cid).await;
         } else if let Some(worktree) = worktree {
             // Nothing ran in it, and no conversation points at it.
-            super::worktree::remove(&worktree).await;
+            if super::worktree::remove(&worktree).await {
+                worktree.observe(&self.emitter, PluginEvent::WorktreeArchived);
+            }
             run.inner.lock().await.worktree = None;
         }
         let mut inner = run.inner.lock().await;
@@ -1131,6 +1141,7 @@ impl CliRunService {
             .unwrap_or(false);
         if root_open {
             let detail = crate::commands::folders::open_worktree_folder_core(
+                &self.emitter,
                 &self.db,
                 worktree.workspace.clone(),
                 source_folder_id,
@@ -1141,10 +1152,11 @@ impl CliRunService {
             crate::commands::folders::emit_folder_upsert(&self.emitter, detail);
             return Ok(id);
         }
-        let entry = folder_service::ensure_worktree_folder_closed(
-            &self.db.conn,
+        let entry = crate::commands::folders::register_closed_workspace_with_plugins(
+            &self.emitter,
+            &self.db,
             &worktree.workspace,
-            root_id,
+            Some(root_id),
         )
         .await
         .map_err(|e| unavailable(e.to_string()))?;
@@ -3292,7 +3304,8 @@ mod tests {
             let db = test_helpers::fresh_in_memory_db().await;
             let manager = ConnectionManager::new();
             let bus = Arc::new(InternalEventBus::new(Arc::new(EventBusMetrics::default())));
-            let emitter = EventEmitter::web_only(Arc::new(WebEventBroadcaster::new()), bus.clone());
+            let emitter =
+                EventEmitter::web_only(Arc::new(WebEventBroadcaster::new()), bus.clone(), None);
             let launcher = Arc::new(ScriptedLauncher {
                 manager: manager.clone_ref(),
                 commands: Arc::new(StdMutex::new(Vec::new())),

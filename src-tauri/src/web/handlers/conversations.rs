@@ -293,7 +293,8 @@ pub async fn create_conversation(
     Json(params): Json<CreateConversationParams>,
 ) -> Result<Json<i32>, AppCommandError> {
     let db = &state.db;
-    let result = conv_commands::create_conversation_core(
+    let result = conv_commands::create_conversation_with_plugins(
+        &state.emitter,
         &db.conn,
         params.folder_id,
         params.agent_type,
@@ -318,7 +319,8 @@ pub async fn create_chat_conversation(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<CreateChatConversationParams>,
 ) -> Result<Json<conv_commands::CreateChatConversationResult>, AppCommandError> {
-    let result = conv_commands::create_chat_conversation_core(
+    let result = conv_commands::create_chat_conversation_with_plugins(
+        &state.emitter,
         &state.db.conn,
         &state.data_dir,
         params.agent_type,
