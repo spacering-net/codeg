@@ -54,7 +54,7 @@ pub async fn open_folder(
     Json(params): Json<AddFolderParams>,
 ) -> Result<Json<FolderDetail>, AppCommandError> {
     Ok(Json(
-        folder_commands::open_folder_core(&state.db, params.path).await?,
+        folder_commands::open_folder_with_plugins(&state.host_plugins, &state.emitter, &state.db, params.path).await?,
     ))
 }
 
@@ -81,6 +81,7 @@ pub async fn open_worktree_folder(
 ) -> Result<Json<FolderDetail>, AppCommandError> {
     Ok(Json(
         folder_commands::open_worktree_folder_core(
+            &state.emitter,
             &state.db,
             params.path,
             params.source_folder_id,
@@ -117,7 +118,7 @@ pub async fn open_folder_in_workspace(
 ) -> Result<Json<FolderDetail>, AppCommandError> {
     let emitter = state.emitter.clone();
     Ok(Json(
-        folder_commands::open_folder_in_workspace_core(&emitter, &state.db, params.path).await?,
+        folder_commands::open_folder_in_workspace_core(&state.host_plugins, &emitter, &state.db, params.path).await?,
     ))
 }
 
@@ -144,7 +145,7 @@ pub async fn open_folder_by_id(
     Json(params): Json<FolderIdParams>,
 ) -> Result<Json<FolderDetail>, AppCommandError> {
     Ok(Json(
-        folder_commands::open_folder_by_id_core(&state.db, params.folder_id).await?,
+        folder_commands::reopen_folder_with_plugins(&state.host_plugins, &state.emitter, &state.db, params.folder_id).await?,
     ))
 }
 
@@ -152,7 +153,8 @@ pub async fn remove_folder_from_workspace(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<FolderIdParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    folder_commands::remove_folder_from_workspace_core(
+    folder_commands::close_folder_with_plugins(
+        &state.host_plugins,
         &state.emitter,
         &state.db,
         params.folder_id,
@@ -621,7 +623,7 @@ pub async fn add_folder_to_history(
     Json(params): Json<AddFolderParams>,
 ) -> Result<Json<FolderHistoryEntry>, AppCommandError> {
     Ok(Json(
-        folder_commands::add_folder_to_history_core(&state.db, params.path).await?,
+        folder_commands::add_folder_to_history_core(&state.emitter, &state.db, params.path).await?,
     ))
 }
 
@@ -629,7 +631,8 @@ pub async fn remove_folder_from_history(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AddFolderParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    folder_commands::remove_folder_from_history_core(&state.db, params.path).await?;
+    folder_commands::remove_folder_from_history_core(&state.emitter, &state.db, params.path)
+        .await?;
     Ok(Json(()))
 }
 
