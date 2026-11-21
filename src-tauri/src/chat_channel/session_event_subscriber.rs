@@ -1804,6 +1804,7 @@ mod error_terminal_gate_tests {
         let emitter = EventEmitter::web_only(
             broadcaster,
             Arc::new(InternalEventBus::new(Default::default())),
+            None,
         );
 
         let chat_mgr = ChatChannelManager::new();

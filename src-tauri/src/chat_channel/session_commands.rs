@@ -20,6 +20,7 @@ use crate::db::service::{
     conversation_service, folder_service, sender_context_service, thread_binding_service,
 };
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::{observe_agent_created, prepare_agent_title};
 use crate::models::agent::AgentType;
 use crate::models::conversation::DbConversationSummary;
 use crate::models::folder::FolderDetail;
@@ -506,6 +507,28 @@ pub async fn handle_task(
         }
     };
 
+    let title = match prepare_agent_title(
+        emitter,
+        agent_type,
+        Some(folder_id),
+        conversation::ConversationKind::Regular,
+        None,
+        Some(truncate_title(task_description)),
+    )
+    .await
+    {
+        Ok(title) => title,
+        Err(e) => {
+            return CommandMessageResult::current_target(
+                RichMessage::error(format!(
+                    "{}{e}",
+                    i18n::failed_to_create_conversation_label(lang)
+                )),
+                target,
+            );
+        }
+    };
+
     let mut session_target = target.clone();
     if target.is_telegram_general_topic() {
         match manager
@@ -525,26 +548,22 @@ pub async fn handle_task(
     }
 
     // 4. Create conversation record
-    let conv = match conversation_service::create(
-        db,
-        folder_id,
-        agent_type,
-        Some(truncate_title(task_description)),
-        folder.git_branch.clone(),
-    )
-    .await
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return CommandMessageResult::current_target(
-                RichMessage::error(format!(
-                    "{}{e}",
-                    i18n::failed_to_create_conversation_label(lang)
-                )),
-                target,
-            );
-        }
-    };
+    let conv =
+        match conversation_service::create(db, folder_id, agent_type, title, folder.git_branch)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return CommandMessageResult::current_target(
+                    RichMessage::error(format!(
+                        "{}{e}",
+                        i18n::failed_to_create_conversation_label(lang)
+                    )),
+                    target,
+                );
+            }
+        };
+    observe_agent_created(emitter, &conv);
 
     // 5. Spawn ACP agent
     let owner_label = owner_label_for(channel_id, sender_id, &session_target);

@@ -247,6 +247,18 @@ pub struct BrokerResultSchemaRequest {
     pub token: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerPluginToolsRequest {
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerPluginToolCall {
+    pub token: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
 /// A result handed in with `submit_result`. Answered with a serialized
 /// [`crate::cli_run::output_schema::SubmitOutcome`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -461,6 +473,8 @@ pub enum BrokerMessage {
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
     ResultSchema(BrokerResultSchemaRequest),
+    PluginTools(BrokerPluginToolsRequest),
+    PluginToolCall(BrokerPluginToolCall),
     SubmitResult(BrokerSubmitResultRequest),
     CreateAutomation(BrokerCreateAutomationRequest),
     CreateWorkTask(BrokerCreateWorkTaskRequest),
@@ -768,6 +782,24 @@ pub async fn client_result_schema_round_trip(
     req: &BrokerResultSchemaRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::ResultSchema(req.clone())).await
+}
+
+pub(super) async fn list_plugin_tools(
+    socket_path: &str,
+    token: String,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(
+        socket_path,
+        &BrokerMessage::PluginTools(BrokerPluginToolsRequest { token }),
+    )
+    .await
+}
+
+pub(super) async fn call_plugin_tool(
+    socket_path: &str,
+    request: BrokerPluginToolCall,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::PluginToolCall(request)).await
 }
 
 /// Hand in a `submit_result` result and read back its

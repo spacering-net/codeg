@@ -1,0 +1,28 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.model-greeting",
+  "name": "Model Greeting",
+  "version": "1.0.0",
+  "server": {
+    "entry": "greeting.mjs",
+    "methods": ["greet"],
+    "rpc": {
+      "greet": {
+        "input": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string", "description": "The person to greet", "minLength": 1, "maxLength": 100 }
+          },
+          "required": ["name"],
+          "additionalProperties": false
+        },
+        "output": { "type": "string" }
+      }
+    }
+  },
+  "contributes": {
+    "modelTools": [
+      { "id": "greet", "description": "Greet a person by name.", "method": "greet" }
+    ]
+  }
+}
