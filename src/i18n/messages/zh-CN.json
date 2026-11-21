@@ -10085,6 +10085,7 @@
       "setupFewerAgents": "收起",
       "setupNoAgents": "还没有可用的 agent：先在设置里安装一个。",
       "setupMissing": "智能体还有 {count} 项未选",
+      "setupBrainAgent": "大脑用的智能体",
       "name": "名称",
       "nameHint": "它在页面和消息里显示的名字和头像；助手也知道自己叫这个名字。名字留空则用默认名称。",
       "namePlaceholder": "个人助手",

@@ -10085,6 +10085,7 @@
       "setupFewerAgents": "Menos",
       "setupNoAgents": "Ainda não há nenhum agente disponível: instale um nas Configurações primeiro.",
       "setupMissing": "{count, plural, one {Falta escolher # opção do seu agente} other {Faltam escolher # opções do seu agente}}",
+      "setupBrainAgent": "Cérebro: o agente com que pensa",
       "tabPersona": "Persona e memória",
       "name": "Nome",
       "nameHint": "O nome e a imagem com que aparece na própria página e nas mensagens; o agente também sabe o próprio nome. Nome vazio usa o padrão.",

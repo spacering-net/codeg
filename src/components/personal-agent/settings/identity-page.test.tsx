@@ -314,6 +314,10 @@ describe("the first setup", () => {
     expect(document.querySelector("[data-pa-setup]")).not.toBeNull()
     expect(screen.queryByTestId("executor-pick")).toBeNull()
     expect(start().textContent).toBe("Chat with your agent")
+    // Its agent's card says what the agent is for: its brain.
+    expect(
+      document.querySelector("[data-pa-setup-agent]")?.textContent
+    ).toContain("Agent for its brain")
     fireEvent.click(
       document.querySelector('[data-pa-setup-agent-tile="claude_code"]')!
     )

@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   ArrowRight,
   Bot,
+  Brain,
   Loader2,
   MessageCircle,
   Sparkles,
@@ -447,8 +448,8 @@ export function IdentityPage({
           >
             <div className="flex flex-col gap-2.5 p-3">
               <p className="flex items-center gap-1.5 px-0.5 text-xs font-medium text-muted-foreground">
-                <Bot className="size-3.5" aria-hidden />
-                {ta("agentLabel")}
+                <Brain className="size-3.5" aria-hidden />
+                {t("setupBrainAgent")}
               </p>
               <SetupAgentTiles
                 value={agentType}
