@@ -99,6 +99,24 @@ composer. Each entry has a unique `id`, a `title`, and `slot` set to
 the conversation has been saved. The Workspace Inspector example declares one
 entry in each slot.
 
+### Plugin details and setup
+
+A client bundle can contribute `contributes.pluginDetail` for its enabled
+plugin details and `contributes.activationPanel` for setup after enablement.
+Each contribution has an `id` and a `title`, and uses the reviewed
+`client.entry`.
+
+```json
+{
+  "pluginDetail": { "id": "details", "title": "About this plugin" },
+  "activationPanel": { "id": "setup", "title": "Set up this plugin" }
+}
+```
+
+Both contributions open on demand from Settings. The frame receives
+`type: "pluginDetail"` or `type: "activationPanel"` from `window.codeg.ready`
+and can use the same settings, server call, and event APIs as `settingsPanel`.
+
 ### Insert text into the composer
 
 An open `composer` contribution can call
