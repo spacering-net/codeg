@@ -14,7 +14,13 @@ type Surface = {
 export type ClientContext = Surface &
   (
     | { readonly type: "workspacePanel"; readonly folderId: number }
-    | { readonly type: "settingsPanel" | "pluginDetail" | "activationPanel" }
+    | {
+        readonly type:
+          | "settingsPanel"
+          | "pluginDetail"
+          | "activationPanel"
+          | "screen"
+      }
     | {
         readonly type: "clientSurface"
         readonly slot: "sessionHeader" | "composer"
