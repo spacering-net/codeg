@@ -6,19 +6,18 @@
   <style>
     :root { color-scheme: light dark; font: 14px system-ui; }
     body { margin: 0; padding: 12px; }
-    form { display: grid; gap: 8px; }
+    main { display: grid; gap: 8px; }
     textarea { box-sizing: border-box; width: 100%; min-height: 7rem; font: inherit; }
     button { justify-self: start; font: inherit; }
     output { overflow-wrap: anywhere; }
   </style>
-  <form>
+  <main>
     <label for="focus">What are you focusing on?</label>
     <textarea id="focus" maxlength="1000" disabled></textarea>
-    <button disabled>Save note</button>
+    <button type="button" disabled>Save note</button>
     <output role="status"></output>
-  </form>
+  </main>
   <script type="module">
-    const form = document.querySelector("form")
     const note = document.querySelector("textarea")
     const save = document.querySelector("button")
     const status = document.querySelector("output")
@@ -29,8 +28,7 @@
       note.value = snapshot.value.note
       note.disabled = false
       save.disabled = false
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault()
+      save.addEventListener("click", async () => {
         save.disabled = true
         try {
           snapshot = await window.codeg.settings.save(snapshot.revision, { note: note.value })
