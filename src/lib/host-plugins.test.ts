@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
@@ -299,5 +301,63 @@ describe("resolvePluginHostSurface", () => {
     }
     expect(resolvePluginHostSurface(blankFields, "pluginDetail")).toBeNull()
     expect(resolvePluginHostSurface(blankFields, "activationPanel")).toBeNull()
+  })
+
+  it("validates the workspace-inspector example manifest and client entry across all surfaces", () => {
+    const manifestPath = resolve(
+      process.cwd(),
+      "examples/plugins/workspace-inspector/codeg-plugin.json"
+    )
+    const htmlPath = resolve(
+      process.cwd(),
+      "examples/plugins/workspace-inspector/inspector.html"
+    )
+    const manifest = JSON.parse(
+      readFileSync(manifestPath, "utf8")
+    ) as InstalledPlugin["manifest"]
+    const html = readFileSync(htmlPath, "utf8")
+
+    expect(manifest.id).toBe("codeg.workspace-inspector")
+    expect(manifest.version).toBe("1.1.0")
+    expect(html).toContain('aria-live="polite"')
+    expect(html).toContain('label for="workspace-label"')
+    expect(html).toContain("window.codeg.composer.insertText")
+
+    const installed: InstalledPlugin = {
+      enabled: true,
+      manifest,
+    }
+    expect(resolvePluginHostSurface(installed, "settingsPanel")).toEqual({
+      id: "about",
+      title: "About Workspace Inspector",
+    })
+    expect(resolvePluginHostSurface(installed, "pluginDetail")).toEqual({
+      id: "detail",
+      title: "Workspace Inspector Details",
+    })
+    expect(resolvePluginHostSurface(installed, "activationPanel")).toEqual({
+      id: "setup",
+      title: "Set Up Workspace Inspector",
+    })
+    expect(selectPluginClientSurfaces([installed], "sessionHeader")).toEqual([
+      {
+        key: "codeg.workspace-inspector:session",
+        pluginId: "codeg.workspace-inspector",
+        pluginName: "Workspace Inspector",
+        id: "session",
+        title: "Inspect session",
+        slot: "sessionHeader",
+      },
+    ])
+    expect(selectPluginClientSurfaces([installed], "composer")).toEqual([
+      {
+        key: "codeg.workspace-inspector:draft",
+        pluginId: "codeg.workspace-inspector",
+        pluginName: "Workspace Inspector",
+        id: "draft",
+        title: "Inspect draft",
+        slot: "composer",
+      },
+    ])
   })
 })
