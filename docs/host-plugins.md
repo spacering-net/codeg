@@ -156,17 +156,31 @@ For a first registration, the same example maps `workspace-create-alias` to
 
 ## Worktree lifecycle hooks
 
+Register `worktree.create.before` to choose the destination for a new worktree.
+Codeg awaits the hook before creating the checkout for workspace actions,
+per-run automations, work tasks, and CLI runs. Return `null` to keep the
+proposed path or `{ path }` with a new absolute path. The destination must be
+unused and outside Git metadata. Codeg runs enabled handlers in plugin ID
+order. A handler error, invalid destination, or timeout aborts creation.
+The source, branch and base commit come from the original operation.
+
+The Workspace Lifecycle example places a path ending in `-request` at the
+corresponding `-checkout` path. Clients calling `git_worktree_add` directly
+can set `allowPluginDestination: true` and use the returned path for workspace
+registration. The older request shape retains the requested path and `null`
+response.
+
 Declare `worktree.create.after` to observe new checkouts made through the
 desktop or Web workspace, per-run automations, work tasks, or `codeg-cli run
 --worktree`. Recreating a task checkout from its saved branch also emits this
 event. Declare `worktree.archive.after` to observe removals from the workspace
 or task cleanup and the checkout removed after a failed CLI launch.
 
-Both hooks receive `{ folderId, repositoryPath, path, branch, origin }`.
-`folderId` identifies the owning project when known. `path` is the checkout
-path, `branch` may be `null`, and `origin` is `workspace`, `automation`, `task`,
-or `cli`. The archive event refers to the checkout. A branch can survive
-archive. These are live observer hooks and use the same client event stream
+All three hooks receive `{ folderId, repositoryPath, path, branch, origin }`.
+`folderId` identifies the owning project when known. `path` is the proposed or
+actual checkout path, `branch` may be `null`, and `origin` is `workspace`,
+`automation`, `task`, or `cli`. The archive event refers to the checkout. A branch can survive
+archive. The after hooks are live observers and use the same client event stream
 as workspace hooks. Changes made directly in an external Git process are
 outside this stream.
 

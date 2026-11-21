@@ -292,22 +292,25 @@ pub struct GitWorktreeAddParams {
     pub worktree_path: String,
     #[serde(default)]
     pub base: Option<String>,
+    #[serde(default)]
+    pub allow_plugin_destination: bool,
 }
 
 pub async fn git_worktree_add(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<GitWorktreeAddParams>,
-) -> Result<Json<()>, AppCommandError> {
-    folder_commands::git_worktree_add_with_plugins(
+) -> Result<Json<Option<String>>, AppCommandError> {
+    let destination = folder_commands::git_worktree_add_with_plugins(
         &state.emitter,
         &state.db,
         &params.path,
         &params.branch_name,
         &params.worktree_path,
         params.base.as_deref(),
+        params.allow_plugin_destination,
     )
     .await?;
-    Ok(Json(()))
+    Ok(Json(destination))
 }
 
 pub async fn git_checkout(

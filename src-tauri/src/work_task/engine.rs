@@ -1811,7 +1811,18 @@ impl TaskEngine {
         // A configured root that does not exist yet (the folder's first task)
         // needs no `mkdir`: `git worktree add` creates the leading directories
         // along with the checkout.
-        let mut wt_path = worktree_path_in(&root.path, settings.worktree_root.as_deref(), &dir);
+        let requested_path = worktree_path_in(&root.path, settings.worktree_root.as_deref(), &dir);
+        let plan = Worktree {
+            folder_id: Some(root.id),
+            repository_path: &root.path,
+            path: &requested_path,
+            branch: Some(&branch),
+            origin: WorktreeOrigin::Task,
+        };
+        let mut wt_path = plan
+            .destination(&self.emitter)
+            .await
+            .map_err(|e| e.to_string())?;
         let mut branch_used = branch.clone();
 
         if let Err(e) = git_worktree_add_core(&root.path, &branch, &wt_path, Some(&start_at)).await
@@ -1820,11 +1831,19 @@ impl TaskEngine {
             // generation-scoped suffix.
             let suffix = format!("r{}b", task.run_seq);
             branch_used = format!("{branch}-{suffix}");
-            wt_path = worktree_path_in(
+            let retry_path = worktree_path_in(
                 &root.path,
                 settings.worktree_root.as_deref(),
                 &format!("{dir}-{suffix}"),
             );
+            wt_path = Worktree {
+                path: &retry_path,
+                branch: Some(&branch_used),
+                ..plan
+            }
+            .destination(&self.emitter)
+            .await
+            .map_err(|e| e.to_string())?;
             git_worktree_add_core(&root.path, &branch_used, &wt_path, Some(&start_at))
                 .await
                 .map_err(|_| format!("worktree add failed: {e}"))?;

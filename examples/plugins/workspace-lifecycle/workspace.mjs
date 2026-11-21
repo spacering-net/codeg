@@ -11,6 +11,11 @@ export function handle(method, input) {
         }
       : null
   }
+  if (method === "before-worktree") {
+    return input.path.endsWith("-request")
+      ? { path: input.path.replace(/-request$/, "-checkout") }
+      : null
+  }
   if (method === "turn-completed") {
     return { folderId: input.folderId, stopReason: input.detail.stopReason }
   }

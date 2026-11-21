@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,6 +32,8 @@ pub enum Event {
     WorkspaceCreated,
     #[serde(rename = "workspace.archive.after")]
     WorkspaceArchived,
+    #[serde(rename = "worktree.create.before")]
+    WorktreeCreateBefore,
     #[serde(rename = "worktree.create.after")]
     WorktreeCreated,
     #[serde(rename = "worktree.archive.after")]
@@ -68,6 +70,16 @@ pub(crate) struct Worktree<'a> {
 }
 
 impl Worktree<'_> {
+    pub(crate) async fn destination(
+        &self,
+        emitter: &EventEmitter,
+    ) -> Result<String, AppCommandError> {
+        let Some(host) = emitter.host_plugins() else {
+            return Ok(self.path.to_owned());
+        };
+        host.worktree_create_path(self).await
+    }
+
     pub(crate) fn observe(self, emitter: &EventEmitter, event: Event) {
         if let Some(host) = emitter.host_plugins() {
             host.observe(emitter, event, json!(self));
@@ -99,7 +111,7 @@ pub(super) struct Registration {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WorkspacePath {
+struct PathReplacement {
     path: String,
 }
 
@@ -182,7 +194,7 @@ impl HostPlugins {
                 if result.is_null() {
                     continue;
                 }
-                let updated: WorkspacePath = serde_json::from_value(result).map_err(|_| {
+                let updated: PathReplacement = serde_json::from_value(result).map_err(|_| {
                     invalid(format!(
                         "Plugin {source} returned an invalid workspace path"
                     ))
@@ -201,6 +213,52 @@ impl HostPlugins {
             AppCommandError::new(
                 AppErrorCode::TaskExecutionFailed,
                 "Workspace plugin hooks timed out",
+            )
+        })?
+    }
+
+    async fn worktree_create_path(
+        &self,
+        request: &Worktree<'_>,
+    ) -> Result<String, AppCommandError> {
+        let mut path = request.path.to_owned();
+        tokio::time::timeout(TRANSFORM_DEADLINE, async {
+            for hook in self.lifecycle_handlers(Event::WorktreeCreateBefore) {
+                let source = hook.id.clone();
+                let input = Worktree {
+                    path: &path,
+                    ..*request
+                };
+                let result = self.invoke(hook, json!(input)).await.map_err(|error| {
+                    AppCommandError::new(
+                        AppErrorCode::TaskExecutionFailed,
+                        format!("Plugin {source} could not prepare the worktree"),
+                    )
+                    .with_detail(error.to_string())
+                })?;
+                if result.is_null() {
+                    continue;
+                }
+                let updated: PathReplacement = serde_json::from_value(result).map_err(|_| {
+                    invalid(format!("Plugin {source} returned an invalid worktree path"))
+                })?;
+                if updated.path != path {
+                    path = validate_worktree_destination(&updated.path, request.repository_path)
+                        .map_err(|error| {
+                            invalid(format!(
+                                "Plugin {source} returned an invalid worktree destination"
+                            ))
+                            .with_detail(error)
+                        })?;
+                }
+            }
+            Ok(path)
+        })
+        .await
+        .map_err(|_| {
+            AppCommandError::new(
+                AppErrorCode::TaskExecutionFailed,
+                "Worktree plugin hooks timed out",
             )
         })?
     }
@@ -262,6 +320,66 @@ impl HostPlugins {
             }
         });
     }
+}
+
+fn validate_worktree_destination(path: &str, repository: &str) -> Result<String, String> {
+    let destination = Path::new(path);
+    if !destination.is_absolute()
+        || path.contains('\0')
+        || destination
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("Use an absolute path without parent-directory segments".into());
+    }
+    let in_git_dir = |path: &Path| {
+        path.components().any(|component| {
+            matches!(component, Component::Normal(name) if
+                name.to_str().is_some_and(|name| name.eq_ignore_ascii_case(".git")))
+        })
+    };
+    if in_git_dir(destination) {
+        return Err("The destination is inside a .git directory".into());
+    }
+    match destination.symlink_metadata() {
+        Ok(_) => return Err("The destination already exists".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    // Canonicalize the first existing ancestor so a symlink can neither send
+    // Git into its own metadata nor make an existing location appear unused.
+    let mut parent = destination
+        .parent()
+        .ok_or("The destination needs a parent directory")?;
+    let parent = loop {
+        match parent.canonicalize() {
+            Ok(resolved) if resolved.is_dir() => break (parent, resolved),
+            Ok(_) => return Err("The destination parent must be a directory".into()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                parent = parent
+                    .parent()
+                    .ok_or("The destination needs an existing ancestor")?;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+    let suffix = destination
+        .strip_prefix(parent.0)
+        .map_err(|error| error.to_string())?;
+    let resolved: PathBuf = parent.1.join(suffix);
+    let repository = Path::new(repository)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if repository.starts_with(&resolved) || in_git_dir(&resolved) {
+        return Err(
+            "Choose a destination outside Git metadata and away from the source checkout".into(),
+        );
+    }
+    let resolved = crate::paths::simplify_verbatim_path(&resolved);
+    resolved
+        .into_os_string()
+        .into_string()
+        .map_err(|_| "The destination is not UTF-8".into())
 }
 
 #[cfg(test)]
@@ -445,7 +563,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workspace_worktree_hooks_report_successful_checkouts_and_archives() {
+    async fn workspace_worktree_hooks_place_checkouts_and_report_the_final_path() {
         let data = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
         let db = fresh_in_memory_db().await;
@@ -482,8 +600,9 @@ mod tests {
             );
         }
         let repo_path = repo.to_str().unwrap();
-        let checkout = repo.join("checkout");
-        let checkout_path = checkout.to_str().unwrap();
+        let requested = repo.join("plugin-request");
+        let checkout = repo.join("plugin-checkout");
+        let checkout_path = requested.to_str().unwrap();
         let folder = open_folder_with_plugins(
             &state.host_plugins,
             &state.emitter,
@@ -502,10 +621,19 @@ mod tests {
                 branch,
                 checkout_path,
                 None,
+                true,
             )
             .await;
             assert_eq!(result.is_ok(), succeeds);
+            if let Ok(actual) = result {
+                let actual = actual.unwrap();
+                assert_eq!(
+                    Path::new(&actual).canonicalize().unwrap(),
+                    checkout.canonicalize().unwrap()
+                );
+            }
         }
+        assert!(!requested.exists());
         let removal = git_remove_worktree_core(
             &state.emitter,
             &state.db,
@@ -559,6 +687,47 @@ mod tests {
                 "worktree.archive.after".to_owned(),
             ])
         );
+        let legacy = git_worktree_add_with_plugins(
+            &state.emitter,
+            &state.db,
+            repo_path,
+            "legacy-topic",
+            checkout_path,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(legacy.is_none());
+        assert!(requested.is_dir());
+    }
+
+    #[test]
+    fn worktree_destination_rejects_existing_paths_and_git_metadata() {
+        let repository = tempfile::tempdir().unwrap();
+        let root = repository.path();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let source = root.to_str().unwrap();
+        for destination in [
+            PathBuf::from("relative"),
+            root.to_owned(),
+            root.join(".git/new"),
+            root.join("parent/../checkout"),
+        ] {
+            assert!(validate_worktree_destination(destination.to_str().unwrap(), source).is_err());
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join(".git"), root.join("alias")).unwrap();
+            assert!(validate_worktree_destination(
+                root.join("alias/new").to_str().unwrap(),
+                source
+            )
+            .is_err());
+        }
+        let destination = root.join("new/nested");
+        assert!(validate_worktree_destination(destination.to_str().unwrap(), source).is_ok());
+        assert!(!destination.exists());
     }
 
     #[tokio::test]

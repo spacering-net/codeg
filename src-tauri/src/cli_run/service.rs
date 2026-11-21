@@ -821,7 +821,8 @@ impl CliRunService {
         // away again (`fail_launch`).
         let worktree = match req.worktree.as_deref() {
             Some(name) => {
-                let made = super::worktree::create(&workspace, name, &run.id).await?;
+                let made =
+                    super::worktree::create(&workspace, name, &run.id, Some(&self.emitter)).await?;
                 run.inner.lock().await.worktree = Some(made.clone());
                 made.observe(&self.emitter, PluginEvent::WorktreeCreated);
                 self.check_stopped(run).await?;
