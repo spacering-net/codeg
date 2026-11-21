@@ -2302,20 +2302,37 @@ pub async fn git_worktree_add_with_plugins(
     branch_name: &str,
     worktree_path: &str,
     base: Option<&str>,
-) -> Result<(), AppCommandError> {
-    git_worktree_add_core(path, branch_name, worktree_path, base).await?;
+    allow_plugin_destination: bool,
+) -> Result<Option<String>, AppCommandError> {
     let repository = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
     let checkout = repository.join(worktree_path);
     let folder = folder_at_path(db, &repository).await.ok().flatten();
-    Worktree {
+    let checkout = crate::paths::simplify_verbatim_path(&checkout);
+    let plan = Worktree {
         folder_id: folder.map(|folder| folder.parent_id.unwrap_or(folder.id)),
         repository_path: path,
         path: &checkout.to_string_lossy(),
         branch: Some(branch_name),
         origin: WorktreeOrigin::Workspace,
+    };
+    let destination = if allow_plugin_destination {
+        Some(plan.destination(emitter).await?)
+    } else {
+        None
+    };
+    git_worktree_add_core(
+        path,
+        branch_name,
+        destination.as_deref().unwrap_or(worktree_path),
+        base,
+    )
+    .await?;
+    Worktree {
+        path: destination.as_deref().unwrap_or(plan.path),
+        ..plan
     }
     .observe(emitter, PluginEvent::WorktreeCreated);
-    Ok(())
+    Ok(destination)
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2327,7 +2344,8 @@ pub async fn git_worktree_add(
     branch_name: String,
     worktree_path: String,
     base: Option<String>,
-) -> Result<(), AppCommandError> {
+    allow_plugin_destination: Option<bool>,
+) -> Result<Option<String>, AppCommandError> {
     git_worktree_add_with_plugins(
         &EventEmitter::from_app(&app),
         &db,
@@ -2335,6 +2353,7 @@ pub async fn git_worktree_add(
         &branch_name,
         &worktree_path,
         base.as_deref(),
+        allow_plugin_destination.unwrap_or_default(),
     )
     .await
 }

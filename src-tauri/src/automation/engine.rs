@@ -649,7 +649,7 @@ impl AutomationEngine {
             IsolationMode::WorktreePerRun => {
                 // Fresh isolated worktree per run; names carry the automation +
                 // run id so `git worktree list` / the branch tree groups them.
-                let mut branch = format!("automation/{}/run-{}", auto.id, run_id);
+                let branch = format!("automation/{}/run-{}", auto.id, run_id);
                 // A repo checked out at a drive / share root has no name of
                 // its own to prefix with.
                 let repo_name = match basename(&root.path) {
@@ -657,25 +657,43 @@ impl AutomationEngine {
                     name => name,
                 };
                 let dir = format!("{}-automation-{}-run-{}", repo_name, auto.id, run_id);
-                let mut wt_path = sibling_path(&root.path, &dir);
+                let requested_path = sibling_path(&root.path, &dir);
+                let plan = Worktree {
+                    folder_id: Some(root_folder_id),
+                    repository_path: &root.path,
+                    path: &requested_path,
+                    branch: Some(&branch),
+                    origin: WorktreeOrigin::Automation,
+                };
+                let mut wt_path = plan
+                    .destination(&self.emitter)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let mut branch_used = branch.clone();
 
                 // Retry once with a short suffix if a leftover collides (a prior
                 // attempt for this run id that failed before cleanup).
                 if let Err(e) = git_worktree_add_core(&root.path, &branch, &wt_path, None).await {
                     let suffix = short_suffix(run_id);
-                    branch = format!("{branch}-{suffix}");
-                    wt_path = sibling_path(&root.path, &format!("{dir}-{suffix}"));
-                    git_worktree_add_core(&root.path, &branch, &wt_path, None)
+                    branch_used = format!("{branch}-{suffix}");
+                    let retry_path = sibling_path(&root.path, &format!("{dir}-{suffix}"));
+                    wt_path = Worktree {
+                        path: &retry_path,
+                        branch: Some(&branch_used),
+                        ..plan
+                    }
+                    .destination(&self.emitter)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                    git_worktree_add_core(&root.path, &branch_used, &wt_path, None)
                         .await
                         .map_err(|_| format!("worktree add failed: {e}"))?;
                 }
 
                 Worktree {
-                    folder_id: Some(root_folder_id),
-                    repository_path: &root.path,
                     path: &wt_path,
-                    branch: Some(&branch),
-                    origin: WorktreeOrigin::Automation,
+                    branch: Some(&branch_used),
+                    ..plan
                 }
                 .observe(&self.emitter, PluginEvent::WorktreeCreated);
                 let wt =
