@@ -15,6 +15,7 @@ use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 pub mod lifecycle;
+mod new_workspace;
 mod runtime;
 mod schema;
 mod settings;
@@ -102,6 +103,8 @@ struct Contributions {
     screens: Vec<HostPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidebar_items: Vec<SidebarItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    new_workspace_items: Vec<new_workspace::NewWorkspaceItem>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -1003,9 +1006,17 @@ impl Manifest {
             themes,
             screens,
             sidebar_items,
+            new_workspace_items,
         } = &self.contributes;
-        if !bundled && workspace_panels.is_empty() && themes.is_empty() {
-            return Err("A declarative plugin needs a workspace panel or theme".to_owned());
+        if !bundled
+            && workspace_panels.is_empty()
+            && themes.is_empty()
+            && new_workspace_items.is_empty()
+        {
+            return Err(
+                "A declarative plugin needs a workspace panel, theme or new workspace item"
+                    .to_owned(),
+            );
         }
         if workspace_panels.len() > MAX_CONTRIBUTIONS
             || commands.len() > MAX_CONTRIBUTIONS
@@ -1112,6 +1123,7 @@ impl Manifest {
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
+        new_workspace::validate(new_workspace_items, self.server.as_ref())?;
         Ok(())
     }
 }

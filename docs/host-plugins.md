@@ -13,6 +13,7 @@ server it is connected to.
 | `commands` | Workspace quick actions | A user-selected command opens a panel owned by the same plugin. |
 | `hooks` | Codeg-managed ACP sessions | `session.turnCompleted` can record completion metadata for a workspace panel. |
 | `themes` | Settings → Appearance | The user selects an installed color palette for light mode, dark mode, or both. |
+| `newWorkspaceItems` | New Workspace and New Worktree forms | Static select and toggle controls suggest edits to the current form draft. |
 
 The manifest is declarative. The host validates identifiers and panel
 references before installation. Plugins can use the views, actions and events
@@ -237,6 +238,84 @@ server entry. The method receives `{ fromVersion, toVersion, value }`. Return
 the replacement settings object. Codeg calls the migration when the user
 enables the update, then validates and stores the result together with
 enablement. If it fails, the original value stays available for a later retry.
+
+## New Workspace form items
+
+Declare `contributes.newWorkspaceItems` to add up to 16 controls per plugin.
+Each item has an `id` and `title`. IDs are unique within the plugin and use the
+usual manifest slug rules. `titleTranslations`, `descriptionTranslations`,
+`placeholderTranslations`, and static option `labelTranslations` follow the
+localized label rules above. A nonempty translation map needs its corresponding
+fallback text. Set `target` to `"workspace"` or `"worktree"` to show the
+control in one form. The default `"all"` shows it in both forms and may be
+omitted from the catalog.
+
+| `control.kind` | Fields and behavior |
+| --- | --- |
+| `combobox` | `searchMethod` takes the current `query` and returns up to 20 matches. `placeholder` and `placeholderTranslations` are optional. Selecting a match applies its `patch`. |
+| `select` | Supply exactly one of `options` (1–32 static options) or `optionsMethod` (returns up to 32 options). Each static option has a unique slug `id`, `label`, and optional `labelTranslations`, `description`, `descriptionTranslations`, and `patch`. The control accepts the same placeholder fields as `combobox`. |
+| `toggle` | `defaultValue` defaults to `false`. On user change, use `enabledPatch` or `disabledPatch` for the new value and call `onChangeMethod` if declared. Supply a method or at least one nonempty patch. |
+| `action` | Call `method` when the user activates the control and apply its returned `patch`, if present. |
+
+A plugin with only static items can use `apiVersion: 1`. A dynamic control
+uses `apiVersion: 2` with a server module. All referenced methods must appear
+in the same plugin's `server.methods`.
+
+The form sends `{ pluginId, method, input }` through the connected host's
+transport, using the desktop command `host_plugins_call` or the server route
+`POST /api/host_plugins_call`. The host checks that the plugin is enabled and
+the method is declared, supplies that plugin's saved settings, and enforces
+any `server.rpc` schemas for the method. The input is
+`{ itemId, target, query?, value?, folderPath?, baseRef?, branch?, metadata?, locale }`.
+The runtime `target` is `"workspace"` or `"worktree"`. `query` carries
+combobox search text, including an empty string for an empty search. `value`
+carries the new boolean for a toggle. The host omits unavailable form fields.
+`metadata` contains only this plugin's metadata from the current draft.
+
+Search and options methods return `{ items: [{ id, label, description?, patch? }] }`
+with unique slug IDs within the result. An empty `items` array is valid.
+Return display text for the supplied `locale`. Toggle and action methods
+return `{ patch? }`, where `{}` leaves the draft as it is.
+
+A `patch` can include `branch`, `baseRef`, `rootPath`, and `metadata`. Omitted
+fields retain their draft values. An explicit `null` clears a branch, base ref,
+or root path suggestion.
+
+- `branch` and `baseRef` accept up to 256 UTF-8 bytes of nonempty Git ref text.
+  Git ref restrictions include `..`, `@{`, an initial `-`, and path
+  components beginning with `.` or ending with `.lock`.
+- `rootPath` accepts nonempty single-line text up to 1,024 UTF-8 bytes.
+  All three string fields reject control characters and Unicode line and
+  paragraph separators. The user can edit the suggested path, and submitting
+  the form runs the normal path, Git, and worktree validation.
+- `metadata` accepts up to 16 keys matching `[A-Za-z0-9._-]{1,64}`.
+  Values are strings, finite numbers, booleans, or `null`. Strings are limited
+  to 512 UTF-8 bytes and reject control characters. The compact JSON metadata
+  object is limited to 4 KiB. Merge entries by key, with `null` removing a
+  key. Keep metadata scoped to its contributing plugin and the current form
+  draft.
+
+Clients validate dynamic result shapes, limits, and patches before displaying
+or applying them, including for methods without RPC schemas. Render result
+labels and descriptions as plain text. When a toggle supplies both a static
+patch and a dynamic result, validate the result before applying the combined
+patch. The dynamic patch takes precedence for fields and metadata keys that it
+supplies.
+
+Debounce combobox searches and cancel or discard superseded requests. Mount
+items from the enabled catalog for the current host and form target. Invalidate
+pending results when the dialog closes, the selected repository, target, or
+transport changes, or a plugin is disabled, updated, or removed. Freeze the
+draft while submission is in progress. Withdraw disabled or removed controls
+and their pending results. Discard plugin metadata when the draft is
+discarded, its host or repository changes, or the contributing plugin is
+withdrawn.
+
+See the [author types](host-plugin-new-workspace-items.d.ts) and the
+[New Workspace Issues example](../examples/plugins/new-workspace-issues).
+Install the example from its directory and enable it. Search for `DEMO-12` in
+either form and select the issue to suggest a branch and attach its ID to the
+draft. The New Worktree form also offers a **Mark as draft** toggle.
 
 ## Workspace lifecycle hooks
 
