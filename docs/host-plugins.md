@@ -67,6 +67,37 @@ no effect until an update. An update that changes the server entry, declared
 methods or module contents disables a running plugin. Review the new version
 before enabling it again.
 
+### Model-callable tools
+
+Use `contributes.modelTools` to offer a declared method to agents that accept
+the Codeg MCP companion. Each plugin can declare up to 16 tools with unique
+IDs. Use up to 32 lowercase letters, digits and hyphens for `id`, beginning
+with a letter, and up to 100 characters for `description`. `method` must
+have a `server.rpc` contract with an object input schema. Codeg validates
+both arguments and the returned JSON value against that contract.
+
+```json
+{
+  "modelTools": [
+    { "id": "greet", "description": "Greet a person by name.", "method": "greet" }
+  ]
+}
+```
+
+Codeg exposes tools from plugins enabled when it starts a session, with a
+name containing the tool ID and a suffix derived from the plugin ID. Calls run
+on the session's host using the existing plugin execution limits and settings.
+A model receives a string result as text and other JSON results serialized
+as text. Object results also appear as structured MCP content.
+
+Disabling, removing or updating the plugin withdraws its tool offers from
+existing sessions. Start a new session to use newly enabled or updated tools.
+Agents need support for ACP stdio MCP configuration and the host needs the
+`codeg-mcp` companion. Install the
+[Model Greeting example](../examples/plugins/model-greeting), enable it, start
+a new session and ask the agent to use the greeting tool for Ada. See
+[the registration type](host-plugin-model-tools.d.ts) for the manifest fields.
+
 ## Client modules
 
 The [Workspace Inspector example](../examples/plugins/workspace-inspector)

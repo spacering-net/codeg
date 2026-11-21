@@ -74,8 +74,10 @@ use crate::acp::delegation::transport::{
     BrokerTaskCompleteRequest, BrokerTaskProgressRequest, ThreadReply,
 };
 use crate::acp::delegation::assistants::{roster_for_schema, AssistantRosterEntry};
+use crate::acp::delegation::transport::{call_plugin_tool, list_plugin_tools, BrokerPluginToolCall};
 use crate::acp::question::parse_questions;
 use crate::acp::session_info::MAX_SESSION_MESSAGES;
+use crate::host_plugins::model_tools::NAME_PREFIX as PLUGIN_TOOL_PREFIX;
 use crate::models::AutomationAction;
 
 /// Upper bound on one broker-side cancel round-trip. Bounds both
@@ -172,6 +174,7 @@ pub struct CompanionFeatures {
     /// `codeg-cli` run given `--output-schema`. Its input schema is that run's
     /// schema, asked of the parent at `tools/list` time.
     pub result: bool,
+    pub plugin_tools: bool,
     /// `create_automation` — save a scheduled/manual automation from chat.
     pub automations: bool,
     /// `create_work_task` — queue a card on the work-task board from chat.
@@ -232,6 +235,7 @@ impl CompanionFeatures {
                 sessions: false,
                 tasks: false,
                 result: false,
+                plugin_tools: false,
                 automations: false,
                 taskboard: false,
                 browser: false,
@@ -248,6 +252,7 @@ impl CompanionFeatures {
             sessions: false,
             tasks: false,
             result: false,
+            plugin_tools: false,
             automations: false,
             taskboard: false,
             browser: false,
@@ -264,6 +269,7 @@ impl CompanionFeatures {
                 "sessions" => f.sessions = true,
                 "tasks" => f.tasks = true,
                 "result" => f.result = true,
+                "plugin_tools" => f.plugin_tools = true,
                 "automations" => f.automations = true,
                 "taskboard" => f.taskboard = true,
                 "browser" => f.browser = true,
@@ -684,6 +690,22 @@ pub async fn dispatch_line(
                     list.push(submit_result_tool(schema));
                 }
             }
+            if ctx.features.plugin_tools {
+                let offers = list_plugin_tools(&ctx.socket_path, ctx.token.clone());
+                if let Ok(Ok(mut response)) =
+                    tokio::time::timeout(RESULT_SCHEMA_BUDGET, offers).await
+                {
+                    if let (Some(list), Some(offers)) = (
+                        tools.as_array_mut(),
+                        response
+                            .outcome
+                            .get_mut("tools")
+                            .and_then(Value::as_array_mut),
+                    ) {
+                        list.append(offers);
+                    }
+                }
+            }
             LineAction::Respond(ok(id, json!({ "tools": tools })))
         }
         "tools/call" => build_tools_call_spawn(ctx.clone(), inflight, id, req.params).await,
@@ -887,6 +909,23 @@ async fn build_tools_call_spawn(
         .to_string();
     let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
     let socket = ctx.socket_path.clone();
+    if ctx.features.plugin_tools && name.starts_with(PLUGIN_TOOL_PREFIX) {
+        let request = BrokerPluginToolCall {
+            token: ctx.token.clone(),
+            name,
+            arguments: params
+                .get("arguments")
+                .map_or_else(|| json!({}), |_| arguments),
+        };
+        let round_trip = Box::pin(async move {
+            tokio::time::timeout(RESULT_SCHEMA_BUDGET, call_plugin_tool(&socket, request))
+                .await
+                .map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::TimedOut, "Plugin tool timed out")
+                })?
+        });
+        return register_and_spawn(inflight, id, None, round_trip, render_plugin_tool).await;
+    }
     // Defense in depth: tools/list already hides tools whose feature group is
     // off, but a misbehaving client could still call one by name. A disabled
     // tool is rejected uniformly as "unknown tool" — indistinguishable from a
@@ -4315,6 +4354,23 @@ pub fn render_submit_result(outcome: &Value) -> Value {
     })
 }
 
+fn render_plugin_tool(outcome: &Value) -> Value {
+    let Some(value) = outcome.get("value") else {
+        let text = outcome["error"]
+            .as_str()
+            .unwrap_or("Plugin tool is unavailable");
+        return json!({ "content": [{ "type": "text", "text": text }], "isError": true });
+    };
+    let text = value
+        .as_str()
+        .map_or_else(|| value.to_string(), str::to_owned);
+    let mut result = json!({ "content": [{ "type": "text", "text": text }], "isError": false });
+    if value.is_object() {
+        result["structuredContent"] = value.clone();
+    }
+    result
+}
+
 /// Map a `create_automation` / `create_work_task` round-trip outcome (a
 /// serialized [`crate::acp::chat_authoring::AuthoringOutcome`]) into an MCP
 /// `tools/call` result.
@@ -4532,6 +4588,7 @@ mod tests {
             sessions: false,
             tasks: false,
             result: false,
+            plugin_tools: false,
             automations: false,
             taskboard: false,
             browser: false,
@@ -5163,6 +5220,7 @@ mod tests {
         sessions: false,
         tasks: false,
         result: false,
+        plugin_tools: false,
         automations: false,
         taskboard: false,
         browser: false,
@@ -5178,6 +5236,7 @@ mod tests {
         sessions: false,
         tasks: false,
         result: false,
+        plugin_tools: false,
         automations: false,
         taskboard: false,
         browser: false,
@@ -5193,6 +5252,7 @@ mod tests {
         sessions: false,
         tasks: false,
         result: false,
+        plugin_tools: false,
         automations: false,
         taskboard: false,
         browser: false,
@@ -5208,6 +5268,7 @@ mod tests {
         sessions: true,
         tasks: false,
         result: false,
+        plugin_tools: false,
         automations: false,
         taskboard: false,
         browser: false,
@@ -5699,6 +5760,7 @@ mod tests {
         sessions: false,
         tasks: false,
         result: false,
+        plugin_tools: false,
         automations: true,
         taskboard: false,
         browser: false,
@@ -5714,6 +5776,7 @@ mod tests {
         sessions: false,
         tasks: false,
         result: false,
+        plugin_tools: false,
         automations: false,
         taskboard: true,
         browser: false,
@@ -6594,6 +6657,7 @@ mod tests {
         sessions: false,
         tasks: false,
         result: false,
+        plugin_tools: false,
         automations: false,
         taskboard: false,
         browser: true,
