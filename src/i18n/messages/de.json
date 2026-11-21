@@ -10150,7 +10150,8 @@
         "communication": "Kommunikation",
         "proactive": "Proaktiv & Benachrichtigungen",
         "automation": "Zuweisung & Automatisierung",
-        "about": "Über dich"
+        "about": "Über dich",
+        "projects": "Deine Projekte"
       },
       "pages": {
         "communicationNote": "Tonfall und Anrede stehen nicht hier: Schreib sie in die SOUL.md jedes Assistenten und in die USER.md des Hauptassistenten.",
@@ -10335,6 +10336,13 @@
           "title": "Morgen früh um",
           "hint": "Die Uhrzeit, die „morgen früh“ bedeutet."
         },
+        "projects": {
+          "title": "Deine Projekte",
+          "hint": "Die Projekte, die die Assistenten im Blick behalten.",
+          "all": "Alle Projekte",
+          "more": "{names} und {rest} weitere",
+          "none": "Keine"
+        },
         "level_reminder": {
           "title": "Erinnerungen",
           "hint": "Eine Erinnerung, die du gesetzt hast, ist fällig."
@@ -10486,7 +10494,7 @@
         },
         "level_proposal_low": {
           "title": "Weitere Vorschläge",
-          "hint": "Nicht committete Änderungen, ruhende Vorgänge, neue Projekte, Branches im Rückstand, wiederkehrende Bitten."
+          "hint": "Nicht committete Änderungen, ruhende Vorgänge, Branches im Rückstand, wiederkehrende Bitten."
         },
         "rule_failed": {
           "title": "Fehlgeschlagen, niemand kümmert sich",
@@ -10508,7 +10516,7 @@
         },
         "rule_pr_review": {
           "title": "Ein PR wartet auf dein Review",
-          "hint": "In den verbundenen Projekten; gezählt ab dem Moment, in dem codeg die Anfrage sah.",
+          "hint": "In den beobachteten Projekten; gezählt ab dem Moment, in dem codeg die Anfrage sah.",
           "on": "An",
           "off": "Aus"
         },
@@ -10521,12 +10529,6 @@
         "rule_idle": {
           "title": "Ein ruhender Vorgang",
           "hint": "Ein offener Vorgang ohne Änderung.",
-          "on": "An",
-          "off": "Aus"
-        },
-        "rule_new_project": {
-          "title": "Ein neues Projekt",
-          "hint": "Ein neues Projekt in codeg, in dem du arbeitest: im Blick behalten?",
           "on": "An",
           "off": "Aus"
         },
@@ -10892,6 +10894,22 @@
         "new": "Neu, auf dem Agenten des Gehirns",
         "none": "Keine",
         "off": "(deaktiviert)"
+      },
+      "projects": {
+        "about": "Die Assistenten behalten diese Projekte auf PRs im Blick, die auf dein Review warten, und suchen darin das Erste, bei dem sie helfen können.",
+        "scope": "Welche Projekte im Blick",
+        "all": "Alle Projekte",
+        "allHint": "Auch neu hinzugefügte.",
+        "only": "Nur ausgewählte Projekte",
+        "onlyHint": "Neue Projekte kommen nicht von selbst dazu; hake sie hier an.",
+        "loading": "Deine Projekte werden gelesen …",
+        "empty": "codeg hat noch kein Projekt.",
+        "openFolder": "Projektordner öffnen",
+        "onForge": "Auf {forge}",
+        "noAccount": "Auf {forge}, kein Konto verbunden",
+        "noForge": "Kein Code-Hosting",
+        "connectAccount": "Konto verbinden",
+        "note": "Ein geschlossenes Projekt wird nicht beobachtet; öffnest du es wieder, ist es zurück."
       }
     },
     "statusWord": {
@@ -11818,23 +11836,22 @@
         "skipped": "Anrede übersprungen"
       },
       "connect": {
-        "heading": "Deine Projekte",
-        "about1": "Während du weg bist, behalte ich die vergebene Arbeit und deine PRs im Blick.",
-        "about2": "Mit verbundenen Repositorys sehe ich PRs, CI und Issues.",
-        "prompt": "Verbinde deine Projekte, und ich suche sofort etwas, wobei ich helfen kann.",
-        "loading": "Deine Projekte werden gelesen …",
-        "none": "In codeg ist noch kein Projekt geöffnet.",
-        "onForge": "Auf {forge}",
-        "noAccount": "Auf {forge}, kein Konto verbunden",
-        "noForge": "Kein Code-Hosting",
-        "connectAccount": "Konto verbinden",
-        "skipHint": "Du kannst das überspringen; alles funktioniert trotzdem.",
-        "connect": "Verbinden{count, plural, =0 {} one { (# Projekt)} other { (# Projekte)}}",
+        "heading": "Gleich eine Sache",
+        "about": "Ich behalte alle deine Projekte im Blick und sage dir, wenn ein PR auf dein Review wartet.",
+        "aboutOnly": "Ich behalte die Projekte im Blick, die du ausgewählt hast, und sage dir, wenn ein PR auf dein Review wartet.",
+        "noProjects": "codeg hat noch kein Projekt; öffne eins, dann behalte ich es im Blick.",
+        "ask": "Soll ich gleich eine Sache suchen, bei der ich dir helfen kann?",
+        "settingsHint": "Welche Projekte ich im Blick behalte, kannst du jederzeit in den Einstellungen ändern.",
+        "settings": "Einstellungen",
+        "go": "Jetzt suchen",
+        "notNow": "Nicht jetzt",
         "openFolder": "Projektordner öffnen",
-        "skip": "Überspringen",
+        "accountHint": "Verbinde dein {forge}-Konto, dann sehe ich auch PRs, CI und Issues.",
+        "connectAccount": "Konto verbinden",
+        "went": "Gut, ich suche.",
+        "skipped": "Dann nicht jetzt. Sag Bescheid, wann immer du magst.",
         "connected": "Verbunden: {projects}",
-        "joiner": ", ",
-        "skipped": "Vorerst übersprungen. Erzähl mir jederzeit von einem Projekt."
+        "joiner": ", "
       },
       "starter": {
         "heading": "Dabei kann ich zuerst helfen",
@@ -12286,7 +12303,6 @@
       "openPr": "PR öffnen",
       "byAuthor": "von {author}",
       "worktreeOf": "Worktree von {project}",
-      "sessions": "{n, plural, one {# Sitzung} other {# Sitzungen}} darin",
       "behindDetail": "{branch} liegt hinter {base}, ein Merge hätte Konflikte.",
       "heading": {
         "failed": "Fehlgeschlagen, niemand kümmert sich",
@@ -12295,7 +12311,6 @@
         "pr_review": "Ein PR wartet auf dein Review",
         "uncommitted": "Nicht committete Änderungen",
         "idle": "Ein ruhender Vorgang",
-        "new_project": "Ein neues Projekt",
         "behind": "Branch im Rückstand, mit Konflikten",
         "undo": "Rückgängig gemachte Änderungen",
         "idle_bot": "Ein untätiger Arbeitsassistent"
@@ -12328,9 +12343,6 @@
           "hand": "Dranbleiben",
           "close": "Schließen"
         },
-        "new_project": {
-          "watch": "Dieses Projekt im Blick behalten"
-        },
         "behind": {
           "rebase": "Rebase veranlassen"
         },
@@ -12349,7 +12361,6 @@
         "reminding": "Morgen früh wirst du erinnert.",
         "opened": "Geöffnet.",
         "closed": "Vorgang geschlossen.",
-        "watching": "Die Assistenten behalten dieses Projekt jetzt im Blick.",
         "rebasing": "Zum Rebase zurückgegeben.",
         "asking_first": "Änderungen, um die du bittest, kommen jetzt zuerst als Karte.",
         "hidden": "Ausgeblendet. Er ist weiter unter den ausgeblendeten Assistenten.",
@@ -12390,7 +12401,7 @@
         },
         "pr_review": {
           "title": "Ein PR wartet auf dein Review",
-          "hint": "In den verbundenen Projekten; gezählt ab dem Moment, in dem codeg die Anfrage sah."
+          "hint": "In den beobachteten Projekten; gezählt ab dem Moment, in dem codeg die Anfrage sah."
         },
         "uncommitted": {
           "title": "Nicht committete Änderungen",
@@ -12399,10 +12410,6 @@
         "idle": {
           "title": "Ein ruhender Vorgang",
           "hint": "Ein offener Vorgang ohne Änderung."
-        },
-        "new_project": {
-          "title": "Ein neues Projekt",
-          "hint": "Ein neues Projekt in codeg, in dem du arbeitest: im Blick behalten?"
         },
         "behind": {
           "title": "Branch im Rückstand",

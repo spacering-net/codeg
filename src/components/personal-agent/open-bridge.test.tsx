@@ -106,6 +106,12 @@ describe("a page asked for in the address (`?pa=`)", () => {
       page: "executors",
     })
     expect(usePersonalAgentUi.getState().botPage).toBeNull()
+    cleanup()
+    window.history.replaceState(null, "", "/workspace?pa=projects")
+    render(<PersonalAgentOpenBridge />)
+    expect(usePersonalAgentUi.getState().settings).toEqual({
+      page: "projects",
+    })
   })
 
   it("leaves one it does not know", () => {

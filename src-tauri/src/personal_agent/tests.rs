@@ -10326,8 +10326,11 @@ async fn a_connected_project_gets_one_thing_at_once_and_it_is_handed_over() {
     engine.answer_choice(card_id(&name), None, None, None, Some(&[])).await.unwrap();
     let app = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
     let quiet = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("quiet").to_string_lossy()).await;
-    let listed = super::meet::meet_projects(&engine.db).await;
-    assert!(listed.iter().any(|p| p.id == app && p.provider.is_none() && !p.account), "{listed:?}");
+    let listed = super::projects::project_views(&engine.db).await;
+    assert!(listed.iter().any(|p| p.id == app && p.forge == super::projects::ForgeStatus::Unknown), "not there: not known {listed:?}");
+    std::fs::create_dir_all(tmp.path().join("app")).unwrap();
+    let listed = super::projects::project_views(&engine.db).await;
+    assert!(listed.iter().any(|p| p.id == app && p.forge == super::projects::ForgeStatus::None), "no checkout: no forge {listed:?}");
     use sea_orm::Set;
     let older = board_task(&engine, app, "Fix login", WorkTaskStatus::Failed, |t| {
         t.updated_at = Set(chrono::Utc::now() - chrono::Duration::hours(2));
@@ -10337,16 +10340,20 @@ async fn a_connected_project_gets_one_thing_at_once_and_it_is_handed_over() {
     board_task(&engine, app, "Later", WorkTaskStatus::Failed, |t| t.deferred_at = Set(Some(chrono::Utc::now()))).await;
 
     let connect = meet_card(&engine, "onboarding", "connect").await.unwrap();
-    assert!(engine.meet_connect(card_id(&connect), &[]).await.is_err(), "a project, or skip");
-    let row = engine.meet_connect(card_id(&connect), &[app]).await.unwrap();
+    let row = engine.meet_go(card_id(&connect)).await.unwrap();
     let data = row.data.unwrap();
     assert_eq!(data["state"], "connected");
-    assert_eq!(data["projects"][0]["id"], app);
-    assert_eq!(meet_record(&engine).await["projects"], json!([app]));
+    assert!(data.get("projects").is_none(), "nothing picked");
+    assert!(meet_record(&engine).await.get("projects").is_none(), "nothing picked, nothing kept");
+    assert!(engine.meet_go(card_id(&connect)).await.unwrap_err().contains("answered already"));
     assert!(meet_card(&engine, "onboarding", "promises").await.is_some(), "what the assistants do comes too");
 
     let card = starter_settled(&engine).await;
     let d = data_of(&card);
+    // Every project watched — all of them, by default.
+    let mut looked: Vec<i64> = d["projects"].as_array().unwrap().iter().map(|p| p["id"].as_i64().unwrap()).collect();
+    looked.sort();
+    assert_eq!(looked, vec![app as i64, quiet as i64]);
     assert_eq!(d["state"], "found");
     assert_eq!((d["lead"]["kind"].as_str(), d["lead"]["task_id"].as_i64()), (Some("task"), Some(newer.id as i64)));
     assert!(card.body.starts_with("I can help with this first:"), "{}", card.body);
@@ -10369,9 +10376,9 @@ async fn a_connected_project_gets_one_thing_at_once_and_it_is_handed_over() {
     fresh.meet_after_save().await;
     let name = meet_card(&fresh, "choice", "meet").await.unwrap();
     fresh.answer_choice(card_id(&name), None, None, None, Some(&[])).await.unwrap();
-    let q = crate::db::test_helpers::seed_folder(&fresh.db, &ftmp.path().join("quiet").to_string_lossy()).await;
+    crate::db::test_helpers::seed_folder(&fresh.db, &ftmp.path().join("quiet").to_string_lossy()).await;
     let connect = meet_card(&fresh, "onboarding", "connect").await.unwrap();
-    fresh.meet_connect(card_id(&connect), &[q]).await.unwrap();
+    fresh.meet_go(card_id(&connect)).await.unwrap();
     let card = starter_settled(&fresh).await;
     assert_eq!(data_of(&card)["state"], "none");
     assert!(fresh.act_on_notice(card_id(&card), "hand").await.is_err());
@@ -10426,6 +10433,9 @@ async fn the_first_thing_is_a_red_pr_of_the_owners_then_a_review_then_an_issue_t
         }
         async fn login(&self, _: i32) -> Option<String> {
             Some("me".into())
+        }
+        async fn served(&self, _: i32) -> super::projects::Served {
+            super::projects::Served::Yes
         }
     }
     let (engine, tmp) = configured().await;
@@ -10492,7 +10502,7 @@ async fn a_late_or_duplicate_look_never_overrides_the_cards_latest() {
     .await;
     board_task(&engine, app, "Bump deps", WorkTaskStatus::Failed, |_| {}).await;
     let connect = meet_card(&engine, "onboarding", "connect").await.unwrap();
-    engine.meet_connect(card_id(&connect), &[app]).await.unwrap();
+    engine.meet_go(card_id(&connect)).await.unwrap();
     let card = starter_settled(&engine).await;
     let id = card_id(&card);
     // The first look again, finding nothing: the card was settled already.
@@ -13916,7 +13926,7 @@ async fn work_waiting_long_for_review_and_a_branch_behind_with_conflicts_go_to_i
 }
 
 #[tokio::test]
-async fn changes_left_uncommitted_a_new_project_and_a_quiet_matter() {
+async fn changes_left_uncommitted_and_a_quiet_matter() {
     use sea_orm::{ActiveModelTrait, Set};
     let (host, w, tmp) = hosted().await;
     let primary = host.primary();
@@ -13947,21 +13957,24 @@ async fn changes_left_uncommitted_a_new_project_and_a_quiet_matter() {
     rules_git(&dir, &["commit", "-q", "-am", "done"]);
     host.rules_tick_at(t0 + chrono::Duration::hours(26)).await;
     assert_eq!(data_of(&rule_cards(&primary, "uncommitted").await[0])["state"], "expired");
-    // A project added since, worked in: [Keep an eye on it] connects it.
-    let other = tmp.path().join("other");
-    std::fs::create_dir_all(&other).unwrap();
-    let fresh = crate::db::test_helpers::seed_folder(&primary.db, &other.to_string_lossy()).await;
-    host.rules_tick_at(t0 + chrono::Duration::hours(27)).await;
-    assert!(rule_cards(&primary, "new_project").await.is_empty(), "no session in it yet");
-    crate::db::test_helpers::seed_conversation(&primary.db, fresh, AgentType::Codex).await;
-    host.rules_tick_at(t0 + chrono::Duration::hours(28)).await;
+    // A card of the "new project" rule there was: it expires with the next
+    // look, and its old step does nothing.
+    let old = super::rules::Found {
+        rule: "new_project",
+        object: format!("project:{app}"),
+        episode: "1".into(),
+        bot: primary.bot().await,
+        since: t0,
+        held: false,
+        facts: json!({ "folder_id": app }),
+        text: "app".into(),
+    };
+    primary.raise_rule_card(&old, &primary.prefs().await, false).await.unwrap();
     let cards = rule_cards(&primary, "new_project").await;
-    assert_eq!(cards.len(), 1);
-    assert_eq!(data_of(&cards[0])["facts"]["folder_id"], fresh);
-    let row = primary.act_on_notice(notice_id_of(&cards[0]), "watch").await.unwrap();
-    assert_eq!(row.data.unwrap()["state"], "watching");
-    let p = svc::primary_bot(&primary.db.conn).await.unwrap().unwrap();
-    assert!(super::meet::connected_in_settings(&p.settings).contains(&fresh));
+    assert_eq!(data_of(&cards[0])["state"], "open");
+    host.rules_tick_at(t0 + chrono::Duration::hours(27)).await;
+    assert_eq!(data_of(&rule_cards(&primary, "new_project").await[0])["state"], "expired");
+    assert!(primary.act_on_notice(notice_id_of(&cards[0]), "watch").await.is_err());
     // A matter of the worker's untouched for eight days: [Close] drops it.
     let item = svc::create_item(
         &worker.db.conn,
@@ -19830,4 +19843,641 @@ async fn a_check_whose_card_could_not_be_written_is_not_marked_told_and_is_told_
             .len(),
         1
     );
+}
+
+// ── the projects watched (`prefs.projects`) ──────────────────────────────────
+
+/// A project folder under `tmp`, open in the workspace.
+async fn watched_folder(engine: &PersonalAgentEngine, tmp: &tempfile::TempDir, name: &str) -> i32 {
+    crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join(name).to_string_lossy()).await
+}
+
+/// Open or close a project, as another codeg would.
+async fn set_open(engine: &PersonalAgentEngine, id: i32, open: bool) {
+    use sea_orm::{ActiveModelTrait, Set};
+    let f = crate::db::entities::folder::Entity::find_by_id(id).one(&engine.db.conn).await.unwrap().unwrap();
+    let mut a: crate::db::entities::folder::ActiveModel = f.into();
+    a.is_open = Set(open);
+    a.update(&engine.db.conn).await.unwrap();
+}
+
+async fn watched_ids(engine: &PersonalAgentEngine) -> Vec<i32> {
+    let mut ids: Vec<i32> = super::projects::watched_projects(&engine.db, &engine.prefs().await)
+        .await
+        .iter()
+        .map(|f| f.id)
+        .collect();
+    ids.sort();
+    ids
+}
+
+fn sorted(mut v: Vec<i32>) -> Vec<i32> {
+    v.sort();
+    v
+}
+
+#[tokio::test]
+async fn the_projects_watched_are_every_open_one_new_ones_too_or_those_picked() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, tmp) = configured().await;
+    let a = watched_folder(&engine, &tmp, "a").await;
+    let b = watched_folder(&engine, &tmp, "b").await;
+    // A worktree, a closed project, a deleted one: none of them.
+    crate::db::service::folder_service::add_folder_with_parent(&engine.db.conn, &tmp.path().join("a-tree").to_string_lossy(), Some(a)).await.unwrap();
+    let closed = watched_folder(&engine, &tmp, "closed").await;
+    set_open(&engine, closed, false).await;
+    let gone = watched_folder(&engine, &tmp, "gone").await;
+    let f = crate::db::entities::folder::Entity::find_by_id(gone).one(&engine.db.conn).await.unwrap().unwrap();
+    let mut am: crate::db::entities::folder::ActiveModel = f.into();
+    am.deleted_at = Set(Some(chrono::Utc::now()));
+    am.update(&engine.db.conn).await.unwrap();
+    assert_eq!(engine.prefs().await.get("projects"), json!("all"));
+    assert_eq!(watched_ids(&engine).await, sorted(vec![a, b]));
+    // One added later is watched too.
+    let later = watched_folder(&engine, &tmp, "later").await;
+    assert_eq!(watched_ids(&engine).await, sorted(vec![a, b, later]));
+    // Under "all", one more or one fewer changes nothing.
+    assert!(engine.apply_settings(&[change("prefs.projects", json!({ "add": a }))]).await.unwrap().is_empty());
+    assert!(engine.apply_settings(&[change("prefs.projects", json!({ "remove": a }))]).await.unwrap().is_empty());
+
+    // Only those picked: every one there is now, to start with.
+    let made = engine.apply_settings(&[change("prefs.projects", json!("only"))]).await.unwrap();
+    assert_eq!(made[0].from, json!("all"));
+    assert_eq!(made[0].to, json!(sorted(vec![a, b, later])));
+    assert!(engine.apply_settings(&[change("prefs.projects", json!("only"))]).await.unwrap().is_empty(), "a list stays");
+    let newer = watched_folder(&engine, &tmp, "newer").await;
+    assert!(!watched_ids(&engine).await.contains(&newer), "a new one is not picked");
+    engine.apply_settings(&[change("prefs.projects", json!({ "add": newer }))]).await.unwrap();
+    engine.apply_settings(&[change("prefs.projects", json!({ "remove": b }))]).await.unwrap();
+    assert_eq!(watched_ids(&engine).await, sorted(vec![a, later, newer]));
+    // Closed, it is not watched; opened again, it is — its id kept, by
+    // ticks made while it was away too.
+    set_open(&engine, a, false).await;
+    assert_eq!(watched_ids(&engine).await, sorted(vec![later, newer]));
+    engine.apply_settings(&[change("prefs.projects", json!({ "remove": later }))]).await.unwrap();
+    assert_eq!(engine.prefs().await.get("projects"), json!(sorted(vec![a, newer])));
+    set_open(&engine, a, true).await;
+    assert_eq!(watched_ids(&engine).await, sorted(vec![a, newer]));
+
+    // Back to all; a late tick does not undo it.
+    engine.apply_settings(&[change("prefs.projects", json!("all"))]).await.unwrap();
+    assert!(engine.apply_settings(&[change("prefs.projects", json!({ "remove": a }))]).await.unwrap().is_empty());
+    assert_eq!(engine.prefs().await.get("projects"), json!("all"));
+    assert!(engine.apply_settings(&[change("prefs.projects", json!({ "add": "x" }))]).await.is_err());
+}
+
+#[tokio::test]
+async fn two_windows_ticking_projects_at_once_both_stand() {
+    let (engine, tmp) = configured().await;
+    let a = watched_folder(&engine, &tmp, "a").await;
+    let b = watched_folder(&engine, &tmp, "b").await;
+    let c = watched_folder(&engine, &tmp, "c").await;
+    engine.apply_settings(&[change("prefs.projects", json!([]))]).await.unwrap();
+    let (ca, cb, cc) = (
+        [change("prefs.projects", json!({ "add": a }))],
+        [change("prefs.projects", json!({ "add": b }))],
+        [change("prefs.projects", json!({ "add": c }))],
+    );
+    let (x, y, z) = tokio::join!(engine.apply_settings(&ca), engine.apply_settings(&cb), engine.apply_settings(&cc));
+    for made in [x, y, z] {
+        assert_eq!(made.unwrap().len(), 1);
+    }
+    assert_eq!(engine.prefs().await.get("projects"), json!(sorted(vec![a, b, c])));
+}
+
+#[tokio::test]
+async fn a_change_of_the_projects_shown_first_takes_what_changed_meanwhile_and_its_undo_keeps_it() {
+    let (engine, tmp) = configured().await;
+    let a = watched_folder(&engine, &tmp, "a").await;
+    let b = watched_folder(&engine, &tmp, "b").await;
+    let c = watched_folder(&engine, &tmp, "c").await;
+    engine.apply_settings(&[change("prefs.projects", json!([a]))]).await.unwrap();
+    engine.apply_settings(&[change("prefs.chat_changes", json!("show"))]).await.unwrap();
+    let out = call_tool(&engine, "prefs_update", json!({
+        "changes": [{ "key": "projects", "value": { "add": b } }], "quote": "watch b too",
+    }))
+    .await;
+    assert_eq!(out.data["state"], "open", "{}", out.text);
+    let card = last_card(&engine, "changed").await;
+    assert_eq!(data_of(&card)["changes"][0]["to"], json!(sorted(vec![a, b])), "the preview");
+    // Another window picks one more before the owner says yes.
+    engine.apply_settings(&[change("prefs.projects", json!({ "add": c }))]).await.unwrap();
+    engine.act_on_notice(card_id(&card), "accept").await.unwrap();
+    assert_eq!(engine.prefs().await.get("projects"), json!(sorted(vec![a, b, c])), "neither lost");
+
+    // Changed at once, the card says what was written; changed again
+    // since, its undo leaves it.
+    engine.apply_settings(&[change("prefs.chat_changes", json!("apply"))]).await.unwrap();
+    let out = call_tool(&engine, "prefs_update", json!({
+        "changes": [{ "key": "projects", "value": { "remove": c } }], "quote": "stop watching c",
+    }))
+    .await;
+    assert_eq!(out.data["state"], "applied", "{}", out.text);
+    let card = last_card(&engine, "changed").await;
+    assert_eq!(data_of(&card)["changes"][0]["from"], json!(sorted(vec![a, b, c])));
+    assert_eq!(data_of(&card)["changes"][0]["to"], json!(sorted(vec![a, b])));
+    engine.apply_settings(&[change("prefs.projects", json!({ "remove": a }))]).await.unwrap();
+    let row = engine.act_on_notice(card_id(&card), "undo").await.unwrap();
+    assert_eq!(row.data.unwrap()["kept"], json!(["prefs.projects"]));
+    assert_eq!(engine.prefs().await.get("projects"), json!([b]));
+    // Asked for what already is: nothing to change, no card.
+    let out = call_tool(&engine, "prefs_update", json!({
+        "changes": [{ "key": "projects", "value": { "add": b } }], "quote": "watch b",
+    }))
+    .await;
+    assert!(out.ok && out.text.starts_with("Nothing to change"), "{}", out.text);
+}
+
+#[tokio::test]
+async fn project_list_says_which_projects_are_open_and_watched_in_its_text_too() {
+    let (engine, tmp) = configured().await;
+    let a = watched_folder(&engine, &tmp, "a").await;
+    let b = watched_folder(&engine, &tmp, "b").await;
+    let shut = watched_folder(&engine, &tmp, "shut").await;
+    set_open(&engine, shut, false).await;
+    engine.apply_settings(&[change("prefs.projects", json!([a, shut]))]).await.unwrap();
+    let out = call(&engine, "project_list", json!({})).await;
+    let rendered = crate::acp::delegation::companion::render_personal_agent_result(&serde_json::to_value(&out).unwrap());
+    let text = rendered["content"][0]["text"].as_str().unwrap();
+    assert!(text.lines().any(|l| l.starts_with(&format!("#{a} ")) && l.ends_with("(open, watched)")), "{text}");
+    assert!(text.lines().any(|l| l.starts_with(&format!("#{b} ")) && l.ends_with("(open)")), "{text}");
+    assert!(text.lines().any(|l| l.starts_with(&format!("#{shut} ")) && l.ends_with("(closed)")), "{text}");
+    let rows = rendered["structuredContent"]["data"]["projects"].as_array().unwrap();
+    let of = |id: i32| rows.iter().find(|r| r["id"] == id).unwrap();
+    assert_eq!((of(a)["open"].clone(), of(a)["watched"].clone()), (json!(true), json!(true)));
+    assert_eq!((of(b)["open"].clone(), of(b)["watched"].clone()), (json!(true), json!(false)));
+    assert_eq!((of(shut)["open"].clone(), of(shut)["watched"].clone()), (json!(false), json!(false)));
+}
+
+/// A forge for the review-request rule: what each project answers, whether
+/// an account serves it, how long it takes, and whom it was asked about.
+#[derive(Default)]
+struct PrForge {
+    rows: std::sync::Mutex<std::collections::HashMap<i32, Result<Vec<crate::forge::ForgeIssueRow>, String>>>,
+    served: std::sync::Mutex<std::collections::HashMap<i32, super::projects::Served>>,
+    delay: std::sync::Mutex<Option<std::time::Duration>>,
+    asked: std::sync::Mutex<Vec<i32>>,
+}
+
+fn review_row(number: i64, url: &str) -> crate::forge::ForgeIssueRow {
+    crate::forge::ForgeIssueRow {
+        number,
+        title: format!("PR {number}"),
+        body: None,
+        state: "open".into(),
+        draft: false,
+        labels: vec![],
+        author: Some("bob".into()),
+        author_avatar: None,
+        updated_at: None,
+        html_url: url.into(),
+        is_pr: true,
+        comments: 0,
+    }
+}
+
+impl PrForge {
+    fn answer(&self, project: i32, rows: Result<Vec<crate::forge::ForgeIssueRow>, String>) {
+        self.rows.lock().unwrap().insert(project, rows);
+    }
+    fn serve(&self, project: i32, s: super::projects::Served) {
+        self.served.lock().unwrap().insert(project, s);
+    }
+    fn asked(&self) -> Vec<i32> {
+        std::mem::take(&mut *self.asked.lock().unwrap())
+    }
+}
+
+#[async_trait::async_trait]
+impl super::starter::ForgeReads for PrForge {
+    async fn open_prs(&self, _: i32) -> Result<Vec<crate::forge::ForgeIssueRow>, String> {
+        Err("none".into())
+    }
+    async fn checks(&self, _: i32, _: i64) -> Result<crate::forge::ForgeCheckList, String> {
+        Err("none".into())
+    }
+    async fn review_requested(&self, project: i32) -> Result<Vec<crate::forge::ForgeIssueRow>, String> {
+        self.asked.lock().unwrap().push(project);
+        let delay = *self.delay.lock().unwrap();
+        if let Some(d) = delay {
+            tokio::time::sleep(d).await;
+        }
+        self.rows.lock().unwrap().get(&project).cloned().unwrap_or_else(|| Ok(Vec::new()))
+    }
+    async fn assigned(&self, _: i32) -> Result<Vec<crate::forge::ForgeIssueRow>, String> {
+        Err("none".into())
+    }
+    async fn login(&self, _: i32) -> Option<String> {
+        None
+    }
+    async fn served(&self, project: i32) -> super::projects::Served {
+        self.served.lock().unwrap().get(&project).copied().unwrap_or(super::projects::Served::Yes)
+    }
+}
+
+/// One look of the review-request rule through `forge`, at `now`.
+async fn pr_look_within(host: &Arc<EngineHost>, forge: &PrForge, now: chrono::DateTime<chrono::Utc>, budget: std::time::Duration) {
+    let primary = svc::primary_bot(&host.primary().db.conn).await.unwrap().unwrap();
+    let look = super::rules::Look {
+        now,
+        prefs: crate::models::personal_agent_prefs::AccountView::from_settings(&primary.settings).prefs,
+        primary: primary.id,
+    };
+    if let Some(found) = host.scan_pr_review_with(&look, forge, budget).await {
+        host.settle_rule("pr_review", &look, found).await;
+    }
+}
+
+async fn pr_look(host: &Arc<EngineHost>, forge: &PrForge, now: chrono::DateTime<chrono::Utc>) {
+    pr_look_within(host, forge, now, std::time::Duration::from_secs(60)).await
+}
+
+/// The review-request cards about project `p`: their states, oldest first.
+async fn pr_cards(engine: &PersonalAgentEngine, p: i32) -> Vec<String> {
+    rule_cards(engine, "pr_review")
+        .await
+        .iter()
+        .filter(|r| data_of(r)["facts"]["folder_id"] == p)
+        .map(|r| data_of(r)["state"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// Project `p`'s records of the rule: their data and when first seen.
+async fn pr_records(engine: &PersonalAgentEngine, p: i32) -> Vec<(serde_json::Value, chrono::DateTime<chrono::Utc>)> {
+    crate::db::service::personal_agent_rule_service::of_rule(&engine.db.conn, "pr_review")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.object.starts_with(&format!("pr:{p}:")))
+        .map(|r| (r.data.as_deref().map(|d| serde_json::from_str(d).unwrap()).unwrap_or(json!({})), r.first_seen_at))
+        .collect()
+}
+
+#[tokio::test]
+async fn review_requests_are_read_in_the_projects_watched_and_one_let_go_of_comes_back() {
+    let (host, _w, tmp) = hosted().await;
+    let primary = host.primary();
+    set_pref(&primary, "rule_pr_review_days", json!(0)).await;
+    let a = watched_folder(&primary, &tmp, "a").await;
+    let b = watched_folder(&primary, &tmp, "b").await;
+    let forge = PrForge::default();
+    forge.answer(a, Ok(vec![review_row(7, "https://github.com/t/a/pull/7")]));
+    forge.answer(b, Ok(vec![review_row(7, "https://github.com/t/b/pull/7")]));
+    let t0 = super::clock::now();
+    pr_look(&host, &forge, t0).await;
+    assert_eq!(sorted(forge.asked()), sorted(vec![a, b]));
+    assert_eq!((pr_cards(&primary, a).await, pr_cards(&primary, b).await), (vec!["open".to_string()], vec!["open".to_string()]));
+
+    // b taken off the list: its card goes at once, its record kept, left.
+    set_pref(&primary, "projects", json!("only")).await;
+    set_pref(&primary, "projects", json!({ "remove": b })).await;
+    assert_eq!(pr_cards(&primary, b).await, vec!["expired"]);
+    let recs = pr_records(&primary, b).await;
+    assert_eq!((recs[0].0["resets"].clone(), recs[0].0["out"].clone()), (json!(1), json!(true)));
+    pr_look(&host, &forge, t0 + chrono::Duration::minutes(1)).await;
+    assert_eq!(forge.asked(), vec![a], "only the ones picked");
+    assert_eq!(pr_cards(&primary, a).await, vec!["open"], "one card, still open");
+    // A third project is not picked; back to all, it is read too.
+    let c = watched_folder(&primary, &tmp, "c").await;
+    pr_look(&host, &forge, t0 + chrono::Duration::minutes(2)).await;
+    assert!(!forge.asked().contains(&c));
+    // b picked again: the same request, a new card.
+    set_pref(&primary, "projects", json!({ "add": b })).await;
+    pr_look(&host, &forge, t0 + chrono::Duration::minutes(3)).await;
+    assert_eq!(pr_cards(&primary, b).await, vec!["expired", "open"]);
+    assert_eq!(pr_records(&primary, b).await[0].0["out"], json!(false));
+    set_pref(&primary, "projects", json!("all")).await;
+    pr_look(&host, &forge, t0 + chrono::Duration::minutes(4)).await;
+    assert!(forge.asked().contains(&c), "all of them, new ones too");
+}
+
+#[tokio::test]
+async fn a_review_request_let_go_of_and_back_is_raised_at_once_its_wait_kept_twice_over() {
+    let (host, _w, tmp) = hosted().await;
+    let primary = host.primary();
+    let a = watched_folder(&primary, &tmp, "a").await;
+    let forge = PrForge::default();
+    forge.answer(a, Ok(vec![review_row(3, "https://github.com/t/a/pull/3")]));
+    let t0 = super::clock::now();
+    pr_look(&host, &forge, t0).await;
+    assert!(pr_cards(&primary, a).await.is_empty(), "two days first");
+    assert_eq!(forge.asked(), vec![a]);
+    // The last project watched taken off, then back, after two days: the
+    // request has waited all along.
+    set_pref(&primary, "projects", json!([])).await;
+    pr_look(&host, &forge, t0 + chrono::Duration::days(1)).await;
+    assert!(!forge.asked().contains(&a), "none watched");
+    set_pref(&primary, "projects", json!({ "add": a })).await;
+    pr_look(&host, &forge, t0 + chrono::Duration::days(3)).await;
+    let cards = rule_cards(&primary, "pr_review").await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["open"]);
+    assert_eq!(data_of(&cards[0])["since"].as_str().map(|s| chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp()), Some(t0.timestamp()));
+    let episode = |n: &crate::db::entities::personal_agent_notice::Model| serde_json::from_str::<serde_json::Value>(&n.payload).unwrap()["episode"].as_str().unwrap().to_string();
+    assert!(episode(&notice_of(&primary, &cards[0]).await).ends_with(":1"));
+    // Off and on again: a second card, not held back by the first.
+    set_pref(&primary, "projects", json!([])).await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["expired"]);
+    set_pref(&primary, "projects", json!({ "add": a })).await;
+    pr_look(&host, &forge, t0 + chrono::Duration::days(3) + chrono::Duration::minutes(1)).await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["expired", "open"]);
+    let cards = rule_cards(&primary, "pr_review").await;
+    assert!(episode(&notice_of(&primary, &cards[1]).await).ends_with(":2"));
+    assert_eq!(pr_records(&primary, a).await[0].1, t0, "first seen, kept");
+}
+
+#[tokio::test]
+async fn a_project_no_account_serves_is_not_asked_and_its_card_goes_one_not_known_stays() {
+    use super::projects::Served;
+    let (host, _w, tmp) = hosted().await;
+    let primary = host.primary();
+    let a = watched_folder(&primary, &tmp, "a").await;
+    let forge = PrForge::default();
+    forge.answer(a, Ok(vec![review_row(3, "https://github.com/t/a/pull/3")]));
+    let t0 = super::clock::now();
+    pr_look(&host, &forge, t0).await;
+    pr_look(&host, &forge, t0 + chrono::Duration::days(3)).await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["open"]);
+    forge.asked();
+    // Not known this time (git or the accounts could not say): held.
+    forge.serve(a, Served::Unknown);
+    pr_look(&host, &forge, t0 + chrono::Duration::days(3) + chrono::Duration::minutes(1)).await;
+    assert!(forge.asked().is_empty());
+    assert_eq!(pr_cards(&primary, a).await, vec!["open"]);
+    // No account: not asked, let go of.
+    forge.serve(a, Served::No);
+    pr_look(&host, &forge, t0 + chrono::Duration::days(3) + chrono::Duration::minutes(2)).await;
+    assert!(forge.asked().is_empty());
+    assert_eq!(pr_cards(&primary, a).await, vec!["expired"]);
+    assert_eq!(pr_records(&primary, a).await[0].0["out"], json!(true));
+    // Connected: raised again at once.
+    forge.serve(a, Served::Yes);
+    pr_look(&host, &forge, t0 + chrono::Duration::days(3) + chrono::Duration::minutes(3)).await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["expired", "open"]);
+}
+
+#[tokio::test]
+async fn one_forge_failing_holds_only_its_own_requests() {
+    let (host, _w, tmp) = hosted().await;
+    let primary = host.primary();
+    set_pref(&primary, "rule_pr_review_days", json!(0)).await;
+    let a = watched_folder(&primary, &tmp, "a").await;
+    let b = watched_folder(&primary, &tmp, "b").await;
+    let forge = PrForge::default();
+    forge.answer(a, Ok(vec![review_row(1, "https://github.com/t/a/pull/1")]));
+    forge.answer(b, Ok(vec![review_row(2, "https://github.com/t/b/pull/2")]));
+    let t0 = super::clock::now();
+    pr_look(&host, &forge, t0).await;
+    forge.answer(a, Err("502".into()));
+    forge.answer(b, Ok(vec![]));
+    pr_look(&host, &forge, t0 + chrono::Duration::minutes(1)).await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["open"], "not read: held");
+    assert_eq!(pr_cards(&primary, b).await, vec!["expired"], "read: gone");
+    assert!(pr_records(&primary, b).await.is_empty());
+    assert_eq!(pr_records(&primary, a).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_look_out_of_time_holds_what_it_did_not_reach_and_the_next_starts_there() {
+    let (host, _w, tmp) = hosted().await;
+    let primary = host.primary();
+    set_pref(&primary, "rule_pr_review_days", json!(0)).await;
+    let forge = PrForge::default();
+    let mut ids = Vec::new();
+    for name in ["a", "b", "c"] {
+        let p = watched_folder(&primary, &tmp, name).await;
+        forge.answer(p, Ok(vec![review_row(1, &format!("https://github.com/t/{name}/pull/1"))]));
+        ids.push(p);
+    }
+    let t0 = super::clock::now();
+    pr_look(&host, &forge, t0).await;
+    forge.asked();
+    *forge.delay.lock().unwrap() = Some(std::time::Duration::from_millis(400));
+    pr_look_within(&host, &forge, t0 + chrono::Duration::minutes(1), std::time::Duration::from_millis(600)).await;
+    let first = forge.asked();
+    assert_eq!(first.len(), 2, "the second ran out of time, the third was not reached: {first:?}");
+    for p in &ids {
+        assert_eq!(pr_cards(&primary, *p).await, vec!["open"], "nothing lost, nothing doubled");
+    }
+    // The one the budget cut short comes first next time, with its time.
+    pr_look_within(&host, &forge, t0 + chrono::Duration::minutes(2), std::time::Duration::from_millis(600)).await;
+    let next = forge.asked();
+    assert_eq!(next[0], first[1], "{first:?} then {next:?}");
+    pr_look_within(&host, &forge, t0 + chrono::Duration::minutes(3), std::time::Duration::from_millis(600)).await;
+    let third = forge.asked();
+    let mut every: Vec<i32> = [first[0], next[0], third[0]].to_vec();
+    every.sort();
+    assert_eq!(every, sorted(ids.clone()), "each in turn: {first:?} {next:?} {third:?}");
+}
+
+#[tokio::test]
+async fn a_project_closed_as_the_look_starts_and_open_again_has_its_card_back() {
+    let (host, _w, tmp) = hosted().await;
+    let primary = host.primary();
+    set_pref(&primary, "rule_pr_review_days", json!(0)).await;
+    let a = watched_folder(&primary, &tmp, "a").await;
+    let forge = PrForge::default();
+    forge.answer(a, Ok(vec![review_row(5, "https://github.com/t/a/pull/5")]));
+    let t0 = super::clock::now();
+    pr_look(&host, &forge, t0).await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["open"]);
+    // Closed after the tick's reconciling, before the look reads what is
+    // watched: the look itself lets it go.
+    set_open(&primary, a, false).await;
+    pr_look(&host, &forge, t0 + chrono::Duration::minutes(1)).await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["expired"]);
+    let recs = pr_records(&primary, a).await;
+    assert_eq!((recs[0].0["resets"].clone(), recs[0].0["out"].clone()), (json!(1), json!(true)));
+    // Open again before any reconciling: the same request, a new card.
+    set_open(&primary, a, true).await;
+    pr_look(&host, &forge, t0 + chrono::Duration::minutes(2)).await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["expired", "open"]);
+}
+
+#[tokio::test]
+async fn a_list_of_projects_never_grows_past_its_bound_into_all() {
+    let (engine, tmp) = configured().await;
+    let a = watched_folder(&engine, &tmp, "a").await;
+    let full: Vec<i32> = (1..=crate::models::personal_agent_prefs::PROJECTS_MAX as i32).map(|i| i + 10_000).collect();
+    engine.apply_settings(&[change("prefs.projects", json!(full))]).await.unwrap();
+    let e = engine.apply_settings(&[change("prefs.projects", json!({ "add": a }))]).await.unwrap_err();
+    assert!(e.contains("at most"), "{e}");
+    assert_eq!(engine.prefs().await.get("projects").as_array().map(|l| l.len()), Some(full.len()), "unchanged, still a list");
+    assert!(!watched_ids(&engine).await.contains(&a));
+    // Shown first with room for one; the room taken before the yes: refused
+    // as it is written, the list as it was.
+    let mut almost = full.clone();
+    almost.pop();
+    engine.apply_settings(&[change("prefs.projects", json!(almost))]).await.unwrap();
+    engine.apply_settings(&[change("prefs.chat_changes", json!("show"))]).await.unwrap();
+    let out = call_tool(&engine, "prefs_update", json!({
+        "changes": [{ "key": "projects", "value": { "add": a } }], "quote": "watch a too",
+    }))
+    .await;
+    assert_eq!(out.data["state"], "open", "{}", out.text);
+    let card = last_card(&engine, "changed").await;
+    engine.apply_settings(&[change("prefs.projects", json!({ "add": 99_999 }))]).await.unwrap();
+    assert!(engine.act_on_notice(card_id(&card), "accept").await.unwrap_err().contains("at most"));
+    assert!(!watched_ids(&engine).await.contains(&a));
+    // A plan made with room, the room taken before it is written: the
+    // write itself refuses, the list exactly as it was.
+    engine.apply_settings(&[change("prefs.projects", json!({ "remove": 99_999 }))]).await.unwrap();
+    let plan = engine.plan_settings(&[change("prefs.projects", json!({ "add": a }))]).await.unwrap();
+    engine.apply_settings(&[change("prefs.projects", json!({ "add": 99_998 }))]).await.unwrap();
+    let before = engine.prefs().await.get("projects");
+    assert!(engine.write_settings(&plan).await.unwrap_err().contains("at most"));
+    assert_eq!(engine.prefs().await.get("projects"), before);
+    assert_eq!(before.as_array().map(|l| l.len()), Some(full.len()));
+}
+
+#[tokio::test]
+async fn a_review_request_is_known_by_its_page_address_whatever_the_checkout_says() {
+    let (host, _w, tmp) = hosted().await;
+    let primary = host.primary();
+    set_pref(&primary, "rule_pr_review_days", json!(0)).await;
+    let a = watched_folder(&primary, &tmp, "a").await;
+    let forge = PrForge::default();
+    forge.answer(a, Ok(vec![review_row(7, "https://Git.Example:8443/team/app/-/merge_requests/7")]));
+    let t0 = super::clock::now();
+    pr_look(&host, &forge, t0).await;
+    let cards = rule_cards(&primary, "pr_review").await;
+    assert_eq!(cards.len(), 1);
+    primary.act_on_notice(notice_id_of(&cards[0]), "dismiss").await.unwrap();
+    // The same request, its address spelled otherwise: the same key — the
+    // "not now" holds, the wait kept.
+    forge.answer(a, Ok(vec![review_row(7, "https://git.example:8443/team/app/-/merge_requests/7/?tab=diffs#top")]));
+    pr_look(&host, &forge, t0 + chrono::Duration::minutes(1)).await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["dismissed"]);
+    assert_eq!(pr_records(&primary, a).await.len(), 1);
+    // A row without an address: not read, its record and the rest stay.
+    forge.answer(a, Ok(vec![review_row(7, "")]));
+    pr_look(&host, &forge, t0 + chrono::Duration::minutes(2)).await;
+    assert_eq!(pr_records(&primary, a).await.len(), 1);
+    assert_eq!(pr_records(&primary, a).await[0].1, t0);
+    // The same number on another instance: another request.
+    forge.answer(a, Ok(vec![review_row(7, "https://other.example/team/app/-/merge_requests/7")]));
+    pr_look(&host, &forge, t0 + chrono::Duration::minutes(3)).await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["dismissed", "open"]);
+    assert_eq!(pr_records(&primary, a).await.len(), 1, "the first is gone, it was read");
+}
+
+#[tokio::test]
+async fn what_is_no_longer_watched_lets_go_whatever_is_switched_off() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (host, _w, tmp) = hosted().await;
+    let primary = host.primary();
+    set_pref(&primary, "rule_pr_review_days", json!(0)).await;
+    let a = watched_folder(&primary, &tmp, "a").await;
+    let b = watched_folder(&primary, &tmp, "b").await;
+    let d = watched_folder(&primary, &tmp, "d").await;
+    let forge = PrForge::default();
+    for (p, n) in [(a, "a"), (b, "b"), (d, "d")] {
+        forge.answer(p, Ok(vec![review_row(1, &format!("https://github.com/t/{n}/pull/1"))]));
+    }
+    let t0 = super::clock::now();
+    pr_look(&host, &forge, t0).await;
+    // Proactive off; a closed in another codeg: the next tick lets it go.
+    set_pref(&primary, "proactive", json!("off")).await;
+    set_open(&primary, a, false).await;
+    host.rules_tick_at(t0 + chrono::Duration::minutes(1)).await;
+    assert_eq!(pr_cards(&primary, a).await, vec!["expired"]);
+    assert_eq!(pr_records(&primary, a).await[0].0["out"], json!(true));
+    // Closed and open again before the tick: nothing to let go of.
+    set_open(&primary, b, false).await;
+    set_open(&primary, b, true).await;
+    host.rules_tick_at(t0 + chrono::Duration::minutes(2)).await;
+    assert_eq!(pr_cards(&primary, b).await, vec!["open"]);
+    // The rule off, then closed: let go of all the same.
+    set_pref(&primary, "proactive", json!("on")).await;
+    set_pref(&primary, "rule_pr_review", json!("off")).await;
+    set_open(&primary, b, false).await;
+    host.rules_tick_at(t0 + chrono::Duration::minutes(3)).await;
+    assert_eq!(pr_cards(&primary, b).await, vec!["expired"]);
+    // Deleted: its records are forgotten too.
+    let f = crate::db::entities::folder::Entity::find_by_id(d).one(&primary.db.conn).await.unwrap().unwrap();
+    let mut am: crate::db::entities::folder::ActiveModel = f.into();
+    am.deleted_at = Set(Some(chrono::Utc::now()));
+    am.update(&primary.db.conn).await.unwrap();
+    host.rules_tick_at(t0 + chrono::Duration::minutes(4)).await;
+    assert_eq!(pr_cards(&primary, d).await, vec!["expired"]);
+    assert!(pr_records(&primary, d).await.is_empty());
+    assert_eq!(pr_records(&primary, a).await.len(), 1, "closed is not deleted");
+}
+
+#[tokio::test]
+async fn the_first_thing_found_at_home_does_not_wait_on_a_slow_forge_and_only_eight_forges_are_asked() {
+    use std::collections::HashSet;
+    struct Slow {
+        asked: std::sync::Mutex<HashSet<i32>>,
+    }
+    #[async_trait::async_trait]
+    impl super::starter::ForgeReads for Slow {
+        async fn open_prs(&self, project: i32) -> Result<Vec<crate::forge::ForgeIssueRow>, String> {
+            self.asked.lock().unwrap().insert(project);
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            Ok(vec![])
+        }
+        async fn checks(&self, _: i32, _: i64) -> Result<crate::forge::ForgeCheckList, String> {
+            Err("none".into())
+        }
+        async fn review_requested(&self, _: i32) -> Result<Vec<crate::forge::ForgeIssueRow>, String> {
+            Err("none".into())
+        }
+        async fn assigned(&self, _: i32) -> Result<Vec<crate::forge::ForgeIssueRow>, String> {
+            Err("none".into())
+        }
+        async fn login(&self, _: i32) -> Option<String> {
+            None
+        }
+        async fn served(&self, project: i32) -> super::projects::Served {
+            // Every other one has an account.
+            if project % 2 == 0 { super::projects::Served::Yes } else { super::projects::Served::No }
+        }
+    }
+    let (engine, tmp) = configured().await;
+    let mut projects = Vec::new();
+    for i in 0..20 {
+        let id = watched_folder(&engine, &tmp, &format!("p{i}")).await;
+        projects.push(super::starter::Project { id, name: format!("p{i}") });
+    }
+    let failed = board_task(&engine, projects[5].id, "Fix login", WorkTaskStatus::Failed, |_| {}).await;
+    let slow = Slow { asked: Default::default() };
+    let started = std::time::Instant::now();
+    let lead = super::starter::find_within(
+        &engine.db,
+        &slow,
+        &projects,
+        &HashSet::new(),
+        chrono::Utc::now(),
+        std::time::Duration::from_millis(500),
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .expect("the board's failed task");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    assert_eq!(lead["task_id"], failed.id);
+    // The forge is asked of one project at a time, only of those an account
+    // serves, eight at most.
+    let asked = slow.asked.lock().unwrap().clone();
+    assert!(asked.iter().all(|p| p % 2 == 0), "{asked:?}");
+}
+
+#[tokio::test]
+async fn another_one_looks_only_in_the_projects_still_watched() {
+    let (engine, tmp) = configured().await;
+    engine.meet_after_save().await;
+    let name = meet_card(&engine, "choice", "meet").await.unwrap();
+    engine.answer_choice(card_id(&name), None, None, None, Some(&[])).await.unwrap();
+    let a = watched_folder(&engine, &tmp, "a").await;
+    let b = watched_folder(&engine, &tmp, "b").await;
+    board_task(&engine, a, "In a", WorkTaskStatus::Failed, |_| {}).await;
+    board_task(&engine, b, "In b", WorkTaskStatus::Failed, |_| {}).await;
+    let connect = meet_card(&engine, "onboarding", "connect").await.unwrap();
+    engine.meet_go(card_id(&connect)).await.unwrap();
+    let card = starter_settled(&engine).await;
+    let first = data_of(&card)["lead"]["project"]["id"].as_i64().unwrap() as i32;
+    // The other stops being watched: [Another one] does not look there.
+    engine.apply_settings(&[change("prefs.projects", json!([first]))]).await.unwrap();
+    engine.act_on_notice(card_id(&card), "next").await.unwrap();
+    let card = starter_settled(&engine).await;
+    assert_eq!(data_of(&card)["state"], "none", "{:?}", data_of(&card));
 }

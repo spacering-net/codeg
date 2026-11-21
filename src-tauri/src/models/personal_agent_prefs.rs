@@ -33,6 +33,210 @@ where
     Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
+/// The most projects a list of them may name.
+pub const PROJECTS_MAX: usize = 2_000;
+
+/// The projects the assistants keep an eye on (`prefs.projects`): every
+/// open one, new ones too (stored `"all"`), or only these (an array of
+/// project ids, possibly empty). Ids of projects closed or deleted stay in
+/// the list, and count again when the project is back.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ProjectScope {
+    #[default]
+    All,
+    Only(Vec<i32>),
+}
+
+impl ProjectScope {
+    /// As stored.
+    pub fn to_json(&self) -> Value {
+        match self {
+            ProjectScope::All => json!("all"),
+            ProjectScope::Only(ids) => json!(ids),
+        }
+    }
+
+    /// From what is stored; `None` for what is neither form.
+    pub fn from_json(v: &Value) -> Option<Self> {
+        match v {
+            Value::String(s) if s.trim() == "all" => Some(ProjectScope::All),
+            // However long: a list is never read as "all".
+            Value::Array(list) => list
+                .iter()
+                .map(project_id)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()
+                .map(|mut ids| {
+                    ids.sort_unstable();
+                    ids.dedup();
+                    ProjectScope::Only(ids)
+                }),
+            _ => None,
+        }
+    }
+
+    /// Refused when a list would be longer than [`PROJECTS_MAX`].
+    pub fn checked(self) -> Result<Self, String> {
+        match &self {
+            ProjectScope::Only(ids) if ids.len() > PROJECTS_MAX => Err(format!(
+                "`projects` names at most {PROJECTS_MAX} projects; pick \"all\" instead"
+            )),
+            _ => Ok(self),
+        }
+    }
+
+    /// Whether project `id` (one that may be kept an eye on) is.
+    pub fn covers(&self, id: i32) -> bool {
+        match self {
+            ProjectScope::All => true,
+            ProjectScope::Only(ids) => ids.contains(&id),
+        }
+    }
+}
+
+impl Serialize for ProjectScope {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        self.to_json().serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProjectScope {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = Value::deserialize(d)?;
+        ProjectScope::from_json(&v)
+            .ok_or_else(|| serde::de::Error::custom("projects: \"all\" or a list of ids"))
+    }
+}
+
+/// What a change of `prefs.projects` asks, read against the value it
+/// meets when it is written — so that two windows ticking projects at once
+/// both stand, and a preview shown first takes what changed since.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectsOp {
+    /// Every project, new ones too.
+    All,
+    /// Only those picked: from "all", every project there is now; a list
+    /// stays as it is.
+    Only,
+    /// One more picked (nothing to do under "all").
+    Add(i32),
+    /// One fewer picked (nothing to do under "all").
+    Remove(i32),
+    /// Exactly these.
+    Set(Vec<i32>),
+    /// Back to `to`, only while it is still `expect` (an undo). Never from
+    /// a caller: codeg makes it.
+    Swap {
+        expect: ProjectScope,
+        to: ProjectScope,
+    },
+}
+
+const PROJECTS_TAKES: &str = "`projects` takes \"all\" (every project, new ones too), \"only\", \
+{\"add\": id}, {\"remove\": id}, or a list of project ids from `project_list`";
+
+/// A list of project ids: positive whole numbers (or their digits), each
+/// once, in order.
+fn project_ids(v: &Value) -> Result<Vec<i32>, String> {
+    let list = v.as_array().ok_or(PROJECTS_TAKES)?;
+    let mut ids: Vec<i32> = Vec::with_capacity(list.len());
+    for x in list {
+        ids.push(project_id(x)?);
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.len() > PROJECTS_MAX {
+        return Err(format!("`projects` names at most {PROJECTS_MAX} projects"));
+    }
+    Ok(ids)
+}
+
+fn project_id(x: &Value) -> Result<i32, String> {
+    x.as_i64()
+        .or_else(|| x.as_str().and_then(|s| s.trim().trim_start_matches('#').parse().ok()))
+        .and_then(|n| i32::try_from(n).ok())
+        .filter(|n| *n > 0)
+        .ok_or_else(|| format!("`projects`: {x} is not a project id; {PROJECTS_TAKES}"))
+}
+
+impl ProjectsOp {
+    /// A change as a caller gives it.
+    pub fn parse(v: &Value) -> Result<Self, String> {
+        match v {
+            Value::String(s) => match s.trim() {
+                "all" => Ok(ProjectsOp::All),
+                "only" => Ok(ProjectsOp::Only),
+                _ => Err(PROJECTS_TAKES.into()),
+            },
+            Value::Array(_) => project_ids(v).map(ProjectsOp::Set),
+            Value::Object(m) if m.len() == 1 => {
+                if let Some(id) = m.get("add") {
+                    project_id(id).map(ProjectsOp::Add)
+                } else if let Some(id) = m.get("remove") {
+                    project_id(id).map(ProjectsOp::Remove)
+                } else {
+                    Err(PROJECTS_TAKES.into())
+                }
+            }
+            _ => Err(PROJECTS_TAKES.into()),
+        }
+    }
+
+    /// As a card keeps it.
+    pub fn to_json(&self) -> Value {
+        match self {
+            ProjectsOp::All => json!("all"),
+            ProjectsOp::Only => json!("only"),
+            ProjectsOp::Add(id) => json!({ "add": id }),
+            ProjectsOp::Remove(id) => json!({ "remove": id }),
+            ProjectsOp::Set(ids) => json!(ids),
+            ProjectsOp::Swap { expect, to } => {
+                json!({ "swap": { "expect": expect.to_json(), "to": to.to_json() } })
+            }
+        }
+    }
+
+    /// As a card kept it — the undo's swap too.
+    pub fn from_card(v: &Value) -> Result<Self, String> {
+        if let Some(swap) = v.get("swap") {
+            let expect = ProjectScope::from_json(&swap["expect"]).ok_or(PROJECTS_TAKES)?;
+            let to = ProjectScope::from_json(&swap["to"]).ok_or(PROJECTS_TAKES)?;
+            return Ok(ProjectsOp::Swap { expect, to });
+        }
+        Self::parse(v)
+    }
+
+    /// What it makes of `current`; `eligible`: the projects there are now
+    /// (what "only" starts from).
+    pub fn apply(&self, current: &ProjectScope, eligible: &[i32]) -> ProjectScope {
+        match (self, current) {
+            (ProjectsOp::All, _) => ProjectScope::All,
+            (ProjectsOp::Only, ProjectScope::All) => {
+                let mut ids = eligible.to_vec();
+                ids.sort_unstable();
+                ids.dedup();
+                ProjectScope::Only(ids)
+            }
+            (ProjectsOp::Only, list) => list.clone(),
+            (ProjectsOp::Add(_) | ProjectsOp::Remove(_), ProjectScope::All) => ProjectScope::All,
+            (ProjectsOp::Add(id), ProjectScope::Only(ids)) => {
+                let mut ids = ids.clone();
+                if !ids.contains(id) {
+                    ids.push(*id);
+                    ids.sort_unstable();
+                }
+                ProjectScope::Only(ids)
+            }
+            (ProjectsOp::Remove(id), ProjectScope::Only(ids)) => {
+                ProjectScope::Only(ids.iter().copied().filter(|x| x != id).collect())
+            }
+            (ProjectsOp::Set(ids), _) => ProjectScope::Only(ids.clone()),
+            (ProjectsOp::Swap { expect, to }, now) if now == expect => to.clone(),
+            (ProjectsOp::Swap { .. }, now) => now.clone(),
+        }
+    }
+}
+
 /// The default number of rounds two assistants may go back and forth with
 /// no progress before codeg stops their exchange (4.9).
 pub const DEFAULT_LOOP_ROUNDS: u32 = 3;
@@ -620,8 +824,8 @@ pub const NEWS: &[(&str, Level, &str)] = &[
     (
         "proposal_low",
         Level::Low,
-        "codeg's other proposals: changes left uncommitted, a matter gone quiet, a new project, \
-         a branch behind with conflicts, a request they keep making",
+        "codeg's other proposals: changes left uncommitted, a matter gone quiet, a branch \
+         behind with conflicts, a request they keep making",
     ),
     ("brief", Level::Normal, "the morning brief and the day's wrap-up"),
     (
@@ -826,6 +1030,10 @@ pub struct Prefs {
     pub level_plan: Level,
     #[serde(default = "urgent", deserialize_with = "lenient_urgent")]
     pub level_plan_stuck: Level,
+    /// The projects the assistants keep an eye on: every open one (new ones
+    /// too), or only those picked.
+    #[serde(default, deserialize_with = "lenient")]
+    pub projects: ProjectScope,
     /// codeg's proposal rules (6.7), each on or off, with how long before
     /// it says something. A rule the owner muted from a card is off here.
     #[serde(default, deserialize_with = "lenient")]
@@ -870,8 +1078,6 @@ pub struct Prefs {
         deserialize_with = "lenient_rule_idle_days"
     )]
     pub rule_idle_days: u32,
-    #[serde(default, deserialize_with = "lenient")]
-    pub rule_new_project: OnOff,
     #[serde(default, deserialize_with = "lenient")]
     pub rule_behind: OnOff,
     #[serde(default, deserialize_with = "lenient")]
@@ -1020,6 +1226,7 @@ impl Default for Prefs {
             level_memory: Level::Low,
             level_plan: Level::Normal,
             level_plan_stuck: Level::Urgent,
+            projects: ProjectScope::All,
             rule_failed: OnOff::On,
             rule_failed_hours: RULE_FAILED_HOURS,
             rule_review: OnOff::On,
@@ -1032,7 +1239,6 @@ impl Default for Prefs {
             rule_uncommitted_hours: RULE_UNCOMMITTED_HOURS,
             rule_idle: OnOff::On,
             rule_idle_days: RULE_IDLE_DAYS,
-            rule_new_project: OnOff::On,
             rule_behind: OnOff::On,
             rule_repeat: OnOff::On,
             rule_repeat_count: RULE_REPEAT_COUNT,
@@ -1073,6 +1279,8 @@ pub enum PrefKind {
     Zone,
     /// A time of day, `HH:MM`.
     Clock,
+    /// The projects kept an eye on (`ProjectsOp`).
+    Projects,
 }
 
 /// The words a `level_<kind>` item takes.
@@ -1289,6 +1497,12 @@ pub const PREFS: &[PrefSpec] = &[
         label: "what still reaches the owner in their quiet hours",
     },
     PrefSpec {
+        key: "projects",
+        kind: PrefKind::Projects,
+        label: "the projects the assistants keep an eye on: \"all\" (new ones too), or a list of \
+                project ids from `project_list`",
+    },
+    PrefSpec {
         key: "morning",
         kind: PrefKind::Choice(&["hours", "fixed"]),
         label: "\"tomorrow morning\" in a reminder",
@@ -1494,11 +1708,6 @@ pub const PREFS: &[PrefSpec] = &[
             max: RULE_MAX_DAYS,
         },
         label: "days without a change before that card",
-    },
-    PrefSpec {
-        key: "rule_new_project",
-        kind: PrefKind::Choice(&["on", "off"]),
-        label: "codeg's card on a new project the owner works in",
     },
     PrefSpec {
         key: "rule_behind",
@@ -1712,7 +1921,6 @@ fn rule_preset(level: &str) -> Vec<(&'static str, Value)> {
         ("rule_uncommitted_hours", time(RULE_UNCOMMITTED_HOURS)),
         ("rule_idle", on(!quiet)),
         ("rule_idle_days", time(RULE_IDLE_DAYS)),
-        ("rule_new_project", on(!quiet)),
         ("rule_behind", on(!quiet)),
         ("rule_repeat", on(!quiet)),
     ]
@@ -1805,6 +2013,7 @@ pub fn check_pref(key: &str, value: &Value) -> Result<Value, String> {
                 .map(|s| json!(s))
                 .map_err(|e| format!("`{key}`: {e}"))
         }
+        PrefKind::Projects => ProjectsOp::parse(value).map(|op| op.to_json()),
     }
 }
 
@@ -1988,7 +2197,7 @@ impl Prefs {
     }
 
     /// Whether proposal rule `rule` (6.7: `failed`, `review`, `session`,
-    /// `pr_review`, `uncommitted`, `idle`, `new_project`, `behind`,
+    /// `pr_review`, `uncommitted`, `idle`, `behind`,
     /// `repeat`, `suggest`) is on.
     pub fn rule_on(&self, rule: &str) -> bool {
         let on = match rule {
@@ -1998,7 +2207,6 @@ impl Prefs {
             "pr_review" => self.rule_pr_review,
             "uncommitted" => self.rule_uncommitted,
             "idle" => self.rule_idle,
-            "new_project" => self.rule_new_project,
             "behind" => self.rule_behind,
             "repeat" => self.rule_repeat,
             "suggest" => self.rule_suggest,
@@ -2264,6 +2472,22 @@ fn brain_value(key: &str, value: &Value) -> String {
             "in the first morning brief of each week, about the week before".into()
         }
         ("weekly_review", "wrap") => "in Friday's wrap-up, about the week so far".into(),
+        ("projects", "all") => {
+            "every project open in codeg, new ones too (they can pick some on the settings' \
+             Your projects page)"
+                .into()
+        }
+        ("projects", _) => match value.as_array() {
+            Some(ids) if ids.is_empty() => "none".into(),
+            Some(ids) => format!(
+                "only these, by project_list's ids: {}",
+                ids.iter()
+                    .map(|i| format!("#{i}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None => value.to_string(),
+        },
         (_, w) if !w.is_empty() => w.to_string(),
         _ => value.to_string(),
     }
@@ -2308,7 +2532,6 @@ fn rules_line(prefs: &Prefs) -> String {
         "pr_review",
         "uncommitted",
         "idle",
-        "new_project",
         "behind",
         "repeat",
         "undo",
@@ -2580,6 +2803,71 @@ mod tests {
         assert_eq!(p.confirm_dispatch, ConfirmDispatch::Code);
         assert_eq!(Prefs::parse(None), Prefs::default());
         assert_eq!(Prefs::parse(Some(&json!("junk"))), Prefs::default());
+    }
+
+    #[test]
+    fn the_projects_are_all_or_a_list_and_changes_read_against_what_is_there() {
+        assert_eq!(check_pref("projects", &json!("all")).unwrap(), json!("all"));
+        assert_eq!(check_pref("projects", &json!(" only ")).unwrap(), json!("only"));
+        assert_eq!(
+            check_pref("projects", &json!([3, "1", 3, "#2"])).unwrap(),
+            json!([1, 2, 3]),
+            "deduplicated, in order, digits taken"
+        );
+        assert_eq!(check_pref("projects", &json!([])).unwrap(), json!([]));
+        assert_eq!(check_pref("projects", &json!({ "add": "4" })).unwrap(), json!({ "add": 4 }));
+        assert_eq!(check_pref("projects", &json!({ "remove": 4 })).unwrap(), json!({ "remove": 4 }));
+        for bad in [
+            json!([-1]),
+            json!([0]),
+            json!(["x"]),
+            json!({ "add": 1, "remove": 2 }),
+            json!({ "swap": { "expect": "all", "to": [] } }),
+            json!({ "id": 1 }),
+            json!("some"),
+            json!(3),
+            json!((1..=PROJECTS_MAX as i32 + 1).collect::<Vec<_>>()),
+        ] {
+            let e = check_pref("projects", &bad).unwrap_err();
+            assert!(e.contains("projects"), "{bad}: {e}");
+        }
+
+        let all = ProjectScope::All;
+        let list = ProjectScope::Only(vec![1, 3]);
+        let eligible = [5, 2, 7];
+        assert_eq!(ProjectsOp::Only.apply(&all, &eligible), ProjectScope::Only(vec![2, 5, 7]));
+        assert_eq!(ProjectsOp::Only.apply(&list, &eligible), list, "a list stays");
+        assert_eq!(ProjectsOp::Add(9).apply(&all, &eligible), all, "watched already");
+        assert_eq!(ProjectsOp::Remove(2).apply(&all, &eligible), all);
+        assert_eq!(ProjectsOp::Add(2).apply(&list, &eligible), ProjectScope::Only(vec![1, 2, 3]));
+        assert_eq!(ProjectsOp::Add(3).apply(&list, &eligible), list);
+        assert_eq!(ProjectsOp::Remove(1).apply(&list, &eligible), ProjectScope::Only(vec![3]));
+        assert_eq!(ProjectsOp::All.apply(&list, &eligible), all);
+        assert_eq!(ProjectsOp::Set(vec![8]).apply(&all, &eligible), ProjectScope::Only(vec![8]));
+        let undo = ProjectsOp::Swap { expect: list.clone(), to: all.clone() };
+        assert_eq!(undo.apply(&list, &eligible), all);
+        let moved = ProjectScope::Only(vec![1]);
+        assert_eq!(undo.apply(&moved, &eligible), moved, "changed since: it stays");
+        assert_eq!(ProjectsOp::from_card(&undo.to_json()).unwrap(), undo);
+
+        // Read leniently: what is neither form is "all", the rest untouched.
+        let p = Prefs::parse(Some(&json!({ "projects": { "x": 1 }, "reply_length": "short" })));
+        assert_eq!(p.projects, ProjectScope::All);
+        assert_eq!(p.reply_length, ReplyLength::Short);
+        let long: Vec<i32> = (1..=PROJECTS_MAX as i32 + 1).collect();
+        assert_eq!(
+            Prefs::parse(Some(&json!({ "projects": long }))).projects,
+            ProjectScope::Only(long.clone()),
+            "a list stays a list"
+        );
+        let full = ProjectScope::Only((1..=PROJECTS_MAX as i32).collect());
+        assert!(ProjectsOp::Add(9_999).apply(&full, &[]).checked().is_err());
+        assert!(ProjectsOp::Only.apply(&all, &long).checked().is_err());
+        assert!(ProjectsOp::Add(1).apply(&full, &[]).checked().is_ok());
+        let p = Prefs::parse(Some(&json!({ "projects": [4, 2] })));
+        assert_eq!(p.projects, ProjectScope::Only(vec![2, 4]));
+        assert_eq!(p.get("projects"), json!([2, 4]));
+        assert_eq!(Prefs::default().get("projects"), json!("all"));
     }
 
     #[test]

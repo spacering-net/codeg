@@ -144,14 +144,21 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             let folders = crate::db::service::folder_service::list_all_folder_details(&db.conn)
                 .await
                 .unwrap_or_default();
+            // Open in the workspace, and kept an eye on (`prefs.projects`).
+            let open: std::collections::HashSet<i32> =
+                super::projects::eligible_projects(db).await.iter().map(|f| f.id).collect();
+            let scope = engine.prefs().await.projects;
             let rows: Vec<Value> = folders
                 .iter()
                 .filter(|f| f.kind == FolderKind::Regular && f.parent_id.is_none())
                 .map(|f| {
+                    let is_open = open.contains(&f.id);
                     json!({
                         "id": f.id,
                         "name": f.alias.clone().unwrap_or_else(|| f.name.clone()),
                         "path": f.path,
+                        "open": is_open,
+                        "watched": is_open && scope.covers(f.id),
                     })
                 })
                 .collect();
@@ -163,7 +170,20 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
             }
             let text = rows
                 .iter()
-                .map(|r| format!("#{} {} — {}", r["id"], r["name"].as_str().unwrap_or(""), r["path"].as_str().unwrap_or("")))
+                .map(|r| {
+                    let mut marks: Vec<&str> = Vec::new();
+                    marks.push(if r["open"] == true { "open" } else { "closed" });
+                    if r["watched"] == true {
+                        marks.push("watched");
+                    }
+                    format!(
+                        "#{} {} — {} ({})",
+                        r["id"],
+                        r["name"].as_str().unwrap_or(""),
+                        r["path"].as_str().unwrap_or(""),
+                        marks.join(", ")
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             ToolOutcome::ok(text, json!({ "projects": rows }))

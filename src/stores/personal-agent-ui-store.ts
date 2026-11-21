@@ -39,6 +39,7 @@ export type SettingsPage =
   | "workers"
   | "executors"
   | "communication"
+  | "projects"
   | "proactive"
   | "automation"
   | "about"

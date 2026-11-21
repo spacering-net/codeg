@@ -17,7 +17,6 @@ import { useTranslations } from "next-intl"
 import {
   BellRing,
   FolderGit2,
-  FolderPlus,
   GitBranch,
   GitPullRequest,
   Hourglass,
@@ -67,7 +66,6 @@ const ICONS: Partial<Record<ProposalRule, LucideIcon>> = {
   pr_review: GitPullRequest,
   uncommitted: FolderGit2,
   idle: BellRing,
-  new_project: FolderPlus,
   behind: GitBranch,
   undo: Undo2,
   idle_bot: UserX,
@@ -81,7 +79,6 @@ const STEPS: Partial<Record<ProposalRule, readonly NoticeAction[]>> = {
   pr_review: ["summary"],
   uncommitted: ["open", "hand"],
   idle: ["hand", "close"],
-  new_project: ["watch"],
   behind: ["rebase"],
   undo: ["ask_first"],
   idle_bot: ["hide", "delete"],
@@ -95,7 +92,6 @@ const DONE_STATES = [
   "reminding",
   "opened",
   "closed",
-  "watching",
   "rebasing",
   "asking_first",
   "hidden",
@@ -119,7 +115,6 @@ function nameOf(rule: ProposalRule, f: Facts): string {
         .filter(Boolean)
         .join(" ")
     case "uncommitted":
-    case "new_project":
       return str(f, "name") ?? ""
     case "idle":
       return str(f, "summary") ?? ""
@@ -233,13 +228,6 @@ export function RuleCard({ item }: { item: NoticeItem }) {
           facts.worktree === true && str(facts, "project")
             ? t("worktreeOf", { project: str(facts, "project") ?? "" })
             : null,
-        ]
-          .filter(Boolean)
-          .join(" · ")
-      case "new_project":
-        return [
-          str(facts, "path"),
-          t("sessions", { n: num(facts, "sessions") ?? 1 }),
         ]
           .filter(Boolean)
           .join(" · ")

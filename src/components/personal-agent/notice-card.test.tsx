@@ -9,7 +9,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
-import type { TimelineRow } from "@/lib/types"
+import type { FolderDetail, TimelineRow } from "@/lib/types"
 
 const api = vi.hoisted(() => ({ personalAgentNoticeAct: vi.fn() }))
 vi.mock("@/lib/api", () => api)
@@ -30,8 +30,11 @@ vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({ openTab: vi.fn() }),
 }))
 
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
+
 import { buildMessageItems, type MessageItem } from "./message-items"
-import { NoticeCard } from "./notice-card"
+import { NoticeCard, pageOf } from "./notice-card"
 import { PageScopeContext, type PageScope } from "./shared"
 
 function card(data: Record<string, unknown>): TimelineRow {
@@ -420,6 +423,38 @@ describe("a settings change card", () => {
     expect(screen.queryByRole("button", { name: "See in settings" })).toBeNull()
   })
 
+  it("names the projects watched, and its settings are their page", () => {
+    useAppWorkspaceStore.setState({
+      folders: [
+        { id: 1, name: "app", alias: null },
+        { id: 2, name: "lib", alias: "Library" },
+        { id: 3, name: "notes", alias: null },
+      ] as unknown as FolderDetail[],
+    })
+    draw(
+      changed({
+        state: "applied",
+        why: "asked",
+        changes: [{ key: "prefs.projects", from: "all", to: [1, 2, 9, 3] }],
+      })
+    )
+    expect(screen.getByText("Your projects")).toBeInTheDocument()
+    expect(screen.getByText("All projects")).toBeInTheDocument()
+    expect(screen.getByText("app, Library, #9 and 1 more")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "See in settings" }))
+    expect(usePersonalAgentUi.getState().settings?.page).toBe("projects")
+    cleanup()
+    draw(
+      changed({
+        state: "applied",
+        why: "asked",
+        changes: [{ key: "prefs.projects", from: [1, 2], to: [] }],
+      })
+    )
+    expect(screen.getByText("app, Library")).toBeInTheDocument()
+    expect(screen.getByText("None")).toBeInTheDocument()
+  })
+
   it("lists what an undo had to leave", () => {
     draw(
       changed({
@@ -482,5 +517,13 @@ describe("tonight's work and the morning brief (6.4, 6.5)", () => {
     await waitFor(() =>
       expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(4, "accept", null)
     )
+  })
+})
+
+describe("where a change is set", () => {
+  it("sends the projects watched to their own page", () => {
+    expect(pageOf("prefs.projects")).toBe("projects")
+    expect(pageOf("prefs.reply_length")).toBe("communication")
+    expect(pageOf("prefs.rule_pr_review")).toBe("proactive")
   })
 })

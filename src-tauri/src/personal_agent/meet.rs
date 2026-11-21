@@ -6,11 +6,12 @@
 //!    call the owner (their system user name, or their own words) and what
 //!    to call the assistant (its name, or a new one). The first goes into
 //!    `USER.md`, the second is its name.
-//! 2. **The projects to connect**, under two lines about what it does: the
-//!    owner ticks the projects codeg has (opening another, connecting a
-//!    forge account), or skips it — everything works without.
+//! 2. **One thing right away?** A question, nothing to pick: the
+//!    assistants keep an eye on the owner's projects (every one, unless the
+//!    owner picked some in the settings — `prefs.projects`); shall it look
+//!    for one thing it can help with now? [Find one] or [Not now].
 //! 3. **One thing at once** (`starter.rs`): the first thing an assistant can
-//!    take off their hands in those projects — [Hand it to me] sends it as
+//!    take off their hands in the projects watched — [Hand it to me] sends it as
 //!    the owner's message, [Another one], [Not now]. With nothing to offer it
 //!    says it keeps an eye on them.
 //! 4. **What the assistants do on their own**: how much they may disturb
@@ -18,28 +19,24 @@
 //!    preferences and the desktop companion. A helper of their own is the
 //!    primary's to make when they ask it for one.
 //!
-//! The record lives on the primary's settings, under `meet`: how it began
-//! and the projects connected. Each card is raised once
-//! (by its subject).
+//! The record lives on the primary's settings, under `meet`: how it began.
+//! Each card is raised once (by its subject).
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::engine::{brain_of, PersonalAgentEngine};
 use super::starter::{self, LiveForge, Project};
 use super::workdir;
-use crate::db::entities::folder::{self, FolderKind};
 use crate::db::entities::personal_agent_notice::{
     self as notice_entity, NoticeKind, NoticeLevel, NoticeState,
 };
 use crate::db::entities::personal_agent_timeline::TimelineKind;
 use crate::db::service::personal_agent_service as svc;
 use crate::db::service::personal_agent_service::{NewNotice, NewRow};
-use crate::db::AppDatabase;
-use crate::forge::ForgeProvider;
 use crate::models::personal_agent::{PersonalAgentChange, PersonalAgentDraft, TimelineRow};
 use crate::models::system::AppLocale;
 
@@ -49,9 +46,6 @@ const NAME_SUBJECT: &str = "meet:name";
 const CONNECT_SUBJECT: &str = "meet:connect";
 const STARTER_SUBJECT: &str = "meet:starter";
 const PROMISES_SUBJECT: &str = "meet:promises";
-/// Projects the connect card lists, and how many may be connected.
-const LIST_MAX: usize = 30;
-const CONNECT_MAX: usize = 10;
 /// The longest a name for the owner may be.
 const CALL_MAX: usize = 60;
 /// One at a time in this process: a card raised once, a starter moved once.
@@ -59,20 +53,6 @@ static MEET: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// The looks on their way, by engine, card and look.
 static LOOKING: std::sync::LazyLock<std::sync::Mutex<HashSet<(usize, i32, i64)>>> =
     std::sync::LazyLock::new(Default::default);
-
-/// A project the connect card lists: where its remote is, and whether an
-/// account serves that forge.
-#[derive(Debug, Clone, Serialize)]
-pub struct MeetProject {
-    pub id: i32,
-    pub name: String,
-    pub path: String,
-    /// The forge of its `origin`, when it is one codeg speaks.
-    pub provider: Option<ForgeProvider>,
-    pub host: Option<String>,
-    /// A forge account serves it.
-    pub account: bool,
-}
 
 /// One answer on the name card: a choice's letter, or the owner's words.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -182,81 +162,6 @@ pub(super) fn with_call(text: &str, line: &str, call: &str) -> String {
     out
 }
 
-/// The projects codeg has open, most recent first: every open top-level
-/// folder of the owner's.
-async fn open_projects(db: &AppDatabase) -> Vec<folder::Model> {
-    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
-    folder::Entity::find()
-        .filter(folder::Column::DeletedAt.is_null())
-        .filter(folder::Column::IsOpen.eq(true))
-        .filter(folder::Column::ParentId.is_null())
-        .filter(folder::Column::Kind.eq(FolderKind::Regular))
-        .order_by_desc(folder::Column::LastOpenedAt)
-        .all(&db.conn)
-        .await
-        .unwrap_or_default()
-}
-
-/// A folder not deleted, by id.
-async fn folder_model(db: &AppDatabase, id: i32) -> Option<folder::Model> {
-    use sea_orm::EntityTrait;
-    folder::Entity::find_by_id(id)
-        .one(&db.conn)
-        .await
-        .ok()
-        .flatten()
-        .filter(|f| f.deleted_at.is_none())
-}
-
-fn project_name(f: &folder::Model) -> String {
-    f.alias.clone().unwrap_or_else(|| f.name.clone())
-}
-
-/// The connect card's list: each open project, its forge and whether an
-/// account serves it. Nothing is asked of the forge.
-pub async fn meet_projects(db: &AppDatabase) -> Vec<MeetProject> {
-    let mut out = Vec::new();
-    for f in open_projects(db).await.into_iter().take(LIST_MAX) {
-        let remote = crate::commands::forge::forge_remote_at(&db.conn, &f.path)
-            .await
-            .ok()
-            .flatten()
-            .filter(|r| r.supported);
-        let account = match remote.as_ref() {
-            Some(r) => crate::forge::auth::has_account(&db.conn, r.provider, &r.server_host).await,
-            None => false,
-        };
-        out.push(MeetProject {
-            id: f.id,
-            name: project_name(&f),
-            path: f.path.clone(),
-            provider: remote.as_ref().map(|r| r.provider),
-            host: remote.map(|r| r.server_host),
-            account,
-        });
-    }
-    out
-}
-
-/// The projects connected, from the record (`meet`).
-pub(super) fn connected_of(meet: &Value) -> Vec<i32> {
-    meet["projects"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_i64().and_then(|n| i32::try_from(n).ok()))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// The projects connected, from the primary's settings.
-pub(super) fn connected_in_settings(settings: &str) -> Vec<i32> {
-    serde_json::from_str::<Value>(settings)
-        .map(|s| connected_of(&s[MEET_KEY]))
-        .unwrap_or_default()
-}
-
 fn payload_of(n: &notice_entity::Model) -> Value {
     serde_json::from_str(&n.payload).unwrap_or(Value::Null)
 }
@@ -269,35 +174,6 @@ impl PersonalAgentEngine {
             .ok()
             .and_then(|s| s.get(MEET_KEY).cloned())
             .filter(|m| m.is_object())
-    }
-
-    async fn patch_meet(&self, patch: Value) {
-        let Ok(Some(primary)) = svc::primary_bot(&self.db.conn).await else {
-            return;
-        };
-        if let Err(e) =
-            svc::patch_settings(&self.db.conn, primary.id, &json!({ MEET_KEY: patch })).await
-        {
-            tracing::warn!("[personal-agent] the record of meeting the owner was not written: {e}");
-        }
-    }
-
-    /// One more project the owner wants an eye kept on (6.7's "new project"
-    /// card): connected as on the projects card. Whether it was not already.
-    pub(super) async fn connect_project(&self, id: i32) -> Result<bool, String> {
-        let _one = MEET.lock().await;
-        let mut ids = connected_of(&self.meet_record().await.unwrap_or(Value::Null));
-        if ids.contains(&id) {
-            return Ok(false);
-        }
-        ids.push(id);
-        let Ok(Some(primary)) = svc::primary_bot(&self.db.conn).await else {
-            return Err("there is no primary assistant".into());
-        };
-        svc::patch_settings(&self.db.conn, primary.id, &json!({ MEET_KEY: { "projects": ids } }))
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(true)
     }
 
     /// Raise a card of getting to know the owner, once: `None` when it was
@@ -548,62 +424,33 @@ impl PersonalAgentEngine {
         self.emit(PersonalAgentChange::Status);
         let _one = MEET.lock().await;
         if let Err(e) = self.raise_connect().await {
-            tracing::warn!("[personal-agent] the projects card was not written: {e}");
+            tracing::warn!("[personal-agent] the card asking to find one thing was not written: {e}");
         }
         Ok(row)
     }
 
-    // ── 2. the projects ─────────────────────────────────────────────────────
+    // ── 2. one thing right away? ────────────────────────────────────────────
 
     async fn raise_connect(&self) -> Result<Option<TimelineRow>, String> {
         self.raise_meet_card(
             NoticeKind::Onboarding,
             CONNECT_SUBJECT,
-            "Connect your projects, and I will find one thing I can help with right away.".into(),
+            "Shall I find one thing I can help with right away?".into(),
             json!({ "notice": "onboarding", "purpose": "connect", "state": "open" }),
             json!({ "purpose": "connect" }),
         )
         .await
     }
 
-    /// The owner connected these projects on the projects card: one thing
-    /// at once in them, and what the assistants do on their own.
-    pub async fn meet_connect(
-        self: &Arc<Self>,
-        notice_id: i32,
-        folders: &[i32],
-    ) -> Result<TimelineRow, String> {
+    /// The owner said [Find one]: one thing at once in the projects watched,
+    /// and what the assistants do on their own.
+    pub async fn meet_go(self: &Arc<Self>, notice_id: i32) -> Result<TimelineRow, String> {
         let notice = svc::get_notice_of(&self.db.conn, self.bot().await, notice_id)
             .await
             .map_err(|e| e.to_string())?
             .ok_or("no such card")?;
         if notice.kind != NoticeKind::Onboarding || payload_of(&notice)["purpose"] != "connect" {
-            return Err("this is not the projects card".into());
-        }
-        let mut ids: Vec<i32> = Vec::new();
-        for id in folders {
-            if !ids.contains(id) {
-                ids.push(*id);
-            }
-        }
-        if ids.is_empty() {
-            return Err("pick a project, or skip this".into());
-        }
-        if ids.len() > CONNECT_MAX {
-            return Err(format!("connect at most {CONNECT_MAX} projects at once"));
-        }
-        let mut projects: Vec<Project> = Vec::new();
-        for id in &ids {
-            let f = folder_model(&self.db, *id)
-                .await
-                .ok_or_else(|| format!("no project #{id}"))?;
-            if f.parent_id.is_some() || f.kind != FolderKind::Regular {
-                return Err(format!("#{id} is not a project"));
-            }
-            projects.push(Project {
-                id: f.id,
-                name: project_name(&f),
-            });
+            return Err("this is not the card asking to find one thing".into());
         }
         let _one = MEET.lock().await;
         if !svc::move_notice(
@@ -617,15 +464,17 @@ impl PersonalAgentEngine {
         {
             return Err("this card was answered already".into());
         }
-        self.patch_meet(json!({ "projects": ids })).await;
+        let projects: Vec<Project> =
+            super::projects::watched_projects(&self.db, &self.prefs().await)
+                .await
+                .iter()
+                .map(|f| Project {
+                    id: f.id,
+                    name: super::projects::project_name(f),
+                })
+                .collect();
         let row = self
-            .set_card_data(&notice, |d| {
-                d["state"] = "connected".into();
-                d["projects"] = json!(projects
-                    .iter()
-                    .map(|p| json!({ "id": p.id, "name": p.name }))
-                    .collect::<Vec<_>>());
-            })
+            .set_card_data(&notice, |d| d["state"] = "connected".into())
             .await?;
         if let Err(e) = self.raise_first_thing(projects).await {
             tracing::warn!("[personal-agent] the first-thing card was not written: {e}");
@@ -636,6 +485,20 @@ impl PersonalAgentEngine {
             );
         }
         Ok(row)
+    }
+
+    /// Of the projects a first-thing card looks in, the ones still watched.
+    async fn still_watched(&self, projects: Vec<Project>) -> Vec<Project> {
+        let watched: HashSet<i32> =
+            super::projects::watched_projects(&self.db, &self.prefs().await)
+                .await
+                .iter()
+                .map(|f| f.id)
+                .collect();
+        projects
+            .into_iter()
+            .filter(|p| watched.contains(&p.id))
+            .collect()
     }
 
     /// Change a card's row data, and tell the page.
@@ -668,7 +531,7 @@ impl PersonalAgentEngine {
     }
 
     /// The owner's answer on a card of getting to know them: `skip` on the
-    /// projects card; `done` on what the assistants do.
+    /// card asking to find one thing; `done` on what the assistants do.
     pub(super) async fn act_on_onboarding(
         self: &Arc<Self>,
         notice: &notice_entity::Model,
@@ -779,6 +642,7 @@ impl PersonalAgentEngine {
             return;
         }
         let (projects, seen) = starter_inputs(&data);
+        let projects = self.still_watched(projects).await;
         self.look_for_starter(n.id, data["gen"].as_i64().unwrap_or(0), projects, seen);
     }
 
@@ -940,6 +804,7 @@ impl PersonalAgentEngine {
             }
             "next" => {
                 let (projects, mut seen) = starter_inputs(&data);
+                let projects = self.still_watched(projects).await;
                 if let Some(k) = data["lead"]["key"].as_str() {
                     seen.insert(k.to_string());
                 }
@@ -989,9 +854,6 @@ impl PersonalAgentEngine {
         .await
     }
 
-}
-
-impl PersonalAgentEngine {
 }
 
 /// The projects a first-thing card looks in, and what it showed already.

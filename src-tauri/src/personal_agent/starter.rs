@@ -9,10 +9,14 @@
 //! 5. a worktree with changes no one has touched for a day.
 //!
 //! The forge is read through the workbench's own reads, with the account
-//! that serves the project's remote; a project with no forge, or no account
-//! for it, or a forge that cannot answer one of the questions, just has
-//! nothing of that kind. What was shown already is passed back in, so
-//! [Another one] moves on.
+//! that serves the project's remote — only for projects an account is
+//! stored for, as this machine says ([`ForgeReads::served`]), the first
+//! [`FORGE_PROJECTS`] of them; a project with no forge, or no account for
+//! it, or a forge that cannot answer one of the questions, just has
+//! nothing of that kind. The forge's questions (1–3) and the local ones
+//! (4–5) are asked side by side, each with its own time: a slow forge
+//! leaves the local answer standing. What was shown already is passed back
+//! in, so [Another one] moves on.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -45,10 +49,16 @@ const FILES_STATTED: usize = 2_000;
 /// The longest the whole search may take: a forge that hangs is a forge
 /// with nothing to say.
 pub(super) const FIND_TIMEOUT: Duration = Duration::from_secs(90);
+/// The forge's questions take this long at most, the local ones this long;
+/// both within [`FIND_TIMEOUT`].
+const FORGE_BUDGET: Duration = Duration::from_secs(60);
+const LOCAL_BUDGET: Duration = Duration::from_secs(75);
+/// The projects whose forge is asked, at most.
+const FORGE_PROJECTS: usize = 8;
 const GIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One project to look in: its id and the name it goes by.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Project {
     pub id: i32,
     pub name: String,
@@ -67,6 +77,10 @@ pub(super) trait ForgeReads: Send + Sync {
     async fn assigned(&self, project: i32) -> Result<Vec<ForgeIssueRow>, String>;
     /// The owner's login on the project's forge.
     async fn login(&self, project: i32) -> Option<String>;
+    /// Whether an account stored on this machine serves the project's
+    /// remote — read off git and the stored accounts, nothing asked of a
+    /// forge.
+    async fn served(&self, project: i32) -> super::projects::Served;
 }
 
 /// The workbench's reads.
@@ -141,6 +155,13 @@ impl ForgeReads for LiveForge<'_> {
             .ok()
             .map(|i| i.username)
     }
+
+    async fn served(&self, project: i32) -> super::projects::Served {
+        let Ok(Some(f)) = folder::Entity::find_by_id(project).one(&self.db.conn).await else {
+            return super::projects::Served::No;
+        };
+        (&super::projects::forge_status(self.db, &f.path).await).into()
+    }
 }
 
 /// The checks that failed and are not allowed to.
@@ -169,13 +190,51 @@ fn item_lead(kind: &str, key: String, p: &Project, row: &ForgeIssueRow) -> Value
     })
 }
 
-/// The first lead not in `seen`, or `None` when there is nothing to offer.
+/// The first lead not in `seen`, or `None` when there is nothing to offer:
+/// the forge's, when it has one in its time; else the local one.
 pub(super) async fn find(
     db: &AppDatabase,
     forge: &dyn ForgeReads,
     projects: &[Project],
     seen: &HashSet<String>,
     now: DateTime<Utc>,
+) -> Option<Value> {
+    find_within(db, forge, projects, seen, now, FORGE_BUDGET, LOCAL_BUDGET).await
+}
+
+/// [`find`], the forge's questions given `forge_budget`, the local ones
+/// `local_budget`.
+pub(super) async fn find_within(
+    db: &AppDatabase,
+    forge: &dyn ForgeReads,
+    projects: &[Project],
+    seen: &HashSet<String>,
+    now: DateTime<Utc>,
+    forge_budget: Duration,
+    local_budget: Duration,
+) -> Option<Value> {
+    let from_forge = tokio::time::timeout(forge_budget, async {
+        let mut served: Vec<Project> = Vec::new();
+        for p in projects {
+            if served.len() >= FORGE_PROJECTS {
+                break;
+            }
+            if forge.served(p.id).await == super::projects::Served::Yes {
+                served.push(p.clone());
+            }
+        }
+        forge_lead(forge, &served, seen).await
+    });
+    let from_here = tokio::time::timeout(local_budget, local_lead(db, projects, seen, now));
+    let (forge, local) = tokio::join!(from_forge, from_here);
+    forge.ok().flatten().or(local.ok().flatten())
+}
+
+/// Steps 1–3: what the forge has for the owner.
+async fn forge_lead(
+    forge: &dyn ForgeReads,
+    projects: &[Project],
+    seen: &HashSet<String>,
 ) -> Option<Value> {
     // 1. A pull request whose checks failed: the owner's own first.
     for p in projects {
@@ -237,6 +296,16 @@ pub(super) async fn find(
             ));
         }
     }
+    None
+}
+
+/// Steps 4–5: what is left at home.
+async fn local_lead(
+    db: &AppDatabase,
+    projects: &[Project],
+    seen: &HashSet<String>,
+    now: DateTime<Utc>,
+) -> Option<Value> {
     let ids: HashSet<i32> = projects.iter().map(|p| p.id).collect();
     // 4. A failed board task no assistant is behind.
     let folders = Folders::load(db).await;

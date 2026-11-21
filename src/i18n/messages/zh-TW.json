@@ -10150,7 +10150,8 @@
         "communication": "溝通",
         "proactive": "主動與通知",
         "automation": "派活與自動",
-        "about": "了解你"
+        "about": "了解你",
+        "projects": "你的專案"
       },
       "pages": {
         "communicationNote": "語氣與稱呼不在這一頁：寫在各助手的 SOUL.md 和主助手的 USER.md 裡。",
@@ -10335,6 +10336,13 @@
           "title": "「明天上午」是",
           "hint": "「明天上午」指的時刻。"
         },
+        "projects": {
+          "title": "你的專案",
+          "hint": "助手替你留意哪些專案。",
+          "all": "所有專案",
+          "more": "{names} 等 {count} 個",
+          "none": "一個都不盯"
+        },
         "level_reminder": {
           "title": "提醒",
           "hint": "你設的提醒到點了。"
@@ -10486,7 +10494,7 @@
         },
         "level_proposal_low": {
           "title": "提議：其他",
-          "hint": "改動沒提交、事項太久沒動、新專案、分支落後、重複的請求。"
+          "hint": "改動沒提交、事項太久沒動、分支落後、重複的請求。"
         },
         "rule_failed": {
           "title": "失敗沒人管",
@@ -10508,7 +10516,7 @@
         },
         "rule_pr_review": {
           "title": "PR 等你審查",
-          "hint": "在你連上的專案裡；從 codeg 第一次看到這個請求時算起。",
+          "hint": "在你盯著的專案裡；從 codeg 第一次看到這個請求時算起。",
           "on": "開",
           "off": "關"
         },
@@ -10521,12 +10529,6 @@
         "rule_idle": {
           "title": "事項太久沒動",
           "hint": "沒收尾的事項一直沒有變化。",
-          "on": "開",
-          "off": "關"
-        },
-        "rule_new_project": {
-          "title": "新專案",
-          "hint": "codeg 裡加了新專案，你在裡面開過工作階段：要不要幫你盯著？",
           "on": "開",
           "off": "關"
         },
@@ -10892,6 +10894,22 @@
         "new": "新建（用大腦同一個 agent）",
         "none": "沒有",
         "off": "（已停用）"
+      },
+      "projects": {
+        "about": "助手會在這些專案裡替你留意等你審查的 PR，第一次見面時也從這裡找能幫你做的事。",
+        "scope": "盯哪些專案",
+        "all": "所有專案",
+        "allHint": "以後新加的也算。",
+        "only": "只盯選中的專案",
+        "onlyHint": "新加的專案不會自動加入，要盯就在這裡勾上。",
+        "loading": "正在讀取你的專案…",
+        "empty": "codeg 裡還沒有專案。",
+        "openFolder": "開啟一個專案資料夾",
+        "onForge": "在 {forge} 上",
+        "noAccount": "在 {forge} 上，還沒連帳號",
+        "noForge": "沒有連著程式碼託管",
+        "connectAccount": "連接帳號",
+        "note": "關閉的專案不會被盯，重新開啟後自動回來。"
       }
     },
     "statusWord": {
@@ -11818,23 +11836,22 @@
         "skipped": "先跳過了稱呼"
       },
       "connect": {
-        "heading": "你的專案",
-        "about1": "你不在的時候，我也替你盯著派出去的工作和 PR。",
-        "about2": "連上你的儲存庫，我能看 PR、CI 和議題。",
-        "prompt": "連上你的專案，我馬上找一件能幫你做的事。",
-        "loading": "正在讀取你的專案…",
-        "none": "codeg 裡還沒有開啟的專案。",
-        "onForge": "在 {forge} 上",
-        "noAccount": "在 {forge} 上，還沒連帳號",
-        "noForge": "沒有連著程式碼託管",
-        "connectAccount": "連接帳號",
-        "skipHint": "可以跳過，跳過了照樣能用。",
-        "connect": "連上{count, plural, =0 {} other { # 個專案}}",
+        "heading": "馬上幫你做一件事",
+        "about": "你的專案我都會幫你留意，有 PR 等你審查會告訴你。",
+        "aboutOnly": "你選的專案我都會幫你留意，有 PR 等你審查會告訴你。",
+        "noProjects": "codeg 裡還沒有專案，開啟一個之後我就能幫你留意。",
+        "ask": "要不要我現在就去找一件能幫你做的事？",
+        "settingsHint": "盯哪些專案，隨時可以在設定裡改。",
+        "settings": "設定",
+        "go": "現在就找",
+        "notNow": "先不用",
         "openFolder": "開啟一個專案資料夾",
-        "skip": "跳過",
+        "accountHint": "連上 {forge} 帳號，我還能看 PR、CI 和議題。",
+        "connectAccount": "連接帳號",
+        "went": "好，去找了。",
+        "skipped": "先不找了。之後隨時叫我。",
         "connected": "連上了：{projects}",
-        "joiner": "、",
-        "skipped": "先跳過了。之後隨時跟我說說你的專案。"
+        "joiner": "、"
       },
       "starter": {
         "heading": "我能先幫你做這件",
@@ -12286,7 +12303,6 @@
       "openPr": "開啟 PR",
       "byAuthor": "{author} 提的",
       "worktreeOf": "{project} 的工作樹",
-      "sessions": "裡面有 {n} 個工作階段",
       "behindDetail": "{branch} 落後於 {base}，合併會有衝突。",
       "heading": {
         "failed": "失敗了，沒人處理",
@@ -12295,7 +12311,6 @@
         "pr_review": "PR 等你審查",
         "uncommitted": "改動還沒提交",
         "idle": "事項很久沒動了",
-        "new_project": "新專案",
         "behind": "分支落後且有衝突",
         "undo": "你撤銷的改動",
         "idle_bot": "閒著的工作助手"
@@ -12328,9 +12343,6 @@
           "hand": "繼續跟",
           "close": "關掉"
         },
-        "new_project": {
-          "watch": "以後幫我盯這個專案"
-        },
         "behind": {
           "rebase": "派人 rebase"
         },
@@ -12349,7 +12361,6 @@
         "reminding": "明天上午提醒你。",
         "opened": "已開啟。",
         "closed": "事項已關掉。",
-        "watching": "以後會幫你盯這個專案。",
         "rebasing": "已派人 rebase。",
         "asking_first": "以後你要改的設定會先給你看，點了才改。",
         "hidden": "已隱藏，在隱藏的助手裡還能找到。",
@@ -12390,7 +12401,7 @@
         },
         "pr_review": {
           "title": "PR 等你審查",
-          "hint": "在你連上的專案裡；從 codeg 第一次看到這個請求時算起。"
+          "hint": "在你盯著的專案裡；從 codeg 第一次看到這個請求時算起。"
         },
         "uncommitted": {
           "title": "改動沒提交",
@@ -12399,10 +12410,6 @@
         "idle": {
           "title": "事項太久沒動",
           "hint": "沒收尾的事項一直沒有變化。"
-        },
-        "new_project": {
-          "title": "新專案",
-          "hint": "codeg 裡加了新專案，你在裡面開過工作階段：要不要幫你盯著？"
         },
         "behind": {
           "title": "分支落後",

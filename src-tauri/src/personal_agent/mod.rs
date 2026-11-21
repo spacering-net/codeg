@@ -57,6 +57,7 @@ pub mod pr_auto;
 pub mod prefs;
 pub mod presence;
 pub mod profile;
+pub mod projects;
 pub mod reach;
 pub mod reminders;
 pub mod routines;

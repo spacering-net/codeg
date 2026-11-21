@@ -290,6 +290,21 @@ pub async fn patch_settings(
     Ok(agent::Entity::find_by_id(id).one(conn).await?)
 }
 
+/// The opening statement of a transaction that reads an assistant's row
+/// and then writes it: a write that changes nothing, so the transaction
+/// holds the write lock from its start. A deferred transaction that reads
+/// first and writes later fails with `SQLITE_BUSY_SNAPSHOT` when another
+/// connection commits in between (see `canvas_service::claim_writer`).
+/// Whether the row is there.
+pub async fn claim_row(conn: &impl ConnectionTrait, id: i32) -> Result<bool, DbError> {
+    let res = agent::Entity::update_many()
+        .col_expr(agent::Column::Revision, Expr::col(agent::Column::Revision).into())
+        .filter(agent::Column::Id.eq(id))
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected > 0)
+}
+
 /// [`patch_settings`], only while the value at JSON `path` (`$.a.b`) is
 /// `expect` (`None`: absent or null) — the check and the write one
 /// statement, so a save in between is never overwritten. Whether it wrote.

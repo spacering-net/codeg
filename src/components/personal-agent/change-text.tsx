@@ -10,6 +10,7 @@
 import { useTranslations } from "next-intl"
 
 import type { AssistantLabelSnapshot, ChangedItem } from "@/lib/types"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 
 import { choiceKey, isClockItem } from "./settings/pref-pages"
 
@@ -55,6 +56,9 @@ function selectionText(v: unknown): string | null {
     .join(" · ")
 }
 
+/** The projects a list names, shown by name, at most this many. */
+const PROJECTS_NAMED = 3
+
 /** A long text, cut to a line for a change's row. */
 export function clip(text: string, max = 80): string {
   const one = text.replace(/\s+/g, " ").trim()
@@ -68,6 +72,27 @@ export function useChangeText(names: Names = {}) {
   const tp = useTranslations("PersonalAgent.settings.prefs")
   const tt = useTranslations("PersonalAgent.notice.changed.team")
   const tf = useTranslations("PersonalAgent.bots.face")
+  const tj = useTranslations("PersonalAgent.meet.connect")
+  const folders = useAppWorkspaceStore((s) => s.folders)
+  /** The projects watched: "all", or the projects by name — one codeg no
+   *  longer has by its id. */
+  const projectsText = (v: unknown): string | null => {
+    if (v === "all") return tp("projects.all")
+    if (!Array.isArray(v)) return null
+    if (v.length === 0) return tp("projects.none")
+    const names = v.map((id) => {
+      const f = folders.find((x) => x.id === id)
+      return f ? f.alias || f.name : `#${id}`
+    })
+    const shown = names.slice(0, PROJECTS_NAMED).join(tj("joiner"))
+    return names.length > PROJECTS_NAMED
+      ? tp("projects.more", {
+          names: shown,
+          count: names.length,
+          rest: names.length - PROJECTS_NAMED,
+        })
+      : shown
+  }
   const ownLabel: Record<string, string> = {
     auto_compact_percent: ts("autoCompact"),
     compact_command: ts("compactCommand"),
@@ -113,6 +138,10 @@ export function useChangeText(names: Names = {}) {
     }
     if (team?.field === "persona" && typeof v === "string") {
       return v.trim() ? clip(v) : tt("empty")
+    }
+    if (key === "prefs.projects") {
+      const text = projectsText(v)
+      if (text) return text
     }
     // A zone is its own name; only `system` has words.
     if (key === "prefs.time_zone" && typeof v === "string") {

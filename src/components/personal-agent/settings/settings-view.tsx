@@ -19,6 +19,7 @@ import {
   ArrowLeft,
   BellRing,
   Bot,
+  FolderGit2,
   MessagesSquare,
   UserRound,
   Users,
@@ -48,6 +49,7 @@ import {
 
 import { AboutPage } from "./about-page"
 import { AutomationPage, CommunicationPage, ProactivePage } from "./pref-pages"
+import { ProjectsPage } from "./projects-page"
 import { ExecutorsPage, WorkersPage } from "./team-pages"
 
 /** The navigation: the team, then the preferences. */
@@ -55,7 +57,7 @@ const GROUPS: { label: "team" | "prefs"; pages: SettingsPage[] }[] = [
   { label: "team", pages: ["workers", "executors"] },
   {
     label: "prefs",
-    pages: ["communication", "proactive", "automation", "about"],
+    pages: ["communication", "projects", "proactive", "automation", "about"],
   },
 ]
 
@@ -63,6 +65,7 @@ const PAGE_ICONS: Record<SettingsPage, LucideIcon> = {
   workers: Users,
   executors: Bot,
   communication: MessagesSquare,
+  projects: FolderGit2,
   proactive: BellRing,
   automation: Zap,
   about: UserRound,
@@ -103,6 +106,10 @@ export function SettingsView() {
       case "communication":
         return account ? (
           <CommunicationPage account={account} disabled={accountLocked} />
+        ) : null
+      case "projects":
+        return account ? (
+          <ProjectsPage account={account} disabled={accountLocked} />
         ) : null
       case "proactive":
         return account ? (

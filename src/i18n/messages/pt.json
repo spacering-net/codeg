@@ -10150,7 +10150,8 @@
         "communication": "Comunicação",
         "proactive": "Proatividade e notificações",
         "automation": "Atribuição e automação",
-        "about": "Sobre você"
+        "about": "Sobre você",
+        "projects": "Seus projetos"
       },
       "pages": {
         "communicationNote": "O tom e como chamam você não ficam aqui: escreva isso no SOUL.md de cada assistente e no USER.md do principal.",
@@ -10335,6 +10336,13 @@
           "title": "Amanhã de manhã às",
           "hint": "A hora que “amanhã de manhã” significa."
         },
+        "projects": {
+          "title": "Seus projetos",
+          "hint": "Os projetos que os assistentes acompanham.",
+          "all": "Todos os projetos",
+          "more": "{names} e mais {rest}",
+          "none": "Nenhum"
+        },
         "level_reminder": {
           "title": "Lembretes",
           "hint": "Vence um lembrete que você definiu."
@@ -10486,7 +10494,7 @@
         },
         "level_proposal_low": {
           "title": "Outras propostas",
-          "hint": "Alterações não commitadas, assuntos parados, projetos novos, branches atrasados, pedidos repetidos."
+          "hint": "Alterações não commitadas, assuntos parados, branches atrasados, pedidos repetidos."
         },
         "rule_failed": {
           "title": "Falha sem ninguém cuidando",
@@ -10508,7 +10516,7 @@
         },
         "rule_pr_review": {
           "title": "Um PR esperando sua revisão",
-          "hint": "Nos projetos conectados; conta desde que o codeg viu o pedido.",
+          "hint": "Nos projetos acompanhados; conta desde que o codeg viu o pedido.",
           "on": "Ligado",
           "off": "Desligado"
         },
@@ -10521,12 +10529,6 @@
         "rule_idle": {
           "title": "Um assunto parado",
           "hint": "Um assunto aberto sem mudanças.",
-          "on": "Ligado",
-          "off": "Desligado"
-        },
-        "rule_new_project": {
-          "title": "Um projeto novo",
-          "hint": "Um projeto novo no codeg em que você trabalha: acompanhar?",
           "on": "Ligado",
           "off": "Desligado"
         },
@@ -10892,6 +10894,22 @@
         "new": "Nova, no agente do cérebro",
         "none": "Nenhuma",
         "off": "(desativada)"
+      },
+      "projects": {
+        "about": "Os assistentes ficam de olho nesses projetos para PRs que esperam sua revisão, e procuram neles a primeira coisa em que podem ajudar.",
+        "scope": "Quais projetos acompanhar",
+        "all": "Todos os projetos",
+        "allHint": "Os novos também.",
+        "only": "Só os que eu escolher",
+        "onlyHint": "Projetos novos não entram sozinhos; marque-os aqui para acompanhá-los.",
+        "loading": "Lendo seus projetos…",
+        "empty": "O codeg ainda não tem projetos.",
+        "openFolder": "Abrir uma pasta de projeto",
+        "onForge": "No {forge}",
+        "noAccount": "No {forge}, sem conta conectada",
+        "noForge": "Sem hospedagem de código",
+        "connectAccount": "Conectar conta",
+        "note": "Um projeto fechado não é acompanhado; ele volta quando você o abrir de novo."
       }
     },
     "statusWord": {
@@ -11818,23 +11836,22 @@
         "skipped": "Pulamos como nos chamar"
       },
       "connect": {
-        "heading": "Seus projetos",
-        "about1": "Enquanto você está fora, fico de olho no trabalho que distribuí e nos seus PRs.",
-        "about2": "Com seus repositórios conectados, vejo PRs, CI e issues.",
-        "prompt": "Conecte seus projetos e eu acho já uma coisa em que posso ajudar.",
-        "loading": "Lendo seus projetos…",
-        "none": "O codeg ainda não tem nenhum projeto aberto.",
-        "onForge": "No {forge}",
-        "noAccount": "No {forge}, sem conta conectada",
-        "noForge": "Sem hospedagem de código",
-        "connectAccount": "Conectar conta",
-        "skipHint": "Dá para pular; tudo funciona do mesmo jeito.",
-        "connect": "Conectar{count, plural, =0 {} one { # projeto} other { # projetos}}",
+        "heading": "Uma coisa agora mesmo",
+        "about": "Fico de olho em todos os seus projetos e aviso quando um PR espera sua revisão.",
+        "aboutOnly": "Fico de olho nos projetos que você escolheu e aviso quando um PR espera sua revisão.",
+        "noProjects": "O codeg ainda não tem projetos; abra um e eu fico de olho.",
+        "ask": "Quer que eu procure agora uma coisa em que posso ajudar?",
+        "settingsHint": "Quais projetos eu acompanho você muda nas configurações quando quiser.",
+        "settings": "Configurações",
+        "go": "Procurar agora",
+        "notNow": "Agora não",
         "openFolder": "Abrir uma pasta de projeto",
-        "skip": "Pular",
+        "accountHint": "Conecte sua conta do {forge} e eu também vejo PRs, CI e issues.",
+        "connectAccount": "Conectar conta",
+        "went": "Certo, vou procurar.",
+        "skipped": "Agora não, então. Me chame quando quiser.",
         "connected": "Conectados: {projects}",
-        "joiner": ", ",
-        "skipped": "Pulado por enquanto. Me fale de um projeto quando quiser."
+        "joiner": ", "
       },
       "starter": {
         "heading": "Posso começar ajudando com isto",
@@ -12286,7 +12303,6 @@
       "openPr": "Abrir o PR",
       "byAuthor": "de {author}",
       "worktreeOf": "worktree de {project}",
-      "sessions": "{n, plural, one {# sessão} other {# sessões}} nele",
       "behindDetail": "{branch} está atrás de {base} e o merge teria conflitos.",
       "heading": {
         "failed": "Falhou e ninguém está cuidando",
@@ -12295,7 +12311,6 @@
         "pr_review": "Um PR espera sua revisão",
         "uncommitted": "Alterações não commitadas",
         "idle": "Um assunto parado",
-        "new_project": "Um projeto novo",
         "behind": "Branch atrasado, com conflitos",
         "undo": "Alterações que você desfez",
         "idle_bot": "Um assistente de trabalho ocioso"
@@ -12328,9 +12343,6 @@
           "hand": "Continuar acompanhando",
           "close": "Fechar"
         },
-        "new_project": {
-          "watch": "Acompanhar este projeto"
-        },
         "behind": {
           "rebase": "Pedir um rebase"
         },
@@ -12349,7 +12361,6 @@
         "reminding": "Lembrete amanhã de manhã.",
         "opened": "Aberto.",
         "closed": "Assunto fechado.",
-        "watching": "Os assistentes agora acompanham este projeto.",
         "rebasing": "Devolvido para rebase.",
         "asking_first": "As alterações que você pedir virão primeiro como cartão.",
         "hidden": "Ocultado. Ele continua entre os assistentes ocultos.",
@@ -12390,7 +12401,7 @@
         },
         "pr_review": {
           "title": "Um PR esperando sua revisão",
-          "hint": "Nos projetos conectados; conta desde que o codeg viu o pedido."
+          "hint": "Nos projetos acompanhados; conta desde que o codeg viu o pedido."
         },
         "uncommitted": {
           "title": "Alterações não commitadas",
@@ -12399,10 +12410,6 @@
         "idle": {
           "title": "Um assunto parado",
           "hint": "Um assunto aberto sem mudanças."
-        },
-        "new_project": {
-          "title": "Um projeto novo",
-          "hint": "Um projeto novo no codeg em que você trabalha: acompanhar?"
         },
         "behind": {
           "title": "Branch atrasado",

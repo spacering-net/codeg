@@ -10149,7 +10149,8 @@
         "communication": "Communication",
         "proactive": "Proactive & notifications",
         "automation": "Dispatch & automation",
-        "about": "About you"
+        "about": "About you",
+        "projects": "Your projects"
       },
       "pages": {
         "communicationNote": "Tone and how they address you are not here: write them in each assistant's SOUL.md, and in the primary's USER.md.",
@@ -10334,6 +10335,13 @@
           "title": "Tomorrow morning at",
           "hint": "The time “tomorrow morning” means."
         },
+        "projects": {
+          "title": "Your projects",
+          "hint": "The projects the assistants keep an eye on.",
+          "all": "All projects",
+          "more": "{names} and {rest} more",
+          "none": "None"
+        },
         "level_reminder": {
           "title": "Reminders",
           "hint": "A reminder you set comes due."
@@ -10485,7 +10493,7 @@
         },
         "level_proposal_low": {
           "title": "codeg's other proposals",
-          "hint": "Uncommitted changes, quiet matters, new projects, branches behind, repeated requests."
+          "hint": "Uncommitted changes, quiet matters, branches behind, repeated requests."
         },
         "rule_failed": {
           "title": "Work failed with nobody on it",
@@ -10507,7 +10515,7 @@
         },
         "rule_pr_review": {
           "title": "A pull request waiting for your review",
-          "hint": "In the projects you connected; counted from when codeg first saw the request.",
+          "hint": "In the projects you watch; counted from when codeg first saw the request.",
           "on": "On",
           "off": "Off"
         },
@@ -10520,12 +10528,6 @@
         "rule_idle": {
           "title": "A matter gone quiet",
           "hint": "An open matter with no change.",
-          "on": "On",
-          "off": "Off"
-        },
-        "rule_new_project": {
-          "title": "A new project",
-          "hint": "A project added to codeg that you work in: keep an eye on it?",
           "on": "On",
           "off": "Off"
         },
@@ -10892,6 +10894,22 @@
         "new": "New, on the brain's agent",
         "none": "None",
         "off": "(off)"
+      },
+      "projects": {
+        "about": "The assistants keep an eye on these projects for PRs waiting for your review, and look in them for the first thing they can help with.",
+        "scope": "Which projects to watch",
+        "all": "All projects",
+        "allHint": "New ones too.",
+        "only": "Only the projects I pick",
+        "onlyHint": "New projects aren't added on their own; tick them here to watch them.",
+        "loading": "Reading your projects…",
+        "empty": "codeg has no project yet.",
+        "openFolder": "Open a project folder",
+        "onForge": "On {forge}",
+        "noAccount": "On {forge}, no account connected",
+        "noForge": "No code host",
+        "connectAccount": "Connect account",
+        "note": "A closed project isn't watched; it's back when you open it again."
       }
     },
     "statusWord": {
@@ -11818,23 +11836,22 @@
         "skipped": "Skipped what to call each other"
       },
       "connect": {
-        "heading": "Your projects",
-        "about1": "While you're away, I keep an eye on the work I handed out and on your PRs.",
-        "about2": "With your repositories connected, I can see PRs, CI and issues.",
-        "prompt": "Connect your projects, and I'll find one thing I can help with right away.",
-        "loading": "Reading your projects…",
-        "none": "codeg has no project open yet.",
-        "onForge": "On {forge}",
-        "noAccount": "On {forge}, no account connected",
-        "noForge": "No code host",
-        "connectAccount": "Connect account",
-        "skipHint": "You can skip this; everything works without it.",
-        "connect": "Connect {count, plural, =0 {} one {# project} other {# projects}}",
+        "heading": "One thing right away",
+        "about": "I keep an eye on all your projects and tell you when a PR waits for your review.",
+        "aboutOnly": "I keep an eye on the projects you picked and tell you when a PR waits for your review.",
+        "noProjects": "codeg has no project yet; open one and I'll keep an eye on it.",
+        "ask": "Shall I find one thing I can help with right now?",
+        "settingsHint": "Which projects I watch, you can change in the settings any time.",
+        "settings": "Settings",
+        "go": "Find one now",
+        "notNow": "Not now",
         "openFolder": "Open a project folder",
-        "skip": "Skip",
+        "accountHint": "Connect your {forge} account and I can see PRs, CI and issues too.",
+        "connectAccount": "Connect account",
+        "went": "OK, looking now.",
+        "skipped": "Not now, then. Ask me any time.",
         "connected": "Connected: {projects}",
-        "joiner": ", ",
-        "skipped": "Skipped for now. Tell me about a project any time."
+        "joiner": ", "
       },
       "starter": {
         "heading": "I can help with this first",
@@ -12286,7 +12303,6 @@
       "openPr": "Open the PR",
       "byAuthor": "by {author}",
       "worktreeOf": "worktree of {project}",
-      "sessions": "{n, plural, one {# session} other {# sessions}} in it",
       "behindDetail": "{branch} is behind {base}, and merging would conflict.",
       "heading": {
         "failed": "Failed, and nobody's on it",
@@ -12295,7 +12311,6 @@
         "pr_review": "A pull request waits for your review",
         "uncommitted": "Changes left uncommitted",
         "idle": "A matter gone quiet",
-        "new_project": "A new project",
         "behind": "A branch behind, with conflicts",
         "undo": "Changes you undid",
         "idle_bot": "An idle work assistant"
@@ -12328,9 +12343,6 @@
           "hand": "Keep after it",
           "close": "Close it"
         },
-        "new_project": {
-          "watch": "Keep an eye on this project"
-        },
         "behind": {
           "rebase": "Have it rebased"
         },
@@ -12349,7 +12361,6 @@
         "reminding": "You'll be reminded tomorrow morning.",
         "opened": "Opened.",
         "closed": "Matter closed.",
-        "watching": "The assistants keep an eye on this project now.",
         "rebasing": "Sent back to be rebased.",
         "asking_first": "Changes you ask for now come to you as a card first.",
         "hidden": "Hidden. It is still there under the hidden assistants.",
@@ -12390,7 +12401,7 @@
         },
         "pr_review": {
           "title": "A pull request waiting for your review",
-          "hint": "In the projects you connected; counted from when codeg first saw the request."
+          "hint": "In the projects you watch; counted from when codeg first saw the request."
         },
         "uncommitted": {
           "title": "Changes left uncommitted",
@@ -12399,10 +12410,6 @@
         "idle": {
           "title": "A matter gone quiet",
           "hint": "An open matter with no change."
-        },
-        "new_project": {
-          "title": "A new project",
-          "hint": "A project added to codeg that you work in: keep an eye on it?"
         },
         "behind": {
           "title": "A branch behind, with conflicts",

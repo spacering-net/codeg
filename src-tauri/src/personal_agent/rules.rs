@@ -5,9 +5,8 @@
 //!   waiting long for review with no round of acceptance (`review`); a
 //!   session waiting on the owner while they are not in it (`session`); a
 //!   pull request waiting for their review (`pr_review`); changes left
-//!   uncommitted (`uncommitted`); a matter gone quiet (`idle`); a new
-//!   project they work in (`new_project`); a dispatched task's branch
-//!   behind its target with conflicts (`behind`). Each is on or off and has
+//!   uncommitted (`uncommitted`); a matter gone quiet (`idle`); a
+//!   dispatched task's branch behind its target with conflicts (`behind`). Each is on or off and has
 //!   its threshold in the preferences; the disturbance levels set them
 //!   (13.4). The repeat offer (`repeat`, 6.9) and the assistants' own
 //!   suggestions (`suggest`) are rules too, raised where they happen.
@@ -34,7 +33,7 @@
 //! [`SLOW_EVERY_MINUTES`] minutes.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
@@ -49,7 +48,6 @@ use super::engine::PersonalAgentEngine;
 use super::host::EngineHost;
 use super::reach::{glimpse, News, NotifyLink, What};
 use super::tools::ToolOutcome;
-use crate::db::entities::conversation::{self, ConversationKind};
 use crate::db::entities::folder::{self, FolderKind};
 use crate::db::entities::personal_agent_dispatch::{self as dispatch_entity, DispatchMode, DispatchState};
 use crate::db::entities::personal_agent_item::{self as item_entity, ItemKind, ItemStatus};
@@ -58,7 +56,7 @@ use crate::db::entities::personal_agent_notice::{
 };
 use crate::db::entities::personal_agent_timeline::TimelineKind;
 use crate::db::entities::personal_agent_verification::VerificationState;
-use crate::db::entities::work_task::{self, WorkTaskStatus};
+use crate::db::entities::work_task::WorkTaskStatus;
 use crate::db::service::personal_agent_rule_service as rsvc;
 use crate::db::service::personal_agent_service as svc;
 use crate::db::service::personal_agent_service::{NewNotice, NewRow};
@@ -77,7 +75,6 @@ pub const SCANNED: &[&str] = &[
     "pr_review",
     "uncommitted",
     "idle",
-    "new_project",
     "behind",
 ];
 /// Every rule: the scanned ones, the repeat offer and the assistants' own
@@ -89,7 +86,6 @@ pub const ALL: &[&str] = &[
     "pr_review",
     "uncommitted",
     "idle",
-    "new_project",
     "behind",
     "repeat",
     "suggest",
@@ -114,6 +110,9 @@ const FAILED_FRESH_DAYS: i64 = 3;
 const FOLDERS_READ: usize = 60;
 const GIT_TIMEOUT: StdDuration = StdDuration::from_secs(10);
 const FORGE_TIMEOUT: StdDuration = StdDuration::from_secs(25);
+/// One look at the pull requests waiting for the owner's review takes this
+/// long at most: the projects it does not reach are read first next time.
+const PR_SCAN_BUDGET: StdDuration = StdDuration::from_secs(60);
 /// Where the rule's own record keeps the last time the owner put it back.
 const RESET_KEY: &str = "reset_at";
 
@@ -381,6 +380,10 @@ pub struct RuleClock {
     busy: AtomicBool,
     last: Mutex<Option<DateTime<Utc>>>,
     slow: Mutex<HashMap<&'static str, DateTime<Utc>>>,
+    /// Where the next look at the pull requests waiting for review starts
+    /// among the projects watched: after the last one this one reached.
+    /// In memory: a restart starts from the first.
+    pr_cursor: AtomicUsize,
 }
 
 impl RuleClock {
@@ -417,11 +420,125 @@ impl Drop for Release {
 }
 
 /// What one look goes by.
-struct Look {
-    now: DateTime<Utc>,
-    prefs: Prefs,
+pub(super) struct Look {
+    pub now: DateTime<Utc>,
+    pub prefs: Prefs,
+    pub primary: i32,
+}
+
+/// The project a `pr_review` record or card is about (`pr:{project}:…`).
+fn pr_project(object: &str) -> Option<i32> {
+    let mut parts = object.split(':');
+    (parts.next() == Some("pr"))
+        .then(|| parts.next()?.parse().ok())
+        .flatten()
+}
+
+/// Which pull request a review request is, as its forge names it: from its
+/// page's address — the instance, the repository and the number in one,
+/// whatever this checkout's remote or the account used says. `None` for a
+/// row without one.
+pub(super) fn pr_ident(html_url: &str) -> Option<String> {
+    use sha1::{Digest, Sha1};
+    let url = html_url.trim();
+    let url = url.split(['?', '#']).next().unwrap_or("").trim_end_matches('/');
+    if url.is_empty() {
+        return None;
+    }
+    // The host is a name, whatever its case; the path is the forge's.
+    let normalized = match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+            format!(
+                "{}://{}{path}",
+                scheme.to_ascii_lowercase(),
+                authority.to_ascii_lowercase()
+            )
+        }
+        None => url.to_string(),
+    };
+    let digest = Sha1::digest(normalized.as_bytes());
+    Some(digest.iter().take(6).map(|b| format!("{b:02x}")).collect())
+}
+
+/// What is watched now, read in `conn` (inside a transaction, the same
+/// moment as its writes).
+async fn watched_in<C: sea_orm::ConnectionTrait>(
+    conn: &C,
     primary: i32,
-    connected: Vec<i32>,
+) -> Result<HashSet<i32>, sea_orm::DbErr> {
+    let Some(row) = crate::db::entities::personal_agent::Entity::find_by_id(primary)
+        .one(conn)
+        .await?
+    else {
+        return Ok(HashSet::new());
+    };
+    let scope = AccountView::from_settings(&row.settings).prefs.projects;
+    Ok(super::projects::eligible_in(conn)
+        .await?
+        .into_iter()
+        .map(|f| f.id)
+        .filter(|id| scope.covers(*id))
+        .collect())
+}
+
+/// The review requests about to be raised, claimed in one transaction that
+/// holds the write lock from its start: each one's project is read again
+/// against what is watched now — one no longer watched is taken out, its
+/// project returned to let go of; the others' records lose `out`, and the
+/// count of times they left (`resets`) makes their episode, with when they
+/// were first seen.
+async fn claim_pr_reviews(
+    db: &AppDatabase,
+    primary: i32,
+    found: Vec<Found>,
+) -> Result<(Vec<Found>, Vec<i32>), sea_orm::DbErr> {
+    use crate::db::entities::personal_agent_rule_state as state;
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, TransactionTrait};
+    let txn = db.conn.begin().await?;
+    svc::claim_row(&txn, primary)
+        .await
+        .map_err(|e| sea_orm::DbErr::Custom(e.to_string()))?;
+    let watched = watched_in(&txn, primary).await?;
+    let mut kept = Vec::with_capacity(found.len());
+    let mut left: Vec<i32> = Vec::new();
+    for mut f in found {
+        let Some(p) = pr_project(&f.object) else {
+            continue;
+        };
+        if !watched.contains(&p) {
+            if !left.contains(&p) {
+                left.push(p);
+            }
+            continue;
+        }
+        if !f.held {
+            let rec = state::Entity::find()
+                .filter(state::Column::Rule.eq("pr_review"))
+                .filter(state::Column::Object.eq(f.object.as_str()))
+                .one(&txn)
+                .await?;
+            let resets = match rec {
+                Some(rec) => {
+                    let mut data = data_of_row(rec.data.as_deref());
+                    let resets = data["resets"].as_u64().unwrap_or(0);
+                    if data["out"].as_bool() == Some(true) {
+                        data["out"] = json!(false);
+                        let mut a: state::ActiveModel = rec.into();
+                        a.data = Set(Some(data.to_string()));
+                        a.updated_at = Set(Utc::now());
+                        a.update(&txn).await?;
+                    }
+                    resets
+                }
+                None => 0,
+            };
+            f.episode = format!("{}:{resets}", f.since.timestamp_millis());
+        }
+        kept.push(f);
+    }
+    txn.commit().await?;
+    Ok((kept, left))
 }
 
 fn project_name(f: &folder::Model) -> String {
@@ -455,6 +572,8 @@ impl EngineHost {
         let Ok(Some(primary)) = svc::primary_bot(&self.db.conn).await else {
             return;
         };
+        // Whatever is switched off: what is no longer watched lets go.
+        self.reconcile_scope(primary.id).await;
         let account = AccountView::from_settings(&primary.settings);
         let prefs = account.prefs;
         if !prefs.proactive() {
@@ -462,7 +581,6 @@ impl EngineHost {
         }
         let look = Look {
             now,
-            connected: super::meet::connected_in_settings(&primary.settings),
             prefs,
             primary: primary.id,
         };
@@ -480,7 +598,6 @@ impl EngineHost {
                 "pr_review" => self.scan_pr_review(&look).await,
                 "uncommitted" => self.scan_uncommitted(&look).await,
                 "idle" => self.scan_idle(&look).await,
-                "new_project" => self.scan_new_projects(&look).await,
                 "behind" => self.scan_behind(&look).await,
                 _ => None,
             };
@@ -490,8 +607,74 @@ impl EngineHost {
         }
     }
 
+    /// What is no longer watched lets go of what it had: a project taken off
+    /// the list or closed — its pull requests' cards expire and their
+    /// records start a new episode when it is back ([`out_of_scope`]); one
+    /// deleted, its records are forgotten too. And the cards of a rule this
+    /// build no longer has expire. Local reads only, every look — the
+    /// switches of what codeg does unasked do not keep stale cards up.
+    ///
+    /// [`out_of_scope`]: PersonalAgentEngine::out_of_scope
+    pub(super) async fn reconcile_scope(&self, primary: i32) {
+        let watched = match watched_in(&self.db.conn, primary).await {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::warn!("[personal-agent] what is watched could not be read: {e}");
+                return;
+            }
+        };
+        let mut left: Vec<i32> = Vec::new();
+        let mut leave = |p: i32| {
+            if !watched.contains(&p) && !left.contains(&p) {
+                left.push(p);
+            }
+        };
+        for n in rsvc::open_of_kind(&self.db.conn, NoticeKind::Rule)
+            .await
+            .unwrap_or_default()
+        {
+            let payload: Value = serde_json::from_str(&n.payload).unwrap_or(Value::Null);
+            let rule = payload["rule"].as_str().unwrap_or_default();
+            if !ALL.contains(&rule) {
+                let engine = self.engine_for(n.bot_id).await.unwrap_or_else(|| self.primary.clone());
+                engine.expire_rule_card(&n).await;
+                continue;
+            }
+            if rule == "pr_review" {
+                if let Some(p) = pr_project(payload["object"].as_str().unwrap_or_default()) {
+                    leave(p);
+                }
+            }
+        }
+        let records = rsvc::of_rule(&self.db.conn, "pr_review").await.unwrap_or_default();
+        for rec in &records {
+            let Some(p) = pr_project(&rec.object) else {
+                continue;
+            };
+            if data_of_row(rec.data.as_deref())["out"].as_bool() != Some(true) {
+                leave(p);
+            }
+        }
+        if !left.is_empty() {
+            if let Err(e) = self.primary.out_of_scope(&left).await {
+                tracing::warn!("[personal-agent] the projects no longer watched kept their cards: {e}");
+            }
+        }
+        // A project deleted: nothing of it to keep.
+        let projects: HashSet<i32> = records.iter().filter_map(|r| pr_project(&r.object)).collect();
+        for p in projects {
+            let alive = folder::Entity::find_by_id(p)
+                .one(&self.db.conn)
+                .await
+                .map(|f| f.is_some_and(|f| f.deleted_at.is_none()));
+            if alive == Ok(false) {
+                let _ = rsvc::forget_prefix(&self.db.conn, "pr_review", &format!("pr:{p}:")).await;
+            }
+        }
+    }
+
     /// Expire the cards whose thing is gone, and raise the ones due.
-    async fn settle_rule(&self, rule: &'static str, look: &Look, found: Vec<Found>) {
+    pub(super) async fn settle_rule(&self, rule: &'static str, look: &Look, found: Vec<Found>) {
         let objects: HashSet<&str> = found.iter().map(|f| f.object.as_str()).collect();
         for n in rsvc::open_of_kind(&self.db.conn, NoticeKind::Rule)
             .await
@@ -746,35 +929,92 @@ impl EngineHost {
     // ── a pull request waiting for the owner's review ───────────────────────
 
     async fn scan_pr_review(&self, look: &Look) -> Option<Vec<Found>> {
-        use super::starter::ForgeReads;
-        if look.connected.is_empty() {
-            return Some(Vec::new());
-        }
         let forge = super::starter::LiveForge { db: &self.db };
+        self.scan_pr_review_with(look, &forge, PR_SCAN_BUDGET).await
+    }
+
+    /// The review requests of the projects watched, read through `forge`
+    /// within `budget`, starting where the last look stopped. Per project:
+    /// one read has its requests no longer there forgotten; one not read
+    /// (git or the accounts could not say, the forge failed, the budget ran
+    /// out) keeps its records and cards (`held`); one no account serves, or
+    /// without a forge remote, is let go of as a project no longer watched.
+    pub(super) async fn scan_pr_review_with(
+        &self,
+        look: &Look,
+        forge: &dyn super::starter::ForgeReads,
+        budget: StdDuration,
+    ) -> Option<Vec<Found>> {
+        use super::projects::Served;
+        // What is watched as the look starts — not what the tick read.
+        let prefs = match svc::primary_bot(&self.db.conn).await.ok().flatten() {
+            Some(p) => AccountView::from_settings(&p.settings).prefs,
+            None => return None,
+        };
+        // Not read: nothing is known to have left, so nothing is settled.
+        let watched = match super::projects::eligible_in(&self.db.conn).await {
+            Ok(eligible) => super::projects::watched_of(eligible, &prefs.projects),
+            Err(e) => {
+                tracing::warn!("[personal-agent] rule pr_review: the projects were not read: {e}");
+                return None;
+            }
+        };
+        let ids: HashSet<i32> = watched.iter().map(|f| f.id).collect();
+        let n = watched.len();
+        let start = if n == 0 {
+            0
+        } else {
+            self.rules.pr_cursor.load(Ordering::SeqCst) % n
+        };
+        let began = tokio::time::Instant::now();
         let mut out = Vec::new();
-        let mut read_all = true;
         let mut seen_now: HashSet<String> = HashSet::new();
-        let mut read_projects: HashSet<i32> = HashSet::new();
-        for id in &look.connected {
-            let Some(f) = folder::Entity::find_by_id(*id)
-                .one(&self.db.conn)
-                .await
-                .ok()
-                .flatten()
-                .filter(|f| f.deleted_at.is_none())
-            else {
-                continue;
-            };
-            let rows = match bounded(FORGE_TIMEOUT, forge.review_requested(*id)).await {
+        let mut read: HashSet<i32> = HashSet::new();
+        // Rows read without the address that names them: their records stay.
+        let mut unnamed: Vec<String> = Vec::new();
+        let mut unserved: Vec<i32> = Vec::new();
+        // The projects this look is done with, in order: one the budget cut
+        // short is not, and the next look starts with it.
+        let mut reached = 0;
+        for f in watched.iter().cycle().skip(start).take(n) {
+            if budget.saturating_sub(began.elapsed()).is_zero() {
+                break;
+            }
+            match forge.served(f.id).await {
+                Served::Yes => {}
+                Served::No => {
+                    reached += 1;
+                    unserved.push(f.id);
+                    continue;
+                }
+                Served::Unknown => {
+                    reached += 1;
+                    continue;
+                }
+            }
+            // What is left once this machine has said, not before.
+            let left = budget.saturating_sub(began.elapsed());
+            if left.is_zero() {
+                break;
+            }
+            let cut = left < FORGE_TIMEOUT;
+            let rows = match bounded(FORGE_TIMEOUT.min(left), forge.review_requested(f.id)).await {
                 Some(Ok(rows)) => rows,
+                // Out of the look's time, not its own: next time first.
+                None if cut => break,
                 _ => {
-                    read_all = false;
+                    reached += 1;
                     continue;
                 }
             };
-            read_projects.insert(*id);
+            reached += 1;
+            read.insert(f.id);
             for pr in rows.into_iter().filter(|r| r.is_pr && r.state == "open") {
-                let object = format!("pr:{}:{}", id, pr.number);
+                let Some(ident) = pr_ident(&pr.html_url) else {
+                    unnamed.push(format!("pr:{}:{}:", f.id, pr.number));
+                    continue;
+                };
+                let object = format!("pr:{}:{}:{ident}", f.id, pr.number);
                 let rec = rsvc::seen(
                     &self.db.conn,
                     "pr_review",
@@ -788,59 +1028,106 @@ impl EngineHost {
                 seen_now.insert(object.clone());
                 out.push(Found {
                     rule: "pr_review",
-                    episode: rec.first_seen_at.timestamp_millis().to_string(),
+                    // Claimed below, as it is raised.
+                    episode: String::new(),
                     object,
                     bot: look.primary,
                     since: rec.first_seen_at,
                     held: false,
                     facts: json!({
-                        "folder_id": id,
-                        "project": project_name(&f),
+                        "folder_id": f.id,
+                        "project": project_name(f),
                         "number": pr.number,
                         "title": pr.title,
                         "url": pr.html_url,
                         "author": pr.author,
                     }),
-                    text: format!("{} #{}", project_name(&f), pr.number),
+                    text: format!("{} #{}", project_name(f), pr.number),
                 });
             }
         }
-        // Requests no longer there, in the projects read, are forgotten.
-        for rec in rsvc::of_rule(&self.db.conn, "pr_review").await.unwrap_or_default() {
-            if rec.object.is_empty() || seen_now.contains(&rec.object) {
-                continue;
+        if n > 0 {
+            self.rules
+                .pr_cursor
+                .store((start + reached) % n, Ordering::SeqCst);
+        }
+        // Each project's records as it went: a request no longer there in a
+        // project read is forgotten; one not read keeps its record and card.
+        // Those not watched (anymore: closed since the tick's reconciling),
+        // or not served, are let go of below — never left to the generic
+        // expiry, which would keep their episode and hold back their card
+        // when they are back.
+        let mut gone: Vec<i32> = unserved.clone();
+        let mut leave = |p: i32| {
+            if !gone.contains(&p) {
+                gone.push(p);
             }
-            let project = rec
-                .object
-                .split(':')
-                .nth(1)
-                .and_then(|p| p.parse::<i32>().ok());
-            if project.is_some_and(|p| read_projects.contains(&p) || !look.connected.contains(&p)) {
-                let _ = rsvc::forget(&self.db.conn, "pr_review", &rec.object).await;
+        };
+        for n in rsvc::open_of_kind(&self.db.conn, NoticeKind::Rule)
+            .await
+            .unwrap_or_default()
+        {
+            let payload: Value = serde_json::from_str(&n.payload).unwrap_or(Value::Null);
+            if payload["rule"].as_str() == Some("pr_review") {
+                if let Some(p) = pr_project(payload["object"].as_str().unwrap_or_default()) {
+                    if !ids.contains(&p) {
+                        leave(p);
+                    }
+                }
             }
         }
-        // A project not read this time: its cards are not known gone.
-        if !read_all {
-            let unread: HashSet<i32> = look
-                .connected
-                .iter()
-                .copied()
-                .filter(|p| !read_projects.contains(p))
-                .collect();
-            for rec in rsvc::of_rule(&self.db.conn, "pr_review").await.unwrap_or_default() {
-                let p = rec.object.split(':').nth(1).and_then(|p| p.parse::<i32>().ok());
-                if p.is_some_and(|p| unread.contains(&p)) {
-                    out.push(Found {
-                        rule: "pr_review",
-                        object: rec.object.clone(),
-                        episode: rec.first_seen_at.timestamp_millis().to_string(),
-                        bot: look.primary,
-                        since: rec.first_seen_at,
-                        held: true,
-                        facts: Value::Null,
-                        text: String::new(),
-                    });
+        for rec in rsvc::of_rule(&self.db.conn, "pr_review").await.unwrap_or_default() {
+            if seen_now.contains(&rec.object) {
+                continue;
+            }
+            let Some(p) = pr_project(&rec.object) else {
+                continue;
+            };
+            if !ids.contains(&p) {
+                if data_of_row(rec.data.as_deref())["out"].as_bool() != Some(true) {
+                    leave(p);
                 }
+                continue;
+            }
+            if unserved.contains(&p) {
+                continue;
+            }
+            let row_unread = unnamed.iter().any(|u| rec.object.starts_with(u.as_str()));
+            if read.contains(&p) && !row_unread {
+                let _ = rsvc::forget(&self.db.conn, "pr_review", &rec.object).await;
+            } else {
+                out.push(Found {
+                    rule: "pr_review",
+                    object: rec.object.clone(),
+                    episode: String::new(),
+                    bot: look.primary,
+                    since: rec.first_seen_at,
+                    held: true,
+                    facts: Value::Null,
+                    text: String::new(),
+                });
+            }
+        }
+        // The last look at what is watched, as the cards are about to be
+        // raised: what left meanwhile is taken out and let go of.
+        let (out, mut left) = match claim_pr_reviews(&self.db, look.primary, out).await {
+            Ok(claimed) => claimed,
+            Err(e) => {
+                tracing::warn!("[personal-agent] rule pr_review: the requests were not claimed: {e}");
+                return None;
+            }
+        };
+        for p in gone {
+            if !left.contains(&p) {
+                left.push(p);
+            }
+        }
+        if !left.is_empty() {
+            // Not let go of: nothing is settled this time — the generic
+            // expiry would keep their episodes. The next look tries again.
+            if let Err(e) = self.primary.out_of_scope(&left).await {
+                tracing::warn!("[personal-agent] rule pr_review: the projects let go of kept their cards: {e}");
+                return None;
             }
         }
         Some(out)
@@ -994,79 +1281,6 @@ impl EngineHost {
                     "status": i.status,
                 }),
                 text: glimpse(&i.summary),
-            });
-        }
-        Some(out)
-    }
-
-    // ── a new project ───────────────────────────────────────────────────────
-
-    async fn scan_new_projects(&self, look: &Look) -> Option<Vec<Found>> {
-        let projects = folder::Entity::find()
-            .filter(folder::Column::DeletedAt.is_null())
-            .filter(folder::Column::Kind.eq(FolderKind::Regular))
-            .filter(folder::Column::ParentId.is_null())
-            .all(&self.db.conn)
-            .await
-            .ok()?;
-        // The projects there were when the rule first looked are not new.
-        let mut record = rule_record(&self.db, "new_project").await;
-        let Some(baseline) = record["baseline"].as_i64() else {
-            record["baseline"] = json!(projects.iter().map(|f| f.id).max().unwrap_or(0));
-            write_record(&self.db, "new_project", &record).await;
-            return Some(Vec::new());
-        };
-        let mut out = Vec::new();
-        for f in projects
-            .iter()
-            .filter(|f| i64::from(f.id) > baseline && !look.connected.contains(&f.id))
-        {
-            // The owner's own sessions: not the ones the board's tasks or
-            // the assistants' work run in.
-            let codeg_made: HashSet<i32> = work_task::Entity::find()
-                .filter(work_task::Column::FolderId.eq(f.id))
-                .all(&self.db.conn)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|t| t.conversation_id)
-                .chain(
-                    dispatch_entity::Entity::find()
-                        .filter(dispatch_entity::Column::FolderId.eq(f.id))
-                        .all(&self.db.conn)
-                        .await
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter_map(|d| d.conversation_id),
-                )
-                .collect();
-            let sessions = conversation::Entity::find()
-                .filter(conversation::Column::FolderId.eq(f.id))
-                .filter(conversation::Column::Kind.eq(ConversationKind::Regular))
-                .filter(conversation::Column::DeletedAt.is_null())
-                .all(&self.db.conn)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|c| !codeg_made.contains(&c.id))
-                .count();
-            if sessions == 0 {
-                continue;
-            }
-            out.push(Found {
-                rule: "new_project",
-                object: format!("project:{}", f.id),
-                episode: "1".into(),
-                bot: look.primary,
-                since: f.created_at,
-                held: false,
-                facts: json!({
-                    "folder_id": f.id,
-                    "name": project_name(f),
-                    "path": f.path,
-                    "sessions": sessions,
-                }),
-                text: project_name(f),
             });
         }
         Some(out)
@@ -1263,6 +1477,41 @@ impl PersonalAgentEngine {
         Ok(notice.id)
     }
 
+    /// Projects no longer watched — taken off the list, closed, with no
+    /// account or forge remote to read them through: their pull requests'
+    /// cards expire, and their records are marked left (`out`) with one
+    /// more `resets` (once per leaving), so that a request still waiting
+    /// when the project is back has a new episode — its card is not held
+    /// back by the one that expired — and keeps when it was first seen.
+    /// One transaction.
+    pub(super) async fn out_of_scope(&self, projects: &[i32]) -> Result<(), String> {
+        if projects.is_empty() {
+            return Ok(());
+        }
+        let primary = svc::primary_bot(&self.db.conn)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("there is no primary assistant")?;
+        let expired = rsvc::pr_review_out(&self.db.conn, primary.id, projects)
+            .await
+            .map_err(|e| e.to_string())?;
+        for n in expired {
+            let (Some(row_id), Some(bot)) = (n.timeline_id, n.bot_id) else {
+                continue;
+            };
+            if let Ok(Some(row)) = svc::get_row(&self.db.conn, row_id).await {
+                self.emit_for(
+                    bot,
+                    PersonalAgentChange::Timeline {
+                        rows: vec![svc::to_row(row)],
+                    },
+                );
+                self.emit_for(bot, PersonalAgentChange::Status);
+            }
+        }
+        Ok(())
+    }
+
     /// A card whose thing is gone: it says so, and waits on nobody.
     pub(super) async fn expire_rule_card(&self, notice: &notice_entity::Model) {
         if svc::move_notice(
@@ -1363,7 +1612,6 @@ impl PersonalAgentEngine {
             "pr_review" => &["summary"],
             "uncommitted" => &["open", "hand"],
             "idle" => &["hand", "close"],
-            "new_project" => &["watch"],
             "behind" => &["rebase"],
             "undo" => &["ask_first"],
             "idle_bot" => &["hide", "delete"],
@@ -1422,12 +1670,6 @@ impl PersonalAgentEngine {
                 self.settle_item(item, "drop", None)
                     .await
                     .map(|_| ("closed".into(), json!({ "item_id": item })))
-            }
-            ("new_project", "watch") => {
-                let folder = id_of("folder_id").ok_or("the card names no project")?;
-                self.connect_project(folder)
-                    .await
-                    .map(|_| ("watching".into(), json!({ "folder_id": folder })))
             }
             ("behind", "rebase") => self.rebase_behind(&facts).await,
             ("undo", "ask_first") => self
@@ -1944,6 +2186,23 @@ mod tests {
         assert_eq!(news_kind("uncommitted", false), "proposal_low");
         assert_eq!(subject_prefix("review"), "rule:review:");
         assert_eq!(subject("review", "task:3"), "rule:review:task:3");
+    }
+
+    #[test]
+    fn a_review_request_is_named_by_its_page_address_as_its_forge_spells_it() {
+        let id = |u: &str| pr_ident(u).unwrap();
+        let a = id("https://git.example:8443/team/app/-/merge_requests/7");
+        assert_eq!(a.len(), 12);
+        assert_eq!(id("https://Git.EXAMPLE:8443/team/app/-/merge_requests/7/"), a);
+        assert_eq!(id(" https://git.example:8443/team/app/-/merge_requests/7?tab=diffs#note_1 "), a);
+        assert_ne!(id("https://git.example/team/app/-/merge_requests/7"), a, "another port, another instance");
+        assert_ne!(id("https://git.example:8443/team/App/-/merge_requests/7"), a, "the path is the forge's");
+        assert_ne!(id("https://git.example:8443/team/app/-/merge_requests/8"), a);
+        assert_eq!(pr_ident(""), None);
+        assert_eq!(pr_ident("  /?x"), None);
+        assert_eq!(pr_project("pr:12:7:abc"), Some(12));
+        assert_eq!(pr_project("pr:12:7"), Some(12));
+        assert_eq!(pr_project("project:12"), None);
     }
 
     #[test]

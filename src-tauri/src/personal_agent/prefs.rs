@@ -37,8 +37,15 @@ use crate::db::service::personal_agent_service as svc;
 use crate::db::service::personal_agent_service::{NewNotice, NewRow};
 use crate::models::personal_agent::{PersonalAgentChange, TimelineRow};
 use crate::models::personal_agent_prefs::{
-    self as prefs, check_pref, AccountView, Prefs,
+    self as prefs, check_pref, AccountView, Prefs, ProjectScope, ProjectsOp,
 };
+
+/// The item whose changes are read against the value they meet
+/// (`ProjectsOp`), and written under [`PROJECTS_WRITE`].
+pub(super) const PROJECTS_KEY: &str = "prefs.projects";
+/// One change of the projects at a time in this process; another process
+/// waits on the transaction's write lock.
+static PROJECTS_WRITE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// How long an item the owner said no to is not suggested again.
 const SUGGEST_MUTE_DAYS: i64 = 7;
@@ -82,6 +89,11 @@ pub struct Applied {
     /// `executor_before`, when that one still is what it was.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub undo: bool,
+    /// For the projects watched: the change as it was asked (`ProjectsOp`)
+    /// — `from`/`to` are what it came to when it was planned, a preview; it
+    /// is read again against the value it meets when it is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<Value>,
 }
 
 impl Applied {
@@ -318,9 +330,27 @@ impl PersonalAgentEngine {
         let mut seen = BTreeSet::new();
         for c in expanded {
             let mut picked = None;
+            let mut op = None;
             let (from, to) = if let Some(item) = c.key.strip_prefix("prefs.") {
                 let to = check_pref(item, &c.value)?;
-                (stored_prefs.get(item).cloned().unwrap_or(Value::Null), to)
+                let from = stored_prefs.get(item).cloned().unwrap_or(Value::Null);
+                if c.key == PROJECTS_KEY {
+                    // What it would come to now; written, it is read again.
+                    let asked = ProjectsOp::parse(&to)?;
+                    let eligible: Vec<i32> = super::projects::eligible_projects(&self.db)
+                        .await
+                        .iter()
+                        .map(|f| f.id)
+                        .collect();
+                    let preview = asked
+                        .apply(&account.prefs.projects, &eligible)
+                        .checked()?
+                        .to_json();
+                    op = Some(asked.to_json());
+                    (from, preview)
+                } else {
+                    (from, to)
+                }
             } else if let Some(rest) = c.key.strip_prefix("bot.") {
                 let (from, to, p) = self.plan_bot_item(rest, &c.value).await?;
                 picked = p;
@@ -363,6 +393,7 @@ impl PersonalAgentEngine {
                 picked,
                 executor_before,
                 undo: false,
+                op,
             });
         }
         if out.iter().any(|a| is_account(&a.key))
@@ -422,11 +453,36 @@ impl PersonalAgentEngine {
         Ok((config, picked))
     }
 
-    /// Write what a plan says each item is to be, and tell the pages.
-    pub(super) async fn write_settings(&self, applied: &[Applied]) -> Result<(), String> {
-        if applied.is_empty() {
-            return Ok(());
+    /// Write what a plan says each item is to be, and tell the pages: what
+    /// was written — the projects as their change came to when written,
+    /// left out when it came to nothing.
+    pub(super) async fn write_settings(&self, applied: &[Applied]) -> Result<Vec<Applied>, String> {
+        let mut made: Vec<Applied> = Vec::with_capacity(applied.len());
+        let mut projects_changed = false;
+        for a in applied {
+            if a.key == PROJECTS_KEY {
+                if let Some(actual) = self.commit_projects(a).await? {
+                    projects_changed = true;
+                    made.push(actual);
+                }
+            } else {
+                made.push(a.clone());
+            }
         }
+        let rest: Vec<Applied> = made
+            .iter()
+            .filter(|a| a.key != PROJECTS_KEY)
+            .cloned()
+            .collect();
+        if rest.is_empty() {
+            if projects_changed {
+                for b in svc::list_bots(&self.db.conn).await.unwrap_or_default() {
+                    self.emit_for(b.id, PersonalAgentChange::Agent);
+                }
+            }
+            return Ok(made);
+        }
+        let applied = rest.as_slice();
         let answers_changed = applied
             .iter()
             .any(|a| a.key == "prefs.exec_questions" || a.key == "prefs.exec_plans");
@@ -434,6 +490,11 @@ impl PersonalAgentEngine {
             .iter()
             .any(|a| a.key == "prefs.cards" || a.key == "own.skill_enabled");
         self.write_settings_now(applied).await?;
+        if projects_changed && !applied.iter().any(|a| is_account(&a.key)) {
+            for b in svc::list_bots(&self.db.conn).await.unwrap_or_default() {
+                self.emit_for(b.id, PersonalAgentChange::Agent);
+            }
+        }
         // How the owner wants cards (or whether this assistant has its
         // skill) changed: the skill and its guide are installed anew (9.1).
         if skill_changed {
@@ -458,7 +519,79 @@ impl PersonalAgentEngine {
                 None => self.refresh_ask_delegates().await,
             }
         }
-        Ok(())
+        Ok(made)
+    }
+
+    /// Write a change of the projects watched, read against what is stored
+    /// as it is written: in this process one at a time, across processes
+    /// in a transaction holding the write lock from its first statement.
+    /// What it came to — `None` when nothing. The projects it took off are
+    /// let go of at once (their cards, their records' episodes).
+    async fn commit_projects(&self, a: &Applied) -> Result<Option<Applied>, String> {
+        use sea_orm::{EntityTrait, TransactionTrait};
+        let asked = match a.op.as_ref() {
+            Some(op) => ProjectsOp::from_card(op)?,
+            None => ProjectsOp::parse(&a.to)?,
+        };
+        let _one = PROJECTS_WRITE.lock().await;
+        let primary = svc::primary_bot(&self.db.conn)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("set the primary assistant up first")?;
+        let txn = self.db.conn.begin().await.map_err(|e| e.to_string())?;
+        if !svc::claim_row(&txn, primary.id).await.map_err(|e| e.to_string())? {
+            return Err("the primary assistant is gone".into());
+        }
+        let row = crate::db::entities::personal_agent::Entity::find_by_id(primary.id)
+            .one(&txn)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("the primary assistant is gone")?;
+        let current = AccountView::from_settings(&row.settings).prefs.projects;
+        let eligible: Vec<i32> = super::projects::eligible_in(&txn)
+            .await
+            .map_err(|e| e.to_string())?
+            .iter()
+            .map(|f| f.id)
+            .collect();
+        let next = match asked.apply(&current, &eligible).checked() {
+            Ok(next) => next,
+            Err(e) => {
+                txn.rollback().await.map_err(|e| e.to_string())?;
+                return Err(e);
+            }
+        };
+        if next == current {
+            txn.rollback().await.map_err(|e| e.to_string())?;
+            return Ok(None);
+        }
+        svc::patch_settings(
+            &txn,
+            primary.id,
+            &json!({ "prefs": { "projects": next.to_json() } }),
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("the primary assistant is gone")?;
+        txn.commit().await.map_err(|e| e.to_string())?;
+        // What it no longer watches is let go of now; what this misses, the
+        // rules' next look does.
+        let left: Vec<i32> = eligible
+            .iter()
+            .copied()
+            .filter(|id| current.covers(*id) && !next.covers(*id))
+            .collect();
+        if !left.is_empty() {
+            if let Err(e) = self.out_of_scope(&left).await {
+                tracing::warn!("[personal-agent] the projects let go of kept their cards: {e}");
+            }
+        }
+        Ok(Some(Applied {
+            from: current.to_json(),
+            to: next.to_json(),
+            op: Some(asked.to_json()),
+            ..a.clone()
+        }))
     }
 
     pub(super) async fn write_settings_now(&self, applied: &[Applied]) -> Result<(), String> {
@@ -572,11 +705,11 @@ impl PersonalAgentEngine {
         Ok(())
     }
 
-    /// Check and write `changes`: the settings view's per-item save.
+    /// Check and write `changes`: the settings view's per-item save. What
+    /// was written.
     pub async fn apply_settings(&self, changes: &[SettingChange]) -> Result<Vec<Applied>, String> {
         let plan = self.plan_settings(changes).await?;
-        self.write_settings(&plan).await?;
-        Ok(plan)
+        self.write_settings(&plan).await
     }
 
     /// Take `applied` back: each item that still is what the change made it
@@ -607,6 +740,18 @@ impl PersonalAgentEngine {
                 Some(c) if c.from == a.to => back.push(Applied {
                     executor_before: a.executor_before,
                     undo: true,
+                    // The projects go back only while still what the change
+                    // made them, checked as they are written.
+                    op: match (
+                        c.key == PROJECTS_KEY,
+                        ProjectScope::from_json(&a.to),
+                        ProjectScope::from_json(&a.from),
+                    ) {
+                        (true, Some(expect), Some(to)) => {
+                            Some(ProjectsOp::Swap { expect, to }.to_json())
+                        }
+                        _ => c.op.clone(),
+                    },
                     ..c.clone()
                 }),
                 // Already back where it was: nothing to do.
@@ -614,8 +759,14 @@ impl PersonalAgentEngine {
                 Some(_) => kept.push(a.key.clone()),
             }
         }
-        self.write_settings(&back).await?;
-        Ok((back, kept))
+        let made = self.write_settings(&back).await?;
+        // Changed again as it was written: it stays.
+        for b in &back {
+            if !made.iter().any(|m| m.key == b.key) {
+                kept.push(b.key.clone());
+            }
+        }
+        Ok((made, kept))
     }
 
     // ── from the conversation ───────────────────────────────────────────────
@@ -791,7 +942,7 @@ impl PersonalAgentEngine {
         batch: Option<i32>,
         key: &str,
     ) -> ToolOutcome {
-        let plan = match self.plan_settings(changes).await {
+        let mut plan = match self.plan_settings(changes).await {
             Ok(p) => p,
             Err(e) => return ToolOutcome::refused(e),
         };
@@ -825,8 +976,17 @@ impl PersonalAgentEngine {
             }
         }
         if why == Why::Asked {
-            if let Err(e) = self.write_settings(&plan).await {
-                return ToolOutcome::refused(e);
+            // What was written is what the card says: the projects as their
+            // change came to then.
+            plan = match self.write_settings(&plan).await {
+                Ok(made) => made,
+                Err(e) => return ToolOutcome::refused(e),
+            };
+            if plan.is_empty() {
+                return ToolOutcome::ok(
+                    "Nothing to change: every item already is what you asked for.",
+                    json!({ "changes": [] }),
+                );
             }
             self.note_prefs_believed(&plan).await;
         }
@@ -1116,11 +1276,13 @@ impl PersonalAgentEngine {
                 {
                     return Err("this card was answered already".into());
                 }
+                // The change as asked: the projects read against what they
+                // are now, not the preview the card showed.
                 let changes: Vec<SettingChange> = plan
                     .iter()
                     .map(|a| SettingChange {
                         key: a.key.clone(),
-                        value: a.to.clone(),
+                        value: a.op.clone().unwrap_or_else(|| a.to.clone()),
                     })
                     .collect();
                 match self.apply_settings(&changes).await {

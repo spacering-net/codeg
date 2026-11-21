@@ -2955,6 +2955,9 @@ export interface PersonalAgentPrefs {
   morning: "hours" | "fixed"
   /** The fixed morning, `HH:MM`. */
   morning_at: string
+  /** The projects the assistants keep an eye on: every open one, new ones
+   *  too (`"all"`), or only these (project ids). */
+  projects: "all" | number[]
   level_reminder: PersonalAgentNewsLevel
   level_forwarded: PersonalAgentNewsLevel
   level_approval: PersonalAgentNewsLevel
@@ -2998,7 +3001,6 @@ export interface PersonalAgentPrefs {
   rule_uncommitted_hours: number
   rule_idle: "on" | "off"
   rule_idle_days: number
-  rule_new_project: "on" | "off"
   rule_behind: "on" | "off"
   rule_repeat: "on" | "off"
   rule_repeat_count: number
@@ -3055,7 +3057,6 @@ export const PROPOSAL_RULES = [
   "pr_review",
   "uncommitted",
   "idle",
-  "new_project",
   "behind",
   "repeat",
   "suggest",
@@ -3371,13 +3372,25 @@ export interface BriefWeek {
 
 /** A project the projects card lists when getting to know the owner (5.4,
  *  1.15): where its remote is, and whether an account serves that forge. */
+/** What codeg knows of a project's forge from this machine alone. */
+export type PersonalAgentProjectForge =
+  /** An account serves its host. */
+  | { kind: "account"; provider: ForgeProviderId; host: string }
+  /** On a public forge codeg speaks, no account for it yet. */
+  | { kind: "no_account"; provider: ForgeProviderId; host: string }
+  /** Another host: self-hosted, or a forge codeg does not speak. */
+  | { kind: "other"; host: string }
+  /** No forge remote. */
+  | { kind: "none" }
+  /** Not known (git or the accounts could not be read). */
+  | { kind: "unknown" }
+
+/** A project the assistants may keep an eye on (`prefs.projects`). */
 export interface PersonalAgentMeetProject {
   id: number
   name: string
   path: string
-  provider: ForgeProviderId | null
-  host: string | null
-  account: boolean
+  forge: PersonalAgentProjectForge
 }
 
 /** One answer on a native card of several questions: a choice's letter, or

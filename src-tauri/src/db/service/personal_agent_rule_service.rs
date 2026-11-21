@@ -101,6 +101,103 @@ pub async fn forget(conn: &DatabaseConnection, rule: &str, object: &str) -> Resu
     Ok(())
 }
 
+/// Forget every record of `rule` whose object starts with `prefix`.
+pub async fn forget_prefix(
+    conn: &DatabaseConnection,
+    rule: &str,
+    prefix: &str,
+) -> Result<(), DbError> {
+    state::Entity::delete_many()
+        .filter(state::Column::Rule.eq(rule))
+        .filter(state::Column::Object.starts_with(prefix))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// Rule `pr_review`'s projects `projects` are no longer watched: their open
+/// cards expire (the card and its row together), and their records are
+/// marked left (`out: true`) with `resets` one more — a record marked so
+/// already is left as it is, so one leaving counts once. All in one
+/// transaction holding the write lock from its first statement (a write
+/// to the row of assistant `claim`). The cards it expired.
+pub async fn pr_review_out(
+    conn: &DatabaseConnection,
+    claim: i32,
+    projects: &[i32],
+) -> Result<Vec<notice::Model>, DbError> {
+    use crate::db::entities::personal_agent_timeline as timeline;
+    use sea_orm::sea_query::Expr;
+    use sea_orm::TransactionTrait;
+    let txn = conn.begin().await?;
+    super::personal_agent_service::claim_row(&txn, claim).await?;
+    let now = Utc::now();
+    let mut expired = Vec::new();
+    for p in projects {
+        let open = notice::Entity::find()
+            .filter(notice::Column::Kind.eq(NoticeKind::Rule))
+            .filter(notice::Column::State.eq(NoticeState::Open))
+            .filter(notice::Column::SubjectKey.starts_with(format!("rule:pr_review:pr:{p}:")))
+            .all(&txn)
+            .await?;
+        for n in open {
+            let moved = notice::Entity::update_many()
+                .col_expr(notice::Column::State, Expr::value(NoticeState::Expired))
+                .col_expr(notice::Column::ActedAt, Expr::value(Some(now)))
+                .col_expr(notice::Column::UpdatedAt, Expr::value(now))
+                .filter(notice::Column::Id.eq(n.id))
+                .filter(notice::Column::State.eq(NoticeState::Open))
+                .exec(&txn)
+                .await?;
+            if moved.rows_affected != 1 {
+                continue;
+            }
+            if let Some(row_id) = n.timeline_id {
+                if let Some(row) = timeline::Entity::find_by_id(row_id).one(&txn).await? {
+                    let mut data = row
+                        .data
+                        .as_deref()
+                        .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                        .filter(|d| d.is_object())
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    data["state"] = "expired".into();
+                    timeline::Entity::update_many()
+                        .col_expr(timeline::Column::Data, Expr::value(Some(data.to_string())))
+                        .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
+                        .filter(timeline::Column::Id.eq(row_id))
+                        .exec(&txn)
+                        .await?;
+                }
+            }
+            expired.push(n);
+        }
+        let records = state::Entity::find()
+            .filter(state::Column::Rule.eq("pr_review"))
+            .filter(state::Column::Object.starts_with(format!("pr:{p}:")))
+            .all(&txn)
+            .await?;
+        for rec in records {
+            let mut data = rec
+                .data
+                .as_deref()
+                .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                .filter(|d| d.is_object())
+                .unwrap_or_else(|| serde_json::json!({}));
+            if data["out"].as_bool() == Some(true) {
+                continue;
+            }
+            data["resets"] = (data["resets"].as_u64().unwrap_or(0) + 1).into();
+            data["out"] = true.into();
+            let mut a: state::ActiveModel = rec.into();
+            a.data = Set(Some(data.to_string()));
+            a.updated_at = Set(now);
+            a.update(&txn).await?;
+        }
+    }
+    txn.commit().await?;
+    Ok(expired)
+}
+
 /// The cards raised about one topic (`rule:<rule>:<object>`), the newest
 /// first.
 pub async fn notices_of_subject(

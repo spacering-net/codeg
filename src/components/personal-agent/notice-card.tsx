@@ -976,11 +976,12 @@ function bareLabel(label: string): string {
 
 /** The page an item is on: a tab of the assistant's own page, or a page of
  *  the settings every assistant shares. */
-function pageOf(key: string): PersonalAgentPage {
+export function pageOf(key: string): PersonalAgentPage {
   if (key === "own.brain") return "identity"
   if (key.startsWith("own.")) return "advanced"
   if (key.startsWith("bot.")) return "workers"
   const item = key.replace(/^prefs\./, "") as PersonalAgentPrefKey
+  if (item === "projects") return "projects"
   if (ABOUT_ITEMS.includes(item)) return "about"
   if (PROACTIVE_ITEMS.includes(item)) return "proactive"
   return COMMUNICATION_ITEMS.includes(item) ? "communication" : "automation"

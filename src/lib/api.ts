@@ -2931,24 +2931,23 @@ export async function personalAgentChoiceAnswer(
   })
 }
 
-/** The projects the projects card lists when getting to know the owner
- *  (5.4): each open project, its forge and whether an account serves it. */
+/** The projects the assistants may keep an eye on (`prefs.projects`):
+ *  each open project and its forge as this machine knows it — nothing
+ *  asked of a forge. */
 export async function personalAgentMeetProjects(): Promise<
   PersonalAgentMeetProject[]
 > {
   return getTransport().call("personal_agent_meet_projects", {})
 }
 
-/** Connect these projects on the projects card: codeg looks in them for one
- *  thing to help with at once (5.4). */
+/** [Find one] on the card asking to find one thing: codeg looks in the
+ *  projects watched for one thing to help with at once (5.4). */
 export async function personalAgentStarter(
   noticeId: number,
-  folderIds: number[],
   bot?: number | null
 ): Promise<TimelineRow> {
   return getTransport().call("personal_agent_starter", {
     noticeId,
-    folderIds,
     botId: bot ?? null,
   })
 }
@@ -3073,7 +3072,6 @@ export type NoticeAction =
   | "open"
   | "summary"
   | "close"
-  | "watch"
   // A watched pull request's card (7.4): have its task fix it, hand it the
   // feedback.
   | "fix"

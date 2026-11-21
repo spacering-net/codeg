@@ -194,78 +194,103 @@ describe("what to call each other", () => {
   })
 })
 
-describe("the projects", () => {
+describe("one thing right away", () => {
   const projects = [
     {
       id: 1,
       name: "app",
       path: "/p/app",
-      provider: "github",
-      host: "github.com",
-      account: true,
+      forge: { kind: "account", provider: "github", host: "github.com" },
     },
     {
       id: 2,
       name: "lib",
       path: "/p/lib",
-      provider: "gitlab",
-      host: "gitlab.com",
-      account: false,
+      forge: { kind: "no_account", provider: "gitlab", host: "gitlab.com" },
     },
+    { id: 3, name: "notes", path: "/p/notes", forge: { kind: "none" } },
     {
-      id: 3,
-      name: "notes",
-      path: "/p/notes",
-      provider: null,
-      host: null,
-      account: false,
+      id: 4,
+      name: "corp",
+      path: "/p/corp",
+      forge: { kind: "other", host: "gitee.com" },
     },
   ]
   const open = () =>
     card({ notice: "onboarding", purpose: "connect", state: "open" })
 
-  it("lists the projects, ticks those with an account, and connects the ticked ones", async () => {
+  it("asks one question, nothing to pick, and finds one on its yes", async () => {
     api.personalAgentMeetProjects.mockResolvedValue(projects)
     draw(open())
     expect(
       screen.getByText(
-        "While you're away, I keep an eye on the work I handed out and on your PRs."
+        "I keep an eye on all your projects and tell you when a PR waits for your review."
       )
     ).toBeTruthy()
-    await screen.findByText("app")
-    expect(screen.getByText("On GitHub")).toBeTruthy()
-    expect(screen.getByText("On GitLab, no account connected")).toBeTruthy()
-    expect(screen.getByText("No code host")).toBeTruthy()
-    // Only the one whose forge has no account offers to connect one.
-    const connectAccount = screen.getAllByRole("button", {
-      name: "Connect account",
-    })
-    expect(connectAccount).toHaveLength(1)
-    fireEvent.click(connectAccount[0])
+    expect(
+      screen.getByText("Shall I find one thing I can help with right now?")
+    ).toBeTruthy()
+    expect(screen.queryByRole("checkbox")).toBeNull()
+    // A watched project on a public forge with no account: one hint.
+    await screen.findByText(
+      "Connect your GitLab account and I can see PRs, CI and issues too."
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Connect account" }))
     expect(api.openSettingsWindow).toHaveBeenCalledWith("version-control")
-
-    fireEvent.click(screen.getByRole("checkbox", { name: /notes/ }))
-    fireEvent.click(screen.getByRole("button", { name: "Connect 2 projects" }))
+    // Projects there are: no folder to open.
+    expect(
+      screen.queryByRole("button", { name: "Open a project folder" })
+    ).toBeNull()
+    // The way to change them: the settings' page of them.
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }))
+    expect(usePersonalAgentUi.getState().settings?.page).toBe("projects")
+    fireEvent.click(screen.getByRole("button", { name: "Find one now" }))
     await waitFor(() =>
-      expect(api.personalAgentStarter).toHaveBeenCalledWith(12, [1, 3], null)
+      expect(api.personalAgentStarter).toHaveBeenCalledWith(12, null)
     )
   })
 
-  it("can be skipped, and opens a folder", async () => {
+  it("says the projects picked, and hints no account for one not watched or not a public forge", async () => {
+    ctx.account = account({
+      prefs: { ...DEFAULT_PREFS, projects: [1, 3, 4] },
+    })
+    api.personalAgentMeetProjects.mockResolvedValue(projects)
+    draw(open())
+    expect(
+      screen.getByText(
+        "I keep an eye on the projects you picked and tell you when a PR waits for your review."
+      )
+    ).toBeTruthy()
+    await waitFor(() =>
+      expect(api.personalAgentMeetProjects).toHaveBeenCalled()
+    )
+    // lib (GitLab, no account) is not watched; corp is Gitee: no hint.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(screen.queryByRole("button", { name: "Connect account" })).toBeNull()
+  })
+
+  it("with no project, offers to open one — finding still answers — or not now", async () => {
     api.personalAgentMeetProjects.mockResolvedValue([])
     draw(open())
-    await screen.findByText("codeg has no project open yet.")
+    await screen.findByText(
+      "codeg has no project yet; open one and I'll keep an eye on it."
+    )
     // Its buttons on the card's last band, under a hairline.
     expect(
       screen
-        .getByRole("button", { name: "Skip" })
+        .getByRole("button", { name: "Not now" })
         .closest("[data-pa-sheet-actions]")
     ).not.toBeNull()
     fireEvent.click(
       screen.getByRole("button", { name: "Open a project folder" })
     )
     expect(screen.getByTestId("folder-dialog")).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Skip" }))
+    expect(
+      screen
+        .getByRole("button", { name: "Find one now" })
+        .hasAttribute("disabled")
+    ).toBe(false)
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }))
     await waitFor(() =>
       expect(api.personalAgentNoticeAct).toHaveBeenCalledWith(
         12,
@@ -276,7 +301,13 @@ describe("the projects", () => {
     )
   })
 
-  it("says which were connected once it is answered", () => {
+  it("folds to a line once answered — and an old card still says which it connected", () => {
+    draw(card({ notice: "onboarding", purpose: "connect", state: "connected" }))
+    expect(screen.getByText("OK, looking now.")).toBeTruthy()
+    cleanup()
+    draw(card({ notice: "onboarding", purpose: "connect", state: "skipped" }))
+    expect(screen.getByText("Not now, then. Ask me any time.")).toBeTruthy()
+    cleanup()
     draw(
       card({
         notice: "onboarding",

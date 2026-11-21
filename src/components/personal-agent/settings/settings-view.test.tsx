@@ -112,6 +112,7 @@ const api = vi.hoisted(() => ({
   personalAgentRosterAct: vi.fn(async () => {}),
   personalAgentRules: vi.fn(async () => []),
   personalAgentRuleReset: vi.fn(async () => []),
+  personalAgentMeetProjects: vi.fn(async (): Promise<unknown[]> => []),
 }))
 vi.mock("@/lib/api", () => api)
 const shell = vi.hoisted(() => ({ desktop: false }))
@@ -124,6 +125,10 @@ vi.mock("@/lib/platform", () => ({
 }))
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), message: vi.fn() } }))
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }))
+vi.mock("@/components/layout/workspace-folder-dialog", () => ({
+  WorkspaceFolderDialog: ({ open }: { open: boolean }) =>
+    open ? <div data-testid="folder-dialog" /> : null,
+}))
 // The pages with editors of their own are tested where they live.
 vi.mock("@/components/settings/assistants-panel", () => ({
   AssistantsPanel: () => <div data-testid="executors-list" />,
@@ -226,6 +231,7 @@ describe("the settings view", () => {
     expect(pages(groups[0])).toEqual(["workers", "executors"])
     expect(pages(groups[1])).toEqual([
       "communication",
+      "projects",
       "proactive",
       "automation",
       "about",
@@ -252,6 +258,108 @@ describe("the settings view", () => {
     expect(
       screen.getByText(/these executor configs are the same ones/)
     ).toBeInTheDocument()
+  })
+
+  it("watches every project by default; picking some is sent as what it asks, never a whole list", async () => {
+    const projects = [
+      {
+        id: 1,
+        name: "app",
+        path: "/p/app",
+        forge: { kind: "account", provider: "github", host: "github.com" },
+      },
+      {
+        id: 2,
+        name: "lib",
+        path: "/p/lib",
+        forge: { kind: "no_account", provider: "gitlab", host: "gitlab.com" },
+      },
+      { id: 3, name: "notes", path: "/p/notes", forge: { kind: "none" } },
+      {
+        id: 4,
+        name: "corp",
+        path: "/p/corp",
+        forge: { kind: "other", host: "gitee.com" },
+      },
+    ]
+    api.personalAgentMeetProjects.mockResolvedValue(projects)
+    usePersonalAgentUi.getState().openSettings("projects")
+    const { unmount } = draw()
+    expect(screen.getByRole("heading", { name: "Your projects" })).toBeTruthy()
+    await screen.findByText("app")
+    // All of them: every box ticked, none to untick.
+    for (const box of screen.getAllByRole("checkbox")) {
+      expect(box.getAttribute("aria-checked")).toBe("true")
+      expect(box.hasAttribute("disabled")).toBe(true)
+    }
+    expect(
+      screen
+        .getByRole("radio", { name: /All projects/ })
+        .getAttribute("aria-checked")
+    ).toBe("true")
+    expect(
+      screen.getByRole("button", { name: "Restore defaults" })
+    ).toBeDisabled()
+    // Where each is hosted; only a public forge without an account offers
+    // one.
+    expect(screen.getByText("On GitHub")).toBeTruthy()
+    expect(screen.getByText("On GitLab, no account connected")).toBeTruthy()
+    expect(screen.getByText("No code host")).toBeTruthy()
+    expect(screen.getByText("gitee.com")).toBeTruthy()
+    const connect = screen.getAllByRole("button", { name: "Connect account" })
+    expect(connect).toHaveLength(1)
+    fireEvent.click(connect[0])
+    expect(api.openSettingsWindow).toHaveBeenCalledWith("version-control")
+    fireEvent.click(screen.getByRole("radio", { name: /Only the projects/ }))
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.projects", value: "only" }],
+        null
+      )
+    )
+    unmount()
+
+    // Some picked: a tick is one more, an untick one fewer.
+    vi.mocked(api.personalAgentSettingsPatch).mockClear()
+    ctx.snapshot = snapshot({ prefs: { ...PREFS, projects: [1] } })
+    draw()
+    await screen.findByText("app")
+    const box = (name: string) =>
+      screen.getByRole("checkbox", { name: new RegExp(name) })
+    expect(box("app").getAttribute("aria-checked")).toBe("true")
+    expect(box("lib").getAttribute("aria-checked")).toBe("false")
+    fireEvent.click(box("lib"))
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.projects", value: { add: 2 } }],
+        null
+      )
+    )
+    fireEvent.click(box("app"))
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.projects", value: { remove: 1 } }],
+        null
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Restore defaults" }))
+    await waitFor(() =>
+      expect(api.personalAgentSettingsPatch).toHaveBeenCalledWith(
+        [{ key: "prefs.projects", value: "all" }],
+        null
+      )
+    )
+  })
+
+  it("with no project yet, offers to open one", async () => {
+    api.personalAgentMeetProjects.mockResolvedValue([])
+    usePersonalAgentUi.getState().openSettings("projects")
+    draw()
+    await screen.findByText("codeg has no project yet.")
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open a project folder" })
+    )
+    expect(screen.getByTestId("folder-dialog")).toBeTruthy()
   })
 
   it("saves an item the moment it changes, and restores a page's defaults", async () => {

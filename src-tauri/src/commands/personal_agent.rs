@@ -1639,24 +1639,24 @@ pub async fn personal_agent_choice_answer_core(
         .map_err(refused)
 }
 
-/// The projects the projects card lists when getting to know the owner
-/// (5.4): each open project, its forge and whether an account serves it.
+/// The projects the assistants may keep an eye on (`prefs.projects`, 5.4):
+/// each open project and its forge as this machine knows it — nothing
+/// asked of a forge.
 pub async fn personal_agent_meet_projects_core(
     db: &AppDatabase,
-) -> Result<Vec<crate::personal_agent::meet::MeetProject>, AppCommandError> {
-    Ok(crate::personal_agent::meet::meet_projects(db).await)
+) -> Result<Vec<crate::personal_agent::projects::ProjectView>, AppCommandError> {
+    Ok(crate::personal_agent::projects::project_views(db).await)
 }
 
-/// "One thing at once" (5.4): the owner connected these projects on the
-/// projects card — codeg looks in them for a first thing to help with.
+/// "One thing at once" (5.4): the owner said [Find one] — codeg looks in
+/// the projects watched for a first thing to help with.
 pub async fn personal_agent_starter_core(
     bot_id: Option<i32>,
     notice_id: i32,
-    folder_ids: Vec<i32>,
 ) -> Result<TimelineRow, AppCommandError> {
     engine(bot_id)
         .await?
-        .meet_connect(notice_id, &folder_ids)
+        .meet_go(notice_id)
         .await
         .map_err(refused)
 }
@@ -2302,7 +2302,7 @@ pub async fn personal_agent_choice_answer(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn personal_agent_meet_projects(
     db: State<'_, AppDatabase>,
-) -> Result<Vec<crate::personal_agent::meet::MeetProject>, AppCommandError> {
+) -> Result<Vec<crate::personal_agent::projects::ProjectView>, AppCommandError> {
     personal_agent_meet_projects_core(&db).await
 }
 
@@ -2311,7 +2311,6 @@ pub async fn personal_agent_meet_projects(
 pub async fn personal_agent_starter(
     bot_id: Option<i32>,
     notice_id: i32,
-    folder_ids: Vec<i32>,
 ) -> Result<TimelineRow, AppCommandError> {
-    personal_agent_starter_core(bot_id, notice_id, folder_ids).await
+    personal_agent_starter_core(bot_id, notice_id).await
 }

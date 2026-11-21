@@ -30,6 +30,7 @@ const SETTINGS_PAGES: readonly SettingsPage[] = [
   "workers",
   "executors",
   "communication",
+  "projects",
   "proactive",
   "automation",
   "about",

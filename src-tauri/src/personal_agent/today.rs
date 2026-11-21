@@ -367,7 +367,7 @@ pub async fn today_from(
         // other row stands for (failed work, a task, a session have theirs).
         if n.kind == NoticeKind::Rule {
             let rule = payload["rule"].as_str().unwrap_or("");
-            if !matches!(rule, "pr_review" | "uncommitted" | "idle" | "new_project") {
+            if !matches!(rule, "pr_review" | "uncommitted" | "idle") {
                 continue;
             }
             let Some(bot) = n.bot_id.filter(|b| bots.iter().any(|x| x.id == *b)) else {
@@ -393,7 +393,7 @@ pub async fn today_from(
                 "pr_review" => facts["number"]
                     .as_i64()
                     .map(|num| format!("{} #{num}", facts["project"].as_str().unwrap_or(""))),
-                "uncommitted" | "new_project" => facts["path"].as_str().map(one_line),
+                "uncommitted" => facts["path"].as_str().map(one_line),
                 _ => None,
             };
             view.needs.push(row);

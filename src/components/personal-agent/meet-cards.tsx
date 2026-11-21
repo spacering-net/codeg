@@ -7,9 +7,11 @@
  * - **What to call each other** — a choice card of two questions, one at
  *   a time (the brain's own questions' stepper): what to call the owner and
  *   what to call the assistant. Answered, it folds to one line.
- * - **The projects** — two lines about what it does, then the projects
- *   codeg has to tick, a way to open another and to connect a forge account
- *   for one whose forge has none; [Connect] or [Skip].
+ * - **One thing right away?** — that the assistants keep an eye on the
+ *   owner's projects (which ones, the settings say), and whether to find
+ *   one thing to help with now: [Find one now] or [Not now]. Nothing to
+ *   pick; an account to connect, a project folder to open when there is
+ *   none.
  * - **One thing at once** — the first thing it can take off the owner's
  *   hands there: [Hand it to me] sends it as their message, [Another one],
  *   [Not now]; or that nothing needs them and it keeps an eye on it.
@@ -17,7 +19,7 @@
  *   of what it does unasked, the preferences and the desktop companion.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useState } from "react"
 import { useTranslations } from "next-intl"
 import {
   ChevronDown,
@@ -40,7 +42,6 @@ import { toast } from "sonner"
 import { WorkspaceFolderDialog } from "@/components/layout/workspace-folder-dialog"
 import { SettingCard, SettingRow } from "@/components/shared/setting-card"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Switch } from "@/components/ui/switch"
 import { SyncedSpinner } from "@/components/ui/synced-spinner"
 import { useBotId, usePersonalAgent } from "@/contexts/personal-agent-context"
@@ -48,7 +49,6 @@ import {
   type NoticeAction,
   openSettingsWindow,
   personalAgentChoiceAnswer,
-  personalAgentMeetProjects,
   personalAgentNoticeAct,
   personalAgentStarter,
 } from "@/lib/api"
@@ -56,13 +56,8 @@ import { toErrorMessage } from "@/lib/app-error"
 import { openPetWindow } from "@/lib/pet/api"
 import { openUrl } from "@/lib/platform"
 import { isDesktop } from "@/lib/transport"
-import type {
-  PersonalAgentMeetProject,
-  PersonalAgentPrefKey,
-  QuestionSpec,
-} from "@/lib/types"
+import type { PersonalAgentPrefKey, QuestionSpec } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import type { MessageItem } from "./message-items"
@@ -75,6 +70,11 @@ import {
   PREF_ICONS,
   PresetPicker,
 } from "./settings/pref-pages"
+import {
+  connectable,
+  forgeName,
+  useWatchableProjects,
+} from "./settings/use-projects"
 import { useSettingsPatch } from "./settings/use-settings"
 import {
   CardMessage,
@@ -89,10 +89,6 @@ import {
 } from "./shared"
 
 type NoticeItem = Extract<MessageItem, { kind: "notice" }>
-
-/** Projects ticked to begin with: the most recent ones whose forge has an
- *  account. */
-const PRESELECT = 3
 
 function obj(v: unknown): Record<string, unknown> | null {
   return v && typeof v === "object" ? (v as Record<string, unknown>) : null
@@ -309,230 +305,150 @@ export function MeetNameCard({ item }: { item: NoticeItem }) {
   )
 }
 
-// ── 2. the projects ────────────────────────────────────────────────────────
+// ── 2. one thing right away? ───────────────────────────────────────────────
 
-/** The projects card's list, read again when codeg's folders change and
- *  when the window comes back (an account may have been connected). */
-function useMeetProjects(active: boolean) {
-  const [projects, setProjects] = useState<PersonalAgentMeetProject[] | null>(
-    null
-  )
-  const folders = useAppWorkspaceStore((s) => s.folders)
-  const folderKey = useMemo(
-    () =>
-      folders
-        .filter((f) => f.parent_id == null && f.kind === "regular")
-        .map((f) => f.id)
-        .join(","),
-    [folders]
-  )
-  const [asked, setAsked] = useState(0)
-  useEffect(() => {
-    if (!active) return
-    let live = true
-    personalAgentMeetProjects()
-      .then((list) => {
-        if (live) setProjects(list)
-      })
-      .catch(() => {
-        if (live) setProjects((p) => p ?? [])
-      })
-    return () => {
-      live = false
-    }
-  }, [active, folderKey, asked])
-  useEffect(() => {
-    if (!active) return
-    const again = () => setAsked((n) => n + 1)
-    window.addEventListener("focus", again)
-    return () => window.removeEventListener("focus", again)
-  }, [active])
-  return projects
-}
-
-const PROVIDER_NAME: Record<string, string> = {
-  github: "GitHub",
-  gitlab: "GitLab",
-  gitea: "Gitea",
-  cnb: "CNB",
-}
-
+/** "Shall I find one thing right away?" — nothing to pick: the assistants
+ *  watch the owner's projects (every one, unless they picked some in the
+ *  settings), with a way there, an account to connect for a public forge
+ *  with none, and a project folder to open when there is none. */
 export function ConnectCard({ item }: { item: NoticeItem }) {
   const t = useTranslations("PersonalAgent.meet.connect")
   const { readOnly } = usePageScope()
   const botId = useBotId()
+  const { snapshot } = usePersonalAgent()
+  const openSettings = usePersonalAgentUi((s) => s.openSettings)
   const row = item.row
   const data = row.data ?? {}
   const state = str(data, "state") ?? "open"
   const open = state === "open"
   const noticeId = Number(row.ref_id)
-  const projects = useMeetProjects(open)
-  const [picked, setPicked] = useState<Set<number> | null>(null)
+  const projects = useWatchableProjects(open)
   const [folderDialog, setFolderDialog] = useState(false)
   const { busy, failed, act, setBusy, setFailed } = useAct(noticeId)
+  const scope = snapshot?.account?.prefs.projects ?? "all"
+  const watched =
+    projects?.filter((p) => scope === "all" || scope.includes(p.id)) ?? []
+  const none = projects != null && projects.length === 0
+  // The first project watched on a public forge with no account: its forge
+  // names the hint.
+  const unconnected = watched.map((p) => p.forge).find(connectable)
+  const about = none
+    ? t("noProjects")
+    : scope === "all"
+      ? t("about")
+      : t("aboutOnly")
 
-  // Ticked to begin with, once the list first arrives.
-  useEffect(() => {
-    if (picked != null || projects == null) return
-    const withAccount = projects.filter((p) => p.account).slice(0, PRESELECT)
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the first pick, once, when the fetched project list arrives
-    setPicked(
-      new Set(
-        (withAccount.length > 0 ? withAccount : projects.slice(0, 1)).map(
-          (p) => p.id
-        )
-      )
-    )
-  }, [projects, picked])
-  const chosen = picked ?? new Set<number>()
-  const listed = new Set(projects?.map((p) => p.id) ?? [])
-  const ids = [...chosen].filter((id) => listed.has(id))
-
-  const connect = async () => {
-    if (busy || ids.length === 0) return
-    setBusy("connect")
+  const go = async () => {
+    if (busy) return
+    setBusy("go")
     setFailed(null)
     try {
-      await personalAgentStarter(noticeId, ids, botId)
+      await personalAgentStarter(noticeId, botId)
     } catch (e) {
       setFailed(toErrorMessage(e))
     } finally {
       setBusy(null)
     }
   }
-  const toggle = (id: number) =>
-    setPicked((p) => {
-      const next = new Set(p ?? [])
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
 
+  // A card answered when the projects were still picked on it.
   const connected = Array.isArray(data.projects)
     ? (data.projects as Array<{ name?: unknown }>)
         .map((p) => (typeof p.name === "string" ? p.name : ""))
         .filter(Boolean)
     : []
+  const settled =
+    state === "connected"
+      ? connected.length > 0
+        ? t("connected", { projects: connected.join(t("joiner")) })
+        : t("went")
+      : t("skipped")
 
   return (
     <MeetFrame
       item={item}
       icon={Compass}
       heading={t("heading")}
-      text={[t("about1"), t("about2"), t("prompt")].join("\n")}
+      text={[about, t("ask")].join("\n")}
       error={failed}
     >
-      {/* What connecting does, and how it went. */}
       <SheetPart className="flex flex-col gap-1.5">
         <div className="space-y-1.5" data-pa-meet-about>
-          <p>{t("about1")}</p>
-          <p>{t("about2")}</p>
+          <p>{about}</p>
+          {open ? <p className="font-medium">{t("ask")}</p> : null}
         </div>
         {open ? null : (
           <OutcomeLine
             tone={state === "connected" ? "done" : "off"}
             data-pa-meet-settled
           >
-            {state === "connected"
-              ? t("connected", { projects: connected.join(t("joiner")) })
-              : t("skipped")}
+            {settled}
           </OutcomeLine>
         )}
       </SheetPart>
       {open ? (
         <>
-          {/* The projects to pick: rows, a hairline between. */}
-          <SheetPart>
-            <p className="mb-1 text-sm font-medium">{t("prompt")}</p>
-            {projects == null ? (
-              <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
-                <SyncedSpinner small className="size-3.5" />
-                {t("loading")}
-              </div>
-            ) : projects.length === 0 ? (
-              <p className="py-1 text-xs text-muted-foreground">{t("none")}</p>
-            ) : (
-              <ul className="flex flex-col" data-pa-meet-projects>
-                {projects.map((p) => {
-                  const id = `pa-meet-project-${row.id}-${p.id}`
-                  return (
-                    <li
-                      key={p.id}
-                      data-pa-meet-project={p.id}
-                      className="flex items-center gap-2 border-t border-border/60 py-2 first:border-t-0"
-                    >
-                      <Checkbox
-                        id={id}
-                        checked={chosen.has(p.id)}
-                        disabled={readOnly || busy != null}
-                        onCheckedChange={() => toggle(p.id)}
-                      />
-                      <label
-                        htmlFor={id}
-                        className="min-w-0 flex-1 cursor-pointer"
-                      >
-                        <span className="block truncate text-sm">{p.name}</span>
-                        <span className="block truncate text-xs text-muted-foreground">
-                          {p.provider
-                            ? p.account
-                              ? t("onForge", {
-                                  forge:
-                                    PROVIDER_NAME[p.provider] ?? p.provider,
-                                })
-                              : t("noAccount", {
-                                  forge:
-                                    PROVIDER_NAME[p.provider] ?? p.provider,
-                                })
-                            : t("noForge")}
-                        </span>
-                      </label>
-                      {p.provider && !p.account ? (
-                        <Button
-                          size="xs"
-                          variant="secondary"
-                          disabled={readOnly}
-                          data-pa-meet-connect-account
-                          onClick={() =>
-                            void openSettingsWindow("version-control").catch(
-                              (e) => setFailed(toErrorMessage(e))
-                            )
-                          }
-                        >
-                          <KeyRound aria-hidden />
-                          {t("connectAccount")}
-                        </Button>
-                      ) : null}
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t("skipHint")}
+          <SheetPart className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+            <p data-pa-meet-settings-hint>
+              {t("settingsHint")}{" "}
+              <button
+                type="button"
+                className="rounded-sm font-medium text-foreground underline-offset-2 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                onClick={() => openSettings("projects")}
+                data-pa-meet-settings
+              >
+                {t("settings")}
+              </button>
             </p>
+            {unconnected ? (
+              <div
+                className="flex items-center justify-between gap-2"
+                data-pa-meet-account-hint
+              >
+                <span className="min-w-0">
+                  {t("accountHint", { forge: forgeName(unconnected.provider) })}
+                </span>
+                <Button
+                  size="xs"
+                  variant="secondary"
+                  disabled={readOnly}
+                  data-pa-meet-connect-account
+                  onClick={() =>
+                    void openSettingsWindow("version-control").catch((e) =>
+                      setFailed(toErrorMessage(e))
+                    )
+                  }
+                >
+                  <KeyRound aria-hidden />
+                  {t("connectAccount")}
+                </Button>
+              </div>
+            ) : null}
           </SheetPart>
           <SheetActions>
             <Button
               size="sm"
-              disabled={readOnly || busy != null || ids.length === 0}
-              onClick={() => void connect()}
-              data-pa-meet-connect
+              disabled={readOnly || busy != null}
+              onClick={() => void go()}
+              data-pa-meet-go
             >
-              {busy === "connect" ? (
+              {busy === "go" ? (
                 <SyncedSpinner small className="size-3.5" />
               ) : null}
-              {t("connect", { count: ids.length })}
+              {t("go")}
             </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={readOnly}
-              onClick={() => setFolderDialog(true)}
-              data-pa-meet-open-folder
-            >
-              <FolderOpenDot aria-hidden />
-              {t("openFolder")}
-            </Button>
+            {none ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={readOnly}
+                onClick={() => setFolderDialog(true)}
+                data-pa-meet-open-folder
+              >
+                <FolderOpenDot aria-hidden />
+                {t("openFolder")}
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="ghost"
@@ -543,7 +459,7 @@ export function ConnectCard({ item }: { item: NoticeItem }) {
               {busy === "skip" ? (
                 <SyncedSpinner small className="size-3.5" />
               ) : null}
-              {t("skip")}
+              {t("notNow")}
             </Button>
             <WorkspaceFolderDialog
               open={folderDialog}
