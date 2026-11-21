@@ -200,7 +200,8 @@ to open its overview from the sidebar header and its help screen from the footer
 ### Composer slash commands
 
 Declare `contributes.slashCommands` to run a plugin method from the composer.
-Each entry names a method in the same plugin's `server.methods`. For example:
+Each entry names a method in the same plugin's `server.methods`. This example
+registers a workspace command.
 
 ```json
 {
@@ -224,8 +225,8 @@ chats. Submitting a matching plain-text command calls the method on the current
 host, with `{ name, args, folderId, conversationId }`. `args` is the trimmed
 remainder of the text and accepts up to 8 KiB of UTF-8. For workspace commands,
 `conversationId` is `null`. For folderless sessions, `folderId` is `null`.
-Codeg displays a short plain-text `message` when the method returns
-`{ message }`. Return `null` for silent success.
+Codeg displays a plain-text `message` of up to 512 characters when the method
+returns `{ message }`. Return `null` for silent success.
 
 Codeg handles the command locally and leaves a failed command in the draft for
 retry. Commands use plain-text drafts without attachments or reference badges.
