@@ -20,6 +20,7 @@ mod schema;
 mod settings;
 pub mod source;
 mod text;
+mod theme;
 
 pub use settings::Snapshot as PluginSettings;
 use text::{valid_translations, Translations};
@@ -95,6 +96,8 @@ struct Contributions {
     lifecycle_hooks: Vec<lifecycle::Registration>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     client_surfaces: Vec<ClientSurface>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    themes: Vec<theme::Theme>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -975,15 +978,16 @@ impl Manifest {
             activation_panel,
             lifecycle_hooks,
             client_surfaces,
+            themes,
         } = &self.contributes;
-        if (!bundled && workspace_panels.is_empty())
-            || workspace_panels.len() > MAX_CONTRIBUTIONS
+        if !bundled && workspace_panels.is_empty() && themes.is_empty() {
+            return Err("A declarative plugin needs a workspace panel or theme".to_owned());
+        }
+        if workspace_panels.len() > MAX_CONTRIBUTIONS
             || commands.len() > MAX_CONTRIBUTIONS
             || hooks.len() > 1
         {
-            return Err(
-                "Provide 1 to 16 panels, up to 16 commands and up to one turn hook".to_owned(),
-            );
+            return Err("Provide up to 16 panels, 16 commands and one turn hook".to_owned());
         }
         let mut panels = BTreeSet::new();
         for panel in workspace_panels {
@@ -1054,6 +1058,7 @@ impl Manifest {
             }
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
+        theme::validate(themes)?;
         Ok(())
     }
 }
