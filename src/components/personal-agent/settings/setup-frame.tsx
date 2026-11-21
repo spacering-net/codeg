@@ -30,7 +30,7 @@ export function SetupFrame({
       />
       {/* Auto margins centre the column, and still let a taller one scroll
           from its top (centring with justify-content would cut it off). */}
-      <div className="relative flex h-full flex-col overflow-y-auto px-6 py-14">
+      <div className="relative flex h-full flex-col overflow-x-hidden overflow-y-auto px-6 py-14">
         <div className="m-auto flex w-full max-w-[26rem] flex-col items-center duration-500 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-3">
           {children}
         </div>

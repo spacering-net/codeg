@@ -238,6 +238,8 @@ export function IdentityPage({
   const renderRow = (row: OptionRow, rowDisabled = false) => (
     <OptionBlock key={row.id}>
       <RequiredOptionRow
+        // The first setup's rows: their names alone, picked at a glance.
+        hideHint={!agent}
         row={row}
         value={effectivePick(row, selection)}
         onChange={(value) => pickValue(row, value)}

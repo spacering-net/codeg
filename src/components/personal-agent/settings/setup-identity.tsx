@@ -5,7 +5,8 @@
  * from it above ("Give me a name?", then "Hi, I'm Nova!"), and its name
  * under it. The face watches the name being typed — its eyes down on the
  * field — and smiles once it has one; a die beside the field offers a name
- * to start from, and the face smiles at that too.
+ * to start from, and the face smiles at that too. Its eyes follow the
+ * pointer anywhere round it, not just over it.
  */
 
 import { useEffect, useRef, useState } from "react"
@@ -97,10 +98,15 @@ export function SetupIdentity({
   const look: BotLook = smiling ? "done" : typing ? "working" : "idle"
 
   return (
-    <div className="flex w-full flex-col items-center">
+    // The pointer anywhere here, not just over the face, has its eyes on it
+    // (and a hop as it comes): a little way round it on every side.
+    <div
+      className="-mx-6 -mt-8 flex w-[calc(100%+3rem)] flex-col items-center px-6 pt-8"
+      data-pa-face-host
+    >
       {/* Its word, over its face: asking for a name, then saying it. */}
       <div
-        className="relative z-10 mb-5 max-w-full rounded-2xl border border-border/70 bg-background px-3.5 py-1.5 text-sm leading-6 text-foreground"
+        className="relative z-10 mb-7 max-w-full rounded-2xl border border-border/70 bg-background px-3.5 py-1.5 text-sm leading-6 text-foreground"
         data-pa-setup-bubble
         aria-live="polite"
       >
@@ -132,7 +138,7 @@ export function SetupIdentity({
       <Label htmlFor="pa-name" className="sr-only">
         {t("name")}
       </Label>
-      <div className="relative mt-7 w-full max-w-xs">
+      <div className="relative mt-10 w-full max-w-xs">
         <input
           id="pa-name"
           dir="auto"

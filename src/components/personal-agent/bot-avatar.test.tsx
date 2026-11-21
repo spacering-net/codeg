@@ -121,6 +121,23 @@ describe("an assistant's face", () => {
     expect(container.querySelectorAll(".pa-face-z")).toHaveLength(0)
   })
 
+  // WebKit cuts an animated SVG off at its own edges on screen: its box has
+  // room round the face on every side, the face drawn where it always was,
+  // and set inline so an icon rule of a parent (a card head's
+  // `[&_svg]:size-3.5`) cannot shrink it.
+  it("draws in a box with room round it, laid over the face as it sits", () => {
+    const { container } = render(
+      <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
+    )
+    const svg = root(container).querySelector("svg")!
+    expect(svg.getAttribute("viewBox")).toBe("-60 -60 220 220")
+    expect(svg.style.left).toBe("-60%")
+    expect(svg.style.top).toBe("-60%")
+    expect(svg.style.width).toBe("220%")
+    expect(svg.style.height).toBe("220%")
+    expect(svg.getAttribute("class")).toContain("pointer-events-none")
+  })
+
   it("draws each look's eyes", () => {
     for (const look of [
       "idle",

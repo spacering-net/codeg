@@ -4393,7 +4393,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 }
 .pa-setup-halo {
   position: absolute;
-  inset: -22%;
+  inset: -16%;
   border-radius: 9999px;
   background: var(--pa-setup-tint);
   opacity: var(--pa-setup-halo);
@@ -4431,7 +4431,7 @@ div.monaco-diff-editor.side-by-side .editor.modified {
     opacity: 0.9;
   }
   100% {
-    transform: scale(1.9);
+    transform: scale(1.6);
     opacity: 0;
   }
 }

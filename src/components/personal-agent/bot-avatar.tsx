@@ -192,6 +192,11 @@ const BLINK_MS = 120
 const LOOK_SWAP_MS = 90
 /** Below this size the "z z z" would be specks. */
 const Z_MIN_SIZE = 20
+/** The room round a face's box its drawing has, in the box's units: the
+ *  highest it goes — a hop at its peak on a perk at its peak, the last z
+ *  of its sleep on its way up — is some 45 above it, the z's some 25 past
+ *  its side. */
+const FACE_ROOM = 60
 
 /** The eyes' centres in the 100 × 100 box. */
 const EYE_X = [38.5, 61.5] as const
@@ -597,9 +602,22 @@ function FaceAvatar({
       className={cn("pa-face relative inline-flex shrink-0", className)}
       style={{ width: rem(size), height: rem(size) }}
     >
+      {/* Its 100 × 100 box with room round it on every side, laid over the
+          face so the face sits as ever: its hops and stretches, and the z's
+          of its sleep, reach well past the box, and WebKit cuts an animated
+          SVG off at its own edges on screen, whatever its overflow — so the
+          edges are where nothing is drawn. Never in the pointer's way. */}
       <svg
-        viewBox="0 0 100 100"
-        className="size-full"
+        viewBox={`${-FACE_ROOM} ${-FACE_ROOM} ${100 + 2 * FACE_ROOM} ${100 + 2 * FACE_ROOM}`}
+        className="pointer-events-none absolute max-w-none"
+        // Inline, so a parent's rule for the icons in it (a card head's
+        // `[&_svg]:size-3.5`) never resizes it.
+        style={{
+          left: `${-FACE_ROOM}%`,
+          top: `${-FACE_ROOM}%`,
+          width: `${100 + 2 * FACE_ROOM}%`,
+          height: `${100 + 2 * FACE_ROOM}%`,
+        }}
         overflow="visible"
         aria-hidden
       >
