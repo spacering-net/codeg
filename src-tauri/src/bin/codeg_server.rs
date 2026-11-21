@@ -344,7 +344,8 @@ async fn async_main(
     let acp_event_bus = Arc::new(codeg_lib::acp::InternalEventBus::new(
         event_bus_metrics.clone(),
     ));
-    let host_plugins = Arc::new(codeg_lib::host_plugins::HostPlugins::new(&data_dir));
+    let host_plugins =
+        Arc::new(codeg_lib::host_plugins::HostPlugins::new_with_acp_providers(&data_dir));
     let emitter = EventEmitter::web_only(
         broadcaster.clone(),
         acp_event_bus.clone(),

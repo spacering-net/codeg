@@ -24,6 +24,7 @@ pub async fn apply_core(
             )
         })??;
     emit_event(emitter, CATALOG_CHANGED, ());
+    crate::commands::acp::emit_acp_agents_updated(emitter, "plugin_catalog_changed", None);
     Ok(catalog)
 }
 
@@ -86,6 +87,7 @@ pub async fn update_core(
     let update = plugins.update(plugin_id).await?;
     if update.updated {
         emit_event(emitter, CATALOG_CHANGED, ());
+        crate::commands::acp::emit_acp_agents_updated(emitter, "plugin_catalog_changed", None);
     }
     Ok(update)
 }

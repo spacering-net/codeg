@@ -53,20 +53,22 @@ pub async fn list(conn: &DatabaseConnection) -> Result<Vec<custom_agent::Model>,
 }
 
 pub async fn list_defs(conn: &DatabaseConnection) -> Result<Vec<CustomAgentDef>, DbError> {
-    let rows = list(conn).await?;
-    Ok(rows
-        .iter()
+    Ok(defs_from_rows(&list(conn).await?))
+}
+
+fn defs_from_rows(rows: &[custom_agent::Model]) -> Vec<CustomAgentDef> {
+    rows.iter()
         .filter_map(|row| {
             let def = def_from_model(row);
             if def.is_none() {
                 tracing::warn!(
-                    "[custom-agent] skipping unreadable row {:?} (bad spec_json or distribution_kind)",
-                    row.registry_id
-                );
+                "[custom-agent] skipping unreadable row {:?} (bad spec_json or distribution_kind)",
+                row.registry_id
+            );
             }
             def
         })
-        .collect())
+        .collect()
 }
 
 pub async fn get(
@@ -161,8 +163,22 @@ pub async fn delete(conn: &DatabaseConnection, registry_id: &str) -> Result<bool
 /// Rebuild the process-global launch registry from the database. Call at
 /// startup and after every mutation.
 pub async fn hydrate_registry(conn: &DatabaseConnection) -> Result<(), DbError> {
-    let defs = list_defs(conn).await?;
-    let errors = custom_registry::hydrate(&defs);
+    static HYDRATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    // Serialize the read and publish together so two concurrent mutations
+    // cannot install older snapshots over newer ones.
+    let _guard = HYDRATION.lock().await;
+    let rows = match list(conn).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            // A missing snapshot cannot establish that a public alias is
+            // unclaimed. Keep the last user layer and withdraw plugin aliases.
+            custom_registry::suspend_plugin_providers();
+            return Err(error);
+        }
+    };
+    let defs = defs_from_rows(&rows);
+    let errors =
+        custom_registry::hydrate_users(&defs, rows.iter().map(|row| row.registry_id.as_str()));
     for (id, err) in errors {
         tracing::warn!("[custom-agent] {id} is registered but not launchable: {err}");
     }

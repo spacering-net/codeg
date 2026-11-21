@@ -15,6 +15,7 @@ use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 pub mod lifecycle;
+mod providers;
 mod runtime;
 mod schema;
 mod settings;
@@ -87,6 +88,8 @@ struct Contributions {
     lifecycle_hooks: Vec<lifecycle::Registration>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     client_surfaces: Vec<ClientSurface>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    acp_providers: Vec<providers::AcpProvider>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -260,6 +263,15 @@ struct PluginState {
     catalog: Catalog,
     turns: BTreeMap<String, VecDeque<(i32, TurnActivity)>>,
     pending_installs: VecDeque<PendingInstall>,
+    publish_acp_providers: bool,
+}
+
+impl PluginState {
+    fn publish_providers(&self) {
+        if self.publish_acp_providers {
+            providers::publish(&self.catalog);
+        }
+    }
 }
 
 impl HostPlugins {
@@ -269,6 +281,7 @@ impl HostPlugins {
             catalog,
             turns: BTreeMap::new(),
             pending_installs: VecDeque::new(),
+            publish_acp_providers: false,
         });
         if let Err(error) = &state {
             tracing::warn!(%error, "Could not load the host plugin catalog");
@@ -279,6 +292,19 @@ impl HostPlugins {
             runtime_slots: Arc::new(Semaphore::new(4)),
             observer_slots: Arc::new(Semaphore::new(16)),
         }
+    }
+
+    /// Load the process's host catalog after database ACP definitions have
+    /// been published. Other catalog instances stay local to their caller.
+    pub fn new_with_acp_providers(data_dir: &Path) -> Self {
+        let host = Self::new(data_dir);
+        if let Ok(state) = host.state.lock().expect("host plugin state lock").as_mut() {
+            state.publish_acp_providers = true;
+            state.publish_providers();
+        } else {
+            crate::acp::custom_registry::hydrate_plugin_providers(Vec::new());
+        }
+        host
     }
 
     pub fn list(&self) -> Result<Vec<InstalledPlugin>, AppCommandError> {
@@ -325,6 +351,7 @@ impl HostPlugins {
         }
         write_catalog(&self.path, &next)?;
         state.catalog = next;
+        state.publish_providers();
         if enabled != Some(true) {
             state.turns.remove(&id);
         }
@@ -475,7 +502,11 @@ impl HostPlugins {
             || current.server_code != server_code
             || current.manifest.client != manifest.client
             || current.client_html != client_html
-            || current.manifest.contributes.lifecycle_hooks != manifest.contributes.lifecycle_hooks;
+            || current.manifest.contributes.lifecycle_hooks != manifest.contributes.lifecycle_hooks
+            || providers::adds_or_changes_recipe(
+                &current.manifest.contributes.acp_providers,
+                &manifest.contributes.acp_providers,
+            );
         let settings_changed = current.manifest.settings != manifest.settings;
         let settings = current.settings_for_update(manifest.settings.as_ref())?;
         if current.manifest == manifest
@@ -509,6 +540,7 @@ impl HostPlugins {
         );
         write_catalog(&self.path, &next)?;
         state.catalog = next;
+        state.publish_providers();
         if discard_activity {
             state.turns.remove(id);
         }
@@ -952,14 +984,15 @@ impl Manifest {
             settings_panel,
             lifecycle_hooks,
             client_surfaces,
+            acp_providers,
         } = &self.contributes;
-        if (!bundled && workspace_panels.is_empty())
+        if (!bundled && workspace_panels.is_empty() && acp_providers.is_empty())
             || workspace_panels.len() > MAX_CONTRIBUTIONS
             || commands.len() > MAX_CONTRIBUTIONS
             || hooks.len() > 1
         {
             return Err(
-                "Provide 1 to 16 panels, up to 16 commands and up to one turn hook".to_owned(),
+                "Provide a panel or ACP provider, up to 16 panels or commands, and up to one turn hook".to_owned(),
             );
         }
         let mut panels = BTreeSet::new();
@@ -1009,6 +1042,7 @@ impl Manifest {
             }
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
+        providers::validate(acp_providers, &self.version)?;
         Ok(())
     }
 }

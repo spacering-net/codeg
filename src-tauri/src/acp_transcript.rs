@@ -199,10 +199,14 @@ fn safe_component(s: &str) -> bool {
         && !s.starts_with('.')
 }
 
+fn safe_agent_dir(agent_dir: &str) -> bool {
+    safe_component(agent_dir) || crate::models::agent::is_plugin_provider_id(agent_dir)
+}
+
 /// `<root>/<agent_dir>/<session_id>.jsonl`, or `None` when either component is
 /// unsafe as a file name.
 pub fn transcript_path_in(root: &Path, agent_dir: &str, session_id: &str) -> Option<PathBuf> {
-    if !safe_component(agent_dir) || !safe_component(session_id) {
+    if !safe_agent_dir(agent_dir) || !safe_component(session_id) {
         return None;
     }
     Some(root.join(agent_dir).join(format!("{session_id}.jsonl")))
@@ -1263,7 +1267,7 @@ pub fn superseded_session_ids_in(
 /// Every session id with a transcript under `<root>/<agent_dir>/`. Used by the
 /// generic parser's `list_conversations`.
 pub fn list_session_ids_in(root: &Path, agent_dir: &str) -> Vec<String> {
-    if !safe_component(agent_dir) {
+    if !safe_agent_dir(agent_dir) {
         return Vec::new();
     }
     let Ok(entries) = std::fs::read_dir(root.join(agent_dir)) else {
@@ -1283,7 +1287,7 @@ pub fn list_session_ids_in(root: &Path, agent_dir: &str) -> Vec<String> {
 /// Delete a custom agent's whole transcript directory. Called when the user
 /// removes the agent definition and asks for its data to go with it.
 pub fn remove_agent_transcripts_in(root: &Path, agent_dir: &str) -> std::io::Result<()> {
-    if !safe_component(agent_dir) {
+    if !safe_agent_dir(agent_dir) {
         return Ok(());
     }
     let dir = root.join(agent_dir);

@@ -557,6 +557,12 @@ fn dir_entry_for_agent_id(agent_id: &str) -> Option<registry::BinaryDirEntry> {
     }
 }
 
+/// Validate the resolved file, including intermediate archive symlinks.
+pub(crate) fn path_within(root: &Path, path: &Path) -> bool {
+    root.canonicalize()
+        .is_ok_and(|root| path.canonicalize().is_ok_and(|path| path.starts_with(root)))
+}
+
 /// The launchable entry inside an extracted version directory, or `None` when
 /// the tree is INCOMPLETE.
 ///
@@ -647,13 +653,15 @@ fn installed_binary_path_in(
         .join(normalized)
         .join(registry::current_platform());
 
+    let plugin = crate::models::agent::is_plugin_provider_id(agent_id);
     if let Some(entry) = dir_entry_for_agent_id(agent_id) {
-        return complete_dir_tree_install(&platform_dir, entry);
+        return complete_dir_tree_install(&platform_dir, entry)
+            .filter(|path| !plugin || path_within(&platform_dir, path));
     }
 
     let path = platform_dir.join(executable_file_name(cmd_name));
 
-    if !path.exists() {
+    if !path.exists() || (plugin && !path_within(&platform_dir, &path)) {
         return None;
     }
     if is_binary_file_compatible(path.as_path()) {
@@ -991,8 +999,14 @@ async fn ensure_binary_with_progress(
             &on_progress,
         )?;
 
+        let plugin = crate::models::agent::is_plugin_provider_id(agent_id);
+        if plugin && registry::from_registry_id(agent_id).is_none() {
+            return Err(AcpError::DownloadFailed(
+                "ACP plugin provider was withdrawn during installation".into(),
+            ));
+        }
         if let Some(entry) = dir_entry_for_agent_id(agent_id) {
-            return install_extracted_tree(&extract_dir, &dir, entry, &on_progress);
+            return install_extracted_tree(&extract_dir, &dir, entry, plugin, &on_progress);
         }
 
         // Find the binary in extracted files and move to final location.
@@ -1071,10 +1085,31 @@ const ENTRY_SIBLING_EXECUTABLES: &[&str] = &[
     "localharness.exe",
 ];
 
+fn validate_provider_archive_entry(root: &Path, cmd: &str) -> Result<(), AcpError> {
+    let entry = root.join(cmd);
+    if !entry.is_file() || !path_within(root, &entry) {
+        return Err(AcpError::DownloadFailed(format!(
+            "ACP plugin entry {cmd:?} must resolve to a file inside its archive"
+        )));
+    }
+    if let Some(parent) = entry.parent() {
+        for name in ENTRY_SIBLING_EXECUTABLES {
+            let helper = parent.join(name);
+            if helper.is_file() && !path_within(root, &helper) {
+                return Err(AcpError::DownloadFailed(format!(
+                    "ACP plugin helper {name:?} resolves outside its archive"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn install_extracted_tree(
     extract_dir: &Path,
     final_dir: &Path,
     entry: registry::BinaryDirEntry,
+    plugin: bool,
     on_progress: &impl Fn(&str),
 ) -> Result<PathBuf, AcpError> {
     on_progress("Installing extracted files...");
@@ -1091,6 +1126,9 @@ fn install_extracted_tree(
     }
 
     let entry_rel = entry.for_current_platform();
+    if plugin {
+        validate_provider_archive_entry(final_dir, entry_rel)?;
+    }
     let entry_path = final_dir.join(entry_rel);
     if !entry_path.is_file() {
         return Err(AcpError::DownloadFailed(format!(
@@ -1239,11 +1277,14 @@ fn unpack_download(
     bin_name: &str,
     on_progress: &impl Fn(&str),
 ) -> Result<(), AcpError> {
-    let extract = if archive_url.ends_with(".tar.gz") || archive_url.ends_with(".tgz") {
+    let archive_path_suffix = archive_url.split(['?', '#']).next().unwrap_or(archive_url);
+    let extract = if archive_path_suffix.ends_with(".tar.gz")
+        || archive_path_suffix.ends_with(".tgz")
+    {
         extract_tar_gz
-    } else if archive_url.ends_with(".tar.bz2") || archive_url.ends_with(".tbz2") {
+    } else if archive_path_suffix.ends_with(".tar.bz2") || archive_path_suffix.ends_with(".tbz2") {
         extract_tar_bz2
-    } else if archive_url.ends_with(".zip") {
+    } else if archive_path_suffix.ends_with(".zip") {
         extract_zip
     } else if is_binary_file_compatible(archive_path) {
         return std::fs::rename(archive_path, extract_dir.join(bin_name))
@@ -1351,6 +1392,27 @@ mod tests {
 
     /// The common case: nothing at the destination, so the whole tree moves in
     /// one rename and the old root is gone afterwards.
+    #[cfg(unix)]
+    #[test]
+    fn provider_entry_and_helpers_must_resolve_inside_the_archive() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("archive");
+        let nested = archive.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+        let outside = temp.path().join("outside");
+        std::fs::write(&outside, "fixture").unwrap();
+        let entry = nested.join("adapter");
+        symlink(&outside, &entry).unwrap();
+        assert!(validate_provider_archive_entry(&archive, "nested/adapter").is_err());
+        std::fs::remove_file(&entry).unwrap();
+        std::fs::write(&entry, "fixture").unwrap();
+        assert!(validate_provider_archive_entry(&archive, "nested/adapter").is_ok());
+        symlink(&outside, nested.join("node")).unwrap();
+        assert!(validate_provider_archive_entry(&archive, "nested/adapter").is_err());
+    }
+
     #[test]
     fn migrate_root_renames_when_the_destination_is_empty() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -1615,7 +1677,8 @@ mod tests {
         if cfg!(windows) {
             return;
         }
-        let installed = install_extracted_tree(&extract, &final_dir, entry, &|_| {}).unwrap();
+        let installed =
+            install_extracted_tree(&extract, &final_dir, entry, false, &|_| {}).unwrap();
         assert_eq!(installed, final_dir.join("dist-package/cursor-agent"));
         assert!(final_dir.join("dist-package/index.js").is_file());
         assert!(final_dir.join("dist-package/node").is_file());
@@ -1660,7 +1723,8 @@ mod tests {
                 windows: &["localharness_external.exe"],
             },
         };
-        let installed = install_extracted_tree(&extract, &final_dir, entry, &|_| {}).unwrap();
+        let installed =
+            install_extracted_tree(&extract, &final_dir, entry, false, &|_| {}).unwrap();
         assert_eq!(installed, final_dir.join("agy_acp_server.par"));
 
         let harness = final_dir.join("localharness_external");
@@ -1749,7 +1813,7 @@ mod tests {
                 windows: &["localharness_external.exe"],
             },
         };
-        let err = install_extracted_tree(&extract, &final_dir, entry, &|_| {}).unwrap_err();
+        let err = install_extracted_tree(&extract, &final_dir, entry, false, &|_| {}).unwrap_err();
         assert!(
             err.to_string().contains("localharness_external"),
             "the error must name the missing helper: {err}"
@@ -1768,7 +1832,7 @@ mod tests {
             windows: "dist-package/cursor-agent.cmd",
             required_siblings: registry::PlatformFiles::NONE,
         };
-        let err = install_extracted_tree(&extract, &final_dir, entry, &|_| {}).unwrap_err();
+        let err = install_extracted_tree(&extract, &final_dir, entry, false, &|_| {}).unwrap_err();
         assert!(err.to_string().contains("not found in archive"), "{err}");
     }
 

@@ -140,7 +140,7 @@ pub async fn run_preflight_with_env(
         // so an installed launcher that leads to none still cannot start.
         let bridge = match &meta.distribution {
             AgentDistribution::Npx { cmd, .. } => {
-                crate::commands::acp::resolve_npx_command(cmd).await
+                crate::commands::acp::resolve_npx_command_for(agent_type, cmd).await
             }
             _ => None,
         };

@@ -1,26 +1,15 @@
-//! Runtime registry for **custom (user-registered) ACP agents**.
+//! Runtime registry for user ACP definitions and enabled host plugin providers.
 //!
-//! Built-in agents are compile-time constants in [`crate::acp::registry`].
-//! Custom agents are rows in the `custom_agent` table, so their launch
-//! metadata only exists at runtime — but every consumer of
-//! [`crate::acp::registry::get_agent_meta`] expects a `&'static str`-shaped
-//! [`AcpAgentMeta`] from a synchronous, infallible call.
-//!
-//! This module bridges the two: [`hydrate`] converts database definitions into
-//! `&'static AcpAgentMeta` values (via [`crate::intern`]) and publishes them in
-//! a process-global map that `get_agent_meta` consults. Consumers are
-//! unchanged — `AgentDistribution` keeps its `&'static str` fields, and the
-//! 57 destructuring sites across `commands/acp.rs`, `binary_cache.rs`,
-//! `preflight.rs` and `connection.rs` need no `Cow` conversion.
+//! Built-ins are compile-time constants in [`crate::acp::registry`]. This
+//! module publishes runtime metadata in separate user and plugin layers. An
+//! opaque plugin identity keeps its installation, preferences and transcripts
+//! separate from other definitions with the same public registry alias.
 //!
 //! ## Leak discipline
 //!
-//! Promoting to `&'static` means leaking. Each definition is fingerprinted
-//! (`serde_json` of the stored spec), and [`hydrate`] reuses the previously
-//! leaked meta whenever the fingerprint is unchanged — so re-hydrating an
-//! untouched registry (which happens on every startup and after every unrelated
-//! CRUD call) allocates nothing. Only an actual edit to a definition leaks a
-//! fresh meta, bounding the leak by the number of edits in one app run.
+//! `AcpAgentMeta` uses process-lifetime references. Cache each published
+//! definition by fingerprint across updates, disables and alias conflicts so
+//! repeated activation of a reviewed recipe reuses existing metadata.
 //!
 //! ## Spec format
 //!
@@ -31,14 +20,15 @@
 //! carry — the npx/uvx console-script name, and runtime version floors — are
 //! optional extra keys with derived defaults.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::acp::registry::{AcpAgentMeta, AgentDistribution, BinaryDirEntry, PlatformBinary};
 use crate::intern::{intern, leak, leak_slice};
-use crate::models::agent::{is_valid_custom_agent_id, AgentType};
+use crate::models::agent::{is_valid_custom_agent_id, AgentType, PLUGIN_PROVIDER_ID_PREFIX};
 
 /// Which distribution channel a custom agent launches through. Stored as a
 /// column so an agent that publishes BOTH a binary and an npx package (the
@@ -72,7 +62,7 @@ impl CustomDistributionKind {
 }
 
 /// npx channel — mirrors the registry's `distribution.npx`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NpxSpec {
     /// Full npm spec including the version, e.g. `@qwen-code/qwen-code@0.21.0`.
     pub package: String,
@@ -92,7 +82,7 @@ pub struct NpxSpec {
 }
 
 /// uvx channel — mirrors the registry's `distribution.uvx`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UvxSpec {
     /// `uvx --from` spec, e.g. `fast-agent-acp==0.9.24`.
     pub package: String,
@@ -112,7 +102,7 @@ pub struct UvxSpec {
 
 /// One platform's binary release — mirrors the registry's
 /// `distribution.binary.<platform>`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BinaryPlatformSpec {
     /// Archive download URL.
     #[serde(alias = "url")]
@@ -133,7 +123,7 @@ pub struct BinaryPlatformSpec {
 }
 
 /// The stored `spec_json`: the ACP registry `distribution` object, verbatim.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustomAgentSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub npx: Option<NpxSpec>,
@@ -382,7 +372,7 @@ fn is_safe_path_component(s: &str) -> bool {
 /// launch a file of the definition's choosing anywhere on disk. Checked against
 /// the NORMALIZED form (see [`split_archive_entry`]), which has already folded
 /// `\` into `/`, so a Windows-style `..\..\x` is caught on a unix build too.
-fn is_safe_archive_entry(raw: &str) -> bool {
+pub(crate) fn is_safe_archive_entry(raw: &str) -> bool {
     let (path, _) = split_archive_entry(raw);
     if path.is_empty() {
         // No entry at all — the command name falls back to the archive stem.
@@ -492,13 +482,20 @@ pub fn validate(def: &CustomAgentDef) -> Result<(), CustomAgentError> {
 /// Validate a definition and convert it into leaked launch metadata.
 ///
 /// Every string that ends up in [`AcpAgentMeta`] is interned, so calling this
-/// twice with equal input leaks only the slices (which [`hydrate`] avoids via
+/// twice with equal input leaks only the slices (which hydration avoids via
 /// fingerprinting). **Call [`validate`] instead when the metadata is not kept**
 /// — those slice leaks are not deduplicated, so building a throwaway meta on a
 /// repeatable request would grow the process without bound.
 pub fn build_meta(def: &CustomAgentDef) -> Result<AcpAgentMeta, CustomAgentError> {
+    build_meta_with_id(def, None)
+}
+
+fn build_meta_with_id(
+    def: &CustomAgentDef,
+    plugin_runtime_id: Option<&str>,
+) -> Result<AcpAgentMeta, CustomAgentError> {
     validate(def)?;
-    let agent_type = AgentType::Custom(intern(&def.registry_id));
+    let agent_type = AgentType::Custom(intern(plugin_runtime_id.unwrap_or(&def.registry_id)));
     let version = intern(effective_version(def));
 
     let distribution = match def.distribution_kind {
@@ -543,7 +540,7 @@ pub fn build_meta(def: &CustomAgentDef) -> Result<AcpAgentMeta, CustomAgentError
                 // …) is a legitimate launcher for a custom agent — same
                 // recipe as the uvx entry script, used when the uv runner is
                 // absent.
-                system_cmd: Some((cmd, args)),
+                system_cmd: plugin_runtime_id.is_none().then_some((cmd, args)),
             }
         }
         CustomDistributionKind::Binary => build_binary_distribution(&def.spec, version)?,
@@ -639,8 +636,8 @@ fn build_binary_distribution(
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| entry_path.clone());
         Some(BinaryDirEntry {
-            unix: intern(&unix),
-            windows: intern(&windows),
+            unix: intern(if cfg!(windows) { &unix } else { &entry_path }),
+            windows: intern(if cfg!(windows) { &entry_path } else { &windows }),
             // The ACP registry has no field for this, and codeg cannot know
             // which files an arbitrary agent's entry execs — so a custom
             // agent's tree is validated by its entry alone.
@@ -690,8 +687,8 @@ fn archive_stem(url: &str) -> &str {
     file.split('.').next().unwrap_or(file)
 }
 
+#[derive(Clone, Copy)]
 struct Entry {
-    fingerprint: String,
     meta: &'static AcpAgentMeta,
     /// Display icon, kept beside the launch metadata rather than inside
     /// [`AcpAgentMeta`]: it is presentation, not launch data, and every one of
@@ -711,99 +708,183 @@ struct Entry {
     version_probe: Option<&'static str>,
 }
 
-fn registry() -> &'static RwLock<HashMap<&'static str, Entry>> {
-    static REGISTRY: OnceLock<RwLock<HashMap<&'static str, Entry>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| RwLock::new(HashMap::new()))
+/// A plugin declaration ready for hydration. The public id participates in
+/// arbitration. The scoped runtime id owns settings, binaries and transcripts.
+#[derive(Clone)]
+pub(crate) struct PluginProviderDef {
+    pub plugin_id: String,
+    pub definition: CustomAgentDef,
 }
 
-fn fingerprint(def: &CustomAgentDef) -> String {
-    serde_json::to_string(def).unwrap_or_default()
+impl PluginProviderDef {
+    fn runtime_id(&self) -> String {
+        let recipe = serde_json::to_vec(&(
+            &self.plugin_id,
+            &self.definition.registry_id,
+            self.definition.distribution_kind,
+            &self.definition.spec,
+        ))
+        .expect("ACP provider recipe serializes");
+        format!("{PLUGIN_PROVIDER_ID_PREFIX}{:x}", Sha256::digest(recipe))
+    }
 }
 
-/// Replace the published registry with `defs`.
-///
-/// Definitions that fail validation are skipped with a warning rather than
-/// failing the whole hydrate — one malformed row must not take down every
-/// other custom agent (or app startup). Returns the errors for callers that
-/// want to surface them.
-pub fn hydrate(defs: &[CustomAgentDef]) -> Vec<(String, CustomAgentError)> {
-    let mut errors = Vec::new();
-    let mut next: HashMap<&'static str, Entry> = HashMap::new();
-    let previous = registry().read().unwrap_or_else(|e| e.into_inner());
+#[derive(Default)]
+struct Registry {
+    users: HashMap<&'static str, Entry>,
+    user_ids: HashSet<String>,
+    user_registry_ready: bool,
+    plugin_defs: Vec<PluginProviderDef>,
+    plugins: HashMap<&'static str, Entry>,
+    plugin_aliases: HashMap<&'static str, AgentType>,
+    // Activation changes can hide an entry temporarily. Retain the leaked
+    // metadata by fingerprint so repeated toggles never allocate another meta.
+    fingerprints: HashMap<String, Entry>,
+}
 
-    for def in defs {
-        let id = intern(&def.registry_id);
-        let fp = fingerprint(def);
-        // Unchanged definition — reuse the already-leaked meta.
-        if let Some(prev) = previous.get(id).filter(|p| p.fingerprint == fp) {
-            next.insert(
-                id,
-                Entry {
-                    fingerprint: fp,
-                    meta: prev.meta,
-                    icon: prev.icon,
-                    skills_shared_store: prev.skills_shared_store,
-                    skills_dir: prev.skills_dir,
-                    source: prev.source,
-                    version_probe: prev.version_probe,
-                },
-            );
-            continue;
+impl Registry {
+    fn entry(&self, id: &str) -> Option<&Entry> {
+        self.users.get(id).or_else(|| self.plugins.get(id))
+    }
+
+    fn hydrate_plugins(&mut self) {
+        self.plugins.clear();
+        self.plugin_aliases.clear();
+        if !self.user_registry_ready {
+            return;
         }
-        match build_meta(def) {
-            Ok(meta) => {
-                next.insert(
-                    id,
-                    Entry {
-                        fingerprint: fp,
-                        meta: leak(meta),
-                        icon: def
-                            .icon_url
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .map(intern),
-                        skills_shared_store: def.skills_shared_store,
-                        skills_dir: def
-                            .skills_dir
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .map(intern),
-                        source: def.source,
-                        version_probe: def
-                            .version_probe
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                            .map(intern),
-                    },
-                );
+        let mut claimed = HashMap::new();
+        for provider in &self.plugin_defs {
+            let def = &provider.definition;
+            let id = &def.registry_id;
+            let folded = id.to_ascii_lowercase();
+            if self.user_ids.contains(&folded) {
+                tracing::debug!(%id, plugin_id = %provider.plugin_id, "ACP plugin provider is shadowed by a user definition");
+                continue;
             }
-            Err(e) => {
-                tracing::warn!(
-                    "[ACP] skipping custom agent {:?}: {e}",
-                    def.registry_id.as_str()
-                );
-                errors.push((def.registry_id.clone(), e));
+            if let Some(winner) = claimed.get(&folded) {
+                tracing::warn!(%id, plugin_id = %provider.plugin_id, %winner, "Conflicting ACP plugin provider ignored");
+                continue;
+            }
+            claimed.insert(folded, provider.plugin_id.as_str());
+            let runtime_id = provider.runtime_id();
+            match cached_entry(&mut self.fingerprints, def, Some(&runtime_id)) {
+                Ok(entry) => {
+                    self.plugins
+                        .insert(entry.meta.agent_type.custom_id().unwrap(), entry);
+                    self.plugin_aliases
+                        .insert(intern(id), entry.meta.agent_type);
+                }
+                Err(CustomAgentError::UnsupportedPlatform(_)) => {}
+                Err(error) => {
+                    tracing::warn!(%id, plugin_id = %provider.plugin_id, %error, "Could not publish ACP plugin provider")
+                }
             }
         }
     }
+}
 
-    drop(previous);
-    *registry().write().unwrap_or_else(|e| e.into_inner()) = next;
+fn registry() -> &'static RwLock<Registry> {
+    static REGISTRY: OnceLock<RwLock<Registry>> = OnceLock::new();
+    REGISTRY.get_or_init(|| RwLock::new(Registry::default()))
+}
+
+fn cached_entry(
+    entries: &mut HashMap<String, Entry>,
+    def: &CustomAgentDef,
+    plugin_runtime_id: Option<&str>,
+) -> Result<Entry, CustomAgentError> {
+    let fingerprint =
+        serde_json::to_string(&(plugin_runtime_id, def)).expect("ACP definition serializes");
+    if let Some(entry) = entries.get(&fingerprint) {
+        return Ok(*entry);
+    }
+    let meta = match plugin_runtime_id {
+        Some(id) => build_meta_with_id(def, Some(id)),
+        None => build_meta(def),
+    }?;
+    let optional_string =
+        |value: Option<&str>| value.map(str::trim).filter(|s| !s.is_empty()).map(intern);
+    let entry = Entry {
+        meta: leak(meta),
+        icon: optional_string(def.icon_url.as_deref()),
+        skills_shared_store: def.skills_shared_store,
+        skills_dir: optional_string(def.skills_dir.as_deref()),
+        source: def.source,
+        version_probe: optional_string(def.version_probe.as_deref()),
+    };
+    entries.insert(fingerprint, entry);
+    Ok(entry)
+}
+
+/// Replace user definitions while preserving the plugin layer. Unlaunchable
+/// rows still reserve their ids so a plugin cannot assume their public alias.
+#[cfg(test)]
+pub fn hydrate(defs: &[CustomAgentDef]) -> Vec<(String, CustomAgentError)> {
+    hydrate_users(defs, defs.iter().map(|def| def.registry_id.as_str()))
+}
+
+pub(crate) fn hydrate_users<'a>(
+    defs: &[CustomAgentDef],
+    user_ids: impl IntoIterator<Item = &'a str>,
+) -> Vec<(String, CustomAgentError)> {
+    let mut registry = registry().write().unwrap_or_else(|e| e.into_inner());
+    let mut errors = Vec::new();
+    let mut users = HashMap::new();
+    for def in defs {
+        match cached_entry(&mut registry.fingerprints, def, None) {
+            Ok(entry) => {
+                users.insert(intern(&def.registry_id), entry);
+            }
+            Err(error) => errors.push((def.registry_id.clone(), error)),
+        }
+    }
+    registry.users = users;
+    registry.user_ids = user_ids.into_iter().map(str::to_ascii_lowercase).collect();
+    registry.user_registry_ready = true;
+    registry.hydrate_plugins();
     errors
 }
 
-/// Launch metadata for a registered custom agent, or `None` when the id is not
-/// registered (never registered, or deleted while conversations still point at
-/// it).
+pub(crate) fn suspend_plugin_providers() {
+    let mut registry = registry().write().unwrap_or_else(|e| e.into_inner());
+    registry.user_registry_ready = false;
+    registry.hydrate_plugins();
+}
+
+pub(crate) fn hydrate_plugin_providers(mut defs: Vec<PluginProviderDef>) {
+    defs.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+    let mut registry = registry().write().unwrap_or_else(|e| e.into_inner());
+    registry.plugin_defs = defs;
+    registry.hydrate_plugins();
+}
+
+/// Resolve a public ACP registry id, or an active scoped provider id.
+pub(crate) fn resolve_id(registry_id: &str) -> Option<AgentType> {
+    let registry = registry().read().unwrap_or_else(|e| e.into_inner());
+    registry
+        .entry(registry_id)
+        .map(|entry| entry.meta.agent_type)
+        .or_else(|| registry.plugin_aliases.get(registry_id).copied())
+}
+
+/// The manifest's public id for provider discovery and display.
+pub(crate) fn public_provider_id(agent_type: AgentType) -> Option<&'static str> {
+    let registry = registry().read().unwrap_or_else(|e| e.into_inner());
+    registry
+        .plugin_aliases
+        .iter()
+        .find_map(|(&id, &agent)| (agent_type == agent).then_some(id))
+}
+
+/// Launch metadata for a registered custom agent. Scoped plugin identities
+/// resolve only while their exact reviewed recipe is published.
 pub fn get(registry_id: &str) -> Option<&'static AcpAgentMeta> {
     registry()
         .read()
         .unwrap_or_else(|e| e.into_inner())
-        .get(registry_id)
-        .map(|e| e.meta)
+        .entry(registry_id)
+        .map(|entry| entry.meta)
 }
 
 /// Display name for a registered custom agent.
@@ -827,7 +908,7 @@ pub fn skills_decl(registry_id: &str) -> CustomSkillsDecl {
     registry()
         .read()
         .unwrap_or_else(|e| e.into_inner())
-        .get(registry_id)
+        .entry(registry_id)
         .map(|e| CustomSkillsDecl {
             shared_store: e.skills_shared_store,
             dir: e.skills_dir,
@@ -841,7 +922,7 @@ pub fn icon_for(registry_id: &str) -> Option<&'static str> {
     registry()
         .read()
         .unwrap_or_else(|e| e.into_inner())
-        .get(registry_id)
+        .entry(registry_id)
         .and_then(|e| e.icon)
 }
 
@@ -851,7 +932,7 @@ pub fn source_of(registry_id: &str) -> Option<CustomAgentSource> {
     registry()
         .read()
         .unwrap_or_else(|e| e.into_inner())
-        .get(registry_id)
+        .entry(registry_id)
         .map(|e| e.source)
 }
 
@@ -861,7 +942,7 @@ pub fn version_probe_of(registry_id: &str) -> Option<&'static str> {
     registry()
         .read()
         .unwrap_or_else(|e| e.into_inner())
-        .get(registry_id)
+        .entry(registry_id)
         .and_then(|e| e.version_probe)
 }
 
@@ -899,14 +980,20 @@ pub fn unregistered_meta(registry_id: &'static str) -> AcpAgentMeta {
 
 /// Every registered custom agent, sorted by id for a stable UI order.
 pub fn all() -> Vec<AgentType> {
-    let mut ids: Vec<&'static str> = registry()
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .keys()
-        .copied()
+    let registry = registry().read().unwrap_or_else(|e| e.into_inner());
+    let mut agents: Vec<_> = registry
+        .users
+        .iter()
+        .map(|(&id, entry)| (id, entry.meta.agent_type))
+        .chain(
+            registry
+                .plugin_aliases
+                .iter()
+                .map(|(&id, &agent)| (id, agent)),
+        )
         .collect();
-    ids.sort_unstable();
-    ids.into_iter().map(AgentType::Custom).collect()
+    agents.sort_unstable_by_key(|(id, _)| *id);
+    agents.into_iter().map(|(_, agent)| agent).collect()
 }
 
 /// Serializes tests that call [`hydrate`].

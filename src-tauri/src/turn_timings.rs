@@ -154,7 +154,9 @@ fn safe_component(s: &str) -> bool {
 /// `<root>/<agent>/<session_id>.jsonl`, or `None` when either component is
 /// unsafe as a file name.
 fn journal_path_in(root: &std::path::Path, agent: &str, session_id: &str) -> Option<PathBuf> {
-    if !safe_component(agent) || !safe_component(session_id) {
+    if (!safe_component(agent) && !crate::models::agent::is_plugin_provider_id(agent))
+        || !safe_component(session_id)
+    {
         return None;
     }
     Some(root.join(agent).join(format!("{session_id}.jsonl")))

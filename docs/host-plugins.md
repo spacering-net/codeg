@@ -30,6 +30,63 @@ See the [turn activity manifest](../examples/plugins/turn-activity/codeg-plugin.
 for a complete example. Import it in **Settings → Plugins**, then enable it.
 Open a workspace in Codeg to use the panel and command.
 
+## ACP providers
+
+Declare `contributes.acpProviders` to add up to four agents or ACP adapters to
+the connected host's agent list. A provider-only manifest uses `apiVersion: 1`
+and can be installed without a JS or HTML module. An adapter is an executable
+that implements ACP over stdio, including one that wraps another CLI. The
+[ACP Provider example](../examples/plugins/acp-provider/codeg-plugin.json)
+uses the Claude Agent ACP package under its own provider ID. Its name and
+summary have Chinese and Spanish translations. See the
+[provider author types](host-plugin-providers.d.ts) for the manifest shape.
+
+Each provider has an `id`, `name`, `distributionKind`, and `spec`. `nameTranslations`
+is optional. `descriptionTranslations` requires a `description` fallback. The
+reviewed manifest includes the recipe and translations. The agent list uses
+`name` and `description` as its display fallbacks.
+
+The launch spec uses the ACP Registry distribution shape. Supply the branch
+named by `distributionKind`.
+
+| Branch | Fields |
+| --- | --- |
+| `npx` | `package` is an npm registry package spec such as `@scope/adapter@1.2.3`. Set `cmd` if the executable name differs from the package basename. `node_required` declares a Node version floor. |
+| `uvx` | `package` is a named Python package requirement such as `example-acp[adapter]==1.2.3`. Set `cmd` if the entry point differs from the package name. `uv_required` declares a uv version floor, and `python` can pin an interpreter version. |
+| `binary` | Map platform names such as `darwin-aarch64` and `linux-x86_64` to entries with an HTTPS `archive` URL, a relative in-archive `cmd`, and an optional 64-character hexadecimal `sha256`. `url` is an alias for `archive`. |
+
+Each launch entry can have `args` and `env`. Use bare executable names for
+`npx` and `uvx`. Binary entries can use nested archive paths. Command paths
+stay inside the archive, and argument and environment values exclude control
+characters and parent-directory segments. Use normal environment variable
+names made of ASCII letters, digits, and underscores. An HTTPS archive URL
+may include a query and must omit user credentials. Review the package, binary,
+arguments, and environment before enabling. The provider process runs on the
+connected host under its ACP launcher account. QuickJS sandbox limits apply to
+plugin server modules and the ACP executable has the host account's access.
+
+Install and enable the plugin in **Settings → Plugins**. Install the provider
+from **Settings → Agents** and select it when opening a session. npm providers
+install under a provider-specific prefix. Binary installs and uvx preparation
+markers use the provider's own cache keys. For a binary provider, the host must
+have a matching platform entry. Codeg uses the reviewed recipe for installation
+and launch.
+
+IDs cannot match a built-in wire name or registry ID. A saved user agent owns
+its ID even when its distribution is unavailable. If Codeg cannot read the
+user-agent registry, plugin providers stay withdrawn until it can. For duplicate plugin
+providers, the first enabled plugin in lexical plugin ID order wins. The host
+compares those IDs without regard to ASCII case. The agent list reports the
+manifest ID as `registry_id` and a scoped `agent_type` used by the existing ACP
+commands. Use the returned `agent_type` for connections. It keeps preferences,
+installed files, and saved sessions associated with the reviewed recipe.
+
+Disabling, removing, or replacing a recipe withdraws its old runtime ID from
+new launches immediately. Running sessions retain their connections and saved
+history stays readable. An update that introduces or changes an executable
+recipe needs re-enabling after review. Presentation-only updates retain the
+runtime ID. A replacement recipe has its own runtime ID and settings.
+
 ## Version 2 server modules
 
 Install the [Workspace Summary example](../examples/plugins/workspace-summary)
