@@ -1,0 +1,47 @@
+{
+  "apiVersion": 2,
+  "id": "codeg.header-actions",
+  "name": "Workspace Header Actions",
+  "version": "1.0.0",
+  "client": { "entry": "actions.html" },
+  "server": { "entry": "actions.mjs", "methods": ["describe"] },
+  "contributes": {
+    "workspacePanels": [
+      { "id": "workspace", "title": "Workspace Details", "view": "client" }
+    ],
+    "screens": [{ "id": "overview", "title": "Plugin Overview" }],
+    "headerActions": [
+      {
+        "id": "show-panel",
+        "title": "Open Workspace Panel",
+        "titleTranslations": {
+          "es": "Abrir panel del espacio de trabajo",
+          "zh-CN": "打开工作区面板"
+        },
+        "label": "Workspace",
+        "labelTranslations": { "es": "Espacio de trabajo", "zh-CN": "工作区" },
+        "action": { "type": "openWorkspacePanel", "panelId": "workspace" }
+      },
+      {
+        "id": "show-overview",
+        "title": "Open Plugin Overview",
+        "titleTranslations": {
+          "es": "Abrir resumen del complemento",
+          "zh-CN": "打开插件概览"
+        },
+        "action": { "type": "openScreen", "screenId": "overview" }
+      },
+      {
+        "id": "check-workspace",
+        "title": "Check Workspace",
+        "titleTranslations": {
+          "es": "Comprobar espacio de trabajo",
+          "zh-CN": "检查工作区"
+        },
+        "label": "Check",
+        "labelTranslations": { "es": "Comprobar", "zh-CN": "检查" },
+        "action": { "type": "callMethod", "method": "describe" }
+      }
+    ]
+  }
+}

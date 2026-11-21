@@ -1,0 +1,16 @@
+<style>
+  :root {
+    color-scheme: light dark;
+    font: 14px system-ui;
+  }
+</style>
+<p id="content" role="status">Opening plugin…</p>
+<script>
+  window.codeg.ready.then(({ type, folderId, locale }) => {
+    document.documentElement.lang = locale
+    document.getElementById("content").textContent =
+      type === "workspacePanel"
+        ? `This panel was opened for workspace #${folderId}.`
+        : "Open the Workspace Panel or run Check Workspace from the header."
+  })
+</script>

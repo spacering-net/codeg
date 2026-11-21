@@ -102,6 +102,8 @@ struct Contributions {
     screens: Vec<HostPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidebar_items: Vec<SidebarItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    header_actions: Vec<HeaderAction>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -192,6 +194,46 @@ struct PluginCommand {
 )]
 enum CommandAction {
     OpenWorkspacePanel { panel_id: String },
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HeaderAction {
+    id: String,
+    title: String,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    title_translations: Translations,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_header_action_label",
+        skip_serializing_if = "Option::is_none"
+    )]
+    label: Option<String>,
+    #[serde(default, skip_serializing_if = "Translations::is_empty")]
+    label_translations: Translations,
+    action: HeaderActionTarget,
+}
+
+fn deserialize_header_action_label<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+enum HeaderActionTarget {
+    OpenWorkspacePanel {
+        #[serde(rename = "panelId")]
+        panel_id: String,
+    },
+    OpenScreen {
+        #[serde(rename = "screenId")]
+        screen_id: String,
+    },
+    CallMethod {
+        method: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -1003,6 +1045,7 @@ impl Manifest {
             themes,
             screens,
             sidebar_items,
+            header_actions,
         } = &self.contributes;
         if !bundled && workspace_panels.is_empty() && themes.is_empty() {
             return Err("A declarative plugin needs a workspace panel or theme".to_owned());
@@ -1109,6 +1152,55 @@ impl Manifest {
                 "Provide up to 16 sidebar items with unique IDs, valid titles and a screen from this plugin"
                     .into(),
             );
+        }
+        if header_actions.len() > MAX_CONTRIBUTIONS {
+            return Err("Provide up to 16 workspace header actions".into());
+        }
+        let mut header_action_ids = BTreeSet::new();
+        for action in header_actions {
+            if !valid_id(&action.id)
+                || !valid_label(&action.title)
+                || !valid_translations(&action.title_translations, valid_label)
+                || !header_action_ids.insert(&action.id)
+            {
+                return Err("Invalid or duplicate workspace header action".into());
+            }
+            if action
+                .label
+                .as_deref()
+                .is_some_and(|label| !valid_label(label))
+                || (action.label.is_none() && !action.label_translations.is_empty())
+                || !valid_translations(&action.label_translations, valid_label)
+            {
+                return Err("Invalid workspace header action label or translations".into());
+            }
+            match &action.action {
+                HeaderActionTarget::OpenWorkspacePanel { panel_id }
+                    if !panels.contains(panel_id) =>
+                {
+                    return Err(
+                        "A header action must target a workspace panel from this plugin".into(),
+                    );
+                }
+                HeaderActionTarget::OpenScreen { screen_id } if !screen_ids.contains(screen_id) => {
+                    return Err(
+                        "A header action must target a screen from this plugin with a client entry"
+                            .into(),
+                    );
+                }
+                HeaderActionTarget::CallMethod { method }
+                    if !self
+                        .server
+                        .as_ref()
+                        .is_some_and(|server| server.methods.contains(method)) =>
+                {
+                    return Err(
+                        "A header action must target a declared server method from this plugin"
+                            .into(),
+                    );
+                }
+                _ => {}
+            }
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
@@ -1283,6 +1375,9 @@ fn plugin_not_found() -> AppCommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const HEADER_ACTIONS_EXAMPLE: &str =
+        include_str!("../../examples/plugins/header-actions/codeg-plugin.json");
 
     const SAMPLE: &str = include_str!("../../examples/plugins/turn-activity/codeg-plugin.json");
     const ID: &str = "codeg.turn-activity";
@@ -1469,6 +1564,176 @@ mod tests {
             invalid["contributes"]["sidebarItems"][0][field] = json!(value);
             assert!(Manifest::parse(&invalid.to_string()).is_err());
         }
+    }
+
+    #[test]
+    fn round_trips_workspace_header_actions_and_preserves_existing_manifests() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(HEADER_ACTIONS_EXAMPLE).unwrap();
+        let parsed = Manifest::parse(HEADER_ACTIONS_EXAMPLE).unwrap();
+        let serialized = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(
+            serialized["contributes"]["headerActions"],
+            example["contributes"]["headerActions"]
+        );
+        assert_eq!(Manifest::parse(&serialized.to_string()).unwrap(), parsed);
+
+        let legacy = Manifest::parse(SAMPLE).unwrap();
+        let mut serialized = serde_json::to_value(&legacy).unwrap();
+        assert!(serialized["contributes"].get("headerActions").is_none());
+        serialized["contributes"]["headerActions"] = json!([]);
+        assert_eq!(Manifest::parse(&serialized.to_string()).unwrap(), legacy);
+
+        serialized["contributes"]["headerActions"] = json!([{
+            "id": "activity",
+            "title": "Show turn activity",
+            "action": { "type": "openWorkspacePanel", "panelId": "activity" }
+        }]);
+        let parsed = Manifest::parse(&serialized.to_string()).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["contributes"]["headerActions"],
+            serialized["contributes"]["headerActions"]
+        );
+    }
+
+    #[test]
+    fn validates_workspace_header_action_limits_ids_and_labels() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(HEADER_ACTIONS_EXAMPLE).unwrap();
+        let mut manifest = example.clone();
+        let actions = manifest["contributes"]["headerActions"]
+            .as_array_mut()
+            .unwrap();
+        let template = actions[0].clone();
+        for index in actions.len()..MAX_CONTRIBUTIONS {
+            let mut action = template.clone();
+            action["id"] = json!(format!("action-{index}"));
+            actions.push(action);
+        }
+        Manifest::parse(&manifest.to_string()).unwrap();
+        let mut additional = template;
+        additional["id"] = json!("extra-action");
+        manifest["contributes"]["headerActions"]
+            .as_array_mut()
+            .unwrap()
+            .push(additional);
+        assert!(Manifest::parse(&manifest.to_string()).is_err());
+
+        for (field, invalid) in [
+            ("id", json!("show-overview")),
+            ("id", json!("bad/id")),
+            ("title", json!("")),
+            ("titleTranslations", json!({ "es": "" })),
+            ("label", json!(" \t")),
+            ("label", json!(null)),
+            ("labelTranslations", json!({ "zh-cn": "Wrong locale" })),
+            ("labelTranslations", json!({ "es": "x".repeat(101) })),
+        ] {
+            let mut invalid_manifest = example.clone();
+            invalid_manifest["contributes"]["headerActions"][0][field] = invalid;
+            assert!(Manifest::parse(&invalid_manifest.to_string()).is_err());
+        }
+
+        let mut missing_label = example;
+        missing_label["contributes"]["headerActions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("label");
+        assert!(Manifest::parse(&missing_label.to_string()).is_err());
+    }
+
+    #[test]
+    fn rejects_header_actions_with_missing_or_foreign_targets() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(HEADER_ACTIONS_EXAMPLE).unwrap();
+        for (index, field) in [(0, "panelId"), (1, "screenId"), (2, "method")] {
+            for target in ["", "another-plugin.target"] {
+                let mut manifest = example.clone();
+                manifest["contributes"]["headerActions"][index]["action"][field] = json!(target);
+                assert!(Manifest::parse(&manifest.to_string()).is_err());
+            }
+        }
+
+        let mut missing_client = example.clone();
+        missing_client.as_object_mut().unwrap().remove("client");
+        let contributes = missing_client["contributes"].as_object_mut().unwrap();
+        contributes.remove("workspacePanels");
+        contributes.insert(
+            "headerActions".into(),
+            json!([example["contributes"]["headerActions"][1]]),
+        );
+        assert!(Manifest::parse(&missing_client.to_string()).is_err());
+
+        let mut missing_server = example;
+        missing_server.as_object_mut().unwrap().remove("server");
+        assert!(Manifest::parse(&missing_server.to_string()).is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_header_action_fields_and_types() {
+        use serde_json::{json, Value};
+
+        let example: Value = serde_json::from_str(HEADER_ACTIONS_EXAMPLE).unwrap();
+        let mut unknown_field = example.clone();
+        unknown_field["contributes"]["headerActions"][0]["tooltip"] = json!("Unknown");
+        assert!(Manifest::parse(&unknown_field.to_string()).is_err());
+        for index in 0..3 {
+            let mut unknown_target_field = example.clone();
+            unknown_target_field["contributes"]["headerActions"][index]["action"]["extra"] =
+                json!(true);
+            assert!(Manifest::parse(&unknown_target_field.to_string()).is_err());
+        }
+        let mut unknown_type = example;
+        unknown_type["contributes"]["headerActions"][0]["action"] = json!({ "type": "runScript" });
+        assert!(Manifest::parse(&unknown_type.to_string()).is_err());
+    }
+
+    #[tokio::test]
+    async fn installs_header_actions_example_and_calls_its_enabled_module() {
+        use serde_json::json;
+
+        let data = tempfile::tempdir().unwrap();
+        let host = HostPlugins::new(data.path());
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/plugins/header-actions");
+        let preview = host
+            .preview_install(source.to_str().unwrap(), source::Registry::Npm, None)
+            .await
+            .unwrap();
+        let id = preview.manifest.id.clone();
+        host.confirm_install(preview.ticket).unwrap();
+        let input = json!({ "folderId": 42 });
+        assert!(host
+            .call(&id, "describe".into(), input.clone())
+            .await
+            .is_err());
+
+        host.apply(Mutation::SetEnabled {
+            id: id.clone(),
+            enabled: true,
+        })
+        .unwrap();
+        assert_eq!(
+            host.client_html(&id).unwrap().as_ref(),
+            include_str!("../../examples/plugins/header-actions/actions.html")
+        );
+        assert_eq!(
+            host.call(&id, "describe".into(), input.clone())
+                .await
+                .unwrap(),
+            json!("Workspace #42 is active.")
+        );
+
+        host.apply(Mutation::SetEnabled {
+            id: id.clone(),
+            enabled: false,
+        })
+        .unwrap();
+        assert!(host.client_html(&id).is_err());
+        assert!(host.call(&id, "describe".into(), input).await.is_err());
     }
 
     #[test]

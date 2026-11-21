@@ -31,6 +31,38 @@ See the [turn activity manifest](../examples/plugins/turn-activity/codeg-plugin.
 for a complete example. Import it in **Settings → Plugins**, then enable it.
 Open a workspace in Codeg to use the panel and command.
 
+## Workspace header actions
+
+Declare `contributes.headerActions` to add up to 16 actions to the active
+workspace header. Each action needs a unique `id` within the array and a
+`title` for its accessible name and menu entry. An optional `label` provides
+short button text. Omit it for a compact button. `titleTranslations` and
+`labelTranslations` follow the localized label rules below. Provide `label`
+as the fallback when adding label translations.
+
+| `action.type` | Target | Behavior |
+| --- | --- | --- |
+| `openWorkspacePanel` | `panelId` from `contributes.workspacePanels` | Opens the panel in the workspace's right sidebar. |
+| `openScreen` | `screenId` from `contributes.screens` | Opens a full-page screen using the reviewed `client.entry`. |
+| `callMethod` | `method` from `server.methods` | Calls the reviewed server module on the connected host. |
+
+All targets must be declared by the same plugin. `openWorkspacePanel`
+supports declarative panels. `openScreen` requires `client.entry`, and
+`callMethod` requires `server.entry`.
+
+On desktop layouts, actions appear on the right side of the workspace header,
+with extra actions available in its overflow menu. On narrow layouts, the
+actions move into the menu. Selecting `callMethod` passes `{ folderId }` for
+the active workspace through `host_plugins_call`. Codeg shows feedback for the
+call's outcome. Disabling or removing the plugin withdraws its actions
+immediately. Switching workspaces withdraws the previous workspace's controls
+and binds the actions to the new workspace.
+
+Install and enable the [Workspace Header Actions example](../examples/plugins/header-actions)
+on the connected host. Open a workspace and select **Open Workspace Panel**,
+**Open Plugin Overview**, or **Check Workspace**. The [author types](host-plugin-header-actions.d.ts)
+describe the manifest entries and server input.
+
 ## Localized names and labels
 
 Add optional `nameTranslations` beside the manifest `name`, `titleTranslations`
