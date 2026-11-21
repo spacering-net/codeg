@@ -2320,7 +2320,8 @@
       "noRecentChats": "لا توجد محادثات دردشة حديثة",
       "noRecentFolders": "لا توجد محادثات مجلدات حديثة",
       "noRecentCli": "لا توجد محادثات حديثة من سطر الأوامر",
-      "recentFilterMenuLabel": "عرض في الأحدث"
+      "recentFilterMenuLabel": "عرض في الأحدث",
+      "sectionBtw": "أسئلة جانبية"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
@@ -2421,23 +2422,24 @@
       "markCompleted": "وضع علامة كمكتمل",
       "reopen": "إعادة فتح",
       "expandSubsessions": "توسيع المحادثات الفرعية",
-      "collapseSubsessions": "طي المحادثات الفرعية"
+      "collapseSubsessions": "طي المحادثات الفرعية",
+      "promoteBtw": "ترقية إلى محادثة"
     },
     "moveConversation": {
       "menuLabel": "نقل إلى",
       "title": "نقل المحادثة",
       "titleMany": "نقل {count, plural, zero {# محادثة} one {محادثة واحدة} two {محادثتين} few {# محادثات} many {# محادثة} other {# محادثة}}",
-      "intro": "ستُنقل «\u2066{title}\u2069» إلى هذا المجلد:",
+      "intro": "ستُنقل «⁦{title}⁩» إلى هذا المجلد:",
       "introMany": "{count, plural, zero {لن تُنقل أي محادثة} one {ستُنقل المحادثة المحددة} two {ستُنقل المحادثتان المحددتان} few {ستُنقل # محادثات محددة} many {ستُنقل # محادثة محددة} other {ستُنقل # محادثة محددة}} إلى هذا المجلد:",
       "untitledConversation": "محادثة بدون عنوان",
       "explain": "بدءًا من الرسالة التالية، يعمل الوكيل في هذا المجلد، ويبقى السجل كما هو. إذا تعذّر على الوكيل استئناف الجلسة هنا، فسيُعرض عليك إعادة تحميلها أو بدء جلسة جديدة.",
-      "chatFilesNote": "تبقى الملفات التي أُنشئت أثناء الدردشة في دليلها المؤقت \u2066{path}\u2069، ولا تُنقل إلى المجلد.",
+      "chatFilesNote": "تبقى الملفات التي أُنشئت أثناء الدردشة في دليلها المؤقت ⁦{path}⁩، ولا تُنقل إلى المجلد.",
       "chatFilesNoteMany": "تبقى الملفات التي أُنشئت أثناء هذه الدردشات في أدلتها المؤقتة، ولا تُنقل إلى المجلد.",
       "noTargets": "لا يوجد مجلد مفتوح آخر",
       "targetUnavailable": "أُغلق هذا المجلد أو أُزيل — اختر مجلدًا آخر.",
       "cancel": "إلغاء",
       "move": "نقل",
-      "toastMoved": "{count, plural, zero {لم تُنقل أي محادثة} one {نُقلت محادثة واحدة} two {نُقلت محادثتان} few {نُقلت # محادثات} many {نُقلت # محادثة} other {نُقلت # محادثة}} إلى \u2066{folder}\u2069",
+      "toastMoved": "{count, plural, zero {لم تُنقل أي محادثة} one {نُقلت محادثة واحدة} two {نُقلت محادثتان} few {نُقلت # محادثات} many {نُقلت # محادثة} other {نُقلت # محادثة}} إلى ⁦{folder}⁩",
       "toastSkipped": "{count, plural, zero {لم تُنقل أي محادثة} one {لم تُنقل محادثة واحدة} two {لم تُنقل محادثتان} few {لم تُنقل # محادثات} many {لم تُنقل # محادثة} other {لم تُنقل # محادثة}}",
       "toastFailed": "تعذّر النقل: {message}",
       "skipReason": {
@@ -2560,14 +2562,14 @@
         "cancel": "إلغاء",
         "confirmStart": "تشغيل",
         "confirmTitle": "فتح Codeg لشبكتك؟",
-        "confirmDescription": "ستستمع خدمة الويب على \u2066{address}\u2069. سيتمكن أي جهاز على شبكتك من الوصول إلى Codeg — بما في ذلك الطرفيات والوكلاء — باستخدام رمز الوصول.",
-        "tooltipNetwork": "خدمة الويب · تستمع على \u2066{address}\u2069 (يمكن الوصول إليها من شبكتك)",
-        "tooltipLocal": "خدمة الويب · تستمع على \u2066{address}\u2069 (هذا الحاسوب فقط)",
+        "confirmDescription": "ستستمع خدمة الويب على ⁦{address}⁩. سيتمكن أي جهاز على شبكتك من الوصول إلى Codeg — بما في ذلك الطرفيات والوكلاء — باستخدام رمز الوصول.",
+        "tooltipNetwork": "خدمة الويب · تستمع على ⁦{address}⁩ (يمكن الوصول إليها من شبكتك)",
+        "tooltipLocal": "خدمة الويب · تستمع على ⁦{address}⁩ (هذا الحاسوب فقط)",
         "tooltipStopped": "خدمة الويب · متوقفة",
-        "hintNetwork": "تستمع على \u2066{address}\u2069. يمكن للأجهزة على شبكتك فتح Codeg باستخدام رمز الوصول.",
-        "hintLocal": "تستمع على \u2066{address}\u2069. هذا الحاسوب فقط يمكنه الوصول إليها.",
-        "hintStoppedNetwork": "متوقفة. عند التشغيل ستستمع على \u2066{address}\u2069، ويمكن الوصول إليها من شبكتك.",
-        "hintStoppedLocal": "متوقفة. عند التشغيل ستستمع على \u2066{address}\u2069، لهذا الحاسوب فقط.",
+        "hintNetwork": "تستمع على ⁦{address}⁩. يمكن للأجهزة على شبكتك فتح Codeg باستخدام رمز الوصول.",
+        "hintLocal": "تستمع على ⁦{address}⁩. هذا الحاسوب فقط يمكنه الوصول إليها.",
+        "hintStoppedNetwork": "متوقفة. عند التشغيل ستستمع على ⁦{address}⁩، ويمكن الوصول إليها من شبكتك.",
+        "hintStoppedLocal": "متوقفة. عند التشغيل ستستمع على ⁦{address}⁩، لهذا الحاسوب فقط.",
         "copyAddress": "نسخ العنوان",
         "openSettings": "فتح إعدادات خدمة الويب"
       }
@@ -3475,7 +3477,7 @@
         "errors": {
           "connectionFailed": "فشل الاتصال",
           "sendPromptFailed": "فشل إرسال الرسالة: {error}",
-          "conversationMoved": "نُقلت هذه المحادثة إلى \u2066{folder}\u2069. أعد إرسال رسالتك للمتابعة هناك."
+          "conversationMoved": "نُقلت هذه المحادثة إلى ⁦{folder}⁩. أعد إرسال رسالتك للمتابعة هناك."
         }
       },
       "shared": {
@@ -3562,7 +3564,8 @@
         "mentionGroupSession": "الجلسات",
         "mentionGroupCommit": "عمليات الإيداع",
         "mentionGroupSkill": "المهارات",
-        "mentionGroupAssistant": "المساعدون"
+        "mentionGroupAssistant": "المساعدون",
+        "btwDescription": "اطرح سؤالاً جانبياً في نسخة من هذه المحادثة"
       },
       "messageQueue": {
         "addToQueue": "إضافة للقائمة",
@@ -3872,9 +3875,9 @@
         "resumeReasonLabel": "سبب الاستئناف",
         "detailTitle": "محادثة الوكيل الفرعي",
         "detailDescription": "عرض للقراءة فقط لمحادثة الوكيل الفرعي المُفوَّض.",
-        "waitForResult": "في انتظار نتيجة المهمة \u2066{task}\u2069",
+        "waitForResult": "في انتظار نتيجة المهمة ⁦{task}⁩",
         "waitForResultNoTask": "في انتظار نتيجة المهمة",
-        "cancelTask": "جارٍ إلغاء المهمة \u2066{task}\u2069",
+        "cancelTask": "جارٍ إلغاء المهمة ⁦{task}⁩",
         "cancelTaskNoTask": "جارٍ إلغاء المهمة",
         "resultPageOf": "{current} / {total}",
         "prevResult": "النتيجة السابقة",
@@ -4038,7 +4041,7 @@
           "monitor": "مراقبة",
           "networkAccess": "الوصول إلى الشبكة",
           "codexScript": "نص برمجي",
-          "background": "في الخلفية · \u2066#{id}\u2069",
+          "background": "في الخلفية · ⁦#{id}⁩",
           "backgroundShort": "في الخلفية",
           "sessionWait": "انتظار",
           "sessionTerminate": "إيقاف",
@@ -4313,7 +4316,8 @@
         "retryUnavailable": "لا توجد رسالة سابقة لإعادة إرسالها.",
         "toggleDetails": "تبديل التفاصيل",
         "dismiss": "تجاهل",
-        "moreIncidents": "+{count} أخرى"
+        "moreIncidents": "+{count} أخرى",
+        "openStripTitle": "فتح"
       },
       "backgroundTasks": {
         "settledFallback": "انتهت مهمة الخلفية ({status})",
@@ -4333,9 +4337,9 @@
         "tokens": "{count} رمز",
         "stopDeclined": "تعذّر إيقاف هذه المهمة، ربما تكون قد انتهت بالفعل.",
         "stopFailed": "فشل إيقاف المهمة: {error}",
-        "agentWorking": "\u2066{agent}\u2069 يعمل",
+        "agentWorking": "⁦{agent}⁩ يعمل",
         "scheduledWakeup": "تنبيه مجدول",
-        "scheduledWakeupAt": "تنبيه مجدول في \u2066{time}\u2069",
+        "scheduledWakeupAt": "تنبيه مجدول في ⁦{time}⁩",
         "scheduledTask": "مهمة مجدولة"
       },
       "liveRuns": {
@@ -4360,6 +4364,11 @@
       "proposedPlan": {
         "title": "الخطة المقترحة",
         "planning": "جارٍ التخطيط…"
+      },
+      "btw": {
+        "stripAnswering": "جارٍ الرد…",
+        "stripAnswered": "تم الرد",
+        "stripStopped": "متوقف"
       }
     },
     "diffPreview": {
@@ -4534,8 +4543,8 @@
       "bindFailed": "فشل ربط العنوان"
     },
     "bindHost": "الاستماع على",
-    "bindHostAll": "كل الواجهات (\u20660.0.0.0\u2069)",
-    "bindHostLocal": "هذا الحاسوب فقط (\u2066127.0.0.1\u2069)",
+    "bindHostAll": "كل الواجهات (⁦0.0.0.0⁩)",
+    "bindHostLocal": "هذا الحاسوب فقط (⁦127.0.0.1⁩)",
     "bindHostAllHint": "يمكن للأجهزة على شبكتك المحلية الوصول إلى الخدمة باستخدام رمز الوصول.",
     "bindHostLocalHint": "هذا الحاسوب فقط يمكنه الوصول إلى الخدمة — مثلًا خلف وكيل عكسي أو Tailscale Serve."
   },
@@ -6726,8 +6735,8 @@
       "fetch": "جلب النماذج",
       "needKey": "أدخل مفتاح API أولًا.",
       "needBaseUrl": "أدخل عنوان API بصيغة http(s) أولًا.",
-      "summaryModels": "{count, plural, zero {لا نماذج} one {نموذج واحد} two {نموذجان} few {# نماذج} many {# نموذجًا} other {# نموذج}} · \u2066{host}\u2069",
-      "summaryPicked": "تم اختيار {picked} من {total} · \u2066{host}\u2069",
+      "summaryModels": "{count, plural, zero {لا نماذج} one {نموذج واحد} two {نموذجان} few {# نماذج} many {# نموذجًا} other {# نموذج}} · ⁦{host}⁩",
+      "summaryPicked": "تم اختيار {picked} من {total} · ⁦{host}⁩",
       "summaryRemoved": "أُزيل {count}",
       "fromPublished": "القائمة المطبّقة",
       "fromCache": "قائمة جُلبت سابقًا",
@@ -6808,7 +6817,7 @@
   "ProviderModels": {
     "fetch": "جلب النماذج",
     "fetching": "جارٍ جلب النماذج…",
-    "fromHost": "{count, plural, zero {لا نماذج} one {نموذج واحد} two {نموذجان} few {# نماذج} many {# نموذجًا} other {# نموذج}} · \u2066{host}\u2069",
+    "fromHost": "{count, plural, zero {لا نماذج} one {نموذج واحد} two {نموذجان} few {# نماذج} many {# نموذجًا} other {# نموذج}} · ⁦{host}⁩",
     "retry": "إعادة المحاولة",
     "needKey": "أدخل مفتاح API أولًا: تُجلب النماذج به.",
     "needBaseUrl": "أدخل عنوان API أولًا.",
@@ -7584,7 +7593,7 @@
       }
     },
     "link": {
-      "discoverOff": "«اكتشاف» متوقف في هذا الـ Codeg، لذا لا يمكن فتح \u2066{ref}\u2069 هنا."
+      "discoverOff": "«اكتشاف» متوقف في هذا الـ Codeg، لذا لا يمكن فتح ⁦{ref}⁩ هنا."
     },
     "discover": {
       "search": {
@@ -7728,7 +7737,7 @@
           "runs_hooks": "خطافات تشغِّل أوامر",
           "launches_mcp": "يشغِّل خادم MCP خاصًا به"
         },
-        "findingRule": "قاعدة · \u2066{name}\u2069",
+        "findingRule": "قاعدة · ⁦{name}⁩",
         "minorFindings": "{count, plural, zero {لا ملاحظات ثانوية} one {ملاحظة ثانوية واحدة} two {ملاحظتان ثانويتان} few {# ملاحظات ثانوية} many {# ملاحظة ثانوية} other {# ملاحظة ثانوية}}: أوامر شائعة وما شابهها، سُجِّلت ولا تدعو للقلق",
         "secretsFound": "{count, plural, zero {لم يُعثر على بيانات اعتماد} one {عُثر على بيان اعتماد واحد} two {عُثر على بيانَي اعتماد} few {عُثر على # بيانات اعتماد} many {عُثر على # بيان اعتماد} other {عُثر على # بيان اعتماد}} في المصدر؛ ولم تُنسخ إلى هنا.",
         "dropped": "ملفات استُبعدت من الحزمة:",
@@ -7744,7 +7753,7 @@
         },
         "installScript": "يشغِّل سكربت تثبيت",
         "files": "الملفات",
-        "filesTotal": "{count, plural, zero {لا ملفات} one {ملف واحد} two {ملفان} few {# ملفات} many {# ملفًا} other {# ملف}} · \u2066{size}\u2069",
+        "filesTotal": "{count, plural, zero {لا ملفات} one {ملف واحد} two {ملفان} few {# ملفات} many {# ملفًا} other {# ملف}} · ⁦{size}⁩",
         "executable": "تنفيذي",
         "showAll": "عرض الكل ({count, number})",
         "versions": "الإصدارات",
@@ -7862,11 +7871,11 @@
         "copy": "نسخ التعريف",
         "copying": "جارٍ النسخ…",
         "copied": "نُسخ",
-        "copiedNote": "نُسخ التعريف. احفظه ملفًا في \u2066~/.claude/agents/\u2069 لتستخدمه في Claude Code.",
+        "copiedNote": "نُسخ التعريف. احفظه ملفًا في ⁦~/.claude/agents/⁩ لتستخدمه في Claude Code.",
         "copyFailed": "تعذَّر النسخ إلى الحافظة.",
         "copyErrors": {
           "notFound": "لا يحتفظ SRN Harness بنسخة من هذا التعريف.",
-          "tooLarge": "التعريف أكبر مما ينسخه Codeg (\u2066256 KB\u2069).",
+          "tooLarge": "التعريف أكبر مما ينسخه Codeg (⁦256 KB⁩).",
           "invalidResponse": "التعريف ليس نصًّا يستطيع Codeg نسخه.",
           "invalidRef": "لا يستطيع Codeg طلب هذا التعريف: بصمة ملفه غير صالحة.",
           "unsupported": "هذا الإصدار من Codeg لا ينسخ التعريفات بعد. حدِّثه لنسخها.",
@@ -9837,7 +9846,7 @@
       "signedOut": "حساب SRN: لم يتم تسجيل الدخول",
       "pending": "حساب SRN: بانتظار المتصفح",
       "completing": "حساب SRN: جارٍ إكمال تسجيل الدخول",
-      "signedIn": "حساب SRN: ⁨{name}\u2069",
+      "signedIn": "حساب SRN: ⁨{name}⁩",
       "unreadable": "حساب SRN: تعذّرت قراءة تسجيل الدخول المحفوظ",
       "unavailable": "حساب SRN: لا يستطيع الخادم التحقق الآن"
     },
@@ -9920,6 +9929,11 @@
     "errorsPlain": {
       "rateLimited": "طلب SRN من Codeg الانتظار قبل إعادة المحاولة.",
       "server": "ردّ SRN بخطأ."
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "هذا الوكيل لا يدعم الأسئلة الجانبية (يتطلب تفريع الجلسة واستئنافها)."
     }
   }
 }

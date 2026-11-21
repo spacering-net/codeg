@@ -2320,7 +2320,8 @@
       "noRecentChats": "最近のチャットはありません",
       "noRecentFolders": "最近のフォルダー会話はありません",
       "noRecentCli": "コマンドラインからの最近の会話はありません",
-      "recentFilterMenuLabel": "最近の表示"
+      "recentFilterMenuLabel": "最近の表示",
+      "sectionBtw": "サイド質問"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",
@@ -2421,7 +2422,8 @@
       "markCompleted": "完了にする",
       "reopen": "再開する",
       "expandSubsessions": "サブ会話を展開",
-      "collapseSubsessions": "サブ会話を折りたたむ"
+      "collapseSubsessions": "サブ会話を折りたたむ",
+      "promoteBtw": "通常のチャットにする"
     },
     "moveConversation": {
       "menuLabel": "移動先",
@@ -3562,7 +3564,8 @@
         "mentionGroupSession": "セッション",
         "mentionGroupCommit": "コミット",
         "mentionGroupSkill": "スキル",
-        "mentionGroupAssistant": "アシスタント"
+        "mentionGroupAssistant": "アシスタント",
+        "btwDescription": "この会話のコピーでサイド質問をする"
       },
       "messageQueue": {
         "addToQueue": "キューに追加",
@@ -4313,7 +4316,8 @@
         "retryUnavailable": "再送信できるメッセージがありません。",
         "toggleDetails": "詳細の切り替え",
         "dismiss": "閉じる",
-        "moreIncidents": "他 {count} 件"
+        "moreIncidents": "他 {count} 件",
+        "openStripTitle": "開く"
       },
       "backgroundTasks": {
         "settledFallback": "バックグラウンドタスクが終了しました（{status}）",
@@ -4360,6 +4364,11 @@
       "proposedPlan": {
         "title": "提案された計画",
         "planning": "計画中…"
+      },
+      "btw": {
+        "stripAnswering": "回答中…",
+        "stripAnswered": "回答済み",
+        "stripStopped": "中断済み"
       }
     },
     "diffPreview": {
@@ -9920,6 +9929,11 @@
     "errorsPlain": {
       "rateLimited": "SRN から、しばらく待ってから再試行するよう求められました。",
       "server": "SRN がエラーを返しました。"
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "このエージェントはサイド質問に対応していません（セッションのフォークと再開が必要です）。"
     }
   }
 }

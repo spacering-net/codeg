@@ -310,6 +310,35 @@ export function selectChatConversationsWithReuse(
 }
 
 /**
+ * Select the `/btw` side-question forks (`kind === "btw"`) for the flat "btw"
+ * sidebar section — the design intent of the folder-scoped list is stated in
+ * docs/btw-side-question-design.md. Same filters as
+ * {@link selectChatConversationsWithReuse}: pinned forks surface in the Pinned
+ * section, and completed ones follow the sidebar's show-completed preference.
+ *
+ * These rows DO carry `parent_id` — it names the conversation they were asked
+ * from — but they are sidebar roots, not subtree children: `list_all` returns
+ * them, the workspace store tracks them, and the Rust
+ * `child_count`/`list_children` count only `delegate`, so the parent's chevron
+ * neither lights nor hides them.
+ */
+export function selectBtwConversationsWithReuse(
+  conversations: readonly DbConversationSummary[],
+  showCompleted: boolean,
+  prev: DbConversationSummary[]
+): DbConversationSummary[] {
+  const next: DbConversationSummary[] = []
+  for (const conv of conversations) {
+    if (conv.pinned_at != null) continue
+    if (conv.kind !== "btw") continue
+    if (!showCompleted && conv.status === "completed") continue
+    next.push(conv)
+  }
+  next.sort(compareByUpdatedAtDesc)
+  return arraysShallowEqual(prev, next) ? prev : next
+}
+
+/**
  * Select the flat "Recent" bucket: every conversation the sidebar can reach,
  * folder-bound and chat alike, most recently active first — the whole point
  * of the section is that it does NOT distinguish the two. Reference reuse as
@@ -1213,7 +1242,7 @@ function pushConversationRow(
  *
  * Structure (top to bottom): the "Pinned" section (when present) is always
  * first; the "Folders", "Chat" and "Recent" sections follow in the order set by
- * `sectionOrder` (default Folders → Chat → Recent). Each section's own
+ * `sectionOrder` (default Folders → Chat → btw → Recent). Each section's own
  * presence/expansion rules are unchanged by that order:
  * - The "Pinned" section header + its conversations appear only when `pinned`
  *   is non-empty, and its rows only when `pinnedExpanded`.
@@ -1252,6 +1281,12 @@ export function buildRows(args: {
   folderTotalCounts: Map<number, number>
   foldersExpanded: boolean
   chatConversations: readonly DbConversationSummary[]
+  /** `kind === "btw"` forks of this folder set, for the "btw" section —
+   *  see {@link selectBtwConversationsWithReuse}. */
+  btwConversations: readonly DbConversationSummary[]
+  /** Collapse state of the btw section (the user's; see
+   *  {@link selectBtwConversationsWithReuse} for the rows). */
+  btwExpanded: boolean
   chatsExpanded: boolean
   /** The flat "Recent" bucket — every reachable conversation, folder-bound and
    *  chat alike (or just one kind, under the user's filter), most recently
@@ -1333,6 +1368,8 @@ export function buildRows(args: {
     folderTotalCounts,
     foldersExpanded,
     chatConversations,
+    btwConversations,
+    btwExpanded,
     chatsExpanded,
     recentConversations = EMPTY_CONVERSATIONS,
     recentExpanded = true,
@@ -1527,6 +1564,32 @@ export function buildRows(args: {
     }
   }
 
+  const pushBtw = () => {
+    // Absent when empty, like the conditional Pinned header: the section's
+    // meaning IS its rows, and a side question has no creation entry point of
+    // its own (the composer's `/btw` makes one). Collapse state is the user's,
+    // persisted by the shared section-collapse machinery.
+    if (btwConversations.length === 0) return
+    rows.push({
+      kind: "section",
+      section: "btw",
+      expanded: btwExpanded,
+      count: btwConversations.length,
+    })
+    if (btwExpanded) {
+      for (const conv of btwConversations) {
+        pushConversationRow(
+          rows,
+          conv,
+          0,
+          conversationExpanded,
+          childrenByParent,
+          childrenLoading
+        )
+      }
+    }
+  }
+
   const pushRecent = () => {
     rows.push({
       kind: "section",
@@ -1577,6 +1640,7 @@ export function buildRows(args: {
   for (const section of normalizeSectionOrder(sectionOrder)) {
     if (section === "folders") pushFolders()
     else if (section === "chats") pushChats()
+    else if (section === "btw") pushBtw()
     else if (showRecent) pushRecent()
   }
 

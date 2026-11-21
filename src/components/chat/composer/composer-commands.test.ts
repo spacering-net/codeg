@@ -5,6 +5,7 @@ import type { PromptInputBlock } from "@/lib/types"
 
 import {
   applyExpertReference,
+  extractBtwQuestion,
   isComposerChromeClick,
   isComposerEmpty,
   restampSkillPrefixes,
@@ -347,5 +348,30 @@ describe("restoreBlocksIntoEditor", () => {
     const md = serialized(editor)
     expect(md).toContain("fresh")
     expect(md).not.toContain("stale")
+  })
+})
+
+describe("extractBtwQuestion", () => {
+  it("takes the text after the token as the question", () => {
+    expect(extractBtwQuestion("/btw what does this fn do")).toBe(
+      "what does this fn do"
+    )
+    expect(extractBtwQuestion("  /btw   spaced  ")).toBe("spaced")
+    expect(extractBtwQuestion("/btw line one\nline two")).toBe(
+      "line one\nline two"
+    )
+  })
+
+  it("is null for a bare token, other commands, and mid-text tokens", () => {
+    for (const text of [
+      "/btw",
+      "/btw   ",
+      "/ btw",
+      "/btwx hi",
+      "see /btw below",
+      "",
+    ]) {
+      expect(extractBtwQuestion(text)).toBeNull()
+    }
   })
 })

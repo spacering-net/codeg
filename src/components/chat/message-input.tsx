@@ -114,6 +114,7 @@ import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri
 import {
   applyExpertReference,
   blankLineAfter,
+  extractBtwQuestion,
   isComposerEmpty,
   restampSkillPrefixes,
 } from "@/components/chat/composer/composer-commands"
@@ -229,6 +230,11 @@ interface MessageInputProps {
    *  `isActive` (which still drives auto-focus/connect). */
   showActiveFlow?: boolean
   onEnqueue?: (draft: PromptDraft, modeId: string | null) => void
+  /** Takes the `/btw <question>` side-question draft (codeg's synthesized
+   *  `client` command — see `AvailableCommandInfo.client`). Resolves true when
+   *  the question was handed to the backend; false keeps the text in the
+   *  composer, so a failed creation never eats the question. */
+  onBtw?: (question: string) => Promise<boolean>
   /** Id of the queue item being edited — the stable key for (re)hydration, so
    *  switching between two items with identical display text still reloads. */
   editingItemId?: string | null
@@ -366,6 +372,7 @@ export function MessageInput({
   isActive = false,
   showActiveFlow = false,
   onEnqueue,
+  onBtw,
   editingItemId,
   editingDraftText,
   editingDraftBlocks,
@@ -1623,6 +1630,11 @@ export function MessageInput({
     historyDraftRef.current = null
   }, [clearAttachments, closeSlashMenu])
 
+  // One `/btw` in flight at a time: the fork RPC takes seconds, and Enter
+  // pressed again in that window would fork the same prefix a second time and
+  // stack a duplicate child row behind the first.
+  const btwInFlightRef = useRef(false)
+
   // Async steering must compare against the current draft, including images
   // added or removed while delivery was awaiting confirmation.
   const currentComposerRef = useRef({
@@ -1662,6 +1674,49 @@ export function MessageInput({
       return
     }
 
+    // `/btw <question>`: codeg's own command, intercepted BEFORE the queue
+    // branches — asking while the parent answers is the case it exists for
+    // (the copy fork reads the settled prefix while the parent streams).
+    // Only the client-synthesized entry is intercepted: an agent's own `/btw`
+    // stays forwarded verbatim, and where the backend offers no entry (no
+    // fork+resume) the text flows on like any unknown slash input. A draft
+    // carrying anything but text (images, file mentions) is not a plain side
+    // question — the fork request has nowhere to put an attachment, so it
+    // takes the ordinary send path instead of being silently stripped.
+    const btwQuestion = extractBtwQuestion(draft.displayText)
+    if (
+      btwQuestion !== null &&
+      onBtw &&
+      draft.blocks.every((block) => block.type === "text") &&
+      slashCommands.some((cmd) => cmd.name === "btw" && cmd.client)
+    ) {
+      if (btwInFlightRef.current) return
+      btwInFlightRef.current = true
+      const sentEditor = editorRef.current?.getEditor()
+      void onBtw(btwQuestion)
+        .then((consumed) => {
+          if (!consumed) return
+          // Same guard as the steer path: the fork RPC takes seconds, and text
+          // typed during that window is unsent — only clear what this Enter
+          // actually submitted (same editor, same draft, same storage key).
+          const current = currentComposerRef.current
+          if (
+            current.draftStorageKey === effectiveDraftStorageKey &&
+            editorRef.current?.getEditor() === sentEditor &&
+            JSON.stringify(current.buildDraft()) === JSON.stringify(draft)
+          ) {
+            if (effectiveDraftStorageKey) {
+              clearMessageInputDraftV2(effectiveDraftStorageKey)
+            }
+            resetComposer()
+          }
+        })
+        .finally(() => {
+          btwInFlightRef.current = false
+        })
+      return
+    }
+
     // Prompting mode: enqueue instead of sending
     if (isPrompting && onEnqueue) {
       onEnqueue(draft, showModeSelector ? effectiveModeId : null)
@@ -1694,6 +1749,8 @@ export function MessageInput({
     isPrompting,
     onSaveQueueEdit,
     onEnqueue,
+    onBtw,
+    slashCommands,
     onSend,
     effectiveModeId,
     showModeSelector,

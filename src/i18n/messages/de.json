@@ -2320,7 +2320,8 @@
       "noRecentChats": "Keine letzten Chats",
       "noRecentFolders": "Keine letzten Ordner-Unterhaltungen",
       "noRecentCli": "Keine letzten Unterhaltungen von der Kommandozeile",
-      "recentFilterMenuLabel": "In „Zuletzt“ anzeigen"
+      "recentFilterMenuLabel": "In „Zuletzt“ anzeigen",
+      "sectionBtw": "Nebenfragen"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",
@@ -2421,7 +2422,8 @@
       "markCompleted": "Als abgeschlossen markieren",
       "reopen": "Erneut öffnen",
       "expandSubsessions": "Unterkonversationen einblenden",
-      "collapseSubsessions": "Unterkonversationen ausblenden"
+      "collapseSubsessions": "Unterkonversationen ausblenden",
+      "promoteBtw": "In Chats übernehmen"
     },
     "moveConversation": {
       "menuLabel": "Verschieben nach",
@@ -3562,7 +3564,8 @@
         "mentionGroupSession": "Sitzungen",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Fähigkeiten",
-        "mentionGroupAssistant": "Assistenten"
+        "mentionGroupAssistant": "Assistenten",
+        "btwDescription": "Nebenfrage in einer Kopie dieser Unterhaltung stellen"
       },
       "messageQueue": {
         "addToQueue": "Zur Warteschlange",
@@ -4313,7 +4316,8 @@
         "retryUnavailable": "Keine vorherige Nachricht zum erneuten Senden.",
         "toggleDetails": "Details umschalten",
         "dismiss": "Schließen",
-        "moreIncidents": "+{count} weitere"
+        "moreIncidents": "+{count} weitere",
+        "openStripTitle": "Öffnen"
       },
       "backgroundTasks": {
         "settledFallback": "Hintergrundaufgabe beendet ({status})",
@@ -4360,6 +4364,11 @@
       "proposedPlan": {
         "title": "Vorgeschlagener Plan",
         "planning": "Wird geplant…"
+      },
+      "btw": {
+        "stripAnswering": "antwortet…",
+        "stripAnswered": "beantwortet",
+        "stripStopped": "Abgebrochen"
       }
     },
     "diffPreview": {
@@ -9920,6 +9929,11 @@
     "errorsPlain": {
       "rateLimited": "SRN hat Codeg gebeten, vor einem neuen Versuch zu warten.",
       "server": "SRN hat mit einem Fehler geantwortet."
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "Dieser Agent unterstützt keine Nebenfragen (Session-Fork und Resume erforderlich)."
     }
   }
 }

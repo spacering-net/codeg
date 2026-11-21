@@ -2320,7 +2320,8 @@
       "noRecentChats": "Nenhum chat recente",
       "noRecentFolders": "Nenhuma conversa de pasta recente",
       "noRecentCli": "Nenhuma conversa recente da linha de comando",
-      "recentFilterMenuLabel": "Mostrar em Recentes"
+      "recentFilterMenuLabel": "Mostrar em Recentes",
+      "sectionBtw": "Perguntas paralelas"
     },
     "conversation": {
       "reloadFailed": "Falha ao recarregar conversa: {message}",
@@ -2421,7 +2422,8 @@
       "markCompleted": "Marcar como concluída",
       "reopen": "Reabrir",
       "expandSubsessions": "Expandir subconversas",
-      "collapseSubsessions": "Recolher subconversas"
+      "collapseSubsessions": "Recolher subconversas",
+      "promoteBtw": "Promover a conversa"
     },
     "moveConversation": {
       "menuLabel": "Mover para",
@@ -3562,7 +3564,8 @@
         "mentionGroupSession": "Sessões",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Habilidades",
-        "mentionGroupAssistant": "Assistentes"
+        "mentionGroupAssistant": "Assistentes",
+        "btwDescription": "Fazer uma pergunta paralela em uma cópia desta conversa"
       },
       "messageQueue": {
         "addToQueue": "Adicionar à fila",
@@ -4313,7 +4316,8 @@
         "retryUnavailable": "Nenhuma mensagem anterior para reenviar.",
         "toggleDetails": "Alternar detalhes",
         "dismiss": "Dispensar",
-        "moreIncidents": "+{count} mais"
+        "moreIncidents": "+{count} mais",
+        "openStripTitle": "Abrir"
       },
       "backgroundTasks": {
         "settledFallback": "Tarefa em segundo plano concluída ({status})",
@@ -4360,6 +4364,11 @@
       "proposedPlan": {
         "title": "Plano proposto",
         "planning": "A planear…"
+      },
+      "btw": {
+        "stripAnswering": "respondendo…",
+        "stripAnswered": "respondido",
+        "stripStopped": "Interrompido"
       }
     },
     "diffPreview": {
@@ -9920,6 +9929,11 @@
     "errorsPlain": {
       "rateLimited": "O SRN pediu que o Codeg espere antes de tentar novamente.",
       "server": "O SRN respondeu com um erro."
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "Este agente não suporta perguntas paralelas (é preciso bifurcação e retomada de sessão)."
     }
   }
 }

@@ -10,6 +10,8 @@
  *
  * - `warning` (amber) — degraded but being handled: a retry in flight.
  * - `muted` — settled; a transient confirmation.
+ * - `info` (sky) — a steady state of the session worth acting on: the
+ *   `/btw` side question awaiting or answering (not a fault, so not amber).
  */
 
 import { useState, type ReactNode } from "react"
@@ -19,18 +21,20 @@ import { ChevronDown, ChevronRight, X, type LucideIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
-export type DockStripTone = "warning" | "muted"
+export type DockStripTone = "warning" | "muted" | "info"
 
 const TONE_CLASSES: Record<DockStripTone, string> = {
   warning:
     "border-amber-500/30 bg-amber-500/10 py-2 text-xs text-amber-700 dark:text-amber-300",
   muted: "border-border/50 bg-muted/30 py-1.5 text-2xs text-muted-foreground",
+  info: "border-sky-500/30 bg-sky-500/10 py-2 text-xs text-sky-700 dark:text-sky-300",
 }
 
 const DISMISS_CLASSES: Record<DockStripTone, string> = {
   warning:
     "h-6 w-6 text-amber-700/70 hover:bg-amber-500/20 hover:text-amber-800 dark:text-amber-300/70 dark:hover:text-amber-200",
   muted: "h-5 w-5 text-muted-foreground/70 hover:text-foreground",
+  info: "h-6 w-6 text-sky-700/70 hover:bg-sky-500/20 hover:text-sky-800 dark:text-sky-300/70 dark:hover:text-sky-200",
 }
 
 interface ComposerDockStripProps {
@@ -46,6 +50,10 @@ interface ComposerDockStripProps {
   meta?: ReactNode
   /** Body of the expandable disclosure; no chevron when absent. */
   details?: string | null
+  /** Makes the title a button (e.g. the btw strip jumping to its
+   *  conversation). Without it the title is plain text, as every existing
+   *  strip wants. */
+  onTitleClick?: () => void
   /** Close button; omitted when there is no handler. */
   onDismiss?: () => void
   /** `status` for progress; none for the muted line. */
@@ -60,6 +68,7 @@ export function ComposerDockStrip({
   hint,
   meta,
   details,
+  onTitleClick,
   onDismiss,
   role,
 }: ComposerDockStripProps) {
@@ -79,7 +88,18 @@ export function ComposerDockStrip({
           )}
         />
         <span className="min-w-0 flex-1 truncate" title={hint ?? title}>
-          <span className={muted ? undefined : "font-medium"}>{title}</span>
+          {onTitleClick ? (
+            <button
+              type="button"
+              onClick={onTitleClick}
+              aria-label={t("openStripTitle")}
+              className="min-w-0 truncate text-start font-medium underline-offset-2 hover:underline"
+            >
+              {title}
+            </button>
+          ) : (
+            <span className={muted ? undefined : "font-medium"}>{title}</span>
+          )}
         </span>
         {meta}
         {details && (

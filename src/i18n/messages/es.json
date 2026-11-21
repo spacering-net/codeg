@@ -2320,7 +2320,8 @@
       "noRecentChats": "No hay chats recientes",
       "noRecentFolders": "No hay conversaciones de carpeta recientes",
       "noRecentCli": "No hay conversaciones recientes desde la línea de comandos",
-      "recentFilterMenuLabel": "Mostrar en Recientes"
+      "recentFilterMenuLabel": "Mostrar en Recientes",
+      "sectionBtw": "Preguntas aparte"
     },
     "conversation": {
       "reloadFailed": "No se pudo recargar la conversación: {message}",
@@ -2421,7 +2422,8 @@
       "markCompleted": "Marcar como completada",
       "reopen": "Reabrir",
       "expandSubsessions": "Expandir subconversaciones",
-      "collapseSubsessions": "Contraer subconversaciones"
+      "collapseSubsessions": "Contraer subconversaciones",
+      "promoteBtw": "Convertir en conversación"
     },
     "moveConversation": {
       "menuLabel": "Mover a",
@@ -3562,7 +3564,8 @@
         "mentionGroupSession": "Sesiones",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Habilidades",
-        "mentionGroupAssistant": "Asistentes"
+        "mentionGroupAssistant": "Asistentes",
+        "btwDescription": "Hacer una pregunta aparte en una copia de esta conversación"
       },
       "messageQueue": {
         "addToQueue": "Agregar a la cola",
@@ -4313,7 +4316,8 @@
         "retryUnavailable": "No hay ningún mensaje anterior para reenviar.",
         "toggleDetails": "Mostrar u ocultar detalles",
         "dismiss": "Descartar",
-        "moreIncidents": "+{count} más"
+        "moreIncidents": "+{count} más",
+        "openStripTitle": "Abrir"
       },
       "backgroundTasks": {
         "settledFallback": "Tarea en segundo plano finalizada ({status})",
@@ -4360,6 +4364,11 @@
       "proposedPlan": {
         "title": "Plan propuesto",
         "planning": "Planificando…"
+      },
+      "btw": {
+        "stripAnswering": "respondiendo…",
+        "stripAnswered": "respondido",
+        "stripStopped": "Interrumpido"
       }
     },
     "diffPreview": {
@@ -9920,6 +9929,11 @@
     "errorsPlain": {
       "rateLimited": "SRN pidió a Codeg esperar antes de reintentar.",
       "server": "SRN respondió con un error."
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "Este agente no admite preguntas aparte (requiere bifurcación y reanudación de sesión)."
     }
   }
 }

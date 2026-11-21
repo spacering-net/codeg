@@ -95,6 +95,7 @@ import { isDesktop } from "@/lib/platform"
 import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { leftChromeReserve, rightChromeReserve } from "@/lib/window-chrome"
 import {
+  acpBtwCreate,
   acpFork,
   acpStopAsyncTask,
   createChatConversation,
@@ -112,7 +113,11 @@ import {
 } from "@/lib/queue-flush"
 import { TurnBusyError } from "@/lib/turn-busy"
 import { deliverQueuedSteer } from "@/lib/queued-steer"
-import { toErrorMessage } from "@/lib/app-error"
+import {
+  toErrorMessage,
+  toLocalizedErrorMessage,
+  type AppErrorTranslator,
+} from "@/lib/app-error"
 import { blockingPrompts } from "@/lib/blocking-prompts"
 import { notify } from "@/lib/notify"
 import {
@@ -319,6 +324,7 @@ const ConversationTabView = memo(function ConversationTabView({
   const folderId = ownFolderId ?? 0
   const {
     bindConversationTab,
+    openTab,
     setChatDraftWorkingDir,
     setTabRuntimeConversationId,
     pinTab,
@@ -1101,6 +1107,90 @@ const ConversationTabView = memo(function ConversationTabView({
       }
     }
   }, [effectiveConversationId, groupId, setPendingCleanup, tabId])
+
+  // ---- `/btw` side questions (docs/btw-side-question-design.md) ----
+  const tBtwErrors = useTranslations("errors")
+  const workspaceConversations = useAppWorkspaceStore((s) => s.conversations)
+  const [dismissedBtwId, setDismissedBtwId] = useState<number | null>(null)
+  // This conversation's newest side-question fork. Derived from the workspace
+  // store — the same `conversation://changed` upserts that fill the sidebar's
+  // btw section update this strip, and a destroy on any client takes it away.
+  // (More than one can exist; the newest is the one the composer is about.)
+  const btwRow = useMemo(() => {
+    if (dbConversationId === null) return null
+    const children = workspaceConversations.filter(
+      (c) => c.kind === "btw" && c.parent_id === dbConversationId
+    )
+    children.sort(
+      (a, b) => b.created_at.localeCompare(a.created_at) || b.id - a.id
+    )
+    return children[0] ?? null
+  }, [workspaceConversations, dbConversationId])
+  // Three-state, from the row's status: a btw the agent cancelled (Stop on the
+  // child) must not claim an answer it never gave.
+  const btwInfo =
+    btwRow && btwRow.id !== dismissedBtwId && btwRow.title !== null
+      ? {
+          title: btwRow.title,
+          state:
+            btwRow.status === "in_progress"
+              ? ("answering" as const)
+              : btwRow.status === "cancelled"
+                ? ("stopped" as const)
+                : ("answered" as const),
+        }
+      : null
+  // `/btw <question>` from the composer (message-input.tsx intercept): the
+  // copy fork rides THIS conversation's connection, the answer streams on the
+  // child's own, and the tab opens on the answer. There is no busy special
+  // case — a question DURING an answer is the situation `/btw` exists for and
+  // the backend forks mid-turn by design. False (kept in the composer) for a
+  // conversation with no row yet: with no history there is nothing to fork.
+  const handleBtw = useCallback(
+    async (question: string): Promise<boolean> => {
+      if (conn.connectionId === null || dbConversationId === null) {
+        return false
+      }
+      // The child lives in the parent's folder — taken from the row itself,
+      // not this tab's folderId, which is 0 in chat mode (the row is the
+      // truth; the tab's folder is only the fallback for a conversation that
+      // has no row yet, where the fork is refused anyway above).
+      const parentRow = workspaceConversations.find(
+        (c) => c.id === dbConversationId
+      )
+      const targetFolderId = parentRow?.folder_id ?? folderId
+      if (targetFolderId === 0) return false
+      try {
+        const created = await acpBtwCreate(
+          conn.connectionId,
+          dbConversationId,
+          question
+        )
+        openTab(targetFolderId, created.conversationId, selectedAgent)
+        return true
+      } catch (e) {
+        toast.error(
+          toLocalizedErrorMessage(
+            e,
+            tBtwErrors as unknown as AppErrorTranslator
+          )
+        )
+        return false
+      }
+    },
+    [
+      conn.connectionId,
+      dbConversationId,
+      folderId,
+      openTab,
+      selectedAgent,
+      tBtwErrors,
+      workspaceConversations,
+    ]
+  )
+  const handleOpenBtw = useCallback(() => {
+    if (btwRow) openTab(btwRow.folder_id, btwRow.id, btwRow.agent_type)
+  }, [btwRow, openTab])
 
   const handleSend = useCallback(
     (
@@ -2387,6 +2477,10 @@ const ConversationTabView = memo(function ConversationTabView({
       showActiveFlow={showActiveFlow}
       queue={msgQueue}
       onEnqueue={mqEnqueue}
+      onBtw={handleBtw}
+      btwInfo={btwInfo}
+      onOpenBtw={handleOpenBtw}
+      onDismissBtw={() => setDismissedBtwId(btwRow?.id ?? null)}
       onQueueReorder={mqReorder}
       onQueueEdit={handleQueueEdit}
       onQueueDelete={mqRemove}

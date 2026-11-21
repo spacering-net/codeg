@@ -1159,6 +1159,8 @@ pub fn build_router_with_srn(
         )
         .route("/acp_cancel", post(handlers::acp::acp_cancel))
         .route("/acp_fork", post(handlers::acp::acp_fork))
+        .route("/btw_create", post(handlers::btw::btw_create))
+        .route("/btw_promote", post(handlers::btw::btw_promote))
         .route(
             "/acp_stop_async_task",
             post(handlers::acp::acp_stop_async_task),

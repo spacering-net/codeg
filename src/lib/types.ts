@@ -1097,8 +1097,11 @@ export type ConversationStatus =
 
 /** Mirrors Rust `ConversationKind` (src-tauri/src/db/entities/conversation.rs).
  *  `loop` rows belong to the Loop Engineering workbench and never appear in
- *  the sidebar list; `delegate` rows nest under their parent's tool-call view. */
-export type ConversationKind = "regular" | "chat" | "loop" | "delegate"
+ *  the sidebar list; `delegate` rows nest under their parent's tool-call view;
+ *  `btw` rows are `/btw` side questions — they name a parent but render in the
+ *  folder's collapsible "btw" section instead of under the parent's chevron
+ *  (see docs/btw-side-question-design.md). */
+export type ConversationKind = "regular" | "chat" | "loop" | "delegate" | "btw"
 
 /** Mirrors Rust `FolderKind` (src-tauri/src/db/entities/folder.rs).
  *  `loop_worktree` is reserved for M2+ — add it here when the variant lands. */
@@ -3077,6 +3080,19 @@ export interface AvailableCommandInfo {
   /** The skill's `SKILL.md`, when the agent sent its path. A skill bundled
    *  with the agent CLI has none. */
   skill_path?: string | null
+  /** A codeg-synthesized command rather than an agent-advertised one (`/btw`
+   *  today): the composer intercepts these instead of forwarding them. An
+   *  agent that natively advertises the same name lacks this flag and keeps
+   *  its forwarding behavior. Mirrors Rust `AvailableCommandInfo::client`. */
+  client?: boolean
+}
+
+/** The `/btw` command's result (mirror of Rust `BtwCreateResult`): the side
+ *  question's new row and its connection, so the UI can open the tab and
+ *  watch the answer stream immediately. */
+export interface BtwCreateResult {
+  conversationId: number
+  connectionId: string
 }
 
 /**

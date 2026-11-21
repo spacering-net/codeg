@@ -2320,7 +2320,8 @@
       "noRecentChats": "No recent chats",
       "noRecentFolders": "No recent folder conversations",
       "noRecentCli": "No recent conversations from the command line",
-      "recentFilterMenuLabel": "Show in Recent"
+      "recentFilterMenuLabel": "Show in Recent",
+      "sectionBtw": "Btw"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
@@ -2421,7 +2422,8 @@
       "markCompleted": "Mark as completed",
       "reopen": "Reopen",
       "expandSubsessions": "Expand sub-conversations",
-      "collapseSubsessions": "Collapse sub-conversations"
+      "collapseSubsessions": "Collapse sub-conversations",
+      "promoteBtw": "Promote to chat"
     },
     "moveConversation": {
       "menuLabel": "Move to",
@@ -3562,7 +3564,8 @@
         "mentionGroupSession": "Sessions",
         "mentionGroupCommit": "Commits",
         "mentionGroupSkill": "Skills",
-        "mentionGroupAssistant": "Assistants"
+        "mentionGroupAssistant": "Assistants",
+        "btwDescription": "Ask a side question in a copy of this conversation"
       },
       "messageQueue": {
         "addToQueue": "Queue message",
@@ -4313,7 +4316,8 @@
         "retryUnavailable": "No previous message to resend.",
         "toggleDetails": "Toggle details",
         "dismiss": "Dismiss",
-        "moreIncidents": "+{count} more"
+        "moreIncidents": "+{count} more",
+        "openStripTitle": "Open"
       },
       "backgroundTasks": {
         "settledFallback": "Background task finished ({status})",
@@ -4360,6 +4364,11 @@
       "proposedPlan": {
         "title": "Proposed plan",
         "planning": "Planning…"
+      },
+      "btw": {
+        "stripAnswering": "answering…",
+        "stripAnswered": "answered",
+        "stripStopped": "stopped"
       }
     },
     "diffPreview": {
@@ -9920,6 +9929,11 @@
     "errorsPlain": {
       "rateLimited": "SRN asked Codeg to wait before trying again.",
       "server": "SRN answered with an error."
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "This agent does not support side questions (session fork and resume are required)."
     }
   }
 }

@@ -1384,6 +1384,22 @@ pub enum ConnectionCommand {
         reply:
             tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
     },
+    /// The `/btw` copy fork (see `commands::btw`): `session/fork` at the tail
+    /// that answers with the forked id and LEAVES THIS SESSION ALONE — no
+    /// re-point, no sibling row, no loop exit. Handled by both the idle
+    /// dispatch and the mid-turn command select: every adapter codeg ships
+    /// accepts `session/fork` during a streaming turn (the copy takes only the
+    /// settled prefix — see `docs/btw-side-question-design.md`), so a side
+    /// question asked while the parent answers is served NOW, not queued.
+    /// Unlike [`Self::Fork`], no `turn_in_flight` gate before it: the parent's
+    /// live pointer never moves, so an in-flight turn has nothing to be
+    /// stranded by. Codex keeps the forking connection subscribed to its fork,
+    /// so the roundtrip helper also closes the forked session on this
+    /// connection (best-effort) to leave it free for the child's load.
+    ForkCopy {
+        reply:
+            tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
+    },
     /// Inject a live-feedback message into the RUNNING turn over the ACP
     /// `_session/steering` extension (native push channel — see
     /// `manager::submit_feedback`). Carries the same `PromptInputBlock`s a
@@ -9581,6 +9597,19 @@ async fn run_connection(
                 }
             }
 
+            // The `/btw` gate (see `SessionState::btw_supported`): a copy
+            // fork hands its child a SESSION, and only an agent that can load
+            // an existing session into a fresh connection can serve it.
+            // OpenCode's ACP mode is the live counter-example — it advertises
+            // `fork` but neither resume nor load, so its forks would strand.
+            {
+                let mut s = state.write().await;
+                s.btw_supported = supports_fork && supports_resume;
+                // The copy-fork arm runs deep in the command loop, which never
+                // saw this handshake's local — the state carries it instead.
+                s.session_close_supported = supports_close;
+            }
+
             // Emit fork support capability
             emit_with_state(
                 &state,
@@ -13987,6 +14016,104 @@ fn close_forked_parent(cx: &ConnectionTo<Agent>, parent: &str, child: &str) {
     }
 }
 
+/// The `/btw` copy-fork roundtrip, shared by the idle dispatch and the
+/// mid-turn command select. Protocol-only and non-destructive: it asks the
+/// agent to fork at the tail, hands the forked id back to the manager, and
+/// leaves this connection's session, state, and event stream exactly as they
+/// were — no [`ForkExitInfo`], no loop exit.
+///
+/// Mid-turn is the interesting case and it is safe by adapter construction:
+/// codex-acp forks at a settled `lastTurnId`, claude-agent-acp copies the
+/// persisted JSONL prefix, and OpenCode's ACP takes the message table's max
+/// seq — none of them refuse, and none of them copy the half-written step. The
+/// deliberate absence of a `turn_in_flight` gate in the manager is documented
+/// at [`ConnectionCommand::ForkCopy`].
+///
+/// Codex's `thread/fork` leaves the FORK subscribed to the connection that
+/// made it (see codex-acp `SessionFork.ts`), and a subscribed thread resues
+/// into another app-server only by ignoring the resume's config (#1105). So
+/// for Codex the copy closes its own fork on this connection — the same
+/// best-effort `session/close` an in-place fork sends to the session it
+/// leaves, aimed at the other id. Claude's fork never enters its adapter's
+/// session map (the child's resume goes cold off the file) and OpenCode has no
+/// resume to strand, so the close is scoped to Codex.
+async fn fork_copy_roundtrip(
+    cx: &ConnectionTo<Agent>,
+    sid: &SessionId,
+    agent_type: AgentType,
+    cwd: &str,
+    mcp_servers: &[McpServer],
+    claude: &ClaudeSessionOptions,
+    supports_close: bool,
+) -> Result<crate::acp::types::ForkProtocolResult, AcpError> {
+    let (fork_response, _models_raw) = crate::acp::fork::fork_session(
+        cx, sid, agent_type, cwd, mcp_servers, claude, None,
+    )
+    .await?;
+    let forked = fork_response.session_id.0.to_string();
+    if agent_type == AgentType::Codex && supports_close && forked != sid.0.as_ref() {
+        // Awaited, unlike the in-place fork's fire-and-forget
+        // `close_forked_parent`: the caller spawns a child connection that
+        // resumes THIS thread immediately, and a resume racing a still-
+        // subscribed fork re-opens the #1105 ignored-config hole the close
+        // exists to prevent. Awaiting is free of pump cost because the whole
+        // roundtrip runs on a spawned task (`spawn_fork_copy`).
+        let request = CloseSessionRequest::new(SessionId::new(forked.clone()));
+        match cx.send_request_to(Agent, request).block_task().await {
+            Ok(_) => tracing::info!("[ACP] copy fork closed {forked} on the parent"),
+            Err(e) => tracing::warn!(
+                "[ACP] copy fork's close of {forked} failed (child resume may ignore its config): {e}"
+            ),
+        }
+    }
+    Ok(crate::acp::types::ForkProtocolResult {
+        forked_session_id: forked,
+        original_session_id: sid.0.to_string(),
+    })
+}
+
+/// [`fork_copy_roundtrip`] on a task the connection owns, replying on `reply`
+/// when it finishes. Awaiting the roundtrip inside either command loop would
+/// stall that loop for the whole fork RPC — mid-turn especially, the parent's
+/// event pump stops forwarding the streaming turn's tokens until the side
+/// question's fork answered. Spawned, the loop keeps selecting, and the
+/// oneshot still resolves exactly once (a spawn failure — connection already
+/// going down — replies nothing, and the sender sees a closed channel).
+#[allow(clippy::too_many_arguments)] // the same request kit fork_copy_roundtrip needs, plus the reply
+fn spawn_fork_copy(
+    cx: &ConnectionTo<Agent>,
+    sid: SessionId,
+    agent_type: AgentType,
+    cwd: &str,
+    mcp_servers: &[McpServer],
+    claude: &ClaudeSessionOptions,
+    supports_close: bool,
+    reply: oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
+) {
+    let request_cx = cx.clone();
+    let cwd = cwd.to_string();
+    let mcp_servers = mcp_servers.to_vec();
+    let claude = claude.clone();
+    let task = async move {
+        let result = fork_copy_roundtrip(
+            &request_cx,
+            &sid,
+            agent_type,
+            &cwd,
+            &mcp_servers,
+            &claude,
+            supports_close,
+        )
+        .await;
+        let _ = reply.send(result);
+        // Never an error: a spawned task that fails takes the connection down.
+        Ok(())
+    };
+    if let Err(e) = cx.spawn(task) {
+        tracing::debug!("[ACP] not running copy fork: {e}");
+    }
+}
+
 /// Main conversation command loop: wait for frontend commands and process them.
 ///
 /// Map ACP `StopReason` to a stable lowercase string carried in the
@@ -16459,6 +16586,39 @@ async fn run_conversation_loop(
                                         "[ACP] in-turn Prompt DROPPED — the turn_in_flight gate should have rejected this"
                                     );
                                 }
+                                Some(ConnectionCommand::ForkCopy { reply }) => {
+                                    // The `/btw` case this arm exists for: a
+                                    // side question asked while this turn
+                                    // streams. Every adapter codeg ships takes
+                                    // `session/fork` mid-turn and copies only
+                                    // the settled prefix, so the answer arrives
+                                    // for the manager to bind to a child row
+                                    // while the parent keeps streaming (see
+                                    // `ConnectionCommand::ForkCopy`). Without
+                                    // this arm the command would fall into the
+                                    // swallowing `_` and drop its reply.
+                                    if !supports_fork {
+                                        let _ = reply.send(Err(AcpError::protocol(
+                                            "This agent does not support session/fork".to_string(),
+                                        )));
+                                    } else {
+                                        let cx = session.connection();
+                                        let sid = session.session_id().clone();
+                                        let claude = state.read().await.claude_session_options();
+                                        let supports_close =
+                                            state.read().await.session_close_supported;
+                                        spawn_fork_copy(
+                                            &cx,
+                                            sid,
+                                            agent_type,
+                                            cwd,
+                                            mcp_servers,
+                                            &claude,
+                                            supports_close,
+                                            reply,
+                                        );
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -16706,6 +16866,28 @@ async fn run_conversation_loop(
                         let _ = reply.send(Err(e));
                     }
                 }
+            }
+            Some(ConnectionCommand::ForkCopy { reply }) => {
+                if !supports_fork {
+                    let _ = reply.send(Err(AcpError::protocol(
+                        "This agent does not support session/fork".to_string(),
+                    )));
+                    continue;
+                }
+                let cx = session.connection();
+                let sid = session.session_id().clone();
+                let claude = state.read().await.claude_session_options();
+                let supports_close = state.read().await.session_close_supported;
+                spawn_fork_copy(
+                    &cx,
+                    sid,
+                    agent_type,
+                    cwd,
+                    mcp_servers,
+                    &claude,
+                    supports_close,
+                    reply,
+                );
             }
             Some(ConnectionCommand::Disconnect) | None => {
                 break;
@@ -20526,9 +20708,10 @@ fn is_config_option_state_command(
 fn available_command_infos(
     agent_type: AgentType,
     commands: &[agent_client_protocol::schema::v1::AvailableCommand],
+    btw_supported: bool,
 ) -> Vec<AvailableCommandInfo> {
     let mut seen = HashSet::new();
-    commands
+    let mut infos: Vec<AvailableCommandInfo> = commands
         .iter()
         .filter(|cmd| !is_config_option_state_command(agent_type, cmd.meta.as_ref()))
         .filter(|cmd| {
@@ -20553,9 +20736,36 @@ fn available_command_infos(
                 input_hint,
                 skill: skill.is_some(),
                 skill_path: skill.flatten(),
+                client: false,
             }
         })
-        .collect()
+        .collect();
+    // `/btw` is codeg's own command, synthesized into the advertised list
+    // exactly where it can be served (fork AND resume — see
+    // `SessionState::btw_supported`), so the composer's menu needs no separate
+    // capability plumbing: the command is listed or it isn't. An agent that
+    // natively advertises `btw` owns the name (its row wins, and the composer
+    // forwards to it — it intercepts on the `client` flag below, not on the
+    // name). The
+    // description is a placeholder — the frontend replaces it with localized
+    // text for this name, the same courtesy it already extends advertised
+    // labels (see `localizedMessage`).
+    if btw_supported
+        && !seen
+            .iter()
+            .any(|name| name.trim().eq_ignore_ascii_case("btw"))
+    {
+        infos.push(AvailableCommandInfo {
+            name: "btw".to_string(),
+            description: "Ask a side question in a copy-fork of this conversation".to_string(),
+            input_hint: None,
+            skill: false,
+            skill_path: None,
+            // The composer intercepts on this flag (see AvailableCommandInfo::client).
+            client: true,
+        });
+    }
+    infos
 }
 
 /// Whether an advertised command is a skill, read off JetBrains AIR's command
@@ -22707,6 +22917,7 @@ fn kiro_available_commands(notif: &KiroCommandsAvailableNotification) -> Vec<Ava
                 input_hint,
                 skill: false,
                 skill_path: None,
+                client: false,
             })
         })
         .collect();
@@ -22735,6 +22946,7 @@ fn kiro_available_commands(notif: &KiroCommandsAvailableNotification) -> Vec<Ava
             input_hint: kiro_prompt_input_hint(prompt),
             skill: false,
             skill_path: None,
+            client: false,
         })
     }));
     // The composer sends a command named `$x` as `$x`, the token codex-acp
@@ -27033,7 +27245,8 @@ async fn emit_conversation_update(
             emit_session_config_options_update(state, emitter, update.config_options).await;
         }
         SessionUpdate::AvailableCommandsUpdate(update) => {
-            let commands = available_command_infos(agent_type, &update.available_commands);
+            let btw_supported = state.read().await.btw_supported;
+            let commands = available_command_infos(agent_type, &update.available_commands, btw_supported);
             emit_with_state(state, emitter, AcpEvent::AvailableCommands { commands }).await;
         }
         SessionUpdate::UsageUpdate(update) => {
@@ -29304,7 +29517,7 @@ mod tests {
 
     #[test]
     fn claude_skill_commands_carry_the_air_skill_mark() {
-        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false));
+        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false), false);
         assert_eq!(
             skill_marks(&read),
             vec![
@@ -29330,7 +29543,7 @@ mod tests {
         assert_eq!(read[3].input_hint.as_deref(), Some("[<target>]"));
 
         // Before the read only the skill found on disk is marked.
-        let first = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(true));
+        let first = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(true), false);
         assert_eq!(
             skill_marks(&first),
             vec![
@@ -29348,12 +29561,42 @@ mod tests {
         );
     }
 
+    /// `/btw` rides the advertised-command list itself (no separate capability
+    /// event): it appears exactly when the session can serve it, and an agent
+    /// that natively advertises the name keeps its own row — the frontend
+    /// distinguishes codeg's synthesis by the `client` flag, not the name.
+    #[test]
+    fn btw_is_synthesized_into_the_command_list_only_when_supported() {
+        let cmds = claude_0991_commands(false);
+        let off = available_command_infos(AgentType::ClaudeCode, &cmds, false);
+        assert!(off.iter().all(|c| c.name != "btw"));
+
+        let on = available_command_infos(AgentType::ClaudeCode, &cmds, true);
+        let btw = on.last().expect("the synthesized command appends last");
+        assert_eq!(btw.name, "btw");
+        assert!(btw.client);
+        assert!(on[..on.len() - 1].iter().all(|c| !c.client));
+
+        let mut native: Vec<agent_client_protocol::schema::v1::AvailableCommand> =
+            serde_json::from_value(serde_json::json!([
+                { "name": "btw", "description": "a native command of some agent", "input": null }
+            ]))
+            .unwrap();
+        native.extend(cmds);
+        let read = available_command_infos(AgentType::ClaudeCode, &native, true);
+        let rows: Vec<&AvailableCommandInfo> =
+            read.iter().filter(|c| c.name == "btw").collect();
+        assert_eq!(rows.len(), 1, "no duplicate under a native name");
+        assert!(!rows[0].client, "the native row is forwarded, not intercepted");
+        assert_eq!(rows[0].description, "a native command of some agent");
+    }
+
     /// A command nothing marks goes to the frontend exactly as before the
     /// marks existed (no `skill` / `skill_path` keys), so every other agent's
     /// list and every snapshot is unchanged; a marked one adds the two keys.
     #[test]
     fn skill_marks_stay_off_the_wire_for_unmarked_commands() {
-        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false));
+        let read = available_command_infos(AgentType::ClaudeCode, &claude_0991_commands(false), false);
         assert_eq!(
             serde_json::to_value(&read[4]).unwrap(),
             serde_json::json!({
@@ -29450,7 +29693,7 @@ mod tests {
             ]))
             .unwrap();
         assert_eq!(
-            skill_marks(&available_command_infos(AgentType::ClaudeCode, &commands)),
+            skill_marks(&available_command_infos(AgentType::ClaudeCode, &commands, false)),
             vec![("deploy", true, Some("/w/.claude/skills/deploy/SKILL.md"))]
         );
     }
@@ -29471,7 +29714,7 @@ mod tests {
             ]))
             .unwrap();
         let names = |agent_type| {
-            available_command_infos(agent_type, &commands)
+            available_command_infos(agent_type, &commands, false)
                 .into_iter()
                 .map(|command| command.name)
                 .collect::<Vec<_>>()

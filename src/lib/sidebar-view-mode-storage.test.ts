@@ -30,19 +30,19 @@ const NAV_ITEMS_KEY = "workspace:sidebar-nav-items"
 
 describe("normalizeSectionOrder", () => {
   it("passes a complete order through unchanged", () => {
-    expect(normalizeSectionOrder(["recent", "chats", "folders"])).toEqual([
-      "recent",
-      "chats",
-      "folders",
-    ])
+    expect(
+      normalizeSectionOrder(["recent", "chats", "folders", "btw"])
+    ).toEqual(["recent", "chats", "folders", "btw"])
   })
 
   it("appends missing sections in default order", () => {
     // Forward compatibility in reverse: a store written before "Recent" existed
-    // gets it at the bottom rather than losing the section entirely.
+    // gets it at the bottom rather than losing the section entirely — and a
+    // store from before the btw section gets THAT appended in id order too.
     expect(normalizeSectionOrder(["chats", "folders"])).toEqual([
       "chats",
       "folders",
+      "btw",
       "recent",
     ])
   })
@@ -50,14 +50,18 @@ describe("normalizeSectionOrder", () => {
   it("drops unknown entries and repeats", () => {
     expect(
       normalizeSectionOrder(["recent", "bogus", "recent", 7, null, "chats"])
-    ).toEqual(["recent", "chats", "folders"])
+    ).toEqual(["recent", "chats", "folders", "btw"])
   })
 
   it("migrates the legacy two-way strings, preserving the user's choice", () => {
+    // The pre-Recent layout, completed: the sections absent from the stored
+    // value are appended in default order, so the newer btw sits behind the
+    // older recent rather than jumping into its default slot.
     expect(normalizeSectionOrder("chats-first")).toEqual([
       "chats",
       "folders",
       "recent",
+      "btw",
     ])
     expect(normalizeSectionOrder("folders-first")).toEqual(
       DEFAULT_SECTION_ORDER
@@ -109,19 +113,19 @@ describe("section-order persistence", () => {
   beforeEach(() => localStorage.clear())
 
   it("round-trips through localStorage", () => {
-    saveSectionOrder(["recent", "folders", "chats"])
-    expect(loadSectionOrder()).toEqual(["recent", "folders", "chats"])
+    saveSectionOrder(["recent", "folders", "chats", "btw"])
+    expect(loadSectionOrder()).toEqual(["recent", "folders", "chats", "btw"])
   })
 
-  it("defaults to Folders → Chat → Recent with nothing stored", () => {
-    expect(loadSectionOrder()).toEqual(["folders", "chats", "recent"])
+  it("defaults to Folders → Chat → btw → Recent with nothing stored", () => {
+    expect(loadSectionOrder()).toEqual(["folders", "chats", "btw", "recent"])
   })
 
   it("migrates a legacy bare string left by an older build", () => {
     // The old format was not JSON, so the loader must survive the parse failure
     // rather than resetting the user's preference.
     localStorage.setItem(SECTION_ORDER_KEY, "chats-first")
-    expect(loadSectionOrder()).toEqual(["chats", "folders", "recent"])
+    expect(loadSectionOrder()).toEqual(["chats", "folders", "recent", "btw"])
   })
 
   it("falls back to the default for corrupt JSON", () => {

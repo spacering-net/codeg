@@ -2320,7 +2320,8 @@
       "noRecentChats": "최근 채팅이 없습니다",
       "noRecentFolders": "최근 폴더 대화가 없습니다",
       "noRecentCli": "명령줄에서 시작한 최근 대화가 없습니다",
-      "recentFilterMenuLabel": "최근 항목 표시"
+      "recentFilterMenuLabel": "최근 항목 표시",
+      "sectionBtw": "부가 질문"
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",
@@ -2421,7 +2422,8 @@
       "markCompleted": "완료로 표시",
       "reopen": "다시 열기",
       "expandSubsessions": "하위 대화 펼치기",
-      "collapseSubsessions": "하위 대화 접기"
+      "collapseSubsessions": "하위 대화 접기",
+      "promoteBtw": "일반 대화로 승격"
     },
     "moveConversation": {
       "menuLabel": "이동",
@@ -3562,7 +3564,8 @@
         "mentionGroupSession": "세션",
         "mentionGroupCommit": "커밋",
         "mentionGroupSkill": "스킬",
-        "mentionGroupAssistant": "어시스턴트"
+        "mentionGroupAssistant": "어시스턴트",
+        "btwDescription": "이 대화의 사본에서 부가 질문하기"
       },
       "messageQueue": {
         "addToQueue": "대기열에 추가",
@@ -4313,7 +4316,8 @@
         "retryUnavailable": "다시 보낼 메시지가 없습니다.",
         "toggleDetails": "세부 정보 전환",
         "dismiss": "닫기",
-        "moreIncidents": "외 {count}건"
+        "moreIncidents": "외 {count}건",
+        "openStripTitle": "열기"
       },
       "backgroundTasks": {
         "settledFallback": "백그라운드 작업이 종료되었습니다 ({status})",
@@ -4360,6 +4364,11 @@
       "proposedPlan": {
         "title": "제안된 계획",
         "planning": "계획 중…"
+      },
+      "btw": {
+        "stripAnswering": "답변 중…",
+        "stripAnswered": "답변 완료",
+        "stripStopped": "중단됨"
       }
     },
     "diffPreview": {
@@ -9920,6 +9929,11 @@
     "errorsPlain": {
       "rateLimited": "SRN이 잠시 후 다시 시도하라고 요청했습니다.",
       "server": "SRN이 오류를 반환했습니다."
+    }
+  },
+  "errors": {
+    "btw": {
+      "unsupportedAgent": "이 에이전트는 부가 질문을 지원하지 않습니다(세션 포크 및 재개가 필요)."
     }
   }
 }

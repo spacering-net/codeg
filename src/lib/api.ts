@@ -28,6 +28,7 @@ import type {
   LeakedTempReclaim,
   LeakedTempScan,
   AgentType,
+  BtwCreateResult,
   CliAccessStatus,
   CliToolStatus,
   AgentDelegationDefaults,
@@ -421,6 +422,28 @@ export async function acpFork(
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
     throw e
   }
+}
+
+/** Create a `/btw` side question on the given conversation connection. Unlike
+ *  `acpFork`, a turn in flight is the normal case, not a rejection: the copy
+ *  fork reads only the settled prefix while the parent keeps streaming (see
+ *  docs/btw-side-question-design.md). */
+export async function acpBtwCreate(
+  parentConnectionId: string,
+  parentConversationId: number,
+  question: string
+): Promise<BtwCreateResult> {
+  return await getTransport().call("btw_create", {
+    parentConnectionId,
+    parentConversationId,
+    question,
+  })
+}
+
+/** Promote a `/btw` row to a normal conversation. Destroying one is
+ *  `deleteConversation`, an ordinary call the sidebar card already offers. */
+export async function acpBtwPromote(conversationId: number): Promise<void> {
+  await getTransport().call("btw_promote", { conversationId })
 }
 
 /**
