@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::{catalog_error, invalid, valid_id, HostPlugins, Invocation, ServerModule};
-use crate::acp::session_state::SessionState;
+use crate::acp::session_state::{SessionState, ToolCallOutput, ToolCallStatus};
 use crate::acp::types::{AcpEvent, ConnectionStatus};
 use crate::app_error::{AppCommandError, AppErrorCode};
 use crate::db::entities::conversation::{self, ConversationKind};
@@ -17,6 +17,7 @@ use crate::web::event_bridge::{emit_event, EventEmitter};
 
 pub const EVENT_CHANNEL: &str = "host-plugins://event";
 const TRANSFORM_DEADLINE: Duration = Duration::from_secs(3);
+const TOOL_PREVIEW_BYTES: usize = 4 * 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Event {
@@ -44,6 +45,8 @@ pub enum Event {
     TurnStarted,
     #[serde(rename = "session.turn.completed")]
     TurnCompleted,
+    #[serde(rename = "session.tool.completed")]
+    ToolCompleted,
     #[serde(rename = "session.permission.requested")]
     PermissionRequested,
     #[serde(rename = "session.permission.resolved")]
@@ -206,6 +209,82 @@ impl Event {
     }
 }
 
+pub(crate) fn pending_tool_result<'a>(
+    emitter: &EventEmitter,
+    session: &SessionState,
+    payload: &'a AcpEvent,
+) -> Option<(Arc<HostPlugins>, &'a str)> {
+    let (tool_call_id, status) = match payload {
+        AcpEvent::ToolCall {
+            tool_call_id,
+            status,
+            ..
+        } => (tool_call_id, status.as_str()),
+        AcpEvent::ToolCallUpdate {
+            tool_call_id,
+            status: Some(status),
+            ..
+        } => (tool_call_id, status.as_str()),
+        _ => return None,
+    };
+    if !matches!(status, "completed" | "failed")
+        || tool_call_id.len() > 256
+        || session.conversation_id.is_none()
+        || session
+            .active_tool_calls
+            .get(tool_call_id)
+            .is_some_and(|tool| {
+                matches!(
+                    tool.status,
+                    ToolCallStatus::Completed | ToolCallStatus::Failed
+                )
+            })
+    {
+        return None;
+    }
+    let host = emitter.host_plugins()?;
+    host.has_lifecycle_observer(Event::ToolCompleted)
+        .then_some((host, tool_call_id.as_str()))
+}
+
+pub(crate) fn tool_result_input(session: &SessionState, tool_call_id: &str) -> Option<Value> {
+    let tool = session.active_tool_calls.get(tool_call_id)?;
+    let (output_kind, text) = match &tool.output {
+        Some(ToolCallOutput::Text { content }) => ("text", Some(content.as_str())),
+        Some(ToolCallOutput::Error { message }) => ("error", Some(message.as_str())),
+        Some(ToolCallOutput::Json { .. }) => ("structured", None),
+        None => (
+            if tool.content.is_some() {
+                "text"
+            } else {
+                "none"
+            },
+            tool.content.as_deref(),
+        ),
+    };
+    let preview = text.map(|text| {
+        let mut end = text.len().min(TOOL_PREVIEW_BYTES);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        &text[..end]
+    });
+    Some(json!({
+        "folderId": session.folder_id,
+        "conversationId": session.conversation_id,
+        "connectionId": session.connection_id,
+        "agentType": session.agent_type,
+        "detail": {
+            "toolCallId": tool_call_id,
+            "kind": tool.kind,
+            "status": tool.status,
+            "outputKind": output_kind,
+            "outputPreview": preview,
+            "previewTruncated": text.zip(preview).is_some_and(|(text, preview)| text.len() != preview.len()),
+        },
+    }))
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Registration {
@@ -252,6 +331,21 @@ pub(super) fn validate(
 }
 
 impl HostPlugins {
+    fn has_lifecycle_observer(&self, event: Event) -> bool {
+        let state = self.state.lock().expect("host plugin state lock");
+        state.as_ref().is_ok_and(|state| {
+            state.catalog.values().any(|plugin| {
+                plugin.enabled
+                    && plugin
+                        .manifest
+                        .contributes
+                        .lifecycle_hooks
+                        .iter()
+                        .any(|hook| hook.event == event)
+            })
+        })
+    }
+
     fn lifecycle_handlers(&self, event: Event) -> Vec<Invocation> {
         let guard = self.state.lock().expect("host plugin state lock");
         let Ok(state) = guard.as_ref().map_err(|error| catalog_error(error)) else {
@@ -1105,6 +1199,87 @@ mod tests {
                 "parentConversationId": null,
                 "title": "Prepared title",
             })
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(250), events.recv())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_completion_emits_one_scoped_event_with_a_bounded_preview() {
+        use crate::web::event_bridge::emit_with_state;
+
+        let data = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let db = fresh_in_memory_db().await;
+        let host = crate::app_state::AppState::new_for_test(db, data.path().to_owned());
+        install_lifecycle_example(&host.host_plugins, source.path()).await;
+        let mut events = host.event_broadcaster.subscribe();
+        let mut state = SessionState::new(
+            "tool-connection".into(),
+            AgentType::Codex,
+            None,
+            "test".into(),
+            Some(12),
+        );
+        state.conversation_id = Some(23);
+        let state = Arc::new(tokio::sync::RwLock::new(state));
+        let full_text = format!("{}é", "x".repeat(TOOL_PREVIEW_BYTES - 1));
+        emit_with_state(
+            &state,
+            &host.emitter,
+            AcpEvent::ToolCall {
+                tool_call_id: "tool-1".into(),
+                title: "Example tool".into(),
+                kind: "execute".into(),
+                status: "in_progress".into(),
+                content: None,
+                raw_input: Some(r#"{"secret":"example input"}"#.into()),
+                raw_output: Some(full_text.clone()),
+                locations: None,
+                meta: None,
+                images: None,
+            },
+        )
+        .await;
+        let settled = || AcpEvent::ToolCallUpdate {
+            tool_call_id: "tool-1".into(),
+            title: None,
+            status: Some("completed".into()),
+            content: None,
+            raw_input: None,
+            raw_output: None,
+            raw_output_append: None,
+            locations: None,
+            meta: None,
+            images: None,
+        };
+        emit_with_state(&state, &host.emitter, settled()).await;
+        emit_with_state(&state, &host.emitter, settled()).await;
+        {
+            let state = state.read().await;
+            let input = tool_result_input(&state, "tool-1").unwrap();
+            assert_eq!(
+                input["detail"]["outputPreview"],
+                &full_text[..TOOL_PREVIEW_BYTES - 1]
+            );
+            assert_eq!(input["detail"]["previewTruncated"], true);
+            assert!(input["detail"].get("input").is_none());
+        }
+        let event = tokio::time::timeout(Duration::from_secs(3), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(event.channel, EVENT_CHANNEL);
+        assert_eq!(event.payload["pluginId"], EXAMPLE_ID);
+        assert_eq!(event.payload["event"], "session.tool.completed");
+        assert_eq!(event.payload["folderId"], 12);
+        assert_eq!(event.payload["conversationId"], 23);
+        assert_eq!(
+            event.payload["data"],
+            json!({ "toolCallId": "tool-1", "status": "completed", "outputKind": "text" })
         );
         assert!(
             tokio::time::timeout(Duration::from_millis(250), events.recv())

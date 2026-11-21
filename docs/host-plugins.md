@@ -207,6 +207,22 @@ client event stream as workspace hooks.
 The permission hooks report state transitions. The user's permission decision
 continues through the standard Codeg approval flow.
 
+### Tool result events
+
+Register `session.tool.completed` to observe a live ACP tool call in a
+saved conversation when its status first becomes `completed` or `failed`.
+The handler receives the conversation and connection IDs, workspace ID when
+available, agent type, and `detail` with `toolCallId`, `kind`, `status`, and
+`outputKind`.
+
+For text and errors, `outputPreview` contains up to 4 KiB of the recorded
+UTF-8 text. `previewTruncated` marks a shortened preview. Structured
+results use `outputKind: "structured"` with a null preview. The hook runs as
+an observer and the original tool result continues to the agent.
+
+The Workspace Lifecycle example emits the tool ID, status, and output kind
+to its settings panel without including the preview.
+
 ## Agent creation, launch, close, and archive hooks
 
 Register `agent.create.before` to set an initial conversation title. It

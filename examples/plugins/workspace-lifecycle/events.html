@@ -12,11 +12,19 @@
 <script>
   window.codeg.ready.then(() => {
     document.getElementById("status").textContent =
-      "Listening for workspace, worktree, agent, and turn events."
+      "Listening for workspace, worktree, agent, turn, and tool events."
     const events = document.getElementById("events")
     window.codeg.events.subscribe(({ event, data }) => {
       const row = document.createElement("li")
-      const details = [event, data.folderId && `folder #${data.folderId}`, data.path, data.title, data.stopReason]
+      const details = [
+        event,
+        data.folderId && `folder #${data.folderId}`,
+        data.path,
+        data.title,
+        data.stopReason,
+        data.toolCallId,
+        data.status,
+      ]
       row.textContent = details.filter(Boolean).join(" · ")
       events.prepend(row)
       if (events.children.length > 20) events.lastElementChild.remove()

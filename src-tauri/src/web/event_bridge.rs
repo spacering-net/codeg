@@ -5,6 +5,7 @@ use serde::{ser::SerializeStruct, Serialize, Serializer};
 use tokio::sync::{broadcast, RwLock};
 
 use crate::acp::{AcpEvent, EventBusMetrics, EventEnvelope, InternalEventBus, SessionState};
+use crate::host_plugins::lifecycle as plugin_lifecycle;
 use crate::host_plugins::HostPlugins;
 
 /// Broadcast-delivered event.
@@ -685,12 +686,18 @@ pub async fn emit_with_state_built<F>(
 where
     F: FnOnce(&mut SessionState) -> Option<AcpEvent>,
 {
-    let (envelope_arc, stream, evicted, turn_file_jobs) = {
+    let (envelope_arc, stream, evicted, turn_file_jobs, tool_result) = {
         let mut s = state.write().await;
         let Some(payload) = build(&mut s) else {
             return false;
         };
+        // Capture the settled result under the same lock as the event.
+        // Turn completion can clear the tool state before listeners run.
+        let pending_tool_result = plugin_lifecycle::pending_tool_result(emitter, &s, &payload);
         s.apply_event(&payload);
+        let tool_result = pending_tool_result.and_then(|(host, tool_call_id)| {
+            plugin_lifecycle::tool_result_input(&s, tool_call_id).map(|input| (host, input))
+        });
         s.event_seq += 1;
         let envelope = Arc::new(EventEnvelope {
             seq: s.event_seq,
@@ -699,7 +706,13 @@ where
         });
         let evicted = s.push_recent_event(Arc::clone(&envelope));
         let turn_file_jobs = std::mem::take(&mut s.turn_file_jobs);
-        (envelope, s.event_stream(), evicted, turn_file_jobs)
+        (
+            envelope,
+            s.event_stream(),
+            evicted,
+            turn_file_jobs,
+            tool_result,
+        )
     };
 
     // Office auto-preview: confirm the files this turn's tool calls named.
@@ -753,6 +766,10 @@ where
             }
         }
         EventEmitter::Noop => {}
+    }
+
+    if let Some((host, input)) = tool_result {
+        host.observe(emitter, plugin_lifecycle::Event::ToolCompleted, input);
     }
 
     // Bridge conversation status transitions onto the global

@@ -29,6 +29,10 @@ export function handle(method, input) {
   if (method === "turn-completed") {
     return { folderId: input.folderId, stopReason: input.detail.stopReason }
   }
+  if (method === "tool-completed") {
+    const { toolCallId, status, outputKind } = input.detail
+    return { toolCallId, status, outputKind }
+  }
   if (
     method === "after-create" ||
     method === "after-archive" ||
