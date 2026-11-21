@@ -1,0 +1,71 @@
+<style>
+  :root {
+    color-scheme: light dark;
+    font: 14px system-ui;
+  }
+  body {
+    margin: 16px;
+  }
+  button {
+    font: inherit;
+    padding: 8px 12px;
+  }
+</style>
+<p id="description" aria-live="polite">Loading workspace context…</p>
+<button id="refresh" type="button" hidden>Refresh workspace details</button>
+<div id="preferences" hidden>
+  <p><label for="workspace-label">Workspace label</label></p>
+  <input id="workspace-label" maxlength="50" />
+  <button id="save" type="button">Save</button>
+</div>
+<script>
+  window.codeg.ready.then(async (context) => {
+    const description = document.getElementById("description")
+    const refresh = document.getElementById("refresh")
+    if (context.type === "clientSurface") {
+      const conversation = context.conversationId ?? "Draft"
+      const placement =
+        context.slot === "composer" ? "Composer" : "Session header"
+      description.textContent = `${placement} · ${conversation}`
+      return
+    }
+    if (context.type === "settingsPanel") {
+      const field = document.getElementById("workspace-label")
+      const save = document.getElementById("save")
+      let snapshot = await window.codeg.settings.read()
+      field.value = snapshot.value.label
+      document.getElementById("preferences").hidden = false
+      description.textContent = ""
+      save.addEventListener("click", async () => {
+        save.disabled = true
+        try {
+          snapshot = await window.codeg.settings.save(snapshot.revision, {
+            label: field.value,
+          })
+          description.textContent = "Saved"
+        } catch (error) {
+          description.textContent = error.message
+        } finally {
+          save.disabled = false
+        }
+      })
+      return
+    }
+    async function describe() {
+      refresh.disabled = true
+      try {
+        description.textContent = await window.codeg.call("describe", {
+          folderId: context.folderId,
+          locale: context.locale,
+        })
+      } catch (error) {
+        description.textContent = error.message
+      } finally {
+        refresh.disabled = false
+      }
+    }
+    refresh.hidden = false
+    refresh.addEventListener("click", describe)
+    void describe()
+  })
+</script>
