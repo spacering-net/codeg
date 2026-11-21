@@ -185,6 +185,10 @@ export function IdentityPage({
     unavailable: agentUnavailable,
   })
   const booleanLabels = { on: tm("booleanOn"), off: tm("booleanOff") }
+  // The options still to pick, as the first setup says it ("Your agent has
+  // 2 options to pick") or as the identity tab does.
+  const missingText = (count: number) =>
+    agent ? ta("missingCount", { count }) : t("setupMissing", { count })
   const savedMarks = useMemo(
     () =>
       savedAgent
@@ -271,7 +275,7 @@ export function IdentityPage({
       }
       if (stillMissing.length > 0) {
         setInvalidIds(new Set(stillMissing.map((row) => row.id)))
-        setSubmitError(ta("missingCount", { count: stillMissing.length }))
+        setSubmitError(missingText(stillMissing.length))
         triggerRefs.current.get(stillMissing[0].id)?.focus()
         return { ok: false }
       }
@@ -303,7 +307,7 @@ export function IdentityPage({
       gate.kind === "error"
         ? ta("cannotSaveProbeFailed")
         : gate.kind === "pick-model"
-          ? ta("missingCount", { count: 1 })
+          ? missingText(1)
           : gate.kind === "not-switched"
             ? ta("cannotSaveModelNotSwitched")
             : ta("cannotSaveStillLoading")
@@ -371,8 +375,7 @@ export function IdentityPage({
     }
   }
 
-  const footerHint =
-    missing.length > 0 ? ta("missingCount", { count: missing.length }) : null
+  const footerHint = missing.length > 0 ? missingText(missing.length) : null
 
   const agentPick = (
     <AgentSelect
@@ -419,18 +422,10 @@ export function IdentityPage({
 
   if (!agent) {
     return (
-      <SetupFrame face={avatar.kind === "face" ? avatar.color : null}>
-        {/* One column; side by side once the screen is wide enough — its
-            face and name on the left, its agent on the right. */}
-        <form
-          className="flex w-full flex-col items-center @4xl/setup:grid @4xl/setup:grid-cols-2 @4xl/setup:items-center @4xl/setup:gap-x-16"
-          data-pa-settings-page="identity"
-          data-pa-setup
-          onSubmit={(event) => {
-            event.preventDefault()
-            void save()
-          }}
-        >
+      <SetupFrame
+        face={avatar.kind === "face" ? avatar.color : null}
+        onSubmit={() => void save()}
+        identity={
           <SetupIdentity
             avatar={avatar}
             name={name}
@@ -438,35 +433,39 @@ export function IdentityPage({
             onName={setName}
             disabled={disabled || saving}
           />
-          <div className="flex w-full flex-col" data-pa-setup-side>
-            {/* Its agent: the tiles, its options under them once picked. */}
-            <div
-              className="mt-9 w-full overflow-hidden rounded-2xl border border-border/70 bg-background/80 @4xl/setup:mt-0"
-              data-pa-setup-agent
-            >
-              <div className="flex flex-col gap-2.5 p-3">
-                <p className="flex items-center gap-1.5 px-0.5 text-xs font-medium text-muted-foreground">
-                  <Bot className="size-3.5" aria-hidden />
-                  {ta("agentLabel")}
-                </p>
-                <SetupAgentTiles
-                  value={agentType}
-                  onChange={pickAgent}
-                  agents={agents.filter((a) => a.enabled)}
-                  disabled={disabled || saving}
-                />
-              </div>
-              {options ? (
-                <div className="divide-y divide-border/60 border-t border-border/60">
-                  {options}
-                </div>
-              ) : null}
+        }
+        agent={
+          // Its agent: the tiles, its options under them once picked.
+          <div
+            className="w-full overflow-hidden rounded-2xl border border-border/70 bg-background/80"
+            data-pa-setup-agent
+          >
+            <div className="flex flex-col gap-2.5 p-3">
+              <p className="flex items-center gap-1.5 px-0.5 text-xs font-medium text-muted-foreground">
+                <Bot className="size-3.5" aria-hidden />
+                {ta("agentLabel")}
+              </p>
+              <SetupAgentTiles
+                value={agentType}
+                onChange={pickAgent}
+                agents={agents.filter((a) => a.enabled)}
+                disabled={disabled || saving}
+              />
             </div>
+            {options ? (
+              <div className="divide-y divide-border/60 border-t border-border/60">
+                {options}
+              </div>
+            ) : null}
+          </div>
+        }
+        start={
+          <>
             <Button
               type="submit"
               size="lg"
               disabled={disabled || saving}
-              className="group/start mt-5 h-11 w-full rounded-full text-[0.9375rem]"
+              className="group/start h-11 w-full rounded-full text-[0.9375rem]"
               data-pa-setup-start
             >
               {saving ? (
@@ -491,14 +490,15 @@ export function IdentityPage({
                   submitError ? "text-destructive" : "text-muted-foreground"
                 )}
                 role={submitError ? "alert" : undefined}
+                data-pa-setup-hint
               >
                 {submitError ?? footerHint}
               </p>
             ) : null}
-          </div>
-        </form>
-        {executorEditor}
-      </SetupFrame>
+          </>
+        }
+        overlay={executorEditor}
+      />
     )
   }
 

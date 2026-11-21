@@ -10084,6 +10084,7 @@
       "setupMoreAgents": "Mehr ({count})",
       "setupFewerAgents": "Weniger",
       "setupNoAgents": "Noch kein Agent verfügbar: Installiere zuerst einen in den Einstellungen.",
+      "setupMissing": "{count, plural, one {Für deinen Agenten ist noch # Option zu wählen} other {Für deinen Agenten sind noch # Optionen zu wählen}}",
       "tabPersona": "Persona & Gedächtnis",
       "name": "Name",
       "nameHint": "Name und Bild, mit denen er auf seiner Seite und in seinen Nachrichten erscheint; der Agent kennt seinen Namen auch. Ohne Namen gilt der Standardname.",

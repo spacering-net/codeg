@@ -10084,6 +10084,7 @@
       "setupMoreAgents": "Plus ({count})",
       "setupFewerAgents": "Moins",
       "setupNoAgents": "Aucun agent n’est encore disponible : installez-en un dans les Paramètres.",
+      "setupMissing": "{count, plural, one {Il reste # option de votre agent à choisir} other {Il reste # options de votre agent à choisir}}",
       "tabPersona": "Persona et mémoire",
       "name": "Nom",
       "nameHint": "Le nom et l’image qu’il porte sur sa page et dans ses messages ; l’agent connaît aussi son nom. Sans nom, le nom par défaut est utilisé.",

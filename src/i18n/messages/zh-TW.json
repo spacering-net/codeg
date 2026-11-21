@@ -10084,6 +10084,7 @@
       "setupMoreAgents": "更多（{count}）",
       "setupFewerAgents": "收起",
       "setupNoAgents": "還沒有可用的 agent：先在設定裡安裝一個。",
+      "setupMissing": "智能體還有 {count} 項未選",
       "tabPersona": "人設與記憶",
       "name": "名稱",
       "nameHint": "它在頁面和訊息裡顯示的名字和頭像；助手也知道自己叫這個名字。名字留空則使用預設名稱。",

@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -361,6 +362,68 @@ describe("the first setup", () => {
     expect(api.personalAgentSave.mock.calls[1][0]).toMatchObject({
       executor_assistant_id: 9,
     })
+  })
+
+  it("says how many of its agent's options are still to pick, and the same when it is saved so", async () => {
+    brain.missing = true
+    setup()
+    fireEvent.click(
+      document.querySelector('[data-pa-setup-agent-tile="claude_code"]')!
+    )
+    expect(document.querySelector("[data-pa-setup-hint]")?.textContent).toBe(
+      "Your agent has 1 option to pick"
+    )
+    fireEvent.click(start())
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Your agent has 1 option to pick"
+    )
+    expect(api.personalAgentSave).not.toHaveBeenCalled()
+  })
+
+  it("goes side by side when wide enough: its face, name and [Chat] on the left, its agent alone scrolling on the right", () => {
+    const observers: Array<() => void> = []
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(cb: () => void) {
+          observers.push(cb)
+        }
+        observe() {}
+        disconnect() {}
+      }
+    )
+    let width = 1200
+    const rect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() => ({ width }) as DOMRect)
+    try {
+      setup()
+      const form = document.querySelector("[data-pa-setup]")!
+      expect(form.getAttribute("data-pa-setup-layout")).toBe("wide")
+      const agentCard = document.querySelector("[data-pa-setup-agent]")!
+      // The button is not in the right half's scroller with the agent: the
+      // left half is its own (scrolling only when too short to hold it).
+      const scroller = agentCard.closest("[data-overlayscrollbars-initialize]")
+      expect(scroller).not.toBeNull()
+      expect(scroller!.contains(start())).toBe(false)
+      expect(start().closest("[data-overlayscrollbars-initialize]")).not.toBe(
+        scroller
+      )
+      expect(
+        start().closest("[data-overlayscrollbars-initialize]")
+      ).not.toBeNull()
+      // Narrower: one column again.
+      width = 700
+      act(() => observers.forEach((o) => o()))
+      expect(
+        document
+          .querySelector("[data-pa-setup]")!
+          .getAttribute("data-pa-setup-layout")
+      ).toBe("narrow")
+    } finally {
+      rect.mockRestore()
+      vi.unstubAllGlobals()
+    }
   })
 
   it("is read-only while the engine runs elsewhere", () => {

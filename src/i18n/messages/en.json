@@ -10084,6 +10084,7 @@
       "setupMoreAgents": "More ({count})",
       "setupFewerAgents": "Fewer",
       "setupNoAgents": "No agent is available yet: install one in Settings first.",
+      "setupMissing": "{count, plural, one {Your agent has # option to pick} other {Your agent has # options to pick}}",
       "name": "Name",
       "nameHint": "The name and picture it goes by on its page and in its messages; the agent knows the name too. An empty name uses the default.",
       "namePlaceholder": "Personal agent",
