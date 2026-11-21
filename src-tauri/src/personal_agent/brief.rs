@@ -2173,6 +2173,13 @@ impl EngineHost {
             return;
         }
         let tz = clock::zone_of(&prefs.time_zone);
+        // None the day it is set up: it has just introduced itself, and a
+        // brief beside that would only say it again — the questions it just
+        // asked as waiting on the owner, a day before it was there. The
+        // first comes the day after and covers this one.
+        if hours_day(primary.created_at, tz) == hours_day(now, tz) {
+            return;
+        }
         let day = day_key(now, tz);
         let key = format!("brief:{day}");
         if bsvc::by_key(&self.db.conn, primary.id, &key)

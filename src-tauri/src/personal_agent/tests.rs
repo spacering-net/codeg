@@ -14322,8 +14322,43 @@ async fn a_change_to_a_reminders_words_keeps_a_time_it_came_up_meanwhile() {
 /// booted as the host boots it.
 async fn briefing(att: super::presence::Attending) -> (Arc<EngineHost>, i32, tempfile::TempDir) {
     let (host, w, tmp) = reaching(att).await;
+    // Set up days ago: the day it is set up has no brief.
+    set_up_ago(&host, chrono::Duration::days(3)).await;
     host.primary().boot().await;
     (host, w, tmp)
+}
+
+/// The primary as set up `ago`.
+async fn set_up_ago(host: &EngineHost, ago: chrono::Duration) {
+    use sea_orm::{ActiveModelTrait, Set};
+    let row = svc::primary_bot(&host.db.conn).await.unwrap().unwrap();
+    let mut am: crate::db::entities::personal_agent::ActiveModel = row.into();
+    am.created_at = Set(super::clock::now() - ago);
+    am.update(&host.db.conn).await.unwrap();
+}
+
+/// The day it is set up there is no brief, the owner here or not: it has
+/// just introduced itself, and a brief would only say that again. The next
+/// day's is the first, and covers the day it was set up.
+#[tokio::test]
+async fn no_brief_the_day_the_assistant_is_set_up_the_next_covers_it() {
+    let (host, _w, _tmp) = reaching(owner_here(None)).await;
+    host.primary().boot().await;
+    let now = super::clock::now();
+    host.brief_tick_at(now).await;
+    host.brief_tick_at(now + chrono::Duration::minutes(5)).await;
+    assert!(briefs_of(&host, "brief", now).await.is_empty());
+
+    let set_up = svc::primary_bot(&host.db.conn)
+        .await
+        .unwrap()
+        .unwrap()
+        .created_at;
+    let next = now + chrono::Duration::days(1);
+    host.brief_tick_at(next).await;
+    let b = briefs_of(&host, "brief", next).await;
+    assert_eq!(b.len(), 1, "{b:?}");
+    assert!(b[0].since <= set_up, "it covers the day it was set up: {b:?}");
 }
 
 /// `bot`'s brief or wrap-up of the day `now` is in.
