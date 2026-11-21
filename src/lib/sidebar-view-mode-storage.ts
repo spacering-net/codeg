@@ -14,7 +14,7 @@ const SECTION_ORDER_KEY = "workspace:sidebar-section-order"
 const SECTION_COLLAPSED_KEY = "workspace:sidebar-section-collapsed"
 const CONVERSATION_EXPANDED_KEY = "workspace:sidebar-conversation-expanded"
 const TAG_FILTER_KEY = "workspace:sidebar-tag-filter"
-const FOCUS_MODE_KEY = "workspace:sidebar-focus-mode"
+export const RECENT_GROUPING_MODE_KEY = "workspace:sidebar-recent-grouping-mode"
 
 export type SidebarSortMode = "created" | "updated"
 
@@ -502,24 +502,26 @@ export function saveTagFilter(filter: TagFilter): void {
   }
 }
 
-/** Whether the sidebar is in focus mode (focusing on priority & recent active chats).
- *  Defaults to false. */
-export function loadFocusMode(): boolean {
-  if (typeof window === "undefined") return false
+export type SidebarRecentGroupingMode = "time" | "flat"
+
+/** How the Recent section displays its conversations: grouped by time horizons
+ *  ("time") or in a flat list by updated_at ("flat"). Defaults to "time". */
+export function loadRecentGroupingMode(): SidebarRecentGroupingMode {
+  if (typeof window === "undefined") return "time"
   try {
-    const raw = localStorage.getItem(FOCUS_MODE_KEY)
-    if (raw === "true") return true
-    if (raw === "false") return false
+    const raw = localStorage.getItem(RECENT_GROUPING_MODE_KEY)
+    if (raw === "flat") return "flat"
+    if (raw === "time") return "time"
   } catch {
     /* ignore */
   }
-  return false
+  return "time"
 }
 
-export function saveFocusMode(value: boolean): void {
+export function saveRecentGroupingMode(mode: SidebarRecentGroupingMode): void {
   if (typeof window === "undefined") return
   try {
-    localStorage.setItem(FOCUS_MODE_KEY, String(value))
+    localStorage.setItem(RECENT_GROUPING_MODE_KEY, mode)
   } catch {
     /* ignore */
   }

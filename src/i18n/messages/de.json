@@ -2288,7 +2288,7 @@
       "sectionRecent": "Zuletzt",
       "focusCurrentChat": "Aktuellen Chat fokussieren",
       "focusModeActive": "Fokusmodus beenden",
-      "timeGroupPriorities": "Prioritäten (In Bearbeitung / Ausstehend)",
+      "timeGroupPriorities": "Prioritäten (In Bearbeitung)",
       "timeGroupToday": "Heute",
       "timeGroupYesterday": "Gestern",
       "timeGroupPrevious7Days": "Letzte 7 Tage",
@@ -2328,8 +2328,10 @@
       "noRecentFolders": "Keine letzten Ordner-Unterhaltungen",
       "noRecentCli": "Keine letzten Unterhaltungen von der Kommandozeile",
       "recentFilterMenuLabel": "In „Zuletzt“ anzeigen",
-      "timeGroupPrioritiesTooltip": "Enthält aktive Sitzungen in Bearbeitung oder ausstehend",
-      "timeGroupPrevious30Days": "Letzte 30 Tage"
+      "timeGroupPrioritiesTooltip": "Enthält aktuell laufende Sitzungen",
+      "timeGroupPrevious30Days": "Letzte 30 Tage",
+      "recentGroupingModeTime": "Zu Zeitgruppierung wechseln",
+      "recentGroupingModeFlat": "Zu flacher Liste wechseln"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",

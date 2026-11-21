@@ -2377,8 +2377,8 @@ describe("SidebarConversationList — folder header and folder-tabs mode", () =>
   })
 })
 
-describe("SidebarConversationList — focusMode", () => {
-  it("filters to only the active conversation in focus mode", () => {
+describe("SidebarConversationList — recent grouping", () => {
+  it("renders with time grouping by default", () => {
     const folders = [folder(1, "Folder 1")]
     useAppWorkspaceStore.setState({
       folders,
@@ -2388,25 +2388,13 @@ describe("SidebarConversationList — focusMode", () => {
         conv(102, 1, { status: "completed" }),
       ],
     })
-    store.activeTabId = "c-main-101"
-    store.tabSpec = [
-      {
-        id: "c-main-101",
-        conversationId: 101,
-        agentType: "claude_code",
-        folderId: 1,
-        title: "Conv 101",
-        isPinned: false,
-      },
-    ]
-
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
-        <SidebarConversationList showCompleted showRecent focusMode />
+        <SidebarConversationList showCompleted showRecent />
       </NextIntlClientProvider>
     )
 
     expect(document.querySelector('[data-conversation-id="101"]')).toBeTruthy()
-    expect(document.querySelector('[data-conversation-id="102"]')).toBeNull()
+    expect(document.querySelector('[data-conversation-id="102"]')).toBeTruthy()
   })
 })

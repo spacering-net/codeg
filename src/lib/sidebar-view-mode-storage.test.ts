@@ -12,8 +12,9 @@ import {
   loadSectionOrder,
   loadShowRecent,
   loadTagFilter,
-  loadFocusMode,
-  saveFocusMode,
+  loadRecentGroupingMode,
+  saveRecentGroupingMode,
+  RECENT_GROUPING_MODE_KEY,
   moveSectionInOrder,
   normalizeSectionOrder,
   saveNavItemVisibility,
@@ -307,24 +308,24 @@ describe("tag filter persistence", () => {
   })
 })
 
-describe("focusMode storage", () => {
+describe("recentGroupingMode storage", () => {
   beforeEach(() => {
     localStorage.clear()
   })
 
-  it("defaults to false when empty", () => {
-    expect(loadFocusMode()).toBe(false)
+  it("defaults to time when empty", () => {
+    expect(loadRecentGroupingMode()).toBe("time")
   })
 
-  it("round-trips true and false", () => {
-    saveFocusMode(true)
-    expect(loadFocusMode()).toBe(true)
-    saveFocusMode(false)
-    expect(loadFocusMode()).toBe(false)
+  it("round-trips flat and time", () => {
+    saveRecentGroupingMode("flat")
+    expect(loadRecentGroupingMode()).toBe("flat")
+    saveRecentGroupingMode("time")
+    expect(loadRecentGroupingMode()).toBe("time")
   })
 
   it("ignores garbage values", () => {
-    localStorage.setItem("workspace:sidebar-focus-mode", "not-a-boolean")
-    expect(loadFocusMode()).toBe(false)
+    localStorage.setItem(RECENT_GROUPING_MODE_KEY, "not-a-valid-mode")
+    expect(loadRecentGroupingMode()).toBe("time")
   })
 })

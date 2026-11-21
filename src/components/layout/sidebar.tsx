@@ -15,7 +15,6 @@ import {
   FolderSync,
   ListChevronsDownUp,
   ListChevronsUpDown,
-  ListFilter,
   LayoutTemplate,
   ListTodo,
   Map as MapIcon,
@@ -68,8 +67,6 @@ import {
   saveTagFilter,
   loadShowCompleted,
   loadShowRecent,
-  loadFocusMode,
-  saveFocusMode,
   loadShowWorktrees,
   loadSortMode,
   loadSectionOrder,
@@ -204,7 +201,6 @@ export function Sidebar() {
   const [showCompleted, setShowCompleted] = useState(false)
   const [showWorktrees, setShowWorktrees] = useState(true)
   const [showRecent, setShowRecent] = useState(true)
-  const [focusMode, setFocusMode] = useState(false)
   // Empty = every nav row shown, which is also the hydrated default — so the
   // pre-hydration render matches for a user who never hid one.
   const [navItems, setNavItems] = useState<SidebarNavItemVisibility>({})
@@ -253,7 +249,6 @@ export function Sidebar() {
     setShowCompleted(loadShowCompleted())
     setShowWorktrees(loadShowWorktrees())
     setShowRecent(loadShowRecent())
-    setFocusMode(loadFocusMode())
     setNavItems(loadNavItemVisibility())
     setSortMode(loadSortMode())
     setSectionOrder(loadSectionOrder())
@@ -280,19 +275,6 @@ export function Sidebar() {
   const handleSetShowRecent = useCallback((value: boolean) => {
     setShowRecent(value)
     saveShowRecent(value)
-  }, [])
-
-  const handleToggleFocusMode = useCallback(() => {
-    setFocusMode((prev) => {
-      const next = !prev
-      saveFocusMode(next)
-      if (next) {
-        setShowRecent(true)
-        saveShowRecent(true)
-        listRef.current?.expandRecentAndScrollToActive()
-      }
-      return next
-    })
   }, [])
 
   const handleSetNavItem = useCallback(
@@ -405,25 +387,6 @@ export function Sidebar() {
               the conversation detail header). Always shown, leading the header
               cluster. The sidebar is unmounted while collapsed, so `listRef` is
               live whenever this button is visible. */}
-          {/* Focus current / active chat toggle (Codex-style focus mode) */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn(
-              "h-6 w-6 shrink-0 transition-colors",
-              focusMode
-                ? "bg-primary/15 text-primary hover:bg-primary/20 hover:text-primary"
-                : "text-muted-foreground"
-            )}
-            onClick={handleToggleFocusMode}
-            title={focusMode ? t("focusModeActive") : t("focusCurrentChat")}
-            aria-label={
-              focusMode ? t("focusModeActive") : t("focusCurrentChat")
-            }
-            aria-pressed={focusMode}
-          >
-            <ListFilter aria-hidden="true" className="h-3.5 w-3.5" />
-          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -748,7 +711,6 @@ export function Sidebar() {
           showCompleted={showCompleted}
           showWorktrees={showWorktrees}
           showRecent={showRecent}
-          focusMode={focusMode}
           sortMode={sortMode}
           sectionOrder={sectionOrder}
           tagFilter={tagFilter}

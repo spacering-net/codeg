@@ -2288,7 +2288,7 @@
       "sectionRecent": "الأحدث",
       "focusCurrentChat": "التركيز على المحادثة الحالية",
       "focusModeActive": "الخروج من وضع التركيز",
-      "timeGroupPriorities": "الأولويات (قيد التنفيذ / معلق)",
+      "timeGroupPriorities": "الأولويات (قيد التنفيذ)",
       "timeGroupToday": "اليوم",
       "timeGroupYesterday": "أمس",
       "timeGroupPrevious7Days": "آخر 7 أيام",
@@ -2328,8 +2328,10 @@
       "noRecentFolders": "لا توجد محادثات مجلدات حديثة",
       "noRecentCli": "لا توجد محادثات حديثة من سطر الأوامر",
       "recentFilterMenuLabel": "عرض في الأحدث",
-      "timeGroupPrioritiesTooltip": "يتضمن الجلسات النشطة قيد التشغيل أو في انتظار المراجعة",
-      "timeGroupPrevious30Days": "آخر 30 يومًا"
+      "timeGroupPrioritiesTooltip": "يتضمن الجلسات قيد التشغيل حاليًا",
+      "timeGroupPrevious30Days": "آخر 30 يومًا",
+      "recentGroupingModeTime": "التبديل إلى التجميع حسب الوقت",
+      "recentGroupingModeFlat": "التبديل إلى قائمة بسيطة"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",

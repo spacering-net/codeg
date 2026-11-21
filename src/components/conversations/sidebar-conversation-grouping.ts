@@ -8,6 +8,7 @@ import {
   DEFAULT_SECTION_ORDER,
   normalizeSectionOrder,
   type SidebarRecentFilter,
+  type SidebarRecentGroupingMode,
   type SidebarSortMode,
   type SidebarSectionKey,
   type SidebarSectionOrder,
@@ -345,7 +346,7 @@ export function classifyRecentConversation(
   conv: DbConversationSummary,
   now: number
 ): RecentTimeGroupId {
-  if (conv.status === "in_progress" || conv.status === "pending_review") {
+  if (conv.status === "in_progress") {
     return "priorities"
   }
   const ts = parseTimestamp(conv.updated_at || conv.created_at)
@@ -1372,6 +1373,8 @@ export function buildRows(args: {
    * omitted keeps every folder, as before.
    */
   hideEmptyFolders?: boolean
+  /** How recent conversations are grouped: by time horizons ("time") or flat ("flat"). */
+  recentGroupingMode?: SidebarRecentGroupingMode
   /** Current timestamp for time-based classification. Defaults to Date.now(). */
   currentTime?: number
 }): SidebarRow[] {
@@ -1398,6 +1401,7 @@ export function buildRows(args: {
     layout,
     groupExpanded = EMPTY_GROUP_EXPANDED,
     hideEmptyFolders = false,
+    recentGroupingMode = "time",
     currentTime = Date.now(),
   } = args
   const rows: SidebarRow[] = []
@@ -1600,39 +1604,8 @@ export function buildRows(args: {
         ? recentConversations
         : recentConversations.slice(0, Math.max(0, recentLimit))
 
-    // Group shown conversations into time segments
-    const timeGroupBuckets = new Map<
-      RecentTimeGroupId,
-      DbConversationSummary[]
-    >()
-    const timeGroupOrder: readonly RecentTimeGroupId[] = [
-      "priorities",
-      "today",
-      "yesterday",
-      "previous7Days",
-      "previous30Days",
-      "older",
-    ]
-    for (const gid of timeGroupOrder) {
-      timeGroupBuckets.set(gid, [])
-    }
-
-    for (const conv of shown) {
-      const gid = classifyRecentConversation(conv, currentTime)
-      timeGroupBuckets.get(gid)?.push(conv)
-    }
-
-    for (const gid of timeGroupOrder) {
-      const bucket = timeGroupBuckets.get(gid)
-      if (!bucket || bucket.length === 0) continue
-
-      rows.push({
-        kind: "recent-time-group",
-        groupId: gid,
-        count: bucket.length,
-      })
-
-      for (const conv of bucket) {
+    if (recentGroupingMode === "flat") {
+      for (const conv of shown) {
         pushConversationRow(
           rows,
           conv,
@@ -1642,6 +1615,51 @@ export function buildRows(args: {
           childrenLoading,
           true
         )
+      }
+    } else {
+      // Group shown conversations into time segments
+      const timeGroupBuckets = new Map<
+        RecentTimeGroupId,
+        DbConversationSummary[]
+      >()
+      const timeGroupOrder: readonly RecentTimeGroupId[] = [
+        "priorities",
+        "today",
+        "yesterday",
+        "previous7Days",
+        "previous30Days",
+        "older",
+      ]
+      for (const gid of timeGroupOrder) {
+        timeGroupBuckets.set(gid, [])
+      }
+
+      for (const conv of shown) {
+        const gid = classifyRecentConversation(conv, currentTime)
+        timeGroupBuckets.get(gid)?.push(conv)
+      }
+
+      for (const gid of timeGroupOrder) {
+        const bucket = timeGroupBuckets.get(gid)
+        if (!bucket || bucket.length === 0) continue
+
+        rows.push({
+          kind: "recent-time-group",
+          groupId: gid,
+          count: bucket.length,
+        })
+
+        for (const conv of bucket) {
+          pushConversationRow(
+            rows,
+            conv,
+            0,
+            conversationExpanded,
+            childrenByParent,
+            childrenLoading,
+            true
+          )
+        }
       }
     }
 

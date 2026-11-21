@@ -2024,17 +2024,61 @@ describe("buildRows under a tag filter (hideEmptyFolders)", () => {
 describe("classifyRecentConversation", () => {
   const now = new Date("2026-11-21T12:00:00Z").getTime()
 
-  it("classifies in_progress or pending_review as priorities", () => {
+  it("classifies in_progress as priorities, while pending_review falls to time bucket", () => {
     const running = conv(1, 10, {
       status: "in_progress",
       updated_at: new Date("2026-11-01T00:00:00Z").toISOString(),
     })
     const review = conv(2, 10, {
       status: "pending_review",
-      updated_at: new Date("2026-11-01T00:00:00Z").toISOString(),
+      updated_at: new Date("2026-11-21T09:00:00Z").toISOString(),
     })
     expect(classifyRecentConversation(running, now)).toBe("priorities")
-    expect(classifyRecentConversation(review, now)).toBe("priorities")
+    expect(classifyRecentConversation(review, now)).toBe("today")
+  })
+
+  it("supports flat vs time grouping mode in buildRows", () => {
+    const c1 = conv(1, 10, {
+      updated_at: new Date("2026-11-21T08:00:00Z").toISOString(),
+    })
+    const flatRows = buildRows({
+      pinned: [],
+      pinnedExpanded: false,
+      orderedFolderIds: [],
+      byFolder: new Map(),
+      folderExpanded: {},
+      folderTotalCounts: new Map(),
+      foldersExpanded: false,
+      chatConversations: [],
+      chatsExpanded: false,
+      recentConversations: [c1],
+      recentExpanded: true,
+      showRecent: true,
+      recentGroupingMode: "flat",
+      currentTime: now,
+    })
+    expect(flatRows.some((r) => r.kind === "recent-time-group")).toBe(false)
+    expect(
+      flatRows.some((r) => r.kind === "conversation" && r.conversation.id === 1)
+    ).toBe(true)
+
+    const timeRows = buildRows({
+      pinned: [],
+      pinnedExpanded: false,
+      orderedFolderIds: [],
+      byFolder: new Map(),
+      folderExpanded: {},
+      folderTotalCounts: new Map(),
+      foldersExpanded: false,
+      chatConversations: [],
+      chatsExpanded: false,
+      recentConversations: [c1],
+      recentExpanded: true,
+      showRecent: true,
+      recentGroupingMode: "time",
+      currentTime: now,
+    })
+    expect(timeRows.some((r) => r.kind === "recent-time-group")).toBe(true)
   })
 
   it("classifies today conversations", () => {

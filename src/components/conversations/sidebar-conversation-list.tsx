@@ -80,10 +80,13 @@ import {
   loadFolderGroupExpanded,
   saveFolderGroupExpanded,
   loadRecentFilter,
+  loadRecentGroupingMode,
   loadSectionCollapsed,
   saveRecentFilter,
+  saveRecentGroupingMode,
   saveSectionCollapsed,
   type SidebarRecentFilter,
+  type SidebarRecentGroupingMode,
   loadConversationExpanded,
   saveConversationExpanded,
   DEFAULT_SECTION_ORDER,
@@ -923,7 +926,6 @@ const FolderHeader = memo(function FolderHeader({
 
 export interface SidebarConversationListHandle {
   scrollToActive: () => void
-  expandRecentAndScrollToActive: () => void
   /**
    * Open / close every collapsible group in the list at once, driven by the
    * sidebar header's toggle. "Every" is literal: the folder groups (plus each
@@ -953,9 +955,6 @@ export interface SidebarConversationListProps {
    *  `sectionOrder`. Defaults to off here; the Sidebar passes the user's
    *  preference, whose product default is ON. */
   showRecent?: boolean
-  /** When on, filters the list to only the currently selected conversation and
-   *  its thread / sub-sessions. */
-  focusMode?: boolean
   /** Narrow every section to conversations carrying these tags (see
    *  `matchesTagFilter`). Must be referentially stable — it feeds the bucket
    *  memos. Defaults to no filter. */
@@ -969,7 +968,6 @@ export function SidebarConversationList({
   sectionOrder = DEFAULT_SECTION_ORDER,
   showWorktrees = false,
   showRecent = false,
-  focusMode = false,
   tagFilter = EMPTY_TAG_FILTER,
 }: SidebarConversationListProps & {
   ref?: Ref<SidebarConversationListHandle>
@@ -1118,6 +1116,15 @@ export function SidebarConversationList({
     saveRecentFilter(next)
     setRecentFilter(next)
   }, [])
+  const [recentGroupingMode, setRecentGroupingMode] =
+    useState<SidebarRecentGroupingMode>("time")
+  const changeRecentGroupingMode = useCallback(
+    (next: SidebarRecentGroupingMode) => {
+      saveRecentGroupingMode(next)
+      setRecentGroupingMode(next)
+    },
+    []
+  )
   // How many Recent rows are currently revealed. Session-only (not persisted):
   // "show me more of this list right now" is a reading gesture, not a setting —
   // and a fresh sidebar should open short again.
@@ -1258,6 +1265,7 @@ export function SidebarConversationList({
     setFolderGroupExpanded(loadFolderGroupExpanded())
     setSectionCollapsed(loadSectionCollapsed())
     setRecentFilter(loadRecentFilter())
+    setRecentGroupingMode(loadRecentGroupingMode())
     setConversationExpanded(new Set(loadConversationExpanded()))
   }, [])
 
@@ -1421,38 +1429,13 @@ export function SidebarConversationList({
   // running badge answers "is work under way in there", filter or not. With no
   // filter this is `conversations` itself, so nothing downstream changes.
   const tagFilterActive = isTagFilterActive(tagFilter)
-  const baseShownConversations = useMemo(
+  const shownConversations = useMemo(
     () =>
       tagFilterActive
         ? conversations.filter((c) => matchesTagFilter(c, tagFilter))
         : conversations,
     [conversations, tagFilter, tagFilterActive]
   )
-  const shownConversations = useMemo(() => {
-    if (!focusMode || !selectedConversation) return baseShownConversations
-    const activeId = selectedConversation.id
-    const activeConv = conversations.find(
-      (c) =>
-        c.id === activeId && c.agent_type === selectedConversation.agentType
-    )
-    if (!activeConv) return baseShownConversations
-
-    const relatedIds = new Set<number>([activeId])
-    if (activeConv.parent_id != null) {
-      relatedIds.add(activeConv.parent_id)
-    }
-    for (const c of conversations) {
-      if (c.parent_id === activeId) {
-        relatedIds.add(c.id)
-      } else if (
-        activeConv.parent_id != null &&
-        c.parent_id === activeConv.parent_id
-      ) {
-        relatedIds.add(c.id)
-      }
-    }
-    return baseShownConversations.filter((c) => relatedIds.has(c.id))
-  }, [focusMode, selectedConversation, baseShownConversations, conversations])
 
   // Folder grouping source: pinned conversations are surfaced in the dedicated
   // Pinned section, and folderless chat conversations in the dedicated Chat
@@ -1699,7 +1682,8 @@ export function SidebarConversationList({
         rootGroupCollapsed,
         layout,
         groupExpanded: folderGroupExpanded,
-        hideEmptyFolders: tagFilterActive || focusMode,
+        hideEmptyFolders: tagFilterActive,
+        recentGroupingMode,
       }),
     [
       pinned,
@@ -1715,6 +1699,7 @@ export function SidebarConversationList({
       recentExpanded,
       showRecent,
       recentLimit,
+      recentGroupingMode,
       sectionOrder,
       conversationExpanded,
       childrenByParent,
@@ -1724,7 +1709,6 @@ export function SidebarConversationList({
       layout,
       folderGroupExpanded,
       tagFilterActive,
-      focusMode,
     ]
   )
 
@@ -1782,16 +1766,6 @@ export function SidebarConversationList({
 
   useImperativeHandle(ref, () => ({
     scrollToActive() {
-      scrollToActiveRef.current()
-    },
-    expandRecentAndScrollToActive() {
-      setSectionCollapsed((prev) => {
-        if (!prev.recent) return prev
-        const next = { ...prev, recent: false }
-        saveSectionCollapsed(next)
-        return next
-      })
-      pendingScrollRef.current = true
       scrollToActiveRef.current()
     },
     expandAll() {
@@ -3099,6 +3073,12 @@ export function SidebarConversationList({
           recentFilter={row.section === "recent" ? recentFilter : undefined}
           onRecentFilterChange={
             row.section === "recent" ? changeRecentFilter : undefined
+          }
+          recentGroupingMode={
+            row.section === "recent" ? recentGroupingMode : undefined
+          }
+          onRecentGroupingModeChange={
+            row.section === "recent" ? changeRecentGroupingMode : undefined
           }
           // Every section header carries a top gap: it separates "Folders" from
           // the "Pinned" section above it, and — now that a fixed New chat /
