@@ -102,6 +102,8 @@ struct Contributions {
     screens: Vec<HostPanel>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sidebar_items: Vec<SidebarItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    sidebar_views: Vec<HostPanel>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -1003,6 +1005,7 @@ impl Manifest {
             themes,
             screens,
             sidebar_items,
+            sidebar_views,
         } = &self.contributes;
         if !bundled && workspace_panels.is_empty() && themes.is_empty() {
             return Err("A declarative plugin needs a workspace panel or theme".to_owned());
@@ -1109,6 +1112,22 @@ impl Manifest {
                 "Provide up to 16 sidebar items with unique IDs, valid titles and a screen from this plugin"
                     .into(),
             );
+        }
+        if !sidebar_views.is_empty() {
+            let mut view_ids = BTreeSet::new();
+            if self.client.is_none()
+                || sidebar_views.len() > MAX_CONTRIBUTIONS
+                || sidebar_views.iter().any(|view| {
+                    !valid_id(&view.id)
+                        || !valid_label(&view.title)
+                        || !valid_translations(&view.title_translations, valid_label)
+                        || !view_ids.insert(&view.id)
+                })
+            {
+                return Err(
+                    "Sidebar views need a client entry, unique IDs and valid titles".into(),
+                );
+            }
         }
         lifecycle::validate(lifecycle_hooks, self.server.as_ref())?;
         theme::validate(themes)?;
@@ -1469,6 +1488,41 @@ mod tests {
             invalid["contributes"]["sidebarItems"][0][field] = json!(value);
             assert!(Manifest::parse(&invalid.to_string()).is_err());
         }
+    }
+
+    #[test]
+    fn validates_sidebar_views_and_requires_a_client_entry() {
+        use serde_json::json;
+
+        let source = include_str!("../../examples/plugins/focus-notes/codeg-plugin.json");
+        let manifest: serde_json::Value = serde_json::from_str(source).unwrap();
+        let rendered = serde_json::to_value(Manifest::parse(source).unwrap()).unwrap();
+        assert_eq!(
+            rendered["contributes"]["sidebarViews"],
+            manifest["contributes"]["sidebarViews"]
+        );
+        for (field, value) in [
+            ("id", json!("with/slash")),
+            ("title", json!("")),
+            ("titleTranslations", json!({ "es": "" })),
+        ] {
+            let mut invalid = manifest.clone();
+            invalid["contributes"]["sidebarViews"][0][field] = value;
+            assert!(Manifest::parse(&invalid.to_string()).is_err());
+        }
+        let mut duplicate = manifest.clone();
+        let view = duplicate["contributes"]["sidebarViews"][0].clone();
+        duplicate["contributes"]["sidebarViews"]
+            .as_array_mut()
+            .unwrap()
+            .push(view);
+        assert!(Manifest::parse(&duplicate.to_string()).is_err());
+
+        let mut missing_client = manifest;
+        missing_client.as_object_mut().unwrap().remove("client");
+        missing_client["server"] = json!({ "entry": "server.mjs", "methods": ["read"] });
+        let error = Manifest::parse(&missing_client.to_string()).unwrap_err();
+        assert!(error.message.contains("Sidebar views need a client entry"));
     }
 
     #[test]

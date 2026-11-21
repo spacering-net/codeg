@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Focus Notes</title>
+  <style>
+    :root { color-scheme: light dark; font: 14px system-ui; }
+    body { margin: 0; padding: 12px; }
+    form { display: grid; gap: 8px; }
+    textarea { box-sizing: border-box; width: 100%; min-height: 7rem; font: inherit; }
+    button { justify-self: start; font: inherit; }
+    output { overflow-wrap: anywhere; }
+  </style>
+  <form>
+    <label for="focus">What are you focusing on?</label>
+    <textarea id="focus" maxlength="1000" disabled></textarea>
+    <button disabled>Save note</button>
+    <output role="status"></output>
+  </form>
+  <script type="module">
+    const form = document.querySelector("form")
+    const note = document.querySelector("textarea")
+    const save = document.querySelector("button")
+    const status = document.querySelector("output")
+
+    try {
+      await window.codeg.ready
+      let snapshot = await window.codeg.settings.read()
+      note.value = snapshot.value.note
+      note.disabled = false
+      save.disabled = false
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault()
+        save.disabled = true
+        try {
+          snapshot = await window.codeg.settings.save(snapshot.revision, { note: note.value })
+          status.textContent = "Saved."
+        } catch (error) {
+          status.textContent = String(error)
+        } finally {
+          save.disabled = false
+        }
+      })
+    } catch (error) {
+      status.textContent = String(error)
+    }
+  </script>
+</html>

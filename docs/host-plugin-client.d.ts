@@ -20,6 +20,7 @@ export type ClientContext = Surface &
           | "pluginDetail"
           | "activationPanel"
           | "screen"
+          | "sidebarView"
       }
     | {
         readonly type: "clientSurface"
