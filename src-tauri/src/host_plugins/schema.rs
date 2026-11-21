@@ -61,7 +61,7 @@ impl std::fmt::Debug for Schema {
 }
 
 impl Schema {
-    pub(super) fn compile(schema: &Value) -> Result<Self, boon::CompileError> {
+    pub(super) fn compile(schema: &Value) -> Result<Self, Box<boon::CompileError>> {
         let mut compiler = boon::Compiler::new();
         compiler.set_default_draft(boon::Draft::V2020_12);
         compiler.use_loader(Box::new(NoExternalSchemas));
