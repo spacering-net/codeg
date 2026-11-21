@@ -22,6 +22,10 @@
       { "id": "inspect", "title": "Workspace Inspector", "view": "client" }
     ],
     "settingsPanel": { "id": "about", "title": "About Workspace Inspector" },
+    "clientSurfaces": [
+      { "id": "session", "title": "Inspect session", "slot": "sessionHeader" },
+      { "id": "draft", "title": "Inspect draft", "slot": "composer" }
+    ],
     "commands": [
       {
         "id": "show-inspector",

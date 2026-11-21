@@ -22,6 +22,13 @@
   window.codeg.ready.then(async (context) => {
     const description = document.getElementById("description")
     const refresh = document.getElementById("refresh")
+    if (context.type === "clientSurface") {
+      const conversation = context.conversationId ?? "Draft"
+      const placement =
+        context.slot === "composer" ? "Composer" : "Session header"
+      description.textContent = `${placement} · ${conversation}`
+      return
+    }
     if (context.type === "settingsPanel") {
       const field = document.getElementById("workspace-label")
       const save = document.getElementById("save")
