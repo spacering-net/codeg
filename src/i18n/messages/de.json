@@ -2769,6 +2769,8 @@
       "source": "Quelltext",
       "fileView": "Dateiansicht",
       "pluginViews": "Plugin-Ansichten",
+      "save": "Speichern",
+      "saving": "Wird gespeichert…",
       "openInSystemBrowser": "Im Systembrowser öffnen",
       "more": "Mehr",
       "maximize": "Maximieren",

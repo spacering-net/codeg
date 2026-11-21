@@ -24,6 +24,7 @@ interface FilePluginPanelSelection {
   scopeKey: string
   transport: Transport
   panelKey: string
+  writable: boolean
   selectionId: number
 }
 
@@ -59,9 +60,9 @@ function setSelection(next: FilePluginPanelSelection | null): void {
 
 /**
  * True when `tab` represents an ordinary text file tab whose in-memory buffer
- * can be snapshotted for a read-only plugin file panel. Excludes diffs,
- * browsers, binary previews (images including SVG, PDFs, Office documents), and
- * load-failed tabs whose `content` contains a localized error message.
+ * can be exposed to a plugin file panel. Excludes diffs, browsers, binary
+ * previews (images including SVG, PDFs, Office documents), and load-failed tabs
+ * whose `content` contains a localized error message.
  */
 export function isReadableTextFileTab(
   tab: FileWorkspaceTab | null | undefined
@@ -165,7 +166,11 @@ export function useActiveFilePluginPanels(
     ) {
       return null
     }
-    return panels.find((panel) => panel.key === selection.panelKey) ?? null
+    const matched = panels.find((panel) => panel.key === selection.panelKey)
+    if (!matched || matched.writable !== selection.writable) {
+      return null
+    }
+    return matched
   }, [eligible, hostScope.scopeKey, panels, selection, tab, transport])
 
   // Withdraw module-level selection when the file panel host unmounts (e.g.
@@ -200,7 +205,11 @@ export function useActiveFilePluginPanels(
     }
     if (
       plugins !== undefined &&
-      !panels.some((panel) => panel.key === selection.panelKey)
+      !panels.some(
+        (panel) =>
+          panel.key === selection.panelKey &&
+          panel.writable === selection.writable
+      )
     ) {
       setSelection(null)
     }
@@ -222,13 +231,15 @@ export function useActiveFilePluginPanels(
         return
       }
       if (hostHidden || !tab || !eligible || !transport) return
-      if (!panels.some((panel) => panel.key === panelKey)) return
+      const targetPanel = panels.find((panel) => panel.key === panelKey)
+      if (!targetPanel) return
       nextSelectionId += 1
       setSelection({
         tabId: tab.id,
         scopeKey: hostScope.scopeKey,
         transport,
         panelKey,
+        writable: targetPanel.writable,
         selectionId: nextSelectionId,
       })
     },

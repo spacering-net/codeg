@@ -2769,6 +2769,8 @@
       "source": "Código",
       "fileView": "Vista de archivo",
       "pluginViews": "Vistas de complementos",
+      "save": "Guardar",
+      "saving": "Guardando…",
       "openInSystemBrowser": "Abrir en el navegador del sistema",
       "more": "Más",
       "maximize": "Maximizar",

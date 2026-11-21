@@ -2769,6 +2769,8 @@
       "source": "Source",
       "fileView": "File view",
       "pluginViews": "Plugin views",
+      "save": "Save",
+      "saving": "Saving…",
       "openInSystemBrowser": "Open in system browser",
       "more": "More",
       "maximize": "Maximize",

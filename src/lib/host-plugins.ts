@@ -16,6 +16,7 @@ export const MAX_PLUGIN_SIDEBAR_VIEWS = 16
 export const MAX_PLUGIN_FILE_PANELS = 16
 export const MAX_PLUGIN_FILE_PANEL_EXTENSIONS = 16
 export const MAX_PLUGIN_FILE_READ_TEXT_BYTES = 64 * 1024
+export const MAX_PLUGIN_FILE_WRITE_TEXT_BYTES = 64 * 1024
 
 const FILE_PANEL_EXTENSION_PATTERN = /^[a-z0-9][a-z0-9+-]{0,15}$/
 
@@ -92,6 +93,7 @@ export interface PluginFilePanelContribution {
   title: string
   titleTranslations?: PluginTextTranslations
   extensions: string[]
+  writable?: boolean
 }
 
 export interface ResolvedPluginFilePanel {
@@ -101,10 +103,16 @@ export interface ResolvedPluginFilePanel {
   id: string
   title: string
   extensions: string[]
+  writable: boolean
 }
 
 export interface PluginFileReadTextResult {
   text: string
+}
+
+export interface PluginFileWriteTextResult {
+  updated: true
+  length: number
 }
 
 export interface PluginHostScope {
@@ -1012,6 +1020,7 @@ export function selectPluginFilePanels(
         id,
         title,
         extensions,
+        writable: panel.writable === true,
       })
     }
   }
@@ -1090,4 +1099,27 @@ export function validatePluginFileReadTextResult(
     throw new Error("File exceeds 64 KiB UTF-8 limit")
   }
   return { text }
+}
+
+export function validatePluginFileWriteRequest(payload: unknown): string {
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    !Object.prototype.hasOwnProperty.call(payload, "type") ||
+    !Object.prototype.hasOwnProperty.call(payload, "text") ||
+    Object.keys(payload).length !== 2 ||
+    (payload as { type: unknown }).type !== "writeText" ||
+    typeof (payload as { text: unknown }).text !== "string"
+  ) {
+    throw new Error("file.writeText requires a single string argument")
+  }
+  const text = (payload as { text: string }).text
+  if (text.includes("\0")) {
+    throw new Error("File text contains unsupported NUL characters")
+  }
+  if (utf8Encoder.encode(text).byteLength > MAX_PLUGIN_FILE_WRITE_TEXT_BYTES) {
+    throw new Error("File text exceeds 64 KiB UTF-8 limit")
+  }
+  return text
 }

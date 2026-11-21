@@ -2769,6 +2769,8 @@
       "source": "المصدر",
       "fileView": "عرض الملف",
       "pluginViews": "عروض الإضافات",
+      "save": "حفظ",
+      "saving": "جارٍ الحفظ…",
       "openInSystemBrowser": "فتح في متصفح النظام",
       "more": "المزيد",
       "maximize": "تكبير",

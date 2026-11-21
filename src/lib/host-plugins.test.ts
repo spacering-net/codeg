@@ -11,6 +11,7 @@ import {
   MAX_PLUGIN_FILE_PANELS,
   MAX_PLUGIN_FILE_PANEL_EXTENSIONS,
   MAX_PLUGIN_FILE_READ_TEXT_BYTES,
+  MAX_PLUGIN_FILE_WRITE_TEXT_BYTES,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
   MAX_PLUGIN_SIDEBAR_VIEWS,
@@ -38,6 +39,7 @@ import {
   validatePluginComposerInsertPayload,
   validatePluginFileReadRequest,
   validatePluginFileReadTextResult,
+  validatePluginFileWriteRequest,
   type InstalledPlugin,
   type PluginTextTranslations,
 } from "@/lib/host-plugins"
@@ -1188,6 +1190,7 @@ describe("selectPluginFilePanels, extension matching, and file read validation",
         id: "table",
         title: "Vista de tabla",
         extensions: ["csv", "tsv", "c++", "json-ld"],
+        writable: false,
       },
     ])
     expect(
@@ -1204,6 +1207,7 @@ describe("selectPluginFilePanels, extension matching, and file read validation",
       id: "table",
       title: "表格视图",
       extensions: ["csv", "tsv", "c++", "json-ld"],
+      writable: false,
     })
     expect(selectPluginFilePanels(plugins, "archive.csv.bak")).toEqual([])
     expect(selectPluginFilePanels(plugins, ".csv")).toEqual([])
@@ -1284,5 +1288,175 @@ describe("selectPluginFilePanels, extension matching, and file read validation",
     expect(validatePluginFileReadTextResult(cjkAtLimit)).toEqual({
       text: cjkAtLimit,
     })
+  })
+
+  it("defaults filePanels.writable to false and only marks explicit boolean true as writable", () => {
+    const plugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.editors",
+        name: "Editors",
+        version: "1.0.0",
+        client: { entry: "editor.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          filePanels: [
+            {
+              id: "default-ro",
+              title: "Default Read Only",
+              extensions: ["csv"],
+            },
+            {
+              id: "explicit-ro",
+              title: "Explicit Read Only",
+              extensions: ["csv"],
+              writable: false,
+            },
+            {
+              id: "coerced-ro",
+              title: "Non-boolean Read Only",
+              extensions: ["csv"],
+              writable: "true" as unknown as boolean,
+            },
+            {
+              id: "editable",
+              title: "CSV Editor",
+              extensions: ["csv"],
+              writable: true,
+            },
+          ],
+        },
+      },
+    }
+
+    const resolved = selectPluginFilePanels([plugin], "sheet.CSV")
+    expect(resolved).toEqual([
+      {
+        key: "acme.editors:default-ro",
+        pluginId: "acme.editors",
+        pluginName: "Editors",
+        id: "default-ro",
+        title: "Default Read Only",
+        extensions: ["csv"],
+        writable: false,
+      },
+      {
+        key: "acme.editors:explicit-ro",
+        pluginId: "acme.editors",
+        pluginName: "Editors",
+        id: "explicit-ro",
+        title: "Explicit Read Only",
+        extensions: ["csv"],
+        writable: false,
+      },
+      {
+        key: "acme.editors:coerced-ro",
+        pluginId: "acme.editors",
+        pluginName: "Editors",
+        id: "coerced-ro",
+        title: "Non-boolean Read Only",
+        extensions: ["csv"],
+        writable: false,
+      },
+      {
+        key: "acme.editors:editable",
+        pluginId: "acme.editors",
+        pluginName: "Editors",
+        id: "editable",
+        title: "CSV Editor",
+        extensions: ["csv"],
+        writable: true,
+      },
+    ])
+    expect(
+      resolvePluginFilePanel([plugin], "sheet.csv", "acme.editors:editable")
+        ?.writable
+    ).toBe(true)
+    expect(
+      resolvePluginFilePanel([plugin], "sheet.csv", "acme.editors:default-ro")
+        ?.writable
+    ).toBe(false)
+  })
+
+  it("validates single-string file.writeText payloads, rejects NUL/extra fields, and enforces the 64 KiB UTF-8 byte ceiling", () => {
+    expect(MAX_PLUGIN_FILE_WRITE_TEXT_BYTES).toBe(64 * 1024)
+
+    // Empty string and plain text (preserving line endings) are valid.
+    expect(
+      validatePluginFileWriteRequest({ type: "writeText", text: "" })
+    ).toBe("")
+    expect(
+      validatePluginFileWriteRequest({
+        type: "writeText",
+        text: "a,b\r\n1,2\r\n",
+      })
+    ).toBe("a,b\r\n1,2\r\n")
+
+    // Exact 64 KiB ASCII and multi-byte UTF-8 boundaries succeed.
+    const asciiAtLimit = "a".repeat(MAX_PLUGIN_FILE_WRITE_TEXT_BYTES)
+    expect(
+      validatePluginFileWriteRequest({ type: "writeText", text: asciiAtLimit })
+    ).toBe(asciiAtLimit)
+    const cjkAtLimit = "汉".repeat(21_845) + "a"
+    expect(new TextEncoder().encode(cjkAtLimit).byteLength).toBe(
+      MAX_PLUGIN_FILE_WRITE_TEXT_BYTES
+    )
+    expect(
+      validatePluginFileWriteRequest({ type: "writeText", text: cjkAtLimit })
+    ).toBe(cjkAtLimit)
+
+    // Over 64 KiB (ASCII and multi-byte UTF-8) rejected.
+    expect(() =>
+      validatePluginFileWriteRequest({
+        type: "writeText",
+        text: "a".repeat(MAX_PLUGIN_FILE_WRITE_TEXT_BYTES + 1),
+      })
+    ).toThrow(/64 KiB/i)
+    const cjkOverLimit = "汉".repeat(21_846)
+    expect(cjkOverLimit.length).toBeLessThan(MAX_PLUGIN_FILE_WRITE_TEXT_BYTES)
+    expect(() =>
+      validatePluginFileWriteRequest({ type: "writeText", text: cjkOverLimit })
+    ).toThrow(/64 KiB/i)
+
+    // NUL characters are rejected.
+    expect(() =>
+      validatePluginFileWriteRequest({
+        type: "writeText",
+        text: "before\0after",
+      })
+    ).toThrow(/NUL/i)
+
+    // Extra fields (e.g. path smuggling), wrong types, or wrong shapes rejected.
+    expect(() =>
+      validatePluginFileWriteRequest({
+        type: "writeText",
+        text: "ok",
+        path: "/etc/passwd",
+      })
+    ).toThrow(/single string argument/i)
+    expect(() =>
+      validatePluginFileWriteRequest({
+        type: "writeText",
+        text: "ok",
+        extra: true,
+      })
+    ).toThrow(/single string argument/i)
+    expect(() => validatePluginFileWriteRequest({ type: "writeText" })).toThrow(
+      /single string argument/i
+    )
+    expect(() =>
+      validatePluginFileWriteRequest({ type: "writeText", text: 123 })
+    ).toThrow(/single string argument/i)
+    expect(() =>
+      validatePluginFileWriteRequest({ type: "readText", text: "ok" })
+    ).toThrow(/single string argument/i)
+    expect(() => validatePluginFileWriteRequest(null)).toThrow(
+      /single string argument/i
+    )
+    expect(() => validatePluginFileWriteRequest(["writeText", "ok"])).toThrow(
+      /single string argument/i
+    )
   })
 })

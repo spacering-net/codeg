@@ -11,8 +11,10 @@ import {
   ExternalLink,
   Eye,
   Frame,
+  Loader2,
   Puzzle,
   RotateCw,
+  Save,
   ShieldCheck,
   ShieldOff,
 } from "lucide-react"
@@ -85,7 +87,7 @@ export function FileWorkspaceHeader() {
   const tFileTree = useTranslations("Folder.fileTreeTab")
   const { activeFileTab, activeFileTabId, previewFileTabIds } =
     useWorkspaceFileTabs()
-  const { toggleFileTabPreview } = useWorkspaceActions()
+  const { saveActiveFile, toggleFileTabPreview } = useWorkspaceActions()
   // Present only while an HTML preview is on screen in this column — its
   // renderer publishes them and takes them away when it unmounts.
   const preview = useHtmlPreviewControls(activeFileTabId)
@@ -121,6 +123,10 @@ export function FileWorkspaceHeader() {
     activeFileTab.kind === "diff" || activeFileTab.kind === "rich-diff"
   const isDirty =
     activeFileTab.kind === "file" && Boolean(activeFileTab.isDirty)
+  const isFileReadonly =
+    activeFileTab.kind === "file" ? Boolean(activeFileTab.readonly) : true
+  const isFileSaving =
+    activeFileTab.kind === "file" && activeFileTab.saveState === "saving"
   // Mirror the gating the file tab strip used (file-workspace-tab-bar.tsx):
   // preview toggle for markdown/html, browser-open for html.
   const canPreview =
@@ -134,6 +140,11 @@ export function FileWorkspaceHeader() {
       ? previewFileTabIds.has(activeFileTabId)
       : false
   const activePluginPanel = filePluginPanels.activePanel
+  const canSaveFromPluginPanel =
+    activeFileTab.kind === "file" &&
+    Boolean(activePluginPanel?.writable) &&
+    isDirty &&
+    !isFileReadonly
   const isShowingBuiltInPreview = isPreviewActive && !activePluginPanel
   const hasPluginFilePanels = filePluginPanels.panels.length > 0
   const selectedFileViewValue = activePluginPanel
@@ -285,6 +296,30 @@ export function FileWorkspaceHeader() {
               <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
             )}
             <span className="truncate">{preview.scripts.label}</span>
+          </button>
+        )}
+        {canSaveFromPluginPanel && (
+          <button
+            type="button"
+            onClick={() => {
+              void saveActiveFile?.()
+            }}
+            disabled={isFileSaving || activeFileTab.loading}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center gap-1 rounded-full bg-primary/10 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:pointer-events-none disabled:opacity-50 sm:w-auto sm:px-2.5"
+            aria-label={isFileSaving ? t("saving") : t("save")}
+            title={isFileSaving ? t("saving") : t("save")}
+          >
+            {isFileSaving ? (
+              <Loader2
+                className="h-3.5 w-3.5 shrink-0 animate-spin"
+                aria-hidden="true"
+              />
+            ) : (
+              <Save className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            )}
+            <span className="hidden sm:inline">
+              {isFileSaving ? t("saving") : t("save")}
+            </span>
           </button>
         )}
         {hasPluginFilePanels && (

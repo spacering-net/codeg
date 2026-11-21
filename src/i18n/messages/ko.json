@@ -2769,6 +2769,8 @@
       "source": "소스",
       "fileView": "파일 보기",
       "pluginViews": "플러그인 보기",
+      "save": "저장",
+      "saving": "저장 중…",
       "openInSystemBrowser": "시스템 브라우저에서 열기",
       "more": "더 보기",
       "maximize": "최대화",

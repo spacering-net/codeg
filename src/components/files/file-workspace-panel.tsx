@@ -48,7 +48,9 @@ import { HostPluginSurface } from "@/components/host-plugin-surface"
 import {
   isCurrentReadyHostTransport,
   validatePluginFileReadTextResult,
+  validatePluginFileWriteRequest,
   type PluginFileReadTextResult,
+  type PluginFileWriteTextResult,
 } from "@/lib/host-plugins"
 import { isHtmlPreviewable } from "@/lib/language-detect"
 import { DiffViewer } from "@/components/diff/diff-viewer"
@@ -799,6 +801,16 @@ function FileWorkspacePanelBody() {
   const t = useTranslations("Folder.fileWorkspacePanel")
   const { activeFileTab, pendingFileReveal, previewFileTabIds } =
     useWorkspaceFileTabs()
+  const {
+    consumePendingFileReveal,
+    openBranchDiff,
+    openCommitDiff,
+    openFilePreview,
+    openWorkingTreeDiff,
+    saveActiveFile,
+    setFileTabComposing,
+    updateFileTabContent,
+  } = useWorkspaceActions()
   const filePluginPanels = useActiveFilePluginPanels(activeFileTab, {
     ownsSurface: true,
   })
@@ -811,20 +823,23 @@ function FileWorkspacePanelBody() {
   const expectedPluginTabId =
     activeFileTab && activePluginFilePanel ? activeFileTab.id : null
   const expectedPluginPanelKey = activePluginFilePanel?.key ?? null
-  const liveFileReadStateRef = useRef({
+  const expectedPluginPanelWritable = activePluginFilePanel?.writable === true
+  const liveFilePluginStateRef = useRef({
     tab: activeFileTab,
     scopeKey: filePluginScopeKey,
     transport: filePluginTransport,
     activePanelKey: expectedPluginPanelKey,
+    activePanelWritable: expectedPluginPanelWritable,
     selectionId: activePluginFileSelectionId,
     hostHidden: filePluginHostHidden,
   })
   useIsomorphicLayoutEffect(() => {
-    liveFileReadStateRef.current = {
+    liveFilePluginStateRef.current = {
       tab: activeFileTab,
       scopeKey: filePluginScopeKey,
       transport: filePluginTransport,
       activePanelKey: expectedPluginPanelKey,
+      activePanelWritable: expectedPluginPanelWritable,
       selectionId: activePluginFileSelectionId,
       hostHidden: filePluginHostHidden,
     }
@@ -832,12 +847,13 @@ function FileWorkspacePanelBody() {
     activeFileTab,
     activePluginFileSelectionId,
     expectedPluginPanelKey,
+    expectedPluginPanelWritable,
     filePluginHostHidden,
     filePluginScopeKey,
     filePluginTransport,
   ])
   const handlePluginFileReadText = useCallback((): PluginFileReadTextResult => {
-    const live = liveFileReadStateRef.current
+    const live = liveFilePluginStateRef.current
     if (
       live.hostHidden ||
       !expectedPluginTabId ||
@@ -867,16 +883,55 @@ function FileWorkspacePanelBody() {
     filePluginScopeKey,
     filePluginTransport,
   ])
-  const {
-    consumePendingFileReveal,
-    openBranchDiff,
-    openCommitDiff,
-    openFilePreview,
-    openWorkingTreeDiff,
-    saveActiveFile,
-    setFileTabComposing,
-    updateFileTabContent,
-  } = useWorkspaceActions()
+  const handlePluginFileWriteText = useCallback(
+    (text: string): PluginFileWriteTextResult => {
+      const live = liveFilePluginStateRef.current
+      if (
+        live.hostHidden ||
+        !expectedPluginTabId ||
+        !filePluginTransport ||
+        !expectedPluginPanelKey ||
+        !expectedPluginPanelWritable ||
+        activePluginFileSelectionId == null ||
+        live.tab?.id !== expectedPluginTabId ||
+        live.scopeKey !== filePluginScopeKey ||
+        live.transport !== filePluginTransport ||
+        live.activePanelKey !== expectedPluginPanelKey ||
+        !live.activePanelWritable ||
+        live.selectionId !== activePluginFileSelectionId ||
+        !isCurrentReadyHostTransport(filePluginTransport)
+      ) {
+        throw new Error("File editor is no longer active")
+      }
+      if (!isReadableTextFileTab(live.tab)) {
+        throw new Error("Active tab is not an editable text file")
+      }
+      if (live.tab.loading) {
+        throw new Error("File is currently loading")
+      }
+      if (live.tab.readonly) {
+        throw new Error("File is read-only")
+      }
+      const validated = validatePluginFileWriteRequest({
+        type: "writeText",
+        text,
+      })
+      updateFileTabContent(live.tab.id, validated)
+      return {
+        updated: true,
+        length: validated.length,
+      }
+    },
+    [
+      activePluginFileSelectionId,
+      expectedPluginPanelKey,
+      expectedPluginPanelWritable,
+      expectedPluginTabId,
+      filePluginScopeKey,
+      filePluginTransport,
+      updateFileTabContent,
+    ]
+  )
   const tabs = useTabStore((s) => s.tabs)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
@@ -1994,7 +2049,7 @@ function FileWorkspacePanelBody() {
     return null
   }
 
-  // Opt-in read-only plugin file panel (mounted only on explicit user choice).
+  // Opt-in plugin file panel (mounted only on explicit user choice).
   if (
     isFileTab &&
     activeFileTab &&
@@ -2011,7 +2066,7 @@ function FileWorkspacePanelBody() {
           </div>
         )}
         <HostPluginSurface
-          key={`${fileScopeKey}:${activePluginFilePanel.key}`}
+          key={`${fileScopeKey}:${activePluginFilePanel.key}:${activePluginFilePanel.writable ? "rw" : "ro"}`}
           pluginId={activePluginFilePanel.pluginId}
           title={activePluginFilePanel.title}
           context={{
@@ -2021,6 +2076,11 @@ function FileWorkspacePanelBody() {
             fileScopeKey,
           }}
           onFileReadText={handlePluginFileReadText}
+          onFileWriteText={
+            activePluginFilePanel.writable
+              ? handlePluginFileWriteText
+              : undefined
+          }
           className="h-full min-h-0 flex-1 rounded-none border-0"
         />
       </div>

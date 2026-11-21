@@ -5,15 +5,18 @@ import { useLocale, useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { toErrorMessage } from "@/lib/app-error"
 import {
+  MAX_PLUGIN_FILE_WRITE_TEXT_BYTES,
   isCurrentReadyHostTransport,
   usePluginClientHtml,
   validatePluginComposerInsertPayload,
   validatePluginFileReadRequest,
   validatePluginFileReadTextResult,
+  validatePluginFileWriteRequest,
   type HostPluginSessionContext,
   type PluginClientSurfaceSlot,
   type PluginComposerInsertResult,
   type PluginFileReadTextResult,
+  type PluginFileWriteTextResult,
 } from "@/lib/host-plugins"
 import type { Transport } from "@/lib/transport"
 import { cn } from "@/lib/utils"
@@ -46,6 +49,10 @@ export type SurfaceContext = { id: string } & (
 const CLIENT_TIMEOUT_MS = 12_000
 const MAX_PENDING_CALLS = 4
 const MAX_INPUT_BYTES = 64 * 1024
+// Accommodate a full 64 KiB UTF-8 text payload even with JSON string escaping
+// (up to 6 chars per escaped control character plus envelope overhead) so
+// exact-limit and slightly-oversized writes reach validatePluginFileWriteRequest.
+const MAX_FILE_INPUT_JSON_LENGTH = 6 * MAX_PLUGIN_FILE_WRITE_TEXT_BYTES + 1024
 const LIFECYCLE_EVENT_CHANNEL = "host-plugins://event"
 
 type PluginEvent = {
@@ -70,7 +77,11 @@ const CLIENT_POLICY = [
 function buildDocument(
   html: string,
   key: string,
-  options: { composerInsert: boolean; fileReadText: boolean }
+  options: {
+    composerInsert: boolean
+    fileReadText: boolean
+    fileWriteText: boolean
+  }
 ): string {
   return `<!doctype html><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${CLIENT_POLICY}">
@@ -156,7 +167,17 @@ function buildDocument(
         return Promise.reject(new Error("file.readText does not accept arguments"));
       }
       return request("file", { type: "readText" });
-    },
+    },${
+      options.fileWriteText
+        ? `
+    writeText: (...args) => {
+      if (args.length !== 1 || typeof args[0] !== "string") {
+        return Promise.reject(new Error("file.writeText requires a single string argument"));
+      }
+      return request("file", { type: "writeText", text: args[0] });
+    },`
+        : ""
+    }
   });`
       : ""
   }
@@ -174,6 +195,10 @@ export type PluginFileReadTextHandler = () =>
   | PluginFileReadTextResult
   | Promise<PluginFileReadTextResult>
 
+export type PluginFileWriteTextHandler = (
+  text: string
+) => PluginFileWriteTextResult | Promise<PluginFileWriteTextResult>
+
 export function HostPluginSurface({
   pluginId,
   title,
@@ -181,6 +206,7 @@ export function HostPluginSurface({
   className,
   onComposerInsertText,
   onFileReadText,
+  onFileWriteText,
 }: {
   pluginId: string
   title: string
@@ -190,6 +216,8 @@ export function HostPluginSurface({
   onComposerInsertText?: PluginComposerInsertHandler
   /** Read-only current text file snapshot handler; honored ONLY for `filePanel` surfaces. */
   onFileReadText?: PluginFileReadTextHandler
+  /** Controlled current text file buffer write handler; honored ONLY for writable `filePanel` surfaces. */
+  onFileWriteText?: PluginFileWriteTextHandler
 }) {
   const t = useTranslations("HostPlugins")
   const locale = useLocale()
@@ -220,6 +248,7 @@ export function HostPluginSurface({
       className={className}
       onComposerInsertText={onComposerInsertText}
       onFileReadText={onFileReadText}
+      onFileWriteText={onFileWriteText}
     />
   )
 }
@@ -234,6 +263,7 @@ function PluginFrame({
   className,
   onComposerInsertText,
   onFileReadText,
+  onFileWriteText,
 }: {
   pluginId: string
   title: string
@@ -244,6 +274,7 @@ function PluginFrame({
   className?: string
   onComposerInsertText?: PluginComposerInsertHandler
   onFileReadText?: PluginFileReadTextHandler
+  onFileWriteText?: PluginFileWriteTextHandler
 }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const { type, id } = context
@@ -264,12 +295,15 @@ function PluginFrame({
     slot === "composer" &&
     Boolean(onComposerInsertText)
   const allowFileReadText = type === "filePanel" && Boolean(onFileReadText)
+  const allowFileWriteText = allowFileReadText && Boolean(onFileWriteText)
   const composerInsertRef = useRef(onComposerInsertText)
   const fileReadTextRef = useRef(onFileReadText)
+  const fileWriteTextRef = useRef(onFileWriteText)
   useIsomorphicLayoutEffect(() => {
     composerInsertRef.current = onComposerInsertText
     fileReadTextRef.current = onFileReadText
-  }, [onComposerInsertText, onFileReadText])
+    fileWriteTextRef.current = onFileWriteText
+  }, [onComposerInsertText, onFileReadText, onFileWriteText])
   const { handshake, doc } = useMemo(() => {
     const handshake = Array.from(
       crypto.getRandomValues(new Uint8Array(16)),
@@ -280,6 +314,7 @@ function PluginFrame({
       doc: buildDocument(html, handshake, {
         composerInsert: allowComposerInsert,
         fileReadText: allowFileReadText,
+        fileWriteText: allowFileWriteText,
       }),
     }
     // A context, capability, or host change restarts the frame and disconnects the old port.
@@ -296,6 +331,7 @@ function PluginFrame({
     fileScopeKey,
     allowComposerInsert,
     allowFileReadText,
+    allowFileWriteText,
     locale,
     host,
     pluginId,
@@ -385,9 +421,13 @@ function PluginFrame({
         )
           return
         const requestId = data.id
+        const maxJsonLength =
+          data.operation === "file"
+            ? MAX_FILE_INPUT_JSON_LENGTH
+            : MAX_INPUT_BYTES
         if (
           activeCalls >= MAX_PENDING_CALLS ||
-          data.json.length > MAX_INPUT_BYTES
+          data.json.length > maxJsonLength
         ) {
           port1.postMessage({
             id: requestId,
@@ -410,22 +450,48 @@ function PluginFrame({
             const text = validatePluginComposerInsertPayload(input)
             value = await insertHandler(text)
           } else if (data.operation === "file") {
-            const readTextHandler = allowFileReadText
-              ? fileReadTextRef.current
-              : undefined
-            if (
-              !readTextHandler ||
-              closed ||
-              !isCurrentReadyHostTransport(host)
-            ) {
-              throw new Error("File snapshot is unavailable")
+            const opType =
+              input &&
+              typeof input === "object" &&
+              !Array.isArray(input) &&
+              "type" in input
+                ? (input as { type: unknown }).type
+                : undefined
+            if (opType === "writeText") {
+              const writeTextHandler = allowFileWriteText
+                ? fileWriteTextRef.current
+                : undefined
+              if (
+                !writeTextHandler ||
+                closed ||
+                !isCurrentReadyHostTransport(host)
+              ) {
+                throw new Error("File write is unavailable")
+              }
+              const text = validatePluginFileWriteRequest(input)
+              const result = await writeTextHandler(text)
+              if (closed || !isCurrentReadyHostTransport(host)) {
+                throw new Error("File editor is no longer active")
+              }
+              value = result
+            } else {
+              const readTextHandler = allowFileReadText
+                ? fileReadTextRef.current
+                : undefined
+              if (
+                !readTextHandler ||
+                closed ||
+                !isCurrentReadyHostTransport(host)
+              ) {
+                throw new Error("File snapshot is unavailable")
+              }
+              validatePluginFileReadRequest(input)
+              const snapshot = await readTextHandler()
+              if (closed || !isCurrentReadyHostTransport(host)) {
+                throw new Error("File snapshot is no longer active")
+              }
+              value = validatePluginFileReadTextResult(snapshot?.text)
             }
-            validatePluginFileReadRequest(input)
-            const snapshot = await readTextHandler()
-            if (closed || !isCurrentReadyHostTransport(host)) {
-              throw new Error("File snapshot is no longer active")
-            }
-            value = validatePluginFileReadTextResult(snapshot?.text)
           } else {
             value = await handleRequest(host, pluginId, data.operation, input)
           }
@@ -470,6 +536,7 @@ function PluginFrame({
     fileScopeKey,
     allowComposerInsert,
     allowFileReadText,
+    allowFileWriteText,
     host,
     id,
     locale,

@@ -2769,6 +2769,8 @@
       "source": "ソース",
       "fileView": "ファイル表示",
       "pluginViews": "プラグイン表示",
+      "save": "保存",
+      "saving": "保存中…",
       "openInSystemBrowser": "システムのブラウザで開く",
       "more": "その他",
       "maximize": "最大化",

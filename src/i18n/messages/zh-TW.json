@@ -2769,6 +2769,8 @@
       "source": "原始碼",
       "fileView": "檔案檢視",
       "pluginViews": "外掛檢視",
+      "save": "儲存",
+      "saving": "儲存中…",
       "openInSystemBrowser": "在系統瀏覽器中開啟",
       "more": "更多",
       "maximize": "最大化",

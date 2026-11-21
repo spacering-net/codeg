@@ -515,6 +515,9 @@ describe("FileWorkspace plugin filePanels integration", () => {
       mocks.previewFileTabIds = next
     })
     mocks.consumePendingFileReveal.mockReset()
+    mocks.updateFileTabContent.mockReset()
+    mocks.saveActiveFile.mockReset()
+    mocks.saveActiveFile.mockResolvedValue(true)
     mocks.readFileForEditSpy.mockReset()
     resetFilePluginPanelSelectionForTests()
     resetHtmlPreviewControlsForTests()
@@ -582,8 +585,23 @@ describe("FileWorkspace plugin filePanels integration", () => {
     const session = await connectPluginIframe(iframe)
     expect(session.srcDoc).toContain("api.file = Object.freeze")
     expect(session.srcDoc).toContain("file.readText does not accept arguments")
+    expect(session.srcDoc).not.toContain("writeText")
     expect(session.srcDoc).not.toContain("api.composer =")
     expect(session.srcDoc).not.toContain("/secret/workspace")
+
+    // Read-only file panel must NOT show the writable save button and must reject writeText at host port.
+    expect(
+      screen.queryByRole("button", {
+        name: esMessages.Folder.fileWorkspace.save,
+      })
+    ).toBeNull()
+    const writeBlocked = await session.sendOperation("file", {
+      type: "writeText",
+      text: "hacked",
+    })
+    expect(writeBlocked?.ok).toBe(false)
+    expect(writeBlocked?.error).toMatch(/unavailable/i)
+    expect(mocks.updateFileTabContent).not.toHaveBeenCalled()
 
     // Context exposes ONLY { type: "filePanel", id, fileName, locale } — no path or folderId!
     expect(session.context).toEqual({
@@ -602,7 +620,7 @@ describe("FileWorkspace plugin filePanels integration", () => {
     // readText() returns live unsaved text snapshot with zero implicit disk reads.
     const readOk = await session.sendOperation("file", { type: "readText" })
     expect(readOk).toEqual({
-      id: 1,
+      id: 2,
       ok: true,
       value: { text: "name,score\nalice,99\n" },
     })
@@ -683,7 +701,7 @@ describe("FileWorkspace plugin filePanels integration", () => {
     )
     const readEmpty = await session.sendOperation("file", { type: "readText" })
     expect(readEmpty).toEqual({
-      id: 5,
+      id: 6,
       ok: true,
       value: { text: "" },
     })
@@ -742,6 +760,7 @@ describe("FileWorkspace plugin filePanels integration", () => {
           title="Non File Surface"
           context={{ type: "sidebarView", id: "side" }}
           onFileReadText={() => ({ text: "should never leak" })}
+          onFileWriteText={() => ({ updated: true, length: 0 })}
         />
       </NextIntlClientProvider>
     )
@@ -751,9 +770,16 @@ describe("FileWorkspace plugin filePanels integration", () => {
     )) as HTMLIFrameElement
     const session = await connectPluginIframe(iframe)
     expect(session.srcDoc).not.toContain("api.file =")
+    expect(session.srcDoc).not.toContain("writeText")
     const forbidden = await session.sendOperation("file", { type: "readText" })
     expect(forbidden?.ok).toBe(false)
     expect(forbidden?.error).toMatch(/unavailable/i)
+    const forbiddenWrite = await session.sendOperation("file", {
+      type: "writeText",
+      text: "blocked",
+    })
+    expect(forbiddenWrite?.ok).toBe(false)
+    expect(forbiddenWrite?.error).toMatch(/unavailable/i)
   })
 
   it("preserves built-in Markdown/HTML Preview state across plugin panel round-trips and hides hoisted HTML controls while plugin view is active", async () => {
@@ -1362,5 +1388,556 @@ describe("FileWorkspace plugin filePanels integration", () => {
     expect(screen.queryByTitle("Markdown Outline")).toBeNull()
     expect(screen.getByTestId("markdown-preview")).toBeInTheDocument()
     expect(mocks.previewFileTabIds.has(readmeMd.id)).toBe(true)
+  })
+
+  it("supports writable filePanel readText/writeText round-trip, validates limits/NUL/extra args, enforces readonly/loading guards, shows Save button, and preserves edits across Source and Preview", async () => {
+    const csvEditorPlugin = makeCsvViewerPlugin({
+      filePanels: [
+        {
+          id: "csv-editor",
+          title: "CSV Editor",
+          titleTranslations: { es: "Editor CSV" },
+          extensions: ["csv", "md"],
+          writable: true,
+        },
+        {
+          id: "csv-readonly",
+          title: "CSV Read Only",
+          extensions: ["csv"],
+        },
+      ],
+    })
+    const host = makeMockTransport({
+      getPlugins: () => [csvEditorPlugin],
+    })
+    mocks.transport = host.transport
+
+    let currentTab = makeFileTab({
+      id: "file:/repo/notes.csv",
+      title: "notes.csv",
+      path: "/repo/notes.csv",
+      content: "name,score\nalice,42\n",
+      savedContent: "name,score\nalice,42\n",
+      isDirty: false,
+      readonly: false,
+      saveState: "idle",
+    })
+    mocks.activeFileTab = currentTab
+    mocks.fileTabs = [currentTab]
+    mocks.updateFileTabContent.mockImplementation(
+      (tabId: string, nextContent: string) => {
+        if (
+          currentTab.id === tabId &&
+          !currentTab.readonly &&
+          !currentTab.loading
+        ) {
+          currentTab = {
+            ...currentTab,
+            content: nextContent,
+            isDirty: nextContent !== currentTab.savedContent,
+            saveState: "idle",
+          }
+          mocks.activeFileTab = currentTab
+          mocks.fileTabs = [currentTab]
+        }
+      }
+    )
+
+    const rerenderColumn = (
+      view: ReturnType<typeof renderFileColumn>,
+      locale: "en" | "es" = "en"
+    ) => {
+      const messages = locale === "es" ? esMessages : enMessages
+      view.rerender(
+        <NextIntlClientProvider locale={locale} messages={messages}>
+          <div className="flex h-[480px] w-[390px] flex-col">
+            <FileWorkspaceHeader />
+            <div className="flex-1 min-h-0">
+              <FileWorkspacePanel />
+            </div>
+          </div>
+        </NextIntlClientProvider>
+      )
+    }
+
+    const view = renderFileColumn("en")
+    // Default stays Monaco Source — no Save button yet.
+    expect(screen.getByTestId("monaco-editor")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
+
+    // Explicitly opt into the writable CSV Editor.
+    await openDropdown(await screen.findByRole("button", { name: "File view" }))
+    await act(async () => {
+      screen.getByRole("menuitemradio", { name: "CSV Editor" }).click()
+    })
+
+    const iframe = (await screen.findByTitle("CSV Editor")) as HTMLIFrameElement
+    const session = await connectPluginIframe(iframe)
+
+    // Context stays strictly { type: "filePanel", id, fileName, locale } (no path/folderId/fileScopeKey/writable).
+    expect(session.context).toEqual({
+      type: "filePanel",
+      id: "csv-editor",
+      fileName: "notes.csv",
+      locale: "en",
+    })
+    expect(Object.keys(session.context).sort()).toEqual([
+      "fileName",
+      "id",
+      "locale",
+      "type",
+    ])
+    expect(session.srcDoc).toContain("api.file = Object.freeze")
+    expect(session.srcDoc).toContain("writeText:")
+    expect(session.srcDoc).toContain(
+      "file.writeText requires a single string argument"
+    )
+
+    // Clean file -> Save button is hidden.
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
+
+    // 1) Read initial buffer -> Write updated text -> Read back updated buffer.
+    expect(await session.sendOperation("file", { type: "readText" })).toEqual({
+      id: 1,
+      ok: true,
+      value: { text: "name,score\nalice,42\n" },
+    })
+
+    const nextText = "name,score\nalice,100\nbob,88\n"
+    const writeOk = await session.sendOperation("file", {
+      type: "writeText",
+      text: nextText,
+    })
+    expect(writeOk).toEqual({
+      id: 2,
+      ok: true,
+      value: { updated: true, length: nextText.length },
+    })
+    expect(mocks.updateFileTabContent).toHaveBeenCalledWith(
+      "file:/repo/notes.csv",
+      nextText
+    )
+
+    // Rerender with updated dirty tab -> readText reflects edit & Save button appears.
+    rerenderColumn(view, "en")
+    expect(await session.sendOperation("file", { type: "readText" })).toEqual({
+      id: 3,
+      ok: true,
+      value: { text: nextText },
+    })
+    expect(screen.getByTestId("file-breadcrumb")).toHaveTextContent(
+      "notes.csv *"
+    )
+
+    // Save button triggers saveActiveFile(), and disables while saving.
+    const saveBtn = screen.getByRole("button", { name: "Save" })
+    expect(saveBtn).not.toBeDisabled()
+    fireEvent.click(saveBtn)
+    expect(mocks.saveActiveFile).toHaveBeenCalledTimes(1)
+
+    currentTab = { ...currentTab, saveState: "saving" }
+    mocks.activeFileTab = currentTab
+    mocks.fileTabs = [currentTab]
+    rerenderColumn(view, "en")
+    const savingBtn = screen.getByRole("button", { name: "Saving…" })
+    expect(savingBtn).toBeDisabled()
+
+    currentTab = { ...currentTab, saveState: "idle" }
+    mocks.activeFileTab = currentTab
+    mocks.fileTabs = [currentTab]
+    rerenderColumn(view, "en")
+
+    // 2) Exact 64 KiB multi-byte UTF-8 boundary succeeds through MessagePort!
+    const cjkAtLimit = "汉".repeat(21_845) + "a"
+    const writeAtLimit = await session.sendOperation("file", {
+      type: "writeText",
+      text: cjkAtLimit,
+    })
+    expect(writeAtLimit).toEqual({
+      id: 4,
+      ok: true,
+      value: { updated: true, length: cjkAtLimit.length },
+    })
+
+    // 3) Over 64 KiB multi-byte UTF-8 (21,846 CJK chars = 65,538 bytes) rejected.
+    const callsBeforeErrors = mocks.updateFileTabContent.mock.calls.length
+    const writeOverLimit = await session.sendOperation("file", {
+      type: "writeText",
+      text: "汉".repeat(21_846),
+    })
+    expect(writeOverLimit?.ok).toBe(false)
+    expect(writeOverLimit?.error).toMatch(/64 KiB/i)
+
+    // 4) NUL character rejected.
+    const writeNul = await session.sendOperation("file", {
+      type: "writeText",
+      text: "bad\0csv",
+    })
+    expect(writeNul?.ok).toBe(false)
+    expect(writeNul?.error).toMatch(/NUL/i)
+
+    // 5) Path smuggling / extra fields / non-string args rejected at host port.
+    const writeExtraPath = await session.sendOperation("file", {
+      type: "writeText",
+      text: "ok",
+      path: "/etc/passwd",
+    })
+    expect(writeExtraPath?.ok).toBe(false)
+    expect(writeExtraPath?.error).toMatch(/single string argument/i)
+
+    const writeNonString = await session.sendOperation("file", {
+      type: "writeText",
+      text: 42,
+    })
+    expect(writeNonString?.ok).toBe(false)
+    expect(writeNonString?.error).toMatch(/single string argument/i)
+    expect(mocks.updateFileTabContent).toHaveBeenCalledTimes(callsBeforeErrors)
+
+    // 6) Loading state rejects writeText cleanly.
+    currentTab = {
+      ...currentTab,
+      content: nextText,
+      isDirty: true,
+      loading: true,
+    }
+    mocks.activeFileTab = currentTab
+    mocks.fileTabs = [currentTab]
+    rerenderColumn(view, "en")
+    const writeLoading = await session.sendOperation("file", {
+      type: "writeText",
+      text: "during-load",
+    })
+    expect(writeLoading?.ok).toBe(false)
+    expect(writeLoading?.error).toMatch(/loading/i)
+
+    // 7) Readonly file: readText still works, writeText rejects with "File is read-only", Save button hidden.
+    currentTab = { ...currentTab, loading: false, readonly: true }
+    mocks.activeFileTab = currentTab
+    mocks.fileTabs = [currentTab]
+    rerenderColumn(view, "en")
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
+    expect(
+      (await session.sendOperation("file", { type: "readText" }))?.ok
+    ).toBe(true)
+    const writeReadonly = await session.sendOperation("file", {
+      type: "writeText",
+      text: "cannot-edit",
+    })
+    expect(writeReadonly?.ok).toBe(false)
+    expect(writeReadonly?.error).toBe("File is read-only")
+    expect(mocks.updateFileTabContent).toHaveBeenCalledTimes(callsBeforeErrors)
+
+    // 8) Restore editable dirty state, switch back to Source -> Monaco keeps plugin's unsaved edits!
+    currentTab = {
+      ...currentTab,
+      readonly: false,
+      content: nextText,
+      isDirty: true,
+    }
+    mocks.activeFileTab = currentTab
+    mocks.fileTabs = [currentTab]
+    rerenderColumn(view, "en")
+
+    await openDropdown(screen.getByRole("button", { name: "File view" }))
+    await act(async () => {
+      screen.getByRole("menuitemradio", { name: "Source" }).click()
+    })
+    expect(screen.queryByTitle("CSV Editor")).toBeNull()
+    expect(session.port.peer.closed).toBe(true)
+    expect(screen.getByTestId("monaco-editor")).toHaveAttribute(
+      "data-value",
+      nextText
+    )
+    expect(screen.getByTestId("file-breadcrumb")).toHaveTextContent(
+      "notes.csv *"
+    )
+
+    // 9) Markdown Preview round-trip preserves plugin-written unsaved edits.
+    let mdTab = makeFileTab({
+      id: "file:/repo/doc.md",
+      title: "doc.md",
+      path: "/repo/doc.md",
+      language: "markdown",
+      content: "# Original\n",
+      savedContent: "# Original\n",
+      isDirty: false,
+      readonly: false,
+    })
+    mocks.activeFileTab = mdTab
+    mocks.fileTabs = [mdTab]
+    mocks.previewFileTabIds = new Set([mdTab.id])
+    mocks.updateFileTabContent.mockImplementation(
+      (tabId: string, updated: string) => {
+        if (mdTab.id === tabId) {
+          mdTab = {
+            ...mdTab,
+            content: updated,
+            isDirty: updated !== mdTab.savedContent,
+          }
+          mocks.activeFileTab = mdTab
+          mocks.fileTabs = [mdTab]
+        }
+      }
+    )
+    rerenderColumn(view, "en")
+    expect(screen.getByTestId("markdown-preview")).toHaveAttribute(
+      "data-content",
+      "# Original\n"
+    )
+
+    await openDropdown(await screen.findByRole("button", { name: "File view" }))
+    await act(async () => {
+      screen.getByRole("menuitemradio", { name: "CSV Editor" }).click()
+    })
+    const mdSession = await connectPluginIframe(
+      (await screen.findByTitle("CSV Editor")) as HTMLIFrameElement
+    )
+    expect(
+      await mdSession.sendOperation("file", {
+        type: "writeText",
+        text: "# Updated by plugin\n",
+      })
+    ).toEqual({
+      id: 1,
+      ok: true,
+      value: { updated: true, length: "# Updated by plugin\n".length },
+    })
+    rerenderColumn(view, "en")
+
+    await openDropdown(screen.getByRole("button", { name: "File view" }))
+    await act(async () => {
+      screen.getByRole("menuitemradio", { name: "Preview" }).click()
+    })
+    expect(screen.getByTestId("markdown-preview")).toHaveAttribute(
+      "data-content",
+      "# Updated by plugin\n"
+    )
+    expect(screen.getByTestId("file-breadcrumb")).toHaveTextContent("doc.md *")
+  })
+
+  it("revokes writeText on writable withdrawal, transport replacement under same remoteConnectionId, mobile unmount, and desktop OverlayHostHiddenProvider", async () => {
+    let remotePlugins: InstalledPlugin[] = [
+      makeCsvViewerPlugin({
+        filePanels: [
+          {
+            id: "csv-editor",
+            title: "CSV Editor",
+            extensions: ["csv"],
+            writable: true,
+          },
+        ],
+      }),
+    ]
+    const remoteHostA = makeMockTransport({ getPlugins: () => remotePlugins })
+    const remoteHostB = makeMockTransport({ getPlugins: () => remotePlugins })
+
+    window.history.replaceState({}, "", "/workspace?remoteConnectionId=12")
+    mocks.activeRemoteId = 12
+    mocks.transport = remoteHostA.transport
+
+    const csvTab = makeFileTab({
+      id: "file:/repo/live.csv",
+      title: "live.csv",
+      path: "/repo/live.csv",
+      content: "k,v\na,1\n",
+      savedContent: "k,v\na,0\n",
+      isDirty: true,
+      readonly: false,
+    })
+    mocks.activeFileTab = csvTab
+    mocks.fileTabs = [csvTab]
+
+    const renderDesktopColumn = (hidden: boolean) => (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <OverlayHostHiddenProvider hidden={hidden}>
+          <div className="flex h-[480px] w-[420px] flex-col">
+            <FileWorkspaceHeader />
+            <div className="flex-1 min-h-0">
+              <FileWorkspacePanel />
+            </div>
+          </div>
+        </OverlayHostHiddenProvider>
+      </NextIntlClientProvider>
+    )
+
+    const view = render(renderDesktopColumn(false))
+
+    // 1) Opt into writable CSV Editor -> write succeeds -> withdraw writable in catalog ->
+    //    unmounts immediately, closes port, Save button disappears; re-selecting mounts read-only and rejects writeText!
+    await openDropdown(await screen.findByRole("button", { name: "File view" }))
+    await act(async () => {
+      screen.getByRole("menuitemradio", { name: "CSV Editor" }).click()
+    })
+    const writableSession = await connectPluginIframe(
+      (await screen.findByTitle("CSV Editor")) as HTMLIFrameElement
+    )
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument()
+    expect(
+      (
+        await writableSession.sendOperation("file", {
+          type: "writeText",
+          text: "k,v\na,2\n",
+        })
+      )?.ok
+    ).toBe(true)
+
+    await act(async () => {
+      remotePlugins = [
+        makeCsvViewerPlugin({
+          filePanels: [
+            {
+              id: "csv-editor",
+              title: "CSV Editor",
+              extensions: ["csv"],
+              writable: false,
+            },
+          ],
+        }),
+      ]
+      remoteHostA.emit("host-plugins://changed", {})
+    })
+    await waitFor(() => {
+      expect(screen.queryByTitle("CSV Editor")).toBeNull()
+      expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
+    })
+    expect(writableSession.port.peer.closed).toBe(true)
+    const callsAfterWithdraw = mocks.updateFileTabContent.mock.calls.length
+    expect(
+      await writableSession.sendOperation("file", {
+        type: "writeText",
+        text: "stale-after-withdraw",
+      })
+    ).toBeUndefined()
+    expect(mocks.updateFileTabContent).toHaveBeenCalledTimes(callsAfterWithdraw)
+
+    // Re-selecting the now read-only panel mounts without writeText and rejects writeText at host port.
+    await openDropdown(screen.getByRole("button", { name: "File view" }))
+    await act(async () => {
+      screen.getByRole("menuitemradio", { name: "CSV Editor" }).click()
+    })
+    const roSession = await connectPluginIframe(
+      (await screen.findByTitle("CSV Editor")) as HTMLIFrameElement
+    )
+    expect(roSession.srcDoc).not.toContain("writeText")
+    const roWrite = await roSession.sendOperation("file", {
+      type: "writeText",
+      text: "blocked-now-ro",
+    })
+    expect(roWrite?.ok).toBe(false)
+    expect(roWrite?.error).toMatch(/unavailable/i)
+    expect(mocks.updateFileTabContent).toHaveBeenCalledTimes(callsAfterWithdraw)
+
+    // 2) Restore writable: true, select panel, then replace Transport under SAME remoteConnectionId=12 ->
+    //    immediately unmounts iframe and closes port!
+    await act(async () => {
+      remotePlugins = [
+        makeCsvViewerPlugin({
+          filePanels: [
+            {
+              id: "csv-editor",
+              title: "CSV Editor",
+              extensions: ["csv"],
+              writable: true,
+            },
+          ],
+        }),
+      ]
+      remoteHostA.emit("host-plugins://changed", {})
+    })
+    await waitFor(() => {
+      expect(screen.queryByTitle("CSV Editor")).toBeNull()
+    })
+    await openDropdown(await screen.findByRole("button", { name: "File view" }))
+    await act(async () => {
+      screen.getByRole("menuitemradio", { name: "CSV Editor" }).click()
+    })
+    const beforeSwapSession = await connectPluginIframe(
+      (await screen.findByTitle("CSV Editor")) as HTMLIFrameElement
+    )
+
+    await act(async () => {
+      mocks.transport = remoteHostB.transport
+      notifyTransportChange()
+    })
+    await waitFor(() => {
+      expect(screen.queryByTitle("CSV Editor")).toBeNull()
+    })
+    expect(beforeSwapSession.port.peer.closed).toBe(true)
+    expect(
+      await beforeSwapSession.sendOperation("file", {
+        type: "writeText",
+        text: "stale-after-transport-swap",
+      })
+    ).toBeUndefined()
+    expect(mocks.updateFileTabContent).toHaveBeenCalledTimes(callsAfterWithdraw)
+
+    // 3) Desktop OverlayHostHiddenProvider hides kept-mounted writable panel -> closes port & restores Source on return.
+    await openDropdown(await screen.findByRole("button", { name: "File view" }))
+    await act(async () => {
+      screen.getByRole("menuitemradio", { name: "CSV Editor" }).click()
+    })
+    const hiddenSession = await connectPluginIframe(
+      (await screen.findByTitle("CSV Editor")) as HTMLIFrameElement
+    )
+    view.rerender(renderDesktopColumn(true))
+    expect(screen.queryByTitle("CSV Editor")).toBeNull()
+    expect(hiddenSession.port.peer.closed).toBe(true)
+    expect(
+      await hiddenSession.sendOperation("file", {
+        type: "writeText",
+        text: "stale-while-hidden",
+      })
+    ).toBeUndefined()
+    expect(mocks.updateFileTabContent).toHaveBeenCalledTimes(callsAfterWithdraw)
+
+    view.rerender(renderDesktopColumn(false))
+    expect(screen.queryByTitle("CSV Editor")).toBeNull()
+    expect(screen.getByTestId("monaco-editor")).toBeInTheDocument()
+    view.unmount()
+
+    // 4) Real 390px mobile unmount (Back leaving files pane) revokes writable port and restores Source on reopen.
+    const renderMobile = (showConversation: boolean) => (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <div className="h-[640px] w-[390px]">
+          <MobileWorkspacePanes
+            showConversation={showConversation}
+            files={
+              <>
+                <FileWorkspaceHeader />
+                <div className="flex-1 min-h-0">
+                  <FileWorkspacePanel />
+                </div>
+              </>
+            }
+          >
+            <div data-testid="mobile-conversation" />
+          </MobileWorkspacePanes>
+        </div>
+      </NextIntlClientProvider>
+    )
+    const mobileView = render(renderMobile(false))
+    await openDropdown(await screen.findByRole("button", { name: "File view" }))
+    await act(async () => {
+      screen.getByRole("menuitemradio", { name: "CSV Editor" }).click()
+    })
+    const mobileSession = await connectPluginIframe(
+      (await screen.findByTitle("CSV Editor")) as HTMLIFrameElement
+    )
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument()
+
+    mobileView.rerender(renderMobile(true))
+    expect(screen.queryByTitle("CSV Editor")).toBeNull()
+    expect(mobileSession.port.peer.closed).toBe(true)
+    expect(
+      await mobileSession.sendOperation("file", {
+        type: "writeText",
+        text: "stale-after-mobile-unmount",
+      })
+    ).toBeUndefined()
+    expect(mocks.updateFileTabContent).toHaveBeenCalledTimes(callsAfterWithdraw)
+
+    mobileView.rerender(renderMobile(false))
+    expect(screen.queryByTitle("CSV Editor")).toBeNull()
+    expect(screen.getByTestId("monaco-editor")).toBeInTheDocument()
   })
 })

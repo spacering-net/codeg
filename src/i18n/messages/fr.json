@@ -2769,6 +2769,8 @@
       "source": "Source",
       "fileView": "Vue du fichier",
       "pluginViews": "Vues de plugins",
+      "save": "Enregistrer",
+      "saving": "Enregistrement…",
       "openInSystemBrowser": "Ouvrir dans le navigateur système",
       "more": "Plus",
       "maximize": "Agrandir",
