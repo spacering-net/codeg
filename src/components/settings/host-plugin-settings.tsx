@@ -27,11 +27,13 @@ import { isUnsupportedCommandError } from "@/lib/harness/errors"
 import {
   applyHostPlugin,
   fetchHostPluginIndex,
-  installHostPluginSource,
+  confirmHostPluginInstall,
+  previewHostPluginInstall,
   updateHostPlugin,
   useHostPlugins,
   type InstalledPlugin,
   type PluginIndex,
+  type PluginInstallPreview,
   type PluginMutation,
 } from "@/lib/host-plugins"
 
@@ -220,6 +222,7 @@ function PluginIndexDialog({
     Record<string, string>
   >({})
   const [installed, setInstalled] = useState<string>()
+  const [preview, setPreview] = useState<PluginInstallPreview>()
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string>()
 
@@ -256,7 +259,7 @@ function PluginIndexDialog({
     }
   }
 
-  const install = async (pluginId: string) => {
+  const review = async (pluginId: string) => {
     const plugin = index?.plugins.find((item) => item.id === pluginId)
     if (!plugin || busy) return
     const version =
@@ -266,9 +269,12 @@ function PluginIndexDialog({
     setBusy(true)
     setFailure(undefined)
     try {
-      await installHostPluginSource(version.source, version.registry)
-      setInstalled(plugin.id)
-      onInstalled()
+      setPreview(
+        await previewHostPluginInstall(version.source, version.registry, {
+          id: plugin.id,
+          version: version.version,
+        })
+      )
     } catch (error) {
       setFailure(
         isUnsupportedCommandError(error)
@@ -280,11 +286,27 @@ function PluginIndexDialog({
     }
   }
 
+  const install = async (pending: PluginInstallPreview) => {
+    setBusy(true)
+    try {
+      await confirmHostPluginInstall(pending.ticket)
+      setInstalled(pending.manifest.id)
+      onInstalled()
+    } catch (error) {
+      setFailure(toErrorMessage(error))
+    } finally {
+      setPreview(undefined)
+      setBusy(false)
+    }
+  }
+
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!busy) setOpen(next)
+        if (busy) return
+        setOpen(next)
+        if (!next) setPreview(undefined)
       }}
     >
       <DialogTrigger asChild>
@@ -298,7 +320,19 @@ function PluginIndexDialog({
           <DialogTitle>{t("discover")}</DialogTitle>
           <DialogDescription>{t("indexDescription")}</DialogDescription>
         </DialogHeader>
-        <form className="grid gap-4" onSubmit={load}>
+        {preview && (
+          <InstallReview
+            preview={preview}
+            busy={busy}
+            onBack={() => setPreview(undefined)}
+            onConfirm={() => void install(preview)}
+          />
+        )}
+        <form
+          hidden={!!preview}
+          className={preview ? "hidden" : "grid gap-4"}
+          onSubmit={load}
+        >
           <label className="grid gap-2 text-sm">
             {t("indexUrl")}
             {savedUrls.length > 0 && (
@@ -346,15 +380,8 @@ function PluginIndexDialog({
             {failure}
           </p>
         )}
-        {index && (
+        {index && !preview && (
           <div className="grid gap-3">
-            <div
-              role="alert"
-              className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100"
-            >
-              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-              <span>{t("trustWarning")}</span>
-            </div>
             <ul className="max-h-[min(50vh,28rem)] divide-y overflow-auto border-y">
               {index.plugins.map((plugin) => {
                 const selected =
@@ -402,9 +429,9 @@ function PluginIndexDialog({
                       <Button
                         size="sm"
                         disabled={busy || isInstalled}
-                        onClick={() => void install(plugin.id)}
+                        onClick={() => void review(plugin.id)}
                       >
-                        {isInstalled ? t("installed") : t("install")}
+                        {isInstalled ? t("installed") : t("reviewInstall")}
                       </Button>
                     </div>
                   </li>
@@ -456,13 +483,16 @@ function InstallSourceDialog({
   const [input, setInput] = useState("")
   const [registry, setRegistry] = useState<"npm" | "mirror">("npm")
   const [busy, setBusy] = useState(false)
+  const [preview, setPreview] = useState<PluginInstallPreview>()
   const [failure, setFailure] = useState<string>()
 
   return (
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!busy) setOpen(next)
+        if (busy) return
+        setOpen(next)
+        if (!next) setPreview(undefined)
       }}
     >
       <DialogTrigger asChild>
@@ -476,79 +506,137 @@ function InstallSourceDialog({
           <DialogTitle>{t("add")}</DialogTitle>
           <DialogDescription>{t("sourceDescription")}</DialogDescription>
         </DialogHeader>
-        <form
-          className="grid gap-4"
-          onSubmit={async (event) => {
-            event.preventDefault()
-            if (busy || !input.trim()) return
-            setBusy(true)
-            setFailure(undefined)
-            try {
-              await installHostPluginSource(input, registry)
-              setInput("")
-              setOpen(false)
-              onInstalled()
-            } catch (error) {
-              if (isUnsupportedCommandError(error)) {
-                setFailure(t("sourceUnsupported"))
-              } else setFailure(toErrorMessage(error))
-            } finally {
-              setBusy(false)
-            }
-          }}
-        >
-          <label className="grid gap-2 text-sm">
-            {t("source")}
-            <Input
-              value={input}
-              maxLength={1024}
-              placeholder="owner/repo, @scope/package"
-              onChange={(event) => setInput(event.target.value)}
-              disabled={busy}
-            />
-          </label>
-          <label className="flex flex-wrap items-center justify-between gap-2 text-sm">
-            {t("registry")}
-            <select
-              className="h-8 rounded-md border bg-background px-2"
-              value={registry}
-              disabled={busy}
-              onChange={(event) =>
-                setRegistry(event.target.value === "mirror" ? "mirror" : "npm")
+        {preview ? (
+          <InstallReview
+            preview={preview}
+            busy={busy}
+            onBack={() => setPreview(undefined)}
+            onConfirm={async () => {
+              setBusy(true)
+              try {
+                await confirmHostPluginInstall(preview.ticket)
+                setInput("")
+                setOpen(false)
+                onInstalled()
+              } catch (error) {
+                setFailure(toErrorMessage(error))
+              } finally {
+                setPreview(undefined)
+                setBusy(false)
               }
-            >
-              <option value="npm">npm</option>
-              <option value="mirror">{t("mirror")}</option>
-            </select>
-          </label>
-          <p className="text-sm text-muted-foreground">{t("sourceHint")}</p>
-          <div
-            role="alert"
-            className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100"
+            }}
+          />
+        ) : (
+          <form
+            className="grid gap-4"
+            onSubmit={async (event) => {
+              event.preventDefault()
+              if (busy || !input.trim()) return
+              setBusy(true)
+              setFailure(undefined)
+              try {
+                setPreview(await previewHostPluginInstall(input, registry))
+              } catch (error) {
+                if (isUnsupportedCommandError(error)) {
+                  setFailure(t("sourceUnsupported"))
+                } else setFailure(toErrorMessage(error))
+              } finally {
+                setBusy(false)
+              }
+            }}
           >
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-            <span>{t("trustWarning")}</span>
-          </div>
-          {failure && (
-            <p role="alert" className="text-sm text-destructive">
-              {failure}
-            </p>
-          )}
-          <DialogFooter>
-            <Button
-              variant="outline"
-              type="button"
-              disabled={busy}
-              onClick={() => setOpen(false)}
-            >
-              {t("cancel")}
-            </Button>
-            <Button type="submit" disabled={busy || !input.trim()}>
-              {t(busy ? "installing" : "install")}
-            </Button>
-          </DialogFooter>
-        </form>
+            <label className="grid gap-2 text-sm">
+              {t("source")}
+              <Input
+                value={input}
+                maxLength={1024}
+                placeholder="owner/repo, @scope/package"
+                onChange={(event) => setInput(event.target.value)}
+                disabled={busy}
+              />
+            </label>
+            <label className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              {t("registry")}
+              <select
+                className="h-8 rounded-md border bg-background px-2"
+                value={registry}
+                disabled={busy}
+                onChange={(event) =>
+                  setRegistry(
+                    event.target.value === "mirror" ? "mirror" : "npm"
+                  )
+                }
+              >
+                <option value="npm">npm</option>
+                <option value="mirror">{t("mirror")}</option>
+              </select>
+            </label>
+            <p className="text-sm text-muted-foreground">{t("sourceHint")}</p>
+            {failure && (
+              <p role="alert" className="text-sm text-destructive">
+                {failure}
+              </p>
+            )}
+            <DialogFooter>
+              <Button
+                variant="outline"
+                type="button"
+                disabled={busy}
+                onClick={() => setOpen(false)}
+              >
+                {t("cancel")}
+              </Button>
+              <Button type="submit" disabled={busy || !input.trim()}>
+                {t(busy ? "loading" : "reviewInstall")}
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+function InstallReview({
+  preview,
+  busy,
+  onBack,
+  onConfirm,
+}: {
+  preview: PluginInstallPreview
+  busy: boolean
+  onBack: () => void
+  onConfirm: () => void
+}) {
+  const t = useTranslations("HostPlugins")
+  const { manifest, source } = preview
+  return (
+    <section className="grid min-w-0 gap-4" aria-label={t("reviewInstall")}>
+      <div className="grid gap-1 rounded-lg border p-3 text-sm">
+        <p className="break-words font-medium">{manifest.name}</p>
+        <p className="break-all text-muted-foreground">
+          {manifest.id} · {manifest.version}
+        </p>
+        <p className="break-all">
+          {source.type === "gitHub"
+            ? `${source.repository}${source.directory ? `/${source.directory}` : ""}#${source.commit}`
+            : sourceText(source)}
+          {source.type === "npm" &&
+            ` · ${source.registry === "mirror" ? t("mirror") : "npm"}`}
+        </p>
+      </div>
+      <div className="flex gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-100">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+        <span>{t("trustWarning")}</span>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" disabled={busy} onClick={onBack}>
+          {t("backToSource")}
+        </Button>
+        <Button disabled={busy} onClick={onConfirm}>
+          {t(busy ? "installing" : "install")}
+        </Button>
+      </DialogFooter>
+    </section>
   )
 }

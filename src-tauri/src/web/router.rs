@@ -2494,6 +2494,14 @@ pub fn build_router_with_srn(
             "/host_plugins_install_source",
             post(handlers::host_plugins::install_source),
         )
+        .route(
+            "/host_plugins_preview_install",
+            post(handlers::host_plugins::preview_install),
+        )
+        .route(
+            "/host_plugins_confirm_install",
+            post(handlers::host_plugins::confirm_install),
+        )
         .route("/host_plugins_update", post(handlers::host_plugins::update))
         .route(
             "/host_plugins_fetch_index",

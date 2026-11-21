@@ -2436,6 +2436,8 @@ mod tauri_app {
                 crate::commands::host_plugins::host_plugins_apply,
                 crate::commands::host_plugins::host_plugins_activity,
                 crate::commands::host_plugins::host_plugins_install_source,
+                crate::commands::host_plugins::host_plugins_preview_install,
+                crate::commands::host_plugins::host_plugins_confirm_install,
                 crate::commands::host_plugins::host_plugins_update,
                 crate::commands::host_plugins::host_plugins_fetch_index,
                 automation_commands::automation_list,

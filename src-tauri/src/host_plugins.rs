@@ -2,10 +2,12 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
+use uuid::Uuid;
 
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{AcpEvent, EventEnvelope};
@@ -20,6 +22,8 @@ pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 const MAX_PLUGINS: usize = 32;
 const MAX_CONTRIBUTIONS: usize = 16;
 const MAX_TURNS: usize = 128;
+const MAX_INSTALL_PREVIEWS: usize = 16;
+const INSTALL_PREVIEW_LIFETIME: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -116,6 +120,27 @@ pub struct PluginUpdate {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpectedPlugin {
+    id: String,
+    version: String,
+}
+
+#[derive(Serialize)]
+pub struct InstallPreview {
+    ticket: Uuid,
+    manifest: Manifest,
+    source: source::InstalledSource,
+}
+
+struct PendingInstall {
+    ticket: Uuid,
+    created: Instant,
+    manifest: String,
+    source: source::InstalledSource,
+}
+
+#[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Mutation {
     Install { manifest: String },
@@ -141,6 +166,7 @@ pub struct HostPlugins {
 struct PluginState {
     catalog: Catalog,
     turns: BTreeMap<String, VecDeque<(i32, TurnActivity)>>,
+    pending_installs: VecDeque<PendingInstall>,
 }
 
 impl HostPlugins {
@@ -149,6 +175,7 @@ impl HostPlugins {
         let state = load_catalog(&path).map(|catalog| PluginState {
             catalog,
             turns: BTreeMap::new(),
+            pending_installs: VecDeque::new(),
         });
         if let Err(error) = &state {
             tracing::warn!(%error, "Could not load the host plugin catalog");
@@ -185,12 +212,7 @@ impl HostPlugins {
         let discard = match mutation {
             Mutation::Install { manifest } => {
                 let manifest = Manifest::parse(&manifest)?;
-                if next.contains_key(&manifest.id) {
-                    return Err(invalid("A plugin with this ID is already installed"));
-                }
-                if next.len() >= MAX_PLUGINS {
-                    return Err(invalid("The host plugin limit has been reached"));
-                }
+                check_install(&next, &manifest.id)?;
                 next.insert(
                     manifest.id.clone(),
                     InstalledPlugin {
@@ -221,6 +243,70 @@ impl HostPlugins {
             state.turns.remove(&id);
         }
         Ok(state.catalog.values().cloned().collect())
+    }
+
+    pub async fn preview_install(
+        &self,
+        input: &str,
+        registry: source::Registry,
+        expected: Option<ExpectedPlugin>,
+    ) -> Result<InstallPreview, AppCommandError> {
+        let (text, source) = source::resolve(input, registry).await?;
+        let manifest = Manifest::parse(&text)?;
+        if expected.is_some_and(|expected| {
+            expected.id != manifest.id || expected.version != manifest.version
+        }) {
+            return Err(invalid(
+                "The plugin manifest ID or version differs from the index entry",
+            ));
+        }
+
+        let mut guard = self.state.lock().expect("host plugin state lock");
+        let state = guard.as_mut().map_err(|error| catalog_error(error))?;
+        check_install(&state.catalog, &manifest.id)?;
+        state
+            .pending_installs
+            .retain(|pending| pending.created.elapsed() < INSTALL_PREVIEW_LIFETIME);
+        if state.pending_installs.len() == MAX_INSTALL_PREVIEWS {
+            state.pending_installs.pop_front();
+        }
+        let ticket = Uuid::new_v4();
+        state.pending_installs.push_back(PendingInstall {
+            ticket,
+            created: Instant::now(),
+            manifest: text,
+            source: source.clone(),
+        });
+        Ok(InstallPreview {
+            ticket,
+            manifest,
+            source,
+        })
+    }
+
+    pub fn confirm_install(&self, ticket: Uuid) -> Result<Vec<InstalledPlugin>, AppCommandError> {
+        let pending = {
+            let mut guard = self.state.lock().expect("host plugin state lock");
+            let state = guard.as_mut().map_err(|error| catalog_error(error))?;
+            state
+                .pending_installs
+                .retain(|pending| pending.created.elapsed() < INSTALL_PREVIEW_LIFETIME);
+            let index = state
+                .pending_installs
+                .iter()
+                .position(|pending| pending.ticket == ticket);
+            index
+                .and_then(|index| state.pending_installs.remove(index))
+                .ok_or_else(|| {
+                    invalid("This installation preview expired. Review the source again.")
+                })?
+        };
+        self.apply_with_source(
+            Mutation::Install {
+                manifest: pending.manifest,
+            },
+            Some(pending.source),
+        )
     }
 
     pub async fn update(&self, id: &str) -> Result<PluginUpdate, AppCommandError> {
@@ -521,6 +607,16 @@ fn invalid(message: impl Into<String>) -> AppCommandError {
     AppCommandError::new(AppErrorCode::InvalidInput, message)
 }
 
+fn check_install(catalog: &Catalog, id: &str) -> Result<(), AppCommandError> {
+    if catalog.contains_key(id) {
+        return Err(invalid("A plugin with this ID is already installed"));
+    }
+    if catalog.len() >= MAX_PLUGINS {
+        return Err(invalid("The host plugin limit has been reached"));
+    }
+    Ok(())
+}
+
 fn plugin_not_found() -> AppCommandError {
     AppCommandError::new(AppErrorCode::NotFound, "Host plugin is not available")
 }
@@ -597,6 +693,41 @@ mod tests {
         install(&host, SAMPLE).unwrap();
         assert!(install(&host, SAMPLE).is_err());
         assert_eq!(host.list().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn confirm_install_uses_the_reviewed_manifest_once() {
+        let data = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("codeg-plugin.json");
+        std::fs::write(&path, SAMPLE).unwrap();
+        let host = HostPlugins::new(data.path());
+        let input = directory.path().to_str().unwrap();
+        let registry = source::Registry::Npm;
+
+        for (id, version) in [("different-plugin", "1.0.0"), (ID, "2.0.0")] {
+            let expected = ExpectedPlugin {
+                id: id.to_owned(),
+                version: version.to_owned(),
+            };
+            assert!(host
+                .preview_install(input, registry, Some(expected))
+                .await
+                .is_err());
+        }
+
+        let preview = host.preview_install(input, registry, None).await.unwrap();
+        assert!(host.list().unwrap().is_empty());
+        assert!(!host.path.exists());
+        std::fs::write(&path, SAMPLE.replace("1.0.0", "2.0.0")).unwrap();
+
+        let installed = host.confirm_install(preview.ticket).unwrap();
+        assert_eq!(installed[0].manifest, preview.manifest);
+        assert_eq!(installed[0].source.as_ref(), Some(&preview.source));
+        assert!(!installed[0].enabled);
+        host.apply(Mutation::Remove { id: ID.into() }).unwrap();
+        assert!(host.confirm_install(preview.ticket).is_err());
+        assert!(host.list().unwrap().is_empty());
     }
 
     #[test]
