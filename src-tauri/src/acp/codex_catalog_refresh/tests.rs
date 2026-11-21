@@ -201,13 +201,13 @@ async fn an_upgrade_rebuilds_a_custom_catalog_against_the_new_officials() {
     hooks::set_officials(Some(
         catalog::bundled_snapshot_models()
             .into_iter()
-            .filter(|m| m["slug"] != "gpt-6.1-sol")
+            .filter(|m| m["slug"] != "gpt-6.2-sol")
             .collect(),
     ));
     save_panel(&env, Some(CUSTOMS), FetchPolicy::Never)
         .await
         .unwrap();
-    assert!(!env.catalog_slugs().iter().any(|s| s == "gpt-6.1-sol"));
+    assert!(!env.catalog_slugs().iter().any(|s| s == "gpt-6.2-sol"));
     let config = env.read(CONFIG_REL).unwrap();
 
     hooks::set_officials(Some(officials_plus("gpt-test-unshipped")));
@@ -217,7 +217,7 @@ async fn an_upgrade_rebuilds_a_custom_catalog_against_the_new_officials() {
         .unwrap();
     assert!(matches!(report.outcome, RefreshOutcome::Published(_)));
     let slugs = env.catalog_slugs();
-    assert_eq!(slugs[..3], ["gw/x", "gpt-6.1-sol", "gpt-6-astra"]);
+    assert_eq!(slugs[..3], ["gw/x", "gpt-6.2-sol", "gpt-6.2-astra"]);
     assert!(slugs.iter().any(|s| s == "gpt-test-unshipped"));
     assert_eq!(env.read(catalog::SOURCE_REL).unwrap(), CUSTOMS);
     assert_eq!(env.read(CONFIG_REL).unwrap(), config);

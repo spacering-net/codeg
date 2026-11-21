@@ -941,7 +941,7 @@ pub async fn create_folder_links(
     git_exclude: Option<bool>,
 ) -> Result<Vec<FolderLinkDetail>, AppCommandError> {
     create_folder_links_core(
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &db,
         folder_id,
         items,
@@ -958,7 +958,7 @@ pub async fn rename_folder_link(
     link_id: i32,
     new_name: String,
 ) -> Result<FolderLinkDetail, AppCommandError> {
-    rename_folder_link_core(&EventEmitter::Tauri(app), &db, link_id, new_name).await
+    rename_folder_link_core(&EventEmitter::from_app(&app), &db, link_id, new_name).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -968,7 +968,7 @@ pub async fn repair_folder_link(
     db: tauri::State<'_, AppDatabase>,
     link_id: i32,
 ) -> Result<FolderLinkDetail, AppCommandError> {
-    repair_folder_link_core(&EventEmitter::Tauri(app), &db, link_id).await
+    repair_folder_link_core(&EventEmitter::from_app(&app), &db, link_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -980,7 +980,7 @@ pub async fn remove_folder_link(
     delete_link: Option<bool>,
 ) -> Result<(), AppCommandError> {
     remove_folder_link_core(
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &db,
         link_id,
         delete_link.unwrap_or(true),

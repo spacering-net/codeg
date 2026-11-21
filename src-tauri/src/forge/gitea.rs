@@ -42,7 +42,7 @@ use super::deliver::{ForgePr, NewPullRequest};
 use super::{
     sanitize_web_url, scan_timestamp, truncate_chars, urlencode_query, validate_state_filter,
     ForgeChangeDetail, ForgeChangedFile, ForgeChangedFileList, ForgeCheck, ForgeCheckList,
-    ForgeCheckState, ForgeComment, ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList,
+    ForgeCheckState, ForgeCheckSummary, ForgeCheckSummaryList, ForgeComment, ForgeCommentList, ForgeError, ForgeFileStatus, ForgeIssueList,
     ForgeIssueRow, ForgeItemKind, ForgeLabel, ForgeLabelList, ForgeMergeMethod, ForgeMergeOptions,
     ForgeMergeStrategy, ForgeStateAction, ForgeTab, ListIssuesRequest, OpenItemsScan,
     ResolvedNewIssue, ScanCursor, BODY_CAP, LABEL_PAGE_SIZE, SCAN_MAX_PAGES,
@@ -455,6 +455,9 @@ pub async fn change_detail(
         // `ForgeChangeDetail`.
         commits: None,
         checks,
+        // Only GitHub holds runs for a maintainer's approval through an API
+        // this panel can act on.
+        workflow_approval: None,
     })
 }
 
@@ -502,6 +505,63 @@ async fn head_checks(auth: &ResolvedAuth, repo: &str, sha: &str) -> ForgeCheckLi
                 .collect(),
         ),
         None => ForgeCheckList::unavailable(),
+    }
+}
+
+/// Requests in flight at once while summarizing a page. Gitea's list carries no
+/// head commit, so each change costs two reads; this keeps a page of a hundred
+/// from arriving at a self-hosted instance as two hundred simultaneous calls.
+const SUMMARY_CONCURRENCY: usize = 4;
+
+/// CI summaries for one page of pull requests.
+///
+/// Two reads per change — the pull (for its head commit) and that commit's
+/// combined status, the same one the panel reads — since `/issues?type=pulls`,
+/// which the list is served from, carries no head commit. Decoration, so it
+/// never fails: a change whose reads fail is left out (unknown), and only when
+/// EVERY change failed is the whole batch unavailable.
+pub async fn check_summaries(
+    auth: &ResolvedAuth,
+    owner_repo: &str,
+    numbers: &[i64],
+) -> ForgeCheckSummaryList {
+    use futures::stream::{self, StreamExt};
+
+    let Ok(repo) = repo_ref(owner_repo) else {
+        return ForgeCheckSummaryList::unavailable();
+    };
+    if numbers.is_empty() {
+        return ForgeCheckSummaryList {
+            available: true,
+            items: Vec::new(),
+        };
+    }
+    let found: Vec<(i64, Option<ForgeCheckSummary>)> = stream::iter(numbers.iter().copied())
+        .map(|number| {
+            let repo = repo.clone();
+            async move {
+                let summary = async {
+                    let url = format!("{}/repos/{repo}/pulls/{number}", auth.api_base);
+                    let raw: RawPull = api_get(auth, &url).await.ok()?.json().await.ok()?;
+                    let sha = raw.head.and_then(|h| h.sha).filter(|sha| !sha.is_empty())?;
+                    ForgeCheckSummary::from_checks(number, &head_checks(auth, &repo, &sha).await)
+                }
+                .await;
+                (number, summary)
+            }
+        })
+        .buffer_unordered(SUMMARY_CONCURRENCY)
+        .collect()
+        .await;
+    if found.iter().all(|(_, s)| s.is_none()) {
+        return ForgeCheckSummaryList::unavailable();
+    }
+    // Back in the order asked: `buffer_unordered` yields as they finish.
+    let mut items: Vec<ForgeCheckSummary> = found.into_iter().filter_map(|(_, s)| s).collect();
+    items.sort_by_key(|s| numbers.iter().position(|n| *n == s.number));
+    ForgeCheckSummaryList {
+        available: true,
+        items,
     }
 }
 
@@ -2786,4 +2846,80 @@ mod open_items_tests {
         assert_eq!(second.resume, None, "the rest of the window was read");
     }
 
+}
+
+#[cfg(test)]
+mod check_summary_tests {
+    use super::*;
+    use axum::extract::Path;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use axum::routing::get;
+    use axum::Json;
+
+    fn auth_for(api_base: String) -> ResolvedAuth {
+        ResolvedAuth {
+            provider: super::super::ForgeProvider::Gitea,
+            server_host: "gitea.test".into(),
+            api_base,
+            account_id: "acc-test".into(),
+            username: "alice".into(),
+            avatar_url: None,
+            token: "tok-test".into(),
+            scopes: vec![],
+        }
+    }
+
+    /// #1 red, #2 no statuses at all, #3 a pull Gitea will not serve, #4 a
+    /// pull whose statuses cannot be read.
+    async fn serve() -> ResolvedAuth {
+        let app = axum::Router::new()
+            .route(
+                "/api/v1/repos/acme/app/pulls/{n}",
+                get(|Path(n): Path<i64>| async move {
+                    if n == 3 {
+                        return StatusCode::NOT_FOUND.into_response();
+                    }
+                    Json(serde_json::json!({ "number": n, "head": { "ref": "fix", "sha": format!("sha{n}") } }))
+                        .into_response()
+                }),
+            )
+            .route(
+                "/api/v1/repos/acme/app/commits/{sha}/status",
+                get(|Path(sha): Path<String>| async move {
+                    match sha.as_str() {
+                        "sha1" => Json(serde_json::json!({ "statuses": [
+                            { "id": 1, "context": "ci/test", "status": "success" },
+                            { "id": 2, "context": "ci/lint", "status": "failure" },
+                            { "id": 3, "context": "ci/e2e", "status": "pending" },
+                        ] }))
+                        .into_response(),
+                        "sha2" => Json(serde_json::json!({ "statuses": [] })).into_response(),
+                        _ => StatusCode::FORBIDDEN.into_response(),
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        auth_for(format!("http://{addr}/api/v1"))
+    }
+
+    #[tokio::test]
+    async fn each_change_is_read_on_its_own_and_a_failure_is_only_that_one() {
+        let auth = serve().await;
+        let list = check_summaries(&auth, "acme/app", &[4, 3, 2, 1]).await;
+        assert!(list.available);
+        let numbers: Vec<i64> = list.items.iter().map(|s| s.number).collect();
+        assert_eq!(numbers, [2, 1], "unknown left out, the rest in the order asked");
+        let red = &list.items[1];
+        assert_eq!(red.verdict, Some(super::super::ForgeCheckVerdict::Failure));
+        assert_eq!(
+            red.counts,
+            Some(super::super::ForgeCheckCounts { passing: 1, failing: 1, pending: 1, neutral: 0, total: 3 })
+        );
+        assert_eq!(list.items[0].verdict, None, "no statuses: present and empty");
+
+        assert!(!check_summaries(&auth, "acme/app", &[3, 4]).await.available, "nothing readable");
+    }
 }

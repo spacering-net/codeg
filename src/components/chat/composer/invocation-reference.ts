@@ -1,8 +1,9 @@
 import type { KnownInvocations } from "@/lib/invocation-token"
-import type {
-  AgentSkillItem,
-  AgentType,
-  AvailableCommandInfo,
+import {
+  isCustomAgentType,
+  type AgentSkillItem,
+  type AgentType,
+  type AvailableCommandInfo,
 } from "@/lib/types"
 
 import type { ReferenceAttrs } from "./types"
@@ -36,12 +37,27 @@ export type InvocationPrefix = "/" | "$"
  *   configured and MCP-prompt ones), while it still loads every skill, names
  *   each to the model and gives the model a `skill` tool to load one by id. A
  *   `/<skill>` the user sends reaches the model as written.
+ * - Custom ACP agents (`custom:<id>`): `/`. codeg cannot tell whether an
+ *   arbitrary ACP server advertises its skills (Antigravity's
+ *   `agy_acp_server` run as a custom agent never does), so the scan follows the
+ *   user's own declaration instead: a custom agent that declares a dedicated
+ *   skills directory or the shared `.agents/skills` store lists those skills,
+ *   and one that declares neither gets `supported: false` and an empty list. A
+ *   declared skill the agent also advertises as a command is dropped by
+ *   {@link skillsForMenu}, so it is not listed twice.
  */
 export function diskSkillTrigger(
   agentType: AgentType | null | undefined
 ): InvocationPrefix | null {
+  if (!agentType) return null
   if (agentType === "codex") return "$"
-  if (agentType === "antigravity" || agentType === "open_code") return "/"
+  if (
+    agentType === "antigravity" ||
+    agentType === "open_code" ||
+    isCustomAgentType(agentType)
+  ) {
+    return "/"
+  }
   return null
 }
 

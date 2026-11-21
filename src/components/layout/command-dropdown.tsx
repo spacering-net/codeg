@@ -119,7 +119,9 @@ export function CommandDropdown() {
   )
 
   useEffect(() => {
+    // Reads localStorage after mount so the static export hydrates cleanly.
     if (!folderId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- browser-only localStorage read after mount (hydration-safe)
       setSelectedCommandIdState(null)
       return
     }
@@ -147,6 +149,7 @@ export function CommandDropdown() {
   useEffect(() => {
     if (!folderId) return
     loadEpochRef.current += 1
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- localStorage read paired with the async folder-command load below
     setGlobalCommands(listGlobalCommands())
     let ignore = false
     const loadCommands = async () => {

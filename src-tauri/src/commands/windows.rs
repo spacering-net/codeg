@@ -374,17 +374,20 @@ fn resolve_settings_route(section: Option<&str>) -> &'static str {
         Some("general") => "settings/general",
         Some("appearance") => "settings/appearance",
         Some("agents") => "settings/agents",
-        Some("mcp") => "settings/mcp",
-        Some("skills") => "settings/skills",
-        Some("experts") => "settings/experts",
-        Some("science") => "settings/science",
-        Some("office-tools") => "settings/office-tools",
         Some("collaboration") => "settings/collaboration",
         Some("browser") => "settings/browser",
         Some("computer-use") => "settings/computer-use",
         Some("version-control") => "settings/version-control",
         Some("shortcuts") => "settings/shortcuts",
         Some("system") => "settings/system",
+        // Desktop only, like the page itself: the web nav hides it, so the web
+        // `open_settings_window` deliberately has no arm for it.
+        Some("web-service") => "settings/web-service",
+        // Anything else lands on Appearance, as an unnamed section does. That
+        // includes the MCP, Skills and Skill packs pages (and the Experts,
+        // Science and Office tools addresses that led to the last), which moved
+        // to the workspace's Harness page: an older window asking for one gets
+        // the Settings window rather than an error.
         _ => "settings/appearance",
     }
 }
@@ -1084,7 +1087,7 @@ pub async fn cleanup_dangling_merge(app: &AppHandle, merge_window_label: &str) {
             .output()
             .await;
 
-        let emitter = crate::web::event_bridge::EventEmitter::Tauri(app.clone());
+        let emitter = crate::web::event_bridge::EventEmitter::from_app(app);
         crate::web::event_bridge::emit_event(
             &emitter,
             "folder://merge-aborted",
@@ -2714,24 +2717,21 @@ mod settings_route_tests {
     /// page must be able to name it and land there. `collaboration` is where
     /// the codeg-mcp tool switches live in full, and it is what the status-bar
     /// codeg-mcp popover links to; `computer-use` is what the Computer use
-    /// popover links to.
+    /// popover links to; `web-service` is what the Web service popover links
+    /// to.
     #[test]
     fn every_named_settings_section_resolves_to_its_own_route() {
         for section in [
             "general",
             "appearance",
             "agents",
-            "mcp",
-            "skills",
-            "experts",
-            "science",
-            "office-tools",
             "collaboration",
             "browser",
             "computer-use",
             "version-control",
             "shortcuts",
             "system",
+            "web-service",
         ] {
             assert_eq!(
                 resolve_settings_route(Some(section)),
@@ -2741,6 +2741,31 @@ mod settings_route_tests {
         }
         // An unnamed section keeps its long-standing desktop landing spot.
         assert_eq!(resolve_settings_route(None), "settings/appearance");
+    }
+
+    /// The MCP, Skills and Skill packs pages are gone from the Settings window
+    /// (they are sections of the workspace's Harness page now), and so are the
+    /// Experts, Science and Office tools addresses that redirected to the last.
+    /// A caller that still names one — an older window, a stale link — is not
+    /// sent to a route that no longer exists: it gets the Settings window on
+    /// the page an unknown section lands on.
+    #[test]
+    fn sections_moved_to_harness_fall_back_like_unknown_ones() {
+        for section in [
+            "mcp",
+            "skills",
+            "skill-packs",
+            "experts",
+            "science",
+            "office-tools",
+            "no-such-section",
+        ] {
+            assert_eq!(
+                resolve_settings_route(Some(section)),
+                "settings/appearance",
+                "section {section} must land where an unknown section does"
+            );
+        }
     }
 }
 

@@ -10,6 +10,7 @@ import {
   Inbox,
   ListX,
   MessageSquareReply,
+  TimerOff,
   MessageSquareText,
   Pencil,
   Play,
@@ -69,6 +70,9 @@ export interface TaskActionHandlers {
   onEdit: () => void
   /** Opens the schedule dialog — to-do tasks only (plan / re-plan / clear). */
   onSchedule: () => void
+  /** Stops waiting for the background work the agent left going when its
+   *  turn ended (see `WorkTask.background_wait`) and settles the task now. */
+  onStopBackgroundWait: () => void
 }
 
 type ActionLabelKey =
@@ -92,6 +96,8 @@ type ActionLabelKey =
   | "actionFollowUp"
   | "actionEdit"
   | "actionSchedule"
+  | "actionStopBackgroundWait"
+  | "actionStopBackgroundWaitHint"
 
 /**
  * The action set a task offers, shared by the board card and the list row so
@@ -278,6 +284,17 @@ export function buildTaskActions(
         })
         break
     }
+  }
+  // A turn held open for its background work (live statuses only — the wait
+  // ends with the generation): the way out when what it waits for never
+  // finishes on its own, a dev server say.
+  if (task.archived_at == null && task.background_wait) {
+    secondaries.push({
+      icon: TimerOff,
+      label: t("actionStopBackgroundWait"),
+      hint: t("actionStopBackgroundWaitHint"),
+      onClick: handlers.onStopBackgroundWait,
+    })
   }
   // The session viewer is offered in every status once a session exists (live
   // ones stream it in real time) and always sorts last, anchoring the corner.

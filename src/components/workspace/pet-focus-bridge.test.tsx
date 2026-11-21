@@ -21,6 +21,7 @@ let tabs: { tabsHydrated: boolean; openTab: Mock }
 let addFolderToWorkspaceById: Mock
 let handlers: Map<string, (p: unknown) => void>
 let takePendingDeepLink: Mock
+let takePendingHarnessLink: Mock
 
 const FOCUS = "workspace://focus-conversation"
 const PENDING = "workspace://deep-link-pending"
@@ -39,8 +40,14 @@ vi.mock("@/lib/transport", () => ({
 }))
 vi.mock("@/lib/deep-link", () => ({
   takePendingDeepLink: () => takePendingDeepLink(),
+  takePendingHarnessLink: () => takePendingHarnessLink(),
 }))
 
+import {
+  __resetHarnessLinkForTests,
+  subscribeWaitingHarnessLink,
+  waitingHarnessLink,
+} from "@/lib/harness-link"
 import { PetFocusBridge } from "./deep-link-bootstrap"
 
 /** One-shot backend slot, mirroring `PENDING_FOCUS`'s atomic take. */
@@ -57,6 +64,8 @@ describe("PetFocusBridge", () => {
   beforeEach(() => {
     handlers = new Map()
     takePendingDeepLink = vi.fn(async () => null)
+    takePendingHarnessLink = vi.fn(async () => null)
+    __resetHarnessLinkForTests()
     addFolderToWorkspaceById = vi.fn()
     resetAppWorkspaceStore()
     useAppWorkspaceStore.setState({
@@ -308,5 +317,118 @@ describe("PetFocusBridge", () => {
     handlers.get(FOCUS)!({ folderId: 7, conversationId: 1 }) // missing agent
     await Promise.resolve()
     expect(tabs.openTab).not.toHaveBeenCalled()
+  })
+})
+
+// `codeg://harness/install?ref=…` waits in a slot of its own, behind the same
+// nudge. The bridge only claims it; `HarnessLinkBootstrap` opens it.
+describe("PetFocusBridge — Harness links", () => {
+  beforeEach(() => {
+    handlers = new Map()
+    takePendingDeepLink = vi.fn(async () => null)
+    takePendingHarnessLink = vi.fn(async () => null)
+    __resetHarnessLinkForTests()
+    addFolderToWorkspaceById = vi.fn()
+    resetAppWorkspaceStore()
+    useAppWorkspaceStore.setState({
+      foldersHydrated: true,
+      folders: [{ id: 7 }] as never,
+      addFolderToWorkspaceById,
+    })
+    tabs = { tabsHydrated: true, openTab: vi.fn() }
+  })
+  afterEach(() => cleanup())
+
+  // The macOS cold start: parked before anything listened.
+  it("claims a link parked before it subscribed, and hands the address on", async () => {
+    takePendingHarnessLink = parkOne("acme/pdf-tools")
+    render(<PetFocusBridge />)
+
+    await waitFor(() => expect(waitingHarnessLink()).toBe("acme/pdf-tools"))
+    // Subscribed first, claimed after: the order that loses nothing.
+    expect(handlers.has(PENDING)).toBe(true)
+    // An address is not a conversation.
+    expect(tabs.openTab).not.toHaveBeenCalled()
+  })
+
+  it("claims a link when a warm start nudges", async () => {
+    render(<PetFocusBridge />)
+    await waitFor(() => expect(handlers.has(PENDING)).toBe(true))
+    await act(async () => {})
+    expect(waitingHarnessLink()).toBeNull()
+
+    takePendingHarnessLink = parkOne("acme/pdf-tools")
+    await act(async () => {
+      handlers.get(PENDING)!(null)
+    })
+    await waitFor(() => expect(waitingHarnessLink()).toBe("acme/pdf-tools"))
+  })
+
+  it("claims both slots on one nudge", async () => {
+    render(<PetFocusBridge />)
+    await waitFor(() => expect(handlers.has(PENDING)).toBe(true))
+
+    takePendingDeepLink = parkOne({
+      folderId: 7,
+      conversationId: 12,
+      agent: "grok",
+    })
+    takePendingHarnessLink = parkOne("acme/pdf-tools")
+    await act(async () => {
+      handlers.get(PENDING)!(null)
+    })
+
+    await waitFor(() =>
+      expect(tabs.openTab).toHaveBeenCalledWith(7, 12, "grok", true)
+    )
+    expect(waitingHarnessLink()).toBe("acme/pdf-tools")
+  })
+
+  it("hands a parked link on once when the nudge races the mount drain", async () => {
+    const take = parkOne("acme/pdf-tools")
+    takePendingHarnessLink = take
+    const queue = vi.fn()
+    const off = subscribeWaitingHarnessLink(queue)
+    render(<PetFocusBridge />)
+    await waitFor(() => expect(handlers.has(PENDING)).toBe(true))
+    await act(async () => {
+      handlers.get(PENDING)!(null)
+    })
+
+    await waitFor(() => expect(waitingHarnessLink()).toBe("acme/pdf-tools"))
+    expect(take.mock.calls.length).toBeGreaterThan(1)
+    // One address arrived, once.
+    expect(queue).toHaveBeenCalledTimes(1)
+    off()
+  })
+
+  // StrictMode mounts the bridge, drops it and mounts it again, and a claim
+  // started by the first one can come back after it is gone. The backend has
+  // already let go of the address, so it is handed on anyway.
+  it("hands on a link claimed by a bridge that has gone since", async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const take = parkOne("acme/pdf-tools")
+    takePendingHarnessLink = vi.fn(async () => {
+      await gate
+      return take()
+    })
+    const first = render(<PetFocusBridge />)
+    await waitFor(() => expect(takePendingHarnessLink).toHaveBeenCalled())
+    first.unmount()
+
+    await act(async () => {
+      release()
+    })
+    await waitFor(() => expect(waitingHarnessLink()).toBe("acme/pdf-tools"))
+  })
+
+  it("hands on nothing when nothing was parked", async () => {
+    render(<PetFocusBridge />)
+    await waitFor(() => expect(takePendingHarnessLink).toHaveBeenCalled())
+    await act(async () => {})
+    expect(waitingHarnessLink()).toBeNull()
   })
 })

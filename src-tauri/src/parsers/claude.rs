@@ -10145,6 +10145,14 @@ mod tests {
                 Some("r1"),
                 &["b9052120", "a79caadf", "39e44cd0"],
             ),
+            // CLI 2.1.328 adds this one to the family: a request that resumed
+            // a paused one. Fields as named in the 2.1.328 binary's code,
+            // trimmed; not seen in a live transcript.
+            json!({
+                "type": "api-request-resumed", "sessionId": "s1",
+                "timestamp": "2026-10-15T13:55:17.035Z",
+                "messageId": "msg_2", "pausedRequestId": "r2", "resumedRequestId": "r3",
+            }),
             assistant(
                 "a2",
                 "2026-10-15T13:55:17.040Z",
@@ -10165,7 +10173,7 @@ mod tests {
                 r
             })
             .collect();
-        assert_eq!(with_requests.len() - without_requests.len(), 6);
+        assert_eq!(with_requests.len() - without_requests.len(), 7);
 
         let with = parse_lines("req", &record_lines(&with_requests));
         let without = parse_lines("req", &record_lines(&without_requests));

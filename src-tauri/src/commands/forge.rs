@@ -252,7 +252,7 @@ impl ForgeScenario {
 
     /// Report scenarios put the deliverable in the reply, not in commits —
     /// recorded on the task config so the engine's worktree guard grants a
-    /// matching licence instead of "commit as you like".
+    /// matching licence instead of "commit your work".
     fn is_report(self) -> bool {
         matches!(self, Self::PlanFirst | Self::ReviewOnly)
     }
@@ -881,6 +881,21 @@ pub async fn forge_issue_detail_core(
     }
 }
 
+pub async fn forge_read_image_core(
+    db: &AppDatabase,
+    folder_id: i32,
+    upload_path: String,
+    account_id: Option<String>,
+) -> Result<forge::ForgeImage, AppCommandError> {
+    let (remote, auth) = resolve_folder_repo(db, folder_id, account_id.as_deref()).await?;
+    match remote.provider {
+        ForgeProvider::GitLab => {
+            Ok(forge::gitlab::read_image(&auth, &remote.owner_repo, &upload_path).await?)
+        }
+        _ => Err(ForgeError::Invalid("image uploads are only supported for GitLab".into()).into()),
+    }
+}
+
 /// One tab's item count under a set of filters — a badge on the workbench's
 /// Issues/PR switcher.
 ///
@@ -1087,6 +1102,64 @@ pub async fn forge_change_detail_core(
             forge::cnb::change_detail(&auth, &remote.owner_repo, number).await?
         }
     })
+}
+
+/// CI summaries for one page of proposed changes — the list rows' marks.
+///
+/// Its own call, fired by the page AFTER the list has drawn, rather than folded
+/// into the list: on GitHub the list spends the search quota (thirty a minute)
+/// while this spends GraphQL's, and a failure here must cost the marks and
+/// never the list. Never an error for a forge that cannot answer: CNB (whose
+/// checks are not readable at all) and anything else come back unavailable,
+/// which draws nothing.
+pub async fn forge_check_summaries_core(
+    db: &AppDatabase,
+    folder_id: i32,
+    query: forge::CheckSummariesQuery,
+) -> Result<forge::ForgeCheckSummaryList, AppCommandError> {
+    let numbers = query.resolve();
+    let (remote, auth) = resolve_folder_repo(db, folder_id, query.account_id.as_deref()).await?;
+    Ok(match remote.provider {
+        ForgeProvider::GitHub => {
+            forge::github::check_summaries(&auth, &remote.owner_repo, &numbers).await
+        }
+        ForgeProvider::GitLab => {
+            forge::gitlab::check_summaries(&auth, &remote.owner_repo, &numbers).await
+        }
+        ForgeProvider::Gitea => {
+            forge::gitea::check_summaries(&auth, &remote.owner_repo, &numbers).await
+        }
+        ForgeProvider::Cnb => forge::ForgeCheckSummaryList::unavailable(),
+    })
+}
+
+/// Approve the workflow runs held on a pull request — GitHub's "Approve
+/// workflows to run". GitHub only: GitLab has no single equivalent (running a
+/// fork's pipeline in the parent project, playing a manual job and approving a
+/// deployment are three different things), and Gitea's approve API is not in a
+/// released version yet.
+pub async fn forge_approve_workflows_core(
+    db: &AppDatabase,
+    folder_id: i32,
+    request: forge::ApproveWorkflowsRequest,
+) -> Result<forge::ForgeApproveResult, AppCommandError> {
+    let (number, head_sha) = request.resolve().map_err(AppCommandError::from)?;
+    let (remote, auth) =
+        resolve_folder_repo(db, folder_id, request.account_id.as_deref()).await?;
+    match remote.provider {
+        ForgeProvider::GitHub => Ok(forge::github::approve_workflows(
+            &auth,
+            &remote.owner_repo,
+            number,
+            &head_sha,
+        )
+        .await?),
+        other => Err(ForgeError::Invalid(format!(
+            "{} has no workflow approval this panel can act on",
+            other.display_name()
+        ))
+        .into()),
+    }
 }
 
 /// One page of the files a proposed change touches.
@@ -1902,6 +1975,18 @@ pub async fn forge_issue_detail(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn forge_read_image(
+    db: tauri::State<'_, AppDatabase>,
+    folder_id: i32,
+    upload_path: String,
+    account_id: Option<String>,
+) -> Result<forge::ForgeImage, AppCommandError> {
+    let image = forge_read_image_core(&db, folder_id, upload_path, account_id).await?;
+    Ok(forge::image_cache::local_image_url(image).await?)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn forge_tab_count(
     db: tauri::State<'_, AppDatabase>,
     folder_id: i32,
@@ -1973,6 +2058,26 @@ pub async fn forge_change_detail(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn forge_check_summaries(
+    db: tauri::State<'_, AppDatabase>,
+    folder_id: i32,
+    query: forge::CheckSummariesQuery,
+) -> Result<forge::ForgeCheckSummaryList, AppCommandError> {
+    forge_check_summaries_core(&db, folder_id, query).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn forge_approve_workflows(
+    db: tauri::State<'_, AppDatabase>,
+    folder_id: i32,
+    request: forge::ApproveWorkflowsRequest,
+) -> Result<forge::ForgeApproveResult, AppCommandError> {
+    forge_approve_workflows_core(&db, folder_id, request).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn forge_change_files(
     db: tauri::State<'_, AppDatabase>,
     folder_id: i32,
@@ -2018,7 +2123,7 @@ pub async fn work_task_create_from_forge(
     db: tauri::State<'_, AppDatabase>,
     draft: ForgeTaskDraft,
 ) -> Result<ForgeCreateResult, AppCommandError> {
-    work_task_create_from_forge_core(&EventEmitter::Tauri(app), &db, draft).await
+    work_task_create_from_forge_core(&EventEmitter::from_app(&app), &db, draft).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2028,7 +2133,7 @@ pub async fn work_task_create_from_forge_issues(
     db: tauri::State<'_, AppDatabase>,
     draft: ForgeIssuesTaskDraft,
 ) -> Result<ForgeIssuesCreateResult, AppCommandError> {
-    work_task_create_from_forge_issues_core(&EventEmitter::Tauri(app), &db, draft).await
+    work_task_create_from_forge_issues_core(&EventEmitter::from_app(&app), &db, draft).await
 }
 
 #[cfg(feature = "tauri-runtime")]

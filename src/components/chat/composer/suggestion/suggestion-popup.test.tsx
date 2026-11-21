@@ -709,10 +709,134 @@ describe("SuggestionPopup with a chosen tab order", () => {
     const spy = vi.fn<ReferenceSearch>(() => groups)
     mountPopup({ search: spy, tabs: ["file", "agent"] })
     await screen.findByText("alpha.md")
-    expect(spy).toHaveBeenCalledWith(state.query, expect.any(AbortSignal), [
-      "file",
-      "agent",
-    ])
+    expect(spy).toHaveBeenCalledWith(
+      state.query,
+      expect.any(AbortSignal),
+      ["file", "agent"],
+      expect.any(Function)
+    )
+  })
+
+  it("shows ready agents while files load and preserves selection when file results arrive", async () => {
+    let finish!: (groups: SuggestionGroup[]) => void
+    const progressive: ReferenceSearch = (_query, _signal, _kinds, update) => {
+      update?.(
+        groups.map((group) =>
+          group.kind === "file" ? { ...group, items: [], loading: true } : group
+        )
+      )
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    }
+    const { ref, onSelect } = mountPopup({
+      search: progressive,
+      tabs: ["agent", "file"],
+    })
+    await screen.findByText("Codex Helper")
+    fireEvent.click(screen.getByRole("tab", { name: /^Files/ }))
+    expect(screen.getByRole("status")).toHaveTextContent("Searching…")
+    fireEvent.click(screen.getByRole("tab", { name: /^Agents/ }))
+    act(() => ref.current?.onKeyDown(key("ArrowDown")))
+    await act(async () => finish(groups))
+    act(() => ref.current?.onKeyDown(key("Enter")))
+    expect(onSelect).toHaveBeenCalledWith(agentRef2, state.range)
+  })
+
+  it.each([1, 2])(
+    "keeps the keyboard-selected session when %i delayed files arrive",
+    async (fileCount) => {
+      const sessions = [1, 2].map((id) => ({
+        reference: {
+          refType: "session" as const,
+          id: String(id),
+          label: `Ready session ${id}`,
+          uri: `codeg://session/${id}`,
+          meta: null,
+        },
+      }))
+      const ready: SuggestionGroup[] = [
+        { kind: "file", label: "Files", items: [], loading: true },
+        { kind: "session", label: "Sessions", items: sessions },
+      ]
+      let finish!: (value: SuggestionGroup[]) => void
+      const progressive: ReferenceSearch = (
+        _query,
+        _signal,
+        _kinds,
+        update
+      ) => {
+        update?.(ready)
+        return new Promise((resolve) => {
+          finish = resolve
+        })
+      }
+      const { ref, onSelect } = mountPopup({
+        search: progressive,
+        tabs: ["file", "session"],
+      })
+      await screen.findByText("Ready session 1")
+      act(() => ref.current?.onKeyDown(key("ArrowDown")))
+      await act(async () =>
+        finish([
+          {
+            kind: "file",
+            label: "Files",
+            items: Array.from({ length: fileCount }, (_, i) => ({
+              reference: {
+                ...fileRef,
+                id: `late${i}.ts`,
+                label: `late${i}.ts`,
+              },
+            })),
+          },
+          ready[1],
+        ])
+      )
+      expect(screen.getByRole("tab", { name: /^Sessions/ })).toHaveAttribute(
+        "aria-selected",
+        "true"
+      )
+      act(() => ref.current?.onKeyDown(key("Enter")))
+      expect(onSelect).toHaveBeenCalledWith(sessions[1].reference, state.range)
+    }
+  )
+
+  it("preserves the selected reference across a progressive reorder and clamps a removed row", async () => {
+    let update!: NonNullable<Parameters<ReferenceSearch>[3]>
+    const progressive: ReferenceSearch = (_query, _signal, _kinds, publish) => {
+      update = publish!
+      return groups
+    }
+    const { ref, onSelect } = mountPopup({ search: progressive })
+    await screen.findByText("Codex Helper")
+    act(() => ref.current?.onKeyDown(key("ArrowDown")))
+    act(() =>
+      update(
+        groups.map((group) =>
+          group.kind === "agent"
+            ? { ...group, items: [...group.items].reverse() }
+            : group
+        )
+      )
+    )
+    act(() => ref.current?.onKeyDown(key("Enter")))
+    expect(onSelect).toHaveBeenLastCalledWith(agentRef2, state.range)
+    act(() =>
+      update(
+        groups.map((group) =>
+          group.kind === "agent"
+            ? { ...group, items: [{ reference: agentRef }] }
+            : group
+        )
+      )
+    )
+    const active = screen
+      .getAllByRole("option")
+      .filter((row) => row.getAttribute("aria-selected") === "true")
+    expect(active).toHaveLength(1)
+    act(() => ref.current?.onKeyDown(key("Enter")))
+    expect(onSelect).toHaveBeenLastCalledWith(agentRef, state.range)
   })
 
   it("re-queries when the shown tabs change while it is open", async () => {
@@ -739,11 +863,12 @@ describe("SuggestionPopup with a chosen tab order", () => {
     // keystroke.
     rerender(view(["file", "agent", "session"]))
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(2))
-    expect(spy).toHaveBeenLastCalledWith(state.query, expect.any(AbortSignal), [
-      "file",
-      "agent",
-      "session",
-    ])
+    expect(spy).toHaveBeenLastCalledWith(
+      state.query,
+      expect.any(AbortSignal),
+      ["file", "agent", "session"],
+      expect.any(Function)
+    )
     expect(screen.getAllByRole("tab")).toHaveLength(3)
   })
 

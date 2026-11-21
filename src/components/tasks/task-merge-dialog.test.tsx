@@ -16,9 +16,12 @@ vi.mock("sonner", () => ({
   },
 }))
 
+const setWritebackMock = vi.fn().mockResolvedValue(undefined)
+
 vi.mock("@/lib/api", () => ({
   workTaskMerge: (...args: unknown[]) => mergeMock(...args),
   workTaskSettingsEffective: (...args: unknown[]) => settingsMock(...args),
+  workTaskSetWriteback: (...args: unknown[]) => setWritebackMock(...args),
 }))
 
 import { TaskMergeDialog } from "./task-merge-dialog"

@@ -27,6 +27,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
 import { forgeListIssues, openSettingsWindow } from "@/lib/api"
 import { buildForgeSourceKey } from "@/lib/forge-source-key"
+import { saveForgeTab } from "@/lib/forge-list-prefs"
 import type {
   ForgeComment,
   ForgeIssueList,
@@ -54,6 +55,7 @@ vi.mock("@/lib/api", () => ({
   forgeListIssues: vi.fn(),
   forgeListLabels: vi.fn(),
   forgeTabCount: vi.fn(),
+  forgeCheckSummaries: vi.fn(),
   // The detail panel fetches the item's discussion as soon as it opens. Left
   // in flight here: every assertion below is about the LIST or the panel's own
   // wiring, and a request that resolved would land its state update after the
@@ -64,6 +66,7 @@ vi.mock("@/lib/api", () => ({
   // list the moment it opens. Covered in the panel's own suite.
   forgeChangeDetail: vi.fn(() => new Promise(() => {})),
   forgeChangeFiles: vi.fn(() => new Promise(() => {})),
+  forgeMergeOptions: vi.fn(() => new Promise(() => {})),
   // And the composer's "posting as" lookup, fired by every panel that opens
   // with a folder. Same reason again — it moves one avatar, and nothing here
   // is about the avatar.
@@ -105,6 +108,7 @@ vi.mock("@/components/ai-elements/message", () => ({
 
 import {
   folderForgeRemote,
+  forgeCheckSummaries,
   forgeCreateComment,
   forgeCreateIssue,
   forgeListComments,
@@ -211,6 +215,13 @@ beforeEach(() => {
   // Issues, so this is the pull-request badge.
   vi.mocked(forgeTabCount).mockResolvedValue(3)
   vi.mocked(workTaskLookupBySource).mockResolvedValue([])
+  // Every pull-request list asks for its CI marks; a bare mock answers
+  // `undefined`, which the page would read as a reply and throw on. Tests about
+  // the marks set their own answer.
+  vi.mocked(forgeCheckSummaries).mockResolvedValue({
+    available: false,
+    items: [],
+  })
   vi.mocked(forgeListLabels).mockResolvedValue({
     labels: [
       { name: "bug", color: "#d73a4a" },
@@ -2214,5 +2225,173 @@ describe("ForgePage writes from a panel with no row", () => {
     expect(
       within(screen.getByRole("dialog")).getByText("6 comments")
     ).toBeInTheDocument()
+  })
+})
+
+/**
+ * The rows' CI marks: the deferred half of a pull-request page, read after the
+ * list has drawn and only from a forge that has checks to read.
+ */
+describe("ForgePage checks marks", () => {
+  function pr(number: number): ForgeIssueRow {
+    return {
+      ...issue(number, `change ${number}`),
+      is_pr: true,
+      html_url: `https://github.com/xintaofei/codeg/pull/${number}`,
+    }
+  }
+
+  beforeEach(() => {
+    saveForgeTab("prs")
+    vi.mocked(forgeListIssues).mockResolvedValue(listOf([pr(5), pr(6)]))
+    vi.mocked(forgeCheckSummaries).mockResolvedValue({
+      available: true,
+      items: [
+        {
+          number: 5,
+          verdict: "failure",
+          counts: { passing: 2, failing: 1, pending: 0, neutral: 0, total: 3 },
+          awaiting_approval: 0,
+        },
+        // #6 positively has no checks: no mark either.
+        { number: 6, verdict: null, counts: null, awaiting_approval: 0 },
+      ],
+    })
+  })
+
+  it("marks the page's changes once the list has drawn, and opens Checks", async () => {
+    const user = userEvent.setup()
+    const { container } = mount()
+    await screen.findByText("change 5")
+    await waitFor(() =>
+      expect(forgeCheckSummaries).toHaveBeenCalledWith(1, [5, 6])
+    )
+    const marks = await waitFor(() => {
+      const found = container.querySelectorAll("[data-forge-checks]")
+      expect(found).toHaveLength(1)
+      return found
+    })
+    expect(marks[0]).toHaveAttribute("data-forge-checks", "failure")
+
+    await user.click(
+      screen.getByRole("button", { name: "1 failing · 2 passing" })
+    )
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: /^Checks/ })).toHaveAttribute(
+        "aria-selected",
+        "true"
+      )
+    )
+  })
+
+  it("asks again on reload, and an unavailable answer keeps the marks", async () => {
+    const user = userEvent.setup()
+    const { container } = mount()
+    await waitFor(() =>
+      expect(container.querySelectorAll("[data-forge-checks]")).toHaveLength(1)
+    )
+    vi.mocked(forgeCheckSummaries).mockResolvedValue({
+      available: false,
+      items: [],
+    })
+    await user.click(screen.getByRole("button", { name: "Refresh" }))
+    await waitFor(() => expect(forgeCheckSummaries).toHaveBeenCalledTimes(2))
+    expect(container.querySelectorAll("[data-forge-checks]")).toHaveLength(1)
+  })
+
+  it("holds each row's place with a skeleton until its marks land, failed or not", async () => {
+    let resolve!: (v: Awaited<ReturnType<typeof forgeCheckSummaries>>) => void
+    vi.mocked(forgeCheckSummaries).mockReturnValueOnce(
+      new Promise((r) => {
+        resolve = r
+      })
+    )
+    const { container } = mount()
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll("[data-forge-checks-loading]")
+      ).toHaveLength(2)
+    )
+    await act(async () => {
+      resolve({
+        available: true,
+        items: [
+          {
+            number: 5,
+            verdict: "success",
+            counts: {
+              passing: 3,
+              failing: 0,
+              pending: 0,
+              neutral: 0,
+              total: 3,
+            },
+            awaiting_approval: 0,
+          },
+        ],
+      })
+    })
+    // #5 drew its mark; #6, missing from the answer, draws nothing.
+    expect(
+      container.querySelectorAll("[data-forge-checks-loading]")
+    ).toHaveLength(0)
+    expect(container.querySelectorAll("[data-forge-checks]")).toHaveLength(1)
+    cleanup()
+
+    // A read that fails takes its skeletons with it.
+    let reject!: (e: unknown) => void
+    vi.mocked(forgeCheckSummaries).mockReturnValueOnce(
+      new Promise((_, r) => {
+        reject = r
+      })
+    )
+    const second = mount()
+    await waitFor(() =>
+      expect(
+        second.container.querySelectorAll("[data-forge-checks-loading]")
+      ).toHaveLength(2)
+    )
+    await act(async () => {
+      reject(new Error("rate limited"))
+    })
+    expect(
+      second.container.querySelectorAll("[data-forge-checks-loading]")
+    ).toHaveLength(0)
+  })
+
+  it("keeps a mark on screen while it is re-read, rather than a skeleton", async () => {
+    const user = userEvent.setup()
+    const { container } = mount()
+    await waitFor(() =>
+      expect(container.querySelectorAll("[data-forge-checks]")).toHaveLength(1)
+    )
+    vi.mocked(forgeCheckSummaries).mockReturnValueOnce(new Promise(() => {}))
+    await user.click(screen.getByRole("button", { name: "Refresh" }))
+    await waitFor(() => expect(forgeCheckSummaries).toHaveBeenCalledTimes(2))
+    expect(container.querySelectorAll("[data-forge-checks]")).toHaveLength(1)
+    // #5 keeps its mark, and #6 keeps its answer — "no checks" — so neither
+    // falls back to a skeleton while the re-read is out.
+    expect(
+      container.querySelectorAll("[data-forge-checks-loading]")
+    ).toHaveLength(0)
+  })
+
+  it("asks nothing on the issues tab or of a forge without readable checks", async () => {
+    saveForgeTab("issues")
+    vi.mocked(forgeListIssues).mockResolvedValue(listOf([issue(1, "an issue")]))
+    mount()
+    await screen.findByText("an issue")
+    cleanup()
+
+    saveForgeTab("prs")
+    vi.mocked(folderForgeRemote).mockResolvedValue({
+      ...REMOTE,
+      server_host: "cnb.cool",
+      provider: "cnb",
+    })
+    vi.mocked(forgeListIssues).mockResolvedValue(listOf([pr(5)]))
+    mount()
+    await screen.findByText("change 5")
+    expect(forgeCheckSummaries).not.toHaveBeenCalled()
   })
 })

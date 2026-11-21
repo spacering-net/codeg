@@ -107,8 +107,13 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
             .delivery
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok()),
+        writeback_drafts: m
+            .writeback_drafts
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok()),
         latest_progress: None,
         compacting: false,
+        background_wait: None,
         created_at: m.created_at,
         updated_at: m.updated_at,
         started_at: m.started_at,
@@ -150,6 +155,37 @@ pub async fn record_event<C: ConnectionTrait>(
     };
     active.insert(conn).await?;
     Ok(())
+}
+
+/// The payload of generation `run_seq`'s `background_wait` when no
+/// `background_wait_end` followed it: the engine was holding that run open for
+/// its agent's background work when the process went away. `None` when the
+/// generation never waited, or its wait was closed.
+pub async fn open_background_wait(
+    conn: &DatabaseConnection,
+    task_id: i32,
+    run_seq: i32,
+) -> Result<Option<serde_json::Value>, DbError> {
+    let events = work_task_event::Entity::find()
+        .filter(work_task_event::Column::TaskId.eq(task_id))
+        .filter(work_task_event::Column::Kind.is_in(["background_wait", "background_wait_end"]))
+        .order_by_desc(work_task_event::Column::Id)
+        .all(conn)
+        .await?;
+    for e in events {
+        let Some(payload) = e
+            .payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok())
+        else {
+            continue;
+        };
+        if payload.get("run_seq").and_then(serde_json::Value::as_i64) != Some(run_seq as i64) {
+            continue;
+        }
+        return Ok((e.kind == "background_wait").then_some(payload));
+    }
+    Ok(None)
 }
 
 async fn status_changed_event<C: ConnectionTrait>(
@@ -217,9 +253,12 @@ pub async fn list(
     if !live_ids.is_empty() {
         let events = work_task_event::Entity::find()
             .filter(work_task_event::Column::TaskId.is_in(live_ids))
-            .filter(
-                work_task_event::Column::Kind.is_in(["agent_progress", "context_compact"]),
-            )
+            .filter(work_task_event::Column::Kind.is_in([
+                "agent_progress",
+                "context_compact",
+                "background_wait",
+                "background_wait_end",
+            ]))
             .order_by_asc(work_task_event::Column::Id)
             .all(conn)
             .await?;
@@ -233,6 +272,10 @@ pub async fn list(
         let mut latest: std::collections::HashMap<i32, String> = std::collections::HashMap::new();
         let mut compacting: std::collections::HashMap<i32, bool> =
             std::collections::HashMap::new();
+        let mut waiting: std::collections::HashMap<
+            i32,
+            Option<crate::models::WorkTaskBackgroundWait>,
+        > = std::collections::HashMap::new();
         let by_id: std::collections::HashMap<i32, i32> =
             infos.iter().map(|t| (t.id, t.run_seq)).collect();
         for e in events {
@@ -273,6 +316,33 @@ pub async fn list(
                         payload.get("status").and_then(|s| s.as_str()) == Some("started");
                     compacting.insert(e.task_id, started);
                 }
+                // The engine opens a wait when the turn ends with work still
+                // running and closes it when it settles the run, so the last
+                // of the pair on this generation is the answer — as with the
+                // compaction above, and with the same tolerance for a lost
+                // closing write: the row's status still tells the truth.
+                "background_wait" => {
+                    let tasks = payload
+                        .get("tasks")
+                        .and_then(|t| t.as_array())
+                        .map(|tasks| {
+                            tasks
+                                .iter()
+                                .filter_map(|t| t.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    waiting.insert(
+                        e.task_id,
+                        Some(crate::models::WorkTaskBackgroundWait {
+                            since: e.created_at,
+                            tasks,
+                        }),
+                    );
+                }
+                "background_wait_end" => {
+                    waiting.insert(e.task_id, None);
+                }
                 _ => {}
             }
         }
@@ -281,6 +351,7 @@ pub async fn list(
                 t.latest_progress = Some(m.clone());
             }
             t.compacting = compacting.get(&t.id).copied().unwrap_or(false);
+            t.background_wait = waiting.get(&t.id).cloned().flatten();
         }
     }
     Ok(infos)
@@ -895,6 +966,7 @@ async fn insert_todo_row<C: ConnectionTrait>(
         source_key: Set(source.map(|s| s.key.clone())),
         source_meta: Set(source_meta),
         delivery: Set(None),
+        writeback_drafts: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
         started_at: Set(None),
@@ -1106,6 +1178,10 @@ async fn claim_inner(
         // A fresh generation invalidates the previous run's self-reported
         // verdict (result_summary stays visible until the next settle).
         .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
+        // …and the thread replies it drafted: a reply describes the run it
+        // came from, and posting one written before a send-back would tell the
+        // thread about work the next run may have undone.
+        .col_expr(work_task::Column::WritebackDrafts, Expr::value(None::<String>))
         // A user-driven claim supersedes any auto-remerge intent and stale
         // preflight light, resurrects an archived terminal task, picks a
         // deferred one back up (this run IS the "later"), and consumes the
@@ -1254,6 +1330,7 @@ pub async fn auto_claim_next(
             // carried in from an older run (review → cancel → requeue → todo)
             // would decide an outcome it knows nothing about.
             .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
+            .col_expr(work_task::Column::WritebackDrafts, Expr::value(None::<String>))
             .col_expr(work_task::Column::FinishedAt, Expr::value(None::<chrono::DateTime<Utc>>))
             .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
             .filter(work_task::Column::Id.eq(head.id))
@@ -1385,6 +1462,7 @@ pub async fn claim_due_scheduled(
             // Same reason as every other claim: the settle path treats a
             // present `verdict` as this generation's self-report.
             .col_expr(work_task::Column::Verdict, Expr::value(None::<String>))
+            .col_expr(work_task::Column::WritebackDrafts, Expr::value(None::<String>))
             .col_expr(
                 work_task::Column::FinishedAt,
                 Expr::value(None::<chrono::DateTime<Utc>>),
@@ -1840,9 +1918,31 @@ pub async fn set_verdict(
     verdict: &str,
     summary: Option<&str>,
 ) -> Result<bool, DbError> {
+    set_verdict_with_drafts(conn, id, run_seq, verdict, summary, None).await
+}
+
+/// [`set_verdict`], also recording the thread replies the agent drafted
+/// (`writeback_drafts`, already sanitized and serialized by the caller) in the
+/// same CAS. `None` leaves whatever an earlier report of this run recorded:
+/// a second `task_complete` without replies must not wipe the first one's.
+pub async fn set_verdict_with_drafts(
+    conn: &DatabaseConnection,
+    id: i32,
+    run_seq: i32,
+    verdict: &str,
+    summary: Option<&str>,
+    writeback_drafts: Option<&str>,
+) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let res = work_task::Entity::update_many()
+    let mut update = work_task::Entity::update_many();
+    if let Some(drafts) = writeback_drafts {
+        update = update.col_expr(
+            work_task::Column::WritebackDrafts,
+            Expr::value(Some(drafts.to_string())),
+        );
+    }
+    let res = update
         .col_expr(
             work_task::Column::Verdict,
             Expr::value(Some(verdict.to_string())),
@@ -1875,6 +1975,63 @@ pub async fn set_verdict(
     .await?;
     txn.commit().await?;
     Ok(true)
+}
+
+/// The user's answer about the thread comment, given while accepting a
+/// forge-sourced task: whether it is posted (`source_meta.writeback`, the
+/// trigger dialog's switch, overwritten) and the reply text to post with it
+/// (`writeback_drafts`, replaced — `None` clears it).
+///
+/// Only while the task sits in review in generation `expect_run_seq` — the
+/// one whose reply the user was shown — and bound to the snapshot this read:
+/// the CAS covers status, `run_seq` AND the `source_meta` text, so neither a
+/// run claimed in between nor a delivery that pinned its closing list into the
+/// snapshot meanwhile can be overwritten with a stale copy, and a dialog left
+/// open across a send-back cannot sign off on a reply it never showed.
+/// `Ok(false)` = the task moved on (or is not forge-sourced); nothing was
+/// written.
+pub async fn set_writeback(
+    conn: &DatabaseConnection,
+    id: i32,
+    expect_run_seq: i32,
+    writeback: bool,
+    drafts: Option<&str>,
+) -> Result<bool, DbError> {
+    let task = get_model(conn, id).await?;
+    if task.status != WorkTaskStatus::Review
+        || task.run_seq != expect_run_seq
+        || task.source_kind.is_none()
+    {
+        return Ok(false);
+    }
+    let Some(old_meta) = task.source_meta.clone() else {
+        return Ok(false);
+    };
+    // Edited as a JSON object rather than through `ForgeSourceMeta`, so keys a
+    // newer build wrote survive the round trip.
+    let mut meta: serde_json::Value = serde_json::from_str(&old_meta)
+        .map_err(|e| DbError::Validation(format!("unreadable source snapshot: {e}")))?;
+    let Some(object) = meta.as_object_mut() else {
+        return Err(DbError::Validation("unreadable source snapshot".to_string()));
+    };
+    object.insert("writeback".to_string(), serde_json::Value::Bool(writeback));
+    let new_meta = serde_json::to_string(&meta)
+        .map_err(|e| DbError::Validation(format!("source snapshot not serializable: {e}")))?;
+    let res = work_task::Entity::update_many()
+        .col_expr(work_task::Column::SourceMeta, Expr::value(Some(new_meta)))
+        .col_expr(
+            work_task::Column::WritebackDrafts,
+            Expr::value(drafts.map(str::to_string)),
+        )
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Review))
+        .filter(work_task::Column::RunSeq.eq(task.run_seq))
+        .filter(work_task::Column::SourceMeta.eq(old_meta))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    Ok(res.rows_affected == 1)
 }
 
 /// Re-write the diff counters of a task that is ALREADY in review, without
@@ -2290,26 +2447,35 @@ pub async fn begin_delivery(
 /// `source_meta` when given — how a task made from several issues fixes the
 /// list of issues its pull request closes at its first delivery: in the same
 /// write as the CAS, so the list is recorded exactly when the delivery that
-/// publishes it begins. Serialized by the CALLER from the row it read: the
-/// CAS on status and `run_seq` is what makes that read current, since nothing
-/// writes the snapshot of a task sitting in review.
+/// publishes it begins. Serialized by the CALLER from the row it read, and
+/// handed in beside the text it read (`(read, new)`): the CAS on status and
+/// `run_seq` keeps the run current, and the one on the read text keeps the
+/// snapshot current — the write-back answer ([`set_writeback`]) is written
+/// there while a task sits in review.
 pub async fn begin_delivery_recording(
     conn: &DatabaseConnection,
     id: i32,
     state: &WorkTaskMergeState,
     expect_run_seq: i32,
-    source_meta: Option<&str>,
+    source_meta: Option<(Option<&str>, &str)>,
 ) -> Result<Option<i32>, DbError> {
     let state_json = serde_json::to_string(state)
         .map_err(|e| DbError::Validation(format!("merge state not serializable: {e}")))?;
     let now = Utc::now();
     let txn = conn.begin().await?;
     let mut update = work_task::Entity::update_many();
-    if let Some(meta) = source_meta {
+    if let Some((read, meta)) = source_meta {
         update = update.col_expr(
             work_task::Column::SourceMeta,
             Expr::value(Some(meta.to_string())),
         );
+        // The snapshot is rewritten from the copy the caller read, so it must
+        // still be that copy: the user's write-back answer ([`set_writeback`])
+        // is the one other write a task in review takes there.
+        update = match read {
+            Some(read) => update.filter(work_task::Column::SourceMeta.eq(read)),
+            None => update.filter(work_task::Column::SourceMeta.is_null()),
+        };
     }
     let res = update
         .col_expr(
@@ -3017,6 +3183,28 @@ pub async fn clear_worktree(conn: &DatabaseConnection, id: i32) -> Result<(), Db
         .exec(conn)
         .await?;
     Ok(())
+}
+
+/// Which of `conversation_ids` a live (not deleted) to-do task is bound to, in
+/// any status — finished tasks included. A task's conversation belongs to the
+/// task: its resume, retry and transcript view all find the session through
+/// the task's worktree and row, so "move to project" refuses these outright.
+pub async fn conversations_bound_to_tasks(
+    conn: &DatabaseConnection,
+    conversation_ids: &[i32],
+) -> Result<std::collections::HashSet<i32>, DbError> {
+    if conversation_ids.is_empty() {
+        return Ok(Default::default());
+    }
+    let rows: Vec<Option<i32>> = work_task::Entity::find()
+        .select_only()
+        .column(work_task::Column::ConversationId)
+        .filter(work_task::Column::ConversationId.is_in(conversation_ids.to_vec()))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .into_tuple()
+        .all(conn)
+        .await?;
+    Ok(rows.into_iter().flatten().collect())
 }
 
 /// Tasks in a status that is actively using their worktree — mid-run or
@@ -6087,5 +6275,44 @@ mod tests {
         .unwrap()
         .is_some());
         let _ = replacement;
+    }
+
+    /// "Move to project" refuses a task's conversation whatever the task's
+    /// status — a finished task still owns its session — but not once the task
+    /// itself is deleted.
+    #[tokio::test]
+    async fn conversations_bound_to_tasks_ignores_status_but_not_deletion() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-bound-convs").await;
+        let bind = |id: i32, conv: i32, status: WorkTaskStatus, deleted: bool| {
+            let conn = db.conn.clone();
+            async move {
+                let mut q = work_task::Entity::update_many()
+                    .col_expr(work_task::Column::ConversationId, Expr::value(Some(conv)))
+                    .col_expr(work_task::Column::Status, Expr::value(status_str(status)));
+                if deleted {
+                    q = q.col_expr(work_task::Column::DeletedAt, Expr::value(Some(Utc::now())));
+                }
+                q.filter(work_task::Column::Id.eq(id))
+                    .exec(&conn)
+                    .await
+                    .unwrap();
+            }
+        };
+        let done = create(&db.conn, draft(folder_id, "done")).await.unwrap();
+        let running = create(&db.conn, draft(folder_id, "running")).await.unwrap();
+        let deleted = create(&db.conn, draft(folder_id, "deleted")).await.unwrap();
+        bind(done.id, 11, WorkTaskStatus::Done, false).await;
+        bind(running.id, 12, WorkTaskStatus::Running, false).await;
+        bind(deleted.id, 13, WorkTaskStatus::Done, true).await;
+
+        let bound = conversations_bound_to_tasks(&db.conn, &[11, 12, 13, 14])
+            .await
+            .unwrap();
+        assert_eq!(bound, [11, 12].into_iter().collect());
+        assert!(conversations_bound_to_tasks(&db.conn, &[])
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

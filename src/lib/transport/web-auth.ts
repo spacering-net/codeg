@@ -5,6 +5,9 @@
 // rules, multi-tenant prefixing, etc.) doesn't have to be remembered at every
 // call site.
 
+import { keepHarnessLinkForLogin } from "@/lib/harness-link"
+import { keepSrnResultForLogin } from "@/lib/srn-account/web-result"
+
 const TOKEN_KEY = "codeg_token"
 // Set when the server admitted this browser without a token: a proxy in front
 // of it vouched for the user (`CODEG_AUTH=proxy-jwt` on codeg-server).
@@ -96,7 +99,15 @@ export function getCodegToken(): string {
 
 export function redirectToCodegLogin(): void {
   if (window.location.pathname.startsWith("/login")) return
+  // The login page is reached without the query, so a Harness item this page
+  // was opened for — and has not been able to show — is kept for after it,
+  // and so is how an SRN sign-in it came back from ended.
+  keepHarnessLinkForLogin()
+  keepSrnResultForLogin()
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(PROXY_AUTH_KEY)
+  // A full page load is intended: it drops every in-memory session and
+  // connection the rejected token was holding.
+  // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- full reload is intended
   window.location.href = "/login"
 }

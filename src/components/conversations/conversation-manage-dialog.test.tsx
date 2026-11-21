@@ -15,6 +15,7 @@ import { setCustomAgentDisplay } from "@/lib/custom-agents"
 const h = vi.hoisted(() => ({
   listAll: vi.fn(),
   deleteConv: vi.fn(),
+  moveConvs: vi.fn(),
   updateStatus: vi.fn(),
   closeConversationTab: vi.fn(),
   refreshConversations: vi.fn(),
@@ -33,13 +34,14 @@ vi.mock("@/hooks/use-acp-agents", () => ({
 vi.mock("@/components/agent-icon", () => ({ AgentIcon: () => null }))
 
 vi.mock("sonner", () => ({
-  toast: { success: vi.fn(), error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }))
 
 vi.mock("@/lib/api", () => ({
   listAllConversations: h.listAll,
   deleteConversation: h.deleteConv,
   updateConversationStatus: h.updateStatus,
+  moveConversations: h.moveConvs,
 }))
 
 vi.mock("@/contexts/tab-context", () => ({
@@ -49,6 +51,9 @@ vi.mock("@/contexts/tab-context", () => ({
 vi.mock("@/stores/app-workspace-store", () => ({
   useAppWorkspaceStore: (selector: (s: unknown) => unknown) =>
     selector({
+      // The open projects (what "Move to…" offers) — chat folders are never
+      // in this list, as in the real store.
+      folders: h.folders.filter((f) => f.kind !== "chat"),
       allFolders: h.folders,
       refreshConversations: h.refreshConversations,
     }),
@@ -486,5 +491,33 @@ describe("ConversationManageDialog", () => {
 
     await waitFor(() => expect(h.deleteConv).toHaveBeenCalledWith(1))
     expect(h.closeConversationTab).toHaveBeenCalledWith(1, 1, "claude_code")
+  })
+
+  it("moves the selection to another folder and drops what moved from it", async () => {
+    h.moveConvs.mockResolvedValue({
+      moved: [1],
+      skipped: [{ conversationId: 2, reason: "busy" }],
+    })
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByText("on main"))
+    await user.click(screen.getByText("on feature"))
+    expect(screen.getByText("2 selected")).toBeTruthy()
+    const listCalls = h.listAll.mock.calls.length
+
+    await user.click(screen.getByRole("button", { name: "Move to…" }))
+    await user.click(paletteRow("beta"))
+    // The pick only asks; nothing moves before the confirmation.
+    expect(h.moveConvs).not.toHaveBeenCalled()
+    expect(screen.getByText("Move 2 conversations")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Move" }))
+
+    await waitFor(() => expect(h.moveConvs).toHaveBeenCalledWith([1, 2], 3))
+    // The one that stayed is still selected for another go; the list refetches.
+    await waitFor(() => expect(screen.getByText("1 selected")).toBeTruthy())
+    await waitFor(() =>
+      expect(h.listAll.mock.calls.length).toBeGreaterThan(listCalls)
+    )
   })
 })

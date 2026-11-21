@@ -573,46 +573,13 @@ async fn async_main(
         });
     }
 
-    // Install bundled expert skills into the central store
-    // (`~/.codeg/skills/`). Runs in the background; failures are logged
-    // but non-fatal.
-    tokio::spawn(async move {
-        let report = codeg_lib::commands::experts::ensure_central_experts_installed().await;
-        if !report.errors.is_empty() {
-            tracing::error!(
-                "[Experts] install finished with {} error(s): {:?}",
-                report.errors.len(),
-                report.errors
-            );
-        } else {
-            tracing::info!(
-                "[Experts] install ok: installed={} updated={} pending_review={}",
-                report.installed_count,
-                report.updated_count,
-                report.pending_user_review.len()
-            );
-        }
-    });
-
-    // Install bundled scientific-research skills into the same central store.
-    // Runs in the background; failures are logged but non-fatal.
-    tokio::spawn(async move {
-        let report = codeg_lib::commands::science::ensure_central_science_installed().await;
-        if !report.errors.is_empty() {
-            tracing::error!(
-                "[Science] install finished with {} error(s): {:?}",
-                report.errors.len(),
-                report.errors
-            );
-        } else {
-            tracing::info!(
-                "[Science] install ok: installed={} updated={} pending_review={}",
-                report.installed_count,
-                report.updated_count,
-                report.pending_user_review.len()
-            );
-        }
-    });
+    // The skills engine's startup work in the central store
+    // (`~/.codeg/skills/`): finish what a crash left half-moved, move older
+    // backups aside, extract the bundled Experts and Science skills, reconcile
+    // the link record — each step under the skills lock, shared with a desktop
+    // app of the same user. Runs in the background; failures are logged but
+    // non-fatal.
+    tokio::spawn(codeg_lib::skills::startup::run(state.emitter.clone()));
 
     // Start chat channel background tasks (event subscriber, command dispatcher, scheduler, auto-connect)
     state
@@ -740,6 +707,14 @@ async fn async_main(
         tokio::spawn(codeg_lib::acp::codex_catalog_refresh::run(scheduler));
     }
 
+    // The Harness update check (mirrors lib.rs setup): daily, in the
+    // background, only tells; not started under CODEG_HARNESS=off.
+    if let Some(checker) =
+        codeg_lib::harness::updates::build(&state.data_dir, state.emitter.clone())
+    {
+        tokio::spawn(codeg_lib::harness::updates::run(checker));
+    }
+
     // Label worktree folders registered before aliases were seeded at creation
     // with the branch they have checked out (mirrors lib.rs setup). Background;
     // changed folders are broadcast, so a browser that already fetched its
@@ -763,6 +738,13 @@ async fn async_main(
     // `main` so strict-mode misconfigurations abort before we touch
     // disk; no second log line here.
     codeg_lib::web::handlers::files::purge_upload_staging().await;
+
+    // Codeg Web's SRN sign-in: its settings (CODEG_PUBLIC_URL,
+    // CODEG_SRN_CLIENT_ID, CODEG_SRN_CLIENT_SECRET_FILE) checked and logged
+    // once, its key in the data directory, its hourly cleanup. Anything
+    // missing or invalid only turns SRN sign-in off; instance access does
+    // not depend on it.
+    codeg_lib::srn::web::start_for_server(&state.db.conn, &state.data_dir);
 
     // Build router
     let proxy_auth = match proxy_auth_config {

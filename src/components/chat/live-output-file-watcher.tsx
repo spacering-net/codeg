@@ -3,8 +3,9 @@
 /**
  * Poll-based freshness for LIVE background-task output logs.
  *
- * The strip's "Output" button (`async-task-strip.tsx`) opens a task's log
- * through `openFilePreview`. That log lives under the OS temp root — OUTSIDE
+ * A run row's "Output" button (`async-task-row.tsx`, mounted by the "N
+ * running" chip in `message-list-view.tsx`) opens a task's log through
+ * `openFilePreview`. That log lives under the OS temp root — OUTSIDE
  * every registered workspace folder — so the notify-driven stream that
  * auto-reloads ordinary open tabs (`use-open-file-tabs-watch.ts`) never sees
  * it: nothing watches a path no root contains. The only existing coverage was
@@ -29,7 +30,7 @@
  *     up reads behind a 2 s interval.
  *   • It is its own leaf component: the subscription to the high-frequency
  *     fileTabs slice re-renders THIS (null-rendering) component on keystroke
- *     churn, never the conversation shell around it.
+ *     churn, never the message list around it.
  */
 
 import { useEffect, useMemo, useRef } from "react"

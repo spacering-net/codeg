@@ -604,9 +604,11 @@ export interface DbConversationSummary {
   parent_id?: number | null
   parent_tool_use_id?: string | null
   delegation_call_id?: string | null
-  /** Set when the conversation was re-parented out of a removed worktree: the
-   *  worktree path it originally ran in. Drives the "source worktree removed"
-   *  badge. */
+  /** The directory this conversation's session was recorded in, when that
+   *  differs from its current folder's path: set when it was re-parented out of
+   *  a removed worktree, or moved to another project by the user (a moved chat
+   *  conversation remembers its scratch dir). Drives the "original working
+   *  directory" line of the hover details. */
   origin_cwd?: string | null
   /** The assistant a delegation child ran as, and its name when the
    *  delegation started (off the child row's snapshot). Absent on every other
@@ -636,6 +638,25 @@ export type ConversationChange =
   | { kind: "status"; id: number; status: string }
 
 export const CONVERSATION_CHANGED_EVENT = "conversation://changed"
+
+/** Why `moveConversations` left a conversation where it was. Mirrors the Rust
+ *  `MoveSkipReason`. */
+export type MoveSkipReason =
+  | "not_found"
+  | "not_movable"
+  | "already_there"
+  | "task_owned"
+  | "busy"
+  | "conflict"
+  | "target_unavailable"
+
+/** Result of `moveConversations`: the root conversations moved (their
+ *  delegation children moved with them) and, per conversation, why the rest
+ *  were left alone. */
+export interface MoveConversationsResult {
+  moved: number[]
+  skipped: { conversationId: number; reason: MoveSkipReason }[]
+}
 
 /** Payload for the global `folder://changed` side-channel. A folder created or
  *  updated headlessly — e.g. the automation engine minting a per-run worktree —
@@ -1631,6 +1652,7 @@ export interface QuestionSpec {
   multi_select: boolean
   options: QuestionOption[]
   is_secret?: boolean
+  allow_other?: boolean
 }
 
 /** Awaiting-answer question set on the session (mirror of `PendingQuestionState`). */
@@ -2059,6 +2081,11 @@ export interface WorkTask {
    *  a task is first delivered, and always on a forge-sourced task — that
    *  one's pull request is `source_meta.result_pr`. */
   delivery?: WorkTaskDelivery | null
+  /** The reply drafted for each thread of a forge-sourced task, keyed by item
+   *  number (JSON object keys are strings) — what the write-back posts once
+   *  the task is accepted. Absent = no draft: the comment is then the outcome
+   *  line alone. */
+  writeback_drafts?: Record<string, string> | null
   /** Latest agent_progress milestone OF THIS GENERATION — present on live
    *  (preparing/running/awaiting/merging) rows only. Scoped by run_seq, so a
    *  merge in flight never narrates the work round it is landing. */
@@ -2067,11 +2094,25 @@ export interface WorkTask {
    *  is working, but on shrinking the session rather than on the task. The one
    *  thing that explains a card sitting in 准备中 / 合并中 for minutes. */
   compacting?: boolean
+  /** This generation's turn has ended but the agent still has background work
+   *  going (a background shell, a monitor, the turn Claude Code starts on its
+   *  own to read their results, a delegation), so the engine holds the run
+   *  open instead of settling it — settling would end that work (mirrors Rust
+   *  WorkTaskBackgroundWait). Absent when not waiting. */
+  background_wait?: WorkTaskBackgroundWait | null
   created_at: string
   updated_at: string
   started_at: string | null
   settled_at: string | null
   finished_at: string | null
+}
+
+/** What a run held open past its turn's end is waiting for. */
+export interface WorkTaskBackgroundWait {
+  /** When the turn ended and the wait began. */
+  since: string
+  /** The work still running then, one short description each (a snapshot). */
+  tasks: string[]
 }
 
 /** Provenance snapshot of a forge-triggered task (mirrors Rust ForgeSourceMeta). */
@@ -2383,6 +2424,68 @@ export interface ForgeChangeDetail {
   changed_files: number | null
   commits: number | null
   checks: ForgeCheckList
+  /** Workflow runs held for a maintainer's approval (GitHub fork changes
+   *  only). Null when there is nothing to say — not GitHub, not a fork, or
+   *  Actions not readable. Held runs have produced NO check yet, which is why
+   *  this sits beside `checks` rather than in it. */
+  workflow_approval: ForgeWorkflowApproval | null
+}
+
+/** A workflow run held for approval (mirrors Rust ForgePendingRun). */
+export interface ForgePendingRun {
+  id: string
+  name: string
+  url: string | null
+}
+
+/** Runs a change waits on a maintainer for (mirrors Rust
+ *  ForgeWorkflowApproval). */
+export interface ForgeWorkflowApproval {
+  runs: ForgePendingRun[]
+  /** The search was cut short; there may be held runs not listed here. */
+  incomplete: boolean
+  /** The runs cannot be tied to this change alone (another open change from
+   *  the same fork branch) — approve on the forge, not here. */
+  ambiguous: boolean
+  /** Whether the account can push (what approving needs); null = unknown. */
+  can_approve: boolean | null
+}
+
+/** What an approval did (mirrors Rust ForgeApproveResult). */
+export interface ForgeApproveResult {
+  approved: number
+  failed: { name: string; message: string }[]
+  incomplete: boolean
+}
+
+/** A whole change's CI as one word (mirrors Rust ForgeCheckVerdict). */
+export type ForgeCheckVerdict = "failure" | "running" | "success" | "neutral"
+
+/** Mirrors Rust ForgeCheckCounts. */
+export interface ForgeCheckCounts {
+  passing: number
+  failing: number
+  pending: number
+  neutral: number
+  total: number
+}
+
+/** One list row's CI (mirrors Rust ForgeCheckSummary). */
+export interface ForgeCheckSummary {
+  number: number
+  /** null = the forge says this change has no checks. */
+  verdict: ForgeCheckVerdict | null
+  /** null where the forge gives a verdict without a breakdown. */
+  counts: ForgeCheckCounts | null
+  /** Workflow runs held for approval (GitHub only; 0 elsewhere). */
+  awaiting_approval: number
+}
+
+/** One page's CI summaries. A change missing from `items` is UNKNOWN — not
+ *  the same as `verdict: null` — and both draw nothing. */
+export interface ForgeCheckSummaryList {
+  available: boolean
+  items: ForgeCheckSummary[]
 }
 
 /** How a file was touched (mirrors Rust ForgeFileStatus). */
@@ -2418,6 +2521,12 @@ export interface ForgeChangedFileList {
   per_page: number
   /** From the forge's own pagination signal, never from the row count. */
   has_next: boolean
+}
+
+/** Cached image resource; account credentials and bytes stay off JSON/IPC. */
+export interface ForgeImage {
+  mime_type: string
+  url: string
 }
 
 /** A folder's `origin` remote parsed into forge coordinates. */
@@ -2520,6 +2629,10 @@ export interface ForgePanelSettings {
    *  position: the switch is on screen every time, and what it says when the
    *  user presses Create is what the task records. */
   writeback_default: boolean
+  /** End every comment codeg posts with the "🤖 Generated with Codeg" line.
+   *  Optional here because a blob from a build that predates it has none,
+   *  which the backend reads as on — the default. */
+  comment_footer?: boolean
   /** Standing instructions appended after a scenario's built-in wording,
    *  keyed by scenario id plus the reserved `all` (every scenario). */
   scenario_prompts: Record<string, string>
@@ -2781,9 +2894,17 @@ export interface WorkTaskChangedFile {
   deletions: number
 }
 
+/** A file a task worktree holds uncommitted — what a delivery commits first
+ *  when the user agrees to. `status`: `A` added or untracked, `M` modified,
+ *  `D` deleted, `R` renamed or copied. */
+export interface WorkTaskUncommittedFile {
+  file: string
+  status: "A" | "M" | "D" | "R"
+}
+
 // --- Token usage dashboard (mirror of src-tauri/src/models/token_usage.rs) ---
 
-export type TokenUsageBucket = "day" | "week" | "month"
+export type TokenUsageBucket = "hour" | "day" | "week" | "month"
 
 export interface TokenUsageFilter {
   /** Inclusive lower bound, ISO-8601. Omit for "since the first recorded turn". */
@@ -3016,6 +3137,27 @@ export interface BackgroundSettledInfo {
   tool_use_id?: string | null
   result?: string | null
   interim?: boolean
+}
+
+/**
+ * One launched-but-unresolved background task (mirror of Rust
+ * `BackgroundOutstandingTask`), as the producer of `background_activity`
+ * accounts it: the Claude transcript watcher, or OpenCode's / Grok's live
+ * state. `task_id` is the id its settle carries; `tool_use_id` the launching
+ * call (the card a row takes its title from), absent when the launch was never
+ * seen; `description` the launch's own words, capped.
+ *
+ * `kind: "shell"` (Claude's background shells) is also on the AIR async-task
+ * channel, which lists it with a stop, so the composer's running list takes
+ * only `"agent"` from here.
+ */
+export interface BackgroundOutstandingTask {
+  task_id: string
+  kind: "agent" | "shell"
+  tool_use_id?: string | null
+  description?: string | null
+  /** When the producer first saw it launched (or resumed), Unix ms. */
+  started_at_ms: number
 }
 
 export type AcpEvent =
@@ -3336,13 +3478,16 @@ export type AcpEvent =
    * `turns` are UPSERTs keyed by `MessageTurn.id` into the conversation
    * runtime store's background overlay; `settled` entries each raise one OS
    * notification; `outstanding` mirrors into the connection for the idle-sweep
-   * exemption (nothing renders the count).
+   * exemption, and `outstanding_tasks` — the same tasks one by one, the
+   * producer's WHOLE current set on every event (absent = none) — feeds the
+   * composer's running list.
    */
   | {
       type: "background_activity"
       session_id: string
       turns?: MessageTurn[]
       outstanding: number
+      outstanding_tasks?: BackgroundOutstandingTask[]
       settled?: BackgroundSettledInfo[]
       watermark: number
     }
@@ -3882,6 +4027,9 @@ export interface LiveSessionSnapshot {
    *  mid-episode recover the pending count the one-shot `background_activity`
    *  events won't replay. Absent / omitted when zero. */
   background_outstanding?: number
+  /** Those tasks one by one (see `BackgroundOutstandingTask`). Absent /
+   *  omitted when empty. */
+  background_outstanding_tasks?: BackgroundOutstandingTask[]
   /** Whether this agent has the `check_user_feedback` tool (fixed at launch).
    *  The frontend gates the feedback bar on this — the agent's real capability —
    *  not the (possibly later-toggled) global setting. Absent → `false`. */
@@ -4328,6 +4476,21 @@ export interface AgentSkillItem {
   path: string
   description: string | null
   read_only: boolean
+  /** Where the entry's link points; `null` for a real folder or file. Absent
+   *  from a backend older than the skills engine. */
+  link_target?: string | null
+  /**
+   * Whose skill it is: Codeg's, linked from one of its packs, from a Harness
+   * install or from a Custom skill (`pack`, `harness`, `custom` — read only in
+   * place), the agent's own (`agent`), a link outside Codeg's store
+   * (`linked_elsewhere`), or a dangling link (`broken`, listed only when asked
+   * for). Absent from an older backend.
+   */
+  owner?: string
+  /** `owner: "pack"`: which pack. */
+  pack?: string | null
+  /** A copy Codeg made where no link could be made. */
+  codeg_copy?: boolean
 }
 
 export interface AgentSkillsListResult {
@@ -4343,7 +4506,7 @@ export interface AgentSkillContent {
 }
 
 /**
- * Built-in expert skills, sourced from obra/superpowers v7.0.1 and bundled into
+ * Built-in expert skills, sourced from obra/superpowers v7.0.2 and bundled into
  * the codeg binary. Experts live in a central store at `~/.codeg/skills/`
  * and are linked into agent skill directories on demand.
  */
@@ -4362,6 +4525,9 @@ export interface ExpertListItem {
   installed_centrally: boolean
   user_modified: boolean
   central_path: string
+  /** A skill of another origin holds this expert's id in the store: the pack
+   *  leaves it alone. Absent from an older backend. */
+  name_taken?: boolean
 }
 
 export type ExpertLinkState =
@@ -4397,6 +4563,9 @@ export interface LinkOpResult {
   /** Present on a successful enable; null for disables and failures. */
   status: ExpertInstallStatus | null
   error: string | null
+  /** A failure's stable code (`acknowledgement_required`, `name_taken`, …).
+   *  Absent from an older backend. */
+  code?: string | null
 }
 
 /**
@@ -4422,6 +4591,8 @@ export interface CustomDeleteResult {
   id: string
   ok: boolean
   error: string | null
+  /** A failure's stable code. Absent from an older backend. */
+  code?: string | null
 }
 
 /**
@@ -4435,6 +4606,8 @@ export interface CustomImportResult {
   ok: boolean
   skipped: boolean
   error: string | null
+  /** A failure's stable code. Absent from an older backend. */
+  code?: string | null
 }
 
 /**
@@ -4467,6 +4640,8 @@ export interface ScienceListItem {
   installed_centrally: boolean
   user_modified: boolean
   central_path: string
+  /** A skill of another origin holds this skill's id in the store. */
+  name_taken?: boolean
 }
 
 export interface OfficecliInfo {
@@ -4487,11 +4662,17 @@ export interface OfficecliSkill {
   displayName: Record<string, string>
   description: Record<string, string>
   installedCentrally: boolean
+  /** A skill of the user's holds this id in the store: Sync leaves it alone.
+   *  Absent from an older backend. */
+  nameTaken?: boolean
 }
 
 export interface SkillSyncReport {
   synced: number
   errors: string[]
+  /** The same problems with their codes (`name_taken`, `command_failed`, …).
+   *  Absent from an older backend. */
+  issues?: { code: string; path?: string; detail?: string }[]
 }
 
 export interface SystemProxySettings {
@@ -6225,5 +6406,45 @@ export interface DeepSeekModelCatalog {
    *  non-positive context window, image limits on a text-only entry…). The
    *  document was understood, so the rows stay editable — but until they are
    *  fixed, sessions run on the agent's built-in catalog instead. */
+  invalid: string | null
+}
+
+/** One `llm-pi-ai` provider route: a provider a DeepSeek session may serve
+ *  models from, keyed by the route id a request selects with. */
+export interface DeepSeekProviderRoute {
+  /** Route id (any non-empty key). A stored sign-in addresses it as a
+   *  credential-key segment, so catalog ids follow `[a-z][a-z0-9-]*`. */
+  id: string
+  /** Selector label; absent falls back to the provider's own name. */
+  displayName?: string
+  /** Credential reference resolved through `$DSH_HOME/.credentials.yaml`;
+   *  absent defers to pi-ai's ambient environment discovery for the provider. */
+  apiKeyEnv?: string
+  /** Wire protocol override; absent takes the pi-ai catalog's protocol. */
+  api?:
+    | "openai-completions"
+    | "openai-responses"
+    | "anthropic-messages"
+    | "google-generative-ai"
+  /** Endpoint override; absent takes the pi-ai catalog's endpoint. */
+  baseURL?: string
+}
+
+/** What the settings panel reads about the stored provider routes. */
+export interface DeepSeekProviderRoutes {
+  /** Where a save lands: `$DSH_HOME/deepseek-acp/settings.yaml`. */
+  path: string
+  /** Whether that document exists at all. */
+  exists: boolean
+  /** Whether the effective document declares `llm-pi-ai.providers`. */
+  configured: boolean
+  /** The document the routes on screen came from — the bridge's own document,
+   *  or a legacy harness document it imports from until this panel writes one. */
+  source: string | null
+  routes: DeepSeekProviderRoute[]
+  /** Why the effective document could not be read; editing is refused. */
+  error: string | null
+  /** Why the stored routes are ones the agent refuses. Editable, but sessions
+   *  keep the routes they had until the rows are fixed. */
   invalid: string | null
 }

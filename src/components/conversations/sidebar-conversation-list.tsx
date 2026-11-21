@@ -107,6 +107,8 @@ import {
   SubsessionAncestorRails,
   CONV_RAIL_DEPTH_STEP,
 } from "./sidebar-conversation-card"
+import { createSidebarRelativeClock } from "./sidebar-relative-time"
+import { MoveConversationDialog } from "./move-conversation-dialog"
 import {
   applyLayoutMove,
   buildDragSlots,
@@ -122,7 +124,6 @@ import {
   conversationRowTimestamp,
   flatIndexOfConversation,
   folderHeaderFlatIndices,
-  formatRelative,
   groupByFolderWithReuse,
   headerIndexForFolder,
   mergeChildrenById,
@@ -1050,6 +1051,7 @@ export function SidebarConversationList({
   // defeat its memo. Reuse the previous reference when the content is unchanged
   // (render-phase ref cache; idempotent under StrictMode's double invoke).
   const selectedConvRef = useRef<{ id: number; agentType: string } | null>(null)
+  /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const selectedConversation = useMemo(() => {
     const activeTab = tabs.find((tab) => tab.id === activeTabId)
     const next =
@@ -1060,8 +1062,10 @@ export function SidebarConversationList({
     selectedConvRef.current = reused
     return reused
   }, [tabs, activeTabId])
+  /* eslint-enable react-hooks/refs */
 
   const openTabKeysRef = useRef<Set<string>>(new Set())
+  /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const openTabKeys = useMemo(() => {
     const next = new Set<string>()
     for (const tab of tabs) {
@@ -1073,6 +1077,7 @@ export function SidebarConversationList({
     openTabKeysRef.current = reused
     return reused
   }, [tabs])
+  /* eslint-enable react-hooks/refs */
 
   const { sortedTypes: availableAgents, fresh: availableAgentsFresh } =
     useSortedAvailableAgents()
@@ -1146,8 +1151,8 @@ export function SidebarConversationList({
   const [childrenByParent, setChildrenByParent] = useState<
     Map<number, DbConversationSummary[]>
   >(() => new Map())
+  // Synced in the layout effect next to the other snapshot refs below.
   const childrenByParentRef = useRef(childrenByParent)
-  childrenByParentRef.current = childrenByParent
   const childrenInFlightRef = useRef<Set<number>>(new Set())
   // In-flight parent fetches → drives the loading spinner. A placeholder empty
   // array is written into `childrenByParent` before the fetch so concurrent child
@@ -1207,15 +1212,15 @@ export function SidebarConversationList({
 
   // Floating sticky folder header. `stickyFolderId` is the ONLY new render
   // state and changes solely when the scroll crosses into a different folder —
-  // never on a status event or the per-minute `now` tick — so the card/header
+  // never on a status event or a label refresh — so the card/header
   // memo budget is untouched. The per-frame handoff translateY is written
   // straight to the overlay node (no re-render); see `recomputeSticky`.
   const [stickyFolderId, setStickyFolderId] = useState<number | null>(null)
   const overlayRef = useRef<HTMLDivElement>(null)
   const stickyRafRef = useRef<number | null>(null)
   // Read by the imperative scroll path without re-subscribing virtua's listener.
+  // Synced in the layout effect next to the other snapshot refs below.
   const draggingRef = useRef<SidebarEntry | null>(dragging)
-  draggingRef.current = dragging
 
   // Custom pointer-based folder reorder (replaces motion `Reorder`, which can't
   // coexist with virtualization — see the perf plan). Refs are read by the
@@ -1243,7 +1248,7 @@ export function SidebarConversationList({
 
   useEffect(() => {
     // Hydrate from localStorage after mount to keep SSR/CSR markup consistent.
-
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- browser-only localStorage read after mount (static-export hydration)
     setFolderExpanded(loadFolderExpanded())
     setFolderGroupExpanded(loadFolderGroupExpanded())
     setSectionCollapsed(loadSectionCollapsed())
@@ -1398,15 +1403,12 @@ export function SidebarConversationList({
   const scrollToActiveRef = useRef<() => void>(() => {})
   const pendingScrollRef = useRef(false)
 
-  // Single "now" shared by every relative time label, refreshed once a minute.
-  // Threading one value through all rows (instead of each row calling
-  // `Date.now()` during render) keeps `timeLabel` referentially stable within a
-  // render tick, so a single status event re-renders only the affected card.
-  const [now, setNow] = useState(() => Date.now())
+  // Share one clock without scheduling a list render on every tick.
+  const [relativeClock] = useState(createSidebarRelativeClock)
   useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 60_000)
+    const interval = setInterval(relativeClock.tick, 60_000)
     return () => clearInterval(interval)
-  }, [])
+  }, [relativeClock])
 
   // The tag filter narrows what every section DRAWS — pinned, folders, chats
   // and recent all bucket from this. It never touches the per-folder counts
@@ -1437,6 +1439,7 @@ export function SidebarConversationList({
   // first, with reference reuse (so an unrelated status event doesn't rebuild it
   // and defeat the section's memo). Pinned chats live in the Pinned section.
   const chatConvsRef = useRef<DbConversationSummary[]>([])
+  /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const chatConversations = useMemo(() => {
     const next = selectChatConversationsWithReuse(
       shownConversations,
@@ -1446,16 +1449,19 @@ export function SidebarConversationList({
     chatConvsRef.current = next
     return next
   }, [shownConversations, showCompleted])
+  /* eslint-enable react-hooks/refs */
 
   // Pinned bucket: the FULL conversation list (ignores "Show completed" — a
   // pinned conversation stays visible regardless), sorted most-recently-pinned
   // first, with reference reuse so an unrelated status event doesn't rebuild it.
   const pinnedRef = useRef<DbConversationSummary[]>([])
+  /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const pinned = useMemo(() => {
     const next = selectPinnedWithReuse(shownConversations, pinnedRef.current)
     pinnedRef.current = next
     return next
   }, [shownConversations])
+  /* eslint-enable react-hooks/refs */
 
   // Every folder currently open in the workspace (repos and their worktree
   // children alike). Depends only on `folders`, so status events never rebuild
@@ -1473,6 +1479,7 @@ export function SidebarConversationList({
   // belongs at the top. Reference reuse keeps an unrelated status event from
   // rebuilding it and defeating the section's card memos.
   const recentConvsRef = useRef<DbConversationSummary[]>([])
+  /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const recentConversations = useMemo(() => {
     const next = selectRecentConversationsWithReuse(
       shownConversations,
@@ -1484,6 +1491,7 @@ export function SidebarConversationList({
     recentConvsRef.current = next
     return next
   }, [shownConversations, showCompleted, openFolderIds, recentFilter])
+  /* eslint-enable react-hooks/refs */
 
   // Maps each open worktree child folder → its (open) root folder. A child is
   // only redirected when its parent is also open, so a worktree whose root was
@@ -1514,6 +1522,7 @@ export function SidebarConversationList({
   // the ref inside the memo factory is a deliberate cache, idempotent under
   // StrictMode's double invoke.
   const byFolderRef = useRef<Map<number, DbConversationSummary[]>>(new Map())
+  /* eslint-disable react-hooks/refs -- render-time identity cache: reuses the previous value when equal so memoised children skip work */
   const byFolder = useMemo(() => {
     const grouped = groupByFolderWithReuse(
       folderConversations,
@@ -1524,6 +1533,7 @@ export function SidebarConversationList({
     byFolderRef.current = grouped
     return grouped
   }, [folderConversations, sortMode, displayChildToParent])
+  /* eslint-enable react-hooks/refs */
 
   // Counts the unfiltered-but-non-pinned conversations per display group, so the
   // empty-hint renderer distinguishes a truly empty folder from one whose rows
@@ -1631,9 +1641,8 @@ export function SidebarConversationList({
 
   // Flat row model for windowing — the pinned section, the folders section, and
   // every conversation live in this ONE array fed to the single Virtualizer (no
-  // separate, un-virtualized pinned list). Deliberately excludes `now` (see
-  // buildRows): the per-minute label tick must not rebuild rows and break the
-  // card memo.
+  // separate, un-virtualized pinned list). Label refreshes run independently
+  // of the row model and card memoization.
   const rows = useMemo(
     () =>
       buildRows({
@@ -1699,14 +1708,11 @@ export function SidebarConversationList({
     [rows]
   )
 
-  // Latest snapshots for the imperative scroll/drag code paths, refreshed every
-  // render so the window listeners and scrollToActive read current values
-  // without being torn down and re-subscribed.
+  // Latest snapshots for the imperative scroll/drag code paths, refreshed after
+  // every commit (see the layout effect below) so the window listeners and
+  // scrollToActive read current values without being torn down and
+  // re-subscribed.
   const rowsRef = useRef<SidebarRow[]>(rows)
-  rowsRef.current = rows
-  layoutRef.current = layout
-  storeLayoutRef.current = storeLayout
-  reorderingRef.current = reordering
 
   // Drop-target rows for the in-flight drag, and the surface that renders them.
   // Rebuilt from the (reconciled) layout on every render so a folder that
@@ -1717,7 +1723,6 @@ export function SidebarConversationList({
     () => (dragging ? buildDragSlots(layout, dragging) : []),
     [dragging, layout]
   )
-  dragSlotsRef.current = dragSlots
 
   // Sticky-overlay lookup tables, rebuilt only when the flat rows change
   // (folder add/remove/expand, not status events). Consumed exclusively by the
@@ -1726,9 +1731,23 @@ export function SidebarConversationList({
   const ownerHeaderIndex = useMemo(() => buildOwnerHeaderIndex(rows), [rows])
   const headerFlatIndices = useMemo(() => folderHeaderFlatIndices(rows), [rows])
   const ownerHeaderIndexRef = useRef(ownerHeaderIndex)
-  ownerHeaderIndexRef.current = ownerHeaderIndex
   const headerFlatIndicesRef = useRef(headerFlatIndices)
-  headerFlatIndicesRef.current = headerFlatIndices
+
+  // Every reader of these snapshots runs after commit — pointer/scroll
+  // listeners, rAF callbacks, passive effects, and the sticky-header layout
+  // effect declared further down (layout effects run in declaration order) —
+  // so syncing them here, before paint, is as fresh as a render-time write.
+  useIsomorphicLayoutEffect(() => {
+    childrenByParentRef.current = childrenByParent
+    draggingRef.current = dragging
+    rowsRef.current = rows
+    layoutRef.current = layout
+    storeLayoutRef.current = storeLayout
+    reorderingRef.current = reordering
+    dragSlotsRef.current = dragSlots
+    ownerHeaderIndexRef.current = ownerHeaderIndex
+    headerFlatIndicesRef.current = headerFlatIndices
+  })
 
   useImperativeHandle(ref, () => ({
     scrollToActive() {
@@ -2142,6 +2161,20 @@ export function SidebarConversationList({
     setManageFolderId(folderId)
   }, [])
 
+  // From a row: the folder whose header the row is listed under — its own
+  // folder, or the repo a worktree session is merged into while "Show
+  // worktrees" is off — so the dialog opens on the group the user is looking
+  // at, like that header's own menu entry would.
+  const handleManageConversationsFor = useCallback(
+    (conversation: DbConversationSummary) => {
+      setManageFolderId(
+        displayChildToParent.get(conversation.folder_id) ??
+          conversation.folder_id
+      )
+    },
+    [displayChildToParent]
+  )
+
   const handleManageFolderTags = useCallback((folderId: number) => {
     openConversationTagsManager({ folderId })
   }, [])
@@ -2234,6 +2267,23 @@ export function SidebarConversationList({
       await updateConversationPinned(id, nextPinned)
     },
     [updateConversationLocal]
+  )
+
+  // "Move to folder" — the row's submenu picks the folder, this one dialog for
+  // the whole list confirms it, so the card memo keeps bailing out on a stable
+  // callback.
+  const [moveRequest, setMoveRequest] = useState<{
+    conversation: DbConversationSummary
+    folderId: number
+  } | null>(null)
+  const handleMoveToFolder = useCallback(
+    (conversation: DbConversationSummary, folderId: number) =>
+      setMoveRequest({ conversation, folderId }),
+    []
+  )
+  const moveConversationsList = useMemo(
+    () => (moveRequest ? [moveRequest.conversation] : []),
+    [moveRequest]
   )
 
   const handleNewConversation = useCallback(() => {
@@ -3268,7 +3318,8 @@ export function SidebarConversationList({
         // Recent's and Chat's own rows read their last activity even while the
         // rest of the sidebar is sorted by creation time, and sub-sessions
         // their creation time even while it is sorted by activity.
-        timeLabel={formatRelative(conversationRowTimestamp(row, sortMode), now)}
+        relativeTimeAt={conversationRowTimestamp(row, sortMode)}
+        relativeTimeClock={relativeClock}
         onSelect={handleSelect}
         onDoubleClick={handleDoubleClick}
         onRename={handleRename}
@@ -3276,6 +3327,8 @@ export function SidebarConversationList({
         onStatusChange={handleStatusChange}
         onNewConversation={handleNewConversationForFolder}
         onTogglePin={handleTogglePin}
+        onMoveToFolder={handleMoveToFolder}
+        onManageConversations={handleManageConversationsFor}
         depth={row.depth}
         hasChildren={conv.child_count > 0}
         expanded={conversationExpanded.has(conv.id)}
@@ -3512,6 +3565,7 @@ export function SidebarConversationList({
                   style={{ willChange: "transform" }}
                 >
                   <div className="pointer-events-auto bg-sidebar">
+                    {/* eslint-disable-next-line react-hooks/refs -- handleOverlayToggle only reads rowsRef inside a rAF after a click; folderHeaderElement just forwards it as onToggle */}
                     {folderHeaderElement(stickyFolderId, {
                       dragging: false,
                       grip: false,
@@ -3612,6 +3666,13 @@ export function SidebarConversationList({
           </ContextMenuContent>
         </ContextMenu>
       )}
+
+      <MoveConversationDialog
+        open={moveRequest !== null}
+        onOpenChange={(open) => !open && setMoveRequest(null)}
+        conversations={moveConversationsList}
+        targetFolderId={moveRequest?.folderId ?? null}
+      />
 
       <AlertDialog
         open={removeConfirm !== null}

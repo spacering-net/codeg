@@ -768,6 +768,15 @@ pub enum AcpEvent {
         /// into `SessionState` to exempt the connection from both idle sweeps
         /// while work is pending.
         outstanding: u32,
+        /// The same tasks one by one, for the composer's "N running" list: a
+        /// count alone cannot say WHICH background sub-agents still run once
+        /// their launching turn has ended, and the launch cards cannot either
+        /// (a transcript can't tell a live task from one whose CLI died).
+        /// Every emission carries the producer's WHOLE current set, like
+        /// `outstanding` — state, not a delta — so an absent field means none.
+        /// `outstanding` stays its length, for older readers.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        outstanding_tasks: Vec<BackgroundOutstandingTask>,
         /// Tasks settled by `<task-notification>` records in this batch — the
         /// frontend raises one OS notification per entry.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -940,6 +949,54 @@ pub enum AcpEvent {
         stale: bool,
         kind: ConfigStaleKind,
     },
+}
+
+/// What kind of work a [`BackgroundOutstandingTask`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskKind {
+    /// A sub-agent running in the background (Claude Code's async `Agent`,
+    /// an OpenCode background `subagent`, a Grok background `spawn_subagent`).
+    Agent,
+    /// A background shell (Claude Code's `Bash(run_in_background)`). The AIR
+    /// async-task channel reports these too, with a stop; the frontend lists
+    /// them from there.
+    Shell,
+}
+
+impl BackgroundTaskKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Agent => "agent",
+            Self::Shell => "shell",
+        }
+    }
+}
+
+/// Cap on [`BackgroundOutstandingTask::description`]: a row title, not the
+/// prompt. Keeps every emission of the set — each one carries it whole —
+/// small whatever the agent wrote.
+pub const BACKGROUND_TASK_DESCRIPTION_MAX_CHARS: usize = 200;
+
+/// One launched-but-unresolved background task, as the producer of
+/// [`AcpEvent::BackgroundActivity`] accounts it: the Claude transcript
+/// watcher, or the OpenCode / Grok live state. Leaves the set when it settles
+/// (or, for the watcher, when its keep-alive expires).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundOutstandingTask {
+    /// The id its settle will carry (`BackgroundSettledInfo::task_id`).
+    pub task_id: String,
+    pub kind: BackgroundTaskKind,
+    /// The tool call that launched it, when known — the card the frontend
+    /// takes the row's title from. `None` for a task whose launch this
+    /// producer never saw (a Claude interim notification is the one case).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    /// The launch's own description of the task, the row's fallback title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// When the producer first saw it launched (or resumed), Unix ms.
+    pub started_at_ms: i64,
 }
 
 /// One background task settled by a `<task-notification>` transcript record,
@@ -1176,7 +1233,7 @@ pub fn attachment_names_from_prompt(blocks: &[PromptInputBlock]) -> Option<Strin
 /// or backslashes is wrapped in `<…>`. Without that a perfectly ordinary
 /// attachment — `file:///a/b (1).ts`, or a Windows `file:///C:\dir\x` — closed
 /// the link early and rendered as raw `[…](…)` source text.
-fn attachment_marker(label: &str, uri: &str) -> String {
+pub(crate) fn attachment_marker(label: &str, uri: &str) -> String {
     format!(
         "[{}]({})",
         escape_markdown_text(label),
@@ -2269,6 +2326,34 @@ pub struct AgentSkillItem {
     /// `~/.codex/skills/.system/*`). Surfaced so the UI can show them but
     /// refuse to edit or delete; the backend also refuses such writes.
     pub read_only: bool,
+    /// Where the entry's link points, when it is a link (symlink or
+    /// junction); `None` for a real folder or file.
+    pub link_target: Option<String>,
+    /// Whose skill this is (see [`AgentSkillOwner`]).
+    pub owner: AgentSkillOwner,
+    /// The pack (`experts`, `science`, `office`, `ui`) when `owner` is `pack`.
+    pub pack: Option<String>,
+    /// A copy Codeg made where no link could be made (Windows); `owner` names
+    /// what it is a copy of.
+    pub codeg_copy: bool,
+}
+
+/// Whose skill an agent's listed skill is.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSkillOwner {
+    /// Codeg linked it from one of its skill packs (read only here).
+    Pack,
+    /// Codeg linked it from a Harness install (read only here).
+    Harness,
+    /// Codeg linked it from a Custom skill (edited in Codeg's store).
+    Custom,
+    /// The agent's own skill, in place.
+    Agent,
+    /// A link to somewhere outside Codeg's store.
+    LinkedElsewhere,
+    /// A link that leads nowhere.
+    Broken,
 }
 
 #[derive(Debug, Clone, Serialize)]

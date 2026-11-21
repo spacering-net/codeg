@@ -87,6 +87,7 @@ export function CreateProjectDialog({
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- probes the local toolchain; flips the checking flag before awaiting
       checkPackageManager(packageManager)
     }
   }, [open, packageManager, checkPackageManager])

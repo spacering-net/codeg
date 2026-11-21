@@ -225,6 +225,18 @@ pub struct BrokerTaskCompleteRequest {
     pub verdict: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// The comment drafted for each forge thread the task came from — only
+    /// when the task context asked for it. Stored as a draft the user reviews
+    /// before it is posted (see `forge::thread_reply`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thread_replies: Vec<ThreadReply>,
+}
+
+/// One entry of `task_complete`'s `thread_replies`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadReply {
+    pub number: i64,
+    pub body: String,
 }
 
 /// The JSON Schema `submit_result` takes, for the companion's `tools/list`.

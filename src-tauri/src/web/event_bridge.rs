@@ -86,10 +86,38 @@ impl WebEventBroadcaster {
 ///
 /// `Noop` drops everything — used for legacy non-streaming call paths and
 /// in tests that don't observe events.
+///
+/// # Why `Arc<AppHandle>` and not `AppHandle`
+///
+/// `tauri::AppHandle` is NOT safe to clone or drop off the main thread, even
+/// though the type system says otherwise. Cloning it walks
+/// `AppHandle -> WryHandle -> Context<T> -> DispatcherMainThreadContext<T> ->
+/// EventLoopWindowTarget<T> -> Rc<EventLoopRunner<T>>`, and that tail is a
+/// **non-atomic `Rc`** (`tao`'s `EventLoopRunnerShared`). `tao` deliberately
+/// relies on that refcount being touched from the event-loop thread only;
+/// `tauri-runtime-wry` nonetheless marks `Context<T>` as `Send + Sync` and
+/// derives `Clone` for it, so the "main thread only" invariant goes
+/// unenforced.
+///
+/// Codeg runs each ACP connection on its own `std::thread`, and those threads
+/// clone and drop `EventEmitter`s freely. With a bare `AppHandle` in this
+/// variant that meant unsynchronised `Rc` refcount traffic racing the main
+/// thread: the count could be under- or over-counted, both sides would then
+/// believe they owned the last reference, and the second `free` of the same
+/// block aborted the process with `0xC0000374`
+/// (`STATUS_HEAP_CORRUPTION` / `heap_failure_block_not_busy`).
+///
+/// Holding the handle behind a process-wide `Arc` moves every cross-thread
+/// clone onto an **atomic** refcount. The inner `AppHandle` is cloned exactly
+/// once — on the main thread, by [`install_tauri_app_handle`] — and never
+/// dropped, so no emitter clone or drop on a worker thread touches
+/// `Rc<EventLoopRunner>`. The payload is [`RetainedAppHandle`], whose field is
+/// private to this module, so code elsewhere cannot build the variant from a
+/// fresh `Arc::new(app.clone())` and must go through [`EventEmitter::from_app`].
 #[derive(Clone)]
 pub enum EventEmitter {
     #[cfg(feature = "tauri-runtime")]
-    Tauri(tauri::AppHandle),
+    Tauri(RetainedAppHandle),
     /// Standalone server runtime. Carries the broadcaster (transport-bound
     /// JSON delivery to WS clients on non-ACP channels) and the internal
     /// bus (typed envelope delivery to in-process subscribers).
@@ -103,6 +131,17 @@ pub enum EventEmitter {
 }
 
 impl EventEmitter {
+    /// Build the desktop emitter from an `AppHandle`, reusing the process-wide
+    /// retained handle.
+    ///
+    /// This is the only way to build the `Tauri` variant. See the
+    /// `EventEmitter` doc comment for why cloning a bare `AppHandle` off the
+    /// main thread corrupts the heap.
+    #[cfg(feature = "tauri-runtime")]
+    pub fn from_app(app: &tauri::AppHandle) -> Self {
+        EventEmitter::Tauri(retained_app_handle(app).clone())
+    }
+
     /// Convenience constructor for the standalone server runtime path.
     /// Mirrors how `Tauri` resolves the same two pieces of state via
     /// `app.try_state`.
@@ -144,6 +183,48 @@ impl EventEmitter {
         let bus = Arc::new(InternalEventBus::new(metrics));
         EventEmitter::WebOnly { broadcaster, bus }
     }
+}
+
+/// The process-wide `AppHandle`, shared behind an atomic `Arc`.
+///
+/// See the `EventEmitter` doc comment for the full rationale: cloning or
+/// dropping a bare `AppHandle` off the main thread races on `tao`'s
+/// non-atomic `Rc<EventLoopRunner>`, which aborts the process. Cloning this
+/// wrapper only touches the `Arc` count. The field is private so the only
+/// instance is the one [`retained_app_handle`] keeps in a static for the
+/// life of the process — `AppHandle::clone` runs once and `AppHandle::drop`
+/// never runs.
+#[cfg(feature = "tauri-runtime")]
+#[derive(Clone)]
+pub struct RetainedAppHandle(Arc<tauri::AppHandle>);
+
+#[cfg(feature = "tauri-runtime")]
+impl std::ops::Deref for RetainedAppHandle {
+    type Target = tauri::AppHandle;
+
+    fn deref(&self) -> &tauri::AppHandle {
+        &self.0
+    }
+}
+
+#[cfg(feature = "tauri-runtime")]
+static RETAINED_APP_HANDLE: std::sync::OnceLock<RetainedAppHandle> = std::sync::OnceLock::new();
+
+/// The retained handle, cloning `app` into it on first use.
+///
+/// `lib.rs::setup` calls [`install_tauri_app_handle`] first thing on the main
+/// thread, so every later call — including from worker threads — finds the
+/// slot filled and never clones `app`.
+#[cfg(feature = "tauri-runtime")]
+fn retained_app_handle(app: &tauri::AppHandle) -> &'static RetainedAppHandle {
+    RETAINED_APP_HANDLE.get_or_init(|| RetainedAppHandle(Arc::new(app.clone())))
+}
+
+/// Retain `app` for the life of the process. Must be called on the main
+/// thread before anything builds an `EventEmitter`; later calls are no-ops.
+#[cfg(feature = "tauri-runtime")]
+pub fn install_tauri_app_handle(app: &tauri::AppHandle) {
+    retained_app_handle(app);
 }
 
 /// Global side-channel for cross-client conversation list/status sync.
@@ -188,6 +269,22 @@ pub const COMPUTER_TOOLS_SETTINGS_CHANGED_EVENT: &str = "computer-tools-settings
 /// [`SESSION_INFO_SETTINGS_CHANGED_EVENT`]. Payload: `ChatAuthoringSettings`
 /// (`{ "automations_enabled": bool, "work_tasks_enabled": bool }`).
 pub const CHAT_AUTHORING_SETTINGS_CHANGED_EVENT: &str = "chat-authoring-settings://changed";
+
+/// Announces that the desktop web service started or stopped, from whichever
+/// surface did it — the Settings window, the status-bar toggle, or auto-start
+/// at launch. Every window (each workspace's status bar, an open Settings
+/// page) follows it by re-reading `get_web_server_status`. Payload is
+/// [`WebServiceStatusChanged`] and deliberately nothing more: like every side
+/// channel it also reaches the web broadcaster, and the status itself carries
+/// the access token.
+pub const WEB_SERVICE_STATUS_CHANGED_EVENT: &str = "web-service://status-changed";
+
+/// Payload for [`WEB_SERVICE_STATUS_CHANGED_EVENT`].
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebServiceStatusChanged {
+    pub running: bool,
+}
 
 /// Announces a delegation-settings write. Same cross-window rationale as
 /// [`CHAT_AUTHORING_SETTINGS_CHANGED_EVENT`], and load-bearing for the same
@@ -667,6 +764,24 @@ mod tests {
     use crate::db::entities::conversation::ConversationStatus;
     use crate::models::AgentType;
 
+    /// The desktop variant must carry the shared [`RetainedAppHandle`], never a
+    /// bare `tauri::AppHandle`: cloning or dropping a bare handle on an ACP
+    /// connection thread races `tao`'s non-atomic `Rc<EventLoopRunner>` and
+    /// aborts the process. A real `AppHandle<Wry>` cannot be built in a unit
+    /// test, so this pins the payload type at compile time — changing the
+    /// variant back to `Tauri(tauri::AppHandle)` stops this test compiling.
+    #[cfg(feature = "tauri-runtime")]
+    #[test]
+    fn tauri_variant_carries_the_retained_handle() {
+        fn payload(emitter: &EventEmitter) -> Option<&RetainedAppHandle> {
+            match emitter {
+                EventEmitter::Tauri(handle) => Some(handle),
+                _ => None,
+            }
+        }
+        assert!(payload(&EventEmitter::Noop).is_none());
+    }
+
     fn fresh_state() -> Arc<RwLock<SessionState>> {
         Arc::new(RwLock::new(SessionState::new(
             "conn-test".to_string(),
@@ -730,6 +845,12 @@ mod tests {
             rx.try_recv().is_err(),
             "non-status ACP events must not emit on conversation://changed"
         );
+    }
+
+    #[test]
+    fn web_service_status_changed_carries_only_the_running_flag() {
+        let wire = serde_json::to_value(WebServiceStatusChanged { running: true }).unwrap();
+        assert_eq!(wire, serde_json::json!({ "running": true }));
     }
 
     #[test]

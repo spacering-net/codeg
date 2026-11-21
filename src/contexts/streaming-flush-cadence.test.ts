@@ -59,13 +59,21 @@ describe("liveRerenderChars", () => {
   })
 
   it("puts a tool-heavy turn past the first step on its own", () => {
-    const cards: LiveContentBlock[] = []
-    for (let i = 0; i < 100; i++) cards.push(toolCall(`call-${i}`))
-    // A hundred tools then a 2 KB summary: the run alone would read as one
-    // frame, while every one of those cards re-renders on every batch.
-    expect(streamFlushDelayMs(liveRerenderChars([...cards, text(2048)]))).toBe(
-      2 * STREAM_FLUSH_FRAME_MS
-    )
+    const cards = (count: number) => {
+      const blocks: LiveContentBlock[] = []
+      for (let i = 0; i < count; i++) blocks.push(toolCall(`call-${i}`))
+      return blocks
+    }
+    // A thousand tools then a 2 KB summary: the run alone would read as one
+    // frame, while every batch still walks each of those blocks.
+    expect(
+      streamFlushDelayMs(liveRerenderChars([...cards(1000), text(2048)]))
+    ).toBe(3 * STREAM_FLUSH_FRAME_MS)
+    // A hundred is not drawn again, nor walked for long: it streams on the
+    // single frame its summary alone would.
+    expect(
+      streamFlushDelayMs(liveRerenderChars([...cards(100), text(2048)]))
+    ).toBe(STREAM_FLUSH_FRAME_MS)
     expect(streamFlushDelayMs(liveRerenderChars([text(2048)]))).toBe(
       STREAM_FLUSH_FRAME_MS
     )

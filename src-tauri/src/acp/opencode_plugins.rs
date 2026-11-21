@@ -117,13 +117,22 @@ pub fn list_plugins() -> Result<PluginList, String> {
 /// Declare `spec` in `plugins` (a no-op when it already is), moving any 1.x
 /// `plugin` entries into `plugins` on the way.
 pub fn add_plugin(spec: &str) -> Result<PluginList, String> {
+    let _mcp_lock = mcp_write_lock()?;
     add_plugin_at(&config_path()?, spec)
 }
 
 /// Remove every entry that declares `spec`, from either list, moving the
 /// remaining 1.x `plugin` entries into `plugins`.
 pub fn remove_plugin(spec: &str) -> Result<PluginList, String> {
+    let _mcp_lock = mcp_write_lock()?;
     remove_plugin_at(&config_path()?, spec)
+}
+
+/// The MCP write lock: OpenCode's config also holds its MCP servers
+/// (`mcp.servers`), which the MCP page edits, so a plugin edit and an MCP
+/// save take turns at the file (see `commands::mcp_engine::lock`).
+fn mcp_write_lock() -> Result<crate::commands::mcp_engine::lock::McpWriteGuard, String> {
+    crate::commands::mcp_engine::lock::acquire_blocking().map_err(|e| e.to_string())
 }
 
 /// The config text at `path`, `""` for a file that is not there.

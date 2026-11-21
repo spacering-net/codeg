@@ -72,6 +72,7 @@ function renderCard(
     onFollowUp: noop,
     onEdit: noop,
     onSchedule: noop,
+    onStopBackgroundWait: noop,
     ...handlers,
   }
   return render(
@@ -377,6 +378,50 @@ describe("TaskCard live note", () => {
     // has nothing else to say for itself.
     renderCard(task({ status: "preparing", compacting: true }))
     expect(screen.getByText("Compacting the session context…")).toBeTruthy()
+  })
+
+  it("says the board is waiting on the background work the turn left going", () => {
+    // The agent's own last word is usually "the tests are still running";
+    // only the wait says the board is holding the task open for them.
+    renderCard(
+      task({
+        status: "running",
+        latest_progress: "full gate running",
+        background_wait: {
+          since: "2026-08-01T02:00:00Z",
+          tasks: ["Run the test suite", "Wait for the gate"],
+        },
+      })
+    )
+    expect(
+      screen.getByText("Waiting for 2 background tasks to finish…")
+    ).toBeTruthy()
+    expect(screen.queryByText("full gate running")).toBeNull()
+  })
+
+  it("still names a wait with nothing listed (a delegation, the agent's own turn)", () => {
+    renderCard(
+      task({
+        status: "running",
+        background_wait: { since: "2026-08-01T02:00:00Z", tasks: [] },
+      })
+    )
+    expect(
+      screen.getByText("Waiting for background work to finish…")
+    ).toBeTruthy()
+  })
+
+  it("offers to stop waiting and settle now", async () => {
+    const onStopBackgroundWait = vi.fn()
+    renderCard(
+      task({
+        status: "running",
+        background_wait: { since: "2026-08-01T02:00:00Z", tasks: ["dev"] },
+      }),
+      { onStopBackgroundWait }
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Stop waiting" }))
+    expect(onStopBackgroundWait).toHaveBeenCalledTimes(1)
   })
 
   it("shows this generation's milestone once the compaction is over", () => {

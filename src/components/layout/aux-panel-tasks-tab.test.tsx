@@ -6,12 +6,14 @@
 import { act, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import {
   resetTasksBoardFilterCacheForTests,
+  resetTasksTimeFilterCacheForTests,
   saveTasksBoardFilter,
+  saveTasksTimeFilter,
 } from "@/lib/tasks-board-filter-storage"
 import type { WorkTask } from "@/lib/types"
 import { peekTasksFocus } from "@/lib/workbench-focus"
@@ -24,6 +26,7 @@ const view = {
   tasks: [] as WorkTask[],
   loading: false,
   refetch: vi.fn(async () => {}),
+  viewMode: "board" as "board" | "list",
 }
 
 vi.mock("@/contexts/tasks-view-context", () => ({
@@ -36,12 +39,11 @@ vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({ setRoute: scene.setRoute }),
 }))
 vi.mock("@/stores/app-workspace-store", () => {
-  const state = {
-    allFolders: [
-      { id: 1, name: "codeg", alias: null, parent_id: null, kind: "regular" },
-      { id: 2, name: "site", alias: null, parent_id: null, kind: "regular" },
-    ],
-  }
+  const folders = [
+    { id: 1, name: "codeg", alias: null, parent_id: null, kind: "regular" },
+    { id: 2, name: "site", alias: null, parent_id: null, kind: "regular" },
+  ]
+  const state = { allFolders: folders, folders }
   const useStore = (selector: (s: typeof state) => unknown) => selector(state)
   return { useAppWorkspaceStore: useStore }
 })
@@ -50,6 +52,7 @@ vi.mock("@/lib/api", () => ({
   workTaskCreate: vi.fn(),
   workTaskDefer: vi.fn(),
   workTaskMergeUnqueue: vi.fn(),
+  workTaskReorder: vi.fn(),
   workTaskStart: vi.fn(),
   workTaskUpdate: vi.fn(),
 }))
@@ -101,7 +104,14 @@ vi.mock("@/components/tasks/task-schedule-dialog", () => ({
 vi.mock("@/components/tasks/task-transcript-dialog", () => ({
   TaskTranscriptDialog: () => null,
 }))
+vi.mock("@/components/tasks/task-settings-dialog", () => ({
+  TaskSettingsDialog: () => null,
+}))
+vi.mock("@/components/shared/folder-select", () => ({
+  FolderSelect: () => null,
+}))
 
+import { TasksPage } from "@/components/tasks/tasks-page"
 import { TasksAuxTab } from "./aux-panel-tasks-tab"
 
 function task(overrides: Partial<WorkTask>): WorkTask {
@@ -132,7 +142,7 @@ function task(overrides: Partial<WorkTask>): WorkTask {
     archived_at: null,
     scheduled_at: null,
     created_at: "2026-10-14T00:00:00Z",
-    updated_at: "2026-10-14T00:00:00Z",
+    updated_at: new Date(Date.now()).toISOString(),
     started_at: null,
     settled_at: null,
     finished_at: null,
@@ -162,9 +172,11 @@ function sections(): string[] {
 beforeEach(() => {
   localStorage.clear()
   resetTasksBoardFilterCacheForTests()
+  resetTasksTimeFilterCacheForTests()
   scene.projectFolderId = 1
   scene.setRoute.mockClear()
   view.loading = false
+  view.viewMode = "board"
   view.tasks = [
     task({ id: 1, title: "Fix the login timeout", status: "todo" }),
     task({ id: 2, title: "Write the release notes", status: "review" }),
@@ -297,5 +309,139 @@ describe("TasksAuxTab", () => {
     expect(
       screen.getByText(enMessages.Folder.auxPanel.noFolderTitle)
     ).toBeInTheDocument()
+  })
+})
+
+describe("shared task time filter", () => {
+  const now = Date.parse("2026-11-16T12:00:00Z")
+  const day = 24 * 60 * 60 * 1000
+
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(now)
+    view.tasks = [
+      task({
+        id: 1,
+        title: "Recent fix",
+        updated_at: new Date(now - day / 2).toISOString(),
+      }),
+      task({
+        id: 2,
+        title: "Weekly fix",
+        updated_at: new Date(now - 3 * day).toISOString(),
+      }),
+      task({
+        id: 3,
+        title: "Monthly fix",
+        updated_at: new Date(now - 20 * day).toISOString(),
+      }),
+      task({
+        id: 4,
+        title: "Older fix",
+        updated_at: new Date(now - 45 * day).toISOString(),
+      }),
+    ]
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  function mountBoth() {
+    return render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <section aria-label="Tasks page">
+          <TasksPage />
+        </section>
+        <section aria-label="Project tasks">
+          <TasksAuxTab />
+        </section>
+      </NextIntlClientProvider>
+    )
+  }
+
+  const page = () => within(screen.getByRole("region", { name: "Tasks page" }))
+  const sidebar = () =>
+    within(screen.getByRole("region", { name: "Project tasks" }))
+
+  it("defaults both views to all time and follows changes from either picker immediately", async () => {
+    const user = userEvent.setup()
+    mountBoth()
+    for (const surface of [page(), sidebar()]) {
+      expect(
+        surface.getByRole("combobox", { name: "Updated: All time" })
+      ).toBeInTheDocument()
+      expect(surface.getByText("Older fix")).toBeInTheDocument()
+    }
+
+    await user.click(sidebar().getByRole("combobox", { name: /^Updated:/ }))
+    await user.click(screen.getByRole("option", { name: "Last 24 hours" }))
+    for (const surface of [page(), sidebar()]) {
+      expect(
+        surface.getByRole("combobox", { name: "Updated: Last 24 hours" })
+      ).toBeInTheDocument()
+      expect(surface.queryByText("Weekly fix")).not.toBeInTheDocument()
+    }
+
+    await user.click(page().getByRole("combobox", { name: /^Updated:/ }))
+    await user.click(screen.getByRole("option", { name: "Last 30 days" }))
+    for (const surface of [page(), sidebar()]) {
+      expect(
+        surface.getByRole("combobox", { name: "Updated: Last 30 days" })
+      ).toBeInTheDocument()
+      expect(surface.getByText("Monthly fix")).toBeInTheDocument()
+      expect(surface.queryByText("Older fix")).not.toBeInTheDocument()
+    }
+  })
+
+  it("remembers the chosen window for both views on the next visit", async () => {
+    const user = userEvent.setup()
+    const { unmount } = mountBoth()
+    await user.click(sidebar().getByRole("combobox", { name: /^Updated:/ }))
+    await user.click(screen.getByRole("option", { name: "Last 7 days" }))
+    unmount()
+    resetTasksTimeFilterCacheForTests()
+    mountBoth()
+    for (const surface of [page(), sidebar()]) {
+      expect(
+        surface.getByRole("combobox", { name: "Updated: Last 7 days" })
+      ).toBeInTheDocument()
+      expect(surface.getByText("Weekly fix")).toBeInTheDocument()
+      expect(surface.queryByText("Monthly fix")).not.toBeInTheDocument()
+    }
+  })
+
+  it("clears the shared time filter from the sidebar empty state", async () => {
+    const user = userEvent.setup()
+    view.tasks = [view.tasks[2]]
+    saveTasksTimeFilter("7d")
+    mountBoth()
+    expect(sidebar().getByText(enMessages.Tasks.listEmpty)).toBeInTheDocument()
+    await user.click(sidebar().getByRole("button", { name: "All time" }))
+    for (const surface of [page(), sidebar()]) {
+      expect(
+        surface.getByRole("combobox", { name: "Updated: All time" })
+      ).toBeInTheDocument()
+      expect(surface.getByText("Monthly fix")).toBeInTheDocument()
+    }
+  })
+
+  it("ages sidebar tasks out while it stays mounted", () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    view.tasks = [
+      task({
+        title: "Expiring task",
+        updated_at: new Date(now - 7 * day + 30_000).toISOString(),
+      }),
+    ]
+    saveTasksTimeFilter("7d")
+    mount()
+    expect(screen.getByText("Expiring task")).toBeInTheDocument()
+    act(() => {
+      vi.advanceTimersByTime(60_000)
+    })
+    expect(screen.queryByText("Expiring task")).not.toBeInTheDocument()
+    expect(screen.getByText(enMessages.Tasks.listEmpty)).toBeInTheDocument()
   })
 })

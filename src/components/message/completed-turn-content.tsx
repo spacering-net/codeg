@@ -214,6 +214,9 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
 
   const bodyId = useId()
   const turnRef = useRef<HTMLDivElement | null>(null)
+  // A long reply draws only the rows near the view (see `ActivityTimeline`):
+  // the failure link asks it to draw the one it is after.
+  const revealRef = useRef<((stepKey: string) => boolean) | null>(null)
   const activity = useMemo(
     () => buildActivity(parts, { isStreaming, keepAnswer: proseOnRail }),
     [parts, isStreaming, proseOnRail]
@@ -225,16 +228,23 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
     if (!failureKey) return
     openDisclosures(disclosureKeysFor(activity.items, failureKey))
     if (!bodyOpen) handleOpenChange(true)
-    requestAnimationFrame(() =>
+    requestAnimationFrame(() => {
+      // Drawn by now, if the steps were folded; the row itself may still
+      // be a scroll away.
+      revealRef.current?.(failureKey)
       requestAnimationFrame(() => {
+        const root = turnRef.current
+        if (!root) return
         const escaped = CSS.escape(failureKey)
-        turnRef.current
-          ?.querySelector(
-            `[data-step-key="${escaped}"], [data-step-key^="${escaped}:"]`
-          )
-          ?.scrollIntoView({ block: "center", behavior: "smooth" })
+        // The step's own row: a group's first member shares the group's key,
+        // and is the one inside it.
+        const rows = root.querySelectorAll(`[data-step-key="${escaped}"]`)
+        const row =
+          rows[rows.length - 1] ??
+          root.querySelector(`[data-step-key^="${escaped}:"]`)
+        row?.scrollIntoView({ block: "center", behavior: "smooth" })
       })
-    )
+    })
   }, [activity, failureKey, bodyOpen, handleOpenChange])
 
   // An open fold's steps end on a foot. While its agent is at work — not
@@ -387,6 +397,7 @@ export const CompletedTurnContent = memo(function CompletedTurnContent({
                 isStreaming={isStreaming}
                 foot={foldable || working ? foot : undefined}
                 headed
+                revealRef={revealRef}
               />
             </div>
           </CollapsibleContent>

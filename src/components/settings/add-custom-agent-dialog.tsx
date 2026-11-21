@@ -280,6 +280,7 @@ export function AddCustomAgentDialog({
   useEffect(() => {
     // Edit mode never shows the registry tab, so don't fetch the catalog.
     if (!open || editing) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- catalog fetch on open; the loader flips its loading flag first
     void loadCatalog()
   }, [open, editing, loadCatalog])
 
@@ -333,10 +334,12 @@ export function AddCustomAgentDialog({
       .catch(() => {})
   }, [open, platform])
 
-  // Reset the form each time the dialog opens so a previous attempt never
-  // leaks into the next one.
+  // Reset the form each time the dialog closes so a previous attempt never
+  // leaks into the next one. `open` is driven by the parent, so this cannot
+  // live in a local handler.
   useEffect(() => {
     if (open) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- form reset when the parent closes the dialog
     setQuery("")
     setManualId("")
     setManualName("")
@@ -416,7 +419,12 @@ export function AddCustomAgentDialog({
     () => (manualJson.trim() ? parseManualSpec(manualJson) : null),
     [manualJson]
   )
-  const manualKinds = manualParsed?.spec ? specKinds(manualParsed.spec) : []
+  // Memoised so `effectiveKind` (read from this array) is a frozen value the
+  // save callback below can list as a dependency.
+  const manualKinds = useMemo(
+    () => (manualParsed?.spec ? specKinds(manualParsed.spec) : []),
+    [manualParsed]
+  )
   // A chosen kind can go stale when the JSON is edited out from under it
   // (pick "binary", then paste an npx-only spec) — honouring it would save a
   // definition whose kind names a channel the spec does not carry.

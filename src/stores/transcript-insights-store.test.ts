@@ -70,6 +70,7 @@ function insights(
       earlier: null,
       revealingTurnId: null,
       currentTurnId: null,
+      running: null,
       ...over.nav,
     },
     plan: {
@@ -101,6 +102,49 @@ describe("mergeTranscriptInsights", () => {
   it("keeps the previous value when the new one has equal content", () => {
     const prev = insights()
     expect(mergeTranscriptInsights(prev, insights())).toBe(prev)
+  })
+
+  it("keeps the navigator while its running round is the same one", () => {
+    const prev = insights({
+      nav: { running: { turnId: "u2", startedAt: 1000 } },
+    })
+    // A fresh object of the same round, as every batch hands over.
+    const next = mergeTranscriptInsights(
+      prev,
+      insights({ nav: { running: { turnId: "u2", startedAt: 1000 } } })
+    )
+    expect(next).toBe(prev)
+  })
+
+  it("takes an entry whose send time changed", () => {
+    const prev = insights()
+    const next = mergeTranscriptInsights(
+      prev,
+      insights({
+        nav: {
+          entries: [
+            navEntry("u1", { subAgents: [source("tu-1")], sentAt: 5000 }),
+            navEntry("u2", { ordinal: 2, subAgents: [source("tu-2")] }),
+          ],
+        },
+      })
+    )
+    expect(next.nav.entries[0].sentAt).toBe(5000)
+    expect(next.nav.entries[1]).toBe(prev.nav.entries[1])
+  })
+
+  it("moves the navigator once its round stops running", () => {
+    const prev = insights({
+      nav: { running: { turnId: "u2", startedAt: 1000 } },
+    })
+    const next = mergeTranscriptInsights(
+      prev,
+      insights({ nav: { running: null } })
+    )
+    expect(next.nav).not.toBe(prev.nav)
+    expect(next.nav.running).toBeNull()
+    expect(next.nav.entries).toBe(prev.nav.entries)
+    expect(next.plan).toBe(prev.plan)
   })
 
   it("replaces only the part that changed", () => {

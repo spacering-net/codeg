@@ -1,6 +1,7 @@
 import {
   getActiveRemoteConnectionId,
   getShellTransport,
+  getServerBaseUrl,
   getTransport,
   isDesktop,
   isRemoteDesktopMode,
@@ -12,6 +13,7 @@ import {
   unauthorizedSource,
 } from "./transport/web-auth"
 import { notifyWebUnauthorized } from "./transport/web-connection-store"
+import { randomUUID } from "./utils"
 import { getCurrentEffectiveAppLocale } from "./i18n"
 import {
   DEFAULT_FORGE_COMMENT_PAGE_SIZE,
@@ -19,6 +21,7 @@ import {
   DEFAULT_FORGE_PAGE_SIZE,
 } from "./forge-list-prefs"
 import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
+import { asConversationMovedError } from "./conversation-moved"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
@@ -37,9 +40,13 @@ import type {
   AutomationDraft,
   DeepSeekCatalogModel,
   DeepSeekModelCatalog,
+  DeepSeekProviderRoute,
+  DeepSeekProviderRoutes,
   ForgeAutoScanReport,
   ForgeAutoStatus,
+  ForgeApproveResult,
   ForgeChangeDetail,
+  ForgeCheckSummaryList,
   ForgeChangedFileList,
   ForgeComment,
   ForgeCreateResult,
@@ -54,6 +61,7 @@ import type {
   ForgeMergeOptions,
   ForgePanelSettings,
   ForgeRemote,
+  ForgeImage,
   ForgeSettingsStore,
   ForgeSort,
   ForgeStateAction,
@@ -67,6 +75,7 @@ import type {
   WorkTaskEvent,
   WorkTaskFolderSettings,
   WorkTaskTemplate,
+  WorkTaskUncommittedFile,
   ConversationSummary,
   ConversationDetail,
   ConversationOutline,
@@ -133,6 +142,7 @@ import type {
   WorktreeResolution,
   GitWorktreeRemoval,
   DbConversationSummary,
+  MoveConversationsResult,
   ImportResult,
   ImportSelectedResult,
   ScanResult,
@@ -339,7 +349,7 @@ export async function acpPrompt(
     })
   } catch (e) {
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
-    throw e
+    throw asConversationMovedError(e) ?? e
   }
 }
 
@@ -949,6 +959,28 @@ export async function updateDeepSeekModelCatalog(
   models: DeepSeekCatalogModel[] | null
 ): Promise<void> {
   return getTransport().call("acp_update_deepseek_model_catalog", { models })
+}
+
+/**
+ * Read the DeepSeek Harness provider routes — `llm-pi-ai.providers` in the
+ * bridge's own `$DSH_HOME/deepseek-acp/settings.yaml`. While that document does
+ * not exist the routes come from the legacy harness documents the bridge
+ * imports, and `source` says which one.
+ */
+export async function loadDeepSeekProviderRoutes(): Promise<DeepSeekProviderRoutes> {
+  return getTransport().call("acp_load_deepseek_provider_routes", {})
+}
+
+/**
+ * Store the DeepSeek Harness provider routes, replacing `llm-pi-ai.providers`
+ * in the bridge's own document and leaving every other key (and every other
+ * section) alone. `null` — and an empty list — REMOVE the routes, so only the
+ * official DeepSeek route remains.
+ */
+export async function updateDeepSeekProviderRoutes(
+  routes: DeepSeekProviderRoute[] | null
+): Promise<void> {
+  return getTransport().call("acp_update_deepseek_provider_routes", { routes })
 }
 
 /**
@@ -1591,10 +1623,15 @@ export async function opencodeRemovePlugin(
 export async function acpListAgentSkills(params: {
   agentType: AgentType
   workspacePath?: string | null
+  /** Also list the dangling links under a skill's name (owner `broken`), so
+   *  they can be repaired or removed. Only the Harness page asks: an older
+   *  backend ignores it. */
+  includeBroken?: boolean
 }): Promise<AgentSkillsListResult> {
   return getTransport().call("acp_list_agent_skills", {
     agentType: params.agentType,
     workspacePath: params.workspacePath ?? null,
+    ...(params.includeBroken ? { includeBroken: true } : {}),
   })
 }
 
@@ -1635,6 +1672,12 @@ export async function acpSaveAgentSkill(params: {
   content: string
   workspacePath?: string | null
   layout?: AgentSkillLayout | null
+  /**
+   * A new skill: refused (`id_taken`) when the id is already used in any
+   * directory of the scope or in Codeg's store. Without it an existing skill
+   * of that id is updated.
+   */
+  create?: boolean
 }): Promise<AgentSkillItem> {
   return getTransport().call("acp_save_agent_skill", {
     agentType: params.agentType,
@@ -1643,6 +1686,7 @@ export async function acpSaveAgentSkill(params: {
     content: params.content,
     workspacePath: params.workspacePath ?? null,
     layout: params.layout ?? null,
+    ...(params.create ? { create: true } : {}),
   })
 }
 
@@ -1666,12 +1710,6 @@ export async function expertsList(): Promise<ExpertListItem[]> {
   return getTransport().call("experts_list")
 }
 
-export async function expertsGetInstallStatus(
-  expertId: string
-): Promise<ExpertInstallStatus[]> {
-  return getTransport().call("experts_get_install_status", { expertId })
-}
-
 /** One round-trip snapshot of every (expert, agent) link state for the matrix. */
 export async function expertsListAllInstallStatuses(): Promise<
   ExpertInstallStatus[]
@@ -1684,26 +1722,6 @@ export async function expertsApplyLinks(
   ops: LinkOp[]
 ): Promise<LinkOpResult[]> {
   return getTransport().call("experts_apply_links", { ops })
-}
-
-export async function expertsLinkToAgent(params: {
-  expertId: string
-  agentType: AgentType
-}): Promise<ExpertInstallStatus> {
-  return getTransport().call("experts_link_to_agent", {
-    expertId: params.expertId,
-    agentType: params.agentType,
-  })
-}
-
-export async function expertsUnlinkFromAgent(params: {
-  expertId: string
-  agentType: AgentType
-}): Promise<void> {
-  return getTransport().call("experts_unlink_from_agent", {
-    expertId: params.expertId,
-    agentType: params.agentType,
-  })
 }
 
 export async function expertsReadContent(expertId: string): Promise<string> {
@@ -1722,12 +1740,6 @@ export async function scienceList(): Promise<ScienceListItem[]> {
   return getTransport().call("science_list")
 }
 
-export async function scienceGetInstallStatus(
-  skillId: string
-): Promise<ExpertInstallStatus[]> {
-  return getTransport().call("science_get_install_status", { skillId })
-}
-
 /** One round-trip snapshot of every (science skill, agent) link state. */
 export async function scienceListAllInstallStatuses(): Promise<
   ExpertInstallStatus[]
@@ -1742,32 +1754,8 @@ export async function scienceApplyLinks(
   return getTransport().call("science_apply_links", { ops })
 }
 
-export async function scienceLinkToAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<ExpertInstallStatus> {
-  return getTransport().call("science_link_to_agent", {
-    skillId: params.skillId,
-    agentType: params.agentType,
-  })
-}
-
-export async function scienceUnlinkFromAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<void> {
-  return getTransport().call("science_unlink_from_agent", {
-    skillId: params.skillId,
-    agentType: params.agentType,
-  })
-}
-
 export async function scienceReadContent(skillId: string): Promise<string> {
   return getTransport().call("science_read_content", { skillId })
-}
-
-export async function scienceOpenCentralDir(): Promise<string> {
-  return getTransport().call("science_open_central_dir")
 }
 
 // ─── Custom (user-authored) skills ──────────────────────────────────────
@@ -1887,26 +1875,6 @@ export async function officecliListSkills(): Promise<OfficecliSkill[]> {
 
 export async function officecliSyncSkills(): Promise<SkillSyncReport> {
   return getTransport().call("officecli_sync_skills")
-}
-
-export async function officecliSkillLinkToAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<ExpertInstallStatus> {
-  return getTransport().call("officecli_skill_link_to_agent", params)
-}
-
-export async function officecliSkillUnlinkFromAgent(params: {
-  skillId: string
-  agentType: AgentType
-}): Promise<void> {
-  return getTransport().call("officecli_skill_unlink_from_agent", params)
-}
-
-export async function officecliSkillGetInstallStatus(
-  skillId: string
-): Promise<ExpertInstallStatus[]> {
-  return getTransport().call("officecli_skill_get_install_status", { skillId })
 }
 
 /** One round-trip snapshot of every (skill, agent) link state for the matrix. */
@@ -3632,21 +3600,26 @@ export async function openCommitWindow(folderId: number): Promise<void> {
   )
 }
 
+/**
+ * The Settings window's pages a caller can open by name. MCP, Skills and Skill
+ * packs are not among them: they are sections of the workspace's Harness page
+ * (`useOpenHarness`). Kept in step with `resolve_settings_route`
+ * (`commands/windows.rs`) and the web `open_settings_window`
+ * (`web/handlers/folders.rs`), where a name they do not know lands on
+ * Appearance.
+ */
 export type SettingsSection =
   | "general"
   | "appearance"
   | "agents"
-  | "mcp"
-  | "skills"
-  | "experts"
-  | "science"
-  | "office-tools"
   | "collaboration"
   | "browser"
   | "computer-use"
   | "version-control"
   | "shortcuts"
   | "system"
+  // Desktop only: the web nav has no Web service page.
+  | "web-service"
 
 interface OpenSettingsWindowOptions {
   agentType?: AgentType | null
@@ -3876,6 +3849,22 @@ export async function deleteConversation(
   conversationId: number
 ): Promise<void> {
   return getTransport().call("delete_conversation", { conversationId })
+}
+
+/**
+ * Move conversations to another open project folder. From the next message on
+ * the agent works in the target folder; the history is untouched. Each
+ * conversation is judged on its own — see {@link MoveConversationsResult} —
+ * and the call rejects only for an invalid target.
+ */
+export async function moveConversations(
+  conversationIds: number[],
+  targetFolderId: number
+): Promise<MoveConversationsResult> {
+  return getTransport().call("move_conversations", {
+    conversationIds,
+    targetFolderId,
+  })
 }
 
 // Folder command management
@@ -4282,7 +4271,11 @@ export async function workTaskDeliverPr(
   /** Which issues the pull request closes — a task made from several related
    *  issues only, and only before its first delivery fixed the list. Omitted
    *  (`undefined`) for every other delivery. */
-  closes?: number[]
+  closes?: number[],
+  /** Commit what the worktree holds uncommitted, with this message, before
+   *  the push (see `workTaskUncommittedFiles`). Omitted, a dirty worktree is
+   *  refused. */
+  commitMessage?: string
 ): Promise<string> {
   return getTransport().call("work_task_deliver_pr", {
     id,
@@ -4291,7 +4284,14 @@ export async function workTaskDeliverPr(
     deleteWorktree,
     markDone,
     ...(closes === undefined ? {} : { closes }),
+    ...(commitMessage === undefined ? {} : { commitMessage }),
   })
+}
+
+/** Stop waiting for the background work a running task's agent left going
+ *  and settle the task now; whatever is still running is stopped with it. */
+export async function workTaskStopBackgroundWait(id: number): Promise<void> {
+  return getTransport().call("work_task_stop_background_wait", { id })
 }
 
 /** Withdraw a merge waiting in the project's queue; the task stays in review. */
@@ -4325,6 +4325,28 @@ export async function workTaskDefer(
   return getTransport().call("work_task_defer", { id, deferred })
 }
 
+/**
+ * The answer about a forge-sourced task's thread comment, given while
+ * accepting it: whether it is posted when the task finishes, and the reply it
+ * carries per item number (blank or missing = the outcome line alone). Only
+ * while the task is in review in generation `runSeq` — the one the dialog
+ * showed; call it before the acceptance itself, which it then binds to that
+ * generation (refused once the task ran again).
+ */
+export async function workTaskSetWriteback(
+  id: number,
+  runSeq: number,
+  writeback: boolean,
+  drafts: Record<number, string>
+): Promise<void> {
+  return getTransport().call("work_task_set_writeback", {
+    id,
+    runSeq,
+    writeback,
+    drafts,
+  })
+}
+
 /** Remove the task's worktree + branch (also retries a failed cleanup). */
 export async function workTaskCleanup(id: number): Promise<void> {
   return getTransport().call("work_task_cleanup", { id })
@@ -4342,6 +4364,14 @@ export async function workTaskChangedFiles(
   id: number
 ): Promise<WorkTaskChangedFile[]> {
   return getTransport().call("work_task_changed_files", { id })
+}
+
+/** What the task's worktree holds uncommitted — the files a delivery would
+ *  commit before pushing. */
+export async function workTaskUncommittedFiles(
+  id: number
+): Promise<WorkTaskUncommittedFile[]> {
+  return getTransport().call("work_task_uncommitted_files", { id })
 }
 
 /** Effective settings after the folder → global → built-in fallback — what
@@ -5028,14 +5058,66 @@ export async function getFileTree(
 }
 
 /**
- * Flat, gitignore-aware listing of every file/dir under `path`. Ignored
- * directories are pruned during the backend walk (no depth cap), so deeply
- * nested files are reachable while the payload stays small. Used by file search.
+ * Enumerate every non-ignored file/dir under `path`, without a depth cap.
+ * This can return millions of entries; search surfaces use searchWorkspaceFiles
+ * to keep the renderer's payload and retained state bounded.
  */
 export async function listWorkspaceFiles(
   path: string
 ): Promise<WorkspaceFileEntry[]> {
   return getTransport().call("list_workspace_files", { path })
+}
+
+/** Compatibility no-op. Discovery starts only with a cancellable query. */
+export async function prepareWorkspaceFileSearch(path: string): Promise<void> {
+  return getTransport().call("prepare_workspace_file_search", { path })
+}
+
+/** Rank across the workspace and transfer only a bounded set of matches. */
+export async function searchWorkspaceFiles(
+  path: string,
+  query: string,
+  options: {
+    limit?: number
+    filesOnly?: boolean
+    refresh?: boolean
+    /** Reject a cached snapshot built more than this many ms ago. */
+    maxAgeMs?: number
+    request?: { consumerId: string; generation: number }
+    signal?: AbortSignal
+  } = {}
+): Promise<WorkspaceFileEntry[]> {
+  const {
+    signal,
+    request = { consumerId: randomUUID(), generation: 0 },
+    ...params
+  } = options
+  if (signal?.aborted) return []
+  const transport = getTransport()
+  const cancel = () => {
+    void transport
+      .call("cancel_workspace_file_search", { request })
+      .catch(() => {})
+  }
+  signal?.addEventListener("abort", cancel, { once: true })
+  try {
+    return await transport.call(
+      "search_workspace_files",
+      {
+        path,
+        query,
+        ...params,
+        request,
+      },
+      {
+        // The backend bounds queue wait + traversal to five minutes. Give both
+        // HTTP transports time to receive that result, including a cold build.
+        timeoutMs: 330_000,
+      }
+    )
+  } finally {
+    signal?.removeEventListener("abort", cancel)
+  }
 }
 
 export async function startWorkspaceStateStream(
@@ -5318,7 +5400,20 @@ export interface WebServerInfo {
   port: number
   token: string
   addresses: string[]
+  /** Address the listener is bound to: `0.0.0.0` (every interface, so the
+   *  local network can reach it) or `127.0.0.1` (this machine only). */
+  bindHost: string
 }
+
+/** Bind hosts the desktop web service can be configured with (Rust
+ *  `WEB_SERVICE_HOST_CANDIDATES`); the first is the default. */
+export const WEB_SERVICE_HOSTS = ["0.0.0.0", "127.0.0.1"] as const
+export type WebServiceHost = (typeof WEB_SERVICE_HOSTS)[number]
+export const DEFAULT_WEB_SERVICE_HOST: WebServiceHost = "0.0.0.0"
+
+/** Broadcast whenever the desktop web service starts or stops, from any
+ *  window or from auto-start. Carries only `running`; re-read the status. */
+export const WEB_SERVICE_STATUS_CHANGED_EVENT = "web-service://status-changed"
 
 export async function startWebServer(params?: {
   port?: number
@@ -5344,6 +5439,8 @@ export interface WebServiceConfig {
   token: string | null
   port: number | null
   autoStart: boolean
+  /** Saved bind host; `null`/absent means never chosen (the default). */
+  host?: WebServiceHost | null
 }
 
 export async function getWebServiceConfig(): Promise<WebServiceConfig> {
@@ -6324,6 +6421,37 @@ export async function forgeIssueDetail(
   })
 }
 
+/** Download to the backend cache; render its binary resource URL. */
+export async function forgeReadImage(
+  folderId: number,
+  uploadPath: string,
+  accountId?: string | null
+): Promise<ForgeImage> {
+  const connectionId = getActiveRemoteConnectionId()
+  const baseUrl = getServerBaseUrl()
+  const image = await getTransport().call<ForgeImage>("forge_read_image", {
+    folderId,
+    uploadPath,
+    accountId: accountId ?? null,
+  })
+  if (connectionId != null) {
+    // Preserve the remote connection's custom auth headers and support HTTP
+    // remote servers: Rust copies the binary into this desktop's cache.
+    try {
+      return await getShellTransport().call<ForgeImage>(
+        "remote_cache_forge_image",
+        { connectionId, url: image.url }
+      )
+    } catch (error) {
+      if (isRemoteAuthenticationFailed(error)) {
+        notifyRemoteDesktopUnauthorized()
+      }
+      throw error
+    }
+  }
+  return isDesktop() ? image : { ...image, url: `${baseUrl}${image.url}` }
+}
+
 /** Everything a COUNT may be narrowed by. No page and no order: neither can
  *  change the number, which is what lets the switcher survive a page turn
  *  without spending a request. */
@@ -6505,6 +6633,35 @@ export async function forgeChangeDetail(
   return getTransport().call("forge_change_detail", {
     folderId,
     query: { number, accountId: accountId ?? null },
+  })
+}
+
+/** CI summaries for one page of proposed changes — the list rows' marks.
+ *  Asked AFTER the list has drawn, and never an error the page shows: a forge
+ *  that cannot answer comes back `available: false`, which draws nothing. */
+export async function forgeCheckSummaries(
+  folderId: number,
+  numbers: number[],
+  accountId?: string | null
+): Promise<ForgeCheckSummaryList> {
+  return getTransport().call("forge_check_summaries", {
+    folderId,
+    query: { numbers, accountId: accountId ?? null },
+  })
+}
+
+/** Approve the workflow runs held on a pull request (GitHub). `headSha` is the
+ *  commit the person reviewed: the backend refuses if the change has moved on
+ *  since, rather than approving a push nobody looked at. */
+export async function forgeApproveWorkflows(
+  folderId: number,
+  number: number,
+  headSha: string,
+  accountId?: string | null
+): Promise<ForgeApproveResult> {
+  return getTransport().call("forge_approve_workflows", {
+    folderId,
+    request: { number, headSha, accountId: accountId ?? null },
   })
 }
 

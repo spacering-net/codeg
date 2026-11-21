@@ -80,6 +80,9 @@ describe("setCustomAgentDisplay", () => {
 
 describe("isMonochromeSvgDataUrl", () => {
   const encode = (svg: string) => `data:image/svg+xml;base64,${btoa(svg)}`
+  /** A distinct monochrome SVG data URL of roughly `padding` source bytes. */
+  const paddedIcon = (tag: string, padding: number) =>
+    encode(`<svg><!--${tag}:${"x".repeat(padding)}--></svg>`)
 
   it("classifies currentColor marks as monochrome", () => {
     // The shape every ACP-registry icon has today.
@@ -170,5 +173,64 @@ describe("isMonochromeSvgDataUrl", () => {
     isMonochromeSvgDataUrl(url)
     expect(spy.mock.calls.length).toBe(callsAfterFirst)
     spy.mockRestore()
+  })
+
+  it.each([
+    { icons: 192, padding: 0, reason: "many small icons" },
+    { icons: 12, padding: 160 * 1024, reason: "a few large icons" },
+  ])("evicts old classifications after $reason", ({ icons, padding }) => {
+    const icon = (index: number) =>
+      paddedIcon(`evict:${padding}:${index}`, padding)
+    const oldest = icon(0)
+    expect(isMonochromeSvgDataUrl(oldest)).toBe(true)
+    let newest = oldest
+    for (let index = 1; index < icons; index++) {
+      newest = icon(index)
+      expect(isMonochromeSvgDataUrl(newest)).toBe(true)
+    }
+
+    const decode = vi.spyOn(globalThis, "atob")
+    try {
+      expect(isMonochromeSvgDataUrl(newest)).toBe(true)
+      expect(decode).not.toHaveBeenCalled()
+      expect(isMonochromeSvgDataUrl(oldest)).toBe(true)
+      expect(decode).toHaveBeenCalledTimes(1)
+    } finally {
+      decode.mockRestore()
+    }
+  })
+
+  it("keeps an icon that is still in use while newer ones age out", () => {
+    const shown = paddedIcon("lru:shown", 0)
+    isMonochromeSvgDataUrl(shown)
+    const decode = vi.spyOn(globalThis, "atob")
+    try {
+      for (let index = 0; index < 300; index++) {
+        isMonochromeSvgDataUrl(paddedIcon(`lru:${index}`, 0))
+        expect(isMonochromeSvgDataUrl(shown)).toBe(true)
+      }
+      // Only the newcomers are decoded; the icon on screen never is again.
+      expect(decode).toHaveBeenCalledTimes(300)
+    } finally {
+      decode.mockRestore()
+    }
+  })
+
+  it("keeps several maximum-size icons cached side by side", () => {
+    // 256 KiB is the upload/inline cap for an icon.
+    const icons = [0, 1, 2, 3].map((index) =>
+      paddedIcon(`max:${index}`, 256 * 1024 - 64)
+    )
+    for (const url of icons) isMonochromeSvgDataUrl(url)
+    const decode = vi.spyOn(globalThis, "atob")
+    try {
+      // A list re-rendering every icon in turn must not re-decode any.
+      for (let pass = 0; pass < 3; pass++) {
+        for (const url of icons) expect(isMonochromeSvgDataUrl(url)).toBe(true)
+      }
+      expect(decode).not.toHaveBeenCalled()
+    } finally {
+      decode.mockRestore()
+    }
   })
 })

@@ -98,6 +98,9 @@ export function TaskScheduleDialog({
   const plannedAt = task?.scheduled_at ?? null
   useEffect(() => {
     if (!open) return
+    // Kept as an effect: the reset reads the clock, which must not happen
+    // during render.
+    /* eslint-disable react-hooks/set-state-in-effect */
     const now = new Date()
     setOpenedAt(now.getTime())
     const planned = plannedAt ? isoToDateTimeLocalValue(plannedAt) : null
@@ -106,6 +109,7 @@ export function TaskScheduleDialog({
     setTime(parts.time)
     setCalendarOpen(false)
     setSubmitting(false)
+    /* eslint-enable react-hooks/set-state-in-effect */
     // `plannedAt` seeds the fields but deliberately does not re-run this: while
     // the dialog is open the inputs belong to the user, not to the row.
     // eslint-disable-next-line react-hooks/exhaustive-deps

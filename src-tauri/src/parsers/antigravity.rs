@@ -85,7 +85,8 @@ pub(crate) fn resolve_gemini_home() -> PathBuf {
     resolve_gemini_home_for_env(&AgentEnv::inherited())
 }
 
-fn resolve_gemini_home_for_env(env: &AgentEnv) -> PathBuf {
+/// [`resolve_gemini_home`] for the server launched with `env`.
+pub(crate) fn resolve_gemini_home_for_env(env: &AgentEnv) -> PathBuf {
     resolve_gemini_home_from(env.var_os("GEMINI_HOME"), dirs::home_dir())
 }
 
@@ -429,9 +430,9 @@ struct AntigravityAskOption {
 }
 
 /// `exa.cortex_pb.AskQuestionEntry`: one question of an `ask_question` step and
-/// the user's answer to it. Checked against the 1.4.1, 1.4.3 and 1.4.4
-/// descriptors and live runs: options are numbered `"1"`, `"2"`, …; a question
-/// the user dismissed (or never reached, once an earlier one was dismissed) is
+/// the user's answer to it. Checked against the 1.4.1, 1.4.3, 1.4.4, 1.4.5 and
+/// 1.5.0 descriptors and live runs: options are numbered `"1"`, `"2"`, …; a
+/// question the user dismissed (or never reached, once an earlier one was dismissed) is
 /// `skipped` with nothing chosen; a multi-select question is still answered
 /// with one option, because the ACP server asks it as a single-choice
 /// permission request.
