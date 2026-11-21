@@ -1397,6 +1397,8 @@ mod tauri_app {
                         message_db,
                         message_manager,
                         broker_for_lifecycle,
+                        effective_data_dir.clone(),
+                        web::event_bridge::EventEmitter::from_app(app.handle()),
                     ));
                 }
 

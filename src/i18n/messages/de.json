@@ -3799,6 +3799,7 @@
         "downloadFailed": "Herunterladen von {name} fehlgeschlagen"
       },
       "messageList": {
+        "sessionMessageSource": "Von Sitzung: {session}",
         "loading": "Lädt...",
         "loadBackgroundActivity": "Hintergrundaktivität laden",
         "loadEarlier": "Frühere Nachrichten laden",

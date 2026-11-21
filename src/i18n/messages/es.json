@@ -3799,6 +3799,7 @@
         "downloadFailed": "No se pudo descargar {name}"
       },
       "messageList": {
+        "sessionMessageSource": "De la sesión: {session}",
         "loading": "Cargando...",
         "loadBackgroundActivity": "Cargar actividad en segundo plano",
         "loadEarlier": "Cargar mensajes anteriores",

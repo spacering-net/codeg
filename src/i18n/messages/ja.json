@@ -3799,6 +3799,7 @@
         "downloadFailed": "{name} のダウンロードに失敗しました"
       },
       "messageList": {
+        "sessionMessageSource": "送信元セッション：{session}",
         "loading": "読み込み中...",
         "loadBackgroundActivity": "バックグラウンドの動作を読み込む",
         "loadEarlier": "以前のメッセージを読み込む",

@@ -3799,6 +3799,7 @@
         "downloadFailed": "Échec du téléchargement de {name}"
       },
       "messageList": {
+        "sessionMessageSource": "De la session : {session}",
         "loading": "Chargement...",
         "loadBackgroundActivity": "Charger l'activité en arrière-plan",
         "loadEarlier": "Charger les messages précédents",

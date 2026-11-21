@@ -75,8 +75,12 @@ pub async fn queued(db: &DatabaseConnection) -> Result<Vec<session_message::Mode
 }
 
 /// Compare-and-set prevents competing dispatchers from accepting the same row.
-pub async fn claim(db: &DatabaseConnection, id: i32) -> Result<bool, DbErr> {
-    transition(db, id, "queued", "in_flight", None).await
+pub async fn claim(db: &DatabaseConnection, row: &session_message::Model) -> Result<bool, DbErr> {
+    let result = transition_update(row.id, "queued", "in_flight", None)
+        .filter(session_message::Column::UpdatedAt.eq(row.updated_at))
+        .exec(db)
+        .await?;
+    Ok(result.rows_affected == 1)
 }
 
 pub async fn transition(
@@ -86,7 +90,17 @@ pub async fn transition(
     to: &str,
     error: Option<String>,
 ) -> Result<bool, DbErr> {
-    let result = session_message::Entity::update_many()
+    let result = transition_update(id, from, to, error).exec(db).await?;
+    Ok(result.rows_affected == 1)
+}
+
+fn transition_update(
+    id: i32,
+    from: &str,
+    to: &str,
+    error: Option<String>,
+) -> sea_orm::UpdateMany<session_message::Entity> {
+    session_message::Entity::update_many()
         .col_expr(
             session_message::Column::Status,
             sea_orm::sea_query::Expr::value(to),
@@ -101,9 +115,6 @@ pub async fn transition(
         )
         .filter(session_message::Column::Id.eq(id))
         .filter(session_message::Column::Status.eq(from))
-        .exec(db)
-        .await?;
-    Ok(result.rows_affected == 1)
 }
 
 pub async fn defer_as_queue(db: &DatabaseConnection, id: i32) -> Result<(), DbErr> {
@@ -239,7 +250,7 @@ mod tests {
         .await
         .unwrap();
         let row = queued(&db.conn).await.unwrap().remove(0);
-        let (first, second) = tokio::join!(claim(&db.conn, row.id), claim(&db.conn, row.id));
+        let (first, second) = tokio::join!(claim(&db.conn, &row), claim(&db.conn, &row));
         assert_ne!(first.unwrap(), second.unwrap());
         assert!(settle(&db.conn, &row, true, Some("answer".into()), None)
             .await
@@ -272,7 +283,7 @@ mod tests {
         .await
         .unwrap();
         let row = queued(&db.conn).await.unwrap().remove(0);
-        claim(&db.conn, row.id).await.unwrap();
+        claim(&db.conn, &row).await.unwrap();
         db.conn.execute(Statement::from_string(DbBackend::Sqlite, "CREATE TRIGGER reject_reply BEFORE INSERT ON session_message BEGIN SELECT RAISE(ABORT, 'test'); END".to_owned())).await.unwrap();
         assert!(settle(&db.conn, &row, true, Some("answer".into()), None)
             .await
@@ -312,7 +323,7 @@ mod tests {
         .await
         .unwrap();
         let first = queued(&db.conn).await.unwrap().remove(0);
-        claim(&db.conn, first.id).await.unwrap();
+        claim(&db.conn, &first).await.unwrap();
         interrupt_in_flight(&db.conn).await.unwrap();
         let saved = session_message::Entity::find_by_id(first.id)
             .one(&db.conn)

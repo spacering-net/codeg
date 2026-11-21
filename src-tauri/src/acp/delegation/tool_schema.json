@@ -71,12 +71,14 @@
   },
   {
     "name": "create_session",
-    "description": "Create an independent Codeg conversation. Provide title and message. By default it uses the current conversation's agent type and folder. Use this when the user asks to create separate conversations, have multiple sessions chat, or take turns continuing a story. Returns conversation_id after starting the first message. The conversation has its own history and stays available after the creator finishes. The first answer is sent back automatically. Use send_to_session with reply=true for later messages. Finish your turn after creating or sending so the automatic answers can arrive as visible incoming messages and start the next turn; do not poll get_session_info for answers.",
+    "description": "Create an independent Codeg conversation. Specify a title, first message, model, reasoning setting, and permission mode. By default it uses the current conversation's agent type and folder. Use this when the user asks to create separate conversations, have multiple sessions chat, or take turns continuing a story. Returns conversation_id after starting the first message. The conversation has its own history and stays available after the creator finishes. The first answer is sent back automatically. Use send_to_session with reply=true for later messages. Finish your turn after creating or sending so the automatic answers can arrive as visible incoming messages and start the next turn; do not poll get_session_info for answers.",
     "inputSchema": {
       "type": "object",
       "required": [
         "title",
-        "message"
+        "message",
+        "mode_id",
+        "config_values"
       ],
       "properties": {
         "agent_type": {
@@ -122,21 +124,27 @@
         },
         "mode_id": {
           "type": "string",
-          "minLength": 1,
-          "description": "Permission mode ID offered by the target agent. A new session of the same agent type inherits the current session's mode. When choosing a different agent type, pass its mode ID to set its permissions explicitly. Examples: Codex read-only or agent-full-access; Claude Code bypassPermissions. An unavailable mode stops creation before the first message."
+          "pattern": "\\S",
+          "description": "Permission mode ID offered by the target agent. For the same agent type, pass the current session's mode ID. For a different agent type, pass a mode ID it offers."
         },
         "config_values": {
           "type": "object",
           "propertyNames": { "enum": ["model", "reasoning_effort", "effort", "thought_level"] },
-          "additionalProperties": { "type": "string" },
-          "description": "Optional model and reasoning settings keyed by the selected agent's ACP option IDs. Set this when the user asks for a specific model or reasoning level. For Codex Luna Medium pass { \"model\": \"gpt-6-luna\", \"reasoning_effort\": \"medium\" }. The first message is sent only if all supplied settings take effect."
+          "additionalProperties": { "type": "string", "pattern": "\\S" },
+          "required": ["model"],
+          "anyOf": [
+            { "required": ["reasoning_effort"] },
+            { "required": ["effort"] },
+            { "required": ["thought_level"] }
+          ],
+          "description": "Specify model and the reasoning option ID offered by the target agent. For Codex, use reasoning_effort. The first message is sent only if the supplied settings take effect."
         }
       }
     }
   },
   {
     "name": "send_to_session",
-    "description": "Send a message to an existing Codeg conversation. Returns a message_id once queued. Put only your message in the body. Codeg adds the sender's conversation ID automatically. To follow up on an incoming message, use the sender ID in its Codeg header as the destination. For conversations chatting or taking turns, use reply=true, then finish your turn: the recipient's answer will arrive automatically as a visible incoming message and start your next turn. Do not poll get_session_info for the answer. Use reply=false only for a one-way notification or when explicitly sending an answer back. An offline conversation receives it next time it is opened.",
+    "description": "Send a message to an existing Codeg conversation. Returns a message_id once queued. Codeg activates offline recipients in the background. Put only your message in the body. Codeg adds the sender's conversation ID automatically. To follow up on an incoming message, use the sender ID in its Codeg header as the destination. For conversations chatting or taking turns, use reply=true, then finish your turn: the recipient's answer will arrive automatically as a visible incoming message and start your next turn. Do not poll get_session_info for the answer. Use reply=false only for a one-way notification or when explicitly sending an answer back.",
     "inputSchema": {
       "type": "object",
       "required": ["conversation_id", "message", "mode", "reply"],

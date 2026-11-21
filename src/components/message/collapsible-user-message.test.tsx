@@ -165,7 +165,10 @@ describe("CollapsibleUserMessage", () => {
           ]}
         />
       )
-      const link = screen.getByRole("button", { name: "Conversation #42" })
+      const link = screen.getByRole("button", {
+        name: "From conversation: Sender",
+      })
+      expect(link).toHaveClass("truncate")
       fireEvent.click(link)
       fireEvent.click(link)
       const { rawTabs, activeTabId } = useTabStore.getState()
@@ -206,7 +209,7 @@ describe("CollapsibleUserMessage", () => {
         ]}
       />
     )
-    const source = screen.getByText("Conversation #42")
+    const source = screen.getByText("From conversation: #42")
     expect(source.parentElement?.querySelector("time")).toHaveAttribute(
       "datetime",
       timestamp

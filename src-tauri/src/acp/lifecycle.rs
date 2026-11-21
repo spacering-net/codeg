@@ -368,6 +368,8 @@ pub(crate) async fn handle_event(
                 )
                 .await;
             }
+            let mut state = state_arc.write().await;
+            state.settled_turn_seq = state.settled_turn_seq.max(envelope.seq);
             Ok(())
         }
         AcpEvent::NativeSessionTitle { title } => {

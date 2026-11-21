@@ -3799,6 +3799,7 @@
         "downloadFailed": "下載 {name} 失敗"
       },
       "messageList": {
+        "sessionMessageSource": "來自工作階段：{session}",
         "loading": "載入中...",
         "loadBackgroundActivity": "載入背景活動",
         "loadEarlier": "載入更早的訊息",

@@ -615,6 +615,8 @@ async fn async_main(
         state.db.conn.clone(),
         Arc::new(state.connection_manager.clone_ref()),
         state.delegation_broker.clone(),
+        state.data_dir.clone(),
+        state.emitter.clone(),
     ));
 
     // Spawn the desktop pet state mapper so server-mode browsers viewing

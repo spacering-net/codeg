@@ -879,8 +879,8 @@ impl DelegationListener {
         if entry.agent_hosts_tools || !config.session_messaging_enabled {
             return serde_json::json!({"error": "Session creation is disabled"});
         }
-        if req.title.trim().is_empty() || req.message.trim().is_empty() {
-            return serde_json::json!({"error": "title and message must not be empty"});
+        if let Err(error) = req.validate() {
+            return serde_json::json!({"error": error});
         }
         let Some(creator) = self.session_creator.get() else {
             return serde_json::json!({"error": "Session creation is unavailable"});

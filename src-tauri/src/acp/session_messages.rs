@@ -18,6 +18,7 @@ use crate::db::entities::{conversation, session_message};
 use crate::db::service::session_message_service as queue;
 use crate::db::service::{conversation_service, folder_service};
 use crate::db::AppDatabase;
+use crate::web::event_bridge::EventEmitter;
 
 pub(crate) const PROMPT_ID_PREFIX: &str = "session-message-";
 type TurnResult = Result<Option<String>, String>;
@@ -312,6 +313,7 @@ impl SessionCreator {
             broker,
             vec![message],
             Some(connection),
+            None,
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -323,6 +325,8 @@ pub async fn start(
     db: DatabaseConnection,
     manager: Arc<ConnectionManager>,
     broker: Arc<DelegationBroker>,
+    data_dir: std::path::PathBuf,
+    emitter: EventEmitter,
 ) {
     while let Err(error) = queue::interrupt_in_flight(&db).await {
         tracing::warn!(%error, "could not recover session messages");
@@ -366,8 +370,14 @@ pub async fn start(
                         let db = db.clone();
                         let manager = manager.clone();
                         let broker = broker.clone();
+                        let data_dir = data_dir.clone();
+                        let emitter = emitter.clone();
                         let task = dispatches.spawn(async move {
-                            if let Err(error) = dispatch(&db, &manager, &broker, rows, None).await {
+                            if let Err(error) = dispatch(
+                                &db, &manager, &broker, rows, None, Some((&data_dir, &emitter)),
+                            )
+                            .await
+                            {
                                 tracing::warn!(recipient, %error, "could not dispatch session message");
                             }
                         });
@@ -385,6 +395,7 @@ async fn dispatch(
     broker: &DelegationBroker,
     rows: Vec<session_message::Model>,
     initial_connection: Option<String>,
+    activation: Option<(&std::path::Path, &EventEmitter)>,
 ) -> Result<(), crate::db::error::DbError> {
     let recipient_id = rows[0].conversation_id;
     let Some(recipient) = live_conversation(db, recipient_id).await? else {
@@ -405,6 +416,9 @@ async fn dispatch(
         }
     }
 
+    if valid.is_empty() {
+        return Ok(());
+    }
     let is_initial = initial_connection.is_some();
     let connection = if is_initial {
         initial_connection
@@ -429,8 +443,21 @@ async fn dispatch(
             },
         }
     };
-    let Some(connection) = connection else {
-        return Ok(());
+    let connection = match (connection, activation) {
+        (Some(connection), _) => connection,
+        (None, Some((data_dir, emitter))) => {
+            match activate_recipient(db, manager, &recipient, data_dir, emitter).await {
+                Ok(connection) => connection,
+                Err(error) => {
+                    let reason = format!("could not activate recipient: {error}");
+                    for row in valid {
+                        fail_queued(db, &row, &reason).await?;
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        (None, None) => return Ok(()),
     };
     let Some(state) = manager.get_state(&connection).await else {
         return Ok(());
@@ -456,7 +483,7 @@ async fn dispatch(
         return Ok(());
     };
     if !broker.config_snapshot().await.session_messaging_enabled
-        || !queue::claim(db, row.id).await?
+        || !queue::claim(db, &row).await?
     {
         return Ok(());
     }
@@ -541,6 +568,80 @@ async fn dispatch(
         Err(error) => finish(db, &row, Err(error.to_string())).await?,
     }
     Ok(())
+}
+
+async fn activate_recipient(
+    db: &DatabaseConnection,
+    manager: &ConnectionManager,
+    recipient: &conversation::Model,
+    data_dir: &std::path::Path,
+    emitter: &EventEmitter,
+) -> Result<String, String> {
+    let agent = crate::models::AgentType::from_wire(&recipient.agent_type)
+        .ok_or("recipient agent is unavailable")?;
+    if recipient.external_id.is_none() && recipient.message_count > 0 {
+        return Err("the recipient has history but no agent session ID".into());
+    }
+    let folder = folder_service::get_folder_by_id(db, recipient.folder_id)
+        .await
+        .map_err(|error| error.to_string())?
+        .ok_or("recipient folder is unavailable")?;
+    crate::commands::acp::verify_agent_installed(agent)
+        .await
+        .map_err(|error| error.to_string())?;
+    let env = crate::commands::acp::build_session_runtime_env(
+        &AppDatabase { conn: db.clone() },
+        agent,
+        recipient.external_id.as_deref(),
+        data_dir,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    let preferences = recipient
+        .model
+        .clone()
+        .map(|model| ("model".into(), model))
+        .into_iter()
+        .collect();
+    let outcome = manager
+        .spawn_agent_with_outcome(
+            agent,
+            Some(folder.path),
+            recipient.external_id.clone(),
+            env,
+            "session-tools".into(),
+            emitter.clone(),
+            None,
+            preferences,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let connection = outcome.connection_id;
+    let ready: Result<(), String> = async {
+        manager
+            .wait_for_session_options(&connection, Duration::from_secs(60))
+            .await
+            .map_err(|error| error.to_string())?;
+        let state = manager
+            .get_state(&connection)
+            .await
+            .ok_or("recipient disconnected")?;
+        let state = state.read().await;
+        if let Some(external_id) = recipient.external_id.as_deref() {
+            if state.external_id.as_deref() != Some(external_id) {
+                return Err("the agent did not resume the original session".into());
+            }
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(error) = ready {
+        if !outcome.reused {
+            let _ = manager.disconnect(&connection).await;
+        }
+        return Err(error);
+    }
+    Ok(connection)
 }
 
 async fn live_conversation(

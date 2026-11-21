@@ -557,6 +557,38 @@ pub struct BrokerCreateSessionRequest {
     pub config_values: std::collections::BTreeMap<String, String>,
 }
 
+impl BrokerCreateSessionRequest {
+    pub(super) fn validate(&self) -> Result<(), &'static str> {
+        if self.title.trim().is_empty() || self.message.trim().is_empty() {
+            return Err("title and message must not be empty");
+        }
+        if !self
+            .mode_id
+            .as_deref()
+            .is_some_and(|mode| !mode.trim().is_empty())
+        {
+            return Err("create_session requires mode_id");
+        }
+        if !self
+            .config_values
+            .get("model")
+            .is_some_and(|model| !model.trim().is_empty())
+        {
+            return Err("create_session requires config_values.model");
+        }
+        if !["reasoning_effort", "effort", "thought_level"]
+            .iter()
+            .any(|key| self.config_values.contains_key(*key))
+        {
+            return Err("create_session requires a reasoning option in config_values");
+        }
+        if self.config_values.values().any(|value| value.trim().is_empty()) {
+            return Err("config_values must not contain empty values");
+        }
+        Ok(())
+    }
+}
+
 pub async fn client_create_session_round_trip(
     socket_path: &str,
     req: BrokerCreateSessionRequest,

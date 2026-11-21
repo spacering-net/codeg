@@ -1156,8 +1156,8 @@ async fn build_tools_call_spawn(
                         return LineAction::Respond(err(id, -32602, format!("create_session: {error}")));
                     }
                 };
-            if req.title.trim().is_empty() || req.message.trim().is_empty() {
-                return LineAction::Respond(err(id, -32602, "title and message must not be empty"));
+            if let Err(error) = req.validate() {
+                return LineAction::Respond(err(id, -32602, error));
             }
             let round_trip = Box::pin(async move {
                 super::transport::client_create_session_round_trip(&socket, req).await
@@ -5467,13 +5467,32 @@ mod tests {
         let valid = json!({
             "jsonrpc": "2.0", "id": 42, "method": "tools/call",
             "params": {"name": "create_session", "arguments": {
-                "title": "C", "message": "Continue the story."
+                "title": "C", "message": "Continue the story.", "mode_id": "read-only",
+                "config_values": {"model": "gpt-6.2-sol", "reasoning_effort": "high"}
             }}
         }).to_string();
         assert!(matches!(
             dispatch_with_features(features, &valid).await,
             LineAction::Spawn(_)
         ));
+        for (path, field) in [
+            ("/params/arguments", "mode_id"),
+            ("/params/arguments/config_values", "model"),
+            ("/params/arguments/config_values", "reasoning_effort"),
+        ] {
+            let mut request: Value = serde_json::from_str(&valid).unwrap();
+            request
+                .pointer_mut(path)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            let error =
+                unwrap_respond(dispatch_with_features(features, &request.to_string()).await)
+                    .error
+                    .unwrap();
+            assert_eq!(error.code, -32602, "missing {field}");
+        }
         let invalid_agent = valid.replace(
             "\"title\":\"C\"",
             "\"agent_type\":\"claude\",\"title\":\"C\"",

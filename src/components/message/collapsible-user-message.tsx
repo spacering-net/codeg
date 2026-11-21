@@ -33,12 +33,14 @@ function SessionMessageSource({
   id: string
   anchor?: SessionMessageAnchor
 }) {
+  const t = useTranslations("Folder.chat.messageList")
   const conversation = useAppWorkspaceStore((state) =>
     state.conversations.find((candidate) => candidate.id === Number(id))
   )
   const { openTab } = useTabActions()
   const route = useOptionalWorkbenchRoute()
-  const label = `Conversation #${id}`
+  const title = formatConversationTitle(conversation?.title).trim() || `#${id}`
+  const label = t("sessionMessageSource", { session: title })
   if (!conversation) {
     return <span className="text-xs text-muted-foreground">{label}</span>
   }
@@ -49,7 +51,7 @@ function SessionMessageSource({
         <TooltipTrigger asChild>
           <button
             type="button"
-            className="w-fit cursor-pointer text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            className="min-w-0 cursor-pointer truncate text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
             onClick={() => {
               useSessionMessageJump.setState({
                 pending: anchor
@@ -69,8 +71,8 @@ function SessionMessageSource({
             {label}
           </button>
         </TooltipTrigger>
-        <TooltipContent>
-          {formatConversationTitle(conversation.title) || label}
+        <TooltipContent className="max-w-80 break-words">
+          {title}
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -134,7 +136,7 @@ export const CollapsibleUserMessage = memo(function CollapsibleUserMessage({
   return (
     <>
       {message.source && (
-        <div className="flex flex-wrap items-baseline gap-x-2">
+        <div className="flex min-w-0 items-baseline gap-x-2">
           <SessionMessageSource id={message.source} anchor={message.anchor} />
           {Number.isFinite(receivedAt) && (
             <time
@@ -143,7 +145,7 @@ export const CollapsibleUserMessage = memo(function CollapsibleUserMessage({
                 dateStyle: "medium",
                 timeStyle: "medium",
               }).format(receivedAt)}
-              className="text-xs text-muted-foreground tabular-nums"
+              className="shrink-0 text-xs text-muted-foreground tabular-nums"
             >
               {new Intl.DateTimeFormat(locale, {
                 timeStyle: "medium",
