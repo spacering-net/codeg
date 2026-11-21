@@ -8,26 +8,36 @@ import {
 } from "@/lib/custom-style"
 import {
   MAX_PLUGIN_COMPOSER_INSERT_BYTES,
+  MAX_PLUGIN_FILE_PANELS,
+  MAX_PLUGIN_FILE_PANEL_EXTENSIONS,
+  MAX_PLUGIN_FILE_READ_TEXT_BYTES,
   MAX_PLUGIN_SCREENS,
   MAX_PLUGIN_SIDEBAR_ITEMS,
   MAX_PLUGIN_SIDEBAR_VIEWS,
+  extractFileBaseName,
+  extractFilePanelExtension,
   hostPluginSessionScopeKey,
   pluginClientSurfaceKey,
+  pluginFilePanelKey,
   pluginScreenKey,
   pluginSidebarItemKey,
   pluginSidebarViewKey,
   pluginThemeKey,
+  resolvePluginFilePanel,
   resolvePluginHostScope,
   resolvePluginHostSurface,
   resolvePluginScreen,
   resolvePluginSidebarView,
   resolvePluginText,
   selectPluginClientSurfaces,
+  selectPluginFilePanels,
   selectPluginScreens,
   selectPluginSidebarItems,
   selectPluginSidebarViews,
   selectPluginThemes,
   validatePluginComposerInsertPayload,
+  validatePluginFileReadRequest,
+  validatePluginFileReadTextResult,
   type InstalledPlugin,
   type PluginTextTranslations,
 } from "@/lib/host-plugins"
@@ -1056,5 +1066,223 @@ describe("selectPluginSidebarViews and resolvePluginSidebarView", () => {
         title: "Notas de enfoque",
       },
     ])
+  })
+})
+
+describe("selectPluginFilePanels, extension matching, and file read validation", () => {
+  it("extracts bare file names and matches only the last filename extension case-insensitively", () => {
+    expect(extractFileBaseName("/repo/dir/report.CSV")).toBe("report.CSV")
+    expect(extractFileBaseName("C:\\work\\sub\\archive.tar.GZ")).toBe(
+      "archive.tar.GZ"
+    )
+    expect(extractFileBaseName("")).toBe("")
+    expect(extractFileBaseName("..")).toBe("")
+
+    expect(extractFilePanelExtension("report.CSV")).toBe("csv")
+    expect(extractFilePanelExtension("/repo/archive.tar.GZ")).toBe("gz")
+    expect(extractFilePanelExtension("main.C++")).toBe("c++")
+    expect(extractFilePanelExtension("schema.JSON-LD")).toBe("json-ld")
+    expect(extractFilePanelExtension(".env.LOCAL")).toBe("local")
+    expect(extractFilePanelExtension(".gitignore")).toBeNull()
+    expect(extractFilePanelExtension("Makefile")).toBeNull()
+    expect(extractFilePanelExtension("trailing.")).toBeNull()
+    expect(extractFilePanelExtension("bad.12345678901234567")).toBeNull()
+    expect(extractFilePanelExtension("bad.a_b")).toBeNull()
+    expect(extractFilePanelExtension("bad.-csv")).toBeNull()
+  })
+
+  it("enforces enabled + client.entry, manifest extension rules, deduplication, localization, and 16-entry caps", () => {
+    const plugins: InstalledPlugin[] = [
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.csv-viewer",
+          name: "CSV Suite",
+          nameTranslations: { "zh-CN": "CSV 工具" },
+          version: "1.0.0",
+          client: { entry: "csv.html" },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            filePanels: [
+              {
+                id: "table",
+                title: "Table View",
+                titleTranslations: {
+                  "zh-CN": "表格视图",
+                  es: "Vista de tabla",
+                },
+                extensions: [
+                  ".csv",
+                  "CSV",
+                  "-bad",
+                  "csv_bad",
+                  "12345678901234567",
+                  "csv",
+                  "csv",
+                  "tsv",
+                  "c++",
+                  "json-ld",
+                ],
+              },
+              {
+                id: "table",
+                title: "Duplicate Table",
+                extensions: ["csv"],
+              },
+              {
+                id: "invalid-only",
+                title: "Invalid Extensions Only",
+                extensions: [".csv", "UPPER"],
+              },
+              {
+                id: "other-ext",
+                title: "YAML Inspector",
+                extensions: ["yaml", "yml"],
+              },
+            ],
+          },
+        },
+      },
+      {
+        enabled: true,
+        manifest: {
+          id: "acme.no-client",
+          name: "Server Only",
+          version: "1.0.0",
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            filePanels: [
+              { id: "hidden", title: "Hidden", extensions: ["csv"] },
+            ],
+          },
+        },
+      },
+      {
+        enabled: false,
+        manifest: {
+          id: "acme.disabled",
+          name: "Disabled",
+          version: "1.0.0",
+          client: { entry: "disabled.html" },
+          contributes: {
+            workspacePanels: [],
+            commands: [],
+            hooks: [],
+            filePanels: [{ id: "off", title: "Off", extensions: ["csv"] }],
+          },
+        },
+      },
+    ]
+
+    expect(
+      selectPluginFilePanels(plugins, "/repo/REPORT.CSV", "es-ES")
+    ).toEqual([
+      {
+        key: pluginFilePanelKey("acme.csv-viewer", "table"),
+        pluginId: "acme.csv-viewer",
+        pluginName: "CSV Suite",
+        id: "table",
+        title: "Vista de tabla",
+        extensions: ["csv", "tsv", "c++", "json-ld"],
+      },
+    ])
+    expect(
+      resolvePluginFilePanel(
+        plugins,
+        "schema.json-ld",
+        "acme.csv-viewer:table",
+        "zh-CN"
+      )
+    ).toEqual({
+      key: "acme.csv-viewer:table",
+      pluginId: "acme.csv-viewer",
+      pluginName: "CSV 工具",
+      id: "table",
+      title: "表格视图",
+      extensions: ["csv", "tsv", "c++", "json-ld"],
+    })
+    expect(selectPluginFilePanels(plugins, "archive.csv.bak")).toEqual([])
+    expect(selectPluginFilePanels(plugins, ".csv")).toEqual([])
+
+    // Cap at 16 panels per plugin (counted before matching file extension)
+    // and 16 extensions per panel.
+    const cappedPlugin: InstalledPlugin = {
+      enabled: true,
+      manifest: {
+        id: "acme.capped-panels",
+        name: "Capped Panels",
+        version: "1.0.0",
+        client: { entry: "capped.html" },
+        contributes: {
+          workspacePanels: [],
+          commands: [],
+          hooks: [],
+          filePanels: [
+            ...Array.from({ length: 16 }, (_, index) => ({
+              id: `panel-${index + 1}`,
+              title: `Panel ${index + 1}`,
+              extensions:
+                index === 0
+                  ? Array.from({ length: 20 }, (__, extIdx) => `e${extIdx + 1}`)
+                  : ["txt"],
+            })),
+            {
+              id: "panel-17",
+              title: "Panel 17 Beyond Cap",
+              extensions: ["csv"],
+            },
+          ],
+        },
+      },
+    }
+
+    expect(MAX_PLUGIN_FILE_PANELS).toBe(16)
+    expect(MAX_PLUGIN_FILE_PANEL_EXTENSIONS).toBe(16)
+    expect(selectPluginFilePanels([cappedPlugin], "note.txt")).toHaveLength(15)
+    expect(selectPluginFilePanels([cappedPlugin], "data.csv")).toEqual([])
+    expect(selectPluginFilePanels([cappedPlugin], "a.e16")).toHaveLength(1)
+    expect(selectPluginFilePanels([cappedPlugin], "a.e17")).toEqual([])
+  })
+
+  it("validates argument-free file.readText requests and enforces the 64 KiB UTF-8 byte ceiling", () => {
+    expect(MAX_PLUGIN_FILE_READ_TEXT_BYTES).toBe(64 * 1024)
+    expect(() =>
+      validatePluginFileReadRequest({ type: "readText" })
+    ).not.toThrow()
+    expect(() =>
+      validatePluginFileReadRequest({ type: "readText", path: "/etc/passwd" })
+    ).toThrow(/arguments/i)
+    expect(() => validatePluginFileReadRequest({ type: "writeText" })).toThrow()
+    expect(() => validatePluginFileReadRequest(null)).toThrow()
+
+    expect(validatePluginFileReadTextResult("")).toEqual({ text: "" })
+    const exactLimit = "a".repeat(MAX_PLUGIN_FILE_READ_TEXT_BYTES)
+    expect(validatePluginFileReadTextResult(exactLimit)).toEqual({
+      text: exactLimit,
+    })
+    expect(() =>
+      validatePluginFileReadTextResult(
+        "a".repeat(MAX_PLUGIN_FILE_READ_TEXT_BYTES + 1)
+      )
+    ).toThrow(/64 KiB/i)
+
+    // Multi-byte UTF-8: 21,846 3-byte CJK chars = 65,538 UTF-8 bytes (> 64 KiB),
+    // even though JS string `.length` is well under 65,536.
+    const cjkOverLimit = "汉".repeat(21_846)
+    expect(cjkOverLimit.length).toBeLessThan(MAX_PLUGIN_FILE_READ_TEXT_BYTES)
+    expect(() => validatePluginFileReadTextResult(cjkOverLimit)).toThrow(
+      /64 KiB/i
+    )
+    const cjkAtLimit = "汉".repeat(21_845) + "a"
+    expect(new TextEncoder().encode(cjkAtLimit).byteLength).toBe(
+      MAX_PLUGIN_FILE_READ_TEXT_BYTES
+    )
+    expect(validatePluginFileReadTextResult(cjkAtLimit)).toEqual({
+      text: cjkAtLimit,
+    })
   })
 })

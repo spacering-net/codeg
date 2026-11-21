@@ -13,6 +13,11 @@ export type PluginTextTranslations = Record<string, string>
 export const MAX_PLUGIN_SCREENS = 16
 export const MAX_PLUGIN_SIDEBAR_ITEMS = 16
 export const MAX_PLUGIN_SIDEBAR_VIEWS = 16
+export const MAX_PLUGIN_FILE_PANELS = 16
+export const MAX_PLUGIN_FILE_PANEL_EXTENSIONS = 16
+export const MAX_PLUGIN_FILE_READ_TEXT_BYTES = 64 * 1024
+
+const FILE_PANEL_EXTENSION_PATTERN = /^[a-z0-9][a-z0-9+-]{0,15}$/
 
 export type PluginSidebarItemPlacement = "header" | "footer"
 
@@ -80,6 +85,26 @@ export interface ResolvedPluginSidebarView {
   pluginName: string
   id: string
   title: string
+}
+
+export interface PluginFilePanelContribution {
+  id: string
+  title: string
+  titleTranslations?: PluginTextTranslations
+  extensions: string[]
+}
+
+export interface ResolvedPluginFilePanel {
+  key: string
+  pluginId: string
+  pluginName: string
+  id: string
+  title: string
+  extensions: string[]
+}
+
+export interface PluginFileReadTextResult {
+  text: string
 }
 
 export interface PluginHostScope {
@@ -190,6 +215,7 @@ export interface InstalledPlugin {
       screens?: PluginScreenContribution[]
       sidebarItems?: PluginSidebarItemContribution[]
       sidebarViews?: PluginSidebarViewContribution[]
+      filePanels?: PluginFilePanelContribution[]
     }
   }
 }
@@ -374,6 +400,12 @@ function getReadyHostTransportSnapshot(): Transport | null {
   return safeGetTransport()
 }
 
+export function isCurrentReadyHostTransport(
+  transport: Transport | null | undefined
+): boolean {
+  return Boolean(transport) && getReadyHostTransportSnapshot() === transport
+}
+
 function getNullTransportSnapshot(): null {
   return null
 }
@@ -519,6 +551,32 @@ export function pluginSidebarItemKey(pluginId: string, itemId: string) {
 
 export function pluginSidebarViewKey(pluginId: string, viewId: string) {
   return `${pluginId}:${viewId}`
+}
+
+export function pluginFilePanelKey(pluginId: string, panelId: string) {
+  return `${pluginId}:${panelId}`
+}
+
+export function extractFileBaseName(
+  fileNameOrPath: string | null | undefined
+): string {
+  if (!fileNameOrPath) return ""
+  const normalized = fileNameOrPath.replace(/[\\/]+$/, "")
+  if (!normalized) return ""
+  const base = normalized.split(/[\\/]/).pop() ?? ""
+  if (!base || base === "." || base === "..") return ""
+  return base
+}
+
+export function extractFilePanelExtension(
+  fileNameOrPath: string | null | undefined
+): string | null {
+  const base = extractFileBaseName(fileNameOrPath)
+  if (!base) return null
+  const lastDot = base.lastIndexOf(".")
+  if (lastDot <= 0 || lastDot === base.length - 1) return null
+  const ext = base.slice(lastDot + 1).toLowerCase()
+  return FILE_PANEL_EXTENSION_PATTERN.test(ext) ? ext : null
 }
 
 export function resolvePluginHostScope(
@@ -893,6 +951,88 @@ export function resolvePluginSidebarView(
   )
 }
 
+export function selectPluginFilePanels(
+  plugins: readonly InstalledPlugin[] | undefined,
+  fileNameOrPath: string | null | undefined,
+  locale?: string
+): ResolvedPluginFilePanel[] {
+  if (!plugins?.length) return []
+  const targetExtension = extractFilePanelExtension(fileNameOrPath)
+  if (!targetExtension) return []
+  const items: ResolvedPluginFilePanel[] = []
+  const seenPlugins = new Set<string>()
+  for (const plugin of plugins) {
+    if (seenPlugins.has(plugin.manifest.id)) continue
+    seenPlugins.add(plugin.manifest.id)
+    if (!plugin.enabled || !plugin.manifest.client?.entry?.trim()) continue
+    const filePanels = plugin.manifest.contributes?.filePanels
+    if (!Array.isArray(filePanels) || filePanels.length === 0) continue
+    const pluginName =
+      resolvePluginText(
+        plugin.manifest.name,
+        plugin.manifest.nameTranslations,
+        locale
+      ).trim() || plugin.manifest.id
+    const seenIds = new Set<string>()
+    let pluginValidCount = 0
+    for (const panel of filePanels) {
+      if (pluginValidCount >= MAX_PLUGIN_FILE_PANELS) break
+      if (
+        typeof panel.id !== "string" ||
+        typeof panel.title !== "string" ||
+        !Array.isArray(panel.extensions)
+      ) {
+        continue
+      }
+      const id = panel.id.trim()
+      const title = resolvePluginText(
+        panel.title,
+        panel.titleTranslations,
+        locale
+      ).trim()
+      if (!id || !title || seenIds.has(id)) continue
+      const extensions: string[] = []
+      const seenExtensions = new Set<string>()
+      for (const rawExt of panel.extensions) {
+        if (extensions.length >= MAX_PLUGIN_FILE_PANEL_EXTENSIONS) break
+        if (typeof rawExt !== "string") continue
+        if (!FILE_PANEL_EXTENSION_PATTERN.test(rawExt)) continue
+        if (seenExtensions.has(rawExt)) continue
+        seenExtensions.add(rawExt)
+        extensions.push(rawExt)
+      }
+      if (extensions.length === 0) continue
+      seenIds.add(id)
+      pluginValidCount += 1
+      if (!extensions.includes(targetExtension)) continue
+      items.push({
+        key: pluginFilePanelKey(plugin.manifest.id, id),
+        pluginId: plugin.manifest.id,
+        pluginName,
+        id,
+        title,
+        extensions,
+      })
+    }
+  }
+  return items
+}
+
+export function resolvePluginFilePanel(
+  plugins: readonly InstalledPlugin[] | undefined,
+  fileNameOrPath: string | null | undefined,
+  panelKey: string | null | undefined,
+  locale?: string
+): ResolvedPluginFilePanel | null {
+  const normalized = panelKey?.trim()
+  if (!normalized) return null
+  return (
+    selectPluginFilePanels(plugins, fileNameOrPath, locale).find(
+      (item) => item.key === normalized
+    ) ?? null
+  )
+}
+
 export function hostPluginSessionScopeKey(
   context: HostPluginSessionContext
 ): string {
@@ -925,4 +1065,29 @@ export function validatePluginComposerInsertPayload(payload: unknown): string {
     throw new Error("Composer text exceeds 16 KiB limit")
   }
   return normalized
+}
+
+export function validatePluginFileReadRequest(payload: unknown): void {
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    !("type" in payload) ||
+    payload.type !== "readText" ||
+    Object.keys(payload).length !== 1
+  ) {
+    throw new Error("file.readText does not accept arguments")
+  }
+}
+
+export function validatePluginFileReadTextResult(
+  text: unknown
+): PluginFileReadTextResult {
+  if (typeof text !== "string") {
+    throw new Error("Active tab is not a readable text file")
+  }
+  if (utf8Encoder.encode(text).byteLength > MAX_PLUGIN_FILE_READ_TEXT_BYTES) {
+    throw new Error("File exceeds 64 KiB UTF-8 limit")
+  }
+  return { text }
 }
