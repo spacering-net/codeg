@@ -81,6 +81,7 @@ export const HostPluginSlot = memo(function HostPluginSlot({
         : null,
     [opened, scopeKey, surfaces]
   )
+  if (opened && !activeSurface) setOpened(null)
 
   const handleOpen = useCallback(
     (surface: ResolvedPluginClientSurface) => {

@@ -227,7 +227,33 @@ describe("HostPluginSlot", () => {
     )
     expect(screen.queryByRole("dialog")).toBeNull()
 
+    rerender(
+      withIntl(
+        <HostPluginSlot
+          slot="composer"
+          sessionContext={{
+            folderId: 1,
+            conversationId: 101,
+            sessionKey: "tab-1",
+          }}
+        />
+      )
+    )
+    expect(screen.queryByRole("dialog")).toBeNull()
+
     // Reopen in tab-2, then switch workspace -> withdrawn again
+    rerender(
+      withIntl(
+        <HostPluginSlot
+          slot="composer"
+          sessionContext={{
+            folderId: 1,
+            conversationId: 102,
+            sessionKey: "tab-2",
+          }}
+        />
+      )
+    )
     await user.click(screen.getByRole("button", { name: "Quick Notes" }))
     expect(
       await within(await screen.findByRole("dialog")).findByTitle("Quick Notes")
@@ -291,6 +317,9 @@ describe("HostPluginSlot", () => {
       expect(screen.queryByRole("dialog")).toBeNull()
       expect(screen.queryByRole("button", { name: "Live Tool" })).toBeNull()
     })
+    act(() => mock.setPlugins(initial))
+    await screen.findByRole("button", { name: "Live Tool" })
+    expect(screen.queryByRole("dialog")).toBeNull()
   })
 
   it("caps inline triggers on desktop and places extra surfaces into an overflow menu", async () => {
