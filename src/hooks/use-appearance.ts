@@ -1,6 +1,6 @@
 "use client"
 
-import { useContext } from "react"
+import { useContext, useEffect } from "react"
 import {
   AppearanceContext,
   ChatAnimationsContext,
@@ -130,6 +130,28 @@ export function useTerminalFont() {
   }
 }
 
+/** 语义化包装：当前已连接 host 的插件主题列表与选择 */
+export function usePluginTheme() {
+  const {
+    isDarkMode,
+    pluginThemes,
+    selectedPluginThemeKey,
+    activePluginTheme,
+    setPluginThemeKey,
+    requestPluginThemesCatalog,
+  } = useAppearance()
+  useEffect(() => {
+    requestPluginThemesCatalog()
+  }, [requestPluginThemesCatalog])
+  return {
+    isDarkMode,
+    pluginThemes,
+    selectedPluginThemeKey,
+    activePluginTheme,
+    setPluginThemeKey,
+  }
+}
+
 /**
  * 自定义样式：主题 token 覆盖 + 自由 CSS + 逃生舱状态。
  *
@@ -139,6 +161,7 @@ export function useTerminalFont() {
 export function useCustomStyle() {
   const {
     isDarkMode,
+    activePluginTheme,
     customTheme,
     setCustomThemeToken,
     replaceCustomTheme,
@@ -154,12 +177,18 @@ export function useCustomStyle() {
   } = useAppearance()
 
   const suppressed = safeStyleRequested || customStyleSuspended
-  const activeTokenOverrides =
+  const pluginOverrides = suppressed
+    ? {}
+    : ((isDarkMode ? activePluginTheme?.dark : activePluginTheme?.light) ?? {})
+  const userOverrides =
     suppressed || !customThemeEnabled
       ? {}
       : isDarkMode
         ? customTheme.dark
         : customTheme.light
+  const activeTokenOverrides = suppressed
+    ? {}
+    : { ...pluginOverrides, ...userOverrides }
 
   return {
     isDarkMode,

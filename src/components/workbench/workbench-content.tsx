@@ -23,6 +23,10 @@ import {
   TokenUsagePage,
   TokenUsagePageTitle,
 } from "@/components/token-usage/token-usage-page"
+import {
+  PluginScreenPage,
+  PluginScreenPageTitle,
+} from "@/components/workbench/plugin-screen-page"
 
 /**
  * Registry of full-page routes that take over the main content region. The
@@ -38,6 +42,7 @@ const WORKBENCH_ROUTES: Partial<Record<WorkbenchRouteId, ComponentType>> = {
   tokenUsage: TokenUsagePage,
   canvas: CanvasPage,
   harness: HarnessPage,
+  pluginScreen: PluginScreenPage,
 }
 
 /** Optional per-route content for the window-chrome strip above the page
@@ -50,6 +55,7 @@ const WORKBENCH_ROUTE_STRIPS: Partial<Record<WorkbenchRouteId, ComponentType>> =
     tokenUsage: TokenUsagePageTitle,
     canvas: CanvasPageTitle,
     harness: HarnessPageTitle,
+    pluginScreen: PluginScreenPageTitle,
   }
 
 /** What a chrome cluster hands its route's buttons: the host's own button

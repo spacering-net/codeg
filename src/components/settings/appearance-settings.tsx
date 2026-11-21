@@ -25,11 +25,13 @@ import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import {
   useThemeColor,
+  usePluginTheme,
   useZoomLevel,
   useWelcomeQuickActions,
   useChatAnimationsSetting,
   useChatContentWidth,
 } from "@/hooks/use-appearance"
+import type { ResolvedPluginTheme } from "@/lib/host-plugins"
 import {
   CHAT_CONTENT_DEFAULT,
   CHAT_CONTENT_MIN,
@@ -61,10 +63,32 @@ function readScreenWidth(): number {
 
 type ThemeMode = "system" | "light" | "dark"
 
+function resolvePluginThemeSwatch(
+  pluginTheme: ResolvedPluginTheme,
+  isDarkMode: boolean
+): string {
+  const preferred = isDarkMode
+    ? (pluginTheme.dark ?? pluginTheme.light)
+    : (pluginTheme.light ?? pluginTheme.dark)
+  const fallback = isDarkMode ? pluginTheme.light : pluginTheme.dark
+  return (
+    preferred?.primary ??
+    preferred?.accent ??
+    preferred?.background ??
+    fallback?.primary ??
+    fallback?.accent ??
+    fallback?.background ??
+    THEME_COLOR_PREVIEW.neutral
+  )
+}
+
 export function AppearanceSettings() {
   const t = useTranslations("AppearanceSettings")
+  const tHostPlugins = useTranslations("HostPlugins")
   const { theme, resolvedTheme, setTheme } = useTheme()
   const { themeColor, setThemeColor } = useThemeColor()
+  const { isDarkMode, pluginThemes, activePluginTheme, setPluginThemeKey } =
+    usePluginTheme()
   const { zoomLevel, setZoomLevel } = useZoomLevel()
   const { showWelcomeQuickActions, setShowWelcomeQuickActions } =
     useWelcomeQuickActions()
@@ -166,12 +190,16 @@ export function AppearanceSettings() {
 
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6">
             {THEME_COLORS.map((color) => {
-              const isActive = themeColor === color
+              const isActive =
+                activePluginTheme === null && themeColor === color
               return (
                 <button
                   key={color}
                   type="button"
-                  onClick={() => setThemeColor(color as ThemeColor)}
+                  onClick={() => {
+                    setPluginThemeKey(null)
+                    setThemeColor(color as ThemeColor)
+                  }}
                   aria-pressed={isActive}
                   className={cn(
                     "flex items-center gap-2 rounded-md border px-3 py-2 text-xs transition-colors",
@@ -192,9 +220,59 @@ export function AppearanceSettings() {
             })}
           </div>
 
+          {pluginThemes.length > 0 && (
+            <div className="space-y-2 border-t pt-3">
+              <div className="text-xs font-medium text-muted-foreground">
+                {tHostPlugins("title")}
+              </div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
+                {pluginThemes.map((pluginTheme) => {
+                  const isActive = activePluginTheme?.key === pluginTheme.key
+                  const swatch = resolvePluginThemeSwatch(
+                    pluginTheme,
+                    isDarkMode
+                  )
+                  return (
+                    <button
+                      key={pluginTheme.key}
+                      type="button"
+                      onClick={() =>
+                        setPluginThemeKey(isActive ? null : pluginTheme.key)
+                      }
+                      aria-label={pluginTheme.title}
+                      aria-pressed={isActive}
+                      title={`${pluginTheme.pluginName} · ${pluginTheme.title}`}
+                      className={cn(
+                        "flex items-center gap-2 rounded-md border px-3 py-2 text-left text-xs transition-colors",
+                        "hover:bg-accent hover:text-accent-foreground",
+                        isActive && "border-primary ring-2 ring-primary/30"
+                      )}
+                    >
+                      <span
+                        className="size-4 shrink-0 rounded-full border"
+                        style={{ backgroundColor: swatch }}
+                        aria-hidden
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate">
+                          {pluginTheme.title}
+                        </span>
+                        <span className="block truncate text-2xs text-muted-foreground">
+                          {pluginTheme.pluginName}
+                        </span>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           <p className="text-2xs text-muted-foreground">
             {t("themeColor.current", {
-              color: t(`themeColor.options.${themeColor}`),
+              color: activePluginTheme
+                ? `${activePluginTheme.title} (${activePluginTheme.pluginName})`
+                : t(`themeColor.options.${themeColor}`),
             })}
           </p>
         </section>
