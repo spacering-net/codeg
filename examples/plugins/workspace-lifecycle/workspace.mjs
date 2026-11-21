@@ -7,5 +7,8 @@ export function handle(method, input) {
   if (method === "turn-completed") {
     return { folderId: input.folderId, stopReason: input.detail.stopReason }
   }
+  if (method === "worktree-created" || method === "worktree-archived") {
+    return input
+  }
   return { folderId: input.folderId }
 }

@@ -344,7 +344,12 @@ async fn async_main(
     let acp_event_bus = Arc::new(codeg_lib::acp::InternalEventBus::new(
         event_bus_metrics.clone(),
     ));
-    let emitter = EventEmitter::web_only(broadcaster.clone(), acp_event_bus.clone());
+    let host_plugins = Arc::new(codeg_lib::host_plugins::HostPlugins::new(&data_dir));
+    let emitter = EventEmitter::web_only(
+        broadcaster.clone(),
+        acp_event_bus.clone(),
+        Some(host_plugins.clone()),
+    );
 
     // Build AppState
     let pet_state_handle = codeg_lib::pet_state_mapper::new_pet_state_handle();
@@ -374,7 +379,7 @@ async fn async_main(
         data_dir.clone(),
     );
     let state = Arc::new(AppState {
-        host_plugins: Arc::new(codeg_lib::host_plugins::HostPlugins::new(&data_dir)),
+        host_plugins,
         db,
         connection_manager,
         terminal_manager: codeg_lib::app_state::default_terminal_manager(),

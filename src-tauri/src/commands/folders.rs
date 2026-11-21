@@ -21,6 +21,7 @@ use crate::app_error::AppCommandError;
 use crate::db::error::DbError;
 use crate::db::service::{folder_group_service, folder_service};
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::{Event as PluginEvent, Worktree, WorktreeOrigin};
 use crate::models::GitCredentials;
 use crate::models::{FolderDetail, FolderGroupDetail, FolderHistoryEntry, SidebarLayoutEntry};
 use crate::web::event_bridge::EventEmitter;
@@ -2214,12 +2215,11 @@ pub async fn git_new_branch(
     Ok(())
 }
 
-#[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn git_worktree_add(
-    path: String,
-    branch_name: String,
-    worktree_path: String,
-    base: Option<String>,
+pub async fn git_worktree_add_core(
+    path: &str,
+    branch_name: &str,
+    worktree_path: &str,
+    base: Option<&str>,
 ) -> Result<(), AppCommandError> {
     // 校验分支是否已存在
     let check = crate::process::tokio_command("git")
@@ -2228,7 +2228,7 @@ pub async fn git_worktree_add(
             "--verify",
             &format!("refs/heads/{}", branch_name),
         ])
-        .current_dir(&path)
+        .current_dir(path)
         .output()
         .await
         .map_err(AppCommandError::io)?;
@@ -2239,7 +2239,7 @@ pub async fn git_worktree_add(
     }
 
     // 校验目录是否已存在
-    if std::path::Path::new(&worktree_path).exists() {
+    if std::path::Path::new(worktree_path).exists() {
         return Err(
             AppCommandError::already_exists("Worktree directory already exists")
                 .with_detail(worktree_path),
@@ -2249,19 +2249,13 @@ pub async fn git_worktree_add(
     // 执行 git worktree add -b <branch> <path> [<base>]
     // 显式 base（提交/引用）消除「读分支 → 建 worktree」间用户切分支的漂移窗口；
     // 省略时沿用 HEAD（既有调用方行为不变）。
-    let mut args = vec![
-        "worktree".to_string(),
-        "add".to_string(),
-        "-b".to_string(),
-        branch_name,
-        worktree_path,
-    ];
+    let mut args = vec!["worktree", "add", "-b", branch_name, worktree_path];
     if let Some(base) = base {
         args.push(base);
     }
     let output = crate::process::tokio_command("git")
         .args(&args)
-        .current_dir(&path)
+        .current_dir(path)
         .output()
         .await
         .map_err(AppCommandError::io)?;
@@ -2270,6 +2264,50 @@ pub async fn git_worktree_add(
         return Err(git_command_error("worktree add", &output.stderr));
     }
     Ok(())
+}
+
+pub async fn git_worktree_add_with_plugins(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    path: &str,
+    branch_name: &str,
+    worktree_path: &str,
+    base: Option<&str>,
+) -> Result<(), AppCommandError> {
+    git_worktree_add_core(path, branch_name, worktree_path, base).await?;
+    let repository = std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
+    let checkout = repository.join(worktree_path);
+    let folder = folder_at_path(db, &repository).await.ok().flatten();
+    Worktree {
+        folder_id: folder.map(|folder| folder.parent_id.unwrap_or(folder.id)),
+        repository_path: path,
+        path: &checkout.to_string_lossy(),
+        branch: Some(branch_name),
+        origin: WorktreeOrigin::Workspace,
+    }
+    .observe(emitter, PluginEvent::WorktreeCreated);
+    Ok(())
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn git_worktree_add(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    path: String,
+    branch_name: String,
+    worktree_path: String,
+    base: Option<String>,
+) -> Result<(), AppCommandError> {
+    git_worktree_add_with_plugins(
+        &EventEmitter::from_app(&app),
+        &db,
+        &path,
+        &branch_name,
+        &worktree_path,
+        base.as_deref(),
+    )
+    .await
 }
 
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
@@ -3560,6 +3598,17 @@ pub async fn git_remove_worktree_core(
             }
         }
         removal.worktree_path = Some(worktree_path.clone());
+        Worktree {
+            folder_id: wt_folder
+                .as_ref()
+                .and_then(|folder| folder.parent_id)
+                .or_else(|| (source_folder_id > 0).then_some(source_folder_id)),
+            repository_path: &repo_path,
+            path: &worktree_path,
+            branch: Some(&branch_name),
+            origin: WorktreeOrigin::Workspace,
+        }
+        .observe(emitter, PluginEvent::WorktreeArchived);
 
         // Only the "delete everything" variant drops the folder: removing just
         // the checkout is how you free a branch while keeping the workspace

@@ -24,6 +24,10 @@ pub enum Event {
     OpenAfter,
     #[serde(rename = "workspace.close.after")]
     CloseAfter,
+    #[serde(rename = "worktree.create.after")]
+    WorktreeCreated,
+    #[serde(rename = "worktree.archive.after")]
+    WorktreeArchived,
     #[serde(rename = "session.started")]
     SessionStarted,
     #[serde(rename = "session.turn.started")]
@@ -34,6 +38,33 @@ pub enum Event {
     PermissionRequested,
     #[serde(rename = "session.permission.resolved")]
     PermissionResolved,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum WorktreeOrigin {
+    Workspace,
+    Automation,
+    Task,
+    Cli,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Worktree<'a> {
+    pub folder_id: Option<i32>,
+    pub repository_path: &'a str,
+    pub path: &'a str,
+    pub branch: Option<&'a str>,
+    pub origin: WorktreeOrigin,
+}
+
+impl Worktree<'_> {
+    pub(crate) fn observe(self, emitter: &EventEmitter, event: Event) {
+        if let Some(host) = emitter.host_plugins() {
+            host.observe(emitter, event, json!(self));
+        }
+    }
 }
 
 impl Event {
@@ -190,18 +221,17 @@ impl HostPlugins {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::folders::{close_folder_with_plugins, open_folder_with_plugins};
+    use crate::commands::folders::{
+        close_folder_with_plugins, git_remove_worktree_core, git_worktree_add_with_plugins,
+        open_folder_with_plugins,
+    };
     use crate::db::test_helpers::fresh_in_memory_db;
     use crate::host_plugins::{source::Registry, Mutation};
     use crate::web::event_bridge::WebEventBroadcaster;
 
-    #[tokio::test]
-    async fn user_folder_operations_use_the_hooks_and_publish_scoped_events() {
-        let data = tempfile::tempdir().unwrap();
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path();
-        let plugins = Arc::new(HostPlugins::new(data.path()));
-        let id = "codeg.workspace-lifecycle";
+    const EXAMPLE_ID: &str = "codeg.workspace-lifecycle";
+
+    async fn install_lifecycle_example(plugins: &HostPlugins, path: &Path) {
         for (name, content) in [
             (
                 "codeg-plugin.json",
@@ -225,12 +255,21 @@ mod tests {
         plugins.confirm_install(preview.ticket).unwrap();
         plugins
             .apply(Mutation::SetEnabled {
-                id: id.into(),
+                id: EXAMPLE_ID.into(),
                 enabled: true,
             })
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn user_folder_operations_use_the_hooks_and_publish_scoped_events() {
+        let data = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path();
+        let plugins = Arc::new(HostPlugins::new(data.path()));
+        install_lifecycle_example(&plugins, path).await;
         assert!(plugins
-            .call(id, "before-open".into(), Value::Null)
+            .call(EXAMPLE_ID, "before-open".into(), Value::Null)
             .await
             .is_err());
 
@@ -260,7 +299,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             if event.channel == EVENT_CHANNEL {
-                assert_eq!(event.payload["pluginId"], id);
+                assert_eq!(event.payload["pluginId"], EXAMPLE_ID);
                 assert_eq!(event.payload["folderId"], folder.id);
                 received.insert(event.payload["event"].as_str().unwrap().to_owned());
             }
@@ -274,7 +313,7 @@ mod tests {
         );
         plugins
             .apply(Mutation::SetEnabled {
-                id: id.into(),
+                id: EXAMPLE_ID.into(),
                 enabled: false,
             })
             .unwrap();
@@ -282,6 +321,123 @@ mod tests {
         assert_eq!(
             plugins.workspace_open_path(alias.clone()).await.unwrap(),
             alias
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_worktree_hooks_report_successful_checkouts_and_archives() {
+        let data = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let db = fresh_in_memory_db().await;
+        let state = crate::app_state::AppState::new_for_test(db, data.path().to_owned());
+        install_lifecycle_example(&state.host_plugins, source.path()).await;
+
+        let directory = tempfile::tempdir().unwrap();
+        let repo = directory.path();
+        for args in [
+            vec!["init", "-b", "main"],
+            vec![
+                "-c",
+                "user.name=Codeg",
+                "-c",
+                "user.email=codeg@example.test",
+                "-c",
+                "commit.gpgSign=false",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+        ] {
+            let result = crate::process::tokio_command("git")
+                .args(args)
+                .current_dir(repo)
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let repo_path = repo.to_str().unwrap();
+        let checkout = repo.join("checkout");
+        let checkout_path = checkout.to_str().unwrap();
+        let folder = open_folder_with_plugins(
+            &state.host_plugins,
+            &state.emitter,
+            &state.db,
+            repo_path.into(),
+        )
+        .await
+        .unwrap();
+        let mut events = state.event_broadcaster.subscribe();
+
+        for (branch, succeeds) in [("main", false), ("topic", true)] {
+            let result = git_worktree_add_with_plugins(
+                &state.emitter,
+                &state.db,
+                repo_path,
+                branch,
+                checkout_path,
+                None,
+            )
+            .await;
+            assert_eq!(result.is_ok(), succeeds);
+        }
+        let removal = git_remove_worktree_core(
+            &state.emitter,
+            &state.db,
+            repo_path.into(),
+            "topic".into(),
+            folder.id,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(removal.worktree_path.is_some());
+        assert!(!checkout.exists());
+        assert!(!removal.branch_deleted);
+
+        let mut received = BTreeSet::new();
+        while received.len() < 2 {
+            let event = tokio::time::timeout(Duration::from_secs(3), events.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            if event.channel != EVENT_CHANNEL {
+                continue;
+            }
+            let Some(name) = event.payload["event"]
+                .as_str()
+                .filter(|s| s.starts_with("worktree."))
+            else {
+                continue;
+            };
+            assert_eq!(event.payload["pluginId"], EXAMPLE_ID);
+            assert_eq!(event.payload["folderId"], folder.id);
+            let mut data = event.payload["data"].clone();
+            let path = data.as_object_mut().unwrap().remove("path").unwrap();
+            assert!(path.as_str().unwrap().ends_with("checkout"));
+            assert_eq!(
+                data,
+                json!({
+                    "folderId": folder.id,
+                    "repositoryPath": repo_path,
+                    "branch": "topic",
+                    "origin": "workspace",
+                })
+            );
+            assert!(received.insert(name.to_owned()));
+        }
+        assert_eq!(
+            received,
+            BTreeSet::from([
+                "worktree.create.after".to_owned(),
+                "worktree.archive.after".to_owned(),
+            ])
         );
     }
 
@@ -327,7 +483,7 @@ mod tests {
         let bus = Arc::new(InternalEventBus::new(Arc::new(EventBusMetrics::default())));
         let broadcaster = Arc::new(WebEventBroadcaster::new());
         let mut outgoing = broadcaster.subscribe();
-        let emitter = EventEmitter::web_only(broadcaster, bus.clone());
+        let emitter = EventEmitter::web_only(broadcaster, bus.clone(), None);
         let connections = crate::app_state::default_connection_manager();
         connections
             .insert_test_connection("workspace-session", AgentType::Codex, None, emitter.clone())

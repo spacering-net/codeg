@@ -40,6 +40,7 @@ use crate::acp::{InternalEventBus, SessionState};
 use crate::db::entities::conversation::{self, ConversationStatus};
 use crate::db::service::{assistant_service, conversation_service, folder_service};
 use crate::db::AppDatabase;
+use crate::host_plugins::lifecycle::Event as PluginEvent;
 use crate::models::agent::AgentType;
 use crate::models::assistant::AssistantInfo;
 use crate::web::event_bridge::EventEmitter;
@@ -822,6 +823,7 @@ impl CliRunService {
             Some(name) => {
                 let made = super::worktree::create(&workspace, name, &run.id).await?;
                 run.inner.lock().await.worktree = Some(made.clone());
+                made.observe(&self.emitter, PluginEvent::WorktreeCreated);
                 self.check_stopped(run).await?;
                 Some(made)
             }
@@ -1097,7 +1099,9 @@ impl CliRunService {
             self.converge_cancelled(cid).await;
         } else if let Some(worktree) = worktree {
             // Nothing ran in it, and no conversation points at it.
-            super::worktree::remove(&worktree).await;
+            if super::worktree::remove(&worktree).await {
+                worktree.observe(&self.emitter, PluginEvent::WorktreeArchived);
+            }
             run.inner.lock().await.worktree = None;
         }
         let mut inner = run.inner.lock().await;
@@ -3292,7 +3296,8 @@ mod tests {
             let db = test_helpers::fresh_in_memory_db().await;
             let manager = ConnectionManager::new();
             let bus = Arc::new(InternalEventBus::new(Arc::new(EventBusMetrics::default())));
-            let emitter = EventEmitter::web_only(Arc::new(WebEventBroadcaster::new()), bus.clone());
+            let emitter =
+                EventEmitter::web_only(Arc::new(WebEventBroadcaster::new()), bus.clone(), None);
             let launcher = Arc::new(ScriptedLauncher {
                 manager: manager.clone_ref(),
                 commands: Arc::new(StdMutex::new(Vec::new())),
