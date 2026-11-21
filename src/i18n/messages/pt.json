@@ -11226,15 +11226,11 @@
       "new": "Novo assistente de trabalho",
       "copyName": "{name} (cópia)",
       "copied": "Cópia criada: {name}",
-      "openConversation": "Abrir",
-      "more": "Mais",
       "copy": "Duplicar",
       "deleteAction": "Excluir…",
       "face": {
-        "change": "Alterar o avatar",
         "shape": "Formato",
         "color": "Cor",
-        "upload": "Enviar uma imagem",
         "tooLarge": "A imagem é grande demais.",
         "unreadable": "Não foi possível ler o arquivo como imagem.",
         "shapes": {
@@ -11263,7 +11259,26 @@
           "purple": "Roxo",
           "magenta": "Magenta",
           "gray": "Cinza"
-        }
+        },
+        "edit": "Editar avatar",
+        "reset": "Redefinir",
+        "pages": {
+          "bot": "Bot",
+          "make": "Gerar",
+          "upload": "Enviar"
+        },
+        "dropHint": "Arraste ou cole uma imagem",
+        "or": "ou",
+        "pickFile": "Escolher uma imagem local",
+        "dragHint": "Arraste para ajustar",
+        "zoom": "Zoom",
+        "zoomIn": "Aproximar",
+        "zoomOut": "Afastar",
+        "restart": "Recomeçar",
+        "setAvatar": "Definir como avatar",
+        "monogram": "Inicial do nome",
+        "typeOne": "Digite um caractere ou emoji",
+        "useIt": "Usar"
       },
       "create": {
         "title": "Novo assistente de trabalho",
@@ -11312,9 +11327,7 @@
           "copy": "Duplicar…",
           "stopAll": "Parar tudo",
           "delete": "Excluir…",
-          "open": "Abrir",
-          "details": "Ver detalhes",
-          "edit": "Editar informações básicas…"
+          "details": "Ver detalhes"
         },
         "mergeable": "#{id} pronta para mesclar: {title}",
         "prReady": "Pronto para mesclar: {text}",
@@ -11390,12 +11403,7 @@
         "planSteps": "{count, plural, one {Uma etapa de outro plano está} other {# etapas de outros planos estão}} com ele: {steps}. Quando chegar a vez, os assistentes desses planos escolhem outro."
       },
       "edit": {
-        "title": "Editar informações básicas",
-        "description": "O nome e a imagem com que aparece na lista, na sua página e nas suas mensagens; o assistente também sabe o seu nome.",
-        "name": "Nome",
-        "cancel": "Cancelar",
-        "save": "Salvar",
-        "saved": "Salvo."
+        "name": "Nome"
       },
       "personaUnwritten": "Persona ainda não escrita"
     },

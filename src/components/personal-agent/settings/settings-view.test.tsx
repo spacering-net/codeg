@@ -823,7 +823,7 @@ describe("the settings view", () => {
     }
   })
 
-  it("opens a work assistant's page from the team's list, or its conversation", async () => {
+  it("opens a work assistant's page from the team's list by its [View details] — its row is no link, and has no [Open] or ⋯", async () => {
     const flags = {
       sort_order: 0,
       pinned_at: null,
@@ -860,17 +860,38 @@ describe("the settings view", () => {
       "Persona I review changes."
     )
     expect(row.querySelector('[data-pa-worker-unbound="7"]')).not.toBeNull()
+    // Its name is no link.
     fireEvent.click(within(row).getByText("Reviewer"))
     let ui = usePersonalAgentUi.getState()
+    expect(ui.viewBot).toBeNull()
+    expect(ui.settings).toEqual({ page: "workers" })
+    // What acts on it, side by side on its row.
+    expect(
+      within(row)
+        .getAllByRole("button")
+        .map((b) => b.textContent)
+    ).toEqual(["View details", "Copy", "Delete…"])
+    expect(row.querySelector("[data-pa-worker-open]")).toBeNull()
+    expect(row.querySelector("[data-pa-worker-menu]")).toBeNull()
+    api.personalAgentBotCopy.mockResolvedValueOnce({ bot: null } as never)
+    fireEvent.click(within(row).getByRole("button", { name: "Copy" }))
+    await waitFor(() =>
+      expect(api.personalAgentBotCopy).toHaveBeenCalledWith(
+        7,
+        expect.stringContaining("Reviewer"),
+        "en"
+      )
+    )
+    api.personalAgentBotImpact.mockReturnValueOnce(new Promise(() => {}))
+    fireEvent.click(within(row).getByRole("button", { name: "Delete…" }))
+    expect(await screen.findByRole("alertdialog")).toBeTruthy()
+    fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" })
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+    fireEvent.click(within(row).getByRole("button", { name: "View details" }))
+    ui = usePersonalAgentUi.getState()
     expect(ui.viewBot).toBe(7)
     expect(ui.botPage).toEqual({ tab: "identity" })
     expect(ui.settings).toBeNull()
-    ui.openSettings("workers")
-    fireEvent.click(document.querySelector('[data-pa-worker-open="7"]')!)
-    ui = usePersonalAgentUi.getState()
-    expect(ui.viewBot).toBe(7)
-    expect(ui.settings).toBeNull()
-    expect(ui.botPage).toBeNull()
     usePersonalAgentUi.setState({ viewBot: null })
     api.personalAgentBots.mockResolvedValue([])
   })

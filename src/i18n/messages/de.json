@@ -11226,15 +11226,11 @@
       "new": "Neuer Arbeitsassistent",
       "copyName": "{name} (Kopie)",
       "copied": "Kopie erstellt: {name}",
-      "openConversation": "Öffnen",
-      "more": "Mehr",
       "copy": "Duplizieren",
       "deleteAction": "Löschen…",
       "face": {
-        "change": "Avatar ändern",
         "shape": "Form",
         "color": "Farbe",
-        "upload": "Bild hochladen",
         "tooLarge": "Das Bild ist zu groß.",
         "unreadable": "Die Datei konnte nicht als Bild gelesen werden.",
         "shapes": {
@@ -11263,7 +11259,26 @@
           "purple": "Lila",
           "magenta": "Magenta",
           "gray": "Grau"
-        }
+        },
+        "edit": "Avatar bearbeiten",
+        "reset": "Zurücksetzen",
+        "pages": {
+          "bot": "Bot",
+          "make": "Erzeugen",
+          "upload": "Hochladen"
+        },
+        "dropHint": "Bild hierher ziehen oder einfügen",
+        "or": "oder",
+        "pickFile": "Lokales Bild wählen",
+        "dragHint": "Ziehen zum Ausrichten",
+        "zoom": "Zoom",
+        "zoomIn": "Vergrößern",
+        "zoomOut": "Verkleinern",
+        "restart": "Neu beginnen",
+        "setAvatar": "Als Avatar festlegen",
+        "monogram": "Anfangsbuchstabe des Namens",
+        "typeOne": "Zeichen oder Emoji eingeben",
+        "useIt": "Verwenden"
       },
       "create": {
         "title": "Neuer Arbeitsassistent",
@@ -11312,9 +11327,7 @@
           "copy": "Duplizieren…",
           "stopAll": "Alles anhalten",
           "delete": "Löschen…",
-          "open": "Öffnen",
-          "details": "Details anzeigen",
-          "edit": "Grunddaten bearbeiten…"
+          "details": "Details anzeigen"
         },
         "mergeable": "#{id} bereit zum Mergen: {title}",
         "prReady": "Bereit zum Mergen: {text}",
@@ -11390,12 +11403,7 @@
         "planSteps": "{count, plural, one {Ein Schritt eines anderen Plans ist} other {# Schritte anderer Pläne sind}} ihm zugeteilt: {steps}. Wenn sie dran sind, wählen deren Assistenten jemand anderen."
       },
       "edit": {
-        "title": "Grunddaten bearbeiten",
-        "description": "Name und Bild, mit denen er in der Liste, auf seiner Seite und in seinen Nachrichten erscheint; der Assistent kennt seinen Namen auch.",
-        "name": "Name",
-        "cancel": "Abbrechen",
-        "save": "Speichern",
-        "saved": "Gespeichert."
+        "name": "Name"
       },
       "personaUnwritten": "Noch keine Persona geschrieben"
     },

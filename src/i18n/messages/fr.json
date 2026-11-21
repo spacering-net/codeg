@@ -11226,15 +11226,11 @@
       "new": "Nouvel assistant de travail",
       "copyName": "{name} (copie)",
       "copied": "Copie créée : {name}",
-      "openConversation": "Ouvrir",
-      "more": "Plus",
       "copy": "Dupliquer",
       "deleteAction": "Supprimer…",
       "face": {
-        "change": "Changer l'avatar",
         "shape": "Forme",
         "color": "Couleur",
-        "upload": "Importer une image",
         "tooLarge": "L'image est trop lourde.",
         "unreadable": "Impossible de lire ce fichier comme une image.",
         "shapes": {
@@ -11263,7 +11259,26 @@
           "purple": "Violet",
           "magenta": "Magenta",
           "gray": "Gris"
-        }
+        },
+        "edit": "Modifier l'avatar",
+        "reset": "Réinitialiser",
+        "pages": {
+          "bot": "Bot",
+          "make": "Générer",
+          "upload": "Importer"
+        },
+        "dropHint": "Glissez ou collez une image",
+        "or": "ou",
+        "pickFile": "Choisir une image locale",
+        "dragHint": "Faites glisser pour ajuster",
+        "zoom": "Zoom",
+        "zoomIn": "Agrandir",
+        "zoomOut": "Réduire",
+        "restart": "Recommencer",
+        "setAvatar": "Définir comme avatar",
+        "monogram": "Initiale du nom",
+        "typeOne": "Tapez un caractère ou un emoji",
+        "useIt": "Utiliser"
       },
       "create": {
         "title": "Nouvel assistant de travail",
@@ -11312,9 +11327,7 @@
           "copy": "Dupliquer…",
           "stopAll": "Tout arrêter",
           "delete": "Supprimer…",
-          "open": "Ouvrir",
-          "details": "Voir les détails",
-          "edit": "Modifier les informations de base…"
+          "details": "Voir les détails"
         },
         "mergeable": "#{id} prête à fusionner : {title}",
         "prReady": "Prête à fusionner : {text}",
@@ -11390,12 +11403,7 @@
         "planSteps": "{count, plural, one {Une étape d’un autre plan lui est confiée} other {# étapes d’autres plans lui sont confiées}} : {steps}. Le moment venu, leurs assistants en choisiront un autre."
       },
       "edit": {
-        "title": "Modifier les informations de base",
-        "description": "Le nom et l'image sous lesquels il apparaît dans la liste, sur sa page et dans ses messages ; l'assistant connaît aussi son nom.",
-        "name": "Nom",
-        "cancel": "Annuler",
-        "save": "Enregistrer",
-        "saved": "Enregistré."
+        "name": "Nom"
       },
       "personaUnwritten": "Pas encore de persona écrite"
     },

@@ -1,6 +1,7 @@
 "use client"
 
-/** The panel's head: who it is — its name, renamed in place — the bell
+/** The panel's head: who it is — its face and its name, each changed in
+ *  place — the bell
  *  that says whether it notifies the owner, and the "⋯" of what acts on
  *  it. How it is (its state) is on the conversation's title. */
 
@@ -13,7 +14,7 @@ import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { useImeGuard } from "@/hooks/use-ime-guard"
 import { personalAgentRosterAct, personalAgentSave } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import type { PersonalAgentSnapshot } from "@/lib/types"
+import type { BotLook, PersonalAgentSnapshot } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import {
   usePersonalAgentRoster,
@@ -21,8 +22,10 @@ import {
 } from "@/stores/personal-agent-roster-store"
 
 import { AgentMenu } from "../agent-menu"
+import { BotAvatar, defaultFaceOf } from "../bot-avatar"
+import { BotFacePicker } from "../bot-face-picker"
+import { usePendingFace, useSaveFace } from "../face-save"
 import { useBotLook } from "../shared"
-import { BotAvatar } from "../bot-avatar"
 
 /** The assistant's face at the head of the panel, in px at 100% zoom. */
 const HEAD_AVATAR_SIZE = 64
@@ -43,7 +46,6 @@ export function AuxHead({
   children: ReactNode
 }) {
   const t = useTranslations("PersonalAgent")
-  const { botId } = usePersonalAgent()
   const agent = snapshot.agent
   const name = agent?.name?.trim() || t("title")
   const look = useBotLook(agent?.id ?? null)
@@ -73,11 +75,11 @@ export function AuxHead({
         </>
       ) : null}
       {agent ? (
-        <BotAvatar
-          avatar={agent.avatar}
+        <HeadFace
+          // Another assistant's: what is being saved is its own.
+          key={`face:${agent.id}`}
+          snapshot={snapshot}
           name={name}
-          size={HEAD_AVATAR_SIZE}
-          star={botId == null}
           look={look}
         />
       ) : null}
@@ -89,6 +91,46 @@ export function AuxHead({
       />
       {children}
     </header>
+  )
+}
+
+/** Its face — pressed ("Edit avatar" under the pointer), the face
+ *  editor's bubble under it, a face picked saved at once. Not changed
+ *  where it runs elsewhere. */
+function HeadFace({
+  snapshot,
+  name,
+  look,
+}: {
+  snapshot: PersonalAgentSnapshot
+  name: string
+  look: BotLook
+}) {
+  const { botId } = usePersonalAgent()
+  const agent = snapshot.agent
+  const face = usePendingFace(agent?.id ?? null, agent?.avatar ?? null)
+  const saveFace = useSaveFace(botId, face.pick)
+  if (!agent || !face.shown) return null
+  if (snapshot.status.engine !== "here")
+    return (
+      <BotAvatar
+        avatar={face.shown}
+        name={name}
+        size={HEAD_AVATAR_SIZE}
+        star={botId == null}
+        look={look}
+      />
+    )
+  return (
+    <BotFacePicker
+      value={face.shown}
+      name={name}
+      onChange={saveFace}
+      resetTo={defaultFaceOf(agent)}
+      size={HEAD_AVATAR_SIZE}
+      star={botId == null}
+      look={look}
+    />
   )
 }
 

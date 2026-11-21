@@ -46,6 +46,7 @@ vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
   subscribe: () => Promise.resolve(() => {}),
   onTransportReconnect: () => () => {},
+  isDesktop: () => false,
 }))
 vi.mock("sonner", () => ({ toast: toasts }))
 vi.mock("@/components/message/live-transcript-view", () => ({
@@ -208,6 +209,8 @@ function snapshot(): PersonalAgentSnapshot {
       folder_id: null,
       revision: 1,
       created_at: "2026-11-01T00:00:00Z",
+      kind: "primary",
+      uid: null,
       updated_at: "2026-11-01T00:00:00Z",
     },
     status: {
@@ -542,6 +545,73 @@ describe("the panel", () => {
     expect(document.querySelector("[data-pa-aux-head] h2")?.textContent).toBe(
       "Nova"
     )
+  })
+
+  it('changes its face in place: "Edit avatar" over it, the face editor\'s bubble under it, a face picked saved at once — not where it runs elsewhere', async () => {
+    api.personalAgentSave.mockClear()
+    api.personalAgentSave.mockResolvedValue(undefined as never)
+    const { unmount } = draw()
+    const head = document.querySelector<HTMLElement>("[data-pa-aux-head]")!
+    const picker = head.querySelector<HTMLElement>("[data-pa-face-picker]")!
+    expect(picker.getAttribute("aria-label")).toBe("Edit avatar")
+    // Its face is still the one alive, its star on the primary's.
+    expect(picker.querySelector("[data-slot='bot-avatar']")).not.toBeNull()
+    fireEvent.focus(picker)
+    await waitFor(() =>
+      expect(
+        document.querySelector("[data-pa-face-hint]")?.textContent
+      ).toContain("Edit avatar")
+    )
+    fireEvent.click(picker)
+    const bubble = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>("[data-pa-face-bubble]")
+      expect(el).not.toBeNull()
+      return el!
+    })
+    expect(
+      within(bubble)
+        .getAllByRole("tab")
+        .map((tab) => tab.textContent)
+    ).toEqual(["Bot", "Generate", "Upload"])
+    // Open on the page its face is from: an emoji's, "Generate".
+    expect(
+      within(bubble)
+        .getByRole("tab", { name: "Generate" })
+        .getAttribute("aria-selected")
+    ).toBe("true")
+    fireEvent.mouseDown(within(bubble).getByRole("tab", { name: "Bot" }), {
+      button: 0,
+    })
+    fireEvent.click(
+      await within(bubble).findByRole("button", { name: "Hexagon" })
+    )
+    await waitFor(() =>
+      expect(api.personalAgentSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          avatar: expect.objectContaining({ kind: "face", shape: "hexagon" }),
+        }),
+        null
+      )
+    )
+    // [Reset]: the primary's own, a black blob.
+    fireEvent.click(within(bubble).getByRole("button", { name: "Reset" }))
+    await waitFor(() =>
+      expect(api.personalAgentSave).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          avatar: { kind: "face", shape: "blob", color: "black" },
+        }),
+        null
+      )
+    )
+    unmount()
+    const elsewhere = snapshot()
+    elsewhere.status.engine = "elsewhere" as never
+    pa.snapshot = elsewhere
+    draw({ snap: elsewhere })
+    expect(document.querySelector("[data-pa-face-picker]")).toBeNull()
+    expect(
+      document.querySelector("[data-pa-aux-head] [data-slot='bot-avatar']")
+    ).not.toBeNull()
   })
 
   it("is the same in the drawer, its count of what waits on the owner on its activity", async () => {

@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label"
 import type { BotAvatar, BotLook } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import { PRIMARY_FACE } from "../bot-avatar"
 import { BotFacePicker } from "../bot-face-picker"
 
 /** How long after the last key the face takes the name as given. */
@@ -132,7 +133,7 @@ export function SetupIdentity({
           disabled={disabled}
           size={88}
           look={look}
-          align="center"
+          resetTo={PRIMARY_FACE}
         />
       </div>
       <Label htmlFor="pa-name" className="sr-only">

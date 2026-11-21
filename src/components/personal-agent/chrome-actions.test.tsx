@@ -4,7 +4,6 @@ import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
-import type { RosterEntry } from "@/lib/types"
 import { usePersonalAgentRoster } from "@/stores/personal-agent-roster-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
@@ -92,7 +91,6 @@ describe("the ⋯ by the face on the panel", () => {
       )
       expect(items).toEqual([
         "View details",
-        "Edit basic info…",
         "View the session underneath",
         "Compact the context",
         "Start a new session…",
@@ -111,50 +109,19 @@ describe("the ⋯ by the face on the panel", () => {
     }
   })
 
-  it("opens its page, and edits its name and face, as a row's menu on the roster does", async () => {
-    usePersonalAgentRoster.setState({
-      entries: [
-        {
-          id: 7,
-          kind: "worker",
-          name: "Nova",
-          avatar: { kind: "face", shape: "blob", color: "teal" },
-        } as unknown as RosterEntry,
-      ],
-    })
+  it("opens its page, as a row's menu on the roster does — its name and face are edited on the panel's head, not here", async () => {
     usePersonalAgentUi.setState({ viewBot: 7 })
     const user = userEvent.setup()
     wrap(<AgentMenu />)
     await user.click(screen.getByRole("button", { name: "More" }))
+    expect(screen.queryByRole("menuitem", { name: /Edit basic info/ })).toBe(
+      null
+    )
     await user.click(
       await screen.findByRole("menuitem", { name: "View details" })
     )
     expect(usePersonalAgentUi.getState().botPage).toEqual({ tab: "identity" })
     expect(usePersonalAgentUi.getState().viewBot).toBe(7)
-
-    await user.click(screen.getByRole("button", { name: "More" }))
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Edit basic info…" })
-    )
-    const field = await screen.findByLabelText("Name")
-    expect((field as HTMLInputElement).value).toBe("Nova")
-    await user.clear(field)
-    await user.type(field, "Vega")
-    await user.click(screen.getByRole("button", { name: "Save" }))
-    expect(api.personalAgentSave).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "Vega" }),
-      7
-    )
-  })
-
-  it("cannot edit its name and face till its roster row is read", async () => {
-    const user = userEvent.setup()
-    wrap(<AgentMenu />)
-    await user.click(screen.getByRole("button", { name: "More" }))
-    const edit = await screen.findByRole("menuitem", {
-      name: "Edit basic info…",
-    })
-    expect(edit.getAttribute("aria-disabled")).toBe("true")
   })
 
   it("stops the reply while a turn runs, in place of compacting", async () => {

@@ -24,6 +24,7 @@ vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
   subscribe: () => Promise.resolve(() => {}),
   onTransportReconnect: () => () => {},
+  isDesktop: () => false,
 }))
 vi.mock("@/contexts/personal-agent-context", () => ({
   useBotId: () => null,
@@ -225,8 +226,20 @@ describe("a new work assistant", () => {
     fireEvent.change(screen.getByLabelText("Name"), {
       target: { value: "Dev" },
     })
-    fireEvent.click(screen.getByRole("button", { name: "Hexagon" }))
+    // Its face at the head of the box, its name under it; the face
+    // editor's bubble behind the face.
+    const head = document.querySelector("[data-pa-new-bot-head]")!
+    expect(
+      head
+        .querySelector("[data-pa-face-picker]")!
+        .compareDocumentPosition(
+          head.querySelector("[data-pa-new-bot-name]")!
+        ) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    fireEvent.click(head.querySelector("[data-pa-face-picker]")!)
+    fireEvent.click(await screen.findByRole("button", { name: "Hexagon" }))
     fireEvent.click(screen.getByRole("button", { name: "Purple" }))
+    expect(head.getAttribute("data-pa-face")).toBe("purple")
     fireEvent.click(screen.getByRole("button", { name: "Create" }))
     await waitFor(() =>
       expect(api.personalAgentBotCreate.mock.calls[0][0].avatar).toEqual({

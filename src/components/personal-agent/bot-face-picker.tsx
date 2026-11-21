@@ -1,35 +1,57 @@
 "use client"
 
 /**
- * Pick an assistant's face (10.6): one of the twelve shapes, one of the
- * eleven colours, or a picture of the owner's. Inline — the "new assistant"
- * box shows it under the name — or behind its avatar as a popover (the
- * identity page).
+ * An assistant's face, and the bubble that edits it (10.6): pressed — "Edit
+ * avatar" over it under the pointer — it opens under it with three pages
+ * and [Reset] at the end of their row:
+ *
+ * - "Bot": one of the twelve shapes, in one of the eleven colours, each
+ *   taken at once;
+ * - "Generate": a face made of a character — its name's first, or an emoji
+ *   picked or typed — on one of the ten colours;
+ * - "Upload": a picture dropped, pasted (anywhere in the bubble) or picked,
+ *   framed in a round window — moved and zoomed — and [Set as avatar].
+ *
+ * [Reset] goes back to the face it was given by default. The same bubble
+ * on the side panel's head, an assistant's own page, the first setup and
+ * the "new work assistant" box.
  */
 
-import { useRef, useState } from "react"
+import { useRef, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
-import { Check, ImageUp, Pencil } from "lucide-react"
+import { Tooltip as TooltipPrimitive } from "radix-ui"
 
+import {
+  AssistantAvatar,
+  SWATCH_CLASSES,
+} from "@/components/assistants/assistant-avatar"
+import { EMOJI_CHOICES } from "@/components/settings/assistant-avatar-picker"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useImeGuard } from "@/hooks/use-ime-guard"
+import { avatarEmojiFrom } from "@/lib/assistant-avatar"
 import {
-  AvatarImageError,
-  imageFileToAvatarDataUrl,
-} from "@/lib/assistant-avatar"
-import type {
-  BotAvatar as BotAvatarValue,
-  BotColor,
-  BotLook,
-  BotShape,
+  ASSISTANT_AVATAR_COLORS,
+  type AssistantAvatarColor,
+  type BotAvatar as BotAvatarValue,
+  type BotColor,
+  type BotLook,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 import { BOT_COLORS, BOT_SHAPES, BotAvatar } from "./bot-avatar"
+import {
+  FaceUpload,
+  pastedImage,
+  useOsImageDrop,
+  usePicture,
+} from "./face-upload"
 
 /** The swatch of each colour, as the face draws it. */
 const SWATCH: Record<BotColor, string> = {
@@ -46,190 +68,448 @@ const SWATCH: Record<BotColor, string> = {
   gray: "bg-slate-400 dark:bg-slate-500",
 }
 
-interface FacePickerProps {
-  value: BotAvatarValue
-  name: string
-  onChange: (next: BotAvatarValue) => void
-  disabled?: boolean
+/** A face's colour, on the "Generate" page: the nearest of its ten. */
+const NEAREST: Record<BotColor, AssistantAvatarColor> = {
+  black: "slate",
+  brown: "amber",
+  red: "red",
+  orange: "orange",
+  yellow: "amber",
+  green: "green",
+  teal: "teal",
+  blue: "blue",
+  purple: "violet",
+  magenta: "pink",
+  gray: "slate",
 }
 
-/** The shape and colour grids, and [Upload a picture]. */
-export function BotFaceChoices({
+/** The emoji the "Generate" page offers beside the name's first
+ *  character; any other can be typed. */
+const EMOJI_OFFERED = EMOJI_CHOICES.slice(0, 23)
+
+type Page = "bot" | "make" | "upload"
+
+function pageOf(face: BotAvatarValue): Page {
+  if (face.kind === "face") return "bot"
+  if (face.kind === "image") return "upload"
+  return "make"
+}
+
+function same(a: BotAvatarValue | null | undefined, b: BotAvatarValue) {
+  return a != null && JSON.stringify(a) === JSON.stringify(b)
+}
+
+/** The ring round what is picked. */
+const PICKED = "ring-[1.5px] ring-border ring-offset-2 ring-offset-popover"
+
+export interface FacePickerProps {
+  value: BotAvatarValue
+  name: string
+  /** A face picked — at once on the first two pages, on [Set as avatar]
+   *  on the third. */
+  onChange: (next: BotAvatarValue) => void
+  disabled?: boolean
+  /** What [Reset] goes back to; no [Reset] without one. */
+  resetTo?: BotAvatarValue | null
+}
+
+/** The bubble's pages. */
+export function FaceEditor({
   value,
   name,
   onChange,
   disabled,
-}: FacePickerProps) {
+  resetTo,
+  onDone,
+}: FacePickerProps & {
+  /** A picture set: the bubble may close. */
+  onDone?: () => void
+}) {
   const t = useTranslations("PersonalAgent.bots.face")
-  const fileRef = useRef<HTMLInputElement | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const seq = useRef(0)
-  const shape: BotShape = value.kind === "face" ? value.shape : "blob"
-  const color: BotColor = value.kind === "face" ? value.color : "blue"
-  const pick = (next: BotAvatarValue) => {
-    seq.current += 1
-    setError(null)
-    onChange(next)
+  const [page, setPage] = useState<Page>(() => pageOf(value))
+  const picture = usePicture()
+  const host = useRef<HTMLDivElement | null>(null)
+  const lastDomDrop = useRef(0)
+  const takeDropped = (file: Blob | Promise<Blob>, fileName: string) => {
+    if (disabled) return
+    setPage("upload")
+    void picture.take(file, fileName)
   }
-  const onFile = async (file: File | undefined) => {
-    if (!file) return
-    const mine = ++seq.current
-    setError(null)
-    setBusy(true)
-    try {
-      const dataUrl = await imageFileToAvatarDataUrl(file)
-      if (seq.current === mine) onChange({ kind: "image", data_url: dataUrl })
-    } catch (err) {
-      if (seq.current === mine)
-        setError(
-          err instanceof AvatarImageError && err.reason === "too_large"
-            ? t("tooLarge")
-            : t("unreadable")
-        )
-    } finally {
-      setBusy(false)
-      if (fileRef.current) fileRef.current.value = ""
-    }
-  }
+  useOsImageDrop(host, takeDropped, lastDomDrop)
   return (
-    <div className="flex flex-col gap-2.5" data-pa-face-choices>
-      <div>
-        <p className="mb-1.5 text-xs text-muted-foreground">{t("shape")}</p>
-        <div className="grid grid-cols-6 gap-1.5">
-          {BOT_SHAPES.map((s) => {
-            const on = value.kind === "face" && value.shape === s
-            return (
-              <button
-                key={s}
-                type="button"
-                disabled={disabled}
-                data-pa-shape={s}
-                aria-pressed={on}
-                aria-label={t(`shapes.${s}`)}
-                title={t(`shapes.${s}`)}
-                onClick={() => pick({ kind: "face", shape: s, color })}
-                className={cn(
-                  "flex items-center justify-center rounded-md p-1 transition-colors hover:bg-muted disabled:opacity-50",
-                  on && "bg-accent ring-1 ring-ring"
-                )}
+    // A drag in it (the picture in its window) is its own, not a swipe of
+    // the drawer it may be in.
+    <div
+      ref={host}
+      data-pa-face-editor
+      data-base-ui-swipe-ignore
+      onPaste={(e) => {
+        const file = pastedImage(e)
+        if (!file) return
+        e.preventDefault()
+        takeDropped(file, file.name)
+      }}
+    >
+      <Tabs
+        value={page}
+        onValueChange={(v) => setPage(v as Page)}
+        className="gap-0"
+      >
+        <div className="flex items-center gap-2 border-b border-border/70 px-3 py-2.5">
+          <TabsList className="h-auto gap-1 bg-transparent p-0 group-data-horizontal/tabs:h-auto">
+            {(["bot", "make", "upload"] as const).map((p) => (
+              <TabsTrigger
+                key={p}
+                value={p}
+                data-pa-face-page={p}
+                className="h-8 flex-none rounded-full px-3.5 text-sm font-normal data-active:bg-muted data-active:shadow-none dark:data-active:border-transparent dark:data-active:bg-muted"
               >
-                <BotAvatar
-                  avatar={{ kind: "face", shape: s, color }}
-                  name={name}
-                  size={26}
-                />
-              </button>
-            )
-          })}
+                {t(`pages.${p}`)}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {resetTo ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="ms-auto rounded-full px-3 font-normal text-muted-foreground"
+              disabled={disabled || same(value, resetTo)}
+              onClick={() => {
+                picture.clear()
+                setPage(pageOf(resetTo))
+                onChange(resetTo)
+              }}
+              data-pa-face-reset
+            >
+              {t("reset")}
+            </Button>
+          ) : null}
         </div>
+        <TabsContent value="bot" className="p-4">
+          <BotPage
+            value={value}
+            name={name}
+            onChange={onChange}
+            disabled={disabled}
+          />
+        </TabsContent>
+        <TabsContent value="make" className="p-4">
+          <MakePage
+            value={value}
+            name={name}
+            onChange={onChange}
+            disabled={disabled}
+          />
+        </TabsContent>
+        <TabsContent value="upload" className="p-4">
+          <FaceUpload
+            state={picture}
+            disabled={disabled}
+            onDomDrop={() => {
+              lastDomDrop.current = Date.now()
+            }}
+            onSet={(dataUrl) => {
+              onChange({ kind: "image", data_url: dataUrl })
+              picture.clear()
+              onDone?.()
+            }}
+          />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+function BotPage({ value, name, onChange, disabled }: FacePickerProps) {
+  const t = useTranslations("PersonalAgent.bots.face")
+  const color: BotColor = value.kind === "face" ? value.color : "blue"
+  return (
+    <div className="flex flex-col gap-5">
+      <div
+        role="group"
+        aria-label={t("shape")}
+        className="flex flex-wrap justify-center gap-x-[calc((100%-15rem-1px)/4)] gap-y-3"
+      >
+        {BOT_SHAPES.map((s) => {
+          const on = value.kind === "face" && value.shape === s
+          return (
+            <button
+              key={s}
+              type="button"
+              disabled={disabled}
+              data-pa-shape={s}
+              aria-pressed={on}
+              aria-label={t(`shapes.${s}`)}
+              title={t(`shapes.${s}`)}
+              onClick={() => onChange({ kind: "face", shape: s, color })}
+              className={cn(
+                "flex size-12 items-center justify-center rounded-xl transition-colors hover:bg-muted disabled:opacity-50",
+                on && "ring-[1.5px] ring-border"
+              )}
+            >
+              <BotAvatar
+                avatar={{ kind: "face", shape: s, color }}
+                name={name}
+                size={36}
+              />
+            </button>
+          )
+        })}
       </div>
-      <div>
-        <p className="mb-1.5 text-xs text-muted-foreground">{t("color")}</p>
-        <div className="flex flex-wrap gap-1.5">
-          {BOT_COLORS.map((c) => {
-            const on = value.kind === "face" && value.color === c
-            return (
-              <button
-                key={c}
-                type="button"
-                disabled={disabled}
-                data-pa-color={c}
-                aria-pressed={on}
-                aria-label={t(`colors.${c}`)}
-                title={t(`colors.${c}`)}
-                onClick={() => pick({ kind: "face", shape, color: c })}
-                className={cn(
-                  "flex size-6 items-center justify-center rounded-full transition-transform hover:scale-110 disabled:opacity-50",
-                  SWATCH[c]
-                )}
-              >
-                {on ? (
-                  <Check
-                    className="size-3.5 text-white mix-blend-difference"
-                    aria-hidden
-                  />
-                ) : null}
-              </button>
-            )
-          })}
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          size="xs"
-          variant="outline"
-          disabled={disabled || busy}
-          onClick={() => fileRef.current?.click()}
-        >
-          <ImageUp aria-hidden />
-          {t("upload")}
-        </Button>
-        {error ? (
-          <span className="text-xs text-destructive">{error}</span>
-        ) : null}
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          className="hidden"
-          onChange={(e) => void onFile(e.target.files?.[0])}
-        />
+      <div
+        role="group"
+        aria-label={t("color")}
+        className="flex flex-wrap justify-center gap-x-[calc((100%-12rem-1px)/5)] gap-y-3"
+      >
+        {BOT_COLORS.map((c) => {
+          const on = value.kind === "face" && value.color === c
+          return (
+            <button
+              key={c}
+              type="button"
+              disabled={disabled}
+              data-pa-color={c}
+              aria-pressed={on}
+              aria-label={t(`colors.${c}`)}
+              title={t(`colors.${c}`)}
+              onClick={() =>
+                onChange({
+                  kind: "face",
+                  shape: value.kind === "face" ? value.shape : "blob",
+                  color: c,
+                })
+              }
+              className={cn(
+                "size-8 rounded-full transition-transform hover:scale-110 disabled:opacity-50",
+                SWATCH[c],
+                on && PICKED
+              )}
+            />
+          )
+        })}
       </div>
     </div>
   )
 }
 
-/** The avatar, with the choices behind it. */
+function MakePage({ value, name, onChange, disabled }: FacePickerProps) {
+  const t = useTranslations("PersonalAgent.bots.face")
+  const [typed, setTyped] = useState("")
+  const ime = useImeGuard()
+  const color: AssistantAvatarColor =
+    value.kind === "monogram" || value.kind === "emoji"
+      ? value.color
+      : value.kind === "face"
+        ? NEAREST[value.color]
+        : "slate"
+  const tile = (
+    key: string,
+    avatar: BotAvatarValue,
+    label: string,
+    on: boolean,
+    attrs: Record<string, string>
+  ): ReactNode => (
+    <button
+      key={key}
+      type="button"
+      disabled={disabled}
+      aria-pressed={on}
+      aria-label={label}
+      title={label}
+      onClick={() => onChange(avatar)}
+      className={cn(
+        "flex size-10 items-center justify-center rounded-xl transition-colors hover:bg-muted disabled:opacity-50",
+        on && "ring-[1.5px] ring-border"
+      )}
+      {...attrs}
+    >
+      <AssistantAvatar
+        avatar={avatar.kind === "face" ? null : avatar}
+        name={name}
+        size={30}
+      />
+    </button>
+  )
+  const use = () => {
+    const emoji = avatarEmojiFrom(typed)
+    if (!emoji) return
+    onChange({ kind: "emoji", emoji, color })
+    setTyped("")
+  }
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-6 justify-items-center gap-1.5">
+        {tile(
+          "monogram",
+          { kind: "monogram", color },
+          t("monogram"),
+          value.kind === "monogram",
+          { "data-pa-face-monogram": "" }
+        )}
+        {EMOJI_OFFERED.map((emoji) =>
+          tile(
+            emoji,
+            { kind: "emoji", emoji, color },
+            emoji,
+            value.kind === "emoji" && value.emoji === emoji,
+            { "data-pa-face-emoji": emoji }
+          )
+        )}
+      </div>
+      {/* No form of its own: its submit would reach the form round the
+          bubble (the new assistant's, the first setup's) and send that. */}
+      <div className="flex items-center gap-2">
+        <Input
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          {...ime.props}
+          onKeyDown={(e) => {
+            // Not the Enter that picks an input method's word.
+            if (e.key !== "Enter" || ime.isComposing(e)) return
+            e.preventDefault()
+            e.stopPropagation()
+            use()
+          }}
+          placeholder={t("typeOne")}
+          aria-label={t("typeOne")}
+          disabled={disabled}
+          className="h-8 rounded-full text-sm"
+          data-pa-face-typed
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="rounded-full"
+          disabled={disabled || !avatarEmojiFrom(typed)}
+          onClick={use}
+        >
+          {t("useIt")}
+        </Button>
+      </div>
+      <div
+        role="group"
+        aria-label={t("color")}
+        className="flex flex-wrap justify-center gap-x-[calc((100%-10rem-1px)/4)] gap-y-3"
+      >
+        {ASSISTANT_AVATAR_COLORS.map((c) => {
+          const on =
+            (value.kind === "monogram" || value.kind === "emoji") &&
+            value.color === c
+          return (
+            <button
+              key={c}
+              type="button"
+              disabled={disabled}
+              data-pa-make-color={c}
+              aria-pressed={on}
+              aria-label={c}
+              title={c}
+              onClick={() =>
+                onChange(
+                  value.kind === "emoji"
+                    ? { ...value, color: c }
+                    : { kind: "monogram", color: c }
+                )
+              }
+              className={cn(
+                "size-8 rounded-full transition-transform hover:scale-110 disabled:opacity-50",
+                SWATCH_CLASSES[c],
+                on && PICKED
+              )}
+            />
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/** The face, and the bubble behind it. */
 export function BotFacePicker({
   value,
   name,
   onChange,
   disabled,
+  resetTo,
   size = 48,
   look,
-  align = "start",
+  star,
+  align = "center",
+  className,
 }: FacePickerProps & {
   size?: number
   /** Alive, as the roster's faces are: it blinks and glances about. */
   look?: BotLook
-  align?: "start" | "center"
+  /** The primary's: its star at the foot. */
+  star?: boolean
+  align?: "start" | "center" | "end"
+  className?: string
 }) {
   const t = useTranslations("PersonalAgent.bots.face")
-  // The pencil grows with a large face, so it still reads as its badge.
-  const large = size >= 72
+  const [open, setOpen] = useState(false)
+  const [hint, setHint] = useState(false)
   return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          disabled={disabled}
-          aria-label={t("change")}
-          title={t("change")}
-          data-pa-face-picker
-          className="group/avatar relative shrink-0 rounded-full outline-none ring-offset-background transition focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (next) setHint(false)
+      }}
+    >
+      <TooltipPrimitive.Provider delayDuration={300}>
+        <TooltipPrimitive.Root
+          open={hint && !open && !disabled}
+          onOpenChange={setHint}
         >
-          <BotAvatar avatar={value} name={name} size={size} look={look} />
-          <span
-            aria-hidden
-            className={cn(
-              "absolute flex items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors group-hover/avatar:text-foreground",
-              large
-                ? "end-0.5 bottom-0.5 size-7"
-                : "-end-0.5 -bottom-0.5 size-5"
-            )}
-          >
-            <Pencil className={large ? "size-3.5" : "size-2.5"} />
-          </span>
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align={align} className="w-72 p-3">
-        <BotFaceChoices
+          <TooltipPrimitive.Trigger asChild>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                disabled={disabled}
+                aria-label={t("edit")}
+                data-pa-face-picker
+                className={cn(
+                  "relative shrink-0 rounded-full outline-none ring-offset-background transition focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 enabled:cursor-pointer disabled:opacity-50",
+                  className
+                )}
+              >
+                <BotAvatar
+                  avatar={value}
+                  name={name}
+                  size={size}
+                  look={look}
+                  star={star}
+                />
+              </button>
+            </PopoverTrigger>
+          </TooltipPrimitive.Trigger>
+          <TooltipPrimitive.Portal>
+            <TooltipPrimitive.Content
+              side="bottom"
+              sideOffset={6}
+              data-pa-face-hint
+              className="z-50 rounded-xl border border-border/70 bg-popover px-3 py-1 text-sm text-popover-foreground shadow-md duration-150 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0"
+            >
+              {t("edit")}
+            </TooltipPrimitive.Content>
+          </TooltipPrimitive.Portal>
+        </TooltipPrimitive.Root>
+      </TooltipPrimitive.Provider>
+      <PopoverContent
+        align={align}
+        sideOffset={10}
+        className="w-80 overflow-hidden rounded-3xl p-0"
+        data-pa-face-bubble
+      >
+        <FaceEditor
           value={value}
           name={name}
           onChange={onChange}
           disabled={disabled}
+          resetTo={resetTo}
+          onDone={() => setOpen(false)}
         />
       </PopoverContent>
     </Popover>

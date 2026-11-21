@@ -11226,15 +11226,11 @@
       "new": "新しい作業アシスタント",
       "copyName": "{name}（コピー）",
       "copied": "{name} として複製しました",
-      "openConversation": "開く",
-      "more": "その他",
       "copy": "複製",
       "deleteAction": "削除…",
       "face": {
-        "change": "アバターを変更",
         "shape": "形",
         "color": "色",
-        "upload": "画像をアップロード",
         "tooLarge": "画像が大きすぎます。",
         "unreadable": "このファイルは画像として読み込めませんでした。",
         "shapes": {
@@ -11263,7 +11259,26 @@
           "purple": "紫",
           "magenta": "マゼンタ",
           "gray": "グレー"
-        }
+        },
+        "edit": "アバターを編集",
+        "reset": "リセット",
+        "pages": {
+          "bot": "Bot",
+          "make": "生成",
+          "upload": "アップロード"
+        },
+        "dropHint": "画像をドラッグまたは貼り付け",
+        "or": "または",
+        "pickFile": "ローカルの画像を選択",
+        "dragHint": "ドラッグして位置を調整",
+        "zoom": "拡大縮小",
+        "zoomIn": "拡大",
+        "zoomOut": "縮小",
+        "restart": "やり直す",
+        "setAvatar": "アバターに設定",
+        "monogram": "名前の頭文字",
+        "typeOne": "文字か絵文字を入力",
+        "useIt": "使う"
       },
       "create": {
         "title": "新しい作業アシスタント",
@@ -11312,9 +11327,7 @@
           "copy": "複製…",
           "stopAll": "すべて停止",
           "delete": "削除…",
-          "open": "開く",
-          "details": "詳細を表示",
-          "edit": "基本情報を編集…"
+          "details": "詳細を表示"
         },
         "mergeable": "#{id} マージできます：{title}",
         "prReady": "マージできます：{text}",
@@ -11390,12 +11403,7 @@
         "planSteps": "他の計画の {count} ステップがこのアシスタントに割り当てられています：{steps}。その番が来たら、各計画のアシスタントが別の担当を選びます。"
       },
       "edit": {
-        "title": "基本情報を編集",
-        "description": "名簿、専用ページ、メッセージに表示される名前とアイコンです。アシスタント自身もこの名前を知っています。",
-        "name": "名前",
-        "cancel": "キャンセル",
-        "save": "保存",
-        "saved": "保存しました。"
+        "name": "名前"
       },
       "personaUnwritten": "ペルソナはまだ書かれていません"
     },

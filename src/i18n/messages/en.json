@@ -11226,15 +11226,11 @@
       "new": "New work assistant",
       "copyName": "{name} (copy)",
       "copied": "Made {name}, a copy",
-      "openConversation": "Open",
-      "more": "More",
       "copy": "Copy",
       "deleteAction": "Delete…",
       "face": {
-        "change": "Change the avatar",
         "shape": "Shape",
         "color": "Colour",
-        "upload": "Upload a picture",
         "tooLarge": "That picture is too large.",
         "unreadable": "That file could not be read as a picture.",
         "shapes": {
@@ -11263,7 +11259,26 @@
           "purple": "Purple",
           "magenta": "Magenta",
           "gray": "Gray"
-        }
+        },
+        "edit": "Edit avatar",
+        "reset": "Reset",
+        "pages": {
+          "bot": "Bot",
+          "make": "Generate",
+          "upload": "Upload"
+        },
+        "dropHint": "Drag or paste a picture",
+        "or": "or",
+        "pickFile": "Choose a local picture",
+        "dragHint": "Drag to adjust",
+        "zoom": "Zoom",
+        "zoomIn": "Zoom in",
+        "zoomOut": "Zoom out",
+        "restart": "Start over",
+        "setAvatar": "Set avatar",
+        "monogram": "Name's first letter",
+        "typeOne": "Type a character or emoji",
+        "useIt": "Use it"
       },
       "create": {
         "title": "New work assistant",
@@ -11312,9 +11327,7 @@
           "copy": "Copy…",
           "stopAll": "Stop everything",
           "delete": "Delete…",
-          "open": "Open",
-          "details": "View details",
-          "edit": "Edit basic info…"
+          "details": "View details"
         },
         "mergeable": "#{id} ready to merge: {title}",
         "prReady": "Ready to merge: {text}",
@@ -11390,12 +11403,7 @@
         "planSteps": "{count, plural, one {A step of another plan is} other {# steps of other plans are}} handed to it: {steps}. Their assistants pick another when it comes up."
       },
       "edit": {
-        "title": "Edit basic info",
-        "description": "The name and picture it goes by on the roster, on its page and in its messages; the assistant knows the name too.",
-        "name": "Name",
-        "cancel": "Cancel",
-        "save": "Save",
-        "saved": "Saved."
+        "name": "Name"
       },
       "personaUnwritten": "No persona written yet"
     },

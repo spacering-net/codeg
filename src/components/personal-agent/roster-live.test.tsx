@@ -626,17 +626,32 @@ function dragRow(from: string, to: () => Element | null, y = 30, fromY = 10) {
 }
 
 describe("the roster's menu and drags (polish round 4)", () => {
-  it("opens an assistant's page and edits its name and face from its menu, each item with its icon", async () => {
+  it("opens an assistant's page from its menu, each item with its icon — no [Open] (a click on the row does it) and no [Edit basic info] (its page and the side panel's head change its name and face)", async () => {
     api.personalAgentBots.mockResolvedValue([entry(1, "Nova"), entry(2, "Dev")])
     wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
     await screen.findByText("Dev")
-    fireEvent.contextMenu(screen.getByText("Dev"))
-    let menu = await screen.findByRole("menu")
-    for (const item of within(menu).getAllByRole("menuitem")) {
-      expect(item.querySelector("svg")).not.toBeNull()
+    for (const who of ["Nova", "Dev"]) {
+      fireEvent.contextMenu(screen.getByText(who))
+      const menu = await screen.findByRole("menu")
+      const items = within(menu).getAllByRole("menuitem")
+      for (const item of items) {
+        expect(item.querySelector("svg")).not.toBeNull()
+      }
+      expect(items[0].textContent).toBe("View details")
+      expect(
+        within(menu).queryByRole("menuitem", { name: /^Open$/ })
+      ).toBeNull()
+      expect(
+        within(menu).queryByRole("menuitem", { name: /Edit basic info/ })
+      ).toBeNull()
+      fireEvent.keyDown(menu, { key: "Escape" })
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
     }
+    fireEvent.contextMenu(screen.getByText("Dev"))
     fireEvent.click(
-      within(menu).getByRole("menuitem", { name: "View details" })
+      within(await screen.findByRole("menu")).getByRole("menuitem", {
+        name: "View details",
+      })
     )
     expect(usePersonalAgentUi.getState()).toMatchObject({
       viewBot: 2,
@@ -646,58 +661,6 @@ describe("the roster's menu and drags (polish round 4)", () => {
     fireEvent.click(screen.getByText("Dev"))
     expect(usePersonalAgentUi.getState().botPage).toBeNull()
     expect(usePersonalAgentUi.getState().viewBot).toBe(2)
-    // Its name and face.
-    fireEvent.contextMenu(screen.getByText("Dev"))
-    menu = await screen.findByRole("menu")
-    fireEvent.click(
-      within(menu).getByRole("menuitem", { name: "Edit basic info…" })
-    )
-    const dialog = await screen.findByRole("dialog", {
-      name: "Edit basic info",
-    })
-    const save = within(dialog).getByRole("button", { name: "Save" })
-    // Nothing changed yet; and a work assistant keeps a name.
-    expect(save).toBeDisabled()
-    const name = within(dialog).getByLabelText("Name")
-    fireEvent.change(name, { target: { value: " " } })
-    expect(save).toBeDisabled()
-    fireEvent.change(name, { target: { value: "  Builder " } })
-    fireEvent.click(within(dialog).getByRole("button", { name: "Purple" }))
-    fireEvent.click(save)
-    await waitFor(() =>
-      expect(api.personalAgentSave).toHaveBeenCalledWith(
-        {
-          name: "Builder",
-          avatar: { kind: "face", shape: "blob", color: "purple" },
-          locale: "en",
-        },
-        2
-      )
-    )
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
-  })
-
-  it("lets the primary go by the default name", async () => {
-    api.personalAgentBots.mockResolvedValue([entry(1, "Nova"), entry(2, "Dev")])
-    wrap(<PersonalAgentRoster variant="column" readOnly={false} />)
-    await screen.findByText("Dev")
-    fireEvent.contextMenu(screen.getByText("Nova"))
-    fireEvent.click(
-      within(await screen.findByRole("menu")).getByRole("menuitem", {
-        name: "Edit basic info…",
-      })
-    )
-    const dialog = await screen.findByRole("dialog")
-    const name = within(dialog).getByLabelText("Name") as HTMLInputElement
-    expect(name.placeholder).toBe("Personal agent")
-    fireEvent.change(name, { target: { value: "" } })
-    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }))
-    await waitFor(() =>
-      expect(api.personalAgentSave).toHaveBeenCalledWith(
-        expect.objectContaining({ name: "" }),
-        null
-      )
-    )
   })
 
   it("puts a row dragged onto a group in it, out of the pinned ones", async () => {

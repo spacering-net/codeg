@@ -27,9 +27,9 @@
  * - Dragged narrower than its least width, the list folds to a rail of
  *   faces (roster-resize.tsx): the primary's, a rule, the others' in the
  *   list's order; each one's name, line and work in hand when hovered.
- * - A row's context menu: open, its page, its name and face, pin, move to a
- *   group, hide, mute, mark unread, notifications, copy, stop everything,
- *   delete.
+ * - A row's context menu: its page, pin, move to a group, hide, mute,
+ *   mark unread, notifications, copy, stop everything, delete. (Its name
+ *   and face are changed on its page, or on the side panel's head.)
  * - Rows come and go by their height (the motion tokens), not at once.
  * - On a narrow screen, a strip of faces over the page.
  * - The column (or the strip) shows only when the owner keeps it shown
@@ -65,13 +65,11 @@ import {
   IdCard,
   Mail,
   MailOpen,
-  MessageSquareText,
   OctagonX,
   Pin,
   PinOff,
   Plus,
   Trash2,
-  UserPen,
   Volume2,
   VolumeX,
 } from "lucide-react"
@@ -121,7 +119,6 @@ import {
 } from "./activity-text"
 import { BotAvatar } from "./bot-avatar"
 import { BotDeleteDialog } from "./bot-delete-dialog"
-import { BotInfoDialog } from "./bot-info-dialog"
 import { NewBotDialog } from "./new-bot-dialog"
 import {
   groupRoster,
@@ -417,7 +414,6 @@ export interface RosterDialogs {
   add: () => void
   remove: (id: number) => void
   group: (entry: RosterEntry) => void
-  edit: (entry: RosterEntry) => void
 }
 
 /** What moves `b` into the group `name` (`null`: the rest): out of the
@@ -447,18 +443,16 @@ async function runActs(id: number, acts: RosterAct[]): Promise<void> {
 }
 
 /** The roster's dialogs — a new assistant, deleting one, naming a group for
- *  one, its name and face — and the way to open each. */
+ *  one — and the way to open each. */
 export function useRosterDialogs(): { api: RosterDialogs; node: ReactNode } {
   const [adding, setAdding] = useState(false)
   const [deleting, setDeleting] = useState<number | null>(null)
   const [grouping, setGrouping] = useState<RosterEntry | null>(null)
-  const [editing, setEditing] = useState<RosterEntry | null>(null)
   const api = useMemo<RosterDialogs>(
     () => ({
       add: () => setAdding(true),
       remove: setDeleting,
       group: setGrouping,
-      edit: setEditing,
     }),
     []
   )
@@ -479,12 +473,6 @@ export function useRosterDialogs(): { api: RosterDialogs; node: ReactNode } {
           if (grouping)
             void runActs(grouping.id, groupActs(grouping, name, true))
           setGrouping(null)
-        }}
-      />
-      <BotInfoDialog
-        bot={editing}
-        onOpenChange={(open) => {
-          if (!open) setEditing(null)
         }}
       />
     </>
@@ -981,24 +969,12 @@ export function PersonalAgentRoster({
       <ContextMenu>
         <ContextMenuTrigger asChild>{trigger}</ContextMenuTrigger>
         <ContextMenuContent data-pa-roster-menu={b.id} className="min-w-48">
-          <ContextMenuItem onSelect={() => go(b)}>
-            <MessageSquareText aria-hidden />
-            {tr("menu.open")}
-          </ContextMenuItem>
           <ContextMenuItem
             onSelect={() => openDetails(b)}
             data-pa-roster-details={b.id}
           >
             <IdCard aria-hidden />
             {tr("menu.details")}
-          </ContextMenuItem>
-          <ContextMenuItem
-            disabled={readOnly}
-            onSelect={() => dialogs.edit(b)}
-            data-pa-roster-edit={b.id}
-          >
-            <UserPen aria-hidden />
-            {tr("menu.edit")}
           </ContextMenuItem>
           <ContextMenuSeparator />
           {worker ? (

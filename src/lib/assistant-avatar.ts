@@ -110,13 +110,15 @@ export class AvatarImageError extends Error {
 }
 
 /** Load a File into an image element (via an object URL). */
-function loadImage(file: Blob): Promise<HTMLImageElement> {
+export function loadAvatarImage(file: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
     const img = new Image()
     img.onload = () => {
       URL.revokeObjectURL(url)
-      resolve(img)
+      if (!img.naturalWidth || !img.naturalHeight)
+        reject(new AvatarImageError("unreadable"))
+      else resolve(img)
     }
     img.onerror = () => {
       URL.revokeObjectURL(url)
@@ -153,18 +155,23 @@ export function encodeAvatarCanvas(canvas: HTMLCanvasElement): string {
   throw new AvatarImageError("too_large")
 }
 
+/** A square of an image, in its own pixels: from (`x`, `y`), `side` wide. */
+export interface AvatarCrop {
+  x: number
+  y: number
+  side: number
+}
+
 /**
- * Turn a picked image file into an avatar data URL: center-crop to a square,
- * scale to {@link AVATAR_IMAGE_SIDE}, encode (see {@link encodeAvatarCanvas}).
- * Done client-side because neither web mode nor a remote-workspace window can
- * hand the backend a local file path — the bytes travel in the request.
+ * The avatar data URL of the square `crop` of `img`: scaled to
+ * {@link AVATAR_IMAGE_SIDE}, encoded (see {@link encodeAvatarCanvas}).
+ * Done client-side because neither web mode nor a remote-workspace window
+ * can hand the backend a local file path — the bytes travel in the request.
  */
-export async function imageFileToAvatarDataUrl(file: Blob): Promise<string> {
-  const img = await loadImage(file)
-  const width = img.naturalWidth
-  const height = img.naturalHeight
-  if (!width || !height) throw new AvatarImageError("unreadable")
-  const side = Math.min(width, height)
+export function cropToAvatarDataUrl(
+  img: CanvasImageSource,
+  crop: AvatarCrop
+): string {
   const canvas = document.createElement("canvas")
   canvas.width = AVATAR_IMAGE_SIDE
   canvas.height = AVATAR_IMAGE_SIDE
@@ -173,14 +180,28 @@ export async function imageFileToAvatarDataUrl(file: Blob): Promise<string> {
   ctx.imageSmoothingQuality = "high"
   ctx.drawImage(
     img,
-    (width - side) / 2,
-    (height - side) / 2,
-    side,
-    side,
+    crop.x,
+    crop.y,
+    crop.side,
+    crop.side,
     0,
     0,
     AVATAR_IMAGE_SIDE,
     AVATAR_IMAGE_SIDE
   )
   return encodeAvatarCanvas(canvas)
+}
+
+/** Turn a picked image file into an avatar data URL: its middle square
+ *  (see {@link cropToAvatarDataUrl}). */
+export async function imageFileToAvatarDataUrl(file: Blob): Promise<string> {
+  const img = await loadAvatarImage(file)
+  const width = img.naturalWidth
+  const height = img.naturalHeight
+  const side = Math.min(width, height)
+  return cropToAvatarDataUrl(img, {
+    x: (width - side) / 2,
+    y: (height - side) / 2,
+    side,
+  })
 }

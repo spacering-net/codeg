@@ -11226,15 +11226,11 @@
       "new": "새 작업 어시스턴트",
       "copyName": "{name} (사본)",
       "copied": "복제본 {name}을(를) 만들었습니다",
-      "openConversation": "열기",
-      "more": "더 보기",
       "copy": "복제",
       "deleteAction": "삭제…",
       "face": {
-        "change": "아바타 변경",
         "shape": "모양",
         "color": "색상",
-        "upload": "이미지 업로드",
         "tooLarge": "이미지가 너무 큽니다.",
         "unreadable": "이 파일을 이미지로 읽을 수 없습니다.",
         "shapes": {
@@ -11263,7 +11259,26 @@
           "purple": "보라",
           "magenta": "마젠타",
           "gray": "회색"
-        }
+        },
+        "edit": "아바타 편집",
+        "reset": "초기화",
+        "pages": {
+          "bot": "Bot",
+          "make": "생성",
+          "upload": "업로드"
+        },
+        "dropHint": "이미지를 끌어오거나 붙여넣기",
+        "or": "또는",
+        "pickFile": "로컬 이미지 선택",
+        "dragHint": "드래그해서 위치 조정",
+        "zoom": "확대/축소",
+        "zoomIn": "확대",
+        "zoomOut": "축소",
+        "restart": "다시 시작",
+        "setAvatar": "아바타로 설정",
+        "monogram": "이름 첫 글자",
+        "typeOne": "글자나 이모지 입력",
+        "useIt": "사용"
       },
       "create": {
         "title": "새 작업 어시스턴트",
@@ -11312,9 +11327,7 @@
           "copy": "복제…",
           "stopAll": "모두 멈추기",
           "delete": "삭제…",
-          "open": "열기",
-          "details": "세부 정보 보기",
-          "edit": "기본 정보 편집…"
+          "details": "세부 정보 보기"
         },
         "mergeable": "#{id} 병합 가능: {title}",
         "prReady": "병합 가능: {text}",
@@ -11390,12 +11403,7 @@
         "planSteps": "다른 계획의 {count}단계가 이 어시스턴트에게 맡겨져 있어요: {steps}. 차례가 오면 각 계획의 어시스턴트가 다른 담당을 골라요."
       },
       "edit": {
-        "title": "기본 정보 편집",
-        "description": "명단, 전용 페이지, 메시지에 표시되는 이름과 사진입니다. 어시스턴트도 이 이름을 압니다.",
-        "name": "이름",
-        "cancel": "취소",
-        "save": "저장",
-        "saved": "저장했습니다."
+        "name": "이름"
       },
       "personaUnwritten": "아직 페르소나가 없습니다"
     },

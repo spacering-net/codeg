@@ -117,6 +117,23 @@ export function defaultBotFace(uid: string): BotAvatarValue {
   }
 }
 
+/** What the primary assistant starts with (10.6): a black blob. */
+export const PRIMARY_FACE: BotAvatarValue = {
+  kind: "face",
+  shape: "blob",
+  color: "black",
+}
+
+/** The face an assistant was given by default — what [Reset] in the face
+ *  editor goes back to; `null` for one with no uid to tell it by. */
+export function defaultFaceOf(
+  bot: { kind: "primary" | "worker"; uid: string | null } | null
+): BotAvatarValue | null {
+  if (!bot) return null
+  if (bot.kind === "primary") return PRIMARY_FACE
+  return bot.uid ? defaultBotFace(bot.uid) : null
+}
+
 /** A fresh uid: 32 lowercase hex digits, as the backend makes them. */
 export function newBotUid(): string {
   const bytes = new Uint8Array(16)

@@ -14,10 +14,12 @@ import { useLocale, useTranslations } from "next-intl"
 import {
   AlertTriangle,
   ChartColumn,
+  Copy,
+  IdCard,
   Layers,
   Loader2,
-  MoreHorizontal,
   Plus,
+  Trash2,
   Users,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -25,12 +27,6 @@ import { toast } from "sonner"
 import { AssistantsPanel } from "@/components/settings/assistants-panel"
 import { SettingCard, SettingNote } from "@/components/shared/setting-card"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import {
   Popover,
   PopoverContent,
@@ -230,13 +226,9 @@ export function WorkersPage({
               <div
                 key={w.id}
                 data-pa-worker={w.id}
-                className="flex w-full items-center gap-3 px-3 py-2.5"
+                className="@container flex w-full flex-wrap items-center gap-x-3 gap-y-1.5 px-3 py-2.5"
               >
-                <button
-                  type="button"
-                  onClick={() => openBotPage("identity", { bot: w.id })}
-                  className="flex min-w-0 flex-1 items-center gap-3 text-start"
-                >
+                <div className="flex min-w-[min(12rem,100%)] flex-1 items-center gap-3">
                   <BotAvatar avatar={w.avatar} name={botName(w)} size={32} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">
@@ -275,7 +267,7 @@ export function WorkersPage({
                       </span>
                     ) : null}
                   </span>
-                </button>
+                </div>
                 {(grades?.cells ?? []).some((c) => c.bot_id === w.id) ? (
                   <Popover>
                     <PopoverTrigger asChild>
@@ -299,53 +291,54 @@ export function WorkersPage({
                     </PopoverContent>
                   </Popover>
                 ) : null}
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  onClick={() => goTo(w.id)}
-                  data-pa-worker-open={w.id}
-                >
-                  {tb("openConversation")}
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      size="icon-xs"
-                      variant="ghost"
-                      aria-label={tb("more")}
-                      data-pa-worker-menu={w.id}
-                    >
-                      {copying === w.id ? (
-                        <Loader2 className="animate-spin" aria-hidden />
-                      ) : (
-                        <MoreHorizontal aria-hidden />
-                      )}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem
-                      onSelect={() => openBotPage("identity", { bot: w.id })}
-                      data-pa-worker-details={w.id}
-                    >
+                {/* Narrow, under the rest, at its end — and narrower still,
+                    their icons alone (their names on them for the pointer
+                    and the screen reader). */}
+                <div className="ms-auto flex flex-wrap items-center justify-end gap-0.5">
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => openBotPage("identity", { bot: w.id })}
+                    title={tb("roster.menu.details")}
+                    data-pa-worker-details={w.id}
+                  >
+                    <IdCard aria-hidden />
+                    <span className="sr-only @sm:not-sr-only">
                       {tb("roster.menu.details")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      disabled={readOnly || copying != null}
-                      onSelect={() => void copy(w)}
-                      data-pa-worker-copy={w.id}
-                    >
+                    </span>
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={readOnly || copying != null}
+                    onClick={() => void copy(w)}
+                    title={tb("copy")}
+                    data-pa-worker-copy={w.id}
+                  >
+                    {copying === w.id ? (
+                      <Loader2 className="animate-spin" aria-hidden />
+                    ) : (
+                      <Copy aria-hidden />
+                    )}
+                    <span className="sr-only @sm:not-sr-only">
                       {tb("copy")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      disabled={readOnly}
-                      variant="destructive"
-                      onSelect={() => setDeleting(w.id)}
-                      data-pa-worker-delete={w.id}
-                    >
+                    </span>
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={readOnly}
+                    onClick={() => setDeleting(w.id)}
+                    title={tb("deleteAction")}
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    data-pa-worker-delete={w.id}
+                  >
+                    <Trash2 aria-hidden />
+                    <span className="sr-only @sm:not-sr-only">
                       {tb("deleteAction")}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                    </span>
+                  </Button>
+                </div>
               </div>
             )
           })}

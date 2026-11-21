@@ -78,6 +78,7 @@ import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
 import { SetupAgentTiles } from "./setup-agent-tiles"
 import { SetupFrame } from "./setup-frame"
+import { PRIMARY_FACE } from "../bot-avatar"
 import { SetupIdentity } from "./setup-identity"
 import {
   assistantAvatarOf,
@@ -86,13 +87,6 @@ import {
   sameChoice,
   type ExecutorChoice,
 } from "./executor-pick"
-
-/** What the primary assistant starts with (10.6): a black blob. */
-const DEFAULT_AVATAR: BotAvatar = {
-  kind: "face",
-  shape: "blob",
-  color: "black",
-}
 
 /** The first setup's line under [Chat]: hung below it, taking no room —
  *  the frame's padding under it is its room — so nothing moves for it. */
@@ -123,7 +117,7 @@ export function IdentityPage({
   // The first setup's name and face; one set up has them on its page's
   // head.
   const [name, setName] = useState("")
-  const [avatar, setAvatar] = useState<BotAvatar>(DEFAULT_AVATAR)
+  const [avatar, setAvatar] = useState<BotAvatar>(PRIMARY_FACE)
   const [agentType, setAgentType] = useState<AgentType | null>(
     agent?.agent_type ?? null
   )

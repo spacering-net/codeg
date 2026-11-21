@@ -40,8 +40,10 @@ import {
   type BotTab,
 } from "@/stores/personal-agent-ui-store"
 
+import { defaultFaceOf } from "../bot-avatar"
 import { useBotLook, useBotName } from "../shared"
-import { BotHero, usePendingFace, useSaveFace } from "./bot-hero"
+import { usePendingFace, useSaveFace } from "../face-save"
+import { BotHero } from "./bot-hero"
 import { IdentityPage } from "./identity-page"
 import { NotifyPage } from "./notify-page"
 import { AdvancedPage, PersonaPage } from "./own-pages"
@@ -132,6 +134,7 @@ export function BotPage() {
       name={name}
       avatar={face.shown}
       onAvatar={agent && !readOnly ? saveFace : undefined}
+      resetTo={defaultFaceOf(entry ?? agent)}
       primary={setUp && kind === "primary"}
       subtitle={subtitle}
       look={setUp ? look : null}

@@ -11226,15 +11226,11 @@
       "new": "新建工作助手",
       "copyName": "{name} 副本",
       "copied": "已复制成 {name}",
-      "openConversation": "打开",
-      "more": "更多",
       "copy": "复制",
       "deleteAction": "删除…",
       "face": {
-        "change": "换头像",
         "shape": "形状",
         "color": "颜色",
-        "upload": "上传图片",
         "tooLarge": "图片太大了。",
         "unreadable": "这个文件读不成图片。",
         "shapes": {
@@ -11263,7 +11259,26 @@
           "purple": "紫",
           "magenta": "品红",
           "gray": "灰"
-        }
+        },
+        "edit": "编辑头像",
+        "reset": "重置",
+        "pages": {
+          "bot": "Bot",
+          "make": "生成",
+          "upload": "上传"
+        },
+        "dropHint": "拖拽或粘贴图片",
+        "or": "或",
+        "pickFile": "选择本地图片",
+        "dragHint": "拖动以调整位置",
+        "zoom": "缩放",
+        "zoomIn": "放大",
+        "zoomOut": "缩小",
+        "restart": "重新开始",
+        "setAvatar": "设置头像",
+        "monogram": "名字首字",
+        "typeOne": "输入一个字或表情",
+        "useIt": "用它"
       },
       "create": {
         "title": "新建工作助手",
@@ -11312,9 +11327,7 @@
           "copy": "复制…",
           "stopAll": "全部停下",
           "delete": "删除…",
-          "open": "打开",
-          "details": "查看详情",
-          "edit": "编辑基本信息…"
+          "details": "查看详情"
         },
         "mergeable": "#{id} 可以合并了：{title}",
         "prReady": "可以合并了：{text}",
@@ -11390,12 +11403,7 @@
         "planSteps": "别的计划里有 {count} 步交给了它：{steps}。轮到时，由那个计划的助手另挑一个。"
       },
       "edit": {
-        "title": "编辑基本信息",
-        "description": "它在名册、它的页面和消息里显示的名字和头像；助手也知道自己叫这个名字。",
-        "name": "名称",
-        "cancel": "取消",
-        "save": "保存",
-        "saved": "已保存。"
+        "name": "名称"
       },
       "personaUnwritten": "还没写人设"
     },

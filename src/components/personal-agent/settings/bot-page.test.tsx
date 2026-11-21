@@ -29,6 +29,7 @@ vi.mock("@/lib/api", () => api)
 vi.mock("@/lib/platform", () => ({
   subscribe: () => Promise.resolve(() => {}),
   onTransportReconnect: () => () => {},
+  isDesktop: () => false,
 }))
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), message: vi.fn() } }))
 // The identity and persona tabs' editors are tested where they live.

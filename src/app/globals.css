@@ -4366,14 +4366,16 @@ div.monaco-diff-editor.side-by-side .editor.modified {
    (both held still with reduced motion). A black or grey face is a light
    touch of grey, never a cloud. The colour eases over as another face is
    picked. An assistant's own page (`data-pa-bot-frame`) has the same wash
-   and glow, without the ripples. */
+   and glow, without the ripples; the "new work assistant" box's head
+   (`data-pa-new-bot-head`) the glow. */
 @property --pa-setup-tint {
   syntax: "<color>";
   inherits: true;
   initial-value: transparent;
 }
 [data-pa-setup-frame],
-[data-pa-bot-frame] {
+[data-pa-bot-frame],
+[data-pa-new-bot-head] {
   --pa-setup-tint: var(--pa-body, var(--primary));
   --pa-setup-wash: 15%;
   --pa-setup-halo: 0.24;
@@ -4383,7 +4385,9 @@ div.monaco-diff-editor.side-by-side .editor.modified {
 [data-pa-setup-frame][data-pa-face="black"],
 [data-pa-setup-frame][data-pa-face="gray"],
 [data-pa-bot-frame][data-pa-face="black"],
-[data-pa-bot-frame][data-pa-face="gray"] {
+[data-pa-bot-frame][data-pa-face="gray"],
+[data-pa-new-bot-head][data-pa-face="black"],
+[data-pa-new-bot-head][data-pa-face="gray"] {
   --pa-setup-wash: 4%;
   --pa-setup-halo: 0.08;
   --pa-setup-ring: 22%;

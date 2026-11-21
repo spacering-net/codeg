@@ -1,9 +1,10 @@
 "use client"
 
 /**
- * [+] on the roster, [New work assistant] in the settings (4.12): a name,
- * and under it a face — a default from the new assistant's uid, which the
- * backend gives it the same way, or one the owner picks; the first lines
+ * [+] on the roster, [New work assistant] in the settings (4.12): its face
+ * and its name under it, as its own page shows them — the face a default
+ * from the new assistant's uid, which the backend gives it the same way,
+ * or one the owner picks in the face editor behind it; the first lines
  * of its persona, which may be left empty — it introduces itself, and
  * writes its own from what it is given and does; and the executor config
  * its work runs on: by default one made with it on the brain's agent (the
@@ -31,7 +32,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { personalAgentBotCreate } from "@/lib/api"
@@ -44,8 +44,8 @@ import type {
 import { readRosterNow } from "@/stores/personal-agent-roster-store"
 import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 
-import { BotAvatar, defaultBotFace, newBotUid } from "./bot-avatar"
-import { BotFaceChoices } from "./bot-face-picker"
+import { defaultBotFace, newBotUid } from "./bot-avatar"
+import { BotFacePicker } from "./bot-face-picker"
 import {
   assistantAvatarOf,
   ExecutorPick,
@@ -53,6 +53,8 @@ import {
 } from "./settings/executor-pick"
 
 const NAME_MAX = 40
+/** Its face at the head of the box, in px at 100% zoom. */
+const HEAD_FACE = 80
 /** Longest persona the dialog takes (the backend's, for the first lines
  *  of one). */
 const PERSONA_MAX = 1_000
@@ -163,31 +165,44 @@ function NewBotBody({
           void create()
         }}
       >
-        <div className="flex items-center gap-3">
-          <BotAvatar
-            avatar={shown}
-            name={trimmed || t("namePlaceholder")}
-            size={48}
-          />
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <Label htmlFor="pa-new-bot-name">{t("name")}</Label>
-            <Input
-              id="pa-new-bot-name"
-              autoFocus
-              value={name}
-              maxLength={NAME_MAX}
-              placeholder={t("namePlaceholder")}
-              onChange={(e) => setName(e.target.value)}
-              data-pa-new-bot-name
+        {/* Who it will be, as its own page has it: its face over its
+            glow — the face editor behind it — and its name under it. */}
+        <div
+          className="flex flex-col items-center pt-2"
+          data-pa-new-bot-head
+          data-pa-face-host
+          data-pa-face={shown.kind === "face" ? shown.color : undefined}
+        >
+          <div className="relative">
+            <span aria-hidden className="pa-setup-halo" />
+            <BotFacePicker
+              value={shown}
+              name={trimmed || t("namePlaceholder")}
+              onChange={setFace}
+              resetTo={defaultBotFace(uid)}
+              disabled={busy}
+              size={HEAD_FACE}
+              look="idle"
             />
           </div>
+          <Label htmlFor="pa-new-bot-name" className="sr-only">
+            {t("name")}
+          </Label>
+          <input
+            id="pa-new-bot-name"
+            autoFocus
+            dir="auto"
+            value={name}
+            maxLength={NAME_MAX}
+            placeholder={t("namePlaceholder")}
+            onChange={(e) => setName(e.target.value)}
+            disabled={busy}
+            autoComplete="off"
+            spellCheck={false}
+            className="mt-6 h-11 w-full max-w-xs rounded-xl border border-dashed border-border bg-transparent px-3 text-center text-xl leading-8 font-semibold tracking-tight text-foreground outline-none transition-colors placeholder:font-normal placeholder:text-foreground/35 hover:border-ring/60 focus-visible:border-solid focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 disabled:opacity-60"
+            data-pa-new-bot-name
+          />
         </div>
-        <BotFaceChoices
-          value={shown}
-          name={trimmed}
-          onChange={setFace}
-          disabled={busy}
-        />
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="pa-new-bot-persona">{t("persona")}</Label>
           <Textarea

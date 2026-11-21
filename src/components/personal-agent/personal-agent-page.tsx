@@ -249,7 +249,6 @@ export function PersonalAgentPageTitle() {
       add: closing(api.add),
       remove: closing(api.remove),
       group: closing(api.group),
-      edit: closing(api.edit),
     }
   }, [rosterDialogs.api])
   return (
