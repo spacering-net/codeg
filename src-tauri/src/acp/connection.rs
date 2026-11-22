@@ -52079,7 +52079,7 @@ mod tests {
             AgentType::Antigravity,
             vec![
                 vec![custom_text("working")],
-                vec![grok_barrier()],
+                vec![],
                 vec![custom_text("next accepted")],
             ],
             vec![
@@ -52103,8 +52103,8 @@ mod tests {
         lp.state.write().await.turn_in_flight = true;
         lp.cmd_tx.send(prompt_command("two")).await.unwrap();
         lp.respond.notify_one(); // let the cancelled RPC settle
-        lp.until_barrier().await;
-        lp.respond.notify_one(); // explicitly declined during cancellation
+        // The mock rejects the second RPC before sending any frames. Seeing the
+        // third RPC's output proves the unaccepted prompt was sent again.
         lp.until_text("next accepted").await;
         lp.close_turn().await;
         assert!(matches!(
