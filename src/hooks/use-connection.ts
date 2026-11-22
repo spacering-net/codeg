@@ -147,7 +147,7 @@ export interface UseConnectionReturn {
     sessionId?: string,
     conversationId?: number
   ) => Promise<void>
-  disconnect: () => Promise<void>
+  disconnect: (onlyIfIdle?: boolean) => Promise<void>
   /** Restart the session (disconnect + resume same sessionId) so it picks up
    *  current agent/model settings. Returns `true` if it actually restarted,
    *  `false` on a no-op (viewer / delegation child / no connection). */
@@ -349,9 +349,13 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   // Drops `actions.disconnect`'s teardown-confirmed flag: this hook's callers
   // are closing a surface, and only a caller that reports a restart back to the
   // user (see `reapplyConfig`) has anything to do with that answer.
-  const disconnect = useCallback(async () => {
-    await actions.disconnect(contextKey)
-  }, [actions, contextKey])
+  const disconnect = useCallback(
+    async (onlyIfIdle?: boolean) => {
+      if (onlyIfIdle) await actions.disconnectIfIdle(contextKey)
+      else await actions.disconnect(contextKey)
+    },
+    [actions, contextKey]
+  )
 
   const sendPrompt = useCallback(
     (

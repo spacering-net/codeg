@@ -12552,9 +12552,16 @@ pub async fn acp_answer_plan_approval(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn acp_disconnect(
     connection_id: String,
+    only_if_idle: Option<bool>,
     manager: State<'_, ConnectionManager>,
-) -> Result<(), AcpError> {
-    manager.disconnect(&connection_id).await
+) -> Result<Option<bool>, AcpError> {
+    if only_if_idle == Some(true) {
+        return manager
+            .release_idle(&connection_id, chrono::Utc::now())
+            .await
+            .map(Some);
+    }
+    manager.disconnect(&connection_id).await.map(|()| None)
 }
 
 #[cfg(feature = "tauri-runtime")]

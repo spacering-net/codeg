@@ -2912,6 +2912,13 @@ pub async fn spawn_agent_connection(
         initial_state.claude_settings =
             crate::acp::claude_model_picker::launch_settings(&runtime_env);
     }
+    if agent_type == AgentType::Antigravity {
+        initial_state.antigravity_sessions_dir = Some(
+            crate::parsers::antigravity::resolve_antigravity_sessions_dir_for_env(
+                &crate::parsers::AgentEnv::from_overrides(runtime_env.clone()),
+            ),
+        );
+    }
     // A `codeg-cli` run's root: marked before anything can look, the codeg-mcp
     // injection below included.
     if let Some(seed) = cli_root {
@@ -9551,6 +9558,9 @@ async fn run_connection(
                 s.native_steering_available = native_steering_available;
                 s.codex_user_input_shape = codex_user_input_shape;
                 s.antigravity_interactions = antigravity_interactions;
+                if !native_antigravity_task_store(init_resp.agent_info.as_ref()) {
+                    s.antigravity_sessions_dir = None;
+                }
                 s.neutral_goal_channel = neutral_goal_channel;
                 // The vocabulary is decided HERE for every adapter, advertising
                 // or not — this assignment is what flips it from "unknown" to
@@ -15180,6 +15190,19 @@ async fn run_conversation_loop(
     // loop ends while `read_update` holds `session`. A fork restarts this loop
     // with the new session, so it cannot go stale in here.
     let agent_turn_session_id = session.session_id().0.to_string();
+    let agy_dir = state.read().await.antigravity_sessions_dir.clone();
+    let agy_watch = match agy_dir {
+        Some(dir) => {
+            crate::parsers::antigravity::background::Watch::start(
+                dir,
+                agent_turn_session_id.clone(),
+            )
+            .await
+        }
+        None => None,
+    };
+    let mut agy_poll = tokio::time::interval(std::time::Duration::from_secs(1));
+    agy_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Whether a prompt has run on this session in this loop — from then on the
     // idle loop records a custom agent's frames as the turn loop does (see the
     // `record_transcript_update` below). Before it, nothing the idle loop reads
@@ -15212,6 +15235,11 @@ async fn run_conversation_loop(
                     match hold_for_codebuddy_cancel(cmd, &mut codebuddy_cancel) {
                         Admitted::Run(cmd) => break cmd,
                         Admitted::Held(held) => held_prompt = Some(held),
+                    }
+                }
+                _ = agy_poll.tick(), if agy_watch.is_some() && prompted => {
+                    if let Some(watch) = &agy_watch {
+                        watch.refresh(state, emitter, false).await;
                     }
                 }
                 update = session.read_update() => {
@@ -15465,6 +15493,11 @@ async fn run_conversation_loop(
                 // instantly — and awaited, so the replay gate can never see
                 // this conversation as transcript-less (see `record_prompt`).
                 record_prompt(agent_type, &sid.0, &prompt_blocks).await;
+                // Drain a native reply that finished between the last poll and
+                // this user prompt before handing the foreground to the wire.
+                if let Some(watch) = &agy_watch {
+                    watch.refresh(state, emitter, false).await;
+                }
                 prompted = true;
                 // claude-agent-acp answers a `/remote-control` prompt itself;
                 // its reply says whether Remote Control is on.
@@ -15588,6 +15621,11 @@ async fn run_conversation_loop(
                         // the turn would end `empty` and the update land on
                         // the idle loop, where a Claude chunk is dropped.
                         biased;
+                        _ = agy_poll.tick(), if agy_watch.is_some() => {
+                            if let Some(watch) = &agy_watch {
+                                watch.refresh(state, emitter, true).await;
+                            }
+                        }
                         update = session.read_update() => {
                             // An `Err` is the session's router going away, not one bad
                             // message (see `AgentSession::read_update`): the connection
@@ -16006,6 +16044,11 @@ async fn run_conversation_loop(
                                 zcode_turn.metrics(),
                             )
                             .await;
+                            // Publish task ownership BEFORE TurnComplete lets
+                            // tab cleanup and the unattended engines release us.
+                            if let Some(watch) = &agy_watch {
+                                watch.before_turn_complete(state, emitter).await;
+                            }
                             // The turn is over, so any card still parked here
                             // is moot — `TurnComplete` clears
                             // `pending_permission` from the snapshot
@@ -20390,6 +20433,15 @@ fn steering_policy_agent(
         }
         other => other,
     }
+}
+
+/// The native CLI (1.5.13) and the standalone adapter (1.5.0) have
+/// different initialize identities. Only the former provides the task
+/// records and autonomous completion turns consumed by the trajectory watch.
+fn native_antigravity_task_store(
+    info: Option<&agent_client_protocol::schema::v1::Implementation>,
+) -> bool {
+    info.is_some_and(|agent| agent.name == "Antigravity ACP Server")
 }
 
 /// The `agentInfo.name` antigravity-acp reports at `initialize` (verified
@@ -31101,6 +31153,18 @@ mod tests {
             steering_policy_agent(AgentType::Codex, Some(&claude)),
             AgentType::Codex
         );
+    }
+
+    #[test]
+    fn native_antigravity_tasks_follow_the_running_adapter() {
+        use agent_client_protocol::schema::v1::Implementation;
+        assert!(native_antigravity_task_store(Some(&Implementation::new(
+            "Antigravity ACP Server", "1.5.13"
+        ))));
+        assert!(!native_antigravity_task_store(Some(&Implementation::new(
+            "antigravity-acp", "1.5.0"
+        ))));
+        assert!(!native_antigravity_task_store(None));
     }
 
     #[test]

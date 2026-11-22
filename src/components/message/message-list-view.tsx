@@ -2248,6 +2248,7 @@ export function MessageListView({
         asyncTasks: liveRuns?.asyncTasks ?? EMPTY_ASYNC_TASKS,
         foregroundAgents,
         backgroundTasks,
+        nativeShellTasks: agentType === "antigravity",
         findLaunchCard: (toolCallId) => {
           if (!cardThread) return null
           for (let i = cardThread.length - 1; i >= 0; i -= 1) {
@@ -2263,6 +2264,7 @@ export function MessageListView({
         delegationBindings,
       }),
     [
+      agentType,
       liveRuns?.asyncTasks,
       liveRuns?.delegatedChildren,
       foregroundAgents,

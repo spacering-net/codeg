@@ -488,8 +488,19 @@ export async function acpAnswerPlanApproval(
   })
 }
 
-export async function acpDisconnect(connectionId: string): Promise<void> {
-  return getTransport().call("acp_disconnect", { connectionId })
+export function acpDisconnect(connectionId: string): Promise<void>
+export function acpDisconnect(
+  connectionId: string,
+  onlyIfIdle: true
+): Promise<boolean>
+export function acpDisconnect(
+  connectionId: string,
+  onlyIfIdle?: true
+): Promise<void | boolean> {
+  return getTransport().call(
+    "acp_disconnect",
+    onlyIfIdle ? { connectionId, onlyIfIdle } : { connectionId }
+  )
 }
 
 export async function acpTouchConnection(

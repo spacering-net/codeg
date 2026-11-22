@@ -3536,7 +3536,7 @@ export interface AcpActionsValue {
    * reason and the agent process may still be alive. Callers that report a
    * restart to the user gate on it; fire-and-forget teardowns ignore it.
    */
-  disconnect(contextKey: string): Promise<boolean>
+  disconnect(contextKey: string, onlyIfIdle?: boolean): Promise<boolean>
   /**
    * Release a connection whose SURFACE went away on its own (a preview tab
    * replaced by the next single-click in the sidebar) — never a user-intent
@@ -7144,15 +7144,25 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       }
 
       for (const { contextKey, connectionId } of toDisconnect) {
-        acpDisconnect(connectionId).catch(() => {})
-        releaseConnectionRoute(connectionId, contextKey)
-        teardownAttachSubscription(contextKey)
-        lastActivityRef.current.delete(contextKey)
-        pendingUnmappedEventsRef.current.delete(connectionId)
-        // Reclaimed for idleness, not closed: the tab is still open and its
-        // Reconnect button must resume this session, not start a new one.
-        captureIdentityBeforeRemoval(contextKey)
-        dispatch({ type: "CONNECTION_REMOVED", contextKey })
+        void acpDisconnect(connectionId, true)
+          .catch((error: unknown) => isConnectionGoneError(error))
+          .then((released) => {
+            if (
+              released === false ||
+              storeRef.current.connections.get(contextKey)?.connectionId !==
+                connectionId
+            )
+              return
+            releaseConnectionRoute(connectionId, contextKey)
+            teardownAttachSubscription(contextKey)
+            lastActivityRef.current.delete(contextKey)
+            pendingUnmappedEventsRef.current.delete(connectionId)
+            // Reclaimed for idleness, not closed: the tab is still open and its
+            // Reconnect button must resume this session, not start a new one.
+            captureIdentityBeforeRemoval(contextKey)
+            dispatch({ type: "CONNECTION_REMOVED", contextKey })
+          })
+          .catch(() => {})
       }
     }, IDLE_SWEEP_INTERVAL_MS)
 
@@ -7210,7 +7220,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           // its work settles — the same rule as a closed tab.
           if (conn && isConnectionBusy(conn)) busy = true
         }
-        if (owned && !busy) acpDisconnect(connectionId).catch(() => {})
+        if (owned && !busy) acpDisconnect(connectionId, true).catch(() => {})
       }
       for (const [, sub] of attachSubs) {
         try {
@@ -7976,7 +7986,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   )
 
   const disconnect = useCallback(
-    async (contextKey: string): Promise<boolean> => {
+    async (contextKey: string, onlyIfIdle = false): Promise<boolean> => {
       pendingConnectRequestsRef.current.delete(contextKey)
       // Whatever the surface does next — close, switch agent, reconnect — the
       // last attempt's failure no longer describes it.
@@ -8039,11 +8049,16 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // the follow-up connect can re-attach to the process it believed it had
       // replaced. Report which happened and let the caller decide.
       let tornDown = true
-      await acpDisconnect(conn.connectionId).catch((error: unknown) => {
+      const released = await (
+        onlyIfIdle
+          ? acpDisconnect(conn.connectionId, true)
+          : acpDisconnect(conn.connectionId)
+      ).catch((error: unknown) => {
         if (isConnectionGoneError(error)) return
         console.warn("[Acp] backend teardown failed, releasing locally:", error)
         tornDown = false
       })
+      if (released === false) return false
       releaseConnectionRoute(conn.connectionId, contextKey)
       teardownAttachSubscription(contextKey)
       lastActivityRef.current.delete(contextKey)
@@ -8076,7 +8091,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // acpDisconnects), and leaving one attached would leak its subscription
       // — the idle sweep skips viewers.
       if (conn && !conn.isViewer && isConnectionBusy(conn)) return
-      await disconnect(contextKey)
+      await disconnect(contextKey, true)
     },
     [disconnect]
   )

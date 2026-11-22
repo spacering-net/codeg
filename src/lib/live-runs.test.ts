@@ -149,6 +149,19 @@ describe("collectLiveRuns", () => {
     expect(runs.count).toBe(0)
   })
 
+  it("shows agy's native shell once while the owner processes its result", () => {
+    const shell = background({ task_id: "s/task-42", kind: "shell" })
+    const source = input({ nativeShellTasks: true, backgroundTasks: [shell] })
+    const runs = collectLiveRuns(source)
+    expect(runs.count).toBe(1)
+    expect(runs.tasks[0]).toMatchObject({
+      task_id: shell.task_id,
+      name: shell.description,
+      can_stop: false,
+    })
+    expect(collectLiveRuns({ ...source, asyncTasks: runs.tasks }).count).toBe(1)
+  })
+
   it("keeps a background sub-agent whose launch card is not loaded, titled by its producer", () => {
     const runs = collectLiveRuns(
       input({ backgroundTasks: [background({ tool_use_id: null })] })

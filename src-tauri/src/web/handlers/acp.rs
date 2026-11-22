@@ -121,18 +121,29 @@ pub async fn acp_connect(
 #[serde(rename_all = "camelCase")]
 pub struct AcpDisconnectParams {
     pub connection_id: String,
+    #[serde(default)]
+    pub only_if_idle: bool,
 }
 
 pub async fn acp_disconnect(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpDisconnectParams>,
-) -> Result<Json<()>, AppCommandError> {
+) -> Result<Json<Option<bool>>, AppCommandError> {
     let manager = &state.connection_manager;
-    manager
-        .disconnect(&params.connection_id)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    Ok(Json(()))
+    let result = if params.only_if_idle {
+        manager
+            .release_idle(&params.connection_id, chrono::Utc::now())
+            .await
+            .map(Some)
+    } else {
+        manager
+            .disconnect(&params.connection_id)
+            .await
+            .map(|()| None)
+    };
+    result
+        .map(Json)
+        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))
 }
 
 #[derive(Deserialize)]

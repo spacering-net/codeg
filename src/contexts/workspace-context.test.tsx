@@ -5335,7 +5335,7 @@ it("retains mobile conversation identity, connection and runtime through A(files
     view.unmount()
   })
   expect(unmounted).toHaveBeenCalledOnce()
-  expect(api.acpDisconnect).toHaveBeenCalledWith("mobile-connection")
+  expect(api.acpDisconnect).toHaveBeenCalledWith("mobile-connection", true)
   expect(useConversationRuntimeStore.getState().byConversationId.has(42)).toBe(
     false
   )

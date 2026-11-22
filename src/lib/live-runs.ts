@@ -88,6 +88,7 @@ export interface LiveRunsInput<
    *  empty while no turn runs. */
   foregroundAgents: readonly AdaptedToolCallPart[]
   backgroundTasks: readonly BackgroundOutstandingTask[]
+  nativeShellTasks?: boolean
   /** A background sub-agent's launch card, by its tool call id. */
   findLaunchCard: (toolCallId: string) => AdaptedToolCallPart | null
   delegatedChildren: readonly string[]
@@ -114,7 +115,26 @@ export function collectLiveRuns<B extends LiveRunDelegationBinding>(
     })
   }
   for (const task of input.backgroundTasks) {
-    if (task.kind !== "agent") continue
+    if (task.kind === "shell") {
+      // agy owns these commands itself. Its ACP server has no AIR task row
+      // or AIR stop method. Other agents already list their shells via AIR.
+      if (
+        input.nativeShellTasks &&
+        !tasks.some((row) => row.task_id === task.task_id)
+      ) {
+        tasks.push({
+          task_id: task.task_id,
+          name: task.description || task.task_id,
+          description: task.description || "",
+          task_type: "shell",
+          show_in_transcript: false,
+          can_stop: false,
+          state: "running",
+          tool_call_id: task.tool_use_id,
+        })
+      }
+      continue
+    }
     const callId = task.tool_use_id ?? null
     // Already listed as the streaming reply's own call.
     if (callId && seenCalls.has(callId)) continue
