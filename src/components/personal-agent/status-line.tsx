@@ -12,6 +12,8 @@
  *   work's title in front; clicking opens the work.
  * - Clicking it during a turn opens this turn's steps, one short line each
  *   ("Edited parser.rs +14 −10"), read again as the turn moves.
+ * - Its chevron points right, out of sight till the line is hovered (or
+ *   focused); with the steps open it points up at them and stays.
  * - Started with nothing to say yet (the owner's message just sent, a vague
  *   first step not lasted yet): three dots rising in turn, and no chevron.
  * - Nothing running: the line folds away. A state gone stale (no push for
@@ -20,7 +22,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { ChevronDown } from "lucide-react"
+import { ChevronRight } from "lucide-react"
 
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentTurnSteps } from "@/lib/api"
@@ -206,7 +208,7 @@ export function StatusLine({
           onClick={click}
           aria-expanded={workActivity ? undefined : open}
           title={workActivity ? t("openWork") : open ? t("fold") : t("steps")}
-          className="flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-start text-xs text-muted-foreground transition-colors hover:bg-muted"
+          className="group/status flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-start text-xs text-muted-foreground transition-colors hover:bg-muted"
         >
           {live ? (
             <BotAvatar
@@ -239,11 +241,16 @@ export function StatusLine({
               <span />
             </span>
           ) : workActivity ? null : (
-            <ChevronDown
+            // Points right, out of sight till the line is hovered or focused;
+            // open, it points up at the steps over it and stays.
+            <ChevronRight
               aria-hidden
+              data-pa-status-chevron
               className={cn(
-                "size-3 shrink-0 transition-transform",
-                open && "rotate-180"
+                "size-3 shrink-0 transition-[opacity,rotate]",
+                open
+                  ? "-rotate-90 opacity-100"
+                  : "opacity-0 group-hover/status:opacity-100 group-focus-visible/status:opacity-100"
               )}
             />
           )}
