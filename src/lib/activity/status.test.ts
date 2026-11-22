@@ -24,8 +24,25 @@ describe("toolCallStatus", () => {
     ).toBe("failed")
   })
 
-  it("keeps a promoted call with an unsettled ACP status running", () => {
-    expect(toolCallStatus(call({ toolStatus: "in_progress" }))).toBe("running")
+  it("settles a promoted call once its turn is no longer streaming, unless moved to background or cancelled", () => {
+    expect(toolCallStatus(call({ toolStatus: "in_progress" }))).toBe(
+      "succeeded"
+    )
+    expect(toolCallStatus(call({ toolStatus: "pending" }))).toBe("succeeded")
+    expect(
+      toolCallStatus(
+        call({
+          toolStatus: "in_progress",
+          meta: { jetbrains: { air: { asyncTasks: { backgrounded: true } } } },
+        })
+      )
+    ).toBe("running")
+    expect(toolCallStatus(call({ toolStatus: "cancelled" }))).toBe("cancelled")
+    expect(
+      toolCallStatus(
+        call({ state: "input-available", toolStatus: "cancelled" })
+      )
+    ).toBe("cancelled")
   })
 
   it("tells a declined call and an interrupted one apart from a failure", () => {

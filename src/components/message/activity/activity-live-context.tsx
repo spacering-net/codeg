@@ -6,6 +6,7 @@ import {
   EMPTY_TOOL_APPROVALS,
   type ToolApprovalMap,
 } from "@/lib/activity/approval"
+import type { AsyncTaskRecord } from "@/lib/types"
 
 /**
  * Live state of the conversation a timeline belongs to that the transcript
@@ -23,6 +24,10 @@ export interface ActivityLiveValue {
   awaitingUser: boolean
   /** The connection's answered permission requests, by tool call id. */
   approvals: ToolApprovalMap
+  /** AIR async tasks of the connection, so backgrounded commands settle with their task. */
+  asyncTasks?: readonly AsyncTaskRecord[]
+  /** False when no live connection owns the backgrounded commands any more. */
+  connectionLive?: boolean
 }
 
 const NONE: ActivityLiveValue = {

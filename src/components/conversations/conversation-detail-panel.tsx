@@ -2134,9 +2134,26 @@ const ConversationTabView = memo(function ConversationTabView({
   )
   const awaitingUser = blockingPrompts(conn) !== null
   const approvals = conn.toolApprovals
+  const connAsyncTasks = conn.asyncTasks
+  const connectionLive =
+    conn.connectionId !== null &&
+    connStatus !== "disconnected" &&
+    connStatus !== "error"
   const activityLive = useMemo(
-    () => ({ awaitingToolCallId, awaitingUser, approvals }),
-    [awaitingToolCallId, awaitingUser, approvals]
+    () => ({
+      awaitingToolCallId,
+      awaitingUser,
+      approvals,
+      asyncTasks: connAsyncTasks,
+      connectionLive,
+    }),
+    [
+      awaitingToolCallId,
+      awaitingUser,
+      approvals,
+      connAsyncTasks,
+      connectionLive,
+    ]
   )
 
   // The work this connection has running beyond the turn, for the "N running"

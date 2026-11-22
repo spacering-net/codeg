@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { isUnsettledToolCall, toolStatusUnsettled } from "./tool-call-lifecycle"
+import {
+  isToolStatusCancelled,
+  isUnsettledToolCall,
+  toolStatusUnsettled,
+} from "./tool-call-lifecycle"
 import type { AdaptedToolCallPart } from "@/lib/adapters/ai-elements-adapter"
 
 function part(over: Partial<AdaptedToolCallPart> = {}): AdaptedToolCallPart {
@@ -23,7 +27,12 @@ describe("toolStatusUnsettled", () => {
   it("treats terminal statuses as settled", () => {
     expect(toolStatusUnsettled("completed")).toBe(false)
     expect(toolStatusUnsettled("failed")).toBe(false)
+    expect(toolStatusUnsettled("cancelled")).toBe(false)
+    expect(toolStatusUnsettled("canceled")).toBe(false)
     expect(toolStatusUnsettled(" COMPLETED ")).toBe(false)
+    expect(isToolStatusCancelled("cancelled")).toBe(true)
+    expect(isToolStatusCancelled(" CANCELED ")).toBe(true)
+    expect(isToolStatusCancelled("in_progress")).toBe(false)
   })
 
   it("treats any non-terminal status as unsettled", () => {

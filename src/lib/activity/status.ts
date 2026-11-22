@@ -5,7 +5,11 @@
  */
 
 import type { AdaptedToolCallPart } from "@/lib/adapters/ai-elements-adapter"
-import { isUnsettledToolCall } from "@/lib/tool-call-lifecycle"
+import {
+  isToolStatusCancelled,
+  toolStatusUnsettled,
+} from "@/lib/tool-call-lifecycle"
+import { toolCallMovedToBackground } from "@/lib/tool-call-normalization"
 
 export type StepStatus =
   | "pending"
@@ -44,6 +48,7 @@ export function toolCallStatus(
   opts?: { awaiting?: boolean }
 ): StepStatus {
   if (opts?.awaiting) return "awaiting"
+  if (isToolStatusCancelled(part.toolStatus)) return "cancelled"
   const errorText = part.errorText?.trim()
   if (part.state === "output-error" || errorText) {
     const text = (errorText || part.output || "").trim()
@@ -51,8 +56,13 @@ export function toolCallStatus(
     if (REJECTED_RE.test(text)) return "rejected"
     return "failed"
   }
-  if (isUnsettledToolCall(part)) {
-    return part.state === "input-streaming" ? "pending" : "running"
+  if (part.state === "input-streaming") return "pending"
+  if (
+    part.state === "input-available" ||
+    (toolCallMovedToBackground(part.meta) &&
+      toolStatusUnsettled(part.toolStatus))
+  ) {
+    return "running"
   }
   return "succeeded"
 }

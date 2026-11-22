@@ -106,6 +106,7 @@ import type {
 } from "@/lib/types"
 import {
   collectLiveRuns,
+  EMPTY_LIVE_RUNS,
   runningSubAgentCalls,
   subAgentCallsById,
 } from "@/lib/live-runs"
@@ -2242,27 +2243,31 @@ export function MessageListView({
   const cardThread = backgroundTasks.some((task) => task.kind === "agent")
     ? threadItems
     : null
+  const connAlive = connStatus !== "disconnected" && connStatus !== "error"
   const liveRunList = useMemo<LiveRunsList>(
     () =>
-      collectLiveRuns({
-        asyncTasks: liveRuns?.asyncTasks ?? EMPTY_ASYNC_TASKS,
-        foregroundAgents,
-        backgroundTasks,
-        findLaunchCard: (toolCallId) => {
-          if (!cardThread) return null
-          for (let i = cardThread.length - 1; i >= 0; i -= 1) {
-            const item = cardThread[i]
-            if (item.kind !== "turn" || item.group.role !== "assistant")
-              continue
-            const part = subAgentCallsById(item.group.parts).get(toolCallId)
-            if (part) return part
-          }
-          return null
-        },
-        delegatedChildren: liveRuns?.delegatedChildren ?? EMPTY_IDS,
-        delegationBindings,
-      }),
+      !connAlive
+        ? EMPTY_LIVE_RUNS
+        : collectLiveRuns({
+            asyncTasks: liveRuns?.asyncTasks ?? EMPTY_ASYNC_TASKS,
+            foregroundAgents,
+            backgroundTasks,
+            findLaunchCard: (toolCallId) => {
+              if (!cardThread) return null
+              for (let i = cardThread.length - 1; i >= 0; i -= 1) {
+                const item = cardThread[i]
+                if (item.kind !== "turn" || item.group.role !== "assistant")
+                  continue
+                const part = subAgentCallsById(item.group.parts).get(toolCallId)
+                if (part) return part
+              }
+              return null
+            },
+            delegatedChildren: liveRuns?.delegatedChildren ?? EMPTY_IDS,
+            delegationBindings,
+          }),
     [
+      connAlive,
       liveRuns?.asyncTasks,
       liveRuns?.delegatedChildren,
       foregroundAgents,

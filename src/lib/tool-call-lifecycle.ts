@@ -10,6 +10,14 @@
 
 import type { AdaptedToolCallPart } from "@/lib/adapters/ai-elements-adapter"
 
+export function isToolStatusCancelled(
+  status: string | null | undefined
+): boolean {
+  if (status == null) return false
+  const s = status.trim().toLowerCase()
+  return s === "cancelled" || s === "canceled"
+}
+
 /**
  * Whether a forwarded ACP tool status is present and not yet terminal. Absent
  * status (`undefined`/`null`, as on DB-persisted rows) counts as settled, so
@@ -20,7 +28,9 @@ export function toolStatusUnsettled(
 ): boolean {
   if (status == null) return false
   const s = status.trim().toLowerCase()
-  return s !== "completed" && s !== "failed"
+  return (
+    s !== "completed" && s !== "failed" && s !== "cancelled" && s !== "canceled"
+  )
 }
 
 /** Whether a forwarded ACP tool status is present and terminal — what a

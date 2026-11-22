@@ -18,6 +18,7 @@ import {
 } from "@/lib/activity/code-mode"
 import { parseCodexScriptMeta } from "@/lib/codex-code-mode"
 import { countLines } from "@/lib/activity/format"
+import { combineStatuses } from "@/lib/activity/status"
 import type { StepStatus } from "@/lib/activity/types"
 import { describeStdinChars } from "@/lib/shell-session-tool"
 import { cn } from "@/lib/utils"
@@ -39,7 +40,11 @@ import {
   useLiveElapsed,
 } from "../use-live-elapsed"
 import type { ToolStep } from "./explore-rows"
-import { useAwaitedStep, useLiveToolStep } from "../use-live-step"
+import {
+  useAwaitedStep,
+  useLiveToolStep,
+  useLiveToolSteps,
+} from "../use-live-step"
 
 /** Tail of a running command's output kept for display. */
 const LIVE_OUTPUT_CHARS = 24_000
@@ -640,7 +645,7 @@ export const CommandRow = memo(function CommandRow({
  */
 export const CommandGroupRow = memo(function CommandGroupRow({
   groupKey,
-  steps,
+  steps: rawSteps,
   status: given,
   followed = false,
 }: {
@@ -653,11 +658,16 @@ export const CommandGroupRow = memo(function CommandGroupRow({
   const t = useTranslations("Folder.chat.activity")
   const statusText = useStatusText()
   const { isStreaming } = useActivityRender()
+  const steps = useLiveToolSteps(rawSteps)
   const failures = steps.filter(
     (s) => s.tool.status === "failed" || s.tool.status === "rejected"
   )
   const awaited = useAwaitedStep(steps)
-  const status = awaited ? "awaiting" : given
+  const status = awaited
+    ? "awaiting"
+    : steps === rawSteps
+      ? given
+      : combineStatuses(steps.map((s) => s.tool.status))
   const live = status === "running" || status === "pending"
   const ended = followed && !live && !awaited
   const { current, going } = useGroupPlace(followed)

@@ -260,14 +260,16 @@ describe("runningSubAgentCalls", () => {
     ])
   })
 
-  it("counts a call whose forwarded status is still open", () => {
-    // The adapter can flip state to output-available while the ACP status
-    // stays in progress (an interrupted call promoted at turn end).
-    const part = agentCall("a", {
+  it("does not count a settled or cancelled call as still running", () => {
+    const promoted = agentCall("a", {
       state: "output-available",
       toolStatus: "in_progress",
     })
-    expect(runningSubAgentCalls([part])).toHaveLength(1)
+    const cancelled = agentCall("b", {
+      state: "input-available",
+      toolStatus: "cancelled",
+    })
+    expect(runningSubAgentCalls([promoted, cancelled])).toHaveLength(0)
   })
 })
 

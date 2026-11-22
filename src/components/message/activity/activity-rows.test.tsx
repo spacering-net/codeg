@@ -1014,6 +1014,73 @@ describe("a command group in a reply being written", () => {
           resetDisclosureStore()
         }
       })
+
+      it("settles the backgrounded command and its group once the async task finishes or the connection is gone", () => {
+        const settledTask = {
+          task_id: "bg-c2",
+          name: "pnpm test",
+          task_type: "shell",
+          description: "",
+          show_in_transcript: true,
+          can_stop: false,
+          state: "completed",
+          tool_call_id: "c2",
+        }
+        const view = render(
+          <NextIntlClientProvider locale="en" messages={enMessages}>
+            <StaticConnectionStoreProvider store={STORE}>
+              <StaticDelegationProvider value={DELEGATION}>
+                <StaticWorkspaceActionsProvider value={WORKSPACE}>
+                  <ActivityLiveProvider
+                    value={{
+                      awaitingToolCallId: null,
+                      awaitingUser: false,
+                      approvals: {},
+                      asyncTasks: [settledTask],
+                      connectionLive: true,
+                    }}
+                  >
+                    <Round parts={parts(live(BACKGROUNDED))} />
+                  </ActivityLiveProvider>
+                </StaticWorkspaceActionsProvider>
+              </StaticDelegationProvider>
+            </StaticConnectionStoreProvider>
+          </NextIntlClientProvider>
+        )
+        expect(rowOf("Ran 2 commands")).toHaveAttribute(
+          "data-status",
+          "succeeded"
+        )
+        fireEvent.click(header())
+        expect(rowOf("pnpm test")).toHaveAttribute("data-status", "succeeded")
+        view.unmount()
+        resetDisclosureStore()
+
+        render(
+          <NextIntlClientProvider locale="en" messages={enMessages}>
+            <StaticConnectionStoreProvider store={STORE}>
+              <StaticDelegationProvider value={DELEGATION}>
+                <StaticWorkspaceActionsProvider value={WORKSPACE}>
+                  <ActivityLiveProvider
+                    value={{
+                      awaitingToolCallId: null,
+                      awaitingUser: false,
+                      approvals: {},
+                      connectionLive: false,
+                    }}
+                  >
+                    <Round parts={parts(live(BACKGROUNDED))} />
+                  </ActivityLiveProvider>
+                </StaticWorkspaceActionsProvider>
+              </StaticDelegationProvider>
+            </StaticConnectionStoreProvider>
+          </NextIntlClientProvider>
+        )
+        expect(rowOf("Ran 2 commands")).toHaveAttribute(
+          "data-status",
+          "succeeded"
+        )
+      })
     })
   })
 

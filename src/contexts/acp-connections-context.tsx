@@ -109,6 +109,7 @@ import {
 import {
   adoptUnknownAsyncTasks,
   mergeAsyncTasks,
+  settleAsyncTasksOnDisconnect,
   upsertAsyncTask,
 } from "@/lib/async-tasks"
 import {
@@ -2362,6 +2363,15 @@ function connectionsReducer(
       if (action.status === "disconnected" || action.status === "error") {
         // Remote Control ran in the agent CLI, which is gone.
         updated.remoteControl = null
+        updated.asyncTasks = settleAsyncTasksOnDisconnect(conn.asyncTasks)
+        updated.backgroundOutstanding = 0
+        updated.backgroundTasks = EMPTY_BACKGROUND_TASKS
+        updated.delegatedChildren = EMPTY_DELEGATED_CHILDREN
+        updated.pendingPermission = null
+        updated.pendingQuestion = null
+        updated.pendingAskQuestion = null
+        updated.pendingPlanApproval = null
+        updated.claudeApiRetry = null
       }
       if (action.status === "prompting") {
         updated.hasPrompted = true
