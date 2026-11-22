@@ -109,7 +109,8 @@ const BUTTON =
   "inline-flex size-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 
 /** Stop the turn writing this reply (the status line has one too, for a
- *  turn that has not written yet — drawn there as a hollow square, `hollow`). */
+ *  turn that has not written yet — drawn there as a hollow square that turns
+ *  red under the pointer, `hollow`). */
 export function StopButton({ hollow = false }: { hollow?: boolean }) {
   const t = useTranslations("PersonalAgent.actions")
   const botId = useBotId()
@@ -117,7 +118,11 @@ export function StopButton({ hollow = false }: { hollow?: boolean }) {
   return (
     <button
       type="button"
-      className={BUTTON}
+      className={cn(
+        BUTTON,
+        // The pill's turns red under the pointer.
+        hollow && "hover:text-destructive focus-visible:text-destructive"
+      )}
       disabled={busy}
       onClick={() => {
         setBusy(true)

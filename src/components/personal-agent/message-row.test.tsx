@@ -530,6 +530,7 @@ describe("MessageActions", () => {
     expect(
       stop.querySelector("[data-pa-stop-icon]")!.getAttribute("class")
     ).toContain("fill-current")
+    expect(stop.className).not.toContain("hover:text-destructive")
     fireEvent.click(stop)
     expect(api.personalAgentCancel).toHaveBeenCalledTimes(1)
   })

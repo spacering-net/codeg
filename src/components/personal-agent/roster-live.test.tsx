@@ -1045,6 +1045,9 @@ describe("the status line", () => {
     const icon = stop.querySelector("[data-pa-stop-icon]")!
     expect(icon.getAttribute("data-pa-stop-icon")).toBe("hollow")
     expect(icon.getAttribute("class")).not.toContain("fill-current")
+    // Red under the pointer.
+    expect(stop.className).toContain("hover:text-destructive")
+    expect(stop.className).not.toContain("hover:text-foreground")
     // Its steps.
     fireEvent.click(screen.getByRole("button", { expanded: false }))
     expect(await screen.findByText("Edited parser.rs +14 −10")).toBeTruthy()
