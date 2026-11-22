@@ -17,7 +17,7 @@ use crate::models::*;
 // Concrete parser type only for `load_thread_name_index`, which is codex's own
 // index reader and not part of the `AgentParser` trait. Every history read goes
 // through `build_agent_parser`.
-use crate::parsers::codex::CodexParser;
+use crate::parsers::codex::{CodexParser, CodexText};
 use crate::parsers::{
     build_agent_parser, folder_name_from_path, normalize_path_for_matching, path_eq_for_matching,
     AgentEnvs, AgentParser, ParseError,
@@ -1540,6 +1540,14 @@ pub async fn get_folder_conversation_core(
     conn: &sea_orm::DatabaseConnection,
     conversation_id: i32,
 ) -> Result<(DbConversationDetail, Option<String>), AppCommandError> {
+    get_folder_conversation_with_text(conn, conversation_id, CodexText::Display).await
+}
+
+pub(crate) async fn get_folder_conversation_with_text(
+    conn: &sea_orm::DatabaseConnection,
+    conversation_id: i32,
+    text: CodexText,
+) -> Result<(DbConversationDetail, Option<String>), AppCommandError> {
     let summary = conversation_service::get_by_id(conn, conversation_id)
         .await
         .map_err(AppCommandError::from)?;
@@ -1567,7 +1575,7 @@ pub async fn get_folder_conversation_core(
         // the default directory codeg's own environment names.
         let agent_env = agent_setting_service::load_agent_env(conn, at).await;
         tokio::task::spawn_blocking(move || -> Result<_, AppCommandError> {
-            let parser = build_agent_parser(at, &agent_env);
+            let parser = crate::parsers::build_agent_parser_with_text(at, &agent_env, text);
             match parser.get_conversation(&eid) {
                 Ok(d) => {
                     // Claude `/clear` (and similar on-disk id changes) make
