@@ -11773,7 +11773,8 @@
         "accepted_unchecked": "Passed without being verified — take a look",
         "needs_delivery": "Accepted — to be delivered as a pull request",
         "merge_ready": "Accepted — ready to merge",
-        "review": "Waiting for your review"
+        "review": "Waiting for your review",
+        "looking": "Didn’t work out — {name} is looking at it"
       },
       "go": {
         "merge": "Merge…",

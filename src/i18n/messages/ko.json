@@ -11773,7 +11773,8 @@
         "accepted_unchecked": "검증 없이 통과했습니다. 확인해 주세요",
         "needs_delivery": "수락됨 · PR로 제출 대기",
         "merge_ready": "수락됨 · 병합 가능",
-        "review": "검토 대기"
+        "review": "검토 대기",
+        "looking": "실패해서 {name}이(가) 살펴보는 중"
       },
       "go": {
         "merge": "병합하기",

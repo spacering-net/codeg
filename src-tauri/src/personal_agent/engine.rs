@@ -442,6 +442,14 @@ pub struct PersonalAgentEngine {
     /// Serializes reading the pull requests it watches (7.4): one read of
     /// one at a time, so what changed is told once.
     pub(super) watch_lock: Mutex<()>,
+    /// One board sync of a task dispatch at a time (B6): two looks at once
+    /// would each tell the run they read, the older one last.
+    pub(super) task_sync_lock: Mutex<()>,
+    /// The task dispatches to look at again, asked for while a look was
+    /// under way: the look under way does them before it lets go.
+    /// By id, how many times asked (a look asked for again while it runs
+    /// is done again).
+    pub(super) task_sync_pending: std::sync::Mutex<std::collections::BTreeMap<i32, u64>>,
     /// The clock's read of the watches is running (`spawn_watch_tick`).
     pub(super) watch_busy: AtomicBool,
     /// Serializes carrying out the plans (7.6): one look at a plan at a
@@ -510,6 +518,8 @@ impl PersonalAgentEngine {
             accept_lock: Mutex::new(()),
             check_lock: Mutex::new(()),
             watch_lock: Mutex::new(()),
+            task_sync_lock: Mutex::new(()),
+            task_sync_pending: std::sync::Mutex::new(std::collections::BTreeMap::new()),
             watch_busy: AtomicBool::new(false),
             plan_lock: Mutex::new(()),
             skill_sync_lock: Mutex::new(()),
@@ -1084,6 +1094,7 @@ impl PersonalAgentEngine {
         // The ledger first: a send that never went out puts its round back
         // before the dispatches still running are marked interrupted.
         self.boot_ledger().await;
+        self.boot_failures().await;
         self.boot_dispatches().await;
         self.boot_handovers().await;
         // The sessions that were asking died with the process (7.3.1).
@@ -3958,7 +3969,17 @@ impl PersonalAgentEngine {
         // A team list it carried and did not see through: what the agent
         // holds of the team is not known now — the next delivery gives it
         // whole, whatever the team is by then.
-        if turn.team_digest.is_some() && (interrupted || turn.agent_compacted) {
+        // The events this turn took, read before an interruption puts them
+        // back: a failure held for it is decided now that the turn is over,
+        // however it ended (B6).
+        let took: Vec<i32> = svc::events_of_batch(&self.db.conn, turn.batch_id)
+            .await
+            .map(|es| es.into_iter().map(|e| e.id).collect())
+            .unwrap_or_default();
+        if let Some(host) = self.host_ref() {
+            host.turn_over(&took);
+        }
+                if turn.team_digest.is_some() && (interrupted || turn.agent_compacted) {
             let _ = svc::set_segment_team_digest(&self.db.conn, turn.segment_id, None).await;
         }
         if interrupted {

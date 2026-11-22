@@ -11773,7 +11773,8 @@
         "accepted_unchecked": "Ohne Prüfung durchgegangen – bitte ansehen",
         "needs_delivery": "Abgenommen – als Pull Request zu liefern",
         "merge_ready": "Abgenommen – bereit zum Mergen",
-        "review": "Wartet auf deine Prüfung"
+        "review": "Wartet auf deine Prüfung",
+        "looking": "Hat nicht geklappt – {name} sieht es sich an"
       },
       "go": {
         "merge": "Mergen…",

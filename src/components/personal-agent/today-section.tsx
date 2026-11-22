@@ -590,7 +590,7 @@ function TodayRowCard({
   // failure says it in its own words.
   const reason =
     row.reason != null && row.reason !== "failed"
-      ? t(`reason.${row.reason}` as "reason.review")
+      ? t(`reason.${row.reason}` as "reason.looking", { name: who })
       : null
   // Where to do it: the task's details, which merge and deliver it.
   const go = group === "needs" && onOpen ? GO_OF[row.reason ?? ""] : undefined
@@ -624,7 +624,11 @@ function TodayRowCard({
   // and in a morning brief — a quiet note. The words are the assistant's
   // summing up, not an error's own text: not in the code face.
   const failed = row.kind === "failed" || row.state === "failed"
-  const said = failed ? (row.text ?? reason) : (reason ?? row.text)
+  // Just failed, its assistant on it (B6): that, not the error.
+  const said =
+    failed && row.reason !== "looking"
+      ? (row.text ?? reason)
+      : (reason ?? row.text)
   const callout =
     group === "needs" && said
       ? {

@@ -94,6 +94,7 @@ const REASONS = {
   needs_delivery: true,
   merge_ready: true,
   review: true,
+  looking: true,
 } satisfies Record<TodayReason, true>
 
 /** The kinds of card the owner answers, as the profile counts them

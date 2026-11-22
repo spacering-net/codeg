@@ -233,6 +233,8 @@ fn level_rank(l: Option<Level>) -> u8 {
 ///   request it came from (the board will not merge it locally);
 /// - `merge_ready` — accepted, to merge;
 /// - `review` — in review with no acceptance: the owner's to review;
+/// - `looking` (set where the row is made) — it just failed, and its
+///   assistant has a moment to pick it up first (B6);
 /// - `None` — awaiting input, or nothing to merge (the board offers to
 ///   complete it): its row's own words.
 ///
@@ -266,6 +268,18 @@ pub(super) fn task_reason(
         Some(_) => "merge_ready",
         None => "review",
     })
+}
+
+/// Whether the assistants run in this process (B6): their host is here. A
+/// test's engines run where the test does.
+fn assistants_run_here() -> bool {
+    cfg!(test) || super::host::host().is_some()
+}
+
+/// Whether something that failed at `at` failed just now (B6): within
+/// [`super::dispatch::FAILED_HOLD_SECS`] of `now`.
+fn just_failed(at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    now - at < Duration::seconds(super::dispatch::FAILED_HOLD_SECS) && at <= now
 }
 
 /// Whether a task's recorded worktree can no longer serve a merge: its
@@ -534,6 +548,11 @@ pub async fn today_from(
         row.level = Some(Level::Low);
         view.needs.push(row);
     }
+    // Failures just now, their assistants' to pick up first (B6): watched
+    // — only where the assistants run, in this process; driven elsewhere,
+    // nothing here knows it will be picked up.
+    let mut held: Vec<TodayRow> = Vec::new();
+    let holds = assistants_run_here();
     // Handed-out work that failed lately: outside the board, and a task's
     // the board shows no failure for — its start failed before the task
     // took it up (still to do), or there is no task at all (B1). One the
@@ -591,6 +610,17 @@ pub async fn today_from(
                 .flatten()
                 .map(|r| r.id);
             dispatch_ids.push(d.id);
+            // Just failed: its assistant, woken by it, has a moment to pick
+            // it up first — watched until then (B6).
+            if holds
+                && d.state == DispatchState::Failed
+                && just_failed(d.finished_at.unwrap_or(d.updated_at), now)
+            {
+                row.reason = Some("looking");
+                row.level = None;
+                held.push(row);
+                continue;
+            }
             view.needs.push(row);
         }
     }
@@ -669,6 +699,19 @@ pub async fn today_from(
             row.level = None;
             row.at = t.updated_at;
             queued.push(row);
+            continue;
+        }
+        // An assistant's task that just failed (not an interruption, which
+        // codeg retries its own way): its assistant's moment first (B6).
+        if holds
+            && t.status == WorkTaskStatus::Failed
+            && t.failure_reason.as_deref() != Some("interrupted")
+            && row.bot_id.is_some()
+            && just_failed(t.settled_at.unwrap_or(t.updated_at), now)
+        {
+            row.reason = Some("looking");
+            row.level = None;
+            held.push(row);
             continue;
         }
         view.needs.push(row);
@@ -877,6 +920,7 @@ pub async fn today_from(
         view.watching.push(row);
     }
     view.watching.extend(queued);
+    view.watching.extend(held);
     // The pull requests the assistants watch (7.4): one ready to merge
     // waits on the owner (its card, above).
     for w in crate::db::service::personal_agent_watch_service::watching(&db.conn, None)

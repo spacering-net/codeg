@@ -196,6 +196,78 @@ pub(super) const LIVE_STATES: &[DispatchState] = &[
     DispatchState::Review,
 ];
 
+/// The round a dispatch's news was of, from its event's source key
+/// (`dispatch:<id>:<round>:<state>:<cause>`).
+/// A work assistant's keys are scoped (`bot<id>:` first).
+fn round_of_source_key(key: &str) -> Option<i32> {
+    let key = match key.split_once(':') {
+        Some((scope, rest)) if scope.starts_with("bot") => rest,
+        _ => key,
+    };
+    let mut parts = key.split(':');
+    (parts.next()? == "dispatch").then_some(())?;
+    parts.next()?;
+    parts.next()?.parse().ok()
+}
+
+/// How long work of an assistant's that failed is left to it before the
+/// owner is told (B6): the assistant often picks it up again at once — a
+/// new attempt, a follow-up — and then a failure is not the owner's news.
+pub const FAILED_HOLD_SECS: i64 = 120;
+
+/// Whether the failure of attempt `f` is still news (B6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StillNews {
+    Yes,
+    /// Taken over in that attempt, or gone on since: a newer card of it
+    /// (one that went on and ended, or failed again — that one has its own
+    /// news), or — a board task's — the board in a newer run.
+    No,
+    /// Not failed now, with nothing newer to tell: picked up, the pick-up
+    /// not known to have gone out (a follow-up's claim before it is sent
+    /// can fall back to failed). Asked again a moment later.
+    NotYet,
+}
+
+pub(crate) async fn failure_still_news(
+    db: &crate::db::AppDatabase,
+    f: &super::reach::FailHold,
+) -> StillNews {
+    let Ok(Some(d)) = svc::get_dispatch(&db.conn, f.dispatch_id).await else {
+        return StillNews::No;
+    };
+    if let Some(by) = d.replaced_by {
+        let taken = match svc::get_dispatch(&db.conn, by).await {
+            Ok(Some(n)) => n.replaces_run_seq,
+            _ => None,
+        };
+        match (taken, f.task) {
+            (Some(run), Some((_, failed))) if run != failed => {}
+            _ => return StillNews::No,
+        }
+    }
+    if svc::latest_result_row(&db.conn, d.id)
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|c| c.id > f.card_id)
+    {
+        return StillNews::No;
+    }
+    if let Some((task, run)) = f.task {
+        let now = crate::db::service::work_task_service::get_model(&db.conn, task)
+            .await
+            .map(|t| t.run_seq);
+        if now.is_ok_and(|r| r != run) {
+            return StillNews::No;
+        }
+    }
+    if d.state != DispatchState::Failed {
+        return StillNews::NotYet;
+    }
+    StillNews::Yes
+}
+
 /// When this process's assistants first booted: work recorded before it was
 /// recorded by a process that is gone (B1's start-up repairs).
 static BOOTED_AT: std::sync::OnceLock<chrono::DateTime<Utc>> = std::sync::OnceLock::new();
@@ -1927,8 +1999,10 @@ impl PersonalAgentEngine {
             // language, and shows an agent's own error as it came.
             "cause": cause,
             "work_task_id": d.work_task_id,
-            // The board run it tells of, for a task's (B1).
+            // The board run it tells of, for a task's (B1); the round of
+            // its work it tells of (B6).
             "run": task.as_ref().map(|t| t.run_seq),
+            "round": round,
             "conversation_id": d.conversation_id,
             "conversation_folder_id": conversation_folder_id,
             "folder_id": d.folder_id,
@@ -1989,8 +2063,8 @@ impl PersonalAgentEngine {
             card,
         )
         .await;
-        let card = match inserted {
-            Ok(Some((_, card))) => card,
+        let (event_id, card) = match inserted {
+            Ok(Some((event, card))) => (event.id, card),
             // A repeated arrival of the same state.
             Ok(None) => return,
             Err(e) => {
@@ -2028,7 +2102,7 @@ impl PersonalAgentEngine {
         };
         if let (Some(what), Some(host)) = (what, self.host_ref()) {
             let bot = self.bot().await;
-            host.tell(super::reach::News {
+            let news = super::reach::News {
                 key: format!("done:{bot}:{card_id}"),
                 bot_id: bot,
                 kind: "done",
@@ -2038,8 +2112,26 @@ impl PersonalAgentEngine {
                     row_id: Some(card_id),
                 }),
                 need: None,
-            })
-            .await;
+            };
+            // Its assistant, woken by it, may pick it up again at once (B6):
+            // the owner is told only if it is still news after a while —
+            // or once that turn is over, whichever is first.
+            if d.state == DispatchState::Failed && wake {
+                let fail = super::reach::FailHold {
+                    dispatch_id: d.id,
+                    task: match (d.work_task_id, task.as_ref()) {
+                        (Some(t), Some(task)) => Some((t, task.run_seq)),
+                        _ => None,
+                    },
+                    card_id,
+                    event_id,
+                };
+                let failed_at = d.finished_at.unwrap_or(d.updated_at);
+                host.tell_failure(news, fail, failed_at + chrono::Duration::seconds(FAILED_HOLD_SECS))
+                    .await;
+            } else {
+                host.tell(news).await;
+            }
         }
         // Work done is progress on the thread it was for (4.9).
         if let (DispatchState::Completed, Some(t)) = (d.state, d.thread_id) {
@@ -2094,7 +2186,62 @@ impl PersonalAgentEngine {
     }
 
     /// Follow a task dispatch's card on the board.
+    /// One look at a time, each read after the last one's writes (B6): two
+    /// at once would each tell the run they read, the older one last. A look
+    /// asked for while another is under way is queued for that one to do
+    /// before it lets go — never waited for, as a look's own news can lead
+    /// back here — and never lost.
     async fn sync_task_dispatch(&self, id: i32) {
+        {
+            let mut p = self.task_sync_pending.lock().unwrap_or_else(|e| e.into_inner());
+            *p.entry(id).or_insert(0) += 1;
+        }
+        self.drain_task_syncs().await;
+    }
+
+    /// Do the looks asked for, one at a time, unless one is under way (it
+    /// does them). An id leaves the queue only once a look begun after its
+    /// last ask is done: a caller dropped midway (a page that went away)
+    /// leaves it for the next — every tick's poll drains what is left — and
+    /// one asked again while it ran is done again.
+    pub(super) async fn drain_task_syncs(&self) {
+        let pending = || self.task_sync_pending.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            let Ok(guard) = self.task_sync_lock.try_lock() else {
+                // The look under way takes it.
+                return;
+            };
+            // A look whose own news asks for it again is done again — a few
+            // times at most: one that keeps asking is left to the next tick.
+            let mut done: std::collections::HashMap<i32, u32> = std::collections::HashMap::new();
+            loop {
+                let next = pending()
+                    .iter()
+                    .find(|(id, _)| done.get(*id).copied().unwrap_or(0) < 3)
+                    .map(|(id, asked)| (*id, *asked));
+                let Some((n, asked)) = next else {
+                    break;
+                };
+                Box::pin(self.sync_task_dispatch_now(n)).await;
+                *done.entry(n).or_insert(0) += 1;
+                let mut p = pending();
+                if p.get(&n) == Some(&asked) {
+                    p.remove(&n);
+                }
+            }
+            drop(guard);
+            // One asked for just as this let go: taken, by this or by it —
+            // not one this drain did its few times already.
+            if pending()
+                .keys()
+                .all(|id| done.get(id).copied().unwrap_or(0) >= 3)
+            {
+                return;
+            }
+        }
+    }
+
+    async fn sync_task_dispatch_now(&self, id: i32) {
         let Ok(Some(d)) = svc::get_dispatch(&self.db.conn, id).await else {
             return;
         };
@@ -2159,6 +2306,43 @@ impl PersonalAgentEngine {
                     Box::pin(self.record_progress_with(&d, excerpt, note, "task", Some(task))).await;
                     return;
                 }
+            }
+        }
+        // Failed in a newer run as well, between two looks — the state the
+        // same both times (B6): the new run's failure is news of its own,
+        // with its own card.
+        if state == d.state && matches!(state, DispatchState::Failed | DispatchState::Interrupted) {
+            // The run its news last told of, by its event (whatever its card
+            // says, or when it has none).
+            let told = svc::latest_event_of_coalesce(&self.db.conn, &format!("dispatch:{}", d.id))
+                .await
+                .ok()
+                .flatten()
+                .and_then(|e| round_of_source_key(&e.source_key));
+            // A newer run than any told — or none told at all (codeg went
+            // down before the first one's news): told now. A look holding
+            // an older read than the news already told does nothing.
+            if !d.is_check && told.is_none_or(|r| task.run_seq > r) {
+                let excerpt = task.result_summary.as_deref().map(excerpt_of);
+                let note = task.last_error.clone();
+                // The dispatch says the new run's end, as a change of state
+                // would have written it.
+                if let Ok(Some(updated)) = svc::update_dispatch(
+                    &self.db.conn,
+                    id,
+                    Some(&[d.state]),
+                    DispatchWrite {
+                        state: Some(state),
+                        result_excerpt: Some(excerpt.clone()),
+                        error: Some(note.clone()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                {
+                    Box::pin(self.record_progress_with(&updated, excerpt, note, "task", Some(task))).await;
+                }
+                return;
             }
         }
         if state == d.state {
@@ -2269,6 +2453,8 @@ impl PersonalAgentEngine {
         // only for a while; older ones are left alone instead of being re-read
         // every few seconds forever.
         let recent = Utc::now() - chrono::Duration::days(3);
+        // Looks asked for and left undone (their caller went away).
+        self.drain_task_syncs().await;
         for d in live {
             let settled = matches!(
                 d.state,
@@ -2479,6 +2665,39 @@ impl PersonalAgentEngine {
             .unwrap_or_default();
         for d in made {
             self.settle_handover_at(&d, true).await;
+        }
+    }
+
+    /// After a restart: conversation work recorded as failed whose failure
+    /// no card tells yet — codeg went down between the two writes (B6). Its
+    /// news is written now: the failure is in the conversation, once.
+    pub(super) async fn boot_failures(&self) {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        // Every one, however old: the guarantee is the conversation's. codeg's
+        // own checks tell their news their own way.
+        let failed = dispatch_entity::Entity::find()
+            .filter(dispatch_entity::Column::BotId.eq(self.bot().await))
+            .filter(dispatch_entity::Column::State.eq(DispatchState::Failed))
+            .filter(dispatch_entity::Column::Mode.ne(DispatchMode::Task))
+            .filter(dispatch_entity::Column::IsCheck.eq(false))
+            .filter(dispatch_entity::Column::ReplacedBy.is_null())
+            .all(&self.db.conn)
+            .await
+            .unwrap_or_default();
+        for d in failed {
+            // Told: its news of this attempt (its round, as the event's key
+            // says — written with its card, in one transaction) is in.
+            let told = svc::latest_event_of_coalesce(&self.db.conn, &format!("dispatch:{}", d.id))
+                .await
+                .ok()
+                .flatten()
+                .and_then(|e| round_of_source_key(&e.source_key))
+                .is_some_and(|r| r == d.turns);
+            if !told {
+                let excerpt = d.result_excerpt.clone();
+                let error = d.error.clone();
+                self.record_progress(&d, excerpt, error, "boot").await;
+            }
         }
     }
 
@@ -3209,6 +3428,13 @@ impl PersonalAgentEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_round_is_read_off_a_dispatch_event_s_key() {
+        assert_eq!(round_of_source_key("dispatch:7:2:failed:task"), Some(2));
+        assert_eq!(round_of_source_key("bot3:dispatch:7:5:failed:task"), Some(5));
+        assert_eq!(round_of_source_key("rule:7"), None);
+    }
 
     #[test]
     fn cut_keeps_short_text_and_marks_long_text() {

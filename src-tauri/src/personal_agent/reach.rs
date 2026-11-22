@@ -1772,6 +1772,34 @@ struct Held {
     level: Level,
     /// Ask the Dock / taskbar for the owner when it goes.
     attention: bool,
+    /// Work that failed, told only if it is still news when it goes (B6).
+    fail: Option<FailHold>,
+}
+
+/// One attempt of a piece of work that failed, as its news was held (B6):
+/// for its assistant to pick it up first. It is still news unless that
+/// attempt was taken over or went on meanwhile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailHold {
+    pub dispatch_id: i32,
+    /// A board task's run that failed.
+    pub task: Option<(i32, i32)>,
+    /// The failure's result card.
+    pub card_id: i32,
+    /// The event that told the assistant: once the turn that took it is
+    /// over, the hold is decided then.
+    pub event_id: i32,
+}
+
+/// How soon a failure picked up again — not known to have gone out — is
+/// asked about again (B6).
+const FAIL_RECHECK_SECS: i64 = 30;
+
+/// Held until a time — or until its turn is over, sooner (B6).
+#[derive(Debug, Clone)]
+struct Later {
+    due: DateTime<Utc>,
+    held: Held,
 }
 
 /// What reaching the owner remembers: the news told, what waits on them,
@@ -1789,6 +1817,8 @@ struct State {
     focus: Vec<Held>,
     away: Vec<Held>,
     digest: Vec<Held>,
+    /// Held until a time (B6).
+    later: Vec<Later>,
     last_digest: DateTime<Utc>,
     #[cfg(test)]
     attending: Option<Attending>,
@@ -1813,6 +1843,7 @@ impl Reach {
                 focus: Vec::new(),
                 away: Vec::new(),
                 digest: Vec::new(),
+                later: Vec::new(),
                 last_digest: started,
                 #[cfg(test)]
                 attending: None,
@@ -1934,7 +1965,39 @@ impl Reach {
 
     fn has_held(&self) -> bool {
         let s = self.lock();
-        !(s.focus.is_empty() && s.away.is_empty() && s.digest.is_empty())
+        !(s.focus.is_empty() && s.away.is_empty() && s.digest.is_empty() && s.later.is_empty())
+    }
+
+    /// Hold `held` until `due` (B6).
+    fn hold_until(&self, due: DateTime<Utc>, held: Held) {
+        self.lock().later.push(Later { due, held });
+    }
+
+    /// The turn that took events `ids` is over: what was held for it is
+    /// decided now, not at its time (B6).
+    pub(super) fn decide_now(&self, ids: &[i32], now: DateTime<Utc>) {
+        if ids.is_empty() {
+            return;
+        }
+        for l in self.lock().later.iter_mut() {
+            if l.held.fail.as_ref().is_some_and(|f| ids.contains(&f.event_id)) {
+                l.due = l.due.min(now);
+            }
+        }
+    }
+
+    /// What was held until a time that has come.
+    fn take_due(&self, now: DateTime<Utc>) -> Vec<Held> {
+        let mut s = self.lock();
+        let (due, wait): (Vec<Later>, Vec<Later>) =
+            std::mem::take(&mut s.later).into_iter().partition(|l| l.due <= now);
+        s.later = wait;
+        due.into_iter().map(|l| l.held).collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn later_count(&self) -> usize {
+        self.lock().later.len()
     }
 
     #[cfg(test)]
@@ -2074,6 +2137,34 @@ impl EngineHost {
         if !self.reach.claim(&news.key) {
             return;
         }
+        self.route_at(news, None, now).await
+    }
+
+    /// Tell the owner that work failed (B6) — not now: once its assistant
+    /// has had `hold` to pick it up (sooner, when its turn on it is over),
+    /// and only if it is still news then.
+    pub async fn tell_failure(&self, news: News, fail: FailHold, due: DateTime<Utc>) {
+        if !self.reach.claim(&news.key) {
+            return;
+        }
+        self.reach.hold_until(
+            due,
+            Held {
+                news,
+                level: Level::Normal,
+                attention: false,
+                fail: Some(fail),
+            },
+        );
+    }
+
+    /// The turn that took events `ids` is over (B6).
+    pub fn turn_over(&self, ids: &[i32]) {
+        self.reach.decide_now(ids, clock::now());
+    }
+
+    /// Route news claimed already, as things are at `now`.
+    async fn route_at(&self, news: News, fail: Option<FailHold>, now: DateTime<Utc>) {
         let Ok(Some(row)) = svc::get_bot(&self.db.conn, news.bot_id).await else {
             return;
         };
@@ -2115,6 +2206,7 @@ impl EngineHost {
                     news,
                     level,
                     attention: false,
+                    fail,
                 },
             ),
         }
@@ -2143,6 +2235,23 @@ impl EngineHost {
         }
         if !self.reach.has_held() {
             return;
+        }
+        // Failures whose time came (B6): told now if still news, routed as
+        // any news is.
+        for h in self.reach.take_due(now) {
+            if let Some(f) = h.fail.as_ref() {
+                use super::dispatch::StillNews;
+                match super::dispatch::failure_still_news(&self.db, f).await {
+                    StillNews::Yes => {}
+                    StillNews::No => continue,
+                    // Picked up, not known to have gone out: asked again.
+                    StillNews::NotYet => {
+                        self.reach.hold_until(now + Duration::seconds(FAIL_RECHECK_SECS), h);
+                        continue;
+                    }
+                }
+            }
+            self.route_at(h.news, h.fail, now).await;
         }
         let ctx = self.reach_context(now).await;
         // Everything held is decided anew, as things are now: the owner may
@@ -2216,6 +2325,19 @@ impl EngineHost {
             if let Some(need) = &h.news.need {
                 if !self.reach.need_alive(h.news.bot_id, need) {
                     continue;
+                }
+            }
+            // A failure held on, its attempt taken over or gone on since (B6);
+            // one picked up and not known to have gone out is held on.
+            if let Some(f) = h.fail.as_ref() {
+                use super::dispatch::StillNews;
+                match super::dispatch::failure_still_news(&self.db, f).await {
+                    StillNews::Yes => {}
+                    StillNews::No => continue,
+                    StillNews::NotYet => {
+                        self.reach.hold_until(clock::now() + Duration::seconds(FAIL_RECHECK_SECS), h);
+                        continue;
+                    }
                 }
             }
             let Ok(Some(row)) = svc::get_bot(&self.db.conn, h.news.bot_id).await else {

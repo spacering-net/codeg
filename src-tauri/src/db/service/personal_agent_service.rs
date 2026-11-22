@@ -1862,6 +1862,18 @@ pub async fn events_of_batch(
         .await?)
 }
 
+/// The newest event under `coalesce_key`.
+pub async fn latest_event_of_coalesce(
+    conn: &DatabaseConnection,
+    coalesce_key: &str,
+) -> Result<Option<event::Model>, DbError> {
+    Ok(event::Entity::find()
+        .filter(event::Column::CoalesceKey.eq(coalesce_key))
+        .order_by_desc(event::Column::Id)
+        .one(conn)
+        .await?)
+}
+
 /// An event of this assistant's, by id: `None` for one of another's.
 pub async fn get_event_of(
     conn: &DatabaseConnection,

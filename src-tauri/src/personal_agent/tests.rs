@@ -565,6 +565,17 @@ async fn dispatch_state(engine: &PersonalAgentEngine, id: i32) -> crate::db::ent
     svc::get_dispatch(&engine.db.conn, id).await.unwrap().unwrap()
 }
 
+/// Work that failed a while ago: its assistant's moment to pick it up
+/// first (B6) is over.
+async fn age_failure(engine: &PersonalAgentEngine, id: i32) {
+    use sea_orm::{ActiveModelTrait, Set};
+    let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = dispatch_state(engine, id).await.into();
+    let then = chrono::Utc::now() - chrono::Duration::minutes(10);
+    am.finished_at = Set(Some(then));
+    am.updated_at = Set(then);
+    am.update(&engine.db.conn).await.unwrap();
+}
+
 async fn compaction_markers(engine: &PersonalAgentEngine) -> Vec<serde_json::Value> {
     let (rows, _) = svc::page(&engine.db.conn, engine.bot().await, None, 200).await.unwrap();
     rows.into_iter()
@@ -9727,6 +9738,170 @@ async fn reaching(att: super::presence::Attending) -> (Arc<EngineHost>, i32, tem
     (host, w, tmp)
 }
 
+/// B6: work that just failed is its assistant's to pick up first — in
+/// "today" it is watched, not waiting on the owner, until the moment is
+/// over; an interruption (codeg retries those) and the owner's own task are
+/// not held.
+#[tokio::test]
+async fn work_that_just_failed_is_watched_before_it_waits_on_the_owner() {
+    let (host, _w, tmp) = hosted().await;
+    let engine = host.primary();
+    let conn = &engine.db.conn;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-f").await;
+    svc::update_dispatch(conn, id, None, DispatchWrite { state: Some(DispatchState::Failed), error: Some(Some("boom".into())), ..Default::default() })
+        .await
+        .unwrap();
+    let view = today_now(&engine).await;
+    assert!(!view.needs.iter().any(|r| r.dispatch_id == Some(id)), "{:?}", view.needs);
+    let row = view.watching.iter().find(|r| r.dispatch_id == Some(id)).expect("watched");
+    assert_eq!((row.kind, row.reason), ("failed", Some("looking")));
+    age_failure(&engine, id).await;
+    let view = today_now(&engine).await;
+    assert!(!view.watching.iter().any(|r| r.dispatch_id == Some(id)));
+    assert_eq!(view.needs.iter().find(|r| r.dispatch_id == Some(id)).map(|r| r.reason), Some(Some("failed")));
+    // A board task of the assistant's that just failed: watched; the
+    // owner's own: theirs at once.
+    use sea_orm::Set;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let mine = board_task(&engine, project, "Mine", WorkTaskStatus::Failed, |t| t.settled_at = Set(Some(chrono::Utc::now()))).await;
+    task_dispatch(&engine, coder, project, mine.id, "Mine", DispatchState::Failed).await;
+    let owners = board_task(&engine, project, "Owner's", WorkTaskStatus::Failed, |t| t.settled_at = Set(Some(chrono::Utc::now()))).await;
+    let view = today_now(&engine).await;
+    assert_eq!(view.watching.iter().find(|r| r.task_id == Some(mine.id)).map(|r| r.reason), Some(Some("looking")));
+    assert!(view.needs.iter().any(|r| r.task_id == Some(owners.id)));
+    assert!(!view.needs.iter().any(|r| r.task_id == Some(mine.id)));
+}
+
+/// B6: the owner hears that work failed only if it is still news once its
+/// assistant had its moment — or once the turn that took it is over, when
+/// that is sooner; not when the assistant took it over meanwhile.
+#[tokio::test]
+async fn a_failure_reaches_the_owner_only_if_it_is_still_news_after_its_assistant_s_moment() {
+    let (host, _w, _tmp) = reaching(owner_here(None)).await;
+    let engine = host.primary();
+    role_assistant(&engine, "Coder", true).await;
+    let conn = &engine.db.conn;
+    let me = engine.bot().await;
+    let fail = |name: &'static str| {
+        let engine = engine.clone();
+        async move {
+            let id = session_dispatch(&engine, DispatchState::Running, name).await;
+            let d = svc::update_dispatch(&engine.db.conn, id, None, DispatchWrite {
+                state: Some(DispatchState::Failed),
+                error: Some(Some("boom".into())),
+                bump_turns: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            engine.record_progress(&d, None, Some("boom".into()), "turn").await;
+            id
+        }
+    };
+    let now = super::clock::now();
+    let later = now + chrono::Duration::seconds(super::dispatch::FAILED_HOLD_SECS + 1);
+    // Nobody picks it up: told once its time is up, not before.
+    fail("c-1").await;
+    assert_eq!(host.reach.later_count(), 1);
+    host.reach_tick_at(now).await;
+    assert!(host.reach.take_sent().is_empty(), "not yet");
+    host.reach_tick_at(later).await;
+    assert_eq!(host.reach.take_sent().len(), 1);
+    // Taken over meanwhile: not told.
+    let second = fail("c-2").await;
+    let out = call_tool(&engine, "dispatch", json!({ "mode": "chat", "title": "Again", "prompt": "p", "replaces": second })).await;
+    assert!(out.ok, "{}", out.text);
+    host.reach_tick_at(later).await;
+    assert!(host.reach.take_sent().is_empty(), "taken over: no news");
+    // The turn that took it is over: decided then, not at its time.
+    let third = fail("c-3").await;
+    let event = svc::pending_events(conn, me)
+        .await
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|e| e.payload.as_deref().is_some_and(|p| p.contains(&format!("\"dispatch_id\":{third}"))))
+        .expect("its event");
+    host.turn_over(&[event.id]);
+    host.reach_tick_at(super::clock::now()).await;
+    assert_eq!(host.reach.take_sent().len(), 1);
+    assert_eq!(host.reach.later_count(), 0);
+    // Picked up — a follow-up's claim, not known to have gone out — when
+    // its time comes: asked again later; fallen back to failed, told.
+    let fifth = fail("c-5").await;
+    svc::update_dispatch(conn, fifth, None, DispatchWrite { state: Some(DispatchState::Running), ..Default::default() })
+        .await
+        .unwrap();
+    host.reach_tick_at(later).await;
+    assert!(host.reach.take_sent().is_empty());
+    assert_eq!(host.reach.later_count(), 1, "held on");
+    svc::update_dispatch(conn, fifth, None, DispatchWrite { state: Some(DispatchState::Failed), ..Default::default() })
+        .await
+        .unwrap();
+    host.reach_tick_at(later + chrono::Duration::seconds(60)).await;
+    assert_eq!(host.reach.take_sent().len(), 1, "fell back: told");
+    // Held on for when the owner is back, and taken over before that: the
+    // same check, not told.
+    host.reach.set_attending(Some(owner_away()));
+    let fourth = fail("c-4").await;
+    host.reach_tick_at(later).await;
+    assert_eq!(host.reach.held_counts().1, 1, "waits for the owner");
+    let out = call_tool(&engine, "dispatch", json!({ "mode": "chat", "title": "Fourth again", "prompt": "p", "replaces": fourth })).await;
+    assert!(out.ok, "{}", out.text);
+    host.reach.set_attending(Some(owner_here(None)));
+    host.reach_tick_at(later).await;
+    assert!(host.reach.take_sent().is_empty(), "taken over while it waited");
+}
+
+/// B6: a restart writes the card of a failure codeg went down before
+/// telling — once; a board run that failed again between two looks is
+/// news of its own.
+#[tokio::test]
+async fn a_failure_is_in_the_conversation_once_after_a_restart_and_a_new_run_s_failure_is_its_own() {
+    use sea_orm::Set;
+    let (host, _w, tmp) = hosted().await;
+    let engine = host.primary();
+    let conn = &engine.db.conn;
+    let id = session_dispatch(&engine, DispatchState::Failed, "c-b").await;
+    assert!(svc::latest_result_row(conn, id).await.unwrap().is_none());
+    engine.boot_failures().await;
+    engine.boot_failures().await;
+    let cards: Vec<_> = svc::result_rows_of_dispatch(conn, id).await.unwrap();
+    assert_eq!(cards.len(), 1, "once");
+    assert_eq!(data_of(&cards[0])["state"], "failed");
+
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let task = board_task(&engine, project, "Flaky", WorkTaskStatus::Failed, |t| t.run_seq = Set(1)).await;
+    let d = task_dispatch(&engine, coder, project, task.id, "Flaky", DispatchState::Failed).await;
+    // Run 1's failure, told.
+    engine.record_progress(&d, None, Some("flaky".into()), "task").await;
+    engine.poll_task_dispatches().await;
+    assert_eq!(svc::result_rows_of_dispatch(conn, d.id).await.unwrap().len(), 1, "nothing new in run 1");
+    let mut am: crate::db::entities::work_task::ActiveModel =
+        crate::db::service::work_task_service::get_model(conn, task.id).await.unwrap().into();
+    am.run_seq = Set(2);
+    sea_orm::ActiveModelTrait::update(am, conn).await.unwrap();
+    engine.poll_task_dispatches().await;
+    let cards = svc::result_rows_of_dispatch(conn, d.id).await.unwrap();
+    assert_eq!(cards.len(), 2, "run 2's own card");
+    assert_eq!(data_of(cards.last().unwrap())["run"], 2);
+    assert!(dispatch_state(&engine, d.id).await.finished_at.unwrap() >= cards[0].created_at, "the dispatch says run 2's end");
+    engine.poll_task_dispatches().await;
+    assert_eq!(svc::result_rows_of_dispatch(conn, d.id).await.unwrap().len(), 2, "told once");
+    // Failed with no news at all (codeg went down before it): told on the
+    // next look, once.
+    let lost_task = board_task(&engine, project, "Lost", WorkTaskStatus::Failed, |t| t.run_seq = Set(3)).await;
+    let lost = task_dispatch(&engine, coder, project, lost_task.id, "Lost", DispatchState::Failed).await;
+    engine.poll_task_dispatches().await;
+    engine.poll_task_dispatches().await;
+    let cards = svc::result_rows_of_dispatch(conn, lost.id).await.unwrap();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(data_of(&cards[0])["run"], 3);
+}
+
 #[tokio::test]
 async fn a_reminder_reaches_the_owner_once_under_the_assistants_name_saying_why() {
     let (host, _w, _tmp) = reaching(owner_away()).await;
@@ -10153,6 +10328,7 @@ async fn new_work_that_replaces_failed_work_takes_its_matter_and_its_failure_lea
     card.dispatch_id = Some(old);
     card.data = Some(json!({ "state": "failed" }));
     let card = svc::insert_row(conn, me, card).await.unwrap();
+    age_failure(&engine, old).await;
     assert!(today_now(&engine).await.needs.iter().any(|r| r.dispatch_id == Some(old)));
 
     let (_seg, _batch) = event_turn(&engine, "pa-r").await;
@@ -10375,6 +10551,7 @@ async fn a_task_run_taken_over_stays_down_until_the_owner_runs_it_again() {
     let task = board_task(&engine, project, "Fix title", WorkTaskStatus::Failed, |t| {
         t.run_seq = Set(1);
         t.last_error = Set(Some("Branch already exists".into()));
+        t.settled_at = Set(Some(chrono::Utc::now() - chrono::Duration::minutes(10)));
     })
     .await;
     let d = task_dispatch(&engine, coder, project, task.id, "Fix title", DispatchState::Failed).await;
@@ -10564,6 +10741,7 @@ async fn stuck_work_that_took_a_failure_over_is_settled_and_seen() {
     svc::update_dispatch(conn, failed.id, None, DispatchWrite { error: Some(Some("the task engine is not running".into())), ..Default::default() })
         .await
         .unwrap();
+    age_failure(&engine, failed.id).await;
     engine.poll_task_dispatches().await;
     assert_eq!(dispatch_state(&engine, failed.id).await.state, DispatchState::Failed);
     let view = today_now(&engine).await;
@@ -10595,6 +10773,7 @@ async fn failed_work_in_today_says_it_failed_and_points_at_its_result_card() {
     let mut card = NewRow::new(TimelineKind::Result, "Failed");
     card.dispatch_id = Some(id);
     let card = svc::insert_row(&engine.db.conn, me, card).await.unwrap();
+    age_failure(&engine, id).await;
     let view = today_now(&engine).await;
     let row = view.needs.iter().find(|r| r.dispatch_id == Some(id)).expect("the failed work");
     assert_eq!((row.kind, row.reason, row.row_id), ("failed", Some("failed"), Some(card.id)));
@@ -15369,6 +15548,7 @@ async fn the_owner_wraps_up_the_day_and_what_they_say_yes_to_tonight_the_brief_r
     let worker = host.engine_for(Some(w)).await.unwrap();
     set_pref(&primary, "rule_suggest", json!("off")).await;
     let failed = session_dispatch(&worker, DispatchState::Failed, "pa-27f").await;
+    age_failure(&worker, failed).await;
     let seg = open_segment(&primary).await;
     let (mut rx, state) = live_connection(&primary, seg, "pa-27c").await;
     // Outside a turn there is nothing to wrap up into.

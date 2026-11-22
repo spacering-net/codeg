@@ -11773,7 +11773,8 @@
         "accepted_unchecked": "Passé sans vérification — jetez un œil",
         "needs_delivery": "Accepté — à livrer en pull request",
         "merge_ready": "Accepté — prêt à fusionner",
-        "review": "En attente de votre revue"
+        "review": "En attente de votre revue",
+        "looking": "Échec — {name} s’en occupe"
       },
       "go": {
         "merge": "Fusionner…",

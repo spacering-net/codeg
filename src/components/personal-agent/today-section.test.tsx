@@ -297,6 +297,27 @@ describe("today", () => {
     ).toBeNull()
   })
 
+  it("says failed work its assistant is looking at is theirs for now", () => {
+    draw(
+      today({
+        watching: [
+          row({
+            key: "failed:4",
+            kind: "failed",
+            title: "Docs",
+            bot_id: 2,
+            dispatch_id: 4,
+            reason: "looking",
+            text: "worktree add failed",
+          }),
+        ],
+      })
+    )
+    const el = document.querySelector('[data-key="failed:4"]') as HTMLElement
+    expect(el.textContent).toMatch(/Didn’t work out — .+ is looking at it/)
+    expect(el.textContent).not.toContain("worktree add failed")
+  })
+
   it("opens failed work that never had a session at its result card", () => {
     draw(
       today({

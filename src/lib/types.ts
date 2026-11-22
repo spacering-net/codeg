@@ -3125,6 +3125,8 @@ export type TodayReason =
   | "needs_delivery"
   | "merge_ready"
   | "review"
+  // Just failed: its assistant has a moment to pick it up first (B6).
+  | "looking"
 
 /** What a row of "Today" is (6.3, 1.14). */
 export type TodayRowKind =

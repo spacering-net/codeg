@@ -11773,7 +11773,8 @@
         "accepted_unchecked": "未核实就通过了，请你看一下",
         "needs_delivery": "验收已通过，待提交 PR",
         "merge_ready": "验收已通过，可以合并",
-        "review": "等你审阅"
+        "review": "等你审阅",
+        "looking": "没做成，{name}在看"
       },
       "go": {
         "merge": "去合并",

@@ -11773,7 +11773,8 @@
         "accepted_unchecked": "未確認のまま通過しました。確認してください",
         "needs_delivery": "受け入れ済み・PR として提出待ち",
         "merge_ready": "受け入れ済み・マージできます",
-        "review": "レビュー待ち"
+        "review": "レビュー待ち",
+        "looking": "うまくいかず、{name}が確認中"
       },
       "go": {
         "merge": "マージへ",
