@@ -276,7 +276,7 @@ function BotPage({ value, name, onChange, disabled }: FacePickerProps) {
               onClick={() =>
                 onChange({
                   kind: "face",
-                  shape: value.kind === "face" ? value.shape : "blob",
+                  shape: value.kind === "face" ? value.shape : "donut",
                   color: c,
                 })
               }

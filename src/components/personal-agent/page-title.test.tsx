@@ -12,7 +12,7 @@ const NOVA = {
     id: 1,
     kind: "primary",
     name: "Nova",
-    avatar: { kind: "face", shape: "blob", color: "black" },
+    avatar: { kind: "face", shape: "ring", color: "black" },
   },
   status: { engine: "here", turn: null },
 }
@@ -66,7 +66,7 @@ const entry = (id: number, kind: "primary" | "worker", name: string) =>
     kind,
     uid: `u${id}`,
     name,
-    avatar: { kind: "face", shape: "pebble", color: "teal" },
+    avatar: { kind: "face", shape: "donut", color: "teal" },
     persona: "",
     persona_unwritten: false,
     executor_assistant_id: null,

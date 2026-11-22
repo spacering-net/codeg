@@ -18,7 +18,13 @@
  * its `icon`.
  */
 
-import { FACE_PATHS } from "@/components/personal-agent/bot-avatar"
+import {
+  ART_BOX,
+  eyeNodes,
+  faceArt,
+  nodeMarkup,
+  type Paint,
+} from "@/components/personal-agent/bot-shapes"
 import { personalAgentAvatarPng } from "@/lib/api"
 import { monogramFor } from "@/lib/assistant-avatar"
 import { isDesktop } from "@/lib/transport"
@@ -64,18 +70,46 @@ const EYES_HEX: Record<BotColor, string> = {
   gray: "#171717",
 }
 
+function paints(color: BotColor): Record<Paint, string> {
+  return {
+    $b: BODY_HEX[color] ?? BODY_HEX.blue,
+    $c: EYES_HEX[color] ?? "#ffffff",
+    $w: "#ffffff",
+  }
+}
+
+/** A face's drawing, its eyes open and moved by (`dx`, `dy`) of the face's
+ *  100 (as far as its window lets them, `bot-avatar.tsx`) — or shut to a
+ *  tenth: `bot-shapes`' own, in the light theme's colours. */
+function faceMarkup(
+  shape: BotShape,
+  color: BotColor,
+  small: boolean,
+  { dx = 0, dy = 0, blink = false } = {}
+): string {
+  const paint = paints(color)
+  const art = faceArt(shape, small, (n) => `f-${n}`)
+  const { eyes } = art
+  const k = (ART_BOX / 100) * eyes.move
+  const eyeColor = eyes.on === "body" ? paint.$c : paint.$b
+  const shift = dx || dy ? ` transform="translate(${dx * k} ${dy * k})"` : ""
+  // Seen only through their window, as on the page.
+  return (
+    art.body.map((n) => nodeMarkup(n, paint)).join("") +
+    `<clipPath id="f-eyes">` +
+    eyes.window.map((n) => nodeMarkup(n, paint)).join("") +
+    `</clipPath><g clip-path="url(#f-eyes)"><g color="${eyeColor}"${shift}>` +
+    nodeMarkup(eyeNodes(eyes, "idle", blink ? 0.1 : 1), paint) +
+    `</g></g>`
+  )
+}
+
 /** The idle face as a standalone SVG document. */
 export function faceSvg(shape: BotShape, color: BotColor): string {
-  const body = BODY_HEX[color] ?? BODY_HEX.blue
-  const eyes = EYES_HEX[color] ?? "#ffffff"
-  const path = FACE_PATHS[shape] ?? FACE_PATHS.blob
-  // The idle eyes: two capsules 9 × 20 at (38.5, 46) and (61.5, 46).
-  const eye = (cx: number) =>
-    `<rect x="${cx - 4.5}" y="36" width="9" height="20" rx="4.5" fill="${eyes}"/>`
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" ` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ART_BOX} ${ART_BOX}" ` +
     `width="${AVATAR_PNG_SIZE}" height="${AVATAR_PNG_SIZE}">` +
-    `<path d="${path}" fill="${body}"/>${eye(38.5)}${eye(61.5)}</svg>`
+    `${faceMarkup(shape, color, false)}</svg>`
   )
 }
 
@@ -87,27 +121,22 @@ export const TRAY_FRAME_SIZE = 36
 export const TRAY_LOOKS = ["open", "blink", "left", "right", "up"] as const
 export type TrayLook = (typeof TRAY_LOOKS)[number]
 
-/** One look of the idle face as a standalone SVG, a little inset as the
- *  menu bar's icons are: the lids down to a tenth to blink, the eyes moved
- *  4 to glance (`bot-avatar.tsx`). */
+/** One look of the idle face as a standalone SVG — its small drawing, a
+ *  little inset as the menu bar's icons are: the lids down to a tenth to
+ *  blink, the eyes moved 4 of the face's 100 to glance (`bot-avatar.tsx`). */
 export function trayFaceSvg(
   shape: BotShape,
   color: BotColor,
   look: TrayLook
 ): string {
-  const body = BODY_HEX[color] ?? BODY_HEX.blue
-  const eyes = EYES_HEX[color] ?? "#ffffff"
-  const path = FACE_PATHS[shape] ?? FACE_PATHS.blob
   const dx = look === "left" ? -4 : look === "right" ? 4 : 0
   const dy = look === "up" ? -4 : 0
-  const h = look === "blink" ? 2 : 20
-  const eye = (cx: number) =>
-    `<rect x="${cx - 4.5 + dx}" y="${46 - h / 2 + dy}" width="9" ` +
-    `height="${h}" rx="${Math.min(4.5, h / 2)}" fill="${eyes}"/>`
+  const inset = ART_BOX * 0.04
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-4 -4 108 108" ` +
+    `<svg xmlns="http://www.w3.org/2000/svg" ` +
+    `viewBox="${-inset} ${-inset} ${ART_BOX + 2 * inset} ${ART_BOX + 2 * inset}" ` +
     `width="${TRAY_FRAME_SIZE}" height="${TRAY_FRAME_SIZE}">` +
-    `<path d="${path}" fill="${body}"/>${eye(38.5)}${eye(61.5)}</svg>`
+    `${faceMarkup(shape, color, true, { dx, dy, blink: look === "blink" })}</svg>`
   )
 }
 

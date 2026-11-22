@@ -51,7 +51,7 @@ afterEach(() => {
   __resetAvatarPngsForTests()
 })
 
-const face: BotAvatar = { kind: "face", shape: "pebble", color: "yellow" }
+const face: BotAvatar = { kind: "face", shape: "donut", color: "yellow" }
 
 async function settle() {
   for (let i = 0; i < 5; i++) await Promise.resolve()
@@ -59,12 +59,28 @@ async function settle() {
 
 describe("an assistant's avatar as a PNG", () => {
   it("draws the idle face with the light theme's colours", () => {
-    const svg = faceSvg("pebble", "yellow")
+    // The mug: its body yellow, its eyes on it dark — two capsules.
+    const svg = faceSvg("mug", "yellow")
     expect(svg).toContain('fill="#facc15"')
-    // Dark eyes on a light body: two capsules.
-    expect(svg.match(/<rect /g)).toHaveLength(2)
-    expect(svg).toContain('fill="#171717"')
-    expect(faceSvg("blob", "blue")).toContain('fill="#ffffff"')
+    expect(svg).toContain('<g color="#171717">')
+    expect(svg.match(/fill="currentColor"/g)).toHaveLength(2)
+    // The donut's eyes are in its hole: in its own colour, seen through.
+    expect(faceSvg("donut", "blue")).toContain('<g color="#3b82f6">')
+    // Its full drawing (the sprinkles), not the small one.
+    expect(faceSvg("donut", "blue").match(/<rect /g)!.length).toBeGreaterThan(2)
+    // The watch's eyes on its screen (painted in the colour that reads on
+    // it): in its own colour.
+    expect(faceSvg("watch", "teal")).toContain('<g color="#14b8a6">')
+    // Seen only through their window, as on the page.
+    expect(svg).toContain('<clipPath id="f-eyes">')
+    expect(svg).toContain('<g clip-path="url(#f-eyes)">')
+    // A picture is still: no mark running round the watch's screen.
+    expect(faceSvg("watch", "teal")).not.toContain("pa-face-progress")
+    expect(faceSvg("watch", "teal")).not.toContain("stroke-dasharray")
+  })
+
+  it("draws a face no longer drawn as the donut", () => {
+    expect(faceSvg("pebble" as never, "red")).toBe(faceSvg("donut", "red"))
   })
 
   it("has an icon for a face or a picture, not an emoji or a monogram", () => {
@@ -114,13 +130,25 @@ describe("an assistant's avatar as a PNG", () => {
   })
 
   it("draws a face's tray frames: open, blinking, glancing left, right, up", async () => {
-    const open = trayFaceSvg("pebble", "yellow", "open")
+    // The mug's small drawing: its eyes 100 tall, on its body.
+    const open = trayFaceSvg("mug", "yellow", "open")
     expect(open).toContain('width="36"')
-    expect(open).toContain('height="20"')
-    expect(trayFaceSvg("pebble", "yellow", "blink")).toContain('height="2"')
-    expect(trayFaceSvg("pebble", "yellow", "left")).toContain('x="30"')
-    expect(trayFaceSvg("pebble", "yellow", "right")).toContain('x="38"')
-    expect(trayFaceSvg("pebble", "yellow", "up")).toContain('y="32"')
+    expect(open).toContain('height="100"')
+    expect(open).not.toContain('transform="translate(')
+    expect(trayFaceSvg("mug", "yellow", "blink")).toContain('height="10"')
+    // Moved 4 of the face's 100, as far as its window lets them (0.8).
+    expect(trayFaceSvg("mug", "yellow", "left")).toContain(
+      'transform="translate(-16.384 0)"'
+    )
+    expect(trayFaceSvg("mug", "yellow", "right")).toContain(
+      'transform="translate(16.384 0)"'
+    )
+    expect(trayFaceSvg("mug", "yellow", "up")).toContain(
+      'transform="translate(0 -16.384)"'
+    )
+    // The small drawing: no steam.
+    expect(open).not.toContain("pa-face-steam")
+    expect(faceSvg("mug", "yellow")).toContain("pa-face-steam")
     const widths: number[] = []
     vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockImplementation(
       function (this: HTMLCanvasElement) {

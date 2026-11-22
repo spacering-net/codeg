@@ -27,8 +27,8 @@ vi.mock("@/lib/platform", () => ({ isDesktop: () => false }))
 import { BotFacePicker, FaceEditor } from "./bot-face-picker"
 import { usePicture } from "./face-upload"
 
-const BLOB: BotAvatar = { kind: "face", shape: "blob", color: "teal" }
-const DEFAULT: BotAvatar = { kind: "face", shape: "pill", color: "blue" }
+const BLOB: BotAvatar = { kind: "face", shape: "ring", color: "teal" }
+const DEFAULT: BotAvatar = { kind: "face", shape: "tape", color: "blue" }
 
 function wrap(ui: React.ReactNode) {
   return render(
@@ -109,18 +109,18 @@ describe("the face editor's bubble", () => {
     const { onChange } = editor(BLOB)
     // Every shape drawn in its colour; the one it is marked.
     expect(
-      screen.getByRole("button", { name: "Blob" }).getAttribute("aria-pressed")
+      screen.getByRole("button", { name: "Ring" }).getAttribute("aria-pressed")
     ).toBe("true")
-    fireEvent.click(screen.getByRole("button", { name: "Hexagon" }))
+    fireEvent.click(screen.getByRole("button", { name: "Hex nut" }))
     expect(onChange).toHaveBeenLastCalledWith({
       kind: "face",
-      shape: "hexagon",
+      shape: "nut",
       color: "teal",
     })
     fireEvent.click(screen.getByRole("button", { name: "Orange" }))
     expect(onChange).toHaveBeenLastCalledWith({
       kind: "face",
-      shape: "blob",
+      shape: "ring",
       color: "orange",
     })
   })
@@ -311,10 +311,10 @@ describe("the face that opens it", () => {
       return el!
     })
     // A shape picked: taken, the bubble left open for more.
-    fireEvent.click(within(bubble).getByRole("button", { name: "Cloud" }))
+    fireEvent.click(within(bubble).getByRole("button", { name: "Mug" }))
     expect(onChange).toHaveBeenLastCalledWith({
       kind: "face",
-      shape: "cloud",
+      shape: "mug",
       color: "teal",
     })
     expect(document.querySelector("[data-pa-face-bubble]")).not.toBeNull()

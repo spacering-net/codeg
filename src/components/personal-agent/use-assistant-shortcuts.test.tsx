@@ -57,7 +57,7 @@ function entry(
     kind,
     uid: `u${id}`,
     name: `Bot ${id}`,
-    avatar: { kind: "face", shape: "blob", color: "teal" },
+    avatar: { kind: "face", shape: "ring", color: "teal" },
     persona: "",
     persona_unwritten: false,
     executor_assistant_id: null,

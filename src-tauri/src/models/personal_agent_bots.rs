@@ -8,15 +8,39 @@ use serde::{Deserialize, Serialize};
 use super::assistant::AssistantAvatar;
 use crate::db::entities::personal_agent_dispatch::{DispatchMode, DispatchState};
 
-/// The twelve shapes codeg draws an assistant as.
-pub const BOT_SHAPES: [&str; 12] = [
-    "blob", "pebble", "squircle", "pill", "wedge", "hexagon", "cloud", "drop", "bean", "egg",
-    "shield", "burst",
+/// The thirteen things codeg draws an assistant as (`bot-shapes.ts`): the
+/// ring — the SpaceRing mark, the primary's — and twelve with a ring or a
+/// hole in them.
+pub const BOT_SHAPES: [&str; 13] = [
+    "ring",
+    "stand",
+    "donut",
+    "gummy",
+    "tape",
+    "gear",
+    "nut",
+    "mug",
+    "magnet",
+    "set_square",
+    "cookie",
+    "frame",
+    "watch",
 ];
-/// The shapes a new assistant is given by default: the eight that read best
-/// small.
-pub const DEFAULT_SHAPES: [&str; 8] = [
-    "blob", "pebble", "squircle", "pill", "cloud", "drop", "bean", "egg",
+/// The shapes a new assistant is given by default: all but the ring, which
+/// is the primary's.
+pub const DEFAULT_SHAPES: [&str; 12] = [
+    "stand",
+    "donut",
+    "gummy",
+    "tape",
+    "gear",
+    "nut",
+    "mug",
+    "magnet",
+    "set_square",
+    "cookie",
+    "frame",
+    "watch",
 ];
 /// The eleven colours.
 pub const BOT_COLORS: [&str; 11] = [
@@ -261,6 +285,27 @@ pub struct BotCreateDraft {
 mod tests {
     use super::*;
 
+    /// The tools that make and change an assistant offer the shapes and the
+    /// colours codeg draws, every one of them and none other.
+    #[test]
+    fn the_tools_offer_the_shapes_and_colours_drawn() {
+        let tools: serde_json::Value =
+            serde_json::from_str(include_str!("../acp/delegation/tool_schema.json")).unwrap();
+        let mut seen = 0;
+        for tool in tools.as_array().unwrap() {
+            let props = &tool["inputSchema"]["properties"];
+            for (key, want) in [("shape", &BOT_SHAPES[..]), ("color", &BOT_COLORS[..])] {
+                let Some(list) = props[key]["enum"].as_array() else {
+                    continue;
+                };
+                let got: Vec<&str> = list.iter().map(|v| v.as_str().unwrap()).collect();
+                assert_eq!(got, want, "{} offers other {key}s", tool["name"]);
+                seen += 1;
+            }
+        }
+        assert!(seen >= 4, "no tool offers a shape and a colour");
+    }
+
     #[test]
     fn the_default_face_follows_the_uid() {
         let a = BotAvatar::default_for("0f3a9c");
@@ -272,12 +317,12 @@ mod tests {
         assert!(DEFAULT_COLORS.contains(&color.as_str()));
         assert_ne!(color, "black");
         // The page hashes the same way: FNV-1a 32 of "abc" is 0x1a47e90b,
-        // colour 1 of 10, shape 1 of 8 (`bots-cards.test.tsx` checks the same).
+        // colour 1 of 10, shape 1 of 12 (`bots-cards.test.tsx` checks the same).
         assert_eq!(fnv1a("abc"), 0x1a47_e90b);
         assert_eq!(
             BotAvatar::default_for("abc"),
             BotAvatar::Face {
-                shape: "pebble".into(),
+                shape: "donut".into(),
                 color: "red".into()
             }
         );
@@ -299,10 +344,17 @@ mod tests {
             }
         );
         let face = BotAvatar::Face {
-            shape: "hexagon".into(),
+            shape: "nut".into(),
             color: "teal".into(),
         };
         assert!(face.validate().is_ok());
+        // A shape codeg drew before is not one it draws now.
+        assert!(BotAvatar::Face {
+            shape: "hexagon".into(),
+            color: "teal".into()
+        }
+        .validate()
+        .is_err());
         let json = serde_json::to_string(&face).unwrap();
         assert_eq!(BotAvatar::parse(&json), face);
         assert!(BotAvatar::Face {

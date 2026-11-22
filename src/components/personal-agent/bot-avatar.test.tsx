@@ -11,7 +11,7 @@ import type { BotAvatar as BotAvatarValue } from "@/lib/types"
 
 import { BotAvatar } from "./bot-avatar"
 
-const face: BotAvatarValue = { kind: "face", shape: "blob", color: "teal" }
+const face: BotAvatarValue = { kind: "face", shape: "ring", color: "teal" }
 
 function root(container: HTMLElement): HTMLElement {
   return container.querySelector("[data-slot='bot-avatar']") as HTMLElement
@@ -154,7 +154,7 @@ describe("an assistant's face", () => {
         <BotAvatar avatar={face} name="Dev" size={28} look={look} />
       )
       const lids = container.querySelector(".pa-face-lids") as SVGGElement
-      expect(lids.children.length, look).toBe(2)
+      expect(lids.firstElementChild!.children.length, look).toBe(2)
       unmount()
     }
   })
@@ -298,7 +298,7 @@ describe("the pointer over a face", () => {
     expect(root(container).hasAttribute("data-hover")).toBe(false)
   })
 
-  it("keeps its eyes on its body: clipped to its shape, each face its own", () => {
+  it("keeps its eyes where they are seen: clipped to its hole, each face its own", () => {
     const { container } = render(
       <>
         <BotAvatar avatar={face} name="Dev" size={28} look="idle" />
@@ -309,16 +309,115 @@ describe("the pointer over a face", () => {
     const ids = faces.map((f) => {
       const clip = f.querySelector("clipPath")!
       const eyes = f.querySelector(".pa-face-lids")!
-      // The group that clips them holds the eyes, and is the body's own.
+      // The group that clips them holds the eyes.
       const clipped = eyes.closest("[clip-path]")!
       expect(clipped.getAttribute("clip-path")).toBe(`url(#${clip.id})`)
-      expect(clip.querySelector("path")!.getAttribute("d")).toBe(
-        f.querySelector(".pa-face-perk > path")!.getAttribute("d")
+      // The ring's: the opening of its band, in the drawing's 512 box.
+      expect(clip.getAttribute("transform")).toBe(`scale(${100 / 512})`)
+      expect(clip.querySelector("path")!.getAttribute("d")).toMatch(
+        /^M416\.77 323\.09A172\.89/
       )
       return clip.id
     })
     expect(new Set(ids).size).toBe(2)
-    for (const id of ids) expect(id).toMatch(/^pa-face-clip-[\w-]+$/)
+    for (const id of ids) expect(id).toMatch(/^pa-face-[\w-]+-clip$/)
+  })
+
+  it("gives each face its own masks", () => {
+    const donut: BotAvatarValue = { kind: "face", shape: "donut", color: "red" }
+    const { container } = render(
+      <>
+        <BotAvatar avatar={donut} name="Dev" size={48} />
+        <BotAvatar avatar={donut} name="Ops" size={48} />
+      </>
+    )
+    const ids = [...container.querySelectorAll("mask")].map((m) => m.id)
+    expect(ids.length).toBe(4)
+    expect(new Set(ids).size).toBe(4)
+    for (const g of container.querySelectorAll("[mask]")) {
+      const ref = g.getAttribute("mask")!.slice(5, -1)
+      expect(ids).toContain(ref)
+    }
+  })
+})
+
+describe("what a face is drawn as", () => {
+  function drawn(avatar: BotAvatarValue, size = 48) {
+    const { container } = render(
+      <BotAvatar avatar={avatar} name="Dev" size={size} />
+    )
+    return root(container)
+  }
+
+  it("paints with its colour's two variables, in either theme", () => {
+    const f = drawn({ kind: "face", shape: "mug", color: "gray" })
+    const svg = f.querySelector("svg")!
+    expect(svg.getAttribute("class")).toContain(
+      "[--pa-b:var(--color-slate-400)]"
+    )
+    expect(svg.getAttribute("class")).toContain(
+      "dark:[--pa-c:var(--color-white)]"
+    )
+    const painted = [...f.querySelectorAll<SVGElement>(".pa-face-art *")]
+      .map((el) => el.style.fill || el.style.stroke)
+      .filter(Boolean)
+    expect(painted).toContain("var(--pa-b)")
+    expect(painted).toContain("var(--pa-c)")
+  })
+
+  it("puts its eyes in the colour that reads where they are", () => {
+    // On the mug's body: the colour that reads on it.
+    const mug = drawn({ kind: "face", shape: "mug", color: "teal" })
+    expect(mug.querySelector<SVGGElement>(".pa-face-lids")!.style.color).toBe(
+      "var(--pa-c)"
+    )
+    // In the donut's hole: its own colour, seen through.
+    cleanup()
+    const donut = drawn({ kind: "face", shape: "donut", color: "teal" })
+    expect(donut.querySelector<SVGGElement>(".pa-face-lids")!.style.color).toBe(
+      "var(--pa-b)"
+    )
+    // On the watch's screen, painted in the colour that reads on it: its
+    // own colour, as a display shows them.
+    cleanup()
+    const watch = drawn({ kind: "face", shape: "watch", color: "teal" })
+    expect(watch.querySelector<SVGGElement>(".pa-face-lids")!.style.color).toBe(
+      "var(--pa-b)"
+    )
+  })
+
+  it("is drawn small under 32px: its textures gone", () => {
+    const big = drawn({ kind: "face", shape: "donut", color: "red" }, 32)
+    expect(big.hasAttribute("data-bot-small")).toBe(false)
+    const sprinkles = big.querySelectorAll(".pa-face-roll rect").length
+    expect(sprinkles).toBeGreaterThan(0)
+    cleanup()
+    const small = drawn({ kind: "face", shape: "donut", color: "red" }, 28)
+    expect(small.hasAttribute("data-bot-small")).toBe(true)
+    expect(small.querySelectorAll(".pa-face-roll rect")).toHaveLength(0)
+  })
+
+  it("draws a shape no longer drawn as the donut", () => {
+    const old = drawn({
+      kind: "face",
+      shape: "pebble" as never,
+      color: "red",
+    })
+    expect(old.querySelector(".pa-face-roll")).not.toBeNull()
+  })
+
+  it("carries the parts that move as it works", () => {
+    expect(
+      drawn({ kind: "face", shape: "gear", color: "blue" }).querySelector(
+        ".pa-face-spin"
+      )
+    ).not.toBeNull()
+    cleanup()
+    expect(
+      drawn({ kind: "face", shape: "watch", color: "blue" }).querySelector(
+        ".pa-face-progress"
+      )
+    ).not.toBeNull()
   })
 })
 

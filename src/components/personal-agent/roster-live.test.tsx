@@ -108,7 +108,7 @@ function entry(
     kind: id === 1 ? "primary" : "worker",
     uid: `u${id}`,
     name,
-    avatar: { kind: "face", shape: "blob", color: id === 1 ? "black" : "teal" },
+    avatar: { kind: "face", shape: "ring", color: id === 1 ? "black" : "teal" },
     persona: id === 2 ? "# Persona I fix the white screens." : "",
     persona_unwritten: id === 3,
     executor_assistant_id: null,
@@ -171,7 +171,7 @@ beforeEach(() => {
     agent: {
       id: 1,
       name: "Nova",
-      avatar: { kind: "face", shape: "blob", color: "black" },
+      avatar: { kind: "face", shape: "ring", color: "black" },
     },
     status: { engine: "here", connected: true, turn: null },
   }
@@ -991,7 +991,7 @@ describe("the status line", () => {
       agent: {
         id: 1,
         name: "Nova",
-        avatar: { kind: "face", shape: "blob", color: "black" },
+        avatar: { kind: "face", shape: "ring", color: "black" },
       },
       status: {
         engine: "here",
@@ -1050,7 +1050,7 @@ describe("the status line", () => {
       agent: {
         id: 1,
         name: "Nova",
-        avatar: { kind: "face", shape: "blob", color: "black" },
+        avatar: { kind: "face", shape: "ring", color: "black" },
       },
       status: {
         engine: "here",
@@ -1089,7 +1089,7 @@ describe("the status line", () => {
       agent: {
         id: 1,
         name: "Nova",
-        avatar: { kind: "face", shape: "blob", color: "black" },
+        avatar: { kind: "face", shape: "ring", color: "black" },
       },
       status: {
         engine: "here",

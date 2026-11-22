@@ -1,18 +1,21 @@
 "use client"
 
 /**
- * An assistant's avatar is its state (10.6): a shape codeg draws, in one of
- * eleven colours, with two capsule eyes whose look says what it is doing —
- * or, for the assistants made before, the executor configs' monogram, emoji
- * or picture, drawn as they always were, its state then only in a ring
- * round it and the dot. A new assistant's face comes from its uid
- * (`defaultBotFace`), the same way the backend picks it, so the page can
- * show it before it is made.
+ * An assistant's avatar is its state (10.6): one of the thirteen things
+ * codeg draws (`bot-shapes.ts` — the primary's ring, twelve with a ring or a
+ * hole in them), in one of eleven colours, with two capsule eyes whose look
+ * says what it is doing — or, for the assistants made before, the executor
+ * configs' monogram, emoji or picture, drawn as they always were, its state
+ * then only in a ring round it and the dot. Under 32px it is drawn small
+ * (its textures gone, its bands thicker, its eyes larger). A new assistant's
+ * face comes from its uid (`defaultBotFace`), the same way the backend picks
+ * it, so the page can show it before it is made.
  *
  * - **Looks.** idle: calm, blinking every 2.8–5.5 s (a double blink one
  *   time in seven), half the time a glance left, right or up instead, held
  *   0.5–0.9 s; thinking: eyes up, wandering, the head tilting; working: eyes
- *   down and focused, the body bouncing, squashed as it lands; waiting: eyes
+ *   down and focused, the thing at its own work (a gear turning, steam off
+ *   the mug, the frame swinging — globals.css); waiting: eyes
  *   on you, breathing deep; stuck: drowsy, lids half down, swaying; done:
  *   eyes curved into a smile, two hops; failed: eyes drooping, a shake of
  *   the head; sleeping: eyes shut, breathing slowly, "z z z" rising. A new
@@ -22,8 +25,9 @@
  *   it — or over what it is the face of, a row or a tile marked
  *   `data-pa-face-host`: it perks up with a little hop — asleep, it wakes
  *   — and its eyes follow the pointer while it stays (as Grok Bot's do),
- *   settling back once it leaves. Its eyes never leave its body: they are
- *   clipped to its shape.
+ *   settling back once it leaves. Its eyes never leave where they are seen:
+ *   they are clipped to its hole, or to the face of the body they are on,
+ *   and wander less in a small hole.
  * - **Alive only when told.** A face is still unless it is given a `look`:
  *   the roster, the title and the status line pass one; a face on a card
  *   or a system line stays put. The idle scheduler pauses while the window
@@ -34,7 +38,17 @@
  *   whose star is there, at the top end.
  */
 
-import { useEffect, useId, useRef, useState, type RefObject } from "react"
+import {
+  createElement,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from "react"
 
 import { AssistantAvatar } from "@/components/assistants/assistant-avatar"
 import { useReducedMotion } from "@/hooks/use-chat-motion"
@@ -43,26 +57,20 @@ import type {
   BotAvatar as BotAvatarValue,
   BotColor,
   BotLook,
-  BotShape,
 } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
+import {
+  ART_BOX,
+  DEFAULT_SHAPES,
+  SMALL_FACE_BELOW,
+  eyeNodes,
+  faceArt,
+  type SvgNode,
+} from "./bot-shapes"
 import type { RosterDot } from "./roster-order"
 
-export const BOT_SHAPES: readonly BotShape[] = [
-  "blob",
-  "pebble",
-  "squircle",
-  "pill",
-  "wedge",
-  "hexagon",
-  "cloud",
-  "drop",
-  "bean",
-  "egg",
-  "shield",
-  "burst",
-]
+export { BOT_SHAPES } from "./bot-shapes"
 
 export const BOT_COLORS: readonly BotColor[] = [
   "black",
@@ -78,18 +86,8 @@ export const BOT_COLORS: readonly BotColor[] = [
   "gray",
 ]
 
-/** The shapes and colours a new assistant is given by default (as the
- *  backend's `DEFAULT_SHAPES` / `DEFAULT_COLORS`). */
-const DEFAULT_SHAPES: readonly BotShape[] = [
-  "blob",
-  "pebble",
-  "squircle",
-  "pill",
-  "cloud",
-  "drop",
-  "bean",
-  "egg",
-]
+/** The colours a new assistant is given by default (as the backend's
+ *  `DEFAULT_COLORS`): all but black, the primary's. */
 const DEFAULT_COLORS: readonly BotColor[] = BOT_COLORS.filter(
   (c) => c !== "black"
 )
@@ -117,10 +115,11 @@ export function defaultBotFace(uid: string): BotAvatarValue {
   }
 }
 
-/** What the primary assistant starts with (10.6): a black blob. */
+/** What the primary assistant starts with (10.6): the black ring — the
+ *  SpaceRing mark. */
 export const PRIMARY_FACE: BotAvatarValue = {
   kind: "face",
-  shape: "blob",
+  shape: "ring",
   color: "black",
 }
 
@@ -176,27 +175,28 @@ export const FACE_EYES: Record<BotColor, string> = {
   gray: "text-neutral-900 dark:text-white",
 }
 
-/** The shapes, in a 100 × 100 box. */
-export const FACE_PATHS: Record<BotShape, string> = {
-  blob: "M50 6C74 6 94 22 94 48C94 76 76 94 50 94C22 94 6 78 6 50C6 24 26 6 50 6Z",
-  pebble:
-    "M52 10C78 10 96 28 92 54C88 80 68 92 46 90C22 88 6 72 8 48C10 24 28 10 52 10Z",
-  squircle:
-    "M50 8C84 8 92 16 92 50C92 84 84 92 50 92C16 92 8 84 8 50C8 16 16 8 50 8Z",
-  pill: "M30 18H70C86 18 96 32 96 50C96 68 86 82 70 82H30C14 82 4 68 4 50C4 32 14 18 30 18Z",
-  wedge:
-    "M50 8C56 8 60 12 64 19L93 74C97 82 92 90 83 90H17C8 90 3 82 7 74L36 19C40 12 44 8 50 8Z",
-  hexagon:
-    "M30 10H70C74 10 77 12 79 15L95 44C97 48 97 52 95 56L79 85C77 88 74 90 70 90H30C26 90 23 88 21 85L5 56C3 52 3 48 5 44L21 15C23 12 26 10 30 10Z",
-  cloud:
-    "M28 86C14 86 4 76 4 63C4 51 12 42 23 40C25 24 37 12 53 12C68 12 80 22 83 36C93 39 97 49 96 60C95 75 84 86 70 86H28Z",
-  drop: "M50 4C62 22 88 42 88 62C88 82 71 96 50 96C29 96 12 82 12 62C12 42 38 22 50 4Z",
-  bean: "M34 10C52 10 56 26 70 26C86 26 96 40 94 58C92 78 76 92 54 92C26 92 6 74 6 48C6 26 18 10 34 10Z",
-  egg: "M50 6C72 6 88 34 88 58C88 80 71 94 50 94C29 94 12 80 12 58C12 34 28 6 50 6Z",
-  shield:
-    "M50 6L88 18C90 19 92 21 92 24V48C92 72 74 88 52 95C51 95.5 49 95.5 48 95C26 88 8 72 8 48V24C8 21 10 19 12 18L50 6Z",
-  burst:
-    "M50 4L60 16L75 9L78 25L94 27L88 42L98 54L84 62L88 78L72 78L66 93L52 84L38 93L32 78L16 78L20 62L4 54L14 42L8 27L24 25L27 9L42 16Z",
+/** Each colour as the two CSS variables its drawing paints with (`$b`,
+ *  `$c` in `bot-shapes`): the body's and the eyes' palette steps, light and
+ *  dark — `FACE_BODY`'s and `FACE_EYES`'s, which a test keeps them to. */
+export const FACE_VARS: Record<BotColor, string> = {
+  black:
+    "[--pa-b:var(--color-neutral-900)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-neutral-200)] dark:[--pa-c:var(--color-neutral-900)]",
+  brown:
+    "[--pa-b:var(--color-amber-800)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-amber-600)]",
+  red: "[--pa-b:var(--color-red-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-red-400)]",
+  orange:
+    "[--pa-b:var(--color-orange-500)] [--pa-c:var(--color-neutral-900)] dark:[--pa-b:var(--color-orange-400)]",
+  yellow:
+    "[--pa-b:var(--color-yellow-400)] [--pa-c:var(--color-neutral-900)] dark:[--pa-b:var(--color-yellow-300)]",
+  green:
+    "[--pa-b:var(--color-green-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-green-400)] dark:[--pa-c:var(--color-neutral-900)]",
+  teal: "[--pa-b:var(--color-teal-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-teal-400)] dark:[--pa-c:var(--color-neutral-900)]",
+  blue: "[--pa-b:var(--color-blue-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-blue-400)]",
+  purple:
+    "[--pa-b:var(--color-violet-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-violet-400)]",
+  magenta:
+    "[--pa-b:var(--color-fuchsia-500)] [--pa-c:var(--color-white)] dark:[--pa-b:var(--color-fuchsia-400)]",
+  gray: "[--pa-b:var(--color-slate-400)] [--pa-c:var(--color-neutral-900)] dark:[--pa-b:var(--color-slate-500)] dark:[--pa-c:var(--color-white)]",
 }
 
 function rem(px: number): string {
@@ -214,10 +214,6 @@ const Z_MIN_SIZE = 20
  *  of its sleep on its way up — is some 45 above it, the z's some 25 past
  *  its side. */
 const FACE_ROOM = 60
-
-/** The eyes' centres in the 100 × 100 box. */
-const EYE_X = [38.5, 61.5] as const
-const EYE_Y = 46
 
 type Glance = "left" | "right" | "up"
 
@@ -243,80 +239,40 @@ const EYES_AT: Record<BotLook, number> = {
   sleeping: 5,
 }
 
-function capsule(cx: number, w: number, h: number, key: string) {
-  return (
-    <rect
-      key={key}
-      x={cx - w / 2}
-      y={EYE_Y - h / 2}
-      width={w}
-      height={h}
-      rx={w / 2}
-      fill="currentColor"
-    />
-  )
+/** The drawing's 512 box in the face's 100 one. */
+const ART_SCALE = 100 / ART_BOX
+
+/** A paint of `bot-shapes` as CSS: the colour's variables (`FACE_VARS`). */
+const PAINT_CSS: Record<string, string> = {
+  $b: "var(--pa-b)",
+  $c: "var(--pa-c)",
+  $w: "#fff",
 }
 
-/** One look's eyes. */
-function eyesOf(look: BotLook) {
-  switch (look) {
-    case "thinking":
-      return EYE_X.map((cx, i) => capsule(cx, 8.5, 17, `e${i}`))
-    case "working":
-      return EYE_X.map((cx, i) => capsule(cx, 8, 12, `e${i}`))
-    case "waiting":
-      return EYE_X.map((cx, i) => capsule(cx, 10, 21, `e${i}`))
-    case "stuck":
-      // Lids half down: the lower half of each eye, its top flat.
-      return EYE_X.map((cx, i) => (
-        <path
-          key={`e${i}`}
-          d={`M${cx - 4.5} ${EYE_Y} H${cx + 4.5} V${EYE_Y + 5.5} A4.5 4.5 0 0 1 ${cx - 4.5} ${EYE_Y + 5.5} Z`}
-          fill="currentColor"
-        />
-      ))
-    case "done":
-      // Curved up into a smile.
-      return EYE_X.map((cx, i) => (
-        <path
-          key={`e${i}`}
-          d={`M${cx - 6} ${EYE_Y + 3} Q${cx} ${EYE_Y - 7} ${cx + 6} ${EYE_Y + 3}`}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={4.5}
-          strokeLinecap="round"
-        />
-      ))
-    case "failed":
-      // Drooping: tilted in at the top.
-      return EYE_X.map((cx, i) => (
-        <rect
-          key={`e${i}`}
-          x={cx - 4}
-          y={EYE_Y - 6.5}
-          width={8}
-          height={13}
-          rx={4}
-          fill="currentColor"
-          transform={`rotate(${i === 0 ? 18 : -18} ${cx} ${EYE_Y})`}
-        />
-      ))
-    case "sleeping":
-      // Shut: two arcs curving down.
-      return EYE_X.map((cx, i) => (
-        <path
-          key={`e${i}`}
-          d={`M${cx - 5.5} ${EYE_Y} Q${cx} ${EYE_Y + 5.5} ${cx + 5.5} ${EYE_Y}`}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={3.5}
-          strokeLinecap="round"
-        />
-      ))
-    case "idle":
-    default:
-      return EYE_X.map((cx, i) => capsule(cx, 9, 20, `e${i}`))
+/** SVG's attribute names as React spells them. */
+function propName(name: string): string {
+  if (name === "class") return "className"
+  return name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
+}
+
+/** A node of `bot-shapes` as React: its paints set as styles, so a colour's
+ *  variables reach them in either theme. */
+function toReact(node: SvgNode, key: string | number): ReactNode {
+  const props: Record<string, unknown> = { key }
+  let style: CSSProperties | undefined
+  for (const [name, value] of Object.entries(node.a)) {
+    if ((name === "fill" || name === "stroke") && value in PAINT_CSS) {
+      style = { ...style, [name]: PAINT_CSS[value as string] }
+    } else {
+      props[propName(name)] = value
+    }
   }
+  if (style) props.style = style
+  return createElement(
+    node.t,
+    props,
+    ...(node.c ?? []).map((child, i) => toReact(child, i))
+  )
 }
 
 /** The ring round a picture, an emoji or a monogram, by look: the state it
@@ -601,15 +557,25 @@ function FaceAvatar({
       ? GLANCE_SHIFT[glance]
       : undefined
   const id = useId()
-  const clip = `pa-face-clip-${id.replace(/[^\w-]/g, "")}`
+  const base = `pa-face-${id.replace(/[^\w-]/g, "")}`
+  const clip = `${base}-clip`
   const { shape, color } = face
-  const outline = FACE_PATHS[shape] ?? FACE_PATHS.blob
+  const small = size < SMALL_FACE_BELOW
+  const art = useMemo(
+    () => faceArt(shape, small, (n) => `${base}-${n}`),
+    [shape, small, base]
+  )
+  const { eyes } = art
+  // The eyes move in the face's units, as far as their window lets them:
+  // the look's shift, a glance, the pointer followed, a wander.
+  const move = eyes.move
   return (
     <span
       ref={rootRef}
       data-slot="bot-avatar"
       data-bot-shape={shape}
       data-bot-color={color}
+      data-bot-small={small ? "" : undefined}
       data-bot-look={look ? displayed : undefined}
       data-blink={blinking ? "" : undefined}
       data-hover={watching ? "" : undefined}
@@ -626,7 +592,10 @@ function FaceAvatar({
           edges are where nothing is drawn. Never in the pointer's way. */}
       <svg
         viewBox={`${-FACE_ROOM} ${-FACE_ROOM} ${100 + 2 * FACE_ROOM} ${100 + 2 * FACE_ROOM}`}
-        className="pointer-events-none absolute max-w-none"
+        className={cn(
+          "pointer-events-none absolute max-w-none",
+          FACE_VARS[color]
+        )}
         // Inline, so a parent's rule for the icons in it (a card head's
         // `[&_svg]:size-3.5`) never resizes it.
         style={{
@@ -639,21 +608,35 @@ function FaceAvatar({
         aria-hidden
       >
         <defs>
-          <clipPath id={clip}>
-            <path d={outline} />
+          {/* Where its eyes can be seen: its hole, or the face of the body
+              they are on — they never wander off it. */}
+          <clipPath id={clip} transform={`scale(${ART_SCALE})`}>
+            {eyes.window.map((n, i) => toReact(n, i))}
           </clipPath>
         </defs>
         <g className="pa-face-body">
           <g className="pa-face-perk">
-            <path d={outline} className={FACE_BODY[color]} />
+            <g className="pa-face-art" transform={`scale(${ART_SCALE})`}>
+              {art.body.map((n, i) => toReact(n, i))}
+            </g>
             <g clipPath={`url(#${clip})`}>
-              <g transform={`translate(0 ${EYES_AT[displayed]})`}>
-                <g
-                  className="pa-face-gaze"
-                  style={eyesTo ? { transform: eyesTo } : undefined}
-                >
-                  <g className={cn("pa-face-lids", FACE_EYES[color])}>
-                    {eyesOf(displayed)}
+              <g transform={`scale(${move})`}>
+                <g transform={`translate(0 ${EYES_AT[displayed]})`}>
+                  <g
+                    className="pa-face-gaze"
+                    style={eyesTo ? { transform: eyesTo } : undefined}
+                  >
+                    <g transform={`scale(${ART_SCALE / move})`}>
+                      <g
+                        className="pa-face-lids"
+                        style={{
+                          color:
+                            eyes.on === "body" ? "var(--pa-c)" : "var(--pa-b)",
+                        }}
+                      >
+                        {toReact(eyeNodes(eyes, displayed), "eyes")}
+                      </g>
+                    </g>
                   </g>
                 </g>
               </g>

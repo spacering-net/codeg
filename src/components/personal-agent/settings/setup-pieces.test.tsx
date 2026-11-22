@@ -14,7 +14,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-const FACE: BotAvatar = { kind: "face", shape: "blob", color: "black" }
+const FACE: BotAvatar = { kind: "face", shape: "ring", color: "black" }
 
 function Named({ start = "" }: { start?: string }) {
   const [name, setName] = useState(start)

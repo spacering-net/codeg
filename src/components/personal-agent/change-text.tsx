@@ -12,6 +12,7 @@ import { useTranslations } from "next-intl"
 import type { AssistantLabelSnapshot, ChangedItem } from "@/lib/types"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 
+import { BOT_SHAPES } from "./bot-shapes"
 import { choiceKey, isClockItem } from "./settings/pref-pages"
 
 export type Change = ChangedItem
@@ -128,9 +129,13 @@ export function useChangeText(names: Names = {}) {
     }
     if (team?.field === "avatar" && v && typeof v === "object") {
       const face = v as { kind?: string; shape?: string; color?: string }
+      // A shape codeg no longer draws (a change recorded before): the
+      // colour alone.
       if (face.kind === "face" && face.shape && face.color) {
         return [
-          tf(`shapes.${face.shape}` as "shapes.blob"),
+          ...((BOT_SHAPES as readonly string[]).includes(face.shape)
+            ? [tf(`shapes.${face.shape}` as "shapes.ring")]
+            : []),
           tf(`colors.${face.color}` as "colors.black"),
         ].join(" · ")
       }

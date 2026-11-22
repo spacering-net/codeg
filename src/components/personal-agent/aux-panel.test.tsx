@@ -583,12 +583,12 @@ describe("the panel", () => {
       button: 0,
     })
     fireEvent.click(
-      await within(bubble).findByRole("button", { name: "Hexagon" })
+      await within(bubble).findByRole("button", { name: "Hex nut" })
     )
     await waitFor(() =>
       expect(api.personalAgentSave).toHaveBeenCalledWith(
         expect.objectContaining({
-          avatar: expect.objectContaining({ kind: "face", shape: "hexagon" }),
+          avatar: expect.objectContaining({ kind: "face", shape: "nut" }),
         }),
         null
       )
@@ -598,7 +598,7 @@ describe("the panel", () => {
     await waitFor(() =>
       expect(api.personalAgentSave).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          avatar: { kind: "face", shape: "blob", color: "black" },
+          avatar: { kind: "face", shape: "ring", color: "black" },
         }),
         null
       )
@@ -1634,7 +1634,7 @@ describe("the stats tab's data", () => {
       ...snapshot(),
       agent: {
         ...snapshot().agent!,
-        avatar: { kind: "face", shape: "blob", color: "orange" },
+        avatar: { kind: "face", shape: "ring", color: "orange" },
       },
     }
     pa.snapshot = faced

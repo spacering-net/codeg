@@ -111,7 +111,7 @@ function entry(
     kind,
     uid: `u${id}`,
     name,
-    avatar: { kind: "face", shape: "blob", color: "blue" },
+    avatar: { kind: "face", shape: "ring", color: "blue" },
     persona: "",
     persona_unwritten: false,
     executor_assistant_id: null,

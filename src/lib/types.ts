@@ -1943,20 +1943,22 @@ export interface PersonalAgentSettings {
   locale?: AppLocale | null
 }
 
-/** The shapes codeg draws an assistant as (10.6). */
+/** The things codeg draws an assistant as (10.6): the ring — the
+ *  primary's — and twelve with a ring or a hole in them. */
 export type BotShape =
-  | "blob"
-  | "pebble"
-  | "squircle"
-  | "pill"
-  | "wedge"
-  | "hexagon"
-  | "cloud"
-  | "drop"
-  | "bean"
-  | "egg"
-  | "shield"
-  | "burst"
+  | "ring"
+  | "stand"
+  | "donut"
+  | "gummy"
+  | "tape"
+  | "gear"
+  | "nut"
+  | "mug"
+  | "magnet"
+  | "set_square"
+  | "cookie"
+  | "frame"
+  | "watch"
 
 export type BotColor =
   | "black"

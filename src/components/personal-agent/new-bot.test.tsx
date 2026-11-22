@@ -92,7 +92,7 @@ const bot = (id: number, kind: "primary" | "worker", name: string) =>
     name,
     avatar: {
       kind: "face",
-      shape: "blob",
+      shape: "ring",
       color: kind === "primary" ? "black" : "teal",
     },
     executor_assistant_id: kind === "worker" ? 3 : null,
@@ -237,14 +237,14 @@ describe("a new work assistant", () => {
         ) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
     fireEvent.click(head.querySelector("[data-pa-face-picker]")!)
-    fireEvent.click(await screen.findByRole("button", { name: "Hexagon" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Hex nut" }))
     fireEvent.click(screen.getByRole("button", { name: "Purple" }))
     expect(head.getAttribute("data-pa-face")).toBe("purple")
     fireEvent.click(screen.getByRole("button", { name: "Create" }))
     await waitFor(() =>
       expect(api.personalAgentBotCreate.mock.calls[0][0].avatar).toEqual({
         kind: "face",
-        shape: "hexagon",
+        shape: "nut",
         color: "purple",
       })
     )

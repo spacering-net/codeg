@@ -1990,18 +1990,19 @@
         "shape": {
           "type": "string",
           "enum": [
-            "blob",
-            "pebble",
-            "squircle",
-            "pill",
-            "wedge",
-            "hexagon",
-            "cloud",
-            "drop",
-            "bean",
-            "egg",
-            "shield",
-            "burst"
+            "ring",
+            "stand",
+            "donut",
+            "gummy",
+            "tape",
+            "gear",
+            "nut",
+            "mug",
+            "magnet",
+            "set_square",
+            "cookie",
+            "frame",
+            "watch"
           ],
           "description": "Its avatar's shape, with `color`; a default by its id otherwise."
         },
@@ -2091,18 +2092,19 @@
         "shape": {
           "type": "string",
           "enum": [
-            "blob",
-            "pebble",
-            "squircle",
-            "pill",
-            "wedge",
-            "hexagon",
-            "cloud",
-            "drop",
-            "bean",
-            "egg",
-            "shield",
-            "burst"
+            "ring",
+            "stand",
+            "donut",
+            "gummy",
+            "tape",
+            "gear",
+            "nut",
+            "mug",
+            "magnet",
+            "set_square",
+            "cookie",
+            "frame",
+            "watch"
           ],
           "description": "Its avatar's shape, with `color`; a default by its id otherwise."
         },

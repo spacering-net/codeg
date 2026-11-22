@@ -316,10 +316,10 @@ describe("a card to make a work assistant (R9)", () => {
 
 describe("the default face", () => {
   it("is picked from the uid the way the backend picks it", () => {
-    // FNV-1a("abc") = 0x1a47e90b: colour 1 of 10, shape 1 of 8.
+    // FNV-1a("abc") = 0x1a47e90b: colour 1 of 10, shape 1 of 12.
     expect(defaultBotFace("abc")).toEqual({
       kind: "face",
-      shape: "pebble",
+      shape: "donut",
       color: "red",
     })
   })

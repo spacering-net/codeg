@@ -59,7 +59,7 @@ function note(over: Partial<PersonalAgentNotify> = {}): PersonalAgentNotify {
     attention: false,
     in_page: false,
     link: { kind: "bot", bot_id: 3, row_id: 40 },
-    avatar: { kind: "face", shape: "blob", color: "blue" },
+    avatar: { kind: "face", shape: "ring", color: "blue" },
     ...over,
   }
 }

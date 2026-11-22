@@ -590,7 +590,7 @@ describe("an assistant's card: a list", () => {
           id: 5,
           kind: "worker",
           name: "Dev",
-          avatar: { kind: "face", shape: "blob", color: "blue" },
+          avatar: { kind: "face", shape: "ring", color: "blue" },
         } as unknown as RosterEntry,
       ],
     })
@@ -862,13 +862,13 @@ describe("an assistant's card: a list", () => {
           id: 5,
           kind: "worker",
           name: "Dev",
-          avatar: { kind: "face", shape: "blob", color: "blue" },
+          avatar: { kind: "face", shape: "ring", color: "blue" },
         } as unknown as RosterEntry,
         {
           id: 6,
           kind: "worker",
           name: "QA",
-          avatar: { kind: "face", shape: "blob", color: "green" },
+          avatar: { kind: "face", shape: "ring", color: "green" },
         } as unknown as RosterEntry,
       ],
     })

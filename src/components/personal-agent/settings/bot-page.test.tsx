@@ -95,7 +95,7 @@ function entry(
     kind,
     uid: `u${id}`,
     name,
-    avatar: { kind: "face", shape: "blob", color: "blue" },
+    avatar: { kind: "face", shape: "ring", color: "blue" },
     executor_assistant_id: null,
     created_at: "2026-11-10T00:00:00Z",
     persona: kind === "worker" ? "# Persona Default sentence." : "",
@@ -112,7 +112,7 @@ function snapshot(
   return {
     agent: agent && {
       ...agent,
-      avatar: { kind: "face", shape: "blob", color: "blue" },
+      avatar: { kind: "face", shape: "ring", color: "blue" },
       agent_type: "claude_code",
       agent_options: {},
       label_snapshot: { agent: "Claude Code", mode: null, options: [] },
@@ -445,7 +445,7 @@ describe("an assistant's own page", () => {
     await waitFor(() =>
       expect(api.personalAgentSave).toHaveBeenCalledWith(
         {
-          avatar: { kind: "face", shape: "blob", color: "teal" },
+          avatar: { kind: "face", shape: "ring", color: "teal" },
           locale: "en",
         },
         null

@@ -5712,6 +5712,269 @@ button.pa-choice:enabled:not(.pa-choice-chosen):hover {
   }
 }
 
+/* Working, each thing its own way (`bot-shapes.ts`): the parts that move
+   carry a class, turning round their own middle — a gear, the donut's
+   glaze, the tape's last turn, the nut a sixth at a time, the cookie
+   wriggling; the mug's steam rising, the magnet's sparks flickering, the
+   standing ring's feet taking turns, a mark running round the watch's
+   screen (shown only then) — and the shapes that move as one replace the
+   bounce: the ring rocks, the gummy squashes, the magnet hums, the set
+   square see-saws on its corner, the frame swings from its nail. A part's
+   motion is in the drawing's own units (its 512 box). */
+.pa-face-spin,
+.pa-face-roll,
+.pa-face-reel,
+.pa-face-tighten,
+.pa-face-twist {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.pa-face-pull {
+  transform-box: fill-box;
+  transform-origin: 50% 0;
+}
+
+.pa-face-step-a,
+.pa-face-step-b {
+  transform-box: fill-box;
+}
+
+.pa-face-progress {
+  display: none;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-spin {
+  animation: pa-face-turn 3s linear infinite;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-roll {
+  animation: pa-face-turn 7s linear infinite;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-reel {
+  animation: pa-face-turn 2.4s linear infinite;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-pull {
+  animation: pa-face-pull 2.4s ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-tighten {
+  animation: pa-face-tighten 1.2s var(--motion-ease-standard) infinite;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-twist {
+  animation: pa-face-twist 1.6s ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-steam {
+  animation: pa-face-steam 1.6s ease-out infinite;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-steam-late {
+  animation-delay: -0.8s;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-spark {
+  animation: pa-face-spark 0.5s ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-step-a {
+  animation: pa-face-step 0.6s ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-step-b {
+  animation: pa-face-step 0.6s ease-in-out -0.3s infinite;
+}
+
+.pa-face[data-bot-look="working"] .pa-face-progress {
+  display: inline;
+  animation: pa-face-progress 1.4s linear infinite;
+}
+
+.pa-face[data-bot-look="working"]:is(
+    [data-bot-shape="donut"],
+    [data-bot-shape="tape"],
+    [data-bot-shape="gear"],
+    [data-bot-shape="nut"],
+    [data-bot-shape="cookie"],
+    [data-bot-shape="watch"]
+  )
+  .pa-face-body {
+  animation: none;
+}
+
+/* The mug's steam is its full drawing's only: drawn small, it bounces. */
+.pa-face[data-bot-look="working"][data-bot-shape="mug"]:not([data-bot-small])
+  .pa-face-body {
+  animation: none;
+}
+
+.pa-face[data-bot-look="working"][data-bot-shape="ring"] .pa-face-body {
+  transform-origin: 50px 50px;
+  animation: pa-face-rock 1.1s ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="working"][data-bot-shape="stand"] .pa-face-body {
+  animation: pa-face-walk 0.3s ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="working"][data-bot-shape="gummy"] .pa-face-body {
+  transform-origin: 50px 88px;
+  animation: pa-face-squash 0.8s ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="working"][data-bot-shape="magnet"] .pa-face-body {
+  animation: pa-face-hum 0.16s linear infinite;
+}
+
+.pa-face[data-bot-look="working"][data-bot-shape="set_square"] .pa-face-body {
+  transform-origin: 13.7px 87.9px;
+  animation: pa-face-seesaw 1.4s ease-in-out infinite;
+}
+
+.pa-face[data-bot-look="working"][data-bot-shape="frame"] .pa-face-body {
+  transform-origin: 50px 8px;
+  animation: pa-face-swing 1.8s ease-in-out infinite;
+}
+
+@keyframes pa-face-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pa-face-pull {
+  50% {
+    transform: scaleY(1.25);
+  }
+}
+
+/* A sixth of a turn, then a pause: the nut looks the same after each. */
+@keyframes pa-face-tighten {
+  0%,
+  45% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(60deg);
+  }
+}
+
+@keyframes pa-face-twist {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  33% {
+    transform: rotate(-18deg);
+  }
+  66% {
+    transform: rotate(18deg);
+  }
+}
+
+@keyframes pa-face-steam {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-30px);
+  }
+}
+
+@keyframes pa-face-spark {
+  50% {
+    opacity: 0.1;
+  }
+}
+
+@keyframes pa-face-step {
+  0%,
+  50%,
+  100% {
+    transform: translateY(0);
+  }
+  25% {
+    transform: translateY(-26px);
+  }
+}
+
+/* Round the screen once: its edge is some 692 of the drawing's units. */
+@keyframes pa-face-progress {
+  from {
+    stroke-dashoffset: 692;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes pa-face-rock {
+  0%,
+  100% {
+    transform: rotate(-9deg);
+  }
+  50% {
+    transform: rotate(9deg);
+  }
+}
+
+@keyframes pa-face-walk {
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes pa-face-squash {
+  0%,
+  100% {
+    transform: scale(1, 1);
+  }
+  33% {
+    transform: scale(1.08, 0.9);
+  }
+  66% {
+    transform: scale(0.95, 1.06);
+  }
+}
+
+@keyframes pa-face-hum {
+  0%,
+  100% {
+    transform: translateX(-1px);
+  }
+  50% {
+    transform: translateX(1px);
+  }
+}
+
+@keyframes pa-face-seesaw {
+  0%,
+  100% {
+    transform: rotate(-7deg);
+  }
+  50% {
+    transform: rotate(5deg);
+  }
+}
+
+@keyframes pa-face-swing {
+  0%,
+  100% {
+    transform: rotate(-9deg);
+  }
+  50% {
+    transform: rotate(9deg);
+  }
+}
+
 /* Reduced motion, for everything of this section: movement becomes a fade,
    loops stop, spinners pulse, the faces rest in each look's still pose (the
    Zs stay, still) and the fast spring plays in 120ms. */

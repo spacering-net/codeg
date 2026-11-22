@@ -375,8 +375,8 @@ describe("the team changed from the conversation", () => {
           },
           {
             key: "bot.u-1.avatar",
-            from: { kind: "face", shape: "blob", color: "red" },
-            to: { kind: "face", shape: "egg", color: "teal" },
+            from: { kind: "face", shape: "ring", color: "red" },
+            to: { kind: "face", shape: "cookie", color: "teal" },
           },
         ],
         names: { "bot:u-1": "Yan" },
@@ -390,7 +390,7 @@ describe("the team changed from the conversation", () => {
     expect(screen.getByText("Yan · agent its work runs on")).toBeInTheDocument()
     expect(screen.getByText("nothing set")).toBeInTheDocument()
     expect(screen.getByText("Codex")).toBeInTheDocument()
-    expect(screen.getByText("Egg · Teal")).toBeInTheDocument()
+    expect(screen.getByText("Star cookie · Teal")).toBeInTheDocument()
   })
 
   it("shows a persona's change whole: the opening it has, the one it gets", () => {

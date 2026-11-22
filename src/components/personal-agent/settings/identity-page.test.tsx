@@ -142,7 +142,7 @@ function agent(
     id: 1,
     kind: "primary",
     name,
-    avatar: { kind: "face", shape: "blob", color },
+    avatar: { kind: "face", shape: "ring", color },
     agent_type: "claude_code",
     agent_options: {},
     label_snapshot: { agent: "Claude Code", mode: null, options: [] },
