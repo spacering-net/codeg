@@ -43,6 +43,7 @@
 
 use std::path::{Path, PathBuf};
 
+use base64::Engine as _;
 use chrono::{DateTime, TimeZone, Utc};
 use prost::Message as _;
 use rusqlite::{Connection, OpenFlags};
@@ -241,6 +242,16 @@ struct UserInput {
     user_response: String,
     #[prost(message, repeated, tag = "3")]
     items: Vec<TextOrScopeItem>,
+    #[prost(message, repeated, tag = "9")]
+    media: Vec<UserMedia>,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct UserMedia {
+    #[prost(string, tag = "1")]
+    mime_type: String,
+    #[prost(bytes = "vec", tag = "2")]
+    data: Vec<u8>,
 }
 
 /// `exa.cortex_pb.CortexStepPlannerResponse` — one assistant step.
@@ -890,18 +901,31 @@ fn project_steps(steps: &[Step]) -> SessionParse {
                 turn_index += 1;
             }
             pending = PendingAssistant::default();
-            let Some(text) = user_input_text(user_input) else {
+            let mut blocks = Vec::new();
+            if let Some(text) = user_input_text(user_input) {
+                parsed
+                    .first_user_text
+                    .get_or_insert_with(|| title_from_user_text(&text));
+                blocks.push(ContentBlock::Text {
+                    text: truncate_str(&text, TEXT_CAP),
+                });
+            }
+            for image in &user_input.media {
+                if image.mime_type.starts_with("image/") && !image.data.is_empty() {
+                    blocks.push(ContentBlock::Image {
+                        data: base64::engine::general_purpose::STANDARD.encode(&image.data),
+                        mime_type: image.mime_type.clone(),
+                        uri: None,
+                    });
+                }
+            }
+            if blocks.is_empty() {
                 continue;
-            };
-            parsed
-                .first_user_text
-                .get_or_insert_with(|| title_from_user_text(&text));
+            }
             parsed.turns.push(MessageTurn {
                 id: format!("agy-{idx}-user"),
                 role: TurnRole::User,
-                blocks: vec![ContentBlock::Text {
-                    text: truncate_str(&text, TEXT_CAP),
-                }],
+                blocks,
                 timestamp: ts.unwrap_or_else(Utc::now),
                 usage: None,
                 duration_ms: None,
@@ -1481,6 +1505,37 @@ mod tests {
             )
             .unwrap();
         }
+    }
+
+    #[test]
+    fn image_only_and_captioned_user_prompts_keep_their_media_on_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let steps = ["", "look at this"].map(|text| Step {
+            user_input: Some(UserInput {
+                query: text.into(),
+                media: vec![UserMedia {
+                    mime_type: "image/png".into(),
+                    data: vec![1, 2, 3],
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        write_steps(dir.path(), "images", &steps);
+        let detail = AntigravityParser::with_base_dir(dir.path().into())
+            .get_conversation("images")
+            .unwrap();
+        assert_eq!(detail.turns.len(), 2);
+        for turn in &detail.turns {
+            assert!(matches!(
+                turn.blocks.last(), Some(ContentBlock::Image { data, mime_type, .. })
+                    if data == "AQID" && mime_type == "image/png"
+            ));
+        }
+        assert_eq!(detail.turns[0].blocks.len(), 1);
+        assert!(matches!(
+            &detail.turns[1].blocks[0], ContentBlock::Text { text } if text == "look at this"
+        ));
     }
 
     // `GEMINI_HOME` names the `.gemini` directory ITSELF (unlike Gemini CLI's

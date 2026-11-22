@@ -45,6 +45,38 @@ pub(super) fn adapter(
 }
 
 type Response = Result<PromptResponse, agent_client_protocol::Error>;
+
+/// The CLI can explicitly refuse admission while its previous cancellation is
+/// unwinding, even after a bounded wait for that turn's outstanding replies.
+/// Only this refusal makes sending the same next prompt again unambiguous.
+pub(super) async fn prompt_after_antigravity_cancel(
+    cx: ConnectionTo<Agent>,
+    request: PromptRequest,
+    stop: tokio_util::sync::CancellationToken,
+) -> Response {
+    let mut delay = std::time::Duration::from_millis(100);
+    loop {
+        if stop.is_cancelled() {
+            return Ok(PromptResponse::new(StopReason::Cancelled));
+        }
+        let result = cx
+            .send_request_to(Agent, request.clone())
+            .block_task()
+            .await;
+        if !result.as_ref().is_err_and(|error| {
+            agent_error_text(error)
+                .contains("the running prompt is being cancelled; wait for it to finish")
+        }) {
+            return result;
+        }
+        tokio::select! {
+            _ = stop.cancelled() => return Ok(PromptResponse::new(StopReason::Cancelled)),
+            _ = tokio::time::sleep(delay) => {}
+        }
+        delay = (delay * 2).min(std::time::Duration::from_secs(1));
+    }
+}
+
 enum Receipt {
     ClientEcho(String),
     Submitted(Option<String>),

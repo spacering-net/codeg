@@ -14020,25 +14020,23 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// ends the turn was answered `cancelled` and lost.
 const CODEBUDDY_CANCEL_BARRIER: std::time::Duration = std::time::Duration::from_millis(600);
 
-/// How long a prompt held for [`CODEBUDDY_CANCEL_BARRIER`] waits for the
-/// cancelled prompt's answer before it goes ahead without one. The barrier is
-/// long over by then; this only bounds the hold when CodeBuddy never answers.
-const CODEBUDDY_CANCEL_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Bound the idle hold if the agent never answers its cancelled prompt.
+const CANCEL_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// A Stop codeg sent CodeBuddy mid-turn, kept until the next prompt has waited
-/// out its barrier (see [`CODEBUDDY_CANCEL_BARRIER`]).
-struct CodeBuddyCancel {
+/// A cancelled turn whose outstanding responses must settle before the next prompt.
+struct PendingPromptCancel {
+    after_answer: std::time::Duration,
     cancelled_at: tokio::time::Instant,
     /// When the cancelled prompt was answered, from the task that awaits it.
     answered: oneshot::Receiver<tokio::time::Instant>,
 }
 
-/// A prompt held back until CodeBuddy's cancel barrier has passed. The idle
+/// A prompt held back while the previous turn is cancelling. The idle
 /// loop keeps reading the agent while it waits, so the cancelled turn's last
 /// frames still land there instead of in this prompt's turn.
 struct HeldPrompt {
     command: ConnectionCommand,
-    cancel: CodeBuddyCancel,
+    cancel: PendingPromptCancel,
     /// When the prompt may go, once known. Kept here because the loop drops
     /// the waiting future whenever it reads an update, and the answer can be
     /// received only once.
@@ -14049,15 +14047,15 @@ struct HeldPrompt {
 enum Admitted {
     /// Run it now.
     Run(Option<ConnectionCommand>),
-    /// A prompt to hold until CodeBuddy's cancel barrier has passed.
+    /// A prompt to hold until the previous cancellation settles.
     Held(HeldPrompt),
 }
 
 /// Only a prompt is held, and only the first one after a Stop: the hold
 /// consumes the pending cancel.
-fn hold_for_codebuddy_cancel(
+fn hold_for_prompt_cancel(
     command: Option<ConnectionCommand>,
-    pending: &mut Option<CodeBuddyCancel>,
+    pending: &mut Option<PendingPromptCancel>,
 ) -> Admitted {
     match command {
         Some(command @ ConnectionCommand::Prompt { .. }) => match pending.take() {
@@ -14072,18 +14070,15 @@ fn hold_for_codebuddy_cancel(
     }
 }
 
-/// Resolves when `held` may be sent: [`CODEBUDDY_CANCEL_BARRIER`] after the
-/// cancelled prompt's answer, or as soon as it is clear none will come.
-async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
+/// Wait for the cancelled requests and any adapter-specific delay after their answers.
+async fn wait_out_prompt_cancel(held: &mut HeldPrompt) {
     let release_at = match held.release_at {
         Some(at) => at,
         None => {
-            let give_up = held.cancel.cancelled_at + CODEBUDDY_CANCEL_ANSWER_WAIT;
+            let give_up = held.cancel.cancelled_at + CANCEL_ANSWER_WAIT;
             let at = match tokio::time::timeout_at(give_up, &mut held.cancel.answered).await {
-                Ok(Ok(answered_at)) => answered_at + CODEBUDDY_CANCEL_BARRIER,
-                // The task holding the cancelled prompt ended without an answer,
-                // or the answer is overdue: in both cases the barrier, armed
-                // when CodeBuddy took the cancel, has already passed.
+                Ok(Ok(answered_at)) => answered_at + held.cancel.after_answer,
+                // Keep the composer usable if the old request never settles.
                 Ok(Err(_)) | Err(_) => tokio::time::Instant::now(),
             };
             held.release_at = Some(at);
@@ -15191,9 +15186,10 @@ async fn run_conversation_loop(
     // own needs a turn to have started it, and background work cannot outlive
     // the agent process this loop's connection owns.
     let mut prompted = false;
-    // A Stop codeg sent CodeBuddy mid-turn, and the prompt held back until its
-    // barrier has passed (see `CODEBUDDY_CANCEL_BARRIER`).
-    let mut codebuddy_cancel: Option<CodeBuddyCancel> = None;
+    // Both CodeBuddy and the Antigravity CLI may still be cancelling when the
+    // composer accepts the next prompt. The idle loop keeps pumping their updates.
+    let mut pending_prompt_cancel: Option<PendingPromptCancel> = None;
+    let mut after_antigravity_cancel = false;
     let mut held_prompt: Option<HeldPrompt> = None;
     loop {
         // Wait for either a user command or a session update (e.g. available_commands_update)
@@ -15202,7 +15198,7 @@ async fn run_conversation_loop(
                 biased;
                 () = async {
                     match held_prompt.as_mut() {
-                        Some(held) => wait_out_codebuddy_cancel(held).await,
+                        Some(held) => wait_out_prompt_cancel(held).await,
                         None => std::future::pending().await,
                     }
                 }, if held_prompt.is_some() => {
@@ -15210,7 +15206,7 @@ async fn run_conversation_loop(
                 }
                 // Not while a prompt is held: what comes after it waits its turn.
                 cmd = cmd_rx.recv(), if held_prompt.is_none() => {
-                    match hold_for_codebuddy_cancel(cmd, &mut codebuddy_cancel) {
+                    match hold_for_prompt_cancel(cmd, &mut pending_prompt_cancel) {
                         Admitted::Run(cmd) => break cmd,
                         Admitted::Held(held) => held_prompt = Some(held),
                     }
@@ -15481,11 +15477,17 @@ async fn run_conversation_loop(
                 let stderr_mark = stderr_tail.mark();
                 // Use Box::pin (heap) instead of tokio::pin! (stack) so the
                 // future can be moved into a background task on cancel.
-                let mut prompt_response = Box::pin(
-                    cx.clone()
-                        .send_request_to(Agent, prompt_request)
-                        .block_task(),
-                );
+                let retry_stop = CancellationToken::new();
+                let mut prompt_response: futures::future::BoxFuture<'static, _> =
+                    if std::mem::take(&mut after_antigravity_cancel) {
+                        Box::pin(mid_turn_prompts::prompt_after_antigravity_cancel(
+                            cx.clone(),
+                            prompt_request,
+                            retry_stop.clone(),
+                        ))
+                    } else {
+                        Box::pin(cx.clone().send_request_to(Agent, prompt_request).block_task())
+                    };
                 let mut mid_turn = mid_turn_prompts::MidTurnPrompts::default();
                 let mut tracked_terminal_tool_calls: HashMap<String, TrackedTerminalToolCall> =
                     HashMap::new();
@@ -16330,6 +16332,7 @@ async fn run_conversation_loop(
                                     );
                                 }
                                 Some(ConnectionCommand::Cancel) => {
+                                    retry_stop.cancel();
                                     // Send CancelNotification to agent to stop the current turn
                                     let _ = cx.send_notification_to(
                                         Agent,
@@ -16441,9 +16444,20 @@ async fn run_conversation_loop(
                                     // CodeBuddy the answer also times the hold
                                     // on the next prompt (see
                                     // `CODEBUDDY_CANCEL_BARRIER`).
-                                    let answered = (agent_type == AgentType::CodeBuddy).then(|| {
+                                    after_antigravity_cancel = state.read().await.native_steering
+                                        == Some(NativeSteering::MidTurnPrompt(
+                                            crate::acp::feedback::MidTurnAdapter::AntigravityCli,
+                                        ));
+                                    let after_answer = if after_antigravity_cancel {
+                                        Some(std::time::Duration::ZERO)
+                                    } else {
+                                        (agent_type == AgentType::CodeBuddy)
+                                            .then_some(CODEBUDDY_CANCEL_BARRIER)
+                                    };
+                                    let answered = after_answer.map(|after_answer| {
                                         let (answered, answer) = oneshot::channel();
-                                        codebuddy_cancel = Some(CodeBuddyCancel {
+                                        pending_prompt_cancel = Some(PendingPromptCancel {
+                                            after_answer,
                                             cancelled_at,
                                             answered: answer,
                                         });
@@ -51242,7 +51256,8 @@ mod tests {
     fn held_after_stop(answer: oneshot::Receiver<tokio::time::Instant>) -> HeldPrompt {
         HeldPrompt {
             command: prompt_command("two"),
-            cancel: CodeBuddyCancel {
+            cancel: PendingPromptCancel {
+                after_answer: CODEBUDDY_CANCEL_BARRIER,
                 cancelled_at: tokio::time::Instant::now(),
                 answered: answer,
             },
@@ -51253,23 +51268,24 @@ mod tests {
     #[tokio::test]
     async fn only_the_first_prompt_after_a_codebuddy_stop_is_held() {
         let (_answered, answer) = oneshot::channel();
-        let mut pending = Some(CodeBuddyCancel {
+        let mut pending = Some(PendingPromptCancel {
+            after_answer: CODEBUDDY_CANCEL_BARRIER,
             cancelled_at: tokio::time::Instant::now(),
             answered: answer,
         });
         // Other commands go through and leave the Stop pending.
         assert!(matches!(
-            hold_for_codebuddy_cancel(Some(ConnectionCommand::Cancel), &mut pending),
+            hold_for_prompt_cancel(Some(ConnectionCommand::Cancel), &mut pending),
             Admitted::Run(Some(ConnectionCommand::Cancel))
         ));
         assert!(matches!(
-            hold_for_codebuddy_cancel(None, &mut pending),
+            hold_for_prompt_cancel(None, &mut pending),
             Admitted::Run(None)
         ));
         assert!(pending.is_some());
         // The first prompt is held and takes the Stop with it…
         assert!(matches!(
-            hold_for_codebuddy_cancel(Some(prompt_command("two")), &mut pending),
+            hold_for_prompt_cancel(Some(prompt_command("two")), &mut pending),
             Admitted::Held(HeldPrompt {
                 command: ConnectionCommand::Prompt { .. },
                 release_at: None,
@@ -51279,7 +51295,7 @@ mod tests {
         assert!(pending.is_none());
         // …so the one after it goes straight through.
         assert!(matches!(
-            hold_for_codebuddy_cancel(Some(prompt_command("three")), &mut pending),
+            hold_for_prompt_cancel(Some(prompt_command("three")), &mut pending),
             Admitted::Run(Some(ConnectionCommand::Prompt { .. }))
         ));
     }
@@ -51298,13 +51314,13 @@ mod tests {
         // can be received only once, so the release time it gave must stick.
         assert!(tokio::time::timeout(
             std::time::Duration::from_millis(100),
-            wait_out_codebuddy_cancel(&mut held),
+            wait_out_prompt_cancel(&mut held),
         )
         .await
         .is_err());
         let release = start + answer_after + CODEBUDDY_CANCEL_BARRIER;
         assert_eq!(held.release_at, Some(release));
-        wait_out_codebuddy_cancel(&mut held).await;
+        wait_out_prompt_cancel(&mut held).await;
         assert_eq!(tokio::time::Instant::now(), release);
     }
 
@@ -51314,7 +51330,7 @@ mod tests {
         drop(answered);
         let mut held = held_after_stop(answer);
         let start = tokio::time::Instant::now();
-        wait_out_codebuddy_cancel(&mut held).await;
+        wait_out_prompt_cancel(&mut held).await;
         assert_eq!(tokio::time::Instant::now(), start);
     }
 
@@ -51323,10 +51339,10 @@ mod tests {
         let (_answered, answer) = oneshot::channel::<tokio::time::Instant>();
         let mut held = held_after_stop(answer);
         let cancelled_at = held.cancel.cancelled_at;
-        wait_out_codebuddy_cancel(&mut held).await;
+        wait_out_prompt_cancel(&mut held).await;
         assert_eq!(
             tokio::time::Instant::now(),
-            cancelled_at + CODEBUDDY_CANCEL_ANSWER_WAIT
+            cancelled_at + CANCEL_ANSWER_WAIT
         );
     }
 
@@ -52053,6 +52069,48 @@ mod tests {
             },
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn antigravity_keeps_the_next_prompt_when_the_previous_turn_is_still_cancelling() {
+        use agent_client_protocol::schema::v1::PromptResponse;
+
+        let mut lp = CustomLoop::start_with_results(
+            AgentType::Antigravity,
+            vec![
+                vec![custom_text("working")],
+                vec![grok_barrier()],
+                vec![custom_text("next accepted")],
+            ],
+            vec![
+                Ok(PromptResponse::new(StopReason::Cancelled)),
+                Err(agent_client_protocol::Error::invalid_params().data(
+                    "Can't add this prompt to session s1: the running prompt is being cancelled; wait for it to finish, then send this prompt again",
+                )),
+                Ok(PromptResponse::new(StopReason::EndTurn)),
+            ],
+        )
+        .await;
+        lp.state.write().await.native_steering = Some(NativeSteering::MidTurnPrompt(
+            crate::acp::feedback::MidTurnAdapter::AntigravityCli,
+        ));
+        lp.open_turn("one", "working").await;
+        lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+        lp.until("stop", |e| {
+            matches!(e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled")
+        })
+        .await;
+        lp.state.write().await.turn_in_flight = true;
+        lp.cmd_tx.send(prompt_command("two")).await.unwrap();
+        lp.respond.notify_one(); // let the cancelled RPC settle
+        lp.until_barrier().await;
+        lp.respond.notify_one(); // explicitly declined during cancellation
+        lp.until_text("next accepted").await;
+        lp.close_turn().await;
+        assert!(matches!(
+            lp.seen.last(), Some(AcpEvent::TurnComplete { stop_reason, .. }) if stop_reason == "end_turn"
+        ));
+        lp.shutdown().await;
     }
 
     #[tokio::test]
