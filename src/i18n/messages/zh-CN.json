@@ -870,7 +870,6 @@
       "modelNotSwitched": "智能体没有切换到所选模型，下面的选项可能属于另一个模型。",
       "unsavedChanges": "有未保存的修改",
       "assistants": {
-        "description": "执行配置是可以被 @ 的委派预设：一个智能体、选定的每一项选项，加上常驻指令。委派给它时，就按这套设置运行。",
         "create": "新建执行配置",
         "delegationOff": "多智能体协同已关闭，执行配置暂时不能被委派。",
         "delegationOffAction": "前往「{tab}」",
@@ -936,10 +935,6 @@
         "avatarUseMonogram": "使用字母",
         "avatarEmojiPlaceholder": "输入或粘贴 emoji",
         "avatarEmojiUse": "使用",
-        "avatarUpload": "上传图片",
-        "avatarUploadHint": "会居中裁成正方形，并缩小到 128×128。",
-        "avatarTooLarge": "这张图片缩小之后仍然太大，请换一张。",
-        "avatarUnreadable": "无法把这个文件读成图片。",
         "avatarColor": "颜色",
         "errors": {
           "emptyName": "请填写执行配置名称。",
@@ -11227,7 +11222,7 @@
       "copyName": "{name} 副本",
       "copied": "已复制成 {name}",
       "copy": "复制",
-      "deleteAction": "删除…",
+      "deleteAction": "删除",
       "face": {
         "shape": "形状",
         "color": "颜色",

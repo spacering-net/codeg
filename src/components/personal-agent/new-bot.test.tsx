@@ -508,6 +508,20 @@ describe("deleting a work assistant", () => {
     expect(usePersonalAgentUi.getState().viewBot).toBeNull()
   })
 
+  it("shows a long working directory whole, wrapped inside the dialog", async () => {
+    const workdir =
+      "/Users/someone/Library/Application Support/app.codeg/personal-agent-bots/d783ec9a74546aabf32dab3e398b5dbb"
+    api.personalAgentBotImpact.mockResolvedValue({ ...impact, workdir })
+    wrap(<BotDeleteDialog botId={9} onOpenChange={() => {}} />)
+    await screen.findByText("Delete Reviewer?")
+    const path = document.querySelector("[data-pa-delete-workdir]")!
+    expect(path.textContent).toBe(workdir)
+    expect(path.className).toContain("wrap-anywhere")
+    expect(path.className).not.toContain("truncate")
+    // The dialog is a grid: its body may shrink below its longest line.
+    expect(path.closest(".flex-col")?.className).toContain("min-w-0")
+  })
+
   it("names its plans that stop and the steps of other plans handed to it", async () => {
     api.personalAgentBotImpact.mockResolvedValue({
       ...impact,

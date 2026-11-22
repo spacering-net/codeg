@@ -1,15 +1,24 @@
 "use client"
 
 /**
- * The assistant editor's avatar picker: a popover with three pages — the
- * name's monogram, an emoji, or an uploaded picture — and the ten-colour
- * palette under the first two. An upload is cropped and scaled client-side
- * (`imageFileToAvatarDataUrl`) and stored as a data URL.
+ * The executor config editor's avatar picker: a popover with three pages —
+ * the name's monogram, an emoji, or an uploaded picture — and the
+ * ten-colour palette under the first two. The upload page is the work
+ * assistants' face editor's (`FaceUpload`): a picture dropped, pasted
+ * (anywhere in the popover) or picked, framed in a round window — dragged,
+ * zoomed — and [Set avatar] stores what the window shows as a data URL.
  */
 
 import { useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { Check, ImageUp, Pencil } from "lucide-react"
+import { Check, Pencil } from "lucide-react"
+
+import {
+  FaceUpload,
+  pastedImage,
+  useOsImageDrop,
+  usePicture,
+} from "@/components/personal-agent/face-upload"
 
 import {
   AssistantAvatar,
@@ -23,11 +32,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import {
-  AvatarImageError,
-  avatarEmojiFrom,
-  imageFileToAvatarDataUrl,
-} from "@/lib/assistant-avatar"
+import { avatarEmojiFrom } from "@/lib/assistant-avatar"
 import {
   ASSISTANT_AVATAR_COLORS,
   type AssistantAvatar as AssistantAvatarValue,
@@ -121,62 +126,9 @@ export function AssistantAvatarPicker({
 }: AssistantAvatarPickerProps) {
   const t = useTranslations("AcpAgentSettings.multiAgent.assistants")
   const [open, setOpen] = useState(false)
-  const [page, setPage] = useState<Page>(avatar.kind)
-  const [customEmoji, setCustomEmoji] = useState("")
-  const [imageError, setImageError] = useState<string | null>(null)
-  const [processing, setProcessing] = useState(false)
-  const fileRef = useRef<HTMLInputElement | null>(null)
-  /** Bumped by every pick, so an upload still being scaled when the user
-   *  picks something else is dropped instead of replacing that pick. */
-  const pickSeq = useRef(0)
-  const color = colorOf(avatar)
-
-  const pick = (next: AssistantAvatarValue) => {
-    pickSeq.current += 1
-    onChange(next)
-  }
-
-  const pickColor = (next: AssistantAvatarColor) => {
-    if (avatar.kind === "emoji") pick({ ...avatar, color: next })
-    else pick({ kind: "monogram", color: next })
-  }
-
-  const pickEmoji = (text: string) => {
-    const emoji = avatarEmojiFrom(text)
-    if (emoji) pick({ kind: "emoji", emoji, color })
-  }
-
-  const onFile = async (file: File | undefined) => {
-    if (!file) return
-    const seq = ++pickSeq.current
-    setImageError(null)
-    setProcessing(true)
-    try {
-      const dataUrl = await imageFileToAvatarDataUrl(file)
-      if (pickSeq.current === seq)
-        onChange({ kind: "image", data_url: dataUrl })
-    } catch (err) {
-      if (pickSeq.current === seq) {
-        setImageError(
-          err instanceof AvatarImageError && err.reason === "too_large"
-            ? t("avatarTooLarge")
-            : t("avatarUnreadable")
-        )
-      }
-    } finally {
-      setProcessing(false)
-      if (fileRef.current) fileRef.current.value = ""
-    }
-  }
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next)
-        if (next) setPage(avatar.kind)
-      }}
-    >
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         {/* The pencil chip is what says "this picture can be changed" — a bare
             avatar reads as decoration, not as a control. */}
@@ -197,142 +149,183 @@ export function AssistantAvatarPicker({
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 p-3">
-        <Tabs value={page} onValueChange={(v) => setPage(v as Page)}>
-          <TabsList className="w-full">
-            <TabsTrigger value="monogram" className="flex-1">
-              {t("avatarMonogram")}
-            </TabsTrigger>
-            <TabsTrigger value="emoji" className="flex-1">
-              {t("avatarEmoji")}
-            </TabsTrigger>
-            <TabsTrigger value="image" className="flex-1">
-              {t("avatarImage")}
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="monogram" className="pt-3">
-            <div className="flex items-center gap-3">
-              <AssistantAvatar
-                avatar={{ kind: "monogram", color }}
-                name={name}
-                size={40}
-              />
-              <p className="text-xs text-muted-foreground">
-                {t("avatarMonogramHint")}
-              </p>
-            </div>
-            {avatar.kind !== "monogram" ? (
-              <Button
-                size="sm"
-                variant="outline"
-                className="mt-3"
-                onClick={() => pick({ kind: "monogram", color })}
-              >
-                {t("avatarUseMonogram")}
-              </Button>
-            ) : null}
-          </TabsContent>
-
-          <TabsContent value="emoji" className="pt-3">
-            <div className="grid grid-cols-8 gap-1">
-              {EMOJI_CHOICES.map((emoji) => (
-                <button
-                  key={emoji}
-                  type="button"
-                  onClick={() => pickEmoji(emoji)}
-                  className={cn(
-                    "flex size-8 items-center justify-center rounded-md font-emoji text-lg transition hover:bg-accent",
-                    avatar.kind === "emoji" &&
-                      avatar.emoji === emoji &&
-                      "bg-accent ring-1 ring-ring"
-                  )}
-                  aria-label={emoji}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <Input
-                value={customEmoji}
-                onChange={(e) => setCustomEmoji(e.target.value)}
-                placeholder={t("avatarEmojiPlaceholder")}
-                className="h-8 text-sm"
-                aria-label={t("avatarEmojiPlaceholder")}
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!avatarEmojiFrom(customEmoji)}
-                onClick={() => {
-                  pickEmoji(customEmoji)
-                  setCustomEmoji("")
-                }}
-              >
-                {t("avatarEmojiUse")}
-              </Button>
-            </div>
-          </TabsContent>
-
-          <TabsContent value="image" className="pt-3">
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              data-testid="assistant-avatar-file"
-              onChange={(e) => void onFile(e.target.files?.[0])}
-            />
-            <div className="flex items-center gap-3">
-              {avatar.kind === "image" ? (
-                <AssistantAvatar avatar={avatar} name={name} size={40} />
-              ) : null}
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={processing}
-                onClick={() => fileRef.current?.click()}
-              >
-                <ImageUp className="size-3.5" aria-hidden />
-                {t("avatarUpload")}
-              </Button>
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {t("avatarUploadHint")}
-            </p>
-            {imageError ? (
-              <p className="mt-1 text-xs text-destructive">{imageError}</p>
-            ) : null}
-          </TabsContent>
-        </Tabs>
-
-        {page !== "image" ? (
-          <div className="mt-3 border-t pt-3">
-            <p className="mb-2 text-xs text-muted-foreground">
-              {t("avatarColor")}
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {ASSISTANT_AVATAR_COLORS.map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => pickColor(key)}
-                  aria-label={key}
-                  aria-pressed={color === key && avatar.kind !== "image"}
-                  className={cn(
-                    "flex size-6 items-center justify-center rounded-full text-white transition hover:scale-110",
-                    SWATCH_CLASSES[key]
-                  )}
-                >
-                  {color === key && avatar.kind !== "image" ? (
-                    <Check className="size-3.5" aria-hidden />
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
+        {/* Mounted while open only: each opening starts on the page of the
+            avatar's kind, with no picture left half framed. */}
+        <PickerPages
+          avatar={avatar}
+          name={name}
+          onChange={onChange}
+          onDone={() => setOpen(false)}
+        />
       </PopoverContent>
     </Popover>
+  )
+}
+
+function PickerPages({
+  avatar,
+  name,
+  onChange,
+  onDone,
+}: {
+  avatar: AssistantAvatarValue
+  name: string
+  onChange: (avatar: AssistantAvatarValue) => void
+  /** A picture set: the popover may close. */
+  onDone: () => void
+}) {
+  const t = useTranslations("AcpAgentSettings.multiAgent.assistants")
+  const [page, setPage] = useState<Page>(avatar.kind)
+  const [customEmoji, setCustomEmoji] = useState("")
+  const picture = usePicture()
+  const host = useRef<HTMLDivElement | null>(null)
+  const lastDomDrop = useRef(0)
+  const takeDropped = (file: Blob | Promise<Blob>, fileName: string) => {
+    setPage("image")
+    void picture.take(file, fileName)
+  }
+  useOsImageDrop(host, takeDropped, lastDomDrop)
+  const color = colorOf(avatar)
+
+  const pickColor = (next: AssistantAvatarColor) => {
+    if (avatar.kind === "emoji") onChange({ ...avatar, color: next })
+    else onChange({ kind: "monogram", color: next })
+  }
+
+  const pickEmoji = (text: string) => {
+    const emoji = avatarEmojiFrom(text)
+    if (emoji) onChange({ kind: "emoji", emoji, color })
+  }
+
+  return (
+    <div
+      ref={host}
+      data-assistant-avatar-pages
+      onPaste={(e) => {
+        const file = pastedImage(e)
+        if (!file) return
+        e.preventDefault()
+        takeDropped(file, file.name)
+      }}
+    >
+      <Tabs value={page} onValueChange={(v) => setPage(v as Page)}>
+        <TabsList className="w-full">
+          <TabsTrigger value="monogram" className="flex-1">
+            {t("avatarMonogram")}
+          </TabsTrigger>
+          <TabsTrigger value="emoji" className="flex-1">
+            {t("avatarEmoji")}
+          </TabsTrigger>
+          <TabsTrigger value="image" className="flex-1">
+            {t("avatarImage")}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="monogram" className="pt-3">
+          <div className="flex items-center gap-3">
+            <AssistantAvatar
+              avatar={{ kind: "monogram", color }}
+              name={name}
+              size={40}
+            />
+            <p className="text-xs text-muted-foreground">
+              {t("avatarMonogramHint")}
+            </p>
+          </div>
+          {avatar.kind !== "monogram" ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3"
+              onClick={() => onChange({ kind: "monogram", color })}
+            >
+              {t("avatarUseMonogram")}
+            </Button>
+          ) : null}
+        </TabsContent>
+
+        <TabsContent value="emoji" className="pt-3">
+          <div className="grid grid-cols-8 gap-1">
+            {EMOJI_CHOICES.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => pickEmoji(emoji)}
+                className={cn(
+                  "flex size-8 items-center justify-center rounded-md font-emoji text-lg transition hover:bg-accent",
+                  avatar.kind === "emoji" &&
+                    avatar.emoji === emoji &&
+                    "bg-accent ring-1 ring-ring"
+                )}
+                aria-label={emoji}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <Input
+              value={customEmoji}
+              onChange={(e) => setCustomEmoji(e.target.value)}
+              placeholder={t("avatarEmojiPlaceholder")}
+              className="h-8 text-sm"
+              aria-label={t("avatarEmojiPlaceholder")}
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!avatarEmojiFrom(customEmoji)}
+              onClick={() => {
+                pickEmoji(customEmoji)
+                setCustomEmoji("")
+              }}
+            >
+              {t("avatarEmojiUse")}
+            </Button>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="image" className="pt-3">
+          <FaceUpload
+            state={picture}
+            onDomDrop={() => {
+              lastDomDrop.current = Date.now()
+            }}
+            onSet={(dataUrl) => {
+              onChange({ kind: "image", data_url: dataUrl })
+              picture.clear()
+              onDone()
+            }}
+          />
+        </TabsContent>
+      </Tabs>
+
+      {page !== "image" ? (
+        <div className="mt-3 border-t pt-3">
+          <p className="mb-2 text-xs text-muted-foreground">
+            {t("avatarColor")}
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {ASSISTANT_AVATAR_COLORS.map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => pickColor(key)}
+                aria-label={key}
+                aria-pressed={color === key && avatar.kind !== "image"}
+                className={cn(
+                  "flex size-6 items-center justify-center rounded-full text-white transition hover:scale-110",
+                  SWATCH_CLASSES[key]
+                )}
+              >
+                {color === key && avatar.kind !== "image" ? (
+                  <Check className="size-3.5" aria-hidden />
+                ) : null}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
   )
 }

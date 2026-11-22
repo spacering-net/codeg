@@ -131,7 +131,16 @@ vi.mock("@/components/layout/workspace-folder-dialog", () => ({
 }))
 // The pages with editors of their own are tested where they live.
 vi.mock("@/components/settings/assistants-panel", () => ({
-  AssistantsPanel: () => <div data-testid="executors-list" />,
+  AssistantsPanel: ({
+    head,
+  }: {
+    head?: (create: React.ReactNode | null) => React.ReactNode
+  }) => (
+    <>
+      {head?.(<button data-testid="executors-create">New</button>)}
+      <div data-testid="executors-list" />
+    </>
+  ),
 }))
 
 const ctx = vi.hoisted(() => ({
@@ -255,6 +264,14 @@ describe("the settings view", () => {
     ).not.toBeNull()
     fireEvent.click(document.querySelector('[data-pa-nav="executors"]')!)
     expect(screen.getByTestId("executors-list")).toBeInTheDocument()
+    // [New] is at the end of the page's title bar, the note under it.
+    const execPage = document.querySelector(
+      '[data-pa-settings-page="executors"]'
+    )!
+    const titleBar = within(execPage as HTMLElement)
+      .getByRole("heading", { level: 2, name: "Executor configs" })
+      .closest("div")!
+    expect(within(titleBar).getByTestId("executors-create")).toBeTruthy()
     expect(
       screen.getByText(
         /These executor configs are the ones you @ in conversations/
@@ -878,7 +895,7 @@ describe("the settings view", () => {
       within(row)
         .getAllByRole("button")
         .map((b) => b.textContent)
-    ).toEqual(["View details", "Copy", "Delete…"])
+    ).toEqual(["View details", "Copy", "Delete"])
     expect(row.querySelector("[data-pa-worker-open]")).toBeNull()
     expect(row.querySelector("[data-pa-worker-menu]")).toBeNull()
     api.personalAgentBotCopy.mockResolvedValueOnce({ bot: null } as never)
@@ -891,7 +908,7 @@ describe("the settings view", () => {
       )
     )
     api.personalAgentBotImpact.mockReturnValueOnce(new Promise(() => {}))
-    fireEvent.click(within(row).getByRole("button", { name: "Delete…" }))
+    fireEvent.click(within(row).getByRole("button", { name: "Delete" }))
     expect(await screen.findByRole("alertdialog")).toBeTruthy()
     fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" })
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())

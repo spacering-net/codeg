@@ -275,6 +275,41 @@ describe("AssistantsPanel", () => {
     ).toBeInTheDocument()
   })
 
+  it("hands [New] — a primary button — to the host's head, with no subtitle", async () => {
+    const head = vi.fn((create: React.ReactNode | null) => (
+      <div data-testid="host-head">{create}</div>
+    ))
+    const user = userEvent.setup()
+    renderPanel({ head })
+    await waitFor(() => expect(shownNames()).toHaveLength(3))
+    const create = within(screen.getByTestId("host-head")).getByRole("button", {
+      name: "New executor config",
+    })
+    expect(create).toHaveAttribute("data-variant", "default")
+    expect(screen.queryByText(/delegation presets you can @/)).toBeNull()
+    await user.click(create)
+    expect(
+      within(await screen.findByRole("dialog")).getByRole("heading", {
+        name: "New executor config",
+      })
+    ).toBeInTheDocument()
+  })
+
+  it("gives the host's head no [New] while the empty state shows its own", async () => {
+    const head = vi.fn((create: React.ReactNode | null) => (
+      <div data-testid="host-head">{create}</div>
+    ))
+    api.assistantList.mockResolvedValue([])
+    renderPanel({ head })
+    await waitFor(() =>
+      expect(screen.getByText("No executor configs yet")).toBeInTheDocument()
+    )
+    expect(head).toHaveBeenLastCalledWith(null)
+    expect(
+      screen.getAllByRole("button", { name: "New executor config" })
+    ).toHaveLength(1)
+  })
+
   it("says nothing about delegation while it is on or not yet known", async () => {
     const { unmount } = renderPanel({ delegationEnabled: true })
     await waitFor(() => expect(shownNames()).toHaveLength(3))

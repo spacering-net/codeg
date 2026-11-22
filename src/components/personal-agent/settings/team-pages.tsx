@@ -536,10 +536,14 @@ export function ExecutorsPage({
   const views = useExecutors()
   const impact = useImpact(views)
   return (
-    <div className="flex flex-col gap-3" data-pa-settings-page="executors">
-      <PageHead title={t("nav.executors")} />
-      <SettingNote icon={Layers}>{t("team.sameBatch")}</SettingNote>
+    <div data-pa-settings-page="executors">
       <AssistantsPanel
+        head={(create) => (
+          <>
+            <PageHead title={t("nav.executors")} action={create} />
+            <SettingNote icon={Layers}>{t("team.sameBatch")}</SettingNote>
+          </>
+        )}
         delegationEnabled={delegationEnabled}
         delegationOffText={t("team.delegationOff")}
         delegationOffAction={t("team.openCollaboration")}

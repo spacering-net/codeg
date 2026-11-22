@@ -870,7 +870,6 @@
       "modelNotSwitched": "O agente não mudou para o modelo selecionado, então estas opções podem ser de outro modelo.",
       "unsavedChanges": "Alterações não salvas",
       "assistants": {
-        "description": "Configurações de execução são predefinições de delegação que você pode mencionar com @: um agente com todas as opções escolhidas e instruções permanentes. Delegar a uma delas executa exatamente esses ajustes.",
         "create": "Nova configuração de execução",
         "delegationOff": "A colaboração multiagente está desativada, então por enquanto não é possível delegar a configurações de execução.",
         "delegationOffAction": "Ir para {tab}",
@@ -936,10 +935,6 @@
         "avatarUseMonogram": "Usar a letra",
         "avatarEmojiPlaceholder": "Digite ou cole um emoji",
         "avatarEmojiUse": "Usar",
-        "avatarUpload": "Enviar imagem",
-        "avatarUploadHint": "Recortada em quadrado e reduzida para 128×128.",
-        "avatarTooLarge": "A imagem continua grande demais mesmo reduzida. Tente outra.",
-        "avatarUnreadable": "Não foi possível ler este arquivo como imagem.",
         "avatarColor": "Cor",
         "errors": {
           "emptyName": "Dê um nome à configuração de execução.",
@@ -11227,7 +11222,7 @@
       "copyName": "{name} (cópia)",
       "copied": "Cópia criada: {name}",
       "copy": "Duplicar",
-      "deleteAction": "Excluir…",
+      "deleteAction": "Excluir",
       "face": {
         "shape": "Formato",
         "color": "Cor",

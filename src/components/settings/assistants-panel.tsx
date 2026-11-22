@@ -127,6 +127,10 @@ export interface AssistantsPanelProps {
     prefill: AssistantPrefill | null
   } | null
   onOpenRequestHandled?: () => void
+  /** The host's own head for the panel (its page title), given [New] for
+   *  its end — `null` while the empty state shows its own, larger one.
+   *  Without it [New] stands alone at the panel's top end. */
+  head?: (create: ReactNode | null) => ReactNode
 }
 
 /** The shared surface of the list, its loading placeholder and nothing else:
@@ -194,6 +198,7 @@ export function AssistantsPanel({
   createMenu,
   openRequest,
   onOpenRequestHandled,
+  head,
 }: AssistantsPanelProps) {
   // The settings window has no workspace layout to keep this store live.
   useAssistantsSync()
@@ -411,32 +416,26 @@ export function AssistantsPanel({
   // rows then push everything down into.
   const loading = !hydrated && !loadError && shown.length === 0
 
+  // The empty state carries its own, larger way in — two "New" buttons on
+  // one screen would only compete.
+  const create = empty ? null : (
+    <div className="flex items-center gap-2">
+      {/* eslint-disable-next-line react-hooks/refs -- openEditor bumps editorSeq only when a menu item is picked, never during render */}
+      {createMenu?.((prefill) => openEditor(null, prefill))}
+      <Button size="sm" onClick={() => openEditor(null)} data-assistants-create>
+        <Plus aria-hidden />
+        {t("create")}
+      </Button>
+    </div>
+  )
+
   return (
-    // A container, so the header can stack by the width this panel actually
-    // gets (the settings sidebar takes its share of the window).
-    <div className="@container space-y-3">
-      <div className="flex flex-col items-start gap-3 @lg:flex-row @lg:items-center @lg:justify-between @lg:gap-4">
-        <p className="min-w-0 text-xs leading-5 text-muted-foreground">
-          {t("description")}
-        </p>
-        {/* The empty state carries its own, larger way in — two "New" buttons
-            on one screen would only compete. */}
-        {empty ? null : (
-          <div className="flex shrink-0 items-center gap-2">
-            {/* eslint-disable-next-line react-hooks/refs -- openEditor bumps editorSeq only when a menu item is picked, never during render */}
-            {createMenu?.((prefill) => openEditor(null, prefill))}
-            <Button
-              size="sm"
-              variant="outline"
-              className="shrink-0"
-              onClick={() => openEditor(null)}
-            >
-              <Plus aria-hidden />
-              {t("create")}
-            </Button>
-          </div>
-        )}
-      </div>
+    <div className="space-y-3">
+      {head ? (
+        head(create)
+      ) : create ? (
+        <div className="flex justify-end">{create}</div>
+      ) : null}
 
       {delegationEnabled === false ? (
         <PanelNotice

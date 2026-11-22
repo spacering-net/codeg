@@ -870,7 +870,6 @@
       "modelNotSwitched": "The agent didn't switch to the selected model, so these options may belong to another model.",
       "unsavedChanges": "Unsaved changes",
       "assistants": {
-        "description": "Executor configs are delegation presets you can @-mention: an agent with every option picked, plus standing instructions. Delegating to one runs exactly that setup.",
         "create": "New executor config",
         "delegationOff": "Multi-Agent Collaboration is off, so executor configs can't be delegated to for now.",
         "delegationOffAction": "Go to {tab}",
@@ -936,10 +935,6 @@
         "avatarUseMonogram": "Use the letter",
         "avatarEmojiPlaceholder": "Type or paste an emoji",
         "avatarEmojiUse": "Use",
-        "avatarUpload": "Upload image",
-        "avatarUploadHint": "Cropped to a square and scaled down to 128×128.",
-        "avatarTooLarge": "This image is too large even after scaling down. Try another one.",
-        "avatarUnreadable": "This file couldn't be read as an image.",
         "avatarColor": "Color",
         "errors": {
           "emptyName": "Give the executor config a name.",
@@ -11227,7 +11222,7 @@
       "copyName": "{name} (copy)",
       "copied": "Made {name}, a copy",
       "copy": "Copy",
-      "deleteAction": "Delete…",
+      "deleteAction": "Delete",
       "face": {
         "shape": "Shape",
         "color": "Colour",

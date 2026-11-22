@@ -870,7 +870,6 @@
       "modelNotSwitched": "エージェントが選択したモデルに切り替わらなかったため、これらのオプションは別のモデルのものである可能性があります。",
       "unsavedChanges": "未保存の変更があります",
       "assistants": {
-        "description": "実行設定は @ で呼び出せる委任プリセットです。エージェントとそのすべてのオプション、常設の指示をまとめたもので、委任するとその設定どおりに実行されます。",
         "create": "新しい実行設定",
         "delegationOff": "マルチエージェント連携がオフのため、現在実行設定に委任できません。",
         "delegationOffAction": "「{tab}」を開く",
@@ -936,10 +935,6 @@
         "avatarUseMonogram": "文字を使う",
         "avatarEmojiPlaceholder": "絵文字を入力または貼り付け",
         "avatarEmojiUse": "使う",
-        "avatarUpload": "画像をアップロード",
-        "avatarUploadHint": "正方形に切り抜き、128×128 に縮小します。",
-        "avatarTooLarge": "縮小してもこの画像は大きすぎます。別の画像を試してください。",
-        "avatarUnreadable": "このファイルを画像として読み込めませんでした。",
         "avatarColor": "色",
         "errors": {
           "emptyName": "実行設定の名前を入力してください。",
@@ -11227,7 +11222,7 @@
       "copyName": "{name}（コピー）",
       "copied": "{name} として複製しました",
       "copy": "複製",
-      "deleteAction": "削除…",
+      "deleteAction": "削除",
       "face": {
         "shape": "形",
         "color": "色",

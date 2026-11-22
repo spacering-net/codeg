@@ -870,7 +870,6 @@
       "modelNotSwitched": "智慧體沒有切換到所選模型，下面的選項可能屬於另一個模型。",
       "unsavedChanges": "有未儲存的修改",
       "assistants": {
-        "description": "執行配置是可以被 @ 的委派預設：一個智慧體、選定的每一項選項，加上常駐指令。委派給它時，就按這套設定執行。",
         "create": "新增執行配置",
         "delegationOff": "多智慧體協同已關閉，執行配置暫時無法被委派。",
         "delegationOffAction": "前往「{tab}」",
@@ -936,10 +935,6 @@
         "avatarUseMonogram": "使用字母",
         "avatarEmojiPlaceholder": "輸入或貼上 emoji",
         "avatarEmojiUse": "使用",
-        "avatarUpload": "上傳圖片",
-        "avatarUploadHint": "會置中裁成正方形，並縮小到 128×128。",
-        "avatarTooLarge": "這張圖片縮小之後仍然太大，請換一張。",
-        "avatarUnreadable": "無法把這個檔案讀成圖片。",
         "avatarColor": "顏色",
         "errors": {
           "emptyName": "請填寫執行配置名稱。",
@@ -11227,7 +11222,7 @@
       "copyName": "{name} 副本",
       "copied": "已複製成 {name}",
       "copy": "複製",
-      "deleteAction": "刪除…",
+      "deleteAction": "刪除",
       "face": {
         "shape": "形狀",
         "color": "顏色",

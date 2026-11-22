@@ -1,19 +1,33 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { AssistantAvatar } from "@/lib/types"
 
-const encode = vi.hoisted(() => ({ toDataUrl: vi.fn() }))
+const avatarLib = vi.hoisted(() => ({
+  loadAvatarImage: vi.fn(),
+  cropToAvatarDataUrl: vi.fn(),
+}))
 vi.mock("@/lib/assistant-avatar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/assistant-avatar")>()),
-  imageFileToAvatarDataUrl: encode.toDataUrl,
+  ...avatarLib,
 }))
+vi.mock("@/lib/platform", () => ({ isDesktop: () => false }))
 
 import enMessages from "@/i18n/messages/en.json"
 import { AvatarImageError } from "@/lib/assistant-avatar"
 import { AssistantAvatarPicker } from "./assistant-avatar-picker"
+
+const face = enMessages.PersonalAgent.bots.face
+
+function picture(name = "cat.png") {
+  return new File([new Uint8Array([1, 2, 3])], name, { type: "image/png" })
+}
+
+function fileInput() {
+  return document.querySelector<HTMLInputElement>("[data-pa-face-file]")!
+}
 
 function renderPicker(avatar: AssistantAvatar, onChange = vi.fn()) {
   render(
@@ -37,7 +51,21 @@ async function open(user: User) {
 
 describe("AssistantAvatarPicker", () => {
   beforeEach(() => {
-    encode.toDataUrl.mockReset()
+    avatarLib.loadAvatarImage.mockReset()
+    avatarLib.cropToAvatarDataUrl.mockReset()
+    avatarLib.loadAvatarImage.mockResolvedValue({
+      naturalWidth: 400,
+      naturalHeight: 200,
+    })
+    avatarLib.cropToAvatarDataUrl.mockReturnValue("data:image/png;base64,AAAA")
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn(() => "blob:cat"),
+      revokeObjectURL: vi.fn(),
+    })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   it("opens on the page of the avatar's kind", async () => {
@@ -106,33 +134,6 @@ describe("AssistantAvatarPicker", () => {
     expect(use).toBeEnabled()
   })
 
-  it("drops an upload that a newer pick replaced", async () => {
-    let finish: (url: string) => void = () => {}
-    encode.toDataUrl.mockReturnValue(
-      new Promise<string>((resolve) => {
-        finish = resolve
-      })
-    )
-    const user = userEvent.setup()
-    const onChange = renderPicker({ kind: "monogram", color: "teal" })
-    await open(user)
-    await user.click(screen.getByRole("tab", { name: "Image" }))
-    await user.upload(
-      screen.getByTestId("assistant-avatar-file"),
-      new File(["x"], "slow.png", { type: "image/png" })
-    )
-    // While it is being scaled, the user picks an emoji instead.
-    await user.click(screen.getByRole("tab", { name: "Emoji" }))
-    await user.click(screen.getByRole("button", { name: "🦉" }))
-    await act(async () => finish("data:image/webp;base64,AAAA"))
-    expect(onChange).toHaveBeenCalledTimes(1)
-    expect(onChange).toHaveBeenLastCalledWith({
-      kind: "emoji",
-      emoji: "🦉",
-      color: "teal",
-    })
-  })
-
   it("recolours the disc, and goes back to the letter", async () => {
     const user = userEvent.setup()
     const onChange = renderPicker({
@@ -160,23 +161,53 @@ describe("AssistantAvatarPicker", () => {
     })
   })
 
-  it("uploads a picture as a data URL", async () => {
-    encode.toDataUrl.mockResolvedValue("data:image/webp;base64,AAAA")
+  it("frames an uploaded picture as the work assistants' editor does, and sets what the window shows", async () => {
     const user = userEvent.setup()
     const onChange = renderPicker({ kind: "monogram", color: "teal" })
     await open(user)
     await user.click(screen.getByRole("tab", { name: "Image" }))
     // The palette is for the letter and the emoji only.
     expect(screen.queryByRole("button", { name: "teal" })).toBeNull()
-    const file = new File(["x"], "me.png", { type: "image/png" })
-    await user.upload(screen.getByTestId("assistant-avatar-file"), file)
-    await waitFor(() =>
-      expect(onChange).toHaveBeenLastCalledWith({
-        kind: "image",
-        data_url: "data:image/webp;base64,AAAA",
-      })
+    expect(screen.getByText(face.dropHint)).toBeInTheDocument()
+    fireEvent.change(fileInput(), { target: { files: [picture()] } })
+    await screen.findByText(face.dragHint)
+    expect(
+      document.querySelector("[data-pa-face-file-info]")?.textContent
+    ).toBe("cat.png · 400×200")
+    // [Start over] goes back to the drop zone.
+    await user.click(screen.getByRole("button", { name: face.restart }))
+    expect(screen.getByText(face.dropHint)).toBeInTheDocument()
+    fireEvent.change(fileInput(), { target: { files: [picture()] } })
+    await screen.findByText(face.dragHint)
+    await user.click(screen.getByRole("button", { name: face.zoomIn }))
+    expect(onChange).not.toHaveBeenCalled()
+    await user.click(screen.getByRole("button", { name: face.setAvatar }))
+    expect(onChange).toHaveBeenLastCalledWith({
+      kind: "image",
+      data_url: "data:image/png;base64,AAAA",
+    })
+    // Zoomed once (1.25): a 160 px square of the 400×200 picture.
+    const crop = avatarLib.cropToAvatarDataUrl.mock.calls[0][1]
+    expect(crop.side).toBeCloseTo(200 / 1.25)
+    // Set: the popover closes, and opens again on a fresh drop zone.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  })
+
+  it("takes a picture pasted anywhere in the popover, to the image page", async () => {
+    const user = userEvent.setup()
+    renderPicker({ kind: "emoji", emoji: "🦊", color: "amber" })
+    await open(user)
+    fireEvent.paste(document.querySelector("[data-assistant-avatar-pages]")!, {
+      clipboardData: { files: [picture("shot.png")] },
+    })
+    await screen.findByText(face.dragHint)
+    expect(screen.getByRole("tab", { name: "Image" })).toHaveAttribute(
+      "data-state",
+      "active"
     )
-    expect(encode.toDataUrl).toHaveBeenCalledWith(file)
+    expect(
+      document.querySelector("[data-pa-face-file-info]")?.textContent
+    ).toBe("shot.png · 400×200")
   })
 
   it("says why a picture could not be used", async () => {
@@ -184,19 +215,18 @@ describe("AssistantAvatarPicker", () => {
     const onChange = renderPicker({ kind: "monogram", color: "teal" })
     await open(user)
     await user.click(screen.getByRole("tab", { name: "Image" }))
-    const input = screen.getByTestId("assistant-avatar-file")
 
-    encode.toDataUrl.mockRejectedValue(new AvatarImageError("too_large"))
-    await user.upload(input, new File(["x"], "huge.png", { type: "image/png" }))
-    expect(
-      await screen.findByText(/too large even after scaling down/)
-    ).toBeInTheDocument()
+    avatarLib.loadAvatarImage.mockRejectedValueOnce(new Error("bad"))
+    fireEvent.change(fileInput(), { target: { files: [picture()] } })
+    expect((await screen.findByRole("alert")).textContent).toBe(face.unreadable)
 
-    encode.toDataUrl.mockRejectedValue(new AvatarImageError("unreadable"))
-    await user.upload(input, new File(["x"], "bad.png", { type: "image/png" }))
-    expect(
-      await screen.findByText("This file couldn't be read as an image.")
-    ).toBeInTheDocument()
+    fireEvent.change(fileInput(), { target: { files: [picture()] } })
+    await screen.findByText(face.dragHint)
+    avatarLib.cropToAvatarDataUrl.mockImplementationOnce(() => {
+      throw new AvatarImageError("too_large")
+    })
+    await user.click(screen.getByRole("button", { name: face.setAvatar }))
+    expect(screen.getByRole("alert").textContent).toBe(face.tooLarge)
     expect(onChange).not.toHaveBeenCalled()
   })
 })

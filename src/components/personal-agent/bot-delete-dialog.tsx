@@ -5,7 +5,7 @@
  * its running work (handed to the primary to follow, by default, or
  * stopped), the messages it has not answered (they go back to their
  * senders), its executor config (kept unless ticked) and its working
- * directory (kept unless ticked).
+ * directory (kept unless ticked) — its whole path shown, wrapped.
  */
 
 import { useEffect, useState } from "react"
@@ -103,7 +103,9 @@ export function BotDeleteDialog({
           <AlertDialogDescription>{t("description")}</AlertDialogDescription>
         </AlertDialogHeader>
         {impact ? (
-          <div className="flex flex-col gap-3 text-sm">
+          // `min-w-0`: the dialog is a grid, whose items would otherwise
+          // grow to their longest unbreakable line (a running task's title).
+          <div className="flex min-w-0 flex-col gap-3 text-sm">
             {impact.running.length > 0 ? (
               <div data-pa-delete-running>
                 <p className="mb-1.5 font-medium">
@@ -193,7 +195,12 @@ export function BotDeleteDialog({
               />
               <span className="min-w-0">
                 {t("dropWorkdir")}
-                <span className="block truncate font-mono text-xs text-muted-foreground">
+                {/* The whole path, wrapped where it must be: the end of it
+                    (its own folder) is the part that tells them apart. */}
+                <span
+                  className="mt-0.5 block font-mono text-xs leading-5 wrap-anywhere text-muted-foreground"
+                  data-pa-delete-workdir
+                >
                   {impact.workdir}
                 </span>
                 {impact.workdir_custom ? (

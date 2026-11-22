@@ -870,7 +870,6 @@
       "modelNotSwitched": "Der Agent hat nicht zum gewählten Modell gewechselt; diese Optionen gehören möglicherweise zu einem anderen Modell.",
       "unsavedChanges": "Ungespeicherte Änderungen",
       "assistants": {
-        "description": "Ausführungskonfigurationen sind Delegations-Vorlagen, die du per @ erwähnen kannst: ein Agent mit allen gewählten Optionen und dauerhaften Anweisungen. Eine Delegation an eine davon läuft genau so.",
         "create": "Neue Ausführungskonfiguration",
         "delegationOff": "Multi-Agenten-Zusammenarbeit ist aus; an Ausführungskonfigurationen kann derzeit nicht delegiert werden.",
         "delegationOffAction": "Zu {tab} wechseln",
@@ -936,10 +935,6 @@
         "avatarUseMonogram": "Buchstaben verwenden",
         "avatarEmojiPlaceholder": "Emoji eingeben oder einfügen",
         "avatarEmojiUse": "Verwenden",
-        "avatarUpload": "Bild hochladen",
-        "avatarUploadHint": "Wird quadratisch zugeschnitten und auf 128×128 verkleinert.",
-        "avatarTooLarge": "Das Bild ist auch verkleinert noch zu groß. Versuche ein anderes.",
-        "avatarUnreadable": "Diese Datei ließ sich nicht als Bild lesen.",
         "avatarColor": "Farbe",
         "errors": {
           "emptyName": "Gib der Ausführungskonfiguration einen Namen.",
@@ -11227,7 +11222,7 @@
       "copyName": "{name} (Kopie)",
       "copied": "Kopie erstellt: {name}",
       "copy": "Duplizieren",
-      "deleteAction": "Löschen…",
+      "deleteAction": "Löschen",
       "face": {
         "shape": "Form",
         "color": "Farbe",
