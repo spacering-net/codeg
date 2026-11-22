@@ -77,6 +77,24 @@ describe("FeedbackNotesDisplay", () => {
     expect(onResend).not.toHaveBeenCalled()
   })
 
+  it("offers a rejected native prompt for retry while the turn is still running", async () => {
+    const onResend = vi.fn()
+    renderList({
+      notes: [
+        {
+          ...note("f", "correction"),
+          status: "failed",
+          delivery_error: "invalid input",
+        },
+      ],
+      onResend,
+    })
+    expect(screen.getByText(LF.submitFailed)).toBeInTheDocument()
+    expect(screen.queryByText(LF.turnEndedUnread)).toBeNull()
+    await userEvent.click(screen.getByText(LF.sendAsMessage))
+    expect(onResend).toHaveBeenCalledWith("f")
+  })
+
   it("renders nothing without notes", () => {
     const { container } = renderList({ notes: [], expired: true })
     expect(container).toBeEmptyDOMElement()

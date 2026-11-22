@@ -3667,12 +3667,12 @@ impl ConnectionManager {
         // `check_user_feedback` pull tool. Reject only when NEITHER channel
         // exists — e.g. a session launched before the feature was enabled (no
         // tool) on an adapter without proven native steering.
-        // `native_steering_available` is re-read on every call so a
+        // The negotiated channel is re-read on every call so a
         // `startedNewTurn` downgrade mid-session silently reroutes later
         // notes to the pull path.
         let (native, tool_available) = {
             let s = state.read().await;
-            (s.native_steering_available, s.feedback_tool_available)
+            (s.native_steering.is_some(), s.feedback_tool_available)
         };
         if !native && !tool_available {
             return Err(AcpError::FeedbackDisabled);
@@ -3731,10 +3731,8 @@ impl ConnectionManager {
     /// JoinHandle to relay the result to a still-live client.
     ///
     /// Invariants (asserted by tests):
-    /// * NO DOUBLE DELIVERY. A natively-injected note is `Delivered` from
-    ///   birth, and `read_pending_feedback` only returns `Pending` — so even
-    ///   with the `check_user_feedback` tool still injected (it is, by
-    ///   design), a pull can never hand the agent the same text again.
+    /// * Native notes are recorded as `Sent` or `Delivered`. Only `Pending`
+    ///   notes can be handed to `check_user_feedback`.
     /// * UNGATED EMIT. The pull path's `emit_with_state_gated(turn_in_flight)`
     ///   is exactly wrong here: the adapter's `injected` reply is the
     ///   authoritative fact the content reached the turn. Gating on a
@@ -3862,8 +3860,11 @@ impl ConnectionManager {
                 // was created, which is also what the pull path records.
                 let created_at = chrono::Utc::now();
                 let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                let (published, recorded) = tokio::sync::oneshot::channel();
                 cmd_tx
                     .send(ConnectionCommand::Steer {
+                        recorded,
+                        admitted_turns_completed,
                         blocks: wire_blocks,
                         reply: reply_tx,
                     })
@@ -3877,7 +3878,7 @@ impl ConnectionManager {
                     // still host-owned. Surface the frontend's existing
                     // turn-end fallback (resubmit as a normal prompt).
                     SteerOutcome::PromptRequired => return Err(AcpError::NoActiveTurn),
-                    SteerOutcome::Injected => {}
+                    SteerOutcome::Injected | SteerOutcome::Submitted => {}
                     SteerOutcome::StartedNewTurn => {
                         // The adapter ignored the opt-in and detached a turn
                         // (stale binary lying about its version?). The content
@@ -3890,14 +3891,15 @@ impl ConnectionManager {
                              (conn={conn_id_for_task}); downgrading native steering for \
                              this session"
                         );
-                        state.write().await.native_steering_available = false;
+                        state.write().await.native_steering = None;
                     }
                 }
-                let item = FeedbackItem::new_delivered(
+                let item = FeedbackItem::new_native(
                     uuid::Uuid::new_v4().to_string(),
                     text,
                     created_at,
                     record_blocks,
+                    steer != SteerOutcome::Submitted,
                 );
                 // Ungated on purpose — see the invariant on this fn's doc.
                 emit_with_state(
@@ -3906,6 +3908,7 @@ impl ConnectionManager {
                     AcpEvent::FeedbackSubmitted { item: item.clone() },
                 )
                 .await;
+                let _ = published.send(item.id.clone());
                 Ok(item)
             }
             .await;
@@ -10437,7 +10440,7 @@ mod tests {
     async fn mark_native_steering_ready(mgr: &ConnectionManager, conn_id: &str) {
         let state = mgr.get_state(conn_id).await.unwrap();
         let mut s = state.write().await;
-        s.native_steering_available = true;
+        s.native_steering = Some(crate::acp::feedback::NativeSteering::SessionSteering);
         s.turn_in_flight = true;
     }
 
@@ -10449,7 +10452,7 @@ mod tests {
     ) -> tokio::task::JoinHandle<Vec<PromptInputBlock>> {
         tokio::spawn(async move {
             match rx.recv().await {
-                Some(ConnectionCommand::Steer { blocks, reply }) => {
+                Some(ConnectionCommand::Steer { blocks, reply, .. }) => {
                     let _ = reply.send(outcome);
                     blocks
                 }
@@ -10562,7 +10565,7 @@ mod tests {
             let s = state.read().await;
             assert_eq!(s.feedback.len(), 1);
             assert_eq!(s.feedback[0].status, FeedbackStatus::Delivered);
-            assert!(s.native_steering_available, "injected must not downgrade");
+            assert!(s.native_steering.is_some(), "injected must not downgrade");
         }
         assert!(
             mgr.read_pending_feedback("c1").await.is_empty(),
@@ -10873,7 +10876,7 @@ mod tests {
         // Content was NOT consumed (honored opt-in): nothing recorded, and the
         // channel stays native — the caller resubmits as a normal prompt.
         assert!(s.feedback.is_empty());
-        assert!(s.native_steering_available);
+        assert!(s.native_steering.is_some());
     }
 
     async fn open_permission_card(mgr: &ConnectionManager, conn_id: &str) {
@@ -10921,7 +10924,7 @@ mod tests {
         let state = mgr.get_state("c1").await.unwrap();
         let s = state.read().await;
         assert!(s.feedback.is_empty());
-        assert!(s.native_steering_available, "the channel stays native");
+        assert!(s.native_steering.is_some(), "the channel stays native");
     }
 
     /// Once the card is answered, codex steers again.
@@ -10990,7 +10993,7 @@ mod tests {
         let _ = fake_loop.await;
         let state = mgr.get_state("c1").await.unwrap();
         assert!(
-            !state.read().await.native_steering_available,
+            state.read().await.native_steering.is_none(),
             "startedNewTurn must downgrade native steering for the session"
         );
 

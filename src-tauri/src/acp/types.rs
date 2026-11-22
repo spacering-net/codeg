@@ -903,6 +903,8 @@ pub enum AcpEvent {
         ids: Vec<String>,
         delivered_at: chrono::DateTime<chrono::Utc>,
     },
+    /// A native prompt was rejected after its optimistic submission.
+    FeedbackFailed { id: String, message: String },
     /// An agent called the `ask_user_question` MCP tool: one or more
     /// multiple-choice questions the user must answer before the (blocked) tool
     /// call returns. Broadcast so every client viewing this conversation renders

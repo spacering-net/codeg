@@ -81,6 +81,52 @@ beforeEach(() => {
 })
 
 describe("useSessionFeedback", () => {
+  it("keeps a rejected native steer recoverable with its original attachments", async () => {
+    const onResendAsPrompt = vi.fn()
+    const blocks = [
+      { type: "image" as const, data: "aGVsbG8=", mime_type: "image/png" },
+    ]
+    const item: FeedbackItem = {
+      ...note("s", "Image correction"),
+      status: "sent",
+    }
+    mockSubmit.mockResolvedValue(item)
+    mockSnapshot.mockResolvedValue(
+      snapshot({ native_steering_available: true })
+    )
+    const props = { ...baseProps, onResendAsPrompt, steeredMessageIds: ["s"] }
+    const { result, rerender } = renderHook(
+      (args: UseSessionFeedbackArgs) => useSessionFeedback(args),
+      { initialProps: props }
+    )
+    await waitFor(() => expect(result.current.channel).toBe("native"))
+    // The event stream can settle a note before the submit HTTP response.
+    act(() =>
+      capturedHandler?.({
+        type: "feedback_failed",
+        connection_id: "c1",
+        id: "s",
+        message: "bad attachment",
+      } as EventEnvelope)
+    )
+    await act(async () => {
+      await result.current.steer(item.text, blocks)
+    })
+    expect(result.current.notes[0]).toMatchObject({
+      status: "failed",
+      delivery_error: "bad attachment",
+    })
+    rerender({ ...props, connStatus: "connected" })
+    expect(result.current.showList).toBe(true)
+    expect(result.current.notesExpired).toBe(false)
+    act(() => {
+      result.current.resendNote("s")
+      result.current.resendNote("s")
+    })
+    expect(onResendAsPrompt).toHaveBeenCalledTimes(1)
+    expect(onResendAsPrompt).toHaveBeenCalledWith(item.text, blocks)
+  })
+
   it("hydrates notes and tool availability from the snapshot", async () => {
     mockSnapshot.mockResolvedValue(
       snapshot({ feedback: [note("n1", "hi")], feedback_tool_available: true })

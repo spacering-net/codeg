@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+#[path = "mid_turn_prompts.rs"]
+mod mid_turn_prompts;
+
 use agent_client_protocol::schema::v1::{
     AuthMethod, AuthenticateRequest, BlobResourceContents, CancelNotification,
     ClientCapabilities, ClientSessionCapabilities,
@@ -48,6 +51,7 @@ use crate::acp::cursor_ext::{
     CursorTaskRequest, CursorUpdateTodosRequest,
 };
 use crate::acp::error::AcpError;
+use crate::acp::feedback::NativeSteering;
 use crate::acp::file_system_runtime::{
     FileSystemRuntime, FileSystemRuntimeError, FsAccessPolicy, FS_POLICY_ENV,
 };
@@ -1308,6 +1312,8 @@ pub enum GoalControlAction {
 /// `PromptRequired` means it did not (safe to resubmit as a normal prompt).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SteerOutcome {
+    /// Sent as a foreground prompt. Its RPC will confirm delivery or report a rejection.
+    Submitted,
     /// Pushed into the RUNNING turn's input — consumed.
     Injected,
     /// The turn settled first and the adapter honored the
@@ -1384,8 +1390,8 @@ pub enum ConnectionCommand {
         reply:
             tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
     },
-    /// Inject a live-feedback message into the RUNNING turn over the ACP
-    /// `_session/steering` extension (native push channel — see
+    /// Inject a live-feedback message using the negotiated native channel
+    /// (`_session/steering` or a concurrent `session/prompt`; see
     /// `manager::submit_feedback`). Carries the same `PromptInputBlock`s a
     /// normal prompt does (text plus image attachments), mapped onto the wire
     /// with the same conversion, so a steered draft keeps its attachments.
@@ -1395,8 +1401,11 @@ pub enum ConnectionCommand {
     /// protocol/persistence split. The idle arm replies `Err(NoActiveTurn)`
     /// so the oneshot can never hang.
     Steer {
+        admitted_turns_completed: u64,
         blocks: Vec<PromptInputBlock>,
         reply: tokio::sync::oneshot::Sender<Result<SteerOutcome, AcpError>>,
+        /// Released after the manager publishes the receipt to attached clients.
+        recorded: oneshot::Receiver<String>,
     },
     /// Stop one AIR async task (`_session/async_task/stop`; claude-agent-acp
     /// 0.73+, codex-acp 1.10+ — identical params and response on both).
@@ -9380,25 +9389,18 @@ async fn run_connection(
                 supports_close
             );
 
-            // Native live-feedback steering, synthesized ONCE from three gates
-            // so every consumer (the submit split, the snapshot, the frontend)
-            // reads a single authoritative bool: (1) the adapter advertises
-            // the extension (top-level `_meta`), (2) the registry says this
-            // agent type honors the `promptRequired` idle opt-in, and (3) the
-            // RUNNING binary proves it via `agent_info.version` — launch
-            // prefers a PATH-resolved install over the pinned package, so (2)
-            // alone can't vouch for the process on the other end of the pipe.
-            // The raw advertisement is deliberately NOT stored: exposing it
-            // would tempt the frontend to re-derive eligibility and show the
-            // instant channel for adapters that advertise steering but would
-            // detach a turn on the idle race (codex-acp before 2.4.0, which a
-            // PATH install can still be).
-            let steering_advertised = init_advertises_steering(init_resp.meta.as_ref());
-            let native_steering_available = synthesize_native_steering(
+            let native_steering = if synthesize_native_steering(
                 agent_type,
                 init_resp.meta.as_ref(),
                 init_resp.agent_info.as_ref(),
-            );
+            ) {
+                Some(NativeSteering::SessionSteering)
+            } else {
+                mid_turn_prompts::adapter(
+                    init_resp.agent_capabilities.meta.as_ref(),
+                    init_resp.agent_info.as_ref(),
+                ).map(NativeSteering::MidTurnPrompt)
+            };
             // Same `agent_info.version` proof, for a different shape decision:
             // which generation of codex's `request_user_input` form this
             // connection will receive.
@@ -9409,14 +9411,13 @@ async fn run_connection(
             let antigravity_interactions =
                 speaks_antigravity_interactions(agent_type, init_resp.agent_info.as_ref());
             tracing::info!(
-                "[ACP][{}] steering: advertised={}, agent={:?}, agent_version={:?}, policy={}{}, native={}",
+                "[ACP][{}] steering: agent={:?}, agent_version={:?}, policy={}{}, native={:?}",
                 agent_type,
-                steering_advertised,
                 init_resp.agent_info.as_ref().map(|i| i.name.as_str()),
                 init_resp.agent_info.as_ref().map(|i| i.version.as_str()),
                 steering_policy,
                 if steering_policy == agent_type { "" } else { " (by agent name)" },
-                native_steering_available
+                native_steering
             );
 
             // Goal channel selection, pinned for the whole connection: an
@@ -9548,7 +9549,7 @@ async fn run_connection(
                 // even when no codeg-mcp is injected (it's exactly the channel
                 // that needs no tool; OpenClaw-style `supports_mcp: false`
                 // agents could ship it someday).
-                s.native_steering_available = native_steering_available;
+                s.native_steering = native_steering;
                 s.codex_user_input_shape = codex_user_input_shape;
                 s.antigravity_interactions = antigravity_interactions;
                 s.neutral_goal_channel = neutral_goal_channel;
@@ -15485,6 +15486,7 @@ async fn run_conversation_loop(
                         .send_request_to(Agent, prompt_request)
                         .block_task(),
                 );
+                let mut mid_turn = mid_turn_prompts::MidTurnPrompts::default();
                 let mut tracked_terminal_tool_calls: HashMap<String, TrackedTerminalToolCall> =
                     HashMap::new();
                 let mut terminal_poll_interval = tokio::time::interval(
@@ -15596,6 +15598,10 @@ async fn run_conversation_loop(
                                 Ok(dispatch) => fix_usage_update_nulls(dispatch),
                                 Err(e) => return Err(defer_to_connection_report(e).await),
                             };
+                            if let Some(id) = mid_turn.echoed_id(&dispatch, &sid) {
+                                mid_turn.acknowledge(id, agent_type, &sid, prompt_ledger).await;
+                                continue;
+                            }
                             let h = emitter.clone();
                             let st = Arc::clone(state);
                             let runtime = terminal_runtime.clone();
@@ -15765,7 +15771,15 @@ async fn run_conversation_loop(
                                 log_dropped_update(&mut drop_log_throttle, "turn", &e);
                             }
                         }
-                        prompt_result = &mut prompt_response => {
+                        Some(completion) = mid_turn.next(), if !mid_turn.is_empty() => {
+                            if let Some(event) = mid_turn.settle(completion, agent_type, &sid, prompt_ledger).await {
+                                emit_with_state(state, emitter, event).await;
+                            }
+                        }
+                        // A mid-turn prompt can cross the agent's idle boundary and
+                        // own a fresh response. Keep pumping its updates and controls.
+                        prompt_result = &mut prompt_response, if mid_turn.is_empty() => {
+                            let prompt_result = mid_turn.turn_result(prompt_result);
                             // A rejected prompt is a TURN failure, not a dead
                             // connection: the agent answered, so it is still
                             // there, and the session it answered about is still
@@ -16210,7 +16224,15 @@ async fn run_conversation_loop(
                                         let _ = reply.send(landed);
                                     }
                                 }
-                                Some(ConnectionCommand::Steer { blocks, reply }) => {
+                                Some(ConnectionCommand::Steer { admitted_turns_completed, blocks, reply, recorded }) => {
+                                    let native_steering = {
+                                        let s = state.read().await;
+                                        if s.turns_completed != admitted_turns_completed {
+                                            let _ = reply.send(Err(AcpError::NoActiveTurn));
+                                            continue;
+                                        }
+                                        s.native_steering
+                                    };
                                     // Protocol round-trip only — the manager's
                                     // cancellation-shielded task records the
                                     // note + broadcasts `FeedbackSubmitted`
@@ -16241,6 +16263,11 @@ async fn run_conversation_loop(
                                     // decline beside the steer.
                                     if let Some(inj) = delegation_injection {
                                         inj.questions.cancel_questions_by_parent(conn_id).await;
+                                    }
+                                    if let Some(NativeSteering::MidTurnPrompt(adapter)) = native_steering {
+                                        let submission = mid_turn_prompts::Submission { blocks, reply, recorded };
+                                        mid_turn.send(adapter, &cx, &sid, submission, agent_type, prompt_ledger).await;
+                                        continue;
                                     }
                                     let outcome = send_steer_request(&cx, &sid, &blocks).await;
                                     // A steered message still lands in the
@@ -16286,6 +16313,7 @@ async fn run_conversation_loop(
                                         .await;
                                     }
                                     let _ = reply.send(outcome);
+                                    let _ = recorded.await;
                                 }
                                 Some(ConnectionCommand::StopAsyncTask {
                                     task_id,
@@ -16422,7 +16450,7 @@ async fn run_conversation_loop(
                                         answered
                                     });
                                     tokio::spawn(async move {
-                                        let _ = prompt_response.await;
+                                        let _ = tokio::join!(prompt_response, mid_turn.drain_cancelled());
                                         if let Some(answered) = answered {
                                             let _ = answered.send(tokio::time::Instant::now());
                                         }
@@ -16580,7 +16608,7 @@ async fn run_conversation_loop(
                     let _ = reply.send(landed);
                 }
             }
-            Some(ConnectionCommand::Steer { blocks: _, reply }) => {
+            Some(ConnectionCommand::Steer { reply, .. }) => {
                 // Steering only means something for a RUNNING turn. Reply —
                 // never drop — so the manager's shielded task can't hang on
                 // the oneshot; the caller falls back to a normal prompt (the
@@ -20349,7 +20377,7 @@ fn steering_version_ok(agent_info: Option<&agent_client_protocol::schema::v1::Im
     agent_info.is_some_and(|info| version_at_least(&info.version, min))
 }
 
-/// Synthesize `SessionState.native_steering_available` from an `initialize`
+/// Determine eligibility for the `_session/steering` extension from an `initialize`
 /// response: extension advertised (top-level `_meta`) AND registry policy says
 /// this agent honors `promptRequired` AND the running binary's
 /// `agent_info.version` proves it. Pure so the full gate matrix is unit-tested;
@@ -49344,8 +49372,11 @@ mod tests {
 
         async fn steer(&self, text: &str) -> Result<SteerOutcome, AcpError> {
             let (reply, outcome) = oneshot::channel();
+            let admitted_turns_completed = self.state.read().await.turns_completed;
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
+                    admitted_turns_completed,
+                    recorded: oneshot::channel().1,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     reply,
                 })
@@ -50572,6 +50603,14 @@ mod tests {
             turns: Vec<Vec<GrokFrame>>,
             responses: Vec<agent_client_protocol::schema::v1::PromptResponse>,
         ) -> Self {
+            Self::start_with_results(agent_type, turns, responses.into_iter().map(Ok).collect()).await
+        }
+
+        async fn start_with_results(
+            agent_type: AgentType,
+            turns: Vec<Vec<GrokFrame>>,
+            responses: Vec<Result<agent_client_protocol::schema::v1::PromptResponse, agent_client_protocol::Error>>,
+        ) -> Self {
             use agent_client_protocol::schema::v1::PromptResponse;
             let turns = Arc::new(std::sync::Mutex::new(VecDeque::from(turns)));
             let responses = Arc::new(std::sync::Mutex::new(VecDeque::from(responses)));
@@ -50595,15 +50634,28 @@ mod tests {
                         on_receive_request!(),
                     )
                     .on_receive_request(
-                        async move |_req: PromptRequest,
+                        async move |req: PromptRequest,
                                     responder: Responder<PromptResponse>,
                                     cx: ConnectionTo<Client>| {
+                            if let Some(id) = req.meta.as_ref().and_then(|m| m.get("cognition.ai/clientMessageId")) {
+                                for block in &req.prompt {
+                                    let echo = custom_update(serde_json::json!({
+                                        "sessionUpdate": "user_message_chunk", "content": block,
+                                        "_meta": { "cognition.ai/clientMessageId": id },
+                                    }));
+                                    send_grok_frames(&cx, &[echo])?;
+                                }
+                            }
                             let frames = turns.lock().unwrap().pop_front().unwrap_or_default();
                             let response = responses
                                 .lock()
                                 .unwrap()
                                 .pop_front()
-                                .unwrap_or_else(|| PromptResponse::new(StopReason::EndTurn));
+                                .unwrap_or_else(|| Ok(PromptResponse::new(StopReason::EndTurn)));
+                            let response = match response {
+                                Ok(response) => response,
+                                Err(error) => return responder.respond_with_error(error),
+                            };
                             send_grok_frames(&cx, &frames)?;
                             let respond = Arc::clone(&agent_respond);
                             // Off the handler, so a held response doesn't hold
@@ -50774,8 +50826,11 @@ mod tests {
         /// Steer the running turn the way `submit_feedback_native` does.
         async fn steer(&self, text: &str) -> Result<SteerOutcome, AcpError> {
             let (reply, outcome) = oneshot::channel();
+            let admitted_turns_completed = self.state.read().await.turns_completed;
             self.cmd_tx
                 .send(ConnectionCommand::Steer {
+                    admitted_turns_completed,
+                    recorded: oneshot::channel().1,
                     blocks: vec![PromptInputBlock::Text { text: text.into() }],
                     reply,
                 })
@@ -51860,6 +51915,173 @@ mod tests {
         .get_conversation("s1")
         .expect("the session has a transcript")
         .turns
+    }
+
+    #[tokio::test]
+    async fn antigravity_steer_reports_rejection_and_holds_the_turn_through_the_accepted_reply() {
+        use crate::acp::feedback::{FeedbackItem, FeedbackStatus};
+        use agent_client_protocol::schema::v1::PromptResponse;
+
+        let ok = || Ok(PromptResponse::new(StopReason::EndTurn));
+        let mut lp = CustomLoop::start_with_results(
+            AgentType::Antigravity,
+            vec![
+                vec![custom_text("Working.")],
+                vec![],
+                vec![custom_text("Corrected.")],
+            ],
+            vec![
+                ok(),
+                Err(agent_client_protocol::Error::invalid_params().data("bad attachment")),
+                ok(),
+            ],
+        )
+        .await;
+        lp.state.write().await.native_steering = Some(NativeSteering::MidTurnPrompt(
+            crate::acp::feedback::MidTurnAdapter::AntigravityCli,
+        ));
+        lp.open_turn("start", "Working.").await;
+
+        for (id, text) in [("bad", "try this"), ("good", "change course")] {
+            let (reply, outcome) = oneshot::channel();
+            let (published, recorded) = oneshot::channel();
+            lp.cmd_tx
+                .send(ConnectionCommand::Steer {
+                    admitted_turns_completed: 0,
+                    blocks: vec![PromptInputBlock::Text { text: text.into() }],
+                    reply,
+                    recorded,
+                })
+                .await
+                .unwrap();
+            let receipt = tokio::time::timeout(std::time::Duration::from_secs(5), outcome)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(receipt, SteerOutcome::Submitted);
+            emit_with_state(
+                &lp.state,
+                &EventEmitter::Noop,
+                AcpEvent::FeedbackSubmitted {
+                    item: FeedbackItem::new_native(
+                        id.into(),
+                        text.into(),
+                        chrono::Utc::now(),
+                        None,
+                        false,
+                    ),
+                },
+            )
+            .await;
+            published.send(id.into()).unwrap();
+            if id == "bad" {
+                lp.until("rejection", |e| matches!(e, AcpEvent::FeedbackFailed { id, message } if id == "bad" && message.contains("bad attachment"))).await;
+                assert_eq!(
+                    lp.state.read().await.feedback[0].status,
+                    FeedbackStatus::Failed
+                );
+            }
+        }
+        lp.until_text("Corrected.").await;
+        lp.respond.notify_one(); // agy releases the original prompt first
+        lp.agent_sends(vec![grok_barrier()]);
+        lp.until_barrier().await;
+        assert!(lp.state.read().await.turn_in_flight);
+        assert_eq!(
+            lp.state.read().await.feedback[1].status,
+            FeedbackStatus::Sent
+        );
+        lp.close_turn().await;
+        assert_eq!(
+            lp.state.read().await.feedback[1].status,
+            FeedbackStatus::Delivered
+        );
+        assert_eq!(
+            lp.seen
+                .iter()
+                .filter(|e| matches!(e, AcpEvent::TurnComplete { .. }))
+                .count(),
+            1
+        );
+        lp.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn devin_steer_is_acknowledged_mid_turn_and_the_last_prompt_owns_completion() {
+        let home = tempfile::tempdir().unwrap();
+        temp_env::async_with_vars(
+            [("CODEG_HOME", Some(home.path().to_str().unwrap()))],
+            async {
+                let mut lp = CustomLoop::start(vec![
+                    vec![custom_text("Working.")],
+                    vec![custom_text("Following the correction.")],
+                ])
+                .await;
+                lp.state.write().await.native_steering = Some(NativeSteering::MidTurnPrompt(crate::acp::feedback::MidTurnAdapter::Devin));
+                lp.open_turn("start", "Working.").await;
+                let received = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    lp.steer("change course"),
+                )
+                .await
+                .expect("receipt must not wait for turn end");
+                assert!(matches!(received, Ok(SteerOutcome::Injected)));
+                lp.until_text("Following the correction.").await;
+
+                // Release only the original RPC, then exercise the live event loop.
+                lp.respond.notify_one();
+                lp.agent_sends(vec![custom_text("Still working."), grok_barrier()]);
+                lp.until_barrier().await;
+                assert!(lp.state.read().await.turn_in_flight);
+                lp.close_turn().await;
+                assert!(matches!(
+                    lp.steer("too late").await,
+                    Err(AcpError::NoActiveTurn)
+                ));
+                lp.shutdown().await;
+
+                assert_eq!(
+                    turn_shape(&recorded_custom_turns().await),
+                    [
+                        r#"User: text "start""#,
+                        r#"Assistant: text "Working.""#,
+                        r#"User: text "change course""#,
+                        r#"Assistant: text "Following the correction.Still working.""#,
+                    ]
+                );
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn devin_steer_allows_cancel_with_both_prompt_responses_outstanding() {
+        let home = tempfile::tempdir().unwrap();
+        temp_env::async_with_vars(
+            [("CODEG_HOME", Some(home.path().to_str().unwrap()))],
+            async {
+                let mut lp = CustomLoop::start(vec![vec![custom_text("Working.")]]).await;
+                lp.state.write().await.native_steering = Some(NativeSteering::MidTurnPrompt(crate::acp::feedback::MidTurnAdapter::Devin));
+                lp.open_turn("start", "Working.").await;
+                let outcome =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), lp.steer("again"))
+                        .await
+                        .unwrap();
+                assert!(matches!(outcome, Ok(SteerOutcome::Injected)));
+                lp.cmd_tx.send(ConnectionCommand::Cancel).await.unwrap();
+                lp.until("cancelled", |e| {
+                    matches!(
+                        e, AcpEvent::TurnComplete { stop_reason, .. } if stop_reason == "cancelled"
+                    )
+                })
+                .await;
+                assert!(!lp.state.read().await.turn_in_flight);
+                lp.respond.notify_waiters();
+                lp.shutdown().await;
+            },
+        )
+        .await;
     }
 
     /// #892: a custom agent running claude-agent-acp steers natively now, and

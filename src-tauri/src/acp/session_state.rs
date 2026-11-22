@@ -15,7 +15,7 @@ use crate::acp::event_stream::{
     images_slice_size, json_str_len, json_value_size, opt_json_size, opt_str_size,
     ConnectionEventStream, RecentEventsBuffer,
 };
-use crate::acp::feedback::{FeedbackItem, FeedbackStatus};
+use crate::acp::feedback::{FeedbackItem, FeedbackStatus, NativeSteering};
 use crate::acp::plan_approval::PendingPlanApprovalState;
 use crate::acp::question::PendingQuestionState;
 use crate::acp::types::{
@@ -620,16 +620,9 @@ pub struct SessionState {
     /// (`connection.rs::speaks_antigravity_interactions`). Backend-only.
     pub antigravity_interactions: bool,
 
-    /// Whether live-feedback notes for THIS session go over the native ACP
-    /// `_session/steering` push channel instead of the `check_user_feedback`
-    /// pull tool. Synthesized ONCE at initialize from three gates (extension
-    /// advertised + registry policy + `agent_info.version` runtime proof — see
-    /// `connection.rs::init_advertises_steering`) so every consumer reads one
-    /// authoritative bool and the frontend never re-derives it from agent
-    /// type. Downgraded to `false` for the rest of the session if a steer ever
-    /// comes back `startedNewTurn` (adapter ignored the `promptRequired`
-    /// opt-in), rerouting subsequent notes to the MCP pull path.
-    pub native_steering_available: bool,
+    /// Native input protocol negotiated at initialize. Exposed to clients as a
+    /// single capability. An extension that returns `startedNewTurn` loses it.
+    pub native_steering: Option<NativeSteering>,
 
     /// Which generation of codex-acp's `request_user_input` bridge this
     /// connection is talking to — 1.12.0 swapped the question and the tab
@@ -980,7 +973,7 @@ impl SessionState {
             result_tool_available: false,
             antigravity_answered_interactions: BTreeSet::new(),
             antigravity_interactions: agent_type == AgentType::Antigravity,
-            native_steering_available: false,
+            native_steering: None,
             codex_user_input_shape: None,
             neutral_goal_channel: false,
             goal_control_method: crate::acp::codex_goal::LEGACY_GOAL_CONTROL_METHOD.to_string(),
@@ -1860,10 +1853,16 @@ impl SessionState {
                 // the write lock; this re-apply is for replay/attach nodes) is
                 // skipped. Order-independent and safe to apply more than once.
                 for f in self.feedback.iter_mut() {
-                    if f.status == FeedbackStatus::Pending && ids.contains(&f.id) {
+                    if matches!(f.status, FeedbackStatus::Pending | FeedbackStatus::Sent) && ids.contains(&f.id) {
                         f.status = FeedbackStatus::Delivered;
                         f.delivered_at = Some(*delivered_at);
                     }
+                }
+            }
+            AcpEvent::FeedbackFailed { id, message } => {
+                if let Some(note) = self.feedback.iter_mut().find(|f| f.id == *id && f.status == FeedbackStatus::Sent) {
+                    note.status = FeedbackStatus::Failed;
+                    note.delivery_error = Some(message.clone());
                 }
             }
             AcpEvent::BackgroundActivity {
@@ -2681,7 +2680,7 @@ impl SessionState {
             background_outstanding: self.background_outstanding,
             background_outstanding_tasks: self.background_outstanding_tasks.clone(),
             feedback_tool_available: self.feedback_tool_available,
-            native_steering_available: self.native_steering_available,
+            native_steering_available: self.native_steering.is_some(),
             modes: self.modes.clone(),
             current_mode: self.current_mode.clone(),
             config_options: self.config_options.clone(),
@@ -2843,8 +2842,8 @@ pub struct LiveSessionSnapshot {
     /// it. Always serialized (a plain bool) so the frontend can rely on it.
     #[serde(default)]
     pub feedback_tool_available: bool,
-    /// Whether feedback notes ride the native `_session/steering` push channel
-    /// (see `SessionState.native_steering_available`). `#[serde(default)]` so
+    /// Whether feedback notes can be sent directly into the running turn
+    /// (see `SessionState.native_steering`). `#[serde(default)]` so
     /// older payloads deserialize to `false`; always serialized (plain bool)
     /// like `feedback_tool_available` so the frontend can rely on it.
     #[serde(default)]
