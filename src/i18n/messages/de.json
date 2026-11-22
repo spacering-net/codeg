@@ -11765,6 +11765,20 @@
         "routine_paused": "Routine pausiert",
         "used_up": "Immer noch nicht richtig"
       },
+      "reason": {
+        "failed": "Fehlgeschlagen",
+        "accepted_queued": "Abgenommen – in der Merge-Warteschlange",
+        "merge_queued": "In der Merge-Warteschlange",
+        "accepted_unchecked": "Ohne Prüfung durchgegangen – bitte ansehen",
+        "needs_delivery": "Abgenommen – als Pull Request zu liefern",
+        "merge_ready": "Abgenommen – bereit zum Mergen",
+        "review": "Wartet auf deine Prüfung"
+      },
+      "go": {
+        "merge": "Mergen…",
+        "board": "Im Board öffnen",
+        "review": "Prüfen"
+      },
       "session": {
         "permission": "Wartet auf deine Freigabe",
         "question": "Fragt dich",

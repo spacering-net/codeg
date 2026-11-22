@@ -11765,6 +11765,20 @@
         "routine_paused": "例程已暫停",
         "used_up": "退回幾輪仍不對"
       },
+      "reason": {
+        "failed": "失敗",
+        "accepted_queued": "驗收已通過，排隊合併中",
+        "merge_queued": "排隊合併中",
+        "accepted_unchecked": "未核實就通過了，請你看一下",
+        "needs_delivery": "驗收已通過，待提交 PR",
+        "merge_ready": "驗收已通過，可以合併",
+        "review": "等你審閱"
+      },
+      "go": {
+        "merge": "去合併",
+        "board": "去看板",
+        "review": "去審閱"
+      },
       "session": {
         "permission": "等你核准",
         "question": "在問你",

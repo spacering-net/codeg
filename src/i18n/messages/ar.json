@@ -11765,6 +11765,20 @@
         "routine_paused": "روتين متوقف مؤقتًا",
         "used_up": "لم يصبح صحيحًا بعد"
       },
+      "reason": {
+        "failed": "فشل",
+        "accepted_queued": "مقبول — في قائمة انتظار الدمج",
+        "merge_queued": "في قائمة انتظار الدمج",
+        "accepted_unchecked": "نجح دون تحقق — ألقِ نظرة",
+        "needs_delivery": "مقبول — بانتظار تسليمه كطلب سحب",
+        "merge_ready": "مقبول — جاهز للدمج",
+        "review": "بانتظار مراجعتك"
+      },
+      "go": {
+        "merge": "دمج…",
+        "board": "فتح في اللوحة",
+        "review": "مراجعة"
+      },
       "session": {
         "permission": "ينتظر موافقتك",
         "question": "يسألك",

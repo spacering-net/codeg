@@ -11765,6 +11765,20 @@
         "routine_paused": "Routine en pause",
         "used_up": "Toujours pas bon"
       },
+      "reason": {
+        "failed": "Échec",
+        "accepted_queued": "Accepté — en file pour la fusion",
+        "merge_queued": "En file pour la fusion",
+        "accepted_unchecked": "Passé sans vérification — jetez un œil",
+        "needs_delivery": "Accepté — à livrer en pull request",
+        "merge_ready": "Accepté — prêt à fusionner",
+        "review": "En attente de votre revue"
+      },
+      "go": {
+        "merge": "Fusionner…",
+        "board": "Ouvrir dans le tableau",
+        "review": "Relire"
+      },
       "session": {
         "permission": "Attend votre approbation",
         "question": "Vous pose une question",

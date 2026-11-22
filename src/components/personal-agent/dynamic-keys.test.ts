@@ -12,7 +12,12 @@
 import { describe, expect, it } from "vitest"
 
 import en from "@/i18n/messages/en.json"
-import type { DispatchState, ItemKind, TodayRowKind } from "@/lib/types"
+import type {
+  DispatchState,
+  ItemKind,
+  TodayReason,
+  TodayRowKind,
+} from "@/lib/types"
 
 type Node = string | { [key: string]: Node }
 
@@ -80,6 +85,17 @@ const KIND_WORDS: readonly TodayRowKind[] = [
   "pr_merged",
 ]
 
+/** What a Today row waits on the owner for (today.rs `task_reason`). */
+const REASONS = {
+  failed: true,
+  accepted_queued: true,
+  merge_queued: true,
+  accepted_unchecked: true,
+  needs_delivery: true,
+  merge_ready: true,
+  review: true,
+} satisfies Record<TodayReason, true>
+
 /** The kinds of card the owner answers, as the profile counts them
  *  (profile.rs `ANSWERED_KINDS`, named by `notice_kind_name`). */
 const ANSWERED_KINDS = [
@@ -115,6 +131,12 @@ describe("messages for the values the backend sends", () => {
 
   it("names every kind of Today row that goes by its kind", () => {
     expect(missing("PersonalAgent.today.kind", KIND_WORDS)).toEqual([])
+  })
+
+  it("says what every reason a Today row waits on the owner is", () => {
+    expect(missing("PersonalAgent.today.reason", Object.keys(REASONS))).toEqual(
+      []
+    )
   })
 
   it("names every kind of card the owner answers", () => {

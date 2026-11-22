@@ -11765,6 +11765,20 @@
         "routine_paused": "ルーティン停止中",
         "used_up": "差し戻してもまだ不十分"
       },
+      "reason": {
+        "failed": "失敗",
+        "accepted_queued": "受け入れ済み・マージ待ち",
+        "merge_queued": "マージ待ち",
+        "accepted_unchecked": "未確認のまま通過しました。確認してください",
+        "needs_delivery": "受け入れ済み・PR として提出待ち",
+        "merge_ready": "受け入れ済み・マージできます",
+        "review": "レビュー待ち"
+      },
+      "go": {
+        "merge": "マージへ",
+        "board": "ボードで開く",
+        "review": "レビューへ"
+      },
       "session": {
         "permission": "承認待ち",
         "question": "あなたに質問",

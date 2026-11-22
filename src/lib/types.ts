@@ -3116,6 +3116,16 @@ export type PersonalAgentNotifyLink =
 
 export const PERSONAL_AGENT_NOTIFY_EVENT = "personal-agent://notify"
 
+/** What a "Today" row waits on the owner for (today.rs `task_reason`). */
+export type TodayReason =
+  | "failed"
+  | "accepted_queued"
+  | "merge_queued"
+  | "accepted_unchecked"
+  | "needs_delivery"
+  | "merge_ready"
+  | "review"
+
 /** What a row of "Today" is (6.3, 1.14). */
 export type TodayRowKind =
   // Waits on the owner: an assistant's card or ask, as its news is named …
@@ -3199,6 +3209,9 @@ export interface TodayRow {
   agent_type: string | null
   /** The owner can take it back here. */
   undo: boolean
+  /** What a board task or failed work waits on the owner for (today.rs
+   *  `task_reason`): put into a sentence and a button. */
+  reason?: TodayReason | null
   /** A setting `changed` for the owner: its card's `changes` and the
    *  `names` they use, to word it as the card does (its `title` names a
    *  setting by its key). */

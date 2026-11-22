@@ -92,6 +92,14 @@ const TIDY_ROW_STATES = new Set([
 ])
 const SKILL_ROW_STATES = new Set([...TIDY_ROW_STATES, "deleted"])
 
+/** The button a reason puts on its row, by the words it says (B2). */
+const GO_OF: Record<string, "merge" | "board" | "review" | undefined> = {
+  merge_ready: "merge",
+  needs_delivery: "board",
+  accepted_unchecked: "review",
+  review: "review",
+}
+
 /** The way each row opens, from the page around it. */
 function useOpener(
   today: Pick<PersonalAgentToday, "dispatches">,
@@ -137,7 +145,9 @@ function useOpener(
         return task ?? session
       case "session":
         return session
+      // Work that failed before it opened a session: its result card.
       case "failed":
+        return work ?? task ?? session ?? jump
       case "dispatch":
       case "finished":
       case "checked":
@@ -576,9 +586,25 @@ function TodayRowCard({
   ) : (
     row.title.trim() || what
   )
+  // What a board task waits on the owner for, in a sentence (B2); a
+  // failure says it in its own words.
+  const reason =
+    row.reason != null && row.reason !== "failed"
+      ? t(`reason.${row.reason}` as "reason.review")
+      : null
+  // Where to do it: the task's details, which merge and deliver it.
+  const go = group === "needs" && onOpen ? GO_OF[row.reason ?? ""] : undefined
   // A matter is settled on its row: one that came due, one still to come.
-  const actions = readOnly ? null : row.kind === "reminder" ||
-    row.kind === "item" ? (
+  const actions = go ? (
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={onOpen ?? undefined}
+      data-pa-today-act={`go-${row.reason}`}
+    >
+      {t(`go.${go}` as "go.review")}
+    </Button>
+  ) : readOnly ? null : row.kind === "reminder" || row.kind === "item" ? (
     <MatterActions row={row} />
   ) : (row.kind === "tidy" || row.kind === "skill") && row.state === "draft" ? (
     <DraftActions row={row} />
@@ -598,11 +624,12 @@ function TodayRowCard({
   // and in a morning brief — a quiet note. The words are the assistant's
   // summing up, not an error's own text: not in the code face.
   const failed = row.kind === "failed" || row.state === "failed"
+  const said = failed ? (row.text ?? reason) : (reason ?? row.text)
   const callout =
-    group === "needs" && row.text
+    group === "needs" && said
       ? {
           tone: failed ? ("error" as const) : ("wait" as const),
-          text: row.text,
+          text: said,
         }
       : null
   return (
@@ -612,7 +639,7 @@ function TodayRowCard({
       time={when}
       meta={meta}
       callout={callout}
-      notes={row.text && !callout ? [row.text] : []}
+      notes={said && !callout ? [said] : []}
       onOpen={onOpen}
       openLabel={t("open")}
       actions={actions}

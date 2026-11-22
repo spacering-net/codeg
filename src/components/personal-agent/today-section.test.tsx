@@ -238,6 +238,93 @@ describe("today", () => {
     expect(document.querySelector("[data-pa-today-group]")).toBeNull()
   })
 
+  it("says what a task waits on the owner for, with the button that does it", () => {
+    draw(
+      today({
+        needs: [
+          row({
+            key: "task:7",
+            kind: "task",
+            title: "Fix title",
+            task_id: 7,
+            state: "review",
+            reason: "merge_ready",
+          }),
+          row({
+            key: "task:8",
+            kind: "task",
+            title: "PR fix",
+            task_id: 8,
+            state: "review",
+            reason: "needs_delivery",
+          }),
+          row({
+            key: "task:9",
+            kind: "task",
+            title: "Own",
+            task_id: 9,
+            state: "review",
+            reason: "review",
+          }),
+        ],
+        watching: [
+          row({
+            key: "task:10",
+            kind: "task",
+            title: "Queued",
+            task_id: 10,
+            state: "review",
+            reason: "accepted_queued",
+          }),
+        ],
+      })
+    )
+    const inRow = (key: string) =>
+      within(document.querySelector(`[data-key="${key}"]`) as HTMLElement)
+    expect(inRow("task:7").getByText("Accepted — ready to merge")).toBeTruthy()
+    fireEvent.click(inRow("task:7").getByRole("button", { name: "Merge…" }))
+    expect(dialogs.openDetail).toHaveBeenLastCalledWith(7)
+    expect(
+      inRow("task:8").getByRole("button", { name: "Open on the board" })
+    ).toBeTruthy()
+    expect(inRow("task:9").getByRole("button", { name: "Review" })).toBeTruthy()
+    // Queued: said, nothing to press.
+    expect(
+      inRow("task:10").getByText("Accepted — queued to merge")
+    ).toBeTruthy()
+    expect(
+      document.querySelector('[data-key="task:10"] [data-pa-today-act]')
+    ).toBeNull()
+  })
+
+  it("opens failed work that never had a session at its result card", () => {
+    draw(
+      today({
+        needs: [
+          row({
+            key: "failed:3",
+            kind: "failed",
+            title: "Docs",
+            bot_id: 1,
+            dispatch_id: 3,
+            row_id: 44,
+            reason: "failed",
+            text: "worktree add failed",
+          }),
+        ],
+      })
+    )
+    fireEvent.click(
+      within(
+        document.querySelector('[data-key="failed:3"]') as HTMLElement
+      ).getAllByRole("button")[0]
+    )
+    expect(usePersonalAgentUi.getState().pendingJump).toEqual({
+      bot: 1,
+      row: 44,
+    })
+  })
+
   it("names a check of a message as one, and a stopped one as stopped", () => {
     draw(
       today({

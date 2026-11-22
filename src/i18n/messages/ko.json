@@ -11765,6 +11765,20 @@
         "routine_paused": "루틴 일시 중지됨",
         "used_up": "되돌려도 아직 부족"
       },
+      "reason": {
+        "failed": "실패",
+        "accepted_queued": "수락됨 · 병합 대기 중",
+        "merge_queued": "병합 대기 중",
+        "accepted_unchecked": "검증 없이 통과했습니다. 확인해 주세요",
+        "needs_delivery": "수락됨 · PR로 제출 대기",
+        "merge_ready": "수락됨 · 병합 가능",
+        "review": "검토 대기"
+      },
+      "go": {
+        "merge": "병합하기",
+        "board": "보드에서 열기",
+        "review": "검토하기"
+      },
       "session": {
         "permission": "승인 대기",
         "question": "질문함",

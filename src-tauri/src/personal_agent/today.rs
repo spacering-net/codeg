@@ -122,6 +122,12 @@ pub struct TodayRow {
     pub agent_type: Option<String>,
     /// The owner can take it back here ([Undo]).
     pub undo: bool,
+    /// What a board task or failed work waits on the owner for, in a word
+    /// the page puts into a sentence and a button: read off the round of
+    /// acceptance as it stands and what the board can do now — see
+    /// [`task_reason`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
     /// A setting `changed` for the owner: its card's `changes` and the
     /// `names` they use, for the page to word it as the card does — its
     /// title is codeg's plain line, a setting by its key.
@@ -156,6 +162,7 @@ impl TodayRow {
             routine_id: None,
             agent_type: None,
             undo: false,
+            reason: None,
             changes: None,
         }
     }
@@ -212,6 +219,74 @@ fn level_rank(l: Option<Level>) -> u8 {
         Some(Level::Urgent) => 0,
         Some(Level::Normal) | None => 1,
         Some(Level::Low) => 2,
+    }
+}
+
+/// What a board task waiting on the owner waits for (B2), from the latest
+/// round of its acceptance (`latest`, its state as stored — a round counts
+/// only for the run it was for) and what the board can do now:
+/// - `failed` — it failed;
+/// - `accepted_queued` / `merge_queued` — in the board's merge queue
+///   (accepted first or not: the owner can queue a merge themselves);
+/// - `accepted_unchecked` — accepted without its check verifying it;
+/// - `needs_delivery` — accepted, and its work goes back to the pull
+///   request it came from (the board will not merge it locally);
+/// - `merge_ready` — accepted, to merge;
+/// - `review` — in review with no acceptance: the owner's to review;
+/// - `None` — awaiting input, or nothing to merge (the board offers to
+///   complete it): its row's own words.
+///
+/// `worktree_gone`: its worktree's folder or directory is gone, as the board
+/// reads it (`annotate_worktree_missing`).
+pub(super) fn task_reason(
+    t: &crate::db::entities::work_task::Model,
+    latest: Option<&crate::db::entities::personal_agent_verification::Model>,
+    worktree_gone: bool,
+) -> Option<&'static str> {
+    use crate::db::entities::personal_agent_verification::VerificationState;
+    match t.status {
+        WorkTaskStatus::Failed => return Some("failed"),
+        WorkTaskStatus::Review => {}
+        _ => return None,
+    }
+    let accepted = latest.filter(|r| r.state == VerificationState::Accepted && r.run_seq == t.run_seq);
+    if crate::db::service::work_task_service::queued_merge(t.pending_merge.as_deref()).is_some() {
+        return Some(if accepted.is_some() {
+            "accepted_queued"
+        } else {
+            "merge_queued"
+        });
+    }
+    if t.files_changed == Some(0) || t.worktree_folder_id.is_none() || worktree_gone {
+        return None;
+    }
+    Some(match accepted {
+        Some(r) if r.unchecked => "accepted_unchecked",
+        Some(_) if t.source_kind.as_deref() == Some("forge_pr") => "needs_delivery",
+        Some(_) => "merge_ready",
+        None => "review",
+    })
+}
+
+/// Whether a task's recorded worktree can no longer serve a merge: its
+/// folder row is removed, or its directory is gone from disk — as the board
+/// reads it, offering "complete" instead.
+async fn worktree_gone(db: &AppDatabase, t: &crate::db::entities::work_task::Model) -> bool {
+    if t.status != WorkTaskStatus::Review {
+        return false;
+    }
+    let Some(id) = t.worktree_folder_id else {
+        return true;
+    };
+    let live = crate::db::entities::folder::Entity::find_by_id(id)
+        .filter(crate::db::entities::folder::Column::DeletedAt.is_null())
+        .one(&db.conn)
+        .await;
+    match live {
+        Ok(Some(f)) => !std::path::Path::new(&f.path).exists(),
+        Ok(None) => true,
+        // Unread: the merge stays the safe default, as on the board.
+        Err(_) => false,
     }
 }
 
@@ -484,8 +559,15 @@ pub async fn today_from(
             row.bot_id = Some(bot.id);
             row.text = d.error.as_deref().and_then(some_line);
             row.state = Some(super::engine::enum_str(&d.state));
+            row.reason = Some("failed");
             row.dispatch_id = Some(d.id);
             row.conversation_id = d.conversation_id;
+            // Its result card, for one that never opened a session to go to.
+            row.row_id = svc::latest_result_row(&db.conn, d.id)
+                .await
+                .ok()
+                .flatten()
+                .map(|r| r.id);
             dispatch_ids.push(d.id);
             view.needs.push(row);
         }
@@ -498,6 +580,21 @@ pub async fn today_from(
     // A task its assistant is accepting is its assistant's — or the owner's
     // through its acceptance card (7.5): not the board's review row.
     let accepting = super::acceptance::being_accepted(db, &tasks).await;
+    // The latest round of acceptance of each task in review: what it waits
+    // on the owner for (B2).
+    let reviewed: Vec<i32> = tasks
+        .iter()
+        .filter(|t| t.status == WorkTaskStatus::Review)
+        .filter_map(|t| t.personal_agent_dispatch_id)
+        .collect();
+    let rounds = crate::db::service::personal_agent_verification_service::latest_of(
+        &db.conn, &reviewed,
+    )
+    .await
+    .unwrap_or_default();
+    // Queued to merge: nothing left for the owner to do — watched, not
+    // waiting on them.
+    let mut queued: Vec<TodayRow> = Vec::new();
     for t in tasks.iter().filter(|t| task_needs_owner(t)) {
         if accepting.contains_key(&t.id) {
             continue;
@@ -528,8 +625,19 @@ pub async fn today_from(
         row.state = Some(super::engine::enum_str(&t.status));
         row.task_id = Some(t.id);
         row.conversation_id = t.conversation_id;
+        row.reason = task_reason(
+            t,
+            t.personal_agent_dispatch_id.and_then(|d| rounds.get(&d)),
+            worktree_gone(db, t).await,
+        );
         if let Some(d) = t.personal_agent_dispatch_id {
             waiting_dispatches.insert(d);
+        }
+        if matches!(row.reason, Some("accepted_queued" | "merge_queued")) {
+            row.level = None;
+            row.at = t.updated_at;
+            queued.push(row);
+            continue;
         }
         view.needs.push(row);
     }
@@ -722,10 +830,21 @@ pub async fn today_from(
         } else {
             super::engine::enum_str(&t.status)
         });
+        // Queued to merge while it is being checked (the owner can queue
+        // one): said so.
+        if crate::db::service::work_task_service::queued_merge(t.pending_merge.as_deref()).is_some()
+        {
+            row.reason = task_reason(
+                t,
+                t.personal_agent_dispatch_id.and_then(|d| rounds.get(&d)),
+                false,
+            );
+        }
         row.task_id = Some(t.id);
         row.conversation_id = t.conversation_id;
         view.watching.push(row);
     }
+    view.watching.extend(queued);
     // The pull requests the assistants watch (7.4): one ready to merge
     // waits on the owner (its card, above).
     for w in crate::db::service::personal_agent_watch_service::watching(&db.conn, None)
@@ -1111,6 +1230,79 @@ mod tests {
             day_of(late, tz).0,
             Utc.with_ymd_and_hms(2026, 11, 9, 20, 0, 0).unwrap()
         );
+    }
+
+    fn round(
+        state: crate::db::entities::personal_agent_verification::VerificationState,
+        run_seq: i32,
+        unchecked: bool,
+    ) -> crate::db::entities::personal_agent_verification::Model {
+        let now = Utc::now();
+        crate::db::entities::personal_agent_verification::Model {
+            id: 1,
+            bot_id: Some(1),
+            dispatch_id: 1,
+            check_dispatch_id: None,
+            round: 1,
+            run_seq,
+            fingerprint: String::new(),
+            state,
+            check_verdict: None,
+            check_evidence: None,
+            decision: None,
+            reason: None,
+            message: None,
+            question: None,
+            decided_by: None,
+            notice_id: None,
+            unchecked,
+            delivered_head: None,
+            merge_commit: None,
+            version_guaranteed: None,
+            created_at: now,
+            updated_at: now,
+            decided_at: None,
+        }
+    }
+
+    #[test]
+    fn a_task_waits_on_the_owner_for_what_its_acceptance_and_the_board_leave_them() {
+        use crate::db::entities::personal_agent_verification::VerificationState as V;
+        use crate::personal_agent::ladder::tests::task;
+        let review = |f: &dyn Fn(&mut crate::db::entities::work_task::Model)| {
+            let mut t = task(WorkTaskStatus::Review);
+            t.run_seq = 2;
+            t.worktree_folder_id = Some(3);
+            t.files_changed = Some(1);
+            f(&mut t);
+            t
+        };
+        let accepted = round(V::Accepted, 2, false);
+        let plain = review(&|_| {});
+        assert_eq!(task_reason(&plain, Some(&accepted), false), Some("merge_ready"));
+        assert_eq!(task_reason(&plain, None, false), Some("review"));
+        // A round for an earlier run is not this run's acceptance.
+        assert_eq!(task_reason(&plain, Some(&round(V::Accepted, 1, false)), false), Some("review"));
+        assert_eq!(
+            task_reason(&plain, Some(&round(V::Accepted, 2, true)), false),
+            Some("accepted_unchecked")
+        );
+        let from_pr = review(&|t| t.source_kind = Some("forge_pr".into()));
+        assert_eq!(task_reason(&from_pr, Some(&accepted), false), Some("needs_delivery"));
+        assert_eq!(task_reason(&from_pr, None, false), Some("review"));
+        // Queued to merge: by the owner (no acceptance) or after it.
+        let queued = review(&|t| t.pending_merge = Some(r#"{"queued_at":"2026-11-22T10:00:00Z"}"#.into()));
+        assert_eq!(task_reason(&queued, Some(&accepted), false), Some("accepted_queued"));
+        assert_eq!(task_reason(&queued, None, false), Some("merge_queued"));
+        // Nothing to merge: the board offers to complete it, in its words.
+        assert_eq!(task_reason(&review(&|t| t.files_changed = Some(0)), Some(&accepted), false), None);
+        assert_eq!(task_reason(&review(&|t| t.worktree_folder_id = None), None, false), None);
+        assert_eq!(task_reason(&plain, Some(&accepted), true), None);
+        // Not a merge intent the board can read: nothing queued.
+        let junk = review(&|t| t.pending_merge = Some("{}".into()));
+        assert_eq!(task_reason(&junk, None, false), Some("review"));
+        assert_eq!(task_reason(&task(WorkTaskStatus::Failed), None, false), Some("failed"));
+        assert_eq!(task_reason(&task(WorkTaskStatus::AwaitingInput), None, false), None);
     }
 
     #[test]

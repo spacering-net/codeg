@@ -10069,6 +10069,13 @@ async fn today_lists_every_session_and_board_task_waiting_on_the_owner_once() {
         t.started_at = Set(Some(chrono::Utc::now() - chrono::Duration::minutes(14)));
     })
     .await;
+    // Queued to merge (by the owner, no acceptance): nothing left for them.
+    let queued = board_task(&engine, project, "Rename flag", WorkTaskStatus::Review, |t| {
+        t.pending_merge = Set(Some(r#"{"queued_at":"2026-11-22T10:00:00Z"}"#.into()));
+        t.worktree_folder_id = Set(Some(project));
+        t.files_changed = Set(Some(1));
+    })
+    .await;
     // The owner's session asks; an assistant's own brain asks too.
     let owned = crate::db::test_helpers::seed_conversation(&engine.db, project, AgentType::Codex).await;
     crate::db::service::conversation_service::update_title(conn, owned, "Explore auth".into()).await.unwrap();
@@ -10105,11 +10112,38 @@ async fn today_lists_every_session_and_board_task_waiting_on_the_owner_once() {
     let own = needs.iter().find(|r| r.task_id == Some(failed.id)).expect("the owner's failed task");
     assert_eq!((own.bot_id, own.text.as_deref()), (None, Some("tests failed")));
     assert_eq!(own.project.as_ref().map(|p| p.name.as_str()), Some("my-app"));
+    // What each waits on the owner for (B2): a failure; a review with no
+    // worktree to merge from is the board's to complete, in its words.
+    assert_eq!((own.reason, handed.reason), (Some("failed"), None));
     assert!(!needs.iter().any(|r| r.task_id == Some(aside.id)), "set aside for later");
-    // What runs is watched.
-    assert_eq!(keys(&view.watching), vec![format!("task:{}", running.id)]);
+    // What runs is watched, and what is queued to merge.
+    assert_eq!(keys(&view.watching), vec![format!("task:{}", queued.id), format!("task:{}", running.id)]);
+    assert_eq!(view.watching[0].reason, Some("merge_queued"));
     assert!(view.schedule.is_empty() && view.done.is_empty());
     assert!(view.day_start <= view.at && view.at < view.day_end);
+}
+
+/// B2: work that failed says so, and — one that never opened a session —
+/// goes to its result card.
+#[tokio::test]
+async fn failed_work_in_today_says_it_failed_and_points_at_its_result_card() {
+    let (engine, _tmp) = configured().await;
+    let me = engine.bot().await;
+    let id = session_dispatch(&engine, DispatchState::Running, "c-x").await;
+    svc::update_dispatch(&engine.db.conn, id, None, DispatchWrite {
+        state: Some(DispatchState::Failed),
+        error: Some(Some("worktree add failed: Branch already exists".into())),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut card = NewRow::new(TimelineKind::Result, "Failed");
+    card.dispatch_id = Some(id);
+    let card = svc::insert_row(&engine.db.conn, me, card).await.unwrap();
+    let view = today_now(&engine).await;
+    let row = view.needs.iter().find(|r| r.dispatch_id == Some(id)).expect("the failed work");
+    assert_eq!((row.kind, row.reason, row.row_id), ("failed", Some("failed"), Some(card.id)));
+    assert_eq!(row.text.as_deref(), Some("worktree add failed: Branch already exists"));
 }
 
 /// 1.14 ②: a question the assistant is answering is not in "needs you" —

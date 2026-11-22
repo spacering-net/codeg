@@ -11765,6 +11765,20 @@
         "routine_paused": "Routine paused",
         "used_up": "Still not right"
       },
+      "reason": {
+        "failed": "Failed",
+        "accepted_queued": "Accepted — queued to merge",
+        "merge_queued": "Queued to merge",
+        "accepted_unchecked": "Passed without being verified — take a look",
+        "needs_delivery": "Accepted — to be delivered as a pull request",
+        "merge_ready": "Accepted — ready to merge",
+        "review": "Waiting for your review"
+      },
+      "go": {
+        "merge": "Merge…",
+        "board": "Open on the board",
+        "review": "Review"
+      },
       "session": {
         "permission": "Waits for your approval",
         "question": "Asks you",

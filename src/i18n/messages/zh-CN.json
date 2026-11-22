@@ -11765,6 +11765,20 @@
         "routine_paused": "例程已暂停",
         "used_up": "退回几轮仍不对"
       },
+      "reason": {
+        "failed": "失败",
+        "accepted_queued": "验收已通过，排队合并中",
+        "merge_queued": "排队合并中",
+        "accepted_unchecked": "未核实就通过了，请你看一下",
+        "needs_delivery": "验收已通过，待提交 PR",
+        "merge_ready": "验收已通过，可以合并",
+        "review": "等你审阅"
+      },
+      "go": {
+        "merge": "去合并",
+        "board": "去看板",
+        "review": "去审阅"
+      },
       "session": {
         "permission": "等你批准",
         "question": "在问你",

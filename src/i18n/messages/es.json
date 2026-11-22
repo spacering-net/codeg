@@ -11765,6 +11765,20 @@
         "routine_paused": "Rutina en pausa",
         "used_up": "Aún no está bien"
       },
+      "reason": {
+        "failed": "Falló",
+        "accepted_queued": "Aceptado: en cola para fusionar",
+        "merge_queued": "En cola para fusionar",
+        "accepted_unchecked": "Aprobado sin verificar: revísalo",
+        "needs_delivery": "Aceptado: por entregar como pull request",
+        "merge_ready": "Aceptado: listo para fusionar",
+        "review": "Espera tu revisión"
+      },
+      "go": {
+        "merge": "Fusionar…",
+        "board": "Abrir en el tablero",
+        "review": "Revisar"
+      },
       "session": {
         "permission": "Espera tu aprobación",
         "question": "Te pregunta",

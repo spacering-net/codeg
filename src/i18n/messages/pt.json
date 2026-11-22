@@ -11765,6 +11765,20 @@
         "routine_paused": "Rotina pausada",
         "used_up": "Ainda não está certo"
       },
+      "reason": {
+        "failed": "Falhou",
+        "accepted_queued": "Aceito — na fila para mesclar",
+        "merge_queued": "Na fila para mesclar",
+        "accepted_unchecked": "Passou sem verificação — dê uma olhada",
+        "needs_delivery": "Aceito — a entregar como pull request",
+        "merge_ready": "Aceito — pronto para mesclar",
+        "review": "Aguardando sua revisão"
+      },
+      "go": {
+        "merge": "Mesclar…",
+        "board": "Abrir no quadro",
+        "review": "Revisar"
+      },
       "session": {
         "permission": "Aguarda sua aprovação",
         "question": "Pergunta a você",
