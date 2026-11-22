@@ -12,17 +12,16 @@
  *   work's title in front; clicking opens the work.
  * - Clicking it during a turn opens this turn's steps, one short line each
  *   ("Edited parser.rs +14 −10"), read again as the turn moves.
- * - Its chevron points right, out of sight till the line is hovered (or
- *   focused); with the steps open it points up at them and stays.
+ * - One round pill, the turn's stop button at its end (while the turn runs
+ *   here); no chevron.
  * - Started with nothing to say yet (the owner's message just sent, a vague
- *   first step not lasted yet): three dots rising in turn, and no chevron.
+ *   first step not lasted yet): three dots rising in turn.
  * - Nothing running: the line folds away. A state gone stale (no push for
  *   its 30 s) is nothing running.
  */
 
 import { useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { ChevronRight } from "lucide-react"
 
 import { usePersonalAgent } from "@/contexts/personal-agent-context"
 import { personalAgentTurnSteps } from "@/lib/api"
@@ -202,13 +201,16 @@ export function StatusLine({
           )}
         </div>
       ) : null}
-      <div className="flex max-w-full items-center gap-1">
+      <div
+        data-pa-status-pill
+        className="inline-flex max-w-full items-center gap-0.5 rounded-full px-1 py-0.5 transition-colors hover:bg-muted"
+      >
         <button
           type="button"
           onClick={click}
           aria-expanded={workActivity ? undefined : open}
           title={workActivity ? t("openWork") : open ? t("fold") : t("steps")}
-          className="group/status flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-start text-xs text-muted-foreground transition-colors hover:bg-muted"
+          className="flex min-w-0 max-w-full items-center gap-1.5 rounded-full px-0.5 text-start text-xs text-muted-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
         >
           {live ? (
             <BotAvatar
@@ -240,22 +242,10 @@ export function StatusLine({
               <span />
               <span />
             </span>
-          ) : workActivity ? null : (
-            // Points right, out of sight till the line is hovered or focused;
-            // open, it points up at the steps over it and stays.
-            <ChevronRight
-              aria-hidden
-              data-pa-status-chevron
-              className={cn(
-                "size-3 shrink-0 transition-[opacity,rotate]",
-                open
-                  ? "-rotate-90 opacity-100"
-                  : "opacity-0 group-hover/status:opacity-100 group-focus-visible/status:opacity-100"
-              )}
-            />
-          )}
+          ) : null}
         </button>
-        {/* The turn can be stopped from here before its reply has a bubble. */}
+        {/* The turn can be stopped from here, in the pill, before its reply
+            has a bubble. */}
         {turnRunning && snapshot?.status.engine === "here" ? (
           <StopButton />
         ) : null}

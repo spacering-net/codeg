@@ -1035,27 +1035,24 @@ describe("the status line", () => {
       document.querySelector("[data-pa-status-text]")!.textContent
     ).toMatch(/Thinking|Mulling|Working out/)
     vi.useRealTimers()
-    // Its chevron points right, out of sight till hovered or focused.
-    const chevron = document.querySelector("[data-pa-status-chevron]")!
-    expect(chevron.classList.contains("lucide-chevron-right")).toBe(true)
-    expect(chevron.getAttribute("class")).toContain("opacity-0")
-    expect(chevron.getAttribute("class")).toContain(
-      "group-hover/status:opacity-100"
-    )
-    expect(chevron.getAttribute("class")).not.toContain("-rotate-90")
-    // Its steps; open, the chevron points up at them and stays.
+    // One round pill, no chevron, the stop button inside it.
+    const pill = document.querySelector("[data-pa-status-pill]")!
+    expect(pill.className).toContain("rounded-full")
+    expect(pill.querySelector("svg[class*='chevron']")).toBeNull()
+    expect(
+      pill.contains(screen.getByRole("button", { name: "Stop the reply" }))
+    ).toBe(true)
+    // Its steps.
     fireEvent.click(screen.getByRole("button", { expanded: false }))
     expect(await screen.findByText("Edited parser.rs +14 −10")).toBeTruthy()
-    const up = document.querySelector("[data-pa-status-chevron]")!
-    expect(up.getAttribute("class")).toContain("-rotate-90")
-    expect(up.getAttribute("class")).not.toContain("opacity-0")
+    expect(pill.querySelector("svg[class*='chevron']")).toBeNull()
     expect(screen.getByText("Read AGENTS.md")).toBeTruthy()
     // And the turn can be stopped from here.
     fireEvent.click(screen.getByRole("button", { name: "Stop the reply" }))
     expect(api.personalAgentCancel).toHaveBeenCalled()
   })
 
-  it("shows three dots, and no chevron, while a turn just begun has nothing to say", async () => {
+  it("shows three dots while a turn just begun has nothing to say", async () => {
     api.personalAgentBots.mockResolvedValue([entry(1, "Nova", busy("think"))])
     pa.snapshot = {
       agent: {
@@ -1076,7 +1073,6 @@ describe("the status line", () => {
       return found!
     })
     expect(line.querySelectorAll("[data-pa-status-dots] > span").length).toBe(3)
-    expect(line.querySelector("[data-pa-status-chevron]")).toBeNull()
     // Read out once there is something to say; the dots give way to it.
     expect(
       line.querySelector("[data-pa-status-text]")!.getAttribute("aria-live")
@@ -1089,7 +1085,6 @@ describe("the status line", () => {
       { timeout: VAGUE_DELAY_MS + 1000 }
     )
     expect(line.querySelector("[data-pa-status-dots]")).toBeNull()
-    expect(line.querySelector("[data-pa-status-chevron]")).toBeTruthy()
   })
 
   it("folds away when its state went stale, whatever an old snapshot says", async () => {
