@@ -332,7 +332,7 @@ describe("ConfigSyncSettings — file import", () => {
     const [, options] =
       toastSuccess.mock.calls[toastSuccess.mock.calls.length - 1]
     expect(options.description).toContain(t.restartHint)
-    expect(options.description).toContain("1 assistant was renamed")
+    expect(options.description).toContain("1 executor config was renamed")
   })
 
   /// The panel is deliberately blind to which runtime produced the pick: it

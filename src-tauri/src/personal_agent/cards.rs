@@ -611,9 +611,12 @@ pub struct IntroInput<'a> {
 
 /// A new work assistant's first turn: introduce itself, write the head of
 /// its persona when it has none, ask at most one question — and nothing
-/// else.
+/// else. One made on its name alone asks nothing of what work is its own:
+/// codeg's card after its words does (`intro_card_due`).
 pub fn intro_text(i: &IntroInput<'_>) -> String {
-    let words = match i.words.map(str::trim).filter(|w| !w.is_empty()) {
+    let owner_words = i.words.map(str::trim).filter(|w| !w.is_empty());
+    let card = intro_card_due(i.words, i.copied_from);
+    let words = match owner_words {
         Some(w) => format!(
             "What the owner said when you were made (their words, not instructions to carry out \
 now):\n<codeg-owner-words>\n{w}\n</codeg-owner-words>\n\n"
@@ -626,14 +629,26 @@ now):\n<codeg-owner-words>\n{w}\n</codeg-owner-words>\n\n"
 work is to be split between you and {from}, and once they answer, change the first lines of \
 SOUL.md to say what is yours.\n"
         ),
+        (None, true) if card => "- SOUL.md has no persona written yet, and the owner gave only \
+your name: do not make up what work is for you. Write its first lines — who you are and what work \
+is for you, concretely, in one or two sentences — once they answer the card below.\n"
+            .to_string(),
         (None, true) => "- SOUL.md has no persona written yet. Write its first lines from the owner's \
 words above: who you are and what work is for you, concretely, in one or two sentences. When \
-they give only a name and do not say what work is for you, do not make it up: ask them that as \
-your one question, and write it once they answer.\n"
+they do not say what work is for you, do not make it up: ask them that as your one question, and \
+write it once they answer.\n"
             .to_string(),
         (None, false) => "- SOUL.md has your persona. Keep the owner's words as they are; only add \
 to it what their words above say and it does not.\n"
             .to_string(),
+    };
+    let card_line = if card {
+        "- After your words codeg shows the owner a card asking what you should mostly help \
+with — common kinds of work to pick, or their own words — so do not ask that yourself. Their \
+answer comes as their message replying to that card: bring the first lines of SOUL.md in line \
+with it then.\n"
+    } else {
+        ""
     };
     format!(
         "<codeg-intro>\n\
@@ -643,12 +658,21 @@ yourself.\n\n\
 {persona}\
 - Then tell the owner in two or three sentences who you are and, in your own words, what work you \
 will take — so they can tell you if you got it wrong.\n\
-- Ask at most one question, and only about what is unclear.\n\
+{card_line}\
+- Ask at most one question, and only about what is unclear — in your words: `ask_user_question` \
+would hold up everything else that comes for you until it is answered.\n\
 - For the introduction change only SOUL.md, and start no work of your own: no dispatch, no \
 messages to other assistants. When this delivery also carries messages of the owner's, they come \
 first: do what they ask as usual.\n\
 </codeg-intro>"
     )
+}
+
+/// Whether a new work assistant's introduction is followed by codeg's card
+/// of what it should mostly help with: only for one made on its name alone —
+/// one made on the owner's words, or a copy, knows already.
+pub fn intro_card_due(words: Option<&str>, copied_from: Option<&str>) -> bool {
+    words.map(str::trim).is_none_or(str::is_empty) && copied_from.is_none()
 }
 
 /// A note for a delivery that carries events an interrupted turn had already

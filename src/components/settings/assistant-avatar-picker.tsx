@@ -241,7 +241,7 @@ export function AssistantAvatarPicker({
                   type="button"
                   onClick={() => pickEmoji(emoji)}
                   className={cn(
-                    "flex size-8 items-center justify-center rounded-md text-lg transition hover:bg-accent",
+                    "flex size-8 items-center justify-center rounded-md font-emoji text-lg transition hover:bg-accent",
                     avatar.kind === "emoji" &&
                       avatar.emoji === emoji &&
                       "bg-accent ring-1 ring-ring"

@@ -69,6 +69,26 @@ export function monogramFor(name: string): string {
  *  avatar (`char::is_whitespace` / `is_control`). */
 const NOT_A_SYMBOL = /[\s\u0000-\u001f\u007f-\u009f]/
 
+let emojiGlyph: RegExp | null | undefined
+
+/** Whether `glyph` is drawn from an emoji font — a pictograph, a flag, a
+ *  keycap — so it may name those fonts outright (`font-emoji`) rather than
+ *  have the webview look it up through the interface's. Built lazily: a
+ *  runtime too old for property escapes says no. */
+export function isEmojiGlyph(glyph: string): boolean {
+  if (emojiGlyph === undefined) {
+    try {
+      emojiGlyph = new RegExp(
+        "\\p{Extended_Pictographic}|\\p{Regional_Indicator}|\\u20e3",
+        "u"
+      )
+    } catch {
+      emojiGlyph = null
+    }
+  }
+  return emojiGlyph?.test(glyph) ?? false
+}
+
 /** The emoji avatar `text` makes — its first character — or `null` when that
  *  is blank, a control character, or longer than the backend accepts. */
 export function avatarEmojiFrom(text: string): string | null {

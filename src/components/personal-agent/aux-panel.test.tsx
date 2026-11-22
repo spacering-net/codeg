@@ -1676,7 +1676,7 @@ describe("the stats tab's data", () => {
     // The rest folded at first, on one card; open on asking, and kept so
     // across a switch of tabs.
     expect(document.querySelector("[data-chart='ranked']")).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: /By assistant/ }))
+    fireEvent.click(screen.getByRole("button", { name: /By executor config/ }))
     expect(document.querySelector("[data-chart='ranked']")).toBeTruthy()
     act(() => usePersonalAgentUi.setState({ auxTab: "output" }))
     act(() => usePersonalAgentUi.setState({ auxTab: "stats" }))

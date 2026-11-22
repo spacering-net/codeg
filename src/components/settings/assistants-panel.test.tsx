@@ -239,7 +239,7 @@ describe("AssistantsPanel", () => {
       onShowUnsaved,
     })
     await waitFor(() =>
-      expect(screen.getByText(/No assistants yet/)).toBeInTheDocument()
+      expect(screen.getByText(/No executor configs yet/)).toBeInTheDocument()
     )
     expect(
       screen.getByText(/Multi-Agent Collaboration is off/)
@@ -256,10 +256,12 @@ describe("AssistantsPanel", () => {
     const user = userEvent.setup()
     renderPanel({ delegationEnabled: false, onShowGeneral })
     await waitFor(() =>
-      expect(screen.getByText("No assistants yet")).toBeInTheDocument()
+      expect(screen.getByText("No executor configs yet")).toBeInTheDocument()
     )
     // The header's button stands down while the empty state shows its own.
-    const create = screen.getAllByRole("button", { name: "New assistant" })
+    const create = screen.getAllByRole("button", {
+      name: "New executor config",
+    })
     expect(create).toHaveLength(1)
 
     await user.click(screen.getByRole("button", { name: "Go to General" }))
@@ -268,7 +270,7 @@ describe("AssistantsPanel", () => {
     await user.click(create[0])
     expect(
       within(await screen.findByRole("dialog")).getByRole("heading", {
-        name: "New assistant",
+        name: "New executor config",
       })
     ).toBeInTheDocument()
   })
@@ -289,7 +291,7 @@ describe("AssistantsPanel", () => {
     renderPanel()
     await waitFor(() =>
       expect(
-        screen.getByText("Failed to load assistants: db locked")
+        screen.getByText("Failed to load executor configs: db locked")
       ).toBeInTheDocument()
     )
     spy.mockRestore()
@@ -302,12 +304,12 @@ describe("AssistantsPanel", () => {
     renderPanel()
     await waitFor(() =>
       expect(
-        screen.getByText("Failed to load assistants: db locked")
+        screen.getByText("Failed to load executor configs: db locked")
       ).toBeInTheDocument()
     )
     await user.click(screen.getByRole("button", { name: "Retry" }))
     await waitFor(() => expect(shownNames()).toHaveLength(3))
-    expect(screen.queryByText(/Failed to load assistants/)).toBeNull()
+    expect(screen.queryByText(/Failed to load executor configs/)).toBeNull()
     spy.mockRestore()
   })
 
@@ -518,9 +520,12 @@ describe("AssistantsPanel", () => {
     screen.getByRole("button", { name: "Move Planner" }).focus()
     await user.keyboard("{ArrowDown}")
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith("Failed to reorder assistants", {
-        description: "db locked",
-      })
+      expect(toast.error).toHaveBeenCalledWith(
+        "Failed to reorder executor configs",
+        {
+          description: "db locked",
+        }
+      )
     )
     expect(shownNames()).toEqual(["Reviewer", "Planner", "Tester"])
     spy.mockRestore()
@@ -556,10 +561,12 @@ describe("AssistantsPanel", () => {
     renderPanel()
     await waitFor(() => expect(shownNames()).toHaveLength(3))
 
-    await user.click(screen.getByRole("button", { name: "New assistant" }))
+    await user.click(
+      screen.getByRole("button", { name: "New executor config" })
+    )
     let dialog = await screen.findByRole("dialog")
     expect(
-      within(dialog).getByRole("heading", { name: "New assistant" })
+      within(dialog).getByRole("heading", { name: "New executor config" })
     ).toBeInTheDocument()
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }))
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
@@ -567,7 +574,7 @@ describe("AssistantsPanel", () => {
     await user.click(screen.getByRole("button", { name: "Edit Tester" }))
     dialog = await screen.findByRole("dialog")
     expect(
-      within(dialog).getByRole("heading", { name: "Edit assistant" })
+      within(dialog).getByRole("heading", { name: "Edit executor config" })
     ).toBeInTheDocument()
     expect(within(dialog).getByLabelText("Name")).toHaveValue("Tester")
   })
@@ -602,7 +609,7 @@ describe("AssistantsPanel", () => {
     )
     dialog = await screen.findByRole("dialog")
     expect(
-      within(dialog).getByRole("heading", { name: "New assistant" })
+      within(dialog).getByRole("heading", { name: "New executor config" })
     ).toBeInTheDocument()
     expect(within(dialog).getByLabelText("Name")).toHaveValue("Gem")
     expect(handled).toHaveBeenCalledTimes(2)

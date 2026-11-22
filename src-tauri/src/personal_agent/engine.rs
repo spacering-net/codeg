@@ -4005,6 +4005,16 @@ impl PersonalAgentEngine {
             .await
             .unwrap_or_default();
             self.emit_rows(moved.into_iter().map(svc::to_row).collect());
+            // A new assistant introduced itself: codeg's card of what it
+            // should mostly help with follows its words (§1.3) — not after
+            // an introduction the owner stopped.
+            if !canceled {
+                if let Ok(events) = svc::events_of_batch(&self.db.conn, turn.batch_id).await {
+                    for e in events.iter().filter(|e| super::bots::is_intro_event(e)) {
+                        self.raise_intro_card(e).await;
+                    }
+                }
+            }
             let _ = svc::finish_batch_events(&self.db.conn, turn.batch_id).await;
             self.messages_handled(turn.batch_id).await;
             // It answered what the owner asked: they hear of it (1.13).

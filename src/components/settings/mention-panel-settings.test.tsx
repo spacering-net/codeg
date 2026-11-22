@@ -121,7 +121,7 @@ describe("MentionPanelSettingsSection", () => {
     ])
     for (const name of [
       "Agents",
-      "Assistants",
+      "Executor configs",
       "Files",
       "Sessions",
       "Commits",

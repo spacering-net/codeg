@@ -1055,7 +1055,7 @@ describe("AssistantEditorDialog — required options", () => {
     )
     await waitFor(() =>
       expect(
-        screen.getByText("An assistant named “Reviewer” already exists.")
+        screen.getByText("An executor config named “Reviewer” already exists.")
       ).toBeInTheDocument()
     )
     expect(screen.getByLabelText("Name")).toHaveAttribute(

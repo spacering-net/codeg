@@ -340,7 +340,7 @@ describe("delegation row: who and how it stands", () => {
         state: "output-available",
       })
     )
-    expect(screen.getByText("assistant not found")).toBeInTheDocument()
+    expect(screen.getByText("executor config not found")).toBeInTheDocument()
   })
 })
 
@@ -681,7 +681,7 @@ describe("delegation row: an assistant's delegation", () => {
         },
       })
     )
-    expect(row()).toHaveTextContent("Assistant #7 · Codex")
+    expect(row()).toHaveTextContent("Executor config #7 · Codex")
   })
 
   it("marks an assistant that has been deleted", () => {

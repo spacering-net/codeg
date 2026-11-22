@@ -5825,6 +5825,10 @@ async fn a_new_work_assistant_introduces_itself_once_and_the_primary_never() {
     assert!(prompt.contains("I want someone to review my pull requests"), "{prompt}");
     assert!(prompt.contains("SOUL.md has your persona"), "{prompt}");
     assert!(prompt.contains("Ask at most one question"), "{prompt}");
+    // In its words: a question card of the brain's would hold up the rest.
+    assert!(prompt.contains("`ask_user_question` would hold up"), "{prompt}");
+    // Made on the owner's words: no card of what it helps with.
+    assert!(!prompt.contains("codeg shows the owner a card"), "{prompt}");
     assert!(prompt.contains("start no work of your own"), "{prompt}");
     // Answered and done: it is not asked again.
     start_prompt(&state, Some(&token)).await;
@@ -5832,15 +5836,54 @@ async fn a_new_work_assistant_introduces_itself_once_and_the_primary_never() {
     assert!(intros(&engine, made.bot.id).await.is_empty());
     worker.pump().await;
     assert!(rx.try_recv().is_err(), "nothing more to deliver");
+    let intro_card = |bot: i32| {
+        let conn = engine.db.conn.clone();
+        async move {
+            svc::notice_of_subject(&conn, bot, NoticeKind::Choice, "intro:work")
+                .await
+                .unwrap()
+        }
+    };
+    assert!(intro_card(made.bot.id).await.is_none(), "it knows its work");
 
-    // None written: write its head from the words, or ask.
+    // Made on its name alone: it asks nothing of its work — codeg's card
+    // after its words does, and holds up nothing.
     let w = engine_of(&engine, &tmp, blank.bot.id);
     let seg = open_segment(&w).await;
-    let (mut rx, _state) = live_connection(&w, seg, "w-blank").await;
+    let (mut rx, state) = live_connection(&w, seg, "w-blank").await;
     w.pump().await;
-    let (prompt, _) = take_prompt(&mut rx);
+    let (prompt, token) = take_prompt(&mut rx);
     assert!(prompt.contains("SOUL.md has no persona written yet"), "{prompt}");
+    assert!(prompt.contains("once they answer the card below"), "{prompt}");
+    assert!(prompt.contains("codeg shows the owner a card"), "{prompt}");
     assert!(!prompt.contains("<codeg-owner-words>"), "{prompt}");
+    assert!(intro_card(blank.bot.id).await.is_none(), "not before its words");
+    start_prompt(&state, Some(&token)).await;
+    emit(&w, &state, "w-blank", turn_complete("end_turn"), true).await;
+    let card = intro_card(blank.bot.id).await.expect("the card after its words");
+    assert_eq!(card.state, NoticeState::Open);
+    let row = svc::get_row(&engine.db.conn, card.timeline_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let reply = svc::recent_rows(&engine.db.conn, blank.bot.id, &[TimelineKind::Reply], 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .max()
+        .unwrap();
+    assert!(row.id > reply, "it follows the introduction");
+    let data: serde_json::Value = serde_json::from_str(row.data.as_deref().unwrap()).unwrap();
+    assert_eq!(data["notice"], "choice");
+    assert_eq!(data["options"].as_array().unwrap().len(), 4);
+    assert_eq!(data["options"][0]["key"], "A");
+    // Picked: the owner's message replying to the card wakes it; once only.
+    w.answer_choice(card.id, Some("A"), None, None, None).await.unwrap();
+    let queued = svc::queued_owner_rows(&engine.db.conn, blank.bot.id).await.unwrap();
+    assert_eq!(queued.len(), 1);
+    assert!(queued[0].body.starts_with("A. "), "{}", queued[0].body);
+    assert!(w.answer_choice(card.id, Some("B"), None, None, None).await.is_err());
 
     // A copy: asks how the work is split.
     let c = engine_of(&engine, &tmp, copy.bot.id);
@@ -5849,6 +5892,7 @@ async fn a_new_work_assistant_introduces_itself_once_and_the_primary_never() {
     c.pump().await;
     let (prompt, _) = take_prompt(&mut rx);
     assert!(prompt.contains("You are a copy of Reviewer"), "{prompt}");
+    assert!(!prompt.contains("codeg shows the owner a card"), "{prompt}");
 }
 
 /// What the owner typed is marked so on the message; what a card or a

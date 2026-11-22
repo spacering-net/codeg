@@ -178,7 +178,7 @@ impl PersonalAgentEngine {
 
     /// Raise a card of getting to know the owner, once: `None` when it was
     /// raised already.
-    async fn raise_meet_card(
+    pub(super) async fn raise_meet_card(
         &self,
         kind: NoticeKind,
         subject: &str,

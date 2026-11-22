@@ -5,9 +5,9 @@
  * place of the conversation, the roster and the side panel: the team — the
  * work assistants and the executor configs their work runs on — and the
  * preferences. An assistant's own settings are on its own page
- * (`bot-page.tsx`). The navigation down the side under the title, the
- * arrow before it going back to the conversation; on a narrow screen it
- * folds into a select at the top.
+ * (`bot-page.tsx`). The navigation down the side under the title — its
+ * rows pills — and [← Back to the conversation] over the title; on a
+ * narrow screen it folds into a select at the top.
  *
  * Read-only while the engine runs in another codeg process — except the
  * executor configs themselves, which are not the engine's.
@@ -126,27 +126,27 @@ export function SettingsView() {
     }
   })()
 
-  // Back to the conversation: an arrow on the title's line, as on an
-  // assistant's own page.
+  // Back to the conversation: a pill saying so above the title, its arrow
+  // in the column of the navigation's icons, as the title is in their
+  // column of words' start.
   const back = (
     <Button
-      size="icon-sm"
       variant="ghost"
-      className="shrink-0 text-muted-foreground hover:text-foreground"
+      size="sm"
+      className="h-8 w-fit max-w-full shrink-0 gap-2 rounded-full ps-2.5 pe-3.5 font-normal text-muted-foreground hover:text-foreground"
       onClick={showConversation}
-      title={t("back")}
-      aria-label={t("back")}
       data-pa-settings-back
     >
-      <ArrowLeft className="rtl:rotate-180" aria-hidden />
+      <ArrowLeft className="size-4 shrink-0 rtl:rotate-180" aria-hidden />
+      <span className="truncate">{t("back")}</span>
     </Button>
   )
   const title = (
-    <div className="min-w-0">
-      <h1 className="truncate text-base leading-6 font-semibold tracking-tight">
+    <div className="min-w-0 px-2.5" data-pa-settings-title>
+      <h1 className="truncate text-xl leading-7 font-semibold tracking-tight">
         {t("viewTitle")}
       </h1>
-      <p className="truncate text-xs leading-4 text-muted-foreground">
+      <p className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">
         {t("viewSubtitle")}
       </p>
     </div>
@@ -159,7 +159,7 @@ export function SettingsView() {
           className="flex w-60 shrink-0 flex-col border-e border-border/60"
           data-pa-settings-nav
         >
-          <div className="flex items-center gap-1.5 px-3 pt-4 pb-5">
+          <div className="flex flex-col gap-4 px-3 pt-3 pb-5">
             {back}
             {title}
           </div>
@@ -176,7 +176,7 @@ export function SettingsView() {
               >
                 <p
                   aria-hidden
-                  className="px-2 pb-1.5 text-xs font-medium text-muted-foreground"
+                  className="px-2.5 pb-1.5 text-xs font-medium text-muted-foreground"
                 >
                   {t(`nav.${g.label}`)}
                 </p>
@@ -192,7 +192,7 @@ export function SettingsView() {
                         aria-current={on ? "page" : undefined}
                         onClick={() => openSettings(p)}
                         className={cn(
-                          "flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-start text-sm transition-colors",
+                          "flex h-9 w-full items-center gap-2.5 rounded-full px-2.5 text-start text-sm transition-colors",
                           on
                             ? "bg-accent font-medium text-accent-foreground"
                             : "text-foreground/80 hover:bg-muted hover:text-foreground"
@@ -224,7 +224,7 @@ export function SettingsView() {
         >
           {isMobile ? (
             <div className="mb-5 flex flex-col gap-3">
-              <div className="-ms-2 flex items-center gap-1.5">
+              <div className="-ms-2.5 flex flex-col gap-3">
                 {back}
                 {title}
               </div>
@@ -234,7 +234,7 @@ export function SettingsView() {
               >
                 <SelectTrigger
                   aria-label={t("viewTitle")}
-                  className="h-9 w-full bg-background text-sm"
+                  className="h-9 w-full rounded-full bg-background text-sm"
                 >
                   <SelectValue />
                 </SelectTrigger>

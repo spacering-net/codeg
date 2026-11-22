@@ -315,7 +315,7 @@ describe("DelegationSettingsSection — tabs and the saved record", () => {
     await screen.findByLabelText("Enable delegation")
     expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument()
     expect(
-      screen.getByText("Assistant configs: moved to the assistants page")
+      screen.getByText("Executor configs: moved to the assistants page")
     ).toBeInTheDocument()
 
     await user.click(tab(/^Agent defaults/))

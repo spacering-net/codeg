@@ -1160,6 +1160,15 @@
 
 @theme inline {
   --font-sans: var(--font-sans);
+  /* An emoji's own fonts (`font-emoji`), and no generic family after them:
+     with `sans-serif` anywhere in its stack — the interface's ends on it —
+     WebKit took six seconds to first draw the two dozen emoji of the face
+     editor's page in the desktop's webview, even with the emoji font named
+     first; without it, milliseconds. A glyph none of these has still falls
+     back to the system's. */
+  --font-emoji:
+    "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Segoe UI Symbol",
+    system-ui;
   --color-activity-rail: var(--activity-rail);
   --color-activity-ring: var(--activity-ring);
   --color-activity-ring-done: var(--activity-ring-done);

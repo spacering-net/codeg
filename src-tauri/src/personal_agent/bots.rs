@@ -94,6 +94,107 @@ pub struct Intro {
 /// The event that wakes a new work assistant to introduce itself.
 pub const INTRO_EVENT: &str = "intro";
 
+/// The card after a new work assistant's introduction, by its subject: one
+/// per assistant.
+const INTRO_CARD_SUBJECT: &str = "intro:work";
+
+/// The card after an introduction in the owner's language: its question,
+/// and the common kinds of work it offers.
+fn intro_card_words(locale: AppLocale) -> (&'static str, [&'static str; 4]) {
+    match locale {
+        AppLocale::En => (
+            "What would you most like me to help with?",
+            [
+                "Writing code and changing repositories",
+                "Looking things up and research",
+                "Timed reminders and keeping watch",
+                "Everyday chores",
+            ],
+        ),
+        AppLocale::ZhCn => (
+            "你最希望我先帮你做哪类事？",
+            [
+                "写代码和改仓库",
+                "查资料和做调研",
+                "定时提醒和监控",
+                "处理日常杂事",
+            ],
+        ),
+        AppLocale::ZhTw => (
+            "你最希望我先幫你做哪類事？",
+            [
+                "寫程式和改倉庫",
+                "查資料和做調研",
+                "定時提醒和監控",
+                "處理日常雜事",
+            ],
+        ),
+        AppLocale::Ja => (
+            "まず、どんなことを手伝ってほしいですか？",
+            [
+                "コードを書いてリポジトリを変更する",
+                "調べものとリサーチ",
+                "定時のリマインドと監視",
+                "日々の雑務",
+            ],
+        ),
+        AppLocale::Ko => (
+            "제가 가장 먼저 도와드렸으면 하는 일은 무엇인가요?",
+            [
+                "코드 작성과 저장소 수정",
+                "자료 조사와 리서치",
+                "정기 알림과 모니터링",
+                "일상적인 잡무",
+            ],
+        ),
+        AppLocale::Es => (
+            "¿En qué te gustaría que te ayudara sobre todo?",
+            [
+                "Escribir código y cambiar repositorios",
+                "Buscar información e investigar",
+                "Recordatorios programados y vigilancia",
+                "Tareas del día a día",
+            ],
+        ),
+        AppLocale::De => (
+            "Wobei soll ich dir vor allem helfen?",
+            [
+                "Code schreiben und Repositorys ändern",
+                "Recherchieren und nachschlagen",
+                "Geplante Erinnerungen und Überwachung",
+                "Alltägliche Aufgaben",
+            ],
+        ),
+        AppLocale::Fr => (
+            "Pour quoi aimerais-tu surtout que je t'aide ?",
+            [
+                "Écrire du code et modifier des dépôts",
+                "Chercher des informations et faire des recherches",
+                "Rappels programmés et surveillance",
+                "Les tâches du quotidien",
+            ],
+        ),
+        AppLocale::Pt => (
+            "Em que você mais gostaria que eu ajudasse?",
+            [
+                "Escrever código e alterar repositórios",
+                "Pesquisar e levantar informações",
+                "Lembretes agendados e monitoramento",
+                "Tarefas do dia a dia",
+            ],
+        ),
+        AppLocale::Ar => (
+            "في أي نوع من العمل تريدني أن أساعدك أولًا؟",
+            [
+                "كتابة الشيفرة وتعديل المستودعات",
+                "البحث وجمع المعلومات",
+                "التذكيرات المجدولة والمراقبة",
+                "المهام اليومية",
+            ],
+        ),
+    }
+}
+
 /// Whether an event is a new assistant's introduction.
 pub(super) fn is_intro_event(e: &crate::db::entities::personal_agent_event::Model) -> bool {
     e.kind == INTRO_EVENT
@@ -453,6 +554,47 @@ impl PersonalAgentEngine {
             copied_from: payload["copied_from"].as_str(),
             unwritten: super::templates::persona_unwritten(&soul),
         })
+    }
+
+    /// After a new work assistant's introduction (§1.3), when it was made
+    /// on its name alone: codeg's card of what it should mostly help with —
+    /// common kinds of work, or the owner's own words. A card, not the
+    /// brain's `ask_user_question`, which would hold up whatever else comes
+    /// for it until answered; the answer goes to it as the owner's message
+    /// replying to the card. Raised once, after the reply it follows.
+    pub(super) async fn raise_intro_card(&self, intro: &crate::db::entities::personal_agent_event::Model) {
+        let payload: Value = intro
+            .payload
+            .as_deref()
+            .and_then(|p| serde_json::from_str(p).ok())
+            .unwrap_or(Value::Null);
+        if !super::cards::intro_card_due(payload["words"].as_str(), payload["copied_from"].as_str()) {
+            return;
+        }
+        let (question, kinds) = intro_card_words(self.locale_now().await);
+        let options: Vec<Value> = kinds
+            .iter()
+            .zip(['A', 'B', 'C', 'D'])
+            .map(|(label, key)| json!({ "key": key.to_string(), "label": label }))
+            .collect();
+        let data = json!({
+            "notice": "choice",
+            "purpose": "intro",
+            "state": "open",
+            "options": options,
+        });
+        if let Err(e) = self
+            .raise_meet_card(
+                NoticeKind::Choice,
+                INTRO_CARD_SUBJECT,
+                question.to_string(),
+                data,
+                json!({ "purpose": "intro" }),
+            )
+            .await
+        {
+            tracing::warn!("[personal-agent] the card after the introduction was not written: {e}");
+        }
     }
 
     /// An executor config's name not taken yet: `name`, or `name (2)`…

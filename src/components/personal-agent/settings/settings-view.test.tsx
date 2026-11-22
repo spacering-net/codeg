@@ -256,7 +256,9 @@ describe("the settings view", () => {
     fireEvent.click(document.querySelector('[data-pa-nav="executors"]')!)
     expect(screen.getByTestId("executors-list")).toBeInTheDocument()
     expect(
-      screen.getByText(/these executor configs are the same ones/)
+      screen.getByText(
+        /These executor configs are the ones you @ in conversations/
+      )
     ).toBeInTheDocument()
   })
 
@@ -677,14 +679,20 @@ describe("the settings view", () => {
     )
   })
 
-  it("goes back to the conversation from the arrow before its title", () => {
+  it("goes back to the conversation from the pill over its title", () => {
     draw()
     const back = document.querySelector<HTMLElement>("[data-pa-settings-back]")!
-    expect(back.textContent).toBe("")
-    expect(back.getAttribute("aria-label")).toBe("Back to the conversation")
-    expect(back.parentElement!.querySelector("h1")?.textContent).toBe(
-      "Settings"
-    )
+    // It says where it goes, in words; the title is under it.
+    expect(back.textContent).toBe("Back to the conversation")
+    const title = back.parentElement!.querySelector("[data-pa-settings-title]")!
+    expect(title.querySelector("h1")?.textContent).toBe("Settings")
+    expect(
+      back.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+    // The navigation's rows are pills.
+    for (const b of document.querySelectorAll("[data-pa-nav]")) {
+      expect(b.className).toContain("rounded-full")
+    }
     fireEvent.click(back)
     expect(usePersonalAgentUi.getState().settings).toBeNull()
   })

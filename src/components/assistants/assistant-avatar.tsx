@@ -2,7 +2,7 @@
 
 import { UserRound } from "lucide-react"
 
-import { monogramFor } from "@/lib/assistant-avatar"
+import { isEmojiGlyph, monogramFor } from "@/lib/assistant-avatar"
 import type { AssistantAvatar as AssistantAvatarValue } from "@/lib/types"
 import type { AssistantAvatarColor } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -132,6 +132,7 @@ export function AssistantAvatar({
       data-slot="assistant-avatar"
       className={cn(
         "inline-flex shrink-0 select-none items-center justify-center rounded-full font-medium leading-none",
+        avatar.kind === "emoji" && isEmojiGlyph(glyph) && "font-emoji",
         DISC_CLASSES[avatar.color] ?? DISC_CLASSES.slate,
         className
       )}

@@ -123,7 +123,7 @@ describe("SessionDetailsDialog", () => {
         stats={fullStats}
       />
     )
-    expect(getByText("Assistant")).toBeTruthy()
+    expect(getByText("Executor config")).toBeTruthy()
     // Not in the store here: the name it carried.
     expect(getByText("Reviewer")).toBeTruthy()
 
@@ -138,7 +138,7 @@ describe("SessionDetailsDialog", () => {
         />
       )
     )
-    expect(queryByText("Assistant")).toBeNull()
+    expect(queryByText("Executor config")).toBeNull()
   })
 
   it("falls back to completed summary timestamps when stats duration is missing", () => {
