@@ -792,6 +792,9 @@ impl PersonalAgentEngine {
     /// Boot recovery, once, before the engine is driven: a fresh process has
     /// no live connection, so whatever was running was interrupted.
     pub(super) async fn boot(&self) {
+        // What was recorded before this moment is a gone process's (B1) —
+        // set when the host was built, here for an engine without one.
+        super::dispatch::booted_at();
         self.boot_reconcile().await;
         // A brief whose turn codeg went down in (6.4).
         self.reconcile_briefs().await;
@@ -818,6 +821,7 @@ impl PersonalAgentEngine {
                 }
                 _ = liveness.tick() => {
                     self.liveness_tick().await;
+                    self.reconcile_handed_over().await;
                     self.poll_task_dispatches().await;
                     self.acceptance_tick().await;
                 }
@@ -1081,6 +1085,7 @@ impl PersonalAgentEngine {
         // before the dispatches still running are marked interrupted.
         self.boot_ledger().await;
         self.boot_dispatches().await;
+        self.boot_handovers().await;
         // The sessions that were asking died with the process (7.3.1).
         self.sweep_asks().await;
     }

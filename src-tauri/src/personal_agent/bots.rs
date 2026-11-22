@@ -1850,6 +1850,50 @@ impl PersonalAgentEngine {
     /// dispatch may belong with (4.4): a session shares the project's
     /// checkout, so its branch; a task has its own. Only a reminder — the
     /// dispatch goes out either way.
+    /// A reminder after work went out in a project where earlier work of
+    /// this assistant's failed and its matter is still open (B1): if the new
+    /// work retries it, that matter should not stay open beside it.
+    pub(super) async fn open_failure_note(
+        &self,
+        made: &crate::db::entities::personal_agent_dispatch::Model,
+    ) -> Option<String> {
+        use crate::db::entities::personal_agent_dispatch::DispatchState;
+        use crate::db::entities::personal_agent_item::ItemStatus;
+        if made.replaces_id.is_some() {
+            return None;
+        }
+        let failed = svc::list_dispatches(
+            &self.db.conn,
+            self.bot().await,
+            &[DispatchState::Failed, DispatchState::Interrupted],
+            None,
+            20,
+        )
+        .await
+        .ok()?;
+        let mut ids: Vec<i32> = Vec::new();
+        for d in failed
+            .iter()
+            .filter(|d| d.id != made.id && d.folder_id == made.folder_id && d.replaced_by.is_none())
+        {
+            let open = svc::item_of_dispatch(&self.db.conn, d.id)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|i| matches!(i.status, ItemStatus::Open | ItemStatus::Waiting));
+            if open {
+                ids.push(d.id);
+            }
+        }
+        let first = *ids.first()?;
+        let list = ids.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(", ");
+        Some(format!(
+            "Your earlier work {list} in the same place failed and its matter is still open. If \
+             this new work retries it, close that matter with item_update — and pass `replaces: \
+             {first}` when you dispatch a retry, which hands its matter over for you."
+        ))
+    }
+
     pub(super) async fn same_line_note(
         &self,
         mode: crate::db::entities::personal_agent_dispatch::DispatchMode,

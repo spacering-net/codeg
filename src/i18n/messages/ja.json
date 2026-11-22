@@ -11038,6 +11038,7 @@
     },
     "event": {
       "someone": "アシスタント",
+      "replacedBy": "「{title}」が引き継ぎました",
       "more": "すべて表示",
       "less": "折りたたむ",
       "note": {

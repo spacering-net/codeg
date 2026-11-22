@@ -121,6 +121,21 @@ export function CollapsedText({
   )
 }
 
+/** The new work that took this failed work over (B1), from the card's
+ *  `replaced_by`. */
+function asReplacedBy(
+  v: unknown
+): { dispatchId: number; title: string; rowId: number | null } | null {
+  if (!v || typeof v !== "object") return null
+  const r = v as Record<string, unknown>
+  if (typeof r.dispatch_id !== "number") return null
+  return {
+    dispatchId: r.dispatch_id,
+    title: typeof r.title === "string" ? r.title : `#${r.dispatch_id}`,
+    rowId: typeof r.row_id === "number" ? r.row_id : null,
+  }
+}
+
 /** How codeg went on from a restart's interruption (7.3), from the card's
  *  `auto_retry`: retried, retrying, asked, out of retries. */
 export function useRetryLine(): (v: unknown) => string | null {
@@ -212,7 +227,7 @@ function EventActions({
 export function EventCard({ item }: { item: EventItem }) {
   const t = useTranslations("PersonalAgent")
   const { dispatchById, botId } = usePersonalAgent()
-  const { readOnly } = usePageScope()
+  const { readOnly, jumpTo } = usePageScope()
   const openRoutineEditor = usePersonalAgentUi((s) => s.openRoutineEditor)
   const openWork = useOpenWork()
   const meta = useWorkMeta()
@@ -237,6 +252,8 @@ export function EventCard({ item }: { item: EventItem }) {
       : rawNote
   const title = info?.title ?? str(data, "title") ?? row.body
   const retry = useRetryLine()(data?.auto_retry)
+  // Taken over by new work (B1): who, and a way to it.
+  const replacedBy = asReplacedBy(data?.replaced_by)
   const target = workTargetOf(info, row)
   const unread = row.read_at == null
   // The acceptance check of other work (7.5): its verdict, and its evidence
@@ -264,6 +281,7 @@ export function EventCard({ item }: { item: EventItem }) {
     answered > 0 ||
     note != null ||
     retry != null ||
+    replacedBy != null ||
     checkFor != null
   return (
     <MessageRow
@@ -331,6 +349,24 @@ export function EventCard({ item }: { item: EventItem }) {
                 data-pa-retry
               >
                 {retry}
+              </p>
+            ) : null}
+            {replacedBy ? (
+              <p
+                className="text-xs break-words text-muted-foreground"
+                data-pa-replaced-by={replacedBy.dispatchId}
+              >
+                {replacedBy.rowId != null ? (
+                  <button
+                    type="button"
+                    className="underline-offset-2 hover:text-foreground hover:underline focus-visible:underline"
+                    onClick={() => jumpTo(replacedBy.rowId!)}
+                  >
+                    {t("event.replacedBy", { title: replacedBy.title })}
+                  </button>
+                ) : (
+                  t("event.replacedBy", { title: replacedBy.title })
+                )}
               </p>
             ) : null}
             {checkFor != null ? (

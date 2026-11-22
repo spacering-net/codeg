@@ -214,6 +214,7 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                 report: report || (mode != DispatchMode::Task && args.get("deliverable").is_some()),
                 on_done: string(&args, "on_done"),
                 done_when: string(&args, "done_when"),
+                replaces: int(&args, "replaces").and_then(as_i32),
             };
             let mut valid = match engine.validate_dispatch(&req).await {
                 Ok(v) => v,
@@ -252,6 +253,11 @@ async fn answer(engine: &Arc<PersonalAgentEngine>, tool: &str, args: Value) -> T
                     let mut out = dispatched(&made.dispatch, made.earlier);
                     if let (false, Some(n)) = (made.earlier, note) {
                         out.text = format!("{}\n{n}", out.text);
+                    }
+                    if !made.earlier {
+                        if let Some(n) = engine.open_failure_note(&made.dispatch).await {
+                            out.text = format!("{}\n{n}", out.text);
+                        }
                     }
                     // The third request like it in a month (6.7).
                     if !made.earlier {

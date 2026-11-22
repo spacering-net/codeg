@@ -766,8 +766,12 @@ impl EngineHost {
             .await
             .ok()?
             {
-                // The board's task stands for task work.
-                if d.mode == DispatchMode::Task || d.updated_at < fresh {
+                // The board's task stands for task work; work another took
+                // over (B1) is somebody's.
+                if d.mode == DispatchMode::Task
+                    || d.updated_at < fresh
+                    || super::dispatch::superseded(&self.db, &d).await
+                {
                     continue;
                 }
                 // One codeg retries or asks about is not nobody's.
@@ -812,6 +816,12 @@ impl EngineHost {
             let (bot, d) = self
                 .owner_of_dispatch(t.personal_agent_dispatch_id, look.primary)
                 .await;
+            // Its run taken over by other work (B1).
+            if let Some(d) = d.as_ref() {
+                if super::dispatch::superseded(&self.db, d).await {
+                    continue;
+                }
+            }
             out.push(Found {
                 rule: "failed",
                 object: format!("task:{}", t.id),
@@ -1653,7 +1663,7 @@ impl PersonalAgentEngine {
             .map(|t| t.trim().chars().take(2_000).collect::<String>())
             .filter(|t| !t.is_empty());
         let ran: Result<(String, Value), String> = match (rule.as_str(), action) {
-            ("failed", "retry") => self.retry_failed(&facts).await,
+            ("failed", "retry") => self.retry_failed(&facts, notice.id).await,
             ("review", "check") => match self.check_review(&facts).await {
                 Ok(Some(r)) => Ok(r),
                 // Not one codeg can check: the assistant sees to it.
@@ -1785,7 +1795,11 @@ impl PersonalAgentEngine {
     }
 
     /// [Retry]: the failed dispatch, or the board's failed task, again.
-    async fn retry_failed(self: &Arc<Self>, facts: &Value) -> Result<(String, Value), String> {
+    async fn retry_failed(
+        self: &Arc<Self>,
+        facts: &Value,
+        notice_id: i32,
+    ) -> Result<(String, Value), String> {
         let id_of = |k: &str| facts[k].as_i64().and_then(|v| i32::try_from(v).ok());
         if let Some(id) = id_of("dispatch_id") {
             let mine = svc::get_dispatch_of(&self.db.conn, self.bot().await, id)
@@ -1796,7 +1810,7 @@ impl PersonalAgentEngine {
                 // agent not installed, say) has nothing to go on with: it
                 // starts again as it was asked.
                 if d.mode != DispatchMode::Task && !self.resumable(&d).await {
-                    let made = self.dispatch_again(&d).await?;
+                    let made = self.dispatch_again(&d, notice_id).await?;
                     return Ok((
                         "retried".into(),
                         json!({ "dispatch_id": made, "retry_of": d.id }),
@@ -1851,10 +1865,14 @@ impl PersonalAgentEngine {
     }
 
     /// The same work handed out again, as it was first asked for: a new
-    /// dispatch on the same line. Its id.
+    /// dispatch on the same line, taking the failed one over (B1). Its id.
+    /// As card `notice_id`'s own run, settled with the dispatch it makes:
+    /// the card run again (a second click) finds the dispatch it made, and a
+    /// restart midway finds the card settled by its entry, not reopened.
     async fn dispatch_again(
         self: &Arc<Self>,
         d: &dispatch_entity::Model,
+        notice_id: i32,
     ) -> Result<i32, String> {
         // On what its assistant's work runs on now, not what the first ran on.
         let request = super::dispatch::DispatchRequest {
@@ -1865,6 +1883,7 @@ impl PersonalAgentEngine {
             report: d.deliverable.as_deref() == Some("report"),
             on_done: d.on_done.clone(),
             done_when: d.done_when.clone(),
+            replaces: Some(d.id),
         };
         let mut v = self.validate_dispatch(&request).await?;
         v.lineage = svc::Lineage {
@@ -1874,7 +1893,7 @@ impl PersonalAgentEngine {
             for_input: d.for_input.clone(),
         };
         let made = self
-            .record_dispatch(v, super::dispatch::DispatchAuth::Direct)
+            .record_dispatch(v, super::dispatch::DispatchAuth::Card { notice_id })
             .await?;
         Ok(made.dispatch.id)
     }

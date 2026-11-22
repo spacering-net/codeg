@@ -891,6 +891,7 @@ impl PersonalAgentEngine {
                     report: deliverable.as_deref() == Some("report"),
                     on_done: None,
                     done_when: done_when.clone(),
+                    replaces: None,
                 };
                 self.validate_dispatch(&req).await.map_err(at)?;
                 let own = self.agent_row().await;
@@ -2269,6 +2270,7 @@ impl PersonalAgentEngine {
                     report: s.deliverable.as_deref() == Some("report"),
                     on_done: None,
                     done_when: s.done_when.clone(),
+                    replaces: None,
                 };
                 match self.validate_dispatch(&req).await {
                     Ok(mut v) => {
@@ -3321,6 +3323,9 @@ mod tests {
             done_when: None,
             pr_fix: None,
             is_check: false,
+            replaces_id: None,
+            replaces_run_seq: None,
+            replaced_by: None,
         }
     }
 

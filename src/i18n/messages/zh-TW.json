@@ -11038,6 +11038,7 @@
     },
     "event": {
       "someone": "職務助理",
+      "replacedBy": "已由「{title}」接手",
       "more": "展開",
       "less": "收合",
       "note": {

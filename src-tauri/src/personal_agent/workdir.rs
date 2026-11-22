@@ -3557,6 +3557,11 @@ turn ends only the LAST thing you wrote stays as your reply.
   verify round for a task in review, a retry for a failed or interrupted task,
   or the next message for an idle chat or session. Once the owner writes in a
   dispatched conversation themselves it is theirs: leave it alone.
+- Retrying failed work with a new dispatch instead (another approach, a
+  fresh start): pass `replaces` with the failed dispatch's id. Its matter is
+  handed to the new work and the old failure leaves "needs you", so the
+  owner sees the attempt that counts, not a stale failure. Without it the
+  failed one stays open beside the new one.
 - Never repeat an external action (a dispatch, a follow-up) before checking
   `item_list` — an interrupted turn may already have done it.
 - The owner may ask to confirm some actions first (their preferences, in
@@ -3808,6 +3813,10 @@ codeg keeps a ledger of open matters for you; every dispatch gets one
 automatically. Use `item_list` / `item_read` to see where things stand, and
 `item_update` to record reminders, follow-ups and questions for the owner, or
 to close a matter.
+
+- Work you retried with a new dispatch is the new work's: dispatch it with
+  `replaces` and codeg closes the failed one's matter for you; when you did
+  not, close that matter with `item_update`.
 
 - "Next time I mention X, remind me of Y": a matter of kind
   `when_mentioned` — Y as its summary, and `when_mentioned: { "keywords":
@@ -4116,6 +4125,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// B1: failed work retried with a new dispatch is taken over with
+    /// `replaces`, in the skill and in the dispatch tool's schema.
+    #[test]
+    fn a_retry_by_a_new_dispatch_takes_the_failed_work_over() {
+        assert!(SKILL_MD.contains("pass `replaces` with the failed dispatch's id"));
+        assert!(SKILL_MD.contains("dispatch it with\n  `replaces` and codeg closes the failed one's matter"));
+        let schema: serde_json::Value =
+            serde_json::from_str(include_str!("../acp/delegation/tool_schema.json")).unwrap();
+        let dispatch = schema
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "dispatch")
+            .unwrap();
+        assert_eq!(dispatch["inputSchema"]["properties"]["replaces"]["type"], "integer");
     }
 
     /// No tool that is gone is offered or described to the assistants.

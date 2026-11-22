@@ -94,6 +94,9 @@ pub fn build(
     bus: Arc<InternalEventBus>,
     data_dir: PathBuf,
 ) -> Option<Arc<EngineHost>> {
+    // Before anything can record work through it: what was recorded before
+    // this moment is a gone process's (B1's start-up repairs).
+    super::dispatch::booted_at();
     let host = EngineHost::new(db, manager, emitter, bus, data_dir);
     HOST.set(host.clone()).ok()?;
     Some(host)

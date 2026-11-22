@@ -164,7 +164,10 @@ const TABLES: &[&str] = &[
         "for_input" text NULL,
         "done_when" text NULL,
         "pr_fix" text NULL,
-        "is_check" boolean NOT NULL DEFAULT FALSE
+        "is_check" boolean NOT NULL DEFAULT FALSE,
+        "replaces_id" integer NULL,
+        "replaces_run_seq" integer NULL,
+        "replaced_by" integer NULL
     )"#,
     r#"CREATE TABLE "personal_agent_action" (
         "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,

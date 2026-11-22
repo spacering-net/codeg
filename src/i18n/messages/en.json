@@ -11038,6 +11038,7 @@
     },
     "event": {
       "someone": "An assistant",
+      "replacedBy": "Taken over by “{title}”",
       "more": "Show all",
       "less": "Show less",
       "note": {

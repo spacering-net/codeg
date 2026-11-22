@@ -1171,6 +1171,9 @@ mod tests {
             done_when: None,
             pr_fix: None,
             is_check: mode == "check",
+            replaces_id: None,
+            replaces_run_seq: None,
+            replaced_by: None,
         }
     }
 

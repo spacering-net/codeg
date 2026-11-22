@@ -11038,6 +11038,7 @@
     },
     "event": {
       "someone": "어시스턴트",
+      "replacedBy": "“{title}”이(가) 이어받았습니다",
       "more": "전체 보기",
       "less": "접기",
       "note": {

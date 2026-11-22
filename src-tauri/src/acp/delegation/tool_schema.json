@@ -1482,6 +1482,10 @@
           "maxLength": 4000,
           "description": "What done looks like, criterion by criterion — e.g. '1. a cold start no longer shows a blank screen; 2. the existing tests pass; 3. the public API is unchanged'. The owner sees it on the dispatch card. For code work (task) codeg checks the result against it in a separate read-only session, and you accept it with acceptance_decide; it also guides how you answer the work session's questions. Write it in the owner's language."
         },
+        "replaces": {
+          "type": "integer",
+          "description": "When this new work retries failed (or stopped) work of yours a different way: that dispatch's id. Its matter is handed to this one and it leaves 'needs you' — the owner sees the new attempt, not a stale failure. Only your own failed, interrupted or stopped work in the same project; not one a follow-up or codeg's own retry is picking up again. To go on with the same session or task instead, use dispatch_followup."
+        },
         "for": {
           "type": "string",
           "description": "The input of this turn the work is for — its id as the delivery shows it: an owner's message #58, another assistant's message m12, news #61. The dispatch is filed under where that input came from. Needed only when the turn carries inputs from more than one source; otherwise leave it out."

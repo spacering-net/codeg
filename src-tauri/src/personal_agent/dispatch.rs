@@ -88,6 +88,10 @@ pub struct DispatchRequest {
     /// What done looks like, criterion by criterion (7.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub done_when: Option<String>,
+    /// The failed (or stopped) work of this assistant's it takes over (B1):
+    /// that work's matter is handed to this one as it is recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaces: Option<i32>,
 }
 
 /// A dispatch checked against the projects, ready to record. What runs it
@@ -111,9 +115,19 @@ pub struct ValidDispatch {
     /// A round codeg starts on a watched pull request (7.4): its task works
     /// on that pull request and is delivered back to it once accepted.
     pub pr_fix: Option<super::pr_auto::PrFix>,
+    /// The failed work it takes over (B1).
+    pub replaces: Option<i32>,
 }
 
 impl ValidDispatch {
+    /// Its ledger key: what makes two calls the same one.
+    pub fn ledger_key(&self) -> String {
+        super::ledger::replacing_key(
+            super::ledger::dispatch_key(self.mode, self.folder_id, &self.title),
+            self.replaces,
+        )
+    }
+
     /// The request it was checked from, as a proposal card keeps it.
     pub fn to_request(&self) -> DispatchRequest {
         DispatchRequest {
@@ -124,6 +138,7 @@ impl ValidDispatch {
             report: self.report,
             on_done: self.on_done.clone(),
             done_when: self.done_when.clone(),
+            replaces: self.replaces,
         }
     }
 }
@@ -180,6 +195,46 @@ pub(super) const LIVE_STATES: &[DispatchState] = &[
     DispatchState::WaitingInput,
     DispatchState::Review,
 ];
+
+/// When this process's assistants first booted: work recorded before it was
+/// recorded by a process that is gone (B1's start-up repairs).
+static BOOTED_AT: std::sync::OnceLock<chrono::DateTime<Utc>> = std::sync::OnceLock::new();
+
+pub(super) fn booted_at() -> chrono::DateTime<Utc> {
+    *BOOTED_AT.get_or_init(Utc::now)
+}
+
+/// Whether dispatch `d` was taken over by other work (B1) in the run it
+/// is in now: then nothing of codeg's picks it up again — an automatic
+/// retry, a retry card, a late update reopening its matter — and it is not
+/// listed as failed. A board task the owner ran again since (its run past
+/// the one taken over) is theirs, and moves as any.
+pub(crate) async fn superseded(db: &crate::db::AppDatabase, d: &dispatch_entity::Model) -> bool {
+    superseded_with(db, d, None).await
+}
+
+/// [`superseded`], with `d`'s board task as the caller read it (`seen`):
+/// judged by that read's run.
+pub(crate) async fn superseded_with(
+    db: &crate::db::AppDatabase,
+    d: &dispatch_entity::Model,
+    seen: Option<&crate::db::entities::work_task::Model>,
+) -> bool {
+    let Some(by) = d.replaced_by else {
+        return false;
+    };
+    let taken = match svc::get_dispatch(&db.conn, by).await {
+        Ok(Some(n)) => n.replaces_run_seq,
+        _ => None,
+    };
+    match (taken, d.work_task_id, seen) {
+        (Some(run), Some(t), Some(task)) if task.id == t => task.run_seq == run,
+        (Some(run), Some(t), _) => crate::db::service::work_task_service::get_model(&db.conn, t)
+            .await
+            .map_or(true, |task| task.run_seq == run),
+        _ => true,
+    }
+}
 
 /// The states a conversation dispatch takes a follow-up in.
 const FOLLOWUP_FROM: &[DispatchState] = &[
@@ -411,6 +466,7 @@ impl PersonalAgentEngine {
             is_check: false,
             lineage: svc::Lineage::default(),
             pr_fix: None,
+            replaces: req.replaces,
         })
     }
 
@@ -447,6 +503,7 @@ impl PersonalAgentEngine {
         v: ValidDispatch,
         auth: DispatchAuth,
     ) -> Result<DispatchMade, String> {
+        let key = v.ledger_key();
         let ValidDispatch {
             mode,
             folder_id,
@@ -458,6 +515,7 @@ impl PersonalAgentEngine {
             is_check,
             lineage,
             pr_fix,
+            replaces,
         } = v;
         let thread = lineage.thread_id;
         let request = DispatchRequest {
@@ -468,8 +526,8 @@ impl PersonalAgentEngine {
             report,
             on_done: on_done.clone(),
             done_when: done_when.clone(),
+            replaces,
         };
-        let key = ledger::dispatch_key(mode, folder_id, &title);
         // A repeat costs nothing to find before anything is written — and is
         // found whatever runs this assistant's work now.
         if let DispatchAuth::Ledgered { scope, .. } = &auth {
@@ -497,6 +555,13 @@ impl PersonalAgentEngine {
                 return self.earlier_dispatch(&entry).await;
             }
         }
+        // The failed work it takes over, as it stands now; claimed with the
+        // write, which refuses it if that no longer holds.
+        let handover = match replaces {
+            Some(p) => Some(self.handover_for(p, folder_id, &title, on_done.clone()).await?),
+            None => None,
+        };
+        let handover = handover.as_ref();
         // What runs it: this assistant's own, as it is the moment it goes out.
         let snapshot = self.work_snapshot().await?;
         let origin_batch_id = match &auth {
@@ -534,9 +599,16 @@ impl PersonalAgentEngine {
         let row = match &auth {
             DispatchAuth::Ledgered { batch_id, .. } => {
                 let slot = LedgerSlot::in_batch(*batch_id, key, ledger::fresh_op_id());
-                match svc::create_dispatch_ledgered(&self.db.conn, new, &slot, payload, None)
-                    .await
-                    .map_err(|e| e.to_string())?
+                match svc::create_dispatch_ledgered(
+                    &self.db.conn,
+                    new,
+                    Some(&slot),
+                    payload,
+                    None,
+                    handover,
+                )
+                .await
+                .map_err(|e| e.to_string())?
                 {
                     Ledgered::New(row) => row,
                     Ledgered::Earlier(earlier) => return self.earlier_dispatch(&earlier).await,
@@ -560,9 +632,16 @@ impl PersonalAgentEngine {
                     row_id,
                     row_data,
                 };
-                match svc::create_dispatch_ledgered(&self.db.conn, new, &slot, payload, Some(card))
-                    .await
-                    .map_err(|e| e.to_string())?
+                match svc::create_dispatch_ledgered(
+                    &self.db.conn,
+                    new,
+                    Some(&slot),
+                    payload,
+                    Some(card),
+                    handover,
+                )
+                .await
+                .map_err(|e| e.to_string())?
                 {
                     Ledgered::New(row) => {
                         if let Ok(Some(r)) = svc::get_row(&self.db.conn, row_id).await {
@@ -573,12 +652,8 @@ impl PersonalAgentEngine {
                     Ledgered::Earlier(earlier) => return self.earlier_dispatch(&earlier).await,
                 }
             }
-            DispatchAuth::Direct => svc::create_dispatch(&self.db.conn, new)
-                .await
-                .map_err(|e| e.to_string())?,
-            DispatchAuth::Routine { run_id, .. } => {
-                let slot = LedgerSlot::outside(format!("routine-run:{run_id}"));
-                match svc::create_dispatch_ledgered(&self.db.conn, new, &slot, payload, None)
+            DispatchAuth::Direct if handover.is_some() => {
+                match svc::create_dispatch_ledgered(&self.db.conn, new, None, payload, None, handover)
                     .await
                     .map_err(|e| e.to_string())?
                 {
@@ -586,11 +661,38 @@ impl PersonalAgentEngine {
                     Ledgered::Earlier(earlier) => return self.earlier_dispatch(&earlier).await,
                 }
             }
+            DispatchAuth::Direct => svc::create_dispatch(&self.db.conn, new)
+                .await
+                .map_err(|e| e.to_string())?,
+            DispatchAuth::Routine { run_id, .. } => {
+                let slot = LedgerSlot::outside(format!("routine-run:{run_id}"));
+                match svc::create_dispatch_ledgered(
+                    &self.db.conn,
+                    new,
+                    Some(&slot),
+                    payload,
+                    None,
+                    handover,
+                )
+                .await
+                .map_err(|e| e.to_string())?
+                {
+                    Ledgered::New(row) => row,
+                    Ledgered::Earlier(earlier) => return self.earlier_dispatch(&earlier).await,
+                }
+            }
             DispatchAuth::Op { op_id } => {
                 let slot = LedgerSlot::outside(op_id.clone());
-                match svc::create_dispatch_ledgered(&self.db.conn, new, &slot, payload, None)
-                    .await
-                    .map_err(|e| e.to_string())?
+                match svc::create_dispatch_ledgered(
+                    &self.db.conn,
+                    new,
+                    Some(&slot),
+                    payload,
+                    None,
+                    handover,
+                )
+                .await
+                .map_err(|e| e.to_string())?
                 {
                     Ledgered::New(row) => row,
                     Ledgered::Earlier(earlier) => return self.earlier_dispatch(&earlier).await,
@@ -620,14 +722,25 @@ impl PersonalAgentEngine {
         let card = self.push_row(card).await;
         // A round on a pull request belongs to the matter of the work that
         // made it, when there is one: no matter of its own (7.4).
-        let under = match pr_fix.as_ref().and_then(|f| f.origin_dispatch_id) {
-            Some(origin) => svc::item_of_dispatch(&self.db.conn, origin)
-                .await
-                .ok()
-                .flatten()
-                .is_some(),
-            None => false,
+        // Work that took failed work over has its matter already, made with
+        // it (B1): it only learns its row.
+        let handed = match handover {
+            Some(_) => svc::item_of_dispatch(&self.db.conn, row.id).await.ok().flatten(),
+            None => None,
         };
+        if let (Some(item), Some(c)) = (handed.as_ref(), card.as_ref()) {
+            let _ = svc::set_item_origin(&self.db.conn, item.id, c.id).await;
+            self.emit(PersonalAgentChange::Item { id: item.id });
+        }
+        let under = handed.is_some()
+            || match pr_fix.as_ref().and_then(|f| f.origin_dispatch_id) {
+                Some(origin) => svc::item_of_dispatch(&self.db.conn, origin)
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some(),
+                None => false,
+            };
         if !under {
             let _ = svc::create_item(
                 &self.db.conn,
@@ -646,6 +759,7 @@ impl PersonalAgentEngine {
         if let Some(t) = thread {
             self.thread_progress(t).await;
         }
+        self.settle_handover(&row).await;
         self.emit(PersonalAgentChange::Dispatch { id: row.id });
         let engine = self.clone();
         let id = row.id;
@@ -669,10 +783,224 @@ impl PersonalAgentEngine {
             .await
             .map_err(|e| e.to_string())?
             .ok_or_else(|| format!("dispatch #{id} of an earlier identical call is gone"))?;
+        // What the first call left to do once its write was in (B1): done
+        // again, to no further effect when it was done.
+        self.settle_handover(&dispatch).await;
         Ok(DispatchMade {
             dispatch,
             earlier: true,
         })
+    }
+
+    /// The result card of `p`'s failure that was taken over: its latest card
+    /// telling a failure (or a stop), of run `run` for a task's.
+    async fn failure_card_taken_over(
+        &self,
+        p: i32,
+        run: Option<i32>,
+    ) -> Option<crate::db::entities::personal_agent_timeline::Model> {
+        let cards = svc::result_rows_of_dispatch(&self.db.conn, p).await.ok()?;
+        cards.into_iter().rev().find(|c| {
+            let data = c
+                .data
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                .unwrap_or_default();
+            let ended = matches!(data["state"].as_str(), Some("failed" | "interrupted" | "canceled"));
+            // A task's: of that run, as the card says (a card from before
+            // cards said so is not known to be it).
+            let of_run = match run {
+                Some(r) => data["run"].as_i64() == Some(i64::from(r)),
+                None => true,
+            };
+            ended && of_run
+        })
+    }
+
+    /// The card work `d` went out with — made now when codeg went down
+    /// between recording the work and writing its card (B1: the failure it
+    /// took over points at it) — and its matter pointed at it.
+    async fn ensure_dispatch_card(&self, d: &dispatch_entity::Model, at_boot: bool) -> Option<i32> {
+        let card = match svc::dispatch_card_row(&self.db.conn, d.id).await.ok()? {
+            Some(c) => c.id,
+            // The call that recorded it writes its card a moment later: only
+            // one long past is missing it.
+            // At start-up: what was recorded before it, by a process gone.
+            None if at_boot && d.created_at >= booted_at() => return None,
+            None if !at_boot && Utc::now() - d.created_at < chrono::Duration::seconds(30) => {
+                return None;
+            }
+            None => {
+                let executor = executor_of(d);
+                let mut card = NewRow::new(TimelineKind::Dispatch, d.title.clone());
+                card.dispatch_id = Some(d.id);
+                card.batch_id = d.origin_batch_id;
+                card.data = Some(serde_json::json!({
+                    "mode": d.mode,
+                    "executor": executor.name,
+                    "executor_id": executor.assistant_id,
+                    "agent_type": executor.agent_type,
+                    "folder_id": d.folder_id,
+                    "deliverable": d.deliverable,
+                    "state": d.state,
+                    "done_when": d.done_when,
+                }));
+                self.push_row(card).await?.id
+            }
+        };
+        if let Ok(Some(item)) = svc::item_of_dispatch(&self.db.conn, d.id).await {
+            if item.origin_timeline_id.is_none() {
+                let _ = svc::set_item_origin(&self.db.conn, item.id, card).await;
+                self.emit(PersonalAgentChange::Item { id: item.id });
+            }
+        }
+        Some(card)
+    }
+
+    /// Whether this assistant's work `p` can be taken over by new work in
+    /// project `folder_id` (B1), read as it stands — on the board for a
+    /// task, which can be a step ahead of the dispatch — and the handing
+    /// over to write with the new work. The write claims it again and
+    /// refuses if any of it no longer holds.
+    async fn handover_for(
+        &self,
+        p: i32,
+        folder_id: Option<i32>,
+        title: &str,
+        on_done: Option<String>,
+    ) -> Result<svc::Handover, String> {
+        let me = self.bot().await;
+        let d = svc::get_dispatch(&self.db.conn, p)
+            .await
+            .map_err(|e| e.to_string())?
+            .filter(|d| d.bot_id == Some(me))
+            .ok_or_else(|| format!("`replaces`: dispatch #{p} is not one of yours"))?;
+        if let Some(by) = d.replaced_by {
+            return Err(format!("`replaces`: dispatch #{p} was taken over by #{by} already"));
+        }
+        if d.is_check || d.pr_fix.is_some() {
+            return Err(format!(
+                "`replaces`: dispatch #{p} is codeg's own (a check, a pull request's round): codeg \
+                 retries it, not you"
+            ));
+        }
+        if d.folder_id != folder_id {
+            return Err(format!(
+                "`replaces`: dispatch #{p} is in another project; new work takes over work in its \
+                 own project only"
+            ));
+        }
+        let task = match (d.mode, d.work_task_id) {
+            (DispatchMode::Task, Some(t)) => {
+                match crate::db::service::work_task_service::get_model(&self.db.conn, t).await {
+                    Ok(task) if matches!(task.status, WorkTaskStatus::Failed | WorkTaskStatus::Canceled) => {
+                        Some((t, task.run_seq))
+                    }
+                    Ok(task) => {
+                        return Err(format!(
+                            "`replaces`: dispatch #{p}'s board task is {} now, not failed: nothing to \
+                             take over",
+                            enum_str(&task.status)
+                        ));
+                    }
+                    // Deleted from the board: the dispatch's own state says.
+                    Err(_) => None,
+                }
+            }
+            _ => None,
+        };
+        if task.is_none()
+            && !matches!(
+                d.state,
+                DispatchState::Failed | DispatchState::Interrupted | DispatchState::Canceled
+            )
+        {
+            return Err(format!(
+                "`replaces`: dispatch #{p} is {} now, not failed or stopped: nothing to take over \
+                 (follow it up with dispatch_followup instead)",
+                enum_str(&d.state)
+            ));
+        }
+        // Being picked up again already: a follow-up on its way, codeg's
+        // own retry of an interruption about to go out.
+        if d.followup.is_some() {
+            return Err(format!(
+                "`replaces`: dispatch #{p} has a follow-up on its way; let it run, or wait for it"
+            ));
+        }
+        if self.retry_pending(p).await {
+            return Err(format!(
+                "`replaces`: codeg retries dispatch #{p} by itself; nothing for you to take over"
+            ));
+        }
+        Ok(svc::Handover {
+            predecessor: p,
+            task,
+            summary: title.to_string(),
+            on_done,
+        })
+    }
+
+    /// Whether codeg is about to retry dispatch `p`'s interruption itself
+    /// (7.3): its card says so, and it has not gone out yet.
+    async fn retry_pending(&self, p: i32) -> bool {
+        let Ok(Some(card)) = svc::latest_result_row(&self.db.conn, p).await else {
+            return false;
+        };
+        card.data
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .is_some_and(|v| v["auto_retry"]["state"].as_str() == Some("pending"))
+    }
+
+    /// What a handing over leaves to do once its write is in (B1): the
+    /// failed work's result card says who took it over, and both pieces of
+    /// work — and the matter closed — are told to the page. Safe to do
+    /// again: a replay and a restart do.
+    pub(super) async fn settle_handover(&self, new: &dispatch_entity::Model) {
+        self.settle_handover_at(new, false).await
+    }
+
+    /// [`Self::settle_handover`]; `at_boot`, at start-up.
+    async fn settle_handover_at(&self, new: &dispatch_entity::Model, at_boot: bool) {
+        let Some(p) = new.replaces_id else {
+            return;
+        };
+        // No card for it yet: the call that recorded it is writing it, and
+        // says who took over itself, with the way to it.
+        let Some(row) = self.ensure_dispatch_card(new, at_boot).await else {
+            return;
+        };
+        // The card of the failure it took over: the latest that tells a
+        // failure, of the run taken over — a run the owner started on the
+        // board since has its own cards; a failure taken over before its
+        // card was written has none (nothing more is written of it).
+        if let Some(card) = self.failure_card_taken_over(p, new.replaces_run_seq).await {
+            let mut data = card
+                .data
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            let by = serde_json::json!({ "dispatch_id": new.id, "title": new.title, "row_id": row });
+            if data.get("replaced_by") != Some(&by) {
+                if let Some(map) = data.as_object_mut() {
+                    map.insert("replaced_by".into(), by);
+                }
+                if svc::update_row_data(&self.db.conn, card.id, None, Some(data))
+                    .await
+                    .is_ok()
+                {
+                    if let Ok(Some(updated)) = svc::get_row(&self.db.conn, card.id).await {
+                        self.emit_rows(vec![svc::to_row(updated)]);
+                    }
+                }
+            }
+        }
+        if let Ok(Some(item)) = svc::item_of_dispatch(&self.db.conn, p).await {
+            self.emit(PersonalAgentChange::Item { id: item.id });
+        }
+        self.emit(PersonalAgentChange::Dispatch { id: p });
+        self.emit(PersonalAgentChange::Dispatch { id: new.id });
     }
 
     /// Start a recorded dispatch: a task right away (the board has its own
@@ -797,7 +1125,16 @@ impl PersonalAgentEngine {
             let _ = engine.cancel(task.id, None).await;
             return Ok(());
         }
-        engine.start(task.id).await?;
+        if let Err(e) = engine.start(task.id).await {
+            // Started by someone else first (the owner's "start all", the
+            // board's own processing): under way, not failed.
+            let elsewhere = crate::db::service::work_task_service::get_model(&self.db.conn, task.id)
+                .await
+                .is_ok_and(|t| t.status != WorkTaskStatus::Todo);
+            if !elsewhere {
+                return Err(e);
+            }
+        }
         if self.was_stopped(d.id).await {
             let _ = engine.cancel(task.id, None).await;
             return Ok(());
@@ -1357,7 +1694,30 @@ impl PersonalAgentEngine {
         note: Option<String>,
         cause: &str,
     ) {
+        // On the heap: its future is a large one, and it is awaited deep in
+        // other futures.
+        Box::pin(self.record_progress_with(d, excerpt, note, cause, None)).await
+    }
+
+    /// [`Self::record_progress`], with the board task as the caller read it
+    /// when it decided there was news (`seen`): the run the news is of is
+    /// that read's, not a later one's.
+    pub(super) async fn record_progress_with(
+        &self,
+        d: &dispatch_entity::Model,
+        excerpt: Option<String>,
+        note: Option<String>,
+        cause: &str,
+        seen: Option<crate::db::entities::work_task::Model>,
+    ) {
         use crate::models::personal_agent_roster::FaceState;
+        // Taken over by other work (B1): a late word of it is not news — its
+        // matter stays with the work that took it over. Judged by the board
+        // as the caller read it, when it did.
+        if superseded_with(&self.db, d, seen.as_ref()).await {
+            self.emit(PersonalAgentChange::Dispatch { id: d.id });
+            return;
+        }
         // A check codeg sent out for an acceptance (7.5) is news of that
         // acceptance, not work for the assistant to read — unless it waits
         // on a permission, which is the owner's as any session's is.
@@ -1383,8 +1743,9 @@ impl PersonalAgentEngine {
             _ => {}
         }
         let executor = executor_of(d);
-        let task = match (d.mode, d.work_task_id) {
-            (DispatchMode::Task, Some(tid)) => {
+        let task = match (d.mode, d.work_task_id, seen) {
+            (DispatchMode::Task, Some(tid), Some(t)) if t.id == tid => Some(t),
+            (DispatchMode::Task, Some(tid), _) => {
                 crate::db::service::work_task_service::get_model(&self.db.conn, tid)
                     .await
                     .ok()
@@ -1566,6 +1927,8 @@ impl PersonalAgentEngine {
             // language, and shows an agent's own error as it came.
             "cause": cause,
             "work_task_id": d.work_task_id,
+            // The board run it tells of, for a task's (B1).
+            "run": task.as_ref().map(|t| t.run_seq),
             "conversation_id": d.conversation_id,
             "conversation_folder_id": conversation_folder_id,
             "folder_id": d.folder_id,
@@ -1707,9 +2070,12 @@ impl PersonalAgentEngine {
                 }
             };
             if item.status != ItemStatus::Dropped {
-                let _ = svc::update_item(
+                // Not when other work took it over meanwhile (B1): its
+                // matter was closed with that, and stays so.
+                let _ = svc::update_item_unless_taken_over(
                     &self.db.conn,
                     item.id,
+                    d.id,
                     ItemWrite {
                         status: Some(status),
                         waits_for: Some(waits_for),
@@ -1771,7 +2137,40 @@ impl PersonalAgentEngine {
             WorkTaskStatus::Failed => DispatchState::Failed,
             WorkTaskStatus::Canceled => DispatchState::Canceled,
         };
+        // Taken over in an earlier run and run again by the owner on the
+        // board since (B1): the new run is theirs, its matter open again as
+        // it stands — and a run that failed again between two looks (the
+        // state the same both times) is news of its own.
+        let mut d = d;
+        // The run taken over moving on to its end (failed → canceled, say):
+        // not this dispatch's news, and not written — the dispatch stays
+        // where the board's sync looks, to see the owner run it again.
+        if superseded_with(&self.db, &d, Some(&task)).await {
+            return;
+        }
+        if d.replaced_by.is_some() {
+            if let Some(released) = self.release_rerun(&d, state).await {
+                d = released;
+                // Failed again between two looks: the state the same both
+                // times, still news of its own.
+                if state == d.state {
+                    let excerpt = task.result_summary.as_deref().map(excerpt_of);
+                    let note = task.last_error.clone();
+                    Box::pin(self.record_progress_with(&d, excerpt, note, "task", Some(task))).await;
+                    return;
+                }
+            }
+        }
         if state == d.state {
+            return;
+        }
+        // Its start failed before the board took the task up (B1): the
+        // failure stands — a task still to do that never ran is not work
+        // queued again.
+        if matches!(d.state, DispatchState::Failed | DispatchState::Interrupted)
+            && task.status == WorkTaskStatus::Todo
+            && task.started_at.is_none()
+        {
             return;
         }
         let excerpt = task.result_summary.as_deref().map(excerpt_of);
@@ -1792,8 +2191,36 @@ impl PersonalAgentEngine {
         )
         .await
         {
-            self.record_progress(&updated, excerpt, note, "task").await;
+            Box::pin(self.record_progress_with(&updated, excerpt, note, "task", Some(task))).await;
         }
+    }
+
+    /// Work taken over in an earlier run, run again by the owner on the
+    /// board since (B1): the new run is theirs. Once — the claim is let go
+    /// in one conditional write, so no later look does this again (a matter
+    /// closed since stays closed) — its matter opens again as the run stands
+    /// (`state`), and it is work like any from here. The dispatch as it is
+    /// now, when this look let it go.
+    async fn release_rerun(
+        &self,
+        d: &dispatch_entity::Model,
+        state: DispatchState,
+    ) -> Option<dispatch_entity::Model> {
+        let by = d.replaced_by?;
+        let reopen = match state {
+            DispatchState::Queued | DispatchState::Running => Some((ItemStatus::Open, WaitsFor::External)),
+            DispatchState::WaitingInput | DispatchState::Review => Some((ItemStatus::Waiting, WaitsFor::Owner)),
+            DispatchState::Failed | DispatchState::Interrupted => Some((ItemStatus::Open, WaitsFor::Agent)),
+            DispatchState::Completed | DispatchState::Canceled | DispatchState::HandedOver => None,
+        };
+        if !svc::release_claim(&self.db.conn, d.id, by, reopen).await.ok()? {
+            return None;
+        }
+        if let Ok(Some(item)) = svc::item_of_dispatch(&self.db.conn, d.id).await {
+            self.emit(PersonalAgentChange::Item { id: item.id });
+        }
+        self.emit(PersonalAgentChange::Dispatch { id: d.id });
+        svc::get_dispatch(&self.db.conn, d.id).await.ok().flatten()
     }
 
     /// Re-read every task dispatch that is still moving. The board's own
@@ -1817,12 +2244,36 @@ impl PersonalAgentEngine {
         )
         .await
         .unwrap_or_default();
+        // So can a stopped one other work took over (B1): its claim is let
+        // go when the owner does. Read on their own, not to crowd the rest.
+        let live = {
+            use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+            let mut live = live;
+            live.extend(
+                dispatch_entity::Entity::find()
+                    .filter(dispatch_entity::Column::BotId.eq(self.bot().await))
+                    .filter(dispatch_entity::Column::Mode.eq(DispatchMode::Task))
+                    .filter(dispatch_entity::Column::State.eq(DispatchState::Canceled))
+                    .filter(dispatch_entity::Column::ReplacedBy.is_not_null())
+                    // Only those still watched for a manual retry (below).
+                    .filter(dispatch_entity::Column::UpdatedAt.gt(Utc::now() - chrono::Duration::days(3)))
+                    .order_by_desc(dispatch_entity::Column::Id)
+                    .limit(200)
+                    .all(&self.db.conn)
+                    .await
+                    .unwrap_or_default(),
+            );
+            live
+        };
         // A failed task stays a candidate for a manual retry from the board
         // only for a while; older ones are left alone instead of being re-read
         // every few seconds forever.
         let recent = Utc::now() - chrono::Duration::days(3);
         for d in live {
-            let settled = matches!(d.state, DispatchState::Failed | DispatchState::Interrupted);
+            let settled = matches!(
+                d.state,
+                DispatchState::Failed | DispatchState::Interrupted | DispatchState::Canceled
+            );
             if d.work_task_id.is_some() && (!settled || d.updated_at > recent) {
                 self.sync_task_dispatch(d.id).await;
             }
@@ -1911,6 +2362,124 @@ impl PersonalAgentEngine {
             }
         }
         self.kick_queue();
+    }
+
+    /// Work that took failed work over and is stuck before its board task
+    /// ran (B1): the failed work is out of sight since the handing over, so
+    /// the new one must not be. Codeg went down between recording it and
+    /// starting its task — before the task was made, before it was linked,
+    /// or before it was started. A minute after it was recorded (its own
+    /// start had its chance), the same task is linked and started, one never
+    /// made is started from the beginning, one the owner deleted is not made
+    /// again (the work is canceled, as the board's sync does), and a start
+    /// that fails fails the work, for the owner to see.
+    pub(super) async fn reconcile_handed_over(self: &std::sync::Arc<Self>) {
+        use crate::db::entities::work_task as work_task_entity;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        let queued = svc::list_dispatches(
+            &self.db.conn,
+            self.bot().await,
+            &[DispatchState::Queued],
+            Some(DispatchMode::Task),
+            50,
+        )
+        .await
+        .unwrap_or_default();
+        let ripe = Utc::now() - chrono::Duration::seconds(60);
+        for d in queued
+            .into_iter()
+            .filter(|d| d.replaces_id.is_some() && d.created_at < ripe)
+        {
+            let task = match d.work_task_id {
+                Some(t) => work_task_entity::Entity::find_by_id(t).one(&self.db.conn).await,
+                None => {
+                    work_task_entity::Entity::find()
+                        .filter(work_task_entity::Column::PersonalAgentDispatchId.eq(d.id))
+                        .one(&self.db.conn)
+                        .await
+                }
+            };
+            let Ok(task) = task else {
+                continue;
+            };
+            match task {
+                // Never made: from the beginning.
+                None if d.work_task_id.is_none() => {
+                    if crate::work_task::engine().is_none() {
+                        continue;
+                    }
+                    if let Err(e) = self.start_task_dispatch(&d).await {
+                        self.fail_dispatch(&d, &e).await;
+                    }
+                }
+                None => {}
+                Some(t) if t.deleted_at.is_some() => {
+                    if let Ok(Some(updated)) = svc::update_dispatch(
+                        &self.db.conn,
+                        d.id,
+                        Some(&[DispatchState::Queued]),
+                        DispatchWrite {
+                            state: Some(DispatchState::Canceled),
+                            error: Some(Some("the task was deleted".into())),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    {
+                        self.record_progress(&updated, None, Some("the task was deleted".into()), "gone")
+                            .await;
+                    }
+                }
+                Some(t) => {
+                    if d.work_task_id.is_none() {
+                        let _ = svc::update_dispatch(
+                            &self.db.conn,
+                            d.id,
+                            None,
+                            DispatchWrite {
+                                work_task_id: Some(t.id),
+                                ..Default::default()
+                            },
+                        )
+                        .await;
+                    }
+                    // Made and never started: the same one, started.
+                    if t.status == WorkTaskStatus::Todo && t.started_at.is_none() {
+                        let Some(engine) = crate::work_task::engine() else {
+                            continue;
+                        };
+                        if let Err(e) = engine.start(t.id).await {
+                            // Someone else started it first (the owner, the
+                            // board's own processing): it is under way.
+                            let elsewhere = crate::db::service::work_task_service::get_model(&self.db.conn, t.id)
+                                .await
+                                .is_ok_and(|t| t.status != WorkTaskStatus::Todo);
+                            if !elsewhere {
+                                self.fail_dispatch(&d, &e).await;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// After a restart: what a handing over left to do once its write was
+    /// in (B1) — the failed work's card saying who took it over — done for
+    /// the work that took over lately, in case codeg went down in between.
+    pub(super) async fn boot_handovers(&self) {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        let lately = Utc::now() - chrono::Duration::days(3);
+        let made = dispatch_entity::Entity::find()
+            .filter(dispatch_entity::Column::BotId.eq(self.bot().await))
+            .filter(dispatch_entity::Column::ReplacesId.is_not_null())
+            .filter(dispatch_entity::Column::CreatedAt.gt(lately))
+            .all(&self.db.conn)
+            .await
+            .unwrap_or_default();
+        for d in made {
+            self.settle_handover_at(&d, true).await;
+        }
     }
 
     /// After a restart, a conversation dispatch that was running lost its
@@ -2060,6 +2629,12 @@ impl PersonalAgentEngine {
         if d.mode != DispatchMode::Task && intent.is_some() {
             return Err("`intent` applies to task dispatches only".into());
         }
+        if superseded(&self.db, &d).await {
+            return Err(format!(
+                "dispatch #{id} was taken over by #{}: follow that one up instead",
+                d.replaced_by.unwrap_or_default()
+            ));
+        }
         let call = FollowupCall {
             dispatch_id: id,
             message: message.clone(),
@@ -2205,6 +2780,28 @@ impl PersonalAgentEngine {
         op: action_entity::Model,
     ) -> Result<String, String> {
         let op_id = op.op_id.clone().ok_or("the follow-up's record has no id")?;
+        // Taken over meanwhile (B1): its record is in, so a handing over
+        // from now on sees it and waits; one already in is seen here.
+        if let Ok(Some(now)) = svc::get_dispatch(&self.db.conn, d.id).await {
+            if superseded(&self.db, &now).await {
+                let why = format!(
+                    "dispatch #{} was taken over by #{}: follow that one up instead",
+                    d.id,
+                    now.replaced_by.unwrap_or_default()
+                );
+                let _ = svc::op_settle(
+                    &self.db.conn,
+                    &op_id,
+                    &[ActionState::Prepared],
+                    ActionState::NotExecuted,
+                    None,
+                    Some(why.clone()),
+                    None,
+                )
+                .await;
+                return Err(why);
+            }
+        }
         self.set_live(&op_id, true).await;
         let out = match d.mode {
             DispatchMode::Task => self.followup_task(d, call.message, call.intent, &op_id).await,
@@ -2589,12 +3186,14 @@ impl PersonalAgentEngine {
         ))
     }
 
-    /// The dispatch's entry is open again, waiting on its executor.
+    /// The dispatch's entry is open again, waiting on its executor — unless
+    /// other work took the dispatch over meanwhile (B1).
     async fn reopen_item(&self, dispatch_id: i32) {
         if let Ok(Some(item)) = svc::item_of_dispatch(&self.db.conn, dispatch_id).await {
-            let _ = svc::update_item(
+            let _ = svc::update_item_unless_taken_over(
                 &self.db.conn,
                 item.id,
+                dispatch_id,
                 ItemWrite {
                     status: Some(ItemStatus::Open),
                     waits_for: Some(Some(WaitsFor::External)),

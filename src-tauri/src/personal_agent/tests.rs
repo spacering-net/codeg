@@ -301,6 +301,7 @@ fn request(mode: DispatchMode, project_id: Option<i32>) -> DispatchRequest {
         report: false,
         on_done: Some("remind the owner".into()),
         done_when: None,
+        replaces: None,
     }
 }
 
@@ -3203,6 +3204,7 @@ async fn a_proposal_card_runs_exactly_what_it_shows() {
             report: false,
             on_done: None,
             done_when: None,
+            replaces: None,
         })
         .await
         .unwrap();
@@ -3252,6 +3254,7 @@ async fn a_card_cut_off_mid_run_is_settled_by_its_entry_after_a_restart() {
             report: false,
             on_done: None,
             done_when: None,
+            replaces: None,
         })
         .await
         .unwrap();
@@ -5337,6 +5340,7 @@ async fn follow_ups_and_messages_wait_for_the_owner_when_they_asked() {
             report: false,
             on_done: None,
             done_when: None,
+            replaces: None,
         })
         .await
         .unwrap();
@@ -5461,6 +5465,7 @@ async fn the_executor_view_shows_what_each_runs_and_what_keeps_failing() {
                 report: false,
                 on_done: None,
                 done_when: None,
+                replaces: None,
             })
             .await
             .unwrap();
@@ -10123,6 +10128,456 @@ async fn today_lists_every_session_and_board_task_waiting_on_the_owner_once() {
     assert!(view.day_start <= view.at && view.at < view.day_end);
 }
 
+/// B1: failed work done again by a new dispatch that `replaces` it — its
+/// matter handed to the new work in the same write, its failure out of
+/// "needs you", its card saying who took over; once only, and not for work
+/// that has not failed.
+#[tokio::test]
+async fn new_work_that_replaces_failed_work_takes_its_matter_and_its_failure_leaves_today() {
+    let (engine, _tmp) = configured().await;
+    role_assistant(&engine, "Coder", true).await;
+    let conn = &engine.db.conn;
+    let me = engine.bot().await;
+    let old = session_dispatch(&engine, DispatchState::Running, "c-old").await;
+    let matter = svc::create_item(conn, me, ItemKind::Dispatch, Some(old), ItemStatus::Open, Some(WaitsFor::Agent), "Investigate".into(), None, None)
+        .await
+        .unwrap();
+    svc::update_dispatch(conn, old, None, DispatchWrite {
+        state: Some(DispatchState::Failed),
+        error: Some(Some("worktree add failed".into())),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut card = NewRow::new(TimelineKind::Result, "Failed");
+    card.dispatch_id = Some(old);
+    card.data = Some(json!({ "state": "failed" }));
+    let card = svc::insert_row(conn, me, card).await.unwrap();
+    assert!(today_now(&engine).await.needs.iter().any(|r| r.dispatch_id == Some(old)));
+
+    let (_seg, _batch) = event_turn(&engine, "pa-r").await;
+    let args = json!({ "mode": "chat", "title": "Investigate again", "prompt": "Look another way.", "replaces": old });
+    let out = call_tool(&engine, "dispatch", args.clone()).await;
+    assert!(out.ok, "{}", out.text);
+    let new = out.data["dispatch_id"].as_i64().unwrap() as i32;
+    assert_eq!(dispatch_state(&engine, new).await.replaces_id, Some(old));
+    assert_eq!(dispatch_state(&engine, old).await.replaced_by, Some(new));
+    // Its matter is closed; the new work has its own, at its card.
+    assert_eq!(svc::get_item(conn, matter.id).await.unwrap().unwrap().status, ItemStatus::Done);
+    let handed = svc::item_of_dispatch(conn, new).await.unwrap().expect("the new work's matter");
+    assert_eq!((handed.status, handed.waits_for), (ItemStatus::Open, Some(WaitsFor::External)));
+    let sent = svc::dispatch_card_row(conn, new).await.unwrap().expect("its card");
+    assert_eq!(handed.origin_timeline_id, Some(sent.id));
+    // The failure's card says who took it over, and the way to it.
+    let card = svc::get_row(conn, card.id).await.unwrap().unwrap();
+    let by = &data_of(&card)["replaced_by"];
+    assert_eq!((by["dispatch_id"].as_i64(), by["row_id"].as_i64()), (Some(new as i64), Some(sent.id as i64)));
+    assert_eq!(by["title"], "Investigate again");
+    assert!(!today_now(&engine).await.needs.iter().any(|r| r.dispatch_id == Some(old)), "the failure is the new work's now");
+
+    // Gone down before the card said so: a restart says it.
+    svc::update_row_data(conn, card.id, None, Some(json!({ "state": "failed" }))).await.unwrap();
+    engine.boot_handovers().await;
+    let card = svc::get_row(conn, card.id).await.unwrap().unwrap();
+    assert_eq!(data_of(&card)["replaced_by"]["dispatch_id"].as_i64(), Some(new as i64));
+    // The same call again (a re-delivered turn): the same dispatch.
+    let again = call_tool(&engine, "dispatch", args).await;
+    assert_eq!((again.data["dispatch_id"].as_i64(), again.data["earlier"].as_bool()), (Some(new as i64), Some(true)));
+    assert_eq!(all_dispatches(&engine).await.iter().filter(|d| d.replaces_id == Some(old)).count(), 1);
+    // Taken over once: a second one is refused, and nothing is made.
+    let twice = call_tool(&engine, "dispatch", json!({ "mode": "chat", "title": "Third try", "prompt": "p", "replaces": old })).await;
+    assert!(!twice.ok && twice.text.contains(&format!("taken over by #{new}")), "{}", twice.text);
+    assert!(!all_dispatches(&engine).await.iter().any(|d| d.title == "Third try"));
+    // Nor is it followed up any more.
+    let f = call_tool(&engine, "dispatch_followup", json!({ "dispatch_id": old, "message": "go on" })).await;
+    assert!(!f.ok && f.text.contains("taken over"), "{}", f.text);
+    // Work still going is not taken over.
+    let live = session_dispatch(&engine, DispatchState::Running, "c-live").await;
+    let no = call_tool(&engine, "dispatch", json!({ "mode": "chat", "title": "Over it", "prompt": "p", "replaces": live })).await;
+    assert!(!no.ok && no.text.contains("not failed"), "{}", no.text);
+    assert!(dispatch_state(&engine, live).await.replaced_by.is_none());
+}
+
+/// B1: work dispatched without `replaces` where earlier work failed and
+/// its matter is still open: the answer says how to close it.
+#[tokio::test]
+async fn a_dispatch_beside_open_failed_work_is_told_to_close_it_or_take_it_over() {
+    let (engine, _tmp) = configured().await;
+    role_assistant(&engine, "Coder", true).await;
+    let conn = &engine.db.conn;
+    let me = engine.bot().await;
+    let old = session_dispatch(&engine, DispatchState::Running, "c-old").await;
+    svc::create_item(conn, me, ItemKind::Dispatch, Some(old), ItemStatus::Open, Some(WaitsFor::Agent), "Investigate".into(), None, None)
+        .await
+        .unwrap();
+    svc::update_dispatch(conn, old, None, DispatchWrite { state: Some(DispatchState::Failed), ..Default::default() })
+        .await
+        .unwrap();
+    let (_seg, _batch) = event_turn(&engine, "pa-h").await;
+    let out = call_tool(&engine, "dispatch", json!({ "mode": "chat", "title": "Again", "prompt": "p" })).await;
+    assert!(out.ok, "{}", out.text);
+    assert!(out.text.contains(&format!("pass `replaces: {old}`")) && out.text.contains("item_update"), "{}", out.text);
+    // Taken over, nothing to say.
+    let out = call_tool(&engine, "dispatch", json!({ "mode": "chat", "title": "Over", "prompt": "p", "replaces": old })).await;
+    assert!(out.ok && !out.text.contains("still open"), "{}", out.text);
+}
+
+/// B1: a late word of work, written while it is taken over, does not
+/// reopen its matter; a follow-up on its way holds a takeover off.
+#[tokio::test]
+async fn a_takeover_and_work_going_on_do_not_undo_each_other() {
+    let (engine, _tmp) = configured().await;
+    role_assistant(&engine, "Coder", true).await;
+    let conn = &engine.db.conn;
+    let me = engine.bot().await;
+    let old = session_dispatch(&engine, DispatchState::Running, "c-old").await;
+    let matter = svc::create_item(conn, me, ItemKind::Dispatch, Some(old), ItemStatus::Open, Some(WaitsFor::Agent), "x".into(), None, None)
+        .await
+        .unwrap();
+    svc::update_dispatch(conn, old, None, DispatchWrite { state: Some(DispatchState::Failed), ..Default::default() })
+        .await
+        .unwrap();
+    // A follow-up of it is recorded, not settled: no takeover meanwhile.
+    let op = svc::begin_op(conn, svc::NewOp {
+        bot_id: me,
+        slot: svc::LedgerSlot::outside("pa-test-follow".into()),
+        kind: "followup",
+        payload: json!({ "dispatch_id": old, "message": "go on", "intent": null }),
+        target: None,
+        notice_id: None,
+    })
+    .await
+    .unwrap();
+    assert!(matches!(op, svc::Ledgered::New(_)));
+    let req = |title: &str| super::dispatch::DispatchRequest {
+        mode: DispatchMode::Chat,
+        title: title.into(),
+        prompt: "p".into(),
+        project_id: None,
+        report: false,
+        on_done: None,
+        done_when: None,
+        replaces: Some(old),
+    };
+    let e = engine.dispatch(req("Over")).await.unwrap_err();
+    assert!(e.contains("follow-up on its way"), "{e}");
+    assert!(dispatch_state(&engine, old).await.replaced_by.is_none());
+    svc::op_settle(conn, "pa-test-follow", &[crate::db::entities::personal_agent_action::ActionState::Prepared], crate::db::entities::personal_agent_action::ActionState::NotExecuted, None, None, None)
+        .await
+        .unwrap();
+    let new = engine.dispatch(req("Over")).await.expect("taken over");
+    // Progress read before the takeover, written after it: not written.
+    let wrote = svc::update_item_unless_taken_over(conn, matter.id, old, svc::ItemWrite {
+        status: Some(ItemStatus::Open),
+        waits_for: Some(Some(WaitsFor::Agent)),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert!(!wrote);
+    assert_eq!(svc::get_item(conn, matter.id).await.unwrap().unwrap().status, ItemStatus::Done);
+    // Work nobody took over is written as ever.
+    let other = svc::item_of_dispatch(conn, new.id).await.unwrap().unwrap();
+    assert!(svc::update_item_unless_taken_over(conn, other.id, new.id, svc::ItemWrite {
+        waits_for: Some(Some(WaitsFor::External)),
+        ..Default::default()
+    })
+    .await
+    .unwrap());
+}
+
+/// B1: codeg went down between recording work that took a failure over
+/// and writing its card: a restart writes the card, and the failure's card
+/// points at it.
+#[tokio::test]
+async fn a_takeover_cut_off_before_its_card_gets_one_at_restart() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, _tmp) = configured().await;
+    role_assistant(&engine, "Coder", true).await;
+    let conn = &engine.db.conn;
+    let me = engine.bot().await;
+    let old = session_dispatch(&engine, DispatchState::Running, "c-old").await;
+    svc::update_dispatch(conn, old, None, DispatchWrite { state: Some(DispatchState::Failed), ..Default::default() })
+        .await
+        .unwrap();
+    let mut failed = NewRow::new(TimelineKind::Result, "Failed");
+    failed.dispatch_id = Some(old);
+    failed.data = Some(json!({ "state": "failed" }));
+    let failed = svc::insert_row(conn, me, failed).await.unwrap();
+    let mut back: crate::db::entities::personal_agent_timeline::ActiveModel = failed.clone().into();
+    back.created_at = Set(chrono::Utc::now() - chrono::Duration::minutes(10));
+    back.update(conn).await.unwrap();
+    let new = session_dispatch(&engine, DispatchState::Queued, "c-new").await;
+    let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = dispatch_state(&engine, new).await.into();
+    // Recorded just before the process went down (before this one booted):
+    // the restart is no race with the call that made it.
+    am.replaces_id = Set(Some(old));
+    am.created_at = Set(super::dispatch::booted_at() - chrono::Duration::seconds(1));
+    am.update(conn).await.unwrap();
+    assert!(svc::dispatch_card_row(conn, new).await.unwrap().is_none());
+    engine.boot_handovers().await;
+    let card = svc::dispatch_card_row(conn, new).await.unwrap().expect("its card, written at restart");
+    let failed = svc::get_row(conn, failed.id).await.unwrap().unwrap();
+    assert_eq!(data_of(&failed)["replaced_by"]["row_id"].as_i64(), Some(card.id as i64));
+    // Once: a second restart writes no second card.
+    engine.boot_handovers().await;
+    let cards = svc::page(conn, me, None, 200).await.unwrap().0;
+    assert_eq!(cards.iter().filter(|r| r.kind == TimelineKind::Dispatch && r.dispatch_id == Some(new)).count(), 1);
+}
+
+/// B1: two takeovers of the same failed work at once — one claims it, the
+/// other's whole write is refused.
+#[tokio::test]
+async fn two_takeovers_of_the_same_failed_work_claim_it_once() {
+    let (engine, _tmp) = configured().await;
+    role_assistant(&engine, "Coder", true).await;
+    let conn = &engine.db.conn;
+    let old = session_dispatch(&engine, DispatchState::Running, "c-old").await;
+    svc::update_dispatch(conn, old, None, DispatchWrite { state: Some(DispatchState::Failed), ..Default::default() })
+        .await
+        .unwrap();
+    let go = |title: &'static str| {
+        let engine = engine.clone();
+        async move {
+            let req = super::dispatch::DispatchRequest {
+                mode: DispatchMode::Chat,
+                title: title.into(),
+                prompt: "p".into(),
+                project_id: None,
+                report: false,
+                on_done: None,
+                done_when: None,
+                replaces: Some(old),
+            };
+            engine.dispatch(req).await
+        }
+    };
+    let (a, b) = tokio::join!(go("A"), go("B"));
+    assert_eq!([a.is_ok(), b.is_ok()].iter().filter(|x| **x).count(), 1, "{a:?} {b:?}");
+    let made: Vec<_> = all_dispatches(&engine).await.into_iter().filter(|d| d.replaces_id == Some(old)).collect();
+    assert_eq!(made.len(), 1, "the refused one is not recorded");
+    assert_eq!(dispatch_state(&engine, old).await.replaced_by, Some(made[0].id));
+    assert_eq!(svc::item_of_dispatch(conn, made[0].id).await.unwrap().map(|i| i.status), Some(ItemStatus::Open));
+}
+
+/// B1: a board task's failed run taken over is out of "needs you", and a
+/// late word of it does not reopen its matter; the owner running the task
+/// again on the board makes a new run, theirs, shown as any.
+#[tokio::test]
+async fn a_task_run_taken_over_stays_down_until_the_owner_runs_it_again() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (host, _w, tmp) = hosted().await;
+    let engine = host.primary();
+    let conn = &engine.db.conn;
+    let me = engine.bot().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let task = board_task(&engine, project, "Fix title", WorkTaskStatus::Failed, |t| {
+        t.run_seq = Set(1);
+        t.last_error = Set(Some("Branch already exists".into()));
+    })
+    .await;
+    let d = task_dispatch(&engine, coder, project, task.id, "Fix title", DispatchState::Failed).await;
+    let matter = svc::create_item(conn, me, ItemKind::Dispatch, Some(d.id), ItemStatus::Open, Some(WaitsFor::Agent), "Fix title".into(), None, None)
+        .await
+        .unwrap();
+    let mut run1 = NewRow::new(TimelineKind::Result, "Run 1 failed");
+    run1.dispatch_id = Some(d.id);
+    run1.data = Some(json!({ "state": "failed", "run": 1 }));
+    let run1 = svc::insert_row(conn, me, run1).await.unwrap();
+    assert!(today_now(&engine).await.needs.iter().any(|r| r.task_id == Some(task.id)));
+    let req = super::dispatch::DispatchRequest {
+        mode: DispatchMode::Task,
+        title: "Fix title, fresh".into(),
+        prompt: "p".into(),
+        project_id: Some(project),
+        report: false,
+        on_done: None,
+        done_when: None,
+        replaces: Some(d.id),
+    };
+    let new = engine.dispatch(req).await.expect("taken over");
+    assert_eq!((new.replaces_id, new.replaces_run_seq), (Some(d.id), Some(1)));
+    assert!(super::dispatch::superseded(&engine.db, &dispatch_state(&engine, d.id).await).await);
+    assert!(!today_now(&engine).await.needs.iter().any(|r| r.task_id == Some(task.id)), "run 1 is the new work's");
+    // A late word of the old run: no news, its matter stays closed.
+    let before = svc::pending_events(conn, me).await.unwrap().len();
+    engine.record_progress(&dispatch_state(&engine, d.id).await, None, Some("late".into()), "task").await;
+    assert_eq!(svc::pending_events(conn, me).await.unwrap().len(), before);
+    assert_eq!(svc::item_of_dispatch(conn, d.id).await.unwrap().unwrap().status, ItemStatus::Done);
+    // The owner runs it again on the board, and it fails again: run 2 is
+    // theirs, in "needs you" as any.
+    let mut am: crate::db::entities::work_task::ActiveModel =
+        crate::db::service::work_task_service::get_model(conn, task.id).await.unwrap().into();
+    am.run_seq = Set(2);
+    am.update(conn).await.unwrap();
+    assert!(!super::dispatch::superseded(&engine.db, &dispatch_state(&engine, d.id).await).await);
+    assert!(today_now(&engine).await.needs.iter().any(|r| r.task_id == Some(task.id)), "run 2 shows");
+    // The board's sync sees the run that failed again (the state the same
+    // both looks): its matter opens again, and it is news with a card.
+    engine.poll_task_dispatches().await;
+    let m = svc::get_item(conn, matter.id).await.unwrap().unwrap();
+    assert_eq!((m.status, m.waits_for), (ItemStatus::Open, Some(WaitsFor::Agent)));
+    let run2 = svc::latest_result_row(conn, d.id).await.unwrap().expect("run 2's card");
+    assert_ne!(run2.id, run1.id);
+    assert!(svc::pending_events(conn, me).await.unwrap().len() > before);
+    // Closed by the assistant since: the next look leaves it closed.
+    svc::update_item(conn, matter.id, svc::ItemWrite { status: Some(ItemStatus::Done), waits_for: Some(None), ..Default::default() })
+        .await
+        .unwrap();
+    engine.poll_task_dispatches().await;
+    assert_eq!(svc::get_item(conn, matter.id).await.unwrap().unwrap().status, ItemStatus::Done);
+    // A restart says who took run 1 over on run 1's card, not on run 2's.
+    engine.boot_handovers().await;
+    let run1 = svc::get_row(conn, run1.id).await.unwrap().unwrap();
+    assert_eq!(data_of(&run1)["replaced_by"]["dispatch_id"].as_i64(), Some(new.id as i64));
+    let run2 = svc::get_row(conn, run2.id).await.unwrap().unwrap();
+    assert!(data_of(&run2).get("replaced_by").is_none(), "{:?}", run2.data);
+    // Run 2 is work like any: the claim on run 1 let go, it can be taken
+    // over in its turn — that run.
+    assert!(dispatch_state(&engine, d.id).await.replaced_by.is_none());
+    let req = super::dispatch::DispatchRequest {
+        mode: DispatchMode::Task,
+        title: "Another".into(),
+        prompt: "p".into(),
+        project_id: Some(project),
+        report: false,
+        on_done: None,
+        done_when: None,
+        replaces: Some(d.id),
+    };
+    let third = engine.dispatch(req).await.expect("run 2 taken over");
+    assert_eq!(third.replaces_run_seq, Some(2));
+}
+
+/// B1: the board ending a run taken over (failed, then canceled) is no
+/// news and is not written — the work stays where the sync looks, and the
+/// owner running it again lets the claim go.
+#[tokio::test]
+async fn a_run_taken_over_ending_on_the_board_stays_watched_for_a_rerun() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (host, _w, tmp) = hosted().await;
+    let engine = host.primary();
+    let conn = &engine.db.conn;
+    let me = engine.bot().await;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let task = board_task(&engine, project, "Fix title", WorkTaskStatus::Canceled, |t| t.run_seq = Set(1)).await;
+    let d = task_dispatch(&engine, coder, project, task.id, "Fix title", DispatchState::Failed).await;
+    svc::create_item(conn, me, ItemKind::Dispatch, Some(d.id), ItemStatus::Open, Some(WaitsFor::Agent), "Fix title".into(), None, None)
+        .await
+        .unwrap();
+    let req = super::dispatch::DispatchRequest {
+        mode: DispatchMode::Task,
+        title: "Fresh".into(),
+        prompt: "p".into(),
+        project_id: Some(project),
+        report: false,
+        on_done: None,
+        done_when: None,
+        replaces: Some(d.id),
+    };
+    engine.dispatch(req).await.expect("taken over");
+    let before = svc::pending_events(conn, me).await.unwrap().len();
+    engine.poll_task_dispatches().await;
+    assert_eq!(dispatch_state(&engine, d.id).await.state, DispatchState::Failed, "not written");
+    assert_eq!(svc::pending_events(conn, me).await.unwrap().len(), before, "no news");
+    // The owner runs it again: run 2, theirs.
+    let mut am: crate::db::entities::work_task::ActiveModel =
+        crate::db::service::work_task_service::get_model(conn, task.id).await.unwrap().into();
+    am.run_seq = Set(2);
+    am.status = Set(WorkTaskStatus::Running);
+    am.update(conn).await.unwrap();
+    engine.poll_task_dispatches().await;
+    let now = dispatch_state(&engine, d.id).await;
+    assert_eq!((now.replaced_by, now.state), (None, DispatchState::Running));
+    let m = svc::item_of_dispatch(conn, d.id).await.unwrap().unwrap();
+    assert_eq!((m.status, m.waits_for), (ItemStatus::Open, Some(WaitsFor::External)));
+}
+
+/// B1: work that took a task's failure over and is stuck before its board
+/// task ran is not out of sight — linked, the task the owner deleted is not
+/// made again; a start that failed before the task took it up stays failed,
+/// and shows in "needs you".
+#[tokio::test]
+async fn stuck_work_that_took_a_failure_over_is_settled_and_seen() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (host, _w, tmp) = hosted().await;
+    let engine = host.primary();
+    let conn = &engine.db.conn;
+    let coder = role_assistant(&engine, "Coder", true).await;
+    let project = crate::db::test_helpers::seed_folder(&engine.db, &tmp.path().join("app").to_string_lossy()).await;
+    let old_task = board_task(&engine, project, "Old", WorkTaskStatus::Failed, |_| {}).await;
+    let old = task_dispatch(&engine, coder, project, old_task.id, "Old", DispatchState::Failed).await;
+    // Recorded, with its task made but not linked yet, a while ago; the
+    // task deleted by the owner since.
+    let stuck = |title: &'static str| {
+        let engine = engine.clone();
+        async move {
+            let d = svc::create_dispatch(
+                &engine.db.conn,
+                NewDispatch {
+                    bot_id: engine.bot().await,
+                    mode: DispatchMode::Task,
+                    executor_assistant_id: coder,
+                    executor_snapshot_json: "{}".into(),
+                    folder_id: Some(project),
+                    deliverable: Some("change".into()),
+                    title: title.into(),
+                    prompt: title.into(),
+                    origin_batch_id: None,
+                    on_done: None,
+                    lineage: Default::default(),
+                    done_when: None,
+                    pr_fix: None,
+                    is_check: false,
+                },
+            )
+            .await
+            .unwrap();
+            let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = d.into();
+            am.replaces_id = Set(Some(old.id));
+            am.created_at = Set(chrono::Utc::now() - chrono::Duration::minutes(5));
+            am.update(&engine.db.conn).await.unwrap()
+        }
+    };
+    let gone = stuck("Gone").await;
+    board_task(&engine, project, "Gone", WorkTaskStatus::Todo, |t| {
+        t.personal_agent_dispatch_id = Set(Some(gone.id));
+        t.deleted_at = Set(Some(chrono::Utc::now()));
+    })
+    .await;
+    let linked = stuck("Linked").await;
+    let made = board_task(&engine, project, "Linked", WorkTaskStatus::Running, |t| {
+        t.personal_agent_dispatch_id = Set(Some(linked.id));
+    })
+    .await;
+    engine.reconcile_handed_over().await;
+    let g = dispatch_state(&engine, gone.id).await;
+    assert_eq!(g.state, DispatchState::Canceled, "the owner's deletion stands");
+    assert_eq!(dispatch_state(&engine, linked.id).await.work_task_id, Some(made.id));
+
+    // Its start failed before the board took the task up: failed it stays,
+    // the board's sync does not queue it again, and the owner sees it.
+    let never = board_task(&engine, project, "Never ran", WorkTaskStatus::Todo, |_| {}).await;
+    let failed = task_dispatch(&engine, coder, project, never.id, "Never ran", DispatchState::Failed).await;
+    svc::update_dispatch(conn, failed.id, None, DispatchWrite { error: Some(Some("the task engine is not running".into())), ..Default::default() })
+        .await
+        .unwrap();
+    engine.poll_task_dispatches().await;
+    assert_eq!(dispatch_state(&engine, failed.id).await.state, DispatchState::Failed);
+    let view = today_now(&engine).await;
+    let row = view.needs.iter().find(|r| r.dispatch_id == Some(failed.id)).expect("seen in needs you");
+    assert_eq!((row.kind, row.text.as_deref()), ("failed", Some("the task engine is not running")));
+    assert_eq!(view.needs.iter().filter(|r| r.dispatch_id == Some(failed.id) || r.task_id == Some(never.id)).count(), 1);
+    // Set aside on the board: as the owner left it.
+    let mut am: crate::db::entities::work_task::ActiveModel =
+        crate::db::service::work_task_service::get_model(conn, never.id).await.unwrap().into();
+    am.archived_at = Set(Some(chrono::Utc::now()));
+    am.update(conn).await.unwrap();
+    assert!(!today_now(&engine).await.needs.iter().any(|r| r.dispatch_id == Some(failed.id)));
+}
+
 /// B2: work that failed says so, and — one that never opened a session —
 /// goes to its result card.
 #[tokio::test]
@@ -14227,6 +14682,12 @@ async fn retry_starts_again_work_whose_connection_went_away_before_a_session() {
     let again = all.iter().find(|x| x.id == data["dispatch_id"].as_i64().unwrap() as i32).unwrap();
     assert_eq!(again.title, "Draft the changelog");
     assert_eq!((again.thread_id, again.for_input.as_deref()), (Some(77), Some("owner:5")));
+    // It takes the failed work over (B1), under the card's own operation:
+    // the card run again makes nothing new.
+    assert_eq!(again.replaces_id, Some(d.id));
+    assert_eq!(dispatch_state(&worker, d.id).await.replaced_by, Some(again.id));
+    let op = svc::get_op(&worker.db.conn, &super::ledger::card_op_id(notice_id_of(&card), 1)).await.unwrap().unwrap();
+    assert_eq!((op.ref_id, op.notice_id), (Some(again.id.to_string()), Some(notice_id_of(&card))));
 }
 
 /// Make codeg's first look at failed work `days` ago.

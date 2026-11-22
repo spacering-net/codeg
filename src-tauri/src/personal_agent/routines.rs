@@ -1654,6 +1654,7 @@ impl PersonalAgentEngine {
             report: t.deliverable.as_deref() == Some("report"),
             on_done: None,
             done_when: t.done_when.clone(),
+            replaces: None,
         };
         let valid = match self.validate_dispatch(&req).await {
             Ok(v) => v,
@@ -2048,6 +2049,7 @@ impl PersonalAgentEngine {
                 report: t.deliverable.as_deref() == Some("report"),
                 on_done: None,
                 done_when: t.done_when.clone(),
+                replaces: None,
             })
             .await?;
         }

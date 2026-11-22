@@ -79,6 +79,15 @@ pub fn dispatch_key(mode: DispatchMode, project_id: Option<i32>, title: &str) ->
     )
 }
 
+/// [`dispatch_key`], of one that takes over failed work (B1): the work it
+/// takes over is part of what makes the call the same one.
+pub fn replacing_key(key: String, replaces: Option<i32>) -> String {
+    match replaces {
+        Some(p) => format!("{key}|replaces:{p}"),
+        None => key,
+    }
+}
+
 /// The ledger key of a follow-up: one per dispatch and intent in a batch.
 pub fn followup_key(dispatch_id: i32, intent: Option<&str>) -> String {
     format!("followup|{dispatch_id}|{}", intent.unwrap_or(""))

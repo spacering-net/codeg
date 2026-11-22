@@ -11038,6 +11038,7 @@
     },
     "event": {
       "someone": "Un assistant",
+      "replacedBy": "Repris par « {title} »",
       "more": "Tout afficher",
       "less": "Réduire",
       "note": {

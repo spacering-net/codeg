@@ -11038,6 +11038,7 @@
     },
     "event": {
       "someone": "مساعد",
+      "replacedBy": "تولّاه «{title}»",
       "more": "عرض الكل",
       "less": "عرض أقل",
       "note": {

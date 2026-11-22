@@ -131,6 +131,10 @@ impl PersonalAgentEngine {
         .unwrap_or_default();
         let recent = chrono::Utc::now() - chrono::Duration::days(1);
         for d in interrupted.into_iter().filter(|d| d.updated_at > recent) {
+            // Taken over by other work (B1): not picked up again.
+            if super::dispatch::superseded(&self.db, &d).await {
+                continue;
+            }
             // Only what its card says codeg goes on with: an interruption
             // told before (an older build's, one the owner was handed) is
             // left as it was told.

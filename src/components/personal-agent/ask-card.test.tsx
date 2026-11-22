@@ -363,6 +363,28 @@ describe("the work's card", () => {
     expect(container.querySelector("[data-pa-retry]")).toBeNull()
   })
 
+  it("says which new work took a failure over, and goes to it", () => {
+    const sc = scope()
+    const row = news(null)
+    row.data = {
+      ...row.data,
+      state: "failed",
+      replaced_by: { dispatch_id: 9, title: "Fix it fresh", row_id: 77 },
+    }
+    const item = buildMessageItems([row]).find((i) => i.kind === "event")
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <PageScopeContext.Provider value={sc}>
+          <EventCard item={item as Extract<MessageItem, { kind: "event" }>} />
+        </PageScopeContext.Provider>
+      </NextIntlClientProvider>
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Taken over by “Fix it fresh”" })
+    )
+    expect(sc.jumpTo).toHaveBeenCalledWith(77)
+  })
+
   it("counts the answers its assistant gave for the owner", () => {
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>

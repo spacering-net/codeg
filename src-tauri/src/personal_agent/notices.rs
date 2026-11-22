@@ -129,7 +129,7 @@ impl PersonalAgentEngine {
         v: ValidDispatch,
         auth: DispatchAuth,
     ) -> Result<Result<super::dispatch::DispatchMade, Confirming>, String> {
-        let key = ledger::dispatch_key(v.mode, v.folder_id, &v.title);
+        let key = v.ledger_key();
         let subject = format!("confirm:{key}");
         // What the turn this delivery repeats did stands, whatever the
         // owner's setting says now: the card it raised (and what that card
@@ -409,7 +409,7 @@ impl PersonalAgentEngine {
     /// as written, run only if the owner accepts. One like it open, or
     /// declined within the week, is not raised again.
     pub(super) async fn suggest_dispatch(&self, v: ValidDispatch, reason: String) -> super::tools::ToolOutcome {
-        let key = ledger::dispatch_key(v.mode, v.folder_id, &v.title);
+        let key = v.ledger_key();
         let subject = format!("suggest:{key}");
         if let Some(o) = self.declined_lately(&subject).await {
             return o;

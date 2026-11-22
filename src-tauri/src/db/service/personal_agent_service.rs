@@ -2826,6 +2826,9 @@ fn dispatch_active(new: NewDispatch) -> dispatch::ActiveModel {
         done_when: Set(new.done_when),
         pr_fix: Set(new.pr_fix),
         is_check: Set(new.is_check),
+        replaces_id: Set(None),
+        replaces_run_seq: Set(None),
+        replaced_by: Set(None),
     }
 }
 
@@ -2900,24 +2903,69 @@ pub(crate) async fn colliding_entry(
         .ok_or_else(|| DbError::NotFound("ledger entry".into()))
 }
 
+/// A dispatch that takes over failed work (B1): written in the same
+/// transaction as the dispatch, or none of it is.
+#[derive(Debug, Clone)]
+pub struct Handover {
+    /// The failed (or stopped) work taken over.
+    pub predecessor: i32,
+    /// Its board task and the run of it taken over, when it is a task's.
+    pub task: Option<(i32, i32)>,
+    /// The new work's matter, made here rather than after the commit: the
+    /// work is followed by one matter or the other at every moment.
+    pub summary: String,
+    pub on_done: Option<String>,
+}
+
 /// Record a dispatch together with its ledger entry — and, for one a card
-/// runs, the card's settling — in one transaction: the entry is committed
-/// with the dispatch it made, or none of it exists. An insert that collides
-/// with an entry on record (same batch and key, or same operation) makes
-/// nothing and hands that entry back.
+/// runs, the card's settling; for one that takes over failed work, the
+/// handing over — in one transaction: the entry is committed with the
+/// dispatch it made, or none of it exists. An insert that collides with an
+/// entry on record (same batch and key, or same operation) makes nothing
+/// and hands that entry back. Without a `slot` (a call outside any ledger)
+/// only the rest is written.
+///
+/// Handing over: the predecessor is claimed (`replaced_by`) only while it
+/// is this assistant's, unclaimed and failed, interrupted or stopped — and,
+/// a task's, while its board task is still failed or canceled in the run
+/// taken over; its matter is closed and the new work's made. A claim that
+/// does not hold refuses the whole write ([`DbError::Conflict`]).
 pub async fn create_dispatch_ledgered(
     conn: &DatabaseConnection,
     new: NewDispatch,
-    slot: &LedgerSlot,
+    slot: Option<&LedgerSlot>,
     payload: Option<serde_json::Value>,
     card: Option<CardSettle>,
+    handover: Option<&Handover>,
 ) -> Result<Ledgered<dispatch::Model>, DbError> {
     use sea_orm::TransactionTrait;
     require_bot(new.bot_id)?;
     let bot = new.bot_id;
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let made = dispatch_active(new).insert(&txn).await?;
+    let mut active = dispatch_active(new);
+    if let Some(h) = handover {
+        active.replaces_id = Set(Some(h.predecessor));
+        active.replaces_run_seq = Set(h.task.map(|(_, run)| run));
+    }
+    let made = active.insert(&txn).await?;
+    if let Some(h) = handover {
+        if let Err(e) = hand_over_in(&txn, bot, &made, h, now).await {
+            let _ = txn.rollback().await;
+            return Err(match e {
+                // Who holds it, read after the rollback.
+                DbError::Conflict(_) => refused_handover(conn, h).await,
+                e => e,
+            });
+        }
+    }
+    let Some(slot) = slot else {
+        if let Some(card) = card {
+            settle_card_in(&txn, card, made.id, now).await?;
+        }
+        txn.commit().await?;
+        return Ok(Ledgered::New(made));
+    };
     let entry = action::ActiveModel {
         id: NotSet,
         bot_id: Set(Some(bot)),
@@ -2950,33 +2998,236 @@ pub async fn create_dispatch_ledgered(
         }
     }
     if let Some(card) = card {
-        let moved = notice::Entity::update_many()
-            .col_expr(notice::Column::State, Expr::value(NoticeState::Acted))
-            .col_expr(notice::Column::ActedAt, Expr::value(now))
-            .col_expr(notice::Column::UpdatedAt, Expr::value(now))
-            .filter(notice::Column::Id.eq(card.notice_id))
-            .filter(notice::Column::State.eq(NoticeState::Acting))
-            .exec(&txn)
+        settle_card_in(&txn, card, made.id, now).await?;
+    }
+    txn.commit().await?;
+    Ok(Ledgered::New(made))
+}
+
+/// A card settled with what it ran: acting → acted, its row's data with the
+/// dispatch made written in.
+async fn settle_card_in(
+    txn: &sea_orm::DatabaseTransaction,
+    card: CardSettle,
+    made: i32,
+    now: DateTime<Utc>,
+) -> Result<(), DbError> {
+    let moved = notice::Entity::update_many()
+        .col_expr(notice::Column::State, Expr::value(NoticeState::Acted))
+        .col_expr(notice::Column::ActedAt, Expr::value(now))
+        .col_expr(notice::Column::UpdatedAt, Expr::value(now))
+        .filter(notice::Column::Id.eq(card.notice_id))
+        .filter(notice::Column::State.eq(NoticeState::Acting))
+        .exec(txn)
+        .await?;
+    if moved.rows_affected != 1 {
+        return Err(DbError::Conflict("the card is not being acted on".into()));
+    }
+    let mut data = card.row_data;
+    if let Some(map) = data.as_object_mut() {
+        map.insert("state".into(), "acted".into());
+        map.insert("result".into(), serde_json::json!({ "dispatch_id": made }));
+        map.insert("error".into(), serde_json::Value::Null);
+    }
+    timeline::Entity::update_many()
+        .col_expr(timeline::Column::Data, Expr::value(data.to_string()))
+        .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
+        .filter(timeline::Column::Id.eq(card.row_id))
+        .exec(txn)
+        .await?;
+    Ok(())
+}
+
+/// The handing over in `txn` (see [`create_dispatch_ledgered`]).
+async fn hand_over_in(
+    txn: &sea_orm::DatabaseTransaction,
+    bot: i32,
+    made: &dispatch::Model,
+    h: &Handover,
+    now: DateTime<Utc>,
+) -> Result<(), DbError> {
+    use crate::db::entities::work_task::{self as work_task, WorkTaskStatus};
+    let claimed = dispatch::Entity::update_many()
+        .col_expr(dispatch::Column::ReplacedBy, Expr::value(made.id))
+        .col_expr(dispatch::Column::UpdatedAt, Expr::value(now))
+        .filter(dispatch::Column::Id.eq(h.predecessor))
+        .filter(dispatch::Column::BotId.eq(bot))
+        .filter(dispatch::Column::ReplacedBy.is_null())
+        .filter(dispatch::Column::State.is_in([
+            DispatchState::Failed,
+            DispatchState::Interrupted,
+            DispatchState::Canceled,
+        ]))
+        .exec(txn)
+        .await?;
+    if claimed.rows_affected != 1 {
+        return Err(DbError::Conflict("not claimed".into()));
+    }
+    // A follow-up of it on its way (recorded, not settled): it goes on with
+    // the work itself — the follow-up checks again once its record is in.
+    let following = action::Entity::find()
+        .filter(action::Column::Kind.eq("followup"))
+        .filter(action::Column::State.eq(ActionState::Prepared))
+        .filter(action::Column::Payload.like(format!("{{\"dispatch_id\":{},%", h.predecessor)))
+        .count(txn)
+        .await?;
+    if following > 0 {
+        return Err(DbError::Conflict("followed up".into()));
+    }
+    if let Some((task, run)) = h.task {
+        let still = work_task::Entity::find()
+            .filter(work_task::Column::Id.eq(task))
+            .filter(work_task::Column::RunSeq.eq(run))
+            .filter(work_task::Column::Status.is_in([WorkTaskStatus::Failed, WorkTaskStatus::Canceled]))
+            .filter(work_task::Column::DeletedAt.is_null())
+            .count(txn)
             .await?;
-        if moved.rows_affected != 1 {
-            txn.rollback().await?;
-            return Err(DbError::Conflict("the card is not being acted on".into()));
+        if still != 1 {
+            return Err(DbError::Conflict("its task moved on".into()));
         }
-        let mut data = card.row_data;
-        if let Some(map) = data.as_object_mut() {
-            map.insert("state".into(), "acted".into());
-            map.insert("result".into(), serde_json::json!({ "dispatch_id": made.id }));
-            map.insert("error".into(), serde_json::Value::Null);
-        }
-        timeline::Entity::update_many()
-            .col_expr(timeline::Column::Data, Expr::value(data.to_string()))
-            .col_expr(timeline::Column::UpdatedAt, Expr::value(now))
-            .filter(timeline::Column::Id.eq(card.row_id))
+    }
+    item::Entity::update_many()
+        .col_expr(item::Column::Status, Expr::value(ItemStatus::Done))
+        .col_expr(item::Column::WaitsFor, Expr::value(Option::<WaitsFor>::None))
+        .col_expr(item::Column::UpdatedAt, Expr::value(now))
+        .filter(item::Column::DispatchId.eq(h.predecessor))
+        .filter(item::Column::Status.is_in([ItemStatus::Open, ItemStatus::Waiting]))
+        .exec(txn)
+        .await?;
+    item::ActiveModel {
+        id: NotSet,
+        kind: Set(ItemKind::Dispatch),
+        dispatch_id: Set(Some(made.id)),
+        status: Set(ItemStatus::Open),
+        waits_for: Set(Some(WaitsFor::External)),
+        summary: Set(h.summary.clone()),
+        on_done: Set(h.on_done.clone()),
+        origin_timeline_id: Set(None),
+        created_at: Set(now),
+        updated_at: Set(now),
+        bot_id: Set(Some(bot)),
+        due_at: Set(None),
+        repeat: Set(None),
+        at_due: Set(None),
+        act_spec: Set(None),
+        fired_at: Set(None),
+        mention: Set(None),
+    }
+    .insert(txn)
+    .await?;
+    Ok(())
+}
+
+/// Let go of the claim `by` holds on dispatch `id` (B1: the owner ran its
+/// task again since), and — in the same transaction — open its matter again
+/// as `reopen` says when it was closed: once, whether this write did it.
+pub async fn release_claim(
+    conn: &DatabaseConnection,
+    id: i32,
+    by: i32,
+    reopen: Option<(ItemStatus, WaitsFor)>,
+) -> Result<bool, DbError> {
+    use sea_orm::TransactionTrait;
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let res = dispatch::Entity::update_many()
+        .col_expr(dispatch::Column::ReplacedBy, Expr::value(Option::<i32>::None))
+        .col_expr(dispatch::Column::UpdatedAt, Expr::value(now))
+        .filter(dispatch::Column::Id.eq(id))
+        .filter(dispatch::Column::ReplacedBy.eq(by))
+        .exec(&txn)
+        .await?;
+    if res.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    if let Some((status, waits_for)) = reopen {
+        item::Entity::update_many()
+            .col_expr(item::Column::Status, Expr::value(status))
+            .col_expr(item::Column::WaitsFor, Expr::value(Some(waits_for)))
+            .col_expr(item::Column::UpdatedAt, Expr::value(now))
+            .filter(item::Column::DispatchId.eq(id))
+            .filter(item::Column::Status.eq(ItemStatus::Done))
             .exec(&txn)
             .await?;
     }
     txn.commit().await?;
-    Ok(Ledgered::New(made))
+    Ok(true)
+}
+
+/// Whether a follow-up of dispatch `p` is recorded and not settled.
+async fn pending_followup(conn: &DatabaseConnection, p: i32) -> bool {
+    action::Entity::find()
+        .filter(action::Column::Kind.eq("followup"))
+        .filter(action::Column::State.eq(ActionState::Prepared))
+        .filter(action::Column::Payload.like(format!("{{\"dispatch_id\":{p},%")))
+        .count(conn)
+        .await
+        .is_ok_and(|n| n > 0)
+}
+
+/// A dispatch's matter written as its progress has it — unless, by the
+/// time the write holds the lock, other work took the dispatch over in the
+/// run it is in (B1): then nothing is written. The write goes first, so a
+/// handing over is wholly before it (and seen) or wholly after (and closes
+/// the matter itself).
+pub async fn update_item_unless_taken_over(
+    conn: &DatabaseConnection,
+    item_id: i32,
+    dispatch_id: i32,
+    write: ItemWrite,
+) -> Result<bool, DbError> {
+    use crate::db::entities::work_task;
+    use sea_orm::TransactionTrait;
+    let txn = conn.begin().await?;
+    item_update_stmt(item_id, write).exec(&txn).await?;
+    let d = dispatch::Entity::find_by_id(dispatch_id).one(&txn).await?;
+    let taken = match d.and_then(|d| d.replaced_by.map(|by| (by, d.work_task_id))) {
+        None => false,
+        Some((by, task)) => {
+            let run = dispatch::Entity::find_by_id(by)
+                .one(&txn)
+                .await?
+                .and_then(|n| n.replaces_run_seq);
+            match (run, task) {
+                (Some(run), Some(t)) => work_task::Entity::find_by_id(t)
+                    .one(&txn)
+                    .await?
+                    .is_none_or(|t| t.run_seq == run),
+                _ => true,
+            }
+        }
+    };
+    if taken {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    txn.commit().await?;
+    Ok(true)
+}
+
+/// Why a handing over was refused, in words for the assistant.
+async fn refused_handover(conn: &DatabaseConnection, h: &Handover) -> DbError {
+    let p = h.predecessor;
+    match get_dispatch(conn, p).await {
+        Ok(Some(d)) => match d.replaced_by {
+            Some(by) => DbError::Conflict(format!("dispatch #{p} was taken over by #{by} already")),
+            None if !matches!(
+                d.state,
+                DispatchState::Failed | DispatchState::Interrupted | DispatchState::Canceled
+            ) => DbError::Conflict(format!(
+                "dispatch #{p} is {} now, not failed or stopped: nothing to take over",
+                sea_orm::ActiveEnum::to_value(&d.state)
+            )),
+            None if pending_followup(conn, p).await => DbError::Conflict(format!(
+                "dispatch #{p} has a follow-up on its way; let it run, or wait for it"
+            )),
+            None => DbError::Conflict(format!(
+                "dispatch #{p}'s board task was run again: that run is not yours to take over"
+            )),
+        },
+        _ => DbError::Conflict(format!("dispatch #{p} does not exist")),
+    }
 }
 
 // ── the ledger ──────────────────────────────────────────────────────────────
@@ -4030,6 +4281,43 @@ pub async fn count_ops_with_prefix(conn: &DatabaseConnection, prefix: &str) -> R
             [sea_orm::Value::from(pattern)],
         ))
         .count(conn)
+        .await?)
+}
+
+/// The card a dispatch went out with.
+pub async fn dispatch_card_row(
+    conn: &DatabaseConnection,
+    dispatch_id: i32,
+) -> Result<Option<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Kind.eq(TimelineKind::Dispatch))
+        .filter(timeline::Column::DispatchId.eq(dispatch_id))
+        .order_by_asc(timeline::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+/// Point a matter at the row it came from, once there is one.
+pub async fn set_item_origin(conn: &DatabaseConnection, id: i32, row: i32) -> Result<(), DbError> {
+    item::Entity::update_many()
+        .col_expr(item::Column::OriginTimelineId, Expr::value(row))
+        .filter(item::Column::Id.eq(id))
+        .filter(item::Column::OriginTimelineId.is_null())
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// Every result card of a dispatch, oldest first.
+pub async fn result_rows_of_dispatch(
+    conn: &DatabaseConnection,
+    dispatch_id: i32,
+) -> Result<Vec<timeline::Model>, DbError> {
+    Ok(timeline::Entity::find()
+        .filter(timeline::Column::Kind.eq(TimelineKind::Result))
+        .filter(timeline::Column::DispatchId.eq(dispatch_id))
+        .order_by_asc(timeline::Column::Id)
+        .all(conn)
         .await?)
 }
 

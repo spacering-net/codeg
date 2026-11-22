@@ -114,6 +114,14 @@ pub struct Model {
     /// codeg's own check of other work (7.5): kept out of what the
     /// assistants' work is compared by.
     pub is_check: bool,
+    /// The failed work this one took over (B1): its matter handed to this
+    /// one in the transaction that recorded it.
+    pub replaces_id: Option<i32>,
+    /// The run of that work's board task it took over: a later run the
+    /// owner starts on the board is not taken over.
+    pub replaces_run_seq: Option<i32>,
+    /// The work that took this one over (B1).
+    pub replaced_by: Option<i32>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -1386,6 +1386,7 @@ impl PersonalAgentEngine {
                     report: false,
                     on_done: None,
                     done_when: Some(done_when.into()),
+                    replaces: None,
                 };
                 let mut valid = Box::pin(self.validate_dispatch(&req)).await?;
                 valid.pr_fix = Some(fix.clone());

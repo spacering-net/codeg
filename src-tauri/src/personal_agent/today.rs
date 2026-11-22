@@ -534,7 +534,11 @@ pub async fn today_from(
         row.level = Some(Level::Low);
         view.needs.push(row);
     }
-    // Handed-out work that failed lately, outside the board.
+    // Handed-out work that failed lately: outside the board, and a task's
+    // the board shows no failure for — its start failed before the task
+    // took it up (still to do), or there is no task at all (B1). One the
+    // owner set aside or archived on the board is as they left it; one
+    // other work took over is that work's.
     for bot in &bots {
         for d in svc::list_dispatches(
             &db.conn,
@@ -546,9 +550,27 @@ pub async fn today_from(
         .await
         .unwrap_or_default()
         .into_iter()
-        .filter(|d| {
-            d.mode != DispatchMode::Task && d.updated_at > now - Duration::days(FAILED_FRESH_DAYS)
-        }) {
+        .filter(|d| d.updated_at > now - Duration::days(FAILED_FRESH_DAYS))
+        {
+            if super::dispatch::superseded(db, &d).await {
+                continue;
+            }
+            if d.mode == DispatchMode::Task {
+                if let Some(tid) = d.work_task_id {
+                    let shown = tasks
+                        .iter()
+                        .any(|t| t.id == tid && t.status == WorkTaskStatus::Failed && task_needs_owner(t));
+                    if shown {
+                        continue;
+                    }
+                    let left = crate::db::service::work_task_service::get_model(&db.conn, tid)
+                        .await
+                        .is_ok_and(|t| t.deferred_at.is_some() || t.archived_at.is_some());
+                    if left {
+                        continue;
+                    }
+                }
+            }
             let mut row = TodayRow::new(
                 format!("failed:{}", d.id),
                 "failed",
@@ -598,6 +620,16 @@ pub async fn today_from(
     for t in tasks.iter().filter(|t| task_needs_owner(t)) {
         if accepting.contains_key(&t.id) {
             continue;
+        }
+        // Its failed run taken over by other work (B1): that work's row.
+        if matches!(t.status, WorkTaskStatus::Failed | WorkTaskStatus::Canceled) {
+            if let Some(d) = t.personal_agent_dispatch_id {
+                if let Ok(Some(d)) = svc::get_dispatch(&db.conn, d).await {
+                    if super::dispatch::superseded(db, &d).await {
+                        continue;
+                    }
+                }
+            }
         }
         if t.status == WorkTaskStatus::AwaitingInput {
             listed_conversations.extend(t.conversation_id);
