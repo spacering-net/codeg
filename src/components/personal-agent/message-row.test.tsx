@@ -520,7 +520,17 @@ describe("the message menu", () => {
 describe("MessageActions", () => {
   it("stops the reply being written", () => {
     draw(<MessageActions rowId={5} text={null} at="" live side="start" />)
-    fireEvent.click(screen.getByRole("button", { name: "Stop the reply" }))
+    const stop = screen.getByRole("button", { name: "Stop the reply" })
+    // Under the bubble its square is filled (the status line's is hollow).
+    expect(
+      stop
+        .querySelector("[data-pa-stop-icon]")!
+        .getAttribute("data-pa-stop-icon")
+    ).toBe("filled")
+    expect(
+      stop.querySelector("[data-pa-stop-icon]")!.getAttribute("class")
+    ).toContain("fill-current")
+    fireEvent.click(stop)
     expect(api.personalAgentCancel).toHaveBeenCalledTimes(1)
   })
 

@@ -109,8 +109,8 @@ const BUTTON =
   "inline-flex size-5 items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 
 /** Stop the turn writing this reply (the status line has one too, for a
- *  turn that has not written yet). */
-export function StopButton() {
+ *  turn that has not written yet — drawn there as a hollow square, `hollow`). */
+export function StopButton({ hollow = false }: { hollow?: boolean }) {
   const t = useTranslations("PersonalAgent.actions")
   const botId = useBotId()
   const [busy, setBusy] = useState(false)
@@ -129,7 +129,10 @@ export function StopButton() {
       {busy ? (
         <SyncedSpinner small className="size-3.5" />
       ) : (
-        <Square className="size-3 fill-current" />
+        <Square
+          data-pa-stop-icon={hollow ? "hollow" : "filled"}
+          className={hollow ? "size-3.5" : "size-3 fill-current"}
+        />
       )}
     </button>
   )

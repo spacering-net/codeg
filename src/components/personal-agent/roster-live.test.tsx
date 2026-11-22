@@ -1039,9 +1039,12 @@ describe("the status line", () => {
     const pill = document.querySelector("[data-pa-status-pill]")!
     expect(pill.className).toContain("rounded-full")
     expect(pill.querySelector("svg[class*='chevron']")).toBeNull()
-    expect(
-      pill.contains(screen.getByRole("button", { name: "Stop the reply" }))
-    ).toBe(true)
+    const stop = screen.getByRole("button", { name: "Stop the reply" })
+    expect(pill.contains(stop)).toBe(true)
+    // Its stop button a hollow, outlined square.
+    const icon = stop.querySelector("[data-pa-stop-icon]")!
+    expect(icon.getAttribute("data-pa-stop-icon")).toBe("hollow")
+    expect(icon.getAttribute("class")).not.toContain("fill-current")
     // Its steps.
     fireEvent.click(screen.getByRole("button", { expanded: false }))
     expect(await screen.findByText("Edited parser.rs +14 −10")).toBeTruthy()

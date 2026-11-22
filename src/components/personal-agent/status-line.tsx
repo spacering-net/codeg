@@ -247,7 +247,7 @@ export function StatusLine({
         {/* The turn can be stopped from here, in the pill, before its reply
             has a bubble. */}
         {turnRunning && snapshot?.status.engine === "here" ? (
-          <StopButton />
+          <StopButton hollow />
         ) : null}
       </div>
     </div>
