@@ -1791,6 +1791,9 @@
       "configDescription": "Pi s'authentifie via la clé API de votre fournisseur de modèle. La clé est écrite dans ~/.pi/agent/auth.json et le choix du modèle dans settings.json.",
       "providerLabel": "Fournisseur",
       "modelLabel": "Modèle",
+      "contextWindowLabel": "Context window (tokens)",
+      "maxTokensLabel": "Max output (tokens)",
+      "capacityHint": "Filled from the provider or model catalogue when you pick a model; edit to override.",
       "thinkingLabel": "Réflexion",
       "thinking": {
         "off": "Désactivé",

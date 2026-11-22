@@ -951,6 +951,8 @@ pub struct AcpUpdatePiConfigParams {
     pub model_reasoning: Option<acp_commands::PiModelReasoningSpec>,
     #[serde(default)]
     pub custom_models: Option<Vec<String>>,
+    #[serde(default)]
+    pub model_capacity: Option<acp_commands::PiModelCapacitySpec>,
 }
 
 pub async fn acp_update_pi_config(
@@ -968,6 +970,7 @@ pub async fn acp_update_pi_config(
             custom_api: params.custom_api,
             model_reasoning: params.model_reasoning,
             custom_models: params.custom_models,
+            model_capacity: params.model_capacity,
         },
         &state.db,
         &emitter,

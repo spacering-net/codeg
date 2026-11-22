@@ -864,6 +864,9 @@ export async function acpUpdatePiConfig(params: {
   /** The custom provider's whole model list (the chosen model always kept);
    * omit to add the model to whatever the list holds. */
   customModels?: string[]
+  /** contextWindow/maxTokens for the chosen model in the custom provider's
+   * models.json. Omit to leave hand-written values untouched. */
+  modelCapacity?: { contextWindow?: number; maxTokens?: number }
 }): Promise<void> {
   return getTransport().call("acp_update_pi_config", {
     provider: params.provider,
@@ -874,6 +877,7 @@ export async function acpUpdatePiConfig(params: {
     customApi: params.customApi ?? null,
     modelReasoning: params.modelReasoning ?? null,
     customModels: params.customModels ?? null,
+    modelCapacity: params.modelCapacity ?? null,
   })
 }
 
@@ -899,6 +903,8 @@ export async function loadPiConfig(): Promise<{
       id: string
       reasoning: boolean | null
       thinkingLevelMap: Record<string, string | null>
+      contextWindow?: number
+      maxTokens?: number
     }[]
   }[]
 }> {

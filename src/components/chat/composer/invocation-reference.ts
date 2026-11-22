@@ -54,6 +54,7 @@ export function diskSkillTrigger(
   if (
     agentType === "antigravity" ||
     agentType === "open_code" ||
+    agentType === "code_arts" ||
     isCustomAgentType(agentType)
   ) {
     return "/"

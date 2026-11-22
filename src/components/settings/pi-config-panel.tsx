@@ -57,6 +57,7 @@ import {
   PI_MIN_RUNTIME_VERSION,
   piRuntimeIsTooOld,
 } from "@/lib/pi-config"
+import { piModelCapacity, type PiModelCapacity } from "@/lib/pi-capacity"
 import {
   PI_THINKING_LEVELS,
   clampThinkingLevel,
@@ -102,6 +103,15 @@ export const PI_RESERVED_ENV_KEYS = [
 ] as const
 
 type PiRuntimeMode = "default" | "custom"
+
+/** A capacity input is sent only when it holds a positive integer; blank or
+ *  malformed input means "omit the key" so a user edit can clear a stale value. */
+function parsePositiveCapacity(raw: string): number | undefined {
+  const value = Number(raw.trim())
+  return raw.trim() !== "" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined
+}
 
 /** A custom provider as `loadPiConfig` projects it out of `models.json`. */
 type PiCustomProvider = Awaited<
@@ -339,6 +349,10 @@ export function PiConfigPanel({
   const [savingCreds, setSavingCreds] = useState(false)
   const [loadingCreds, setLoadingCreds] = useState(true)
   const [reasoning, setReasoning] = useState<PiModelReasoning>(NO_REASONING)
+  // Token capacities for the current model. Blank string = "not declared",
+  // so a save can omit the key rather than write a bogus 0.
+  const [contextWindow, setContextWindow] = useState("")
+  const [maxTokens, setMaxTokens] = useState("")
   const [showWireValues, setShowWireValues] = useState(false)
   const [configLoadError, setConfigLoadError] = useState<string | null>(null)
   // pi's own model catalog, tagged with the runtime it came from (see
@@ -408,14 +422,43 @@ export function PiConfigPanel({
     model: string
     entry: ModelCatalogEntry
   } | null>(null)
-  const applyCatalogPick = useCallback((entry: ModelCatalogEntry) => {
-    catalogPickRef.current = { model: entry.model, entry }
-    setReasoning(reasoningFromCatalog(entry))
+  // A capacity resolved at pick time, applied on the render that rehydrates
+  // after `model` changes (same pattern as the reasoning pick above).
+  const capacityPickRef = useRef<PiModelCapacity | null>(null)
+
+  /** Resolve a model id's capacity: the provider's listing first, litellm second. */
+  const fillCapacity = useCallback(
+    (modelId: string): PiModelCapacity =>
+      piModelCapacity(modelId, providerModels.models, modelCatalog?.entries),
+    [providerModels.models, modelCatalog]
+  )
+  const applyCapacity = useCallback((capacity: PiModelCapacity) => {
+    setContextWindow(
+      capacity.contextWindow != null ? String(capacity.contextWindow) : ""
+    )
+    setMaxTokens(capacity.maxTokens != null ? String(capacity.maxTokens) : "")
   }, [])
+
+  const applyCatalogPick = useCallback(
+    (entry: ModelCatalogEntry) => {
+      catalogPickRef.current = { model: entry.model, entry }
+      setReasoning(reasoningFromCatalog(entry))
+      // A catalog pick carries capacity; prefer the provider's own value when
+      // it has one, otherwise litellm's.
+      capacityPickRef.current = piModelCapacity(
+        entry.model,
+        providerModels.models,
+        modelCatalog?.entries
+      )
+    },
+    [providerModels.models, modelCatalog]
+  )
   if (reasoningKey !== null && reasoningKey !== lastReasoningKey) {
     setLastReasoningKey(reasoningKey)
     const picked = catalogPickRef.current
     catalogPickRef.current = null
+    const capPicked = capacityPickRef.current
+    capacityPickRef.current = null
     if (picked && picked.model === model.trim()) {
       setReasoning(reasoningFromCatalog(picked.entry))
     } else {
@@ -425,6 +468,24 @@ export function PiConfigPanel({
       setReasoning(
         reasoningFromModel(stored?.reasoning, stored?.thinkingLevelMap)
       )
+    }
+    if (capPicked) {
+      // A pick just happened for this model: use the resolved capacity.
+      applyCapacity(capPicked)
+    } else {
+      const stored = customProviders
+        .find((provider) => provider.id === effectiveProvider)
+        ?.models?.find((entry) => entry.id === model.trim())
+      if (stored?.contextWindow != null || stored?.maxTokens != null) {
+        // Rehydrate what the user already has in models.json.
+        setContextWindow(
+          stored.contextWindow != null ? String(stored.contextWindow) : ""
+        )
+        setMaxTokens(stored.maxTokens != null ? String(stored.maxTokens) : "")
+      } else {
+        // A freshly typed model id with nothing stored: auto-fill.
+        applyCapacity(fillCapacity(model.trim()))
+      }
     }
   }
 
@@ -440,6 +501,8 @@ export function PiConfigPanel({
       setSelectedProvider("")
       setModel("")
       setThinkingLevel("")
+      setContextWindow("")
+      setMaxTokens("")
       setAuthProviders([])
       setCustomProviders([])
       setLoadingCreds(false)
@@ -473,6 +536,8 @@ export function PiConfigPanel({
         setSelectedProvider("")
         setModel("")
         setThinkingLevel("")
+        setContextWindow("")
+        setMaxTokens("")
         setAuthProviders([])
         setCustomProviders([])
         setConfigLoadError(toErrorMessage(error))
@@ -600,6 +665,12 @@ export function PiConfigPanel({
           : undefined,
         customModels:
           isCustom && customModels !== null ? customModels : undefined,
+        modelCapacity: isCustom
+          ? {
+              contextWindow: parsePositiveCapacity(contextWindow),
+              maxTokens: parsePositiveCapacity(maxTokens),
+            }
+          : undefined,
       })
       if (apiKey.trim()) {
         setApiKey("")
@@ -665,6 +736,8 @@ export function PiConfigPanel({
     reasoning,
     apiKey,
     customModels,
+    contextWindow,
+    maxTokens,
     onSaved,
     t,
   ])
@@ -1380,6 +1453,52 @@ export function PiConfigPanel({
             disabled={savingCreds || loadingCreds}
           />
         </div>
+
+        {isCustom && (
+          <div className="space-y-2 rounded-md border bg-muted/10 p-3">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="pi-context-window"
+                  className="text-2xs text-muted-foreground"
+                >
+                  {t("pi.contextWindowLabel")}
+                </label>
+                <Input
+                  id="pi-context-window"
+                  type="number"
+                  min={0}
+                  inputMode="numeric"
+                  value={contextWindow}
+                  onChange={(event) => setContextWindow(event.target.value)}
+                  placeholder="1000000"
+                  disabled={savingCreds || loadingCreds}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="pi-max-tokens"
+                  className="text-2xs text-muted-foreground"
+                >
+                  {t("pi.maxTokensLabel")}
+                </label>
+                <Input
+                  id="pi-max-tokens"
+                  type="number"
+                  min={0}
+                  inputMode="numeric"
+                  value={maxTokens}
+                  onChange={(event) => setMaxTokens(event.target.value)}
+                  placeholder="128000"
+                  disabled={savingCreds || loadingCreds}
+                />
+              </div>
+            </div>
+            <p className="text-2xs text-muted-foreground">
+              {t("pi.capacityHint")}
+            </p>
+          </div>
+        )}
 
         {isCustom && (
           <ModelIdListField

@@ -1791,6 +1791,9 @@
       "configDescription": "Pi는 모델 제공자의 API 키로 인증합니다. 키는 ~/.pi/agent/auth.json에, 모델 선택은 settings.json에 저장됩니다.",
       "providerLabel": "제공자",
       "modelLabel": "모델",
+      "contextWindowLabel": "Context window (tokens)",
+      "maxTokensLabel": "Max output (tokens)",
+      "capacityHint": "Filled from the provider or model catalogue when you pick a model; edit to override.",
       "thinkingLabel": "사고",
       "thinking": {
         "off": "끔",

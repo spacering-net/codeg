@@ -3,7 +3,8 @@
 //! `codearts models --verbose` prints a two-column table followed by one JSON
 //! object per model. Each object carries `options.creditRatioDisplay` (the
 //! credit multiplier Huawei shows in its TUI as e.g. `0.7x`), `limit.context`,
-//! `capabilities.reasoning` and `variants`. There is no documented API for the
+//! `variants` (a non-empty list is the only gate for an effort selector).
+//! There is no documented API for the
 //! catalogue, so parsing is deliberately defensive: anything unrecognised
 //! falls back to the bundled table below and the bridge still starts.
 
@@ -90,8 +91,10 @@ pub struct CodeArtsModel {
     /// `creditRatioDisplay`, e.g. `0.7x`.
     pub credit: Option<String>,
     pub context: Option<u64>,
-    /// Gate for the reasoning-effort selector. Huawei only accepts `--variant`
-    /// on models that advertise thinking support.
+    /// Gate for the reasoning-effort selector: `true` exactly when the model
+    /// declares a non-empty `variants` list in `codearts models --verbose`
+    /// (e.g. deepseek-v4.1-flash, GLM-5.2). Models with no variants (e.g.
+    /// openpangu-2.0-flash) get no selector.
     pub reasoning_capable: bool,
     /// Empty when the model does not support reasoning: no selector is shown.
     pub effort_levels: Vec<String>,
@@ -134,54 +137,12 @@ pub fn fallback_models() -> Vec<CodeArtsModel> {
             name: (*name).to_string(),
             credit: Some((*credit).to_string()),
             context: Some(*context),
-            // All eight built-ins report `capabilities.reasoning: false` and
-            // `variants: {}` on 26.10.9, so the bundled fallback shows NO
-            // reasoning selector. Only a live fetch that finds `variants`
-            // (GLM-5.2 / GLM-5.2-ArkTS-SPARK) enables it.
+            // The bundled fallback carries no variants, so it shows NO
+            // reasoning selector. Only a live fetch whose model declares
+            // non-empty `variants` enables one.
             reasoning_capable: false,
             effort_levels: Vec::new(),
         })
-        .collect()
-}
-
-/// Normalize a model id for loose matching against litellm keys, which carry
-/// provider prefixes (`accounts/fireworks/models/kimi-k3`) or `@cf/…` namespaces.
-fn normalize_id(value: &str) -> String {
-    value
-        .rsplit('/')
-        .next()
-        .unwrap_or(value)
-        .to_ascii_lowercase()
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
-        .collect()
-}
-
-/// Reasoning levels for one model: the litellm catalogue wins, a hard-coded
-/// vocabulary is the fallback. The CLI's `capabilities.reasoning` flag is NOT
-/// a gate here — CodeArts reports `false` for its built-in models even though
-/// `codearts run --variant` accepts a provider-specific effort, and matching
-/// the model catalogue is exactly how the composer learns the levels each
-/// model supports. Levels therefore vary per model (the useful kind of gate).
-pub fn effort_levels_for(short_id: &str) -> Vec<String> {
-    let needle = normalize_id(short_id);
-    if !needle.is_empty() {
-        for entry in crate::model_catalog::bundled_entries() {
-            if entry.reasoning_effort_levels.is_empty() {
-                continue;
-            }
-            let candidate = normalize_id(&entry.model);
-            let matches = candidate == needle
-                || candidate.contains(&needle)
-                || (candidate.len() >= 5 && needle.contains(&candidate));
-            if matches {
-                return entry.reasoning_effort_levels.clone();
-            }
-        }
-    }
-    DEFAULT_EFFORT_LEVELS
-        .iter()
-        .map(|level| (*level).to_string())
         .collect()
 }
 
@@ -251,27 +212,14 @@ fn parse_model_object(value: &Value) -> Option<CodeArtsModel> {
         .get("limit")
         .and_then(|l| l.get("context"))
         .and_then(Value::as_u64);
-    let declared_reasoning = value
-        .get("capabilities")
-        .and_then(|c| c.get("reasoning"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let declared = declared_variant_levels(value);
-    let has_variants = !declared.is_empty();
-    // Only a model that declares `variants` (or reasoning support) is known to
-    // accept `--variant`. Models without it must NOT show a reasoning
-    // selector at all — offering levels the CLI rejects would mislead the
-    // user into thinking a setting took effect.
-    let reasoning_capable = declared_reasoning || has_variants;
-    let effort_levels = if !reasoning_capable {
-        Vec::new()
-    } else if has_variants {
-        declared
-    } else {
-        // Declared reasoning support but no variant names: fall back to
-        // matching the litellm model catalogue, then the hardcoded vocabulary.
-        effort_levels_for(&short_id)
-    };
+    // Gate purely on `variants`: a non-empty list is the CLI's own declaration
+    // of the reasoning efforts it accepts for this model, so it both enables
+    // the selector and supplies its levels. E.g. deepseek-v4.1-flash lists
+    // `low/high/max` and gets a switch; openpangu-2.0-flash lists none and does
+    // not. `capabilities.reasoning` is not used — the CLI reports false for
+    // models that do accept a variant.
+    let effort_levels = declared_variant_levels(value);
+    let reasoning_capable = !effort_levels.is_empty();
     Some(CodeArtsModel {
         id,
         short_id,
@@ -473,22 +421,6 @@ huaweicloud-maas/glm-5.3                   GLM-5.3
     }
 
     #[test]
-    fn effort_levels_follow_the_catalogue_with_a_fallback() {
-        // GLM-5.2 matches a litellm entry whose levels differ from the
-        // hardcoded vocabulary — that is the per-model gating the picker needs.
-        let glm = effort_levels_for("GLM-5.2");
-        assert!(!glm.is_empty());
-        assert!(glm.contains(&"high".to_string()));
-        assert_eq!(
-            effort_levels_for("unknown-model-xyz"),
-            DEFAULT_EFFORT_LEVELS
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
     fn default_level_avoids_max_and_long_lists() {
         let levels =
             |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -533,6 +465,7 @@ huaweicloud-maas/GLM-5.2  GLM-5.2
   "id": "GLM-5.2",
   "providerID": "huaweicloud-maas",
   "name": "GLM-5.2",
+  "capabilities": { "reasoning": true },
   "variants": { "max": {}, "high": {} },
   "options": { "creditRatioDisplay": "0.7x" }
 }
@@ -550,6 +483,43 @@ huaweicloud-maas/GLM-5.2  GLM-5.2
             Some("high"),
             "`max` must not be the default"
         );
+    }
+
+    /// Gate is `variants` alone: deepseek-v4.1-flash declares three variants
+    /// and gets a switch (even with reasoning:false), while openpangu-2.0-flash
+    /// declares none and gets none.
+    #[test]
+    fn variants_alone_decides_the_selector() {
+        let pretty = r#"model_id  model_name
+---
+huaweicloud-maas/deepseek-v4.1-flash  DeepSeek-V4.1-Flash
+{
+  "id": "deepseek-v4.1-flash",
+  "providerID": "huaweicloud-maas",
+  "name": "DeepSeek-V4.1-Flash",
+  "capabilities": { "reasoning": false },
+  "variants": { "low": {}, "high": {}, "max": {} },
+  "options": { "creditRatioDisplay": "0.09x" }
+}
+huaweicloud-maas/openpangu-2.0-flash  OpenPangu-2.0-Flash
+{
+  "id": "openpangu-2.0-flash",
+  "providerID": "huaweicloud-maas",
+  "name": "OpenPangu-2.0-Flash",
+  "capabilities": { "reasoning": false },
+  "variants": {},
+  "options": { "creditRatioDisplay": "0.32x" }
+}
+"#;
+        let models = parse_verbose_output(pretty);
+        assert_eq!(models.len(), 2);
+        assert!(models[0].reasoning_capable);
+        assert_eq!(
+            models[0].effort_levels,
+            vec!["low".to_string(), "high".to_string(), "max".to_string()]
+        );
+        assert!(!models[1].reasoning_capable);
+        assert!(models[1].effort_levels.is_empty());
     }
 
     #[test]

@@ -1791,6 +1791,9 @@
       "configDescription": "يصادق Pi عبر مفتاح API لمزوّد النموذج. يُكتب المفتاح في ~/.pi/agent/auth.json واختيار النموذج في settings.json.",
       "providerLabel": "المزوّد",
       "modelLabel": "النموذج",
+      "contextWindowLabel": "Context window (tokens)",
+      "maxTokensLabel": "Max output (tokens)",
+      "capacityHint": "Filled from the provider or model catalogue when you pick a model; edit to override.",
       "thinkingLabel": "التفكير",
       "thinking": {
         "off": "إيقاف",

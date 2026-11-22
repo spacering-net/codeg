@@ -451,6 +451,48 @@ describe("Pi custom provider models", () => {
     )
   })
 
+  it("shows and saves the model's contextWindow/maxTokens, auto-filled from the provider", async () => {
+    api.loadPiConfig.mockResolvedValue({
+      defaultProvider: "my-proxy",
+      defaultModel: "local-model",
+      defaultThinkingLevel: "",
+      authProviders: ["my-proxy"],
+      customProviders: [
+        {
+          id: "my-proxy",
+          baseUrl: "https://proxy.example/v1",
+          api: "openai-completions",
+          models: [
+            {
+              id: "local-model",
+              reasoning: null,
+              thinkingLevelMap: {},
+              contextWindow: 500000,
+              maxTokens: 64000,
+            },
+          ],
+        },
+      ],
+    })
+    await renderPanel({}, "local-model")
+    const cw = screen.getByLabelText("Context window (tokens)")
+    const mt = screen.getByLabelText("Max output (tokens)")
+    expect(cw).toHaveValue(500000)
+    expect(mt).toHaveValue(64000)
+
+    // A manual edit overrides the auto-filled value on save.
+    await userEvent.clear(cw)
+    await userEvent.type(cw, "123456")
+    await saveConfig()
+    await waitFor(() =>
+      expect(api.acpUpdatePiConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          modelCapacity: { contextWindow: 123456, maxTokens: 64000 },
+        })
+      )
+    )
+  })
+
   it("leaves the list on disk alone until it is edited", async () => {
     api.loadPiConfig.mockResolvedValue({
       defaultProvider: "my-proxy",

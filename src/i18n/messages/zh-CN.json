@@ -1791,6 +1791,9 @@
       "configDescription": "Pi 通过模型提供方的 API Key 鉴权。Key 写入 ~/.pi/agent/auth.json，模型选择写入 settings.json。",
       "providerLabel": "提供方",
       "modelLabel": "模型",
+      "contextWindowLabel": "上下文窗口（tokens）",
+      "maxTokensLabel": "最大输出（tokens）",
+      "capacityHint": "选择模型时自动取自供应商或模型目录，可手动修改覆盖。",
       "thinkingLabel": "思考",
       "thinking": {
         "off": "关闭",

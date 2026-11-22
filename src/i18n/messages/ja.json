@@ -1791,6 +1791,9 @@
       "configDescription": "Pi はモデルプロバイダーの API キーで認証します。キーは ~/.pi/agent/auth.json に、モデル選択は settings.json に書き込まれます。",
       "providerLabel": "プロバイダー",
       "modelLabel": "モデル",
+      "contextWindowLabel": "Context window (tokens)",
+      "maxTokensLabel": "Max output (tokens)",
+      "capacityHint": "Filled from the provider or model catalogue when you pick a model; edit to override.",
       "thinkingLabel": "思考",
       "thinking": {
         "off": "オフ",

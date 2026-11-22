@@ -130,6 +130,13 @@ describe("diskSkillTrigger", () => {
     expect(diskSkillTrigger("open_code")).toBe("/")
   })
 
+  // CodeArts' OpenCode-derived CLI reads skills from disk but its bridge
+  // advertises no ACP commands, so its skills can only come from disk. Wire
+  // form is `code_arts` (snake_case), not `codearts`.
+  it("lists CodeArts' disk skills under `/`", () => {
+    expect(diskSkillTrigger("code_arts")).toBe("/")
+  })
+
   // Custom ACP agents (e.g. user-configured Antigravity, or agents with declared
   // skill directories) do not advertise skills as ACP commands; their skills
   // live on disk and are invoked via `/`.

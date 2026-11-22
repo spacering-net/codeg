@@ -1791,6 +1791,9 @@
       "configDescription": "Pi 透過模型提供方的 API Key 驗證。Key 寫入 ~/.pi/agent/auth.json，模型選擇寫入 settings.json。",
       "providerLabel": "提供方",
       "modelLabel": "模型",
+      "contextWindowLabel": "上下文視窗（tokens）",
+      "maxTokensLabel": "最大輸出（tokens）",
+      "capacityHint": "選擇模型時自動取自供應商或模型目錄，可手動修改覆蓋。",
       "thinkingLabel": "思考",
       "thinking": {
         "off": "關閉",

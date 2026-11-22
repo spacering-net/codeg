@@ -3053,6 +3053,17 @@ fn home_dir_or_default() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// CodeArts CLI config home. Its launcher sets `KERNEL_CONFIG_DIR` to
+/// `~/.codeartsdoer` before running the executable; skills live under its
+/// `skills/` subdirectory. Falls back to `~/.codeartsdoer` when codeg itself
+/// was not launched through the shim.
+fn codearts_config_dir() -> PathBuf {
+    std::env::var_os("KERNEL_CONFIG_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home_dir_or_default().join(".codeartsdoer"))
+}
+
 pub(crate) fn codex_home_dir() -> PathBuf {
     let configured = std::env::var("CODEX_HOME").ok().and_then(|raw| {
         let trimmed = raw.trim();
@@ -7150,6 +7161,23 @@ pub(crate) struct PiConfigUpdate {
     /// adds `model` to whatever the list holds. Ignored without
     /// `custom_base_url`.
     pub custom_models: Option<Vec<String>>,
+    /// Context window / max output for `model`, written into the custom
+    /// provider's `models.json` entry. `None` leaves whatever the user
+    /// hand-wrote untouched; `Some` with both values absent clears the keys.
+    /// `context_window` maps to pi's `contextWindow`, `max_tokens` to `maxTokens`.
+    pub model_capacity: Option<PiModelCapacitySpec>,
+}
+
+/// A model's token capacities as pi records them in `models.json`:
+/// `contextWindow` and `maxTokens`. Positive values only — pi drops a model
+/// whose `contextWindow` is 0, so an absent/invalid value means "clear".
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PiModelCapacitySpec {
+    #[serde(default)]
+    pub context_window: Option<u64>,
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
 }
 
 /// A model's reasoning capability as pi records it in `models.json`.
@@ -7318,6 +7346,37 @@ fn apply_pi_custom_model(
     }
 
     entry.insert("models".to_string(), serde_json::Value::Array(models));
+}
+
+/// Write `contextWindow` / `maxTokens` into the custom provider's model entry.
+/// `None` means the panel omitted the field: leave the user's hand-written
+/// values untouched. `Some` rewrites each key only when it has a positive
+/// value; absent values clear that key (so a picked model with no catalog
+/// capacity does not keep a stale number).
+fn apply_pi_custom_capacity(
+    entry: &mut serde_json::Map<String, serde_json::Value>,
+    model_id: &str,
+    capacity: Option<&PiModelCapacitySpec>,
+) {
+    let Some(spec) = capacity else { return };
+    let Some(serde_json::Value::Array(models)) = entry.get_mut("models") else {
+        return;
+    };
+    let Some(item) = models.iter_mut().find_map(|item| {
+        let obj = item.as_object_mut()?;
+        (obj.get("id").and_then(serde_json::Value::as_str) == Some(model_id)).then_some(obj)
+    }) else {
+        return;
+    };
+    for (key, value) in [
+        ("contextWindow", spec.context_window),
+        ("maxTokens", spec.max_tokens),
+    ] {
+        match value.filter(|v| *v > 0) {
+            Some(v) => { item.insert(key.to_string(), serde_json::Value::from(v)); }
+            None => { item.remove(key); }
+        }
+    }
 }
 
 /// One built-in model's thinking capability, as pi's own model registry reports
@@ -7717,6 +7776,7 @@ pub(crate) async fn acp_update_pi_config_core(
             set_pi_custom_models(&mut entry, ids, model);
         }
         apply_pi_custom_model(&mut entry, model, update.model_reasoning.as_ref());
+        apply_pi_custom_capacity(&mut entry, model, update.model_capacity.as_ref());
         providers.insert(provider.to_string(), serde_json::Value::Object(entry));
         models_doc.insert(
             "providers".to_string(),
@@ -7759,6 +7819,11 @@ pub struct PiCustomModel {
     /// pi's `thinkingLevelMap`: a level mapped to `None` is removed from the picker,
     /// `Some(wire)` keeps it and sets the effort string sent to the provider.
     pub thinking_level_map: BTreeMap<String, Option<String>>,
+    /// Token capacities pi reads from the model entry, when declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
 }
 
 /// Project a custom provider's `models` array. Entries without a string `id` are
@@ -7792,6 +7857,10 @@ fn pi_custom_models_from_entry(entry: &serde_json::Value) -> Vec<PiCustomModel> 
                         id: id.to_string(),
                         reasoning: item.get("reasoning").and_then(serde_json::Value::as_bool),
                         thinking_level_map,
+                        context_window: item
+                            .get("contextWindow")
+                            .and_then(serde_json::Value::as_u64),
+                        max_tokens: item.get("maxTokens").and_then(serde_json::Value::as_u64),
                     })
                 })
                 .collect()
@@ -10122,10 +10191,25 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
                 project_rel_dirs: vec![".zcode/skills", ".agents/skills"],
             })
         }
+        // CodeArts is an OpenCode-1 derivative: its CLI reads skills from
+        // `<KERNEL_CONFIG_DIR>/skills` (`~/.codeartsdoer/skills` by default,
+        // where the launcher sets KERNEL_CONFIG_DIR) and the shared
+        // `~/.agents/skills` store, plus `.agents/skills` in the workspace.
+        // Bundles only (`<id>/SKILL.md`), matching OpenCode's shape. Listing
+        // them is what lets the composer's `/` menu offer installed skills
+        // such as `grill-with-docs` (the bridge advertises no ACP commands).
+        AgentType::CodeArts => Some(SkillStorageSpec {
+            kind: SkillStorageKind::SkillDirectoryOnly,
+            // Display order: the project's own `.codeartsdoer/skills` first,
+            // then the user-level `~/.codeartsdoer/skills`. The sort in
+            // `acp_list_agent_skills` ranks Project above Global for CodeArts.
+            global_dirs: vec![codearts_config_dir().join("skills")],
+            project_rel_dirs: vec![".codeartsdoer/skills"],
+        }),
         // MiniMax Code's native profile roots and external skill discovery are
         // CLI-owned; do not install into a different profile than the launch
         // env selects.
-        AgentType::MiniMaxCode | AgentType::CodeArts => None,
+        AgentType::MiniMaxCode => None,
         // codeg cannot detect where an arbitrary ACP agent loads skills from,
         // so custom agents are gated on the user's own declaration: that the
         // agent reads the shared `.agents/skills` store (the cross-agent
@@ -10175,6 +10259,19 @@ fn scope_rank(scope: AgentSkillScope) -> u8 {
     match scope {
         AgentSkillScope::Global => 0,
         AgentSkillScope::Project => 1,
+    }
+}
+
+/// CodeArts lists the project's `.codeartsdoer/skills` ahead of the user's
+/// `~/.codeartsdoer/skills`, the reverse of the settings-page order.
+fn skill_scope_rank(agent_type: AgentType, scope: AgentSkillScope) -> u8 {
+    if agent_type == AgentType::CodeArts {
+        match scope {
+            AgentSkillScope::Project => 0,
+            AgentSkillScope::Global => 1,
+        }
+    } else {
+        scope_rank(scope)
     }
 }
 
@@ -13788,6 +13885,7 @@ pub async fn acp_update_pi_config(
     custom_api: Option<String>,
     model_reasoning: Option<PiModelReasoningSpec>,
     custom_models: Option<Vec<String>>,
+    model_capacity: Option<PiModelCapacitySpec>,
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
@@ -13802,6 +13900,7 @@ pub async fn acp_update_pi_config(
             custom_api,
             model_reasoning,
             custom_models,
+            model_capacity,
         },
         &db,
         &emitter,
@@ -15074,8 +15173,8 @@ pub async fn acp_list_agent_skills(
         }
     }
     skills.sort_by(|a, b| {
-        scope_rank(a.scope)
-            .cmp(&scope_rank(b.scope))
+        skill_scope_rank(agent_type, a.scope)
+            .cmp(&skill_scope_rank(agent_type, b.scope))
             .then_with(|| a.name.cmp(&b.name))
     });
 
@@ -18594,6 +18693,7 @@ mod tests {
             custom_api: None,
             model_reasoning: None,
             custom_models: None,
+            model_capacity: None,
         };
         lookup_failed(
             acp_update_pi_config_core(update, &db, &EventEmitter::Noop)
@@ -19077,6 +19177,37 @@ echo {"id":"codeg-models","type":"response","command":"get_available_models","su
         assert!(models[0].get("thinkingLevelMap").is_none());
     }
 
+    #[test]
+    fn pi_custom_capacity_writes_and_clears_context_and_tokens() {
+        let mut entry = serde_json::Map::new();
+        apply_pi_custom_model(&mut entry, "m", None);
+        let spec = PiModelCapacitySpec { context_window: Some(200000), max_tokens: Some(32000) };
+        apply_pi_custom_capacity(&mut entry, "m", Some(&spec));
+        let models = pi_models_of(&entry);
+        assert_eq!(models[0]["contextWindow"], 200000);
+        assert_eq!(models[0]["maxTokens"], 32000);
+
+        // A spec whose values are absent clears both keys (no stale capacity).
+        let empty = PiModelCapacitySpec { context_window: None, max_tokens: None };
+        apply_pi_custom_capacity(&mut entry, "m", Some(&empty));
+        let models = pi_models_of(&entry);
+        assert!(models[0].get("contextWindow").is_none());
+        assert!(models[0].get("maxTokens").is_none());
+    }
+
+    #[test]
+    fn pi_custom_capacity_none_leaves_hand_written_values() {
+        let mut entry = serde_json::Map::new();
+        apply_pi_custom_model(&mut entry, "m", None);
+        {
+            let spec = PiModelCapacitySpec { context_window: Some(123), max_tokens: Some(45) };
+            apply_pi_custom_capacity(&mut entry, "m", Some(&spec));
+        }
+        apply_pi_custom_capacity(&mut entry, "m", None);
+        let models = pi_models_of(&entry);
+        assert_eq!(models[0]["contextWindow"], 123);
+        assert_eq!(models[0]["maxTokens"], 45);
+    }
     /// pi-acp rejects a level name outside pi's fixed seven with `invalidParams`, so
     /// one must never reach disk.
     #[test]
@@ -23876,6 +24007,25 @@ model = "gpt"
         );
         assert_eq!(env.get("EXPLICIT").map(String::as_str), Some("value"));
         assert!(skill_storage_spec(AgentType::MiniMaxCode).is_none());
+    }
+    #[test]
+    fn codearts_skill_spec_project_before_user() {
+        let spec = skill_storage_spec(AgentType::CodeArts).expect("CodeArts supports skills");
+        assert_eq!(spec.global_dirs, vec![codearts_config_dir().join("skills")]);
+        assert_eq!(spec.project_rel_dirs, vec![".codeartsdoer/skills"]);
+        assert_eq!(
+            skill_scope_rank(AgentType::CodeArts, AgentSkillScope::Project),
+            0
+        );
+        assert_eq!(
+            skill_scope_rank(AgentType::CodeArts, AgentSkillScope::Global),
+            1
+        );
+        // Other agents keep the settings-page order: global before project.
+        assert_eq!(
+            skill_scope_rank(AgentType::ClaudeCode, AgentSkillScope::Global),
+            0
+        );
     }
 
     // OpenCode's local config is its own opencode.json: its `model` is

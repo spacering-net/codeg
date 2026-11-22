@@ -1791,6 +1791,9 @@
       "configDescription": "O Pi autentica via a chave de API do seu provedor de modelos. A chave é gravada em ~/.pi/agent/auth.json e a seleção de modelo em settings.json.",
       "providerLabel": "Provedor",
       "modelLabel": "Modelo",
+      "contextWindowLabel": "Context window (tokens)",
+      "maxTokensLabel": "Max output (tokens)",
+      "capacityHint": "Filled from the provider or model catalogue when you pick a model; edit to override.",
       "thinkingLabel": "Raciocínio",
       "thinking": {
         "off": "Desligado",
