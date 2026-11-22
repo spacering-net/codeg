@@ -486,6 +486,9 @@ pub struct SessionState {
     ///
     /// Backend-internal — not serialized, not carried on `to_snapshot()`.
     pub pi_enabled_model_patterns: Option<Vec<String>>,
+    /// Pi model `provider/id` → context window (from pi's own model catalog).
+    /// Appended to the session model-selector labels. Backend-internal; not serialized.
+    pub pi_model_context_windows: BTreeMap<String, u64>,
     pub prompt_capabilities: Option<PromptCapabilitiesInfo>,
     pub fork_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
@@ -941,6 +944,7 @@ impl SessionState {
             env_pinned_config_option_ids: Vec::new(),
             trae_pat_sign_in: false,
             pi_enabled_model_patterns: None,
+            pi_model_context_windows: BTreeMap::new(),
             prompt_capabilities: None,
             fork_supported: false,
             available_commands: Vec::new(),

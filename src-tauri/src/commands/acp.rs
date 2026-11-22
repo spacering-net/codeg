@@ -7391,6 +7391,10 @@ pub struct PiModelCapability {
     pub reasoning: bool,
     #[serde(default)]
     pub thinking_level_map: BTreeMap<String, Option<String>>,
+
+    /// The model's context window, when pi's catalog reports one (> 0).
+    #[serde(default)]
+    pub context_window: Option<u64>,
 }
 
 /// Whether pi answered the catalog query, and if not, why. The settings panel
@@ -7636,6 +7640,24 @@ async fn query_pi_model_catalog(
         },
         Ok(_) => PiModelCatalog::unavailable(PiCatalogStatus::Failed),
     }
+}
+
+/// Pi model `provider/id` → context window, from pi's own catalog query. Used
+/// by the connection layer to decorate the session model selector; failures
+/// yield an empty map so the picker simply shows no context sizes.
+pub(crate) async fn pi_model_context_windows_for_env(
+    runtime_env: &BTreeMap<String, String>,
+) -> BTreeMap<String, u64> {
+    query_pi_model_catalog(runtime_env, Duration::from_secs(12))
+        .await
+        .models
+        .into_iter()
+        .filter_map(|model| {
+            model.context_window.filter(|w| *w > 0).map(|w| {
+                (format!("{}/{}", model.provider, model.id), w)
+            })
+        })
+        .collect()
 }
 
 pub async fn list_pi_model_catalog_core(db: &AppDatabase, data_dir: &Path) -> PiModelCatalog {

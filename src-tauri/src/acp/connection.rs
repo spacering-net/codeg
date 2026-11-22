@@ -2872,6 +2872,38 @@ pub async fn spawn_agent_connection(
     )
     .await;
 
+    // Pi only: fetch the model catalog once in the background to learn each
+    // model's context window, then refresh the selectors on screen so the
+    // model dropdown shows it. Best-effort; the picker works without it.
+    if agent_type == AgentType::Pi {
+        let ctx_state = Arc::clone(&session_state);
+        let ctx_emitter = emitter.clone();
+        let ctx_env = runtime_env.clone();
+        tokio::spawn(async move {
+            let windows = crate::commands::acp::pi_model_context_windows_for_env(&ctx_env).await;
+            if windows.is_empty() {
+                return;
+            }
+            let config_options = {
+                let mut guard = ctx_state.write().await;
+                guard.pi_model_context_windows = windows;
+                guard.config_options.clone()
+            };
+            if let Some(options) = config_options {
+                let windows = {
+                    ctx_state.read().await.pi_model_context_windows.clone()
+                };
+                let mut options = options;
+                append_pi_context_windows(&mut options, &windows);
+                emit_with_state(
+                    &ctx_state,
+                    &ctx_emitter,
+                    AcpEvent::SessionConfigOptions { config_options: options },
+                )
+                .await;
+            }
+        });
+    }
     // Align ~/.hermes/.env's base-URL var with config.yaml's model.base_url so
     // Hermes' auxiliary tasks (title generation, compression, …) resolve the
     // same endpoint as the main conversation. Best-effort; never blocks launch.
@@ -4596,6 +4628,102 @@ fn filter_pi_enabled_model_options(
         .collect()
 }
 
+/// Strip the redundant `"Thinking: "` prefix pi-acp puts on every level name
+/// under its `thought_level` selector ("Thinking: off", "Thinking: high", …).
+/// The selector itself is already titled "Thinking", so the prefix is pure
+/// duplication in the dropdown. Only Pi's thought_level options are touched;
+/// every other agent and option is returned unchanged.
+fn strip_pi_thinking_prefixes(config_options: Vec<SessionConfigOption>) -> Vec<SessionConfigOption> {
+    const PREFIX: &str = "Thinking: ";
+    config_options
+        .into_iter()
+        .map(|mut option| {
+            let thought_level = option.id.to_string() == "thought_level"
+                || option.category.as_ref().is_some_and(|c| {
+                    matches!(c, SessionConfigOptionCategory::ThoughtLevel)
+                });
+            if !thought_level {
+                return option;
+            }
+            let SessionConfigKind::Select(select) = &mut option.kind else {
+                return option;
+            };
+            let strip = |name: &mut String| {
+                if name.starts_with(PREFIX) {
+                    *name = name[PREFIX.len()..].to_string();
+                }
+            };
+            match &mut select.options {
+                SessionConfigSelectOptions::Ungrouped(options) => {
+                    for row in options.iter_mut() {
+                        strip(&mut row.name);
+                    }
+                }
+                SessionConfigSelectOptions::Grouped(groups) => {
+                    for group in groups.iter_mut() {
+                        for row in group.options.iter_mut() {
+                            strip(&mut row.name);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            option
+        })
+        .collect()
+}
+/// Format a token count the way model pickers show context: whole millions
+/// (`1M`), otherwise thousands (`922K`), else the raw number.
+fn format_context_window(tokens: u64) -> String {
+    if tokens >= 1_000_000 && tokens.is_multiple_of(1_000_000) {
+        format!("{}M", tokens / 1_000_000)
+    } else if tokens >= 1_000 {
+        format!("{}K", tokens / 1_000)
+    } else {
+        tokens.to_string()
+    }
+}
+
+/// Append each Pi model's context window to its selector label. The map is
+/// keyed by the same `provider/id` the option `value` carries, so the lookup
+/// is exact. Models without a known window are left untouched.
+fn append_pi_context_windows(
+    options: &mut [SessionConfigOptionInfo],
+    windows: &std::collections::BTreeMap<String, u64>,
+) {
+    for option in options.iter_mut() {
+        if option.id != MODEL_CONFIG_OPTION_ID
+            && option.category.as_deref() != Some("model")
+        {
+            continue;
+        }
+        let SessionConfigKindInfo::Select(select) = &mut option.kind else {
+            continue;
+        };
+        let append = |row: &mut SessionConfigSelectOptionInfo| {
+            if let Some(window) = windows.get(&row.value) {
+                let label = format_context_window(*window);
+                if let Some(description) = row.description.as_mut() {
+                    if !description.is_empty() {
+                        description.push_str(&format!(" · {label} context"));
+                    } else {
+                        *description = format!("{label} context");
+                    }
+                } else {
+                    row.description = Some(format!("{label} context"));
+                }
+            }
+        };
+        for row in select.options.iter_mut() {
+            append(row);
+        }
+        for group in select.groups.iter_mut() {
+            for row in group.options.iter_mut() {
+                append(row);
+            }
+        }
+    }
+}
 /// Emit the option list an establishment settled on.
 async fn emit_session_config_options_values(
     state: &Arc<RwLock<SessionState>>,
@@ -4626,18 +4754,24 @@ async fn emit_config_options(
     // Drop what this launch froze BEFORE mapping, so every producer of this
     // event — establishment, the answer to a set, and the agent's own
     // `config_option_update` push — is filtered by one rule.
-    let (pinned, pi_enabled_model_patterns, agent_type) = {
+    let (pinned, pi_enabled_model_patterns, agent_type, pi_context_windows) = {
         let guard = state.read().await;
         (
             guard.env_pinned_config_option_ids.clone(),
             guard.pi_enabled_model_patterns.clone(),
             guard.agent_type,
+            guard.pi_model_context_windows.clone(),
         )
     };
     let visible = visible_config_options(&pinned, config_options);
     let visible = match pi_enabled_model_patterns.as_deref() {
         Some(patterns) => filter_pi_enabled_model_options(patterns, visible),
         None => visible,
+    };
+    let visible = if agent_type == AgentType::Pi {
+        strip_pi_thinking_prefixes(visible)
+    } else {
+        visible
     };
     if update && agent_type == AgentType::Hermes {
         // Folded against the selectors on screen under the same lock that
@@ -4653,11 +4787,15 @@ async fn emit_config_options(
         .await;
         return;
     }
+    let mut mapped = map_session_config_options(&visible);
+    if agent_type == AgentType::Pi {
+        append_pi_context_windows(&mut mapped, &pi_context_windows);
+    }
     emit_with_state(
         state,
         emitter,
         AcpEvent::SessionConfigOptions {
-            config_options: map_session_config_options(&visible),
+            config_options: mapped,
         },
     )
     .await;
@@ -45570,6 +45708,82 @@ mod tests {
             .unwrap_or_default()
     }
 
+    #[test]
+    fn strip_pi_thinking_prefixes_removes_only_thinking_level_labels() {
+        let options: Vec<SessionConfigOption> = serde_json::from_value(serde_json::json!([
+            {
+                "type": "select",
+                "id": "thought_level",
+                "name": "Thinking",
+                "category": "thought_level",
+                "currentValue": "high",
+                "options": [
+                    {"value": "off", "name": "Thinking: off"},
+                    {"value": "high", "name": "Thinking: high"},
+                ]
+            },
+            {
+                "type": "select",
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "currentValue": "x",
+                "options": [{"value": "x", "name": "Thinking: keep-me"}],
+            },
+        ])).expect("fixture");
+        let stripped = strip_pi_thinking_prefixes(options);
+        let name_of = |opts: &[SessionConfigOption], id: &str| -> Vec<String> {
+            opts.iter()
+                .find(|o| o.id.to_string() == id)
+                .and_then(|o| match &o.kind {
+                    SessionConfigKind::Select(sel) => match &sel.options {
+                        SessionConfigSelectOptions::Ungrouped(rows) => Some(
+                            rows.iter().map(|r| r.name.clone()).collect(),
+                        ),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            name_of(&stripped, "thought_level"),
+            vec!["off".to_string(), "high".to_string()]
+        );
+        // Non-thought_level options are untouched, even with the same prefix.
+        assert_eq!(name_of(&stripped, "model"), vec!["Thinking: keep-me".to_string()]);
+    }
+    #[test]
+    fn pi_context_window_label_and_enrichment() {
+        assert_eq!(format_context_window(1_000_000), "1M");
+        assert_eq!(format_context_window(922_000), "922K");
+        assert_eq!(format_context_window(128_000), "128K");
+        assert_eq!(format_context_window(4_096), "4K");
+        assert_eq!(format_context_window(512), "512");
+
+        let mut options: Vec<SessionConfigOptionInfo> = serde_json::from_value(serde_json::json!([
+            {
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "kind": {"type": "select", "currentValue": "p/a", "options": [
+                    {"value": "p/a", "name": "Provider/A", "description": null},
+                    {"value": "p/b", "name": "Provider/B", "description": "existing"},
+                    {"value": "p/c", "name": "Provider/C", "description": null},
+                ], "groups": []},
+            },
+        ])).expect("fixture");
+        let mut windows = std::collections::BTreeMap::new();
+        windows.insert("p/a".to_string(), 1_000_000u64);
+        windows.insert("p/b".to_string(), 922_000u64);
+        append_pi_context_windows(&mut options, &windows);
+        let SessionConfigKindInfo::Select(sel) = &options[0].kind else {
+            panic!("select");
+        };
+        assert_eq!(sel.options[0].description.as_deref(), Some("1M context"));
+        assert_eq!(sel.options[1].description.as_deref(), Some("existing · 922K context"));
+        assert!(sel.options[2].description.is_none(), "unknown model untouched");
+    }
     #[test]
     fn pi_enabled_models_filter_only_the_model_selector() {
         let filtered = filter_pi_enabled_model_options(
