@@ -11748,6 +11748,8 @@
         "failed": "Failed",
         "reminder": "Reminder",
         "finished": "Finished",
+        "checked": "Checked a message",
+        "checkCanceled": "Message check stopped",
         "canceled": "Stopped",
         "answered": "Answered for you",
         "changed": "Changed for you",

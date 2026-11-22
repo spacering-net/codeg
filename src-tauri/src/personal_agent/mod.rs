@@ -41,6 +41,7 @@ pub mod due;
 pub mod engine;
 pub mod fact_check;
 pub mod forge_acts;
+pub mod gist;
 pub mod history;
 pub mod host;
 pub mod ledger;

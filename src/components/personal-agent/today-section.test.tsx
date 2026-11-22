@@ -238,6 +238,33 @@ describe("today", () => {
     expect(document.querySelector("[data-pa-today-group]")).toBeNull()
   })
 
+  it("names a check of a message as one, and a stopped one as stopped", () => {
+    draw(
+      today({
+        done: [
+          row({
+            key: "checked:1",
+            kind: "checked",
+            title: "Claim A",
+            bot_id: 2,
+            dispatch_id: 1,
+            state: "completed",
+          }),
+          row({
+            key: "checked:2",
+            kind: "checked",
+            title: "Claim B",
+            bot_id: 2,
+            dispatch_id: 2,
+            state: "canceled",
+          }),
+        ],
+      })
+    )
+    expect(screen.getByText("Checked a message")).toBeTruthy()
+    expect(screen.getByText("Message check stopped")).toBeTruthy()
+  })
+
   it("shows only the groups with something, in order, with how many each holds", () => {
     draw(
       today({

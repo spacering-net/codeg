@@ -11748,6 +11748,8 @@
         "failed": "실패",
         "reminder": "알림",
         "finished": "완료",
+        "checked": "메시지 확인",
+        "checkCanceled": "메시지 확인 중단됨",
         "canceled": "중지됨",
         "answered": "대신 답함",
         "changed": "대신 변경함",

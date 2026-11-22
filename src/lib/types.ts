@@ -3143,8 +3143,10 @@ export type TodayRowKind =
   | "dispatch"
   // The rest of the day: a matter with a time.
   | "item"
-  // Done today.
+  // Done today: handed-out work, or a check of a message the owner asked
+  // about (a check under acceptance is its work's, not listed).
   | "finished"
+  | "checked"
   | "answered"
   | "changed"
   // What an assistant remembered (7.7).

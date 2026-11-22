@@ -11748,6 +11748,8 @@
         "failed": "Fehlgeschlagen",
         "reminder": "Erinnerung",
         "finished": "Fertig",
+        "checked": "Nachricht geprüft",
+        "checkCanceled": "Prüfung gestoppt",
         "canceled": "Gestoppt",
         "answered": "Für dich beantwortet",
         "changed": "Für dich geändert",

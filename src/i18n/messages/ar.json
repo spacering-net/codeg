@@ -11748,6 +11748,8 @@
         "failed": "فشل",
         "reminder": "تذكير",
         "finished": "اكتمل",
+        "checked": "تحقق من رسالة",
+        "checkCanceled": "توقف التحقق",
         "canceled": "أُوقف",
         "answered": "أُجيب نيابةً عنك",
         "changed": "غُيّر نيابةً عنك",

@@ -70,6 +70,7 @@ const KIND_WORDS: readonly TodayRowKind[] = [
   "failed",
   "reminder",
   "finished",
+  "checked",
   "answered",
   "changed",
   "memory",

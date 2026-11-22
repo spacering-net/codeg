@@ -140,6 +140,7 @@ function useOpener(
       case "failed":
       case "dispatch":
       case "finished":
+      case "checked":
         return work ?? task ?? session
       // A watched pull request: the work it came from, else its assistant.
       case "pr":
@@ -183,6 +184,11 @@ function useRowWords() {
         return row.state === "canceled"
           ? t("kind.canceled")
           : t("kind.finished")
+      // A check of a message the owner asked about.
+      case "checked":
+        return row.state === "canceled"
+          ? t("kind.checkCanceled")
+          : t("kind.checked")
       case "changed":
         return row.state === "undone" ? t("kind.undone") : t("kind.changed")
       // What an assistant remembered (7.7).

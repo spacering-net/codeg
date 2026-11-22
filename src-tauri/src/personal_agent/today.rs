@@ -82,7 +82,9 @@ pub struct TodayRow {
     /// - watching — handed-out work (`dispatch`), a board `task`, a watched
     ///   pull request (`pr`, its state its rung);
     /// - the schedule — a matter (`item`);
-    /// - done — handed-out work `finished`, a question `answered` for the
+    /// - done — handed-out work `finished` (a check of a message the owner
+    ///   asked about `checked`; a check under acceptance is its work's), a
+    ///   question `answered` for the
     ///   owner, a setting `changed` for them, a pull request merged
     ///   (`pr_merged`).
     /// - the schedule also has a `routine` that runs later today; watching,
@@ -790,7 +792,7 @@ pub async fn today_from(
     view.watching.sort_by_key(|r| std::cmp::Reverse(r.at));
 
     // ── done today ──────────────────────────────────────────────────────
-    for d in dispatch_entity::Entity::find()
+    let ended = dispatch_entity::Entity::find()
         .filter(
             dispatch_entity::Column::State
                 .is_in([DispatchState::Completed, DispatchState::Canceled]),
@@ -799,19 +801,36 @@ pub async fn today_from(
         .order_by_desc(dispatch_entity::Column::FinishedAt)
         .all(&db.conn)
         .await
-        .unwrap_or_default()
-    {
+        .unwrap_or_default();
+    // A check of other work under acceptance says its word on that work's
+    // row (7.5), not as one more piece of work with the same title; a check
+    // of a message the owner asked about is listed, as what it is.
+    let check_ids: Vec<i32> = ended.iter().filter(|d| d.is_check).map(|d| d.id).collect();
+    let acceptance_checks =
+        crate::db::service::personal_agent_verification_service::of_checks(&db.conn, &check_ids)
+            .await
+            .unwrap_or_default();
+    for d in ended {
         let Some(bot) = d.bot_id.filter(|b| bot_ids.contains(b)) else {
             continue;
         };
+        if acceptance_checks.contains_key(&d.id) {
+            continue;
+        }
+        let kind = if d.is_check { "checked" } else { "finished" };
         let mut row = TodayRow::new(
-            format!("finished:{}", d.id),
-            "finished",
+            format!("{kind}:{}", d.id),
+            kind,
             one_line(&d.title),
             d.finished_at.unwrap_or(d.updated_at),
         );
         row.bot_id = Some(bot);
-        row.text = d.result_excerpt.as_deref().and_then(some_line);
+        // What came of it in a plain sentence: not its first line, which is
+        // as often a heading ("## Overview").
+        row.text = d
+            .result_excerpt
+            .as_deref()
+            .and_then(super::gist::plain_gist);
         row.state = Some(super::engine::enum_str(&d.state));
         row.dispatch_id = Some(d.id);
         row.task_id = d.work_task_id;

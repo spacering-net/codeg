@@ -11748,6 +11748,8 @@
         "failed": "失敗",
         "reminder": "リマインダー",
         "finished": "完了",
+        "checked": "メッセージを確認",
+        "checkCanceled": "メッセージの確認を停止",
         "canceled": "停止",
         "answered": "代わりに回答",
         "changed": "代わりに変更",

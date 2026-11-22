@@ -10218,6 +10218,59 @@ async fn what_was_done_today_is_listed_and_a_change_made_for_the_owner_can_be_ta
     assert!(!today_now(&engine).await.done.iter().any(|r| r.notice_id == Some(card) && r.undo));
 }
 
+/// What finished today says what came of it in a plain sentence, not its
+/// first line (a heading); a check under acceptance is its work's, not one
+/// more piece of work with the same title; a check of a message is listed
+/// as one.
+#[tokio::test]
+async fn done_today_reads_a_results_gist_and_keeps_acceptance_checks_off_it() {
+    use crate::db::entities::personal_agent_verification::VerificationState;
+    use crate::db::service::personal_agent_verification_service as vsvc;
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, _tmp) = configured().await;
+    let conn = &engine.db.conn;
+    let finish = |id: i32, excerpt: &'static str, check: bool| async move {
+        let row = svc::get_dispatch(conn, id).await.unwrap().unwrap();
+        let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel = row.into();
+        am.state = Set(DispatchState::Completed);
+        am.is_check = Set(check);
+        am.result_excerpt = Set(Some(excerpt.into()));
+        am.finished_at = Set(Some(super::clock::now()));
+        am.update(conn).await.unwrap();
+    };
+    let work = session_dispatch(&engine, DispatchState::Running, "c-work").await;
+    finish(work, "## 项目定位\n\nmy-app 是一个 **Next.js** 前端演示项目。它用 App Router。", false).await;
+    let accepted = session_dispatch(&engine, DispatchState::Running, "c-accepted").await;
+    let check = session_dispatch(&engine, DispatchState::Running, "c-check").await;
+    finish(check, "PASS: the title reads right.", true).await;
+    let round = vsvc::create(
+        conn,
+        vsvc::NewRound {
+            bot_id: Some(engine.bot().await),
+            dispatch_id: accepted,
+            round: 1,
+            run_seq: 1,
+            fingerprint: "f".into(),
+            state: VerificationState::Deciding,
+            unchecked: false,
+        },
+    )
+    .await
+    .unwrap();
+    vsvc::write_round(conn, round.id, vsvc::RoundWrite { check_dispatch_id: Some(Some(check)), ..Default::default() })
+        .await
+        .unwrap();
+    let message_check = session_dispatch(&engine, DispatchState::Running, "c-msg").await;
+    finish(message_check, "The claim holds.", true).await;
+
+    let view = today_now(&engine).await;
+    let row = view.done.iter().find(|r| r.dispatch_id == Some(work)).expect("the work");
+    assert_eq!((row.kind, row.text.as_deref()), ("finished", Some("my-app 是一个 Next.js 前端演示项目。")));
+    assert!(!view.done.iter().any(|r| r.dispatch_id == Some(check)), "{:?}", view.done);
+    let row = view.done.iter().find(|r| r.dispatch_id == Some(message_check)).expect("the message check");
+    assert_eq!((row.kind, row.text.as_deref()), ("checked", Some("The claim holds.")));
+}
+
 /// 6.3: a reminder that came due today waits on the owner, with its card;
 /// the rest of the day's matters are its schedule; tomorrow's is not today.
 #[tokio::test]

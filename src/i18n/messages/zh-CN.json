@@ -11748,6 +11748,8 @@
         "failed": "失败",
         "reminder": "提醒",
         "finished": "已完成",
+        "checked": "核对消息",
+        "checkCanceled": "核对已停止",
         "canceled": "已停止",
         "answered": "替你答了",
         "changed": "替你改了",
