@@ -327,6 +327,26 @@ describe("buildReferenceGroups", () => {
     ])
   })
 
+  it("names one with no name of its own as its pill does: the primary by its role, the others by number", () => {
+    const sources = emptySources({
+      agents: [makeAgent("codex")],
+      assistants: [
+        makeAssistant(1, "  "),
+        makeAssistant(5, "", { kind: "primary" }),
+      ],
+      primaryAssistantName: "个人助手",
+    })
+    const items = (query: string) =>
+      itemsOf(buildReferenceGroups(query, sources), "assistant").map(
+        (i) => i.reference
+      )
+    expect(items("").map((r) => [r.label, r.uri])).toEqual([
+      ["个人助手", "codeg://bot/u-5"],
+      ["#1", "codeg://bot/u-1"],
+    ])
+    expect(items("个人").map((r) => r.id)).toEqual(["u-5"])
+  })
+
   it("finds an assistant by its name, persona or agent", () => {
     const sources = emptySources({
       agents: [makeAgent("codex"), makeAgent("open_code")],

@@ -130,7 +130,8 @@ export function PersonalAgentComposer({
   const [text, setText] = useState("")
   const [sending, setSending] = useState(false)
 
-  const { groupLabels, uiLabels } = useComposerMentionLabels()
+  const { groupLabels, uiLabels, primaryAssistantName } =
+    useComposerMentionLabels()
   // The other assistants are named with `@` (D8): the brain reads each as
   // its name and number, and hands work over itself if it should.
   const referenceSearch = useReferenceSearch({
@@ -138,6 +139,8 @@ export function PersonalAgentComposer({
     enabled: true,
     labels: groupLabels,
     excludeAssistantUid: agent.uid,
+
+    primaryAssistantName,
   })
   const attach = useComposerAttachments({
     editorRef,

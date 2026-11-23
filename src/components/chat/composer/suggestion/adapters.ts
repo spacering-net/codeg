@@ -66,7 +66,10 @@ export function agentToSuggestion(agent: AcpAgentInfo): SuggestionItem {
  */
 export function assistantToSuggestion(
   entry: RosterEntry & { uid: string },
-  detail?: string | null
+  detail?: string | null,
+  /** What the primary is called while it has no name of its own (the
+   *  localized "Personal assistant"). */
+  primaryName = "Personal assistant"
 ): SuggestionItem {
   const agentType = entry.work_agent_type ?? null
   const agentLabel = agentType ? getAgentLabel(agentType) : ""
@@ -74,7 +77,11 @@ export function assistantToSuggestion(
     reference: {
       refType: "assistant",
       id: entry.uid,
-      label: entry.name,
+      // As its pill and its page name it: one with no name of its own by its
+      // role (the primary) or its number — never a blank `[@](…)` link.
+      label:
+        entry.name.trim() ||
+        (entry.kind === "primary" ? primaryName : `#${entry.id}`),
       uri: `codeg://bot/${entry.uid}`,
       meta: { botUid: entry.uid },
     },

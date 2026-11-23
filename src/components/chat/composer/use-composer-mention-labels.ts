@@ -18,6 +18,9 @@ export interface ComposerMentionLabels {
   groupLabels: ReferenceGroupLabels
   /** Empty / loading / listbox name / "more results" / count announcement. */
   uiLabels: MentionUiLabels
+  /** The primary assistant's name while it has none of its own, for its
+   *  `@` option and the link it writes. */
+  primaryAssistantName: string
 }
 
 /**
@@ -33,6 +36,7 @@ export interface ComposerMentionLabels {
  */
 export function useComposerMentionLabels(): ComposerMentionLabels {
   const t = useTranslations("Folder.chat.messageInput")
+  const tPa = useTranslations("PersonalAgent")
   const groupLabels = useMemo<ReferenceGroupLabels>(
     () => ({
       file: t("mentionGroupFile"),
@@ -76,5 +80,5 @@ export function useComposerMentionLabels(): ComposerMentionLabels {
     }),
     [t, setRoute]
   )
-  return { groupLabels, uiLabels }
+  return { groupLabels, uiLabels, primaryAssistantName: tPa("title") }
 }

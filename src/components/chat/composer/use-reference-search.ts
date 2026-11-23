@@ -77,6 +77,8 @@ export interface ReferenceSearchSources {
   /** An assistant not offered: the one whose conversation the composer is
    *  in. */
   excludeAssistantUid?: string | null
+  /** The primary's name while it has none of its own (localized). */
+  primaryAssistantName?: string
   /** The agents an assistant's own agent is checked against; `agents` when
    *  omitted. Separate so a hidden agent tab need not be built to fill the
    *  assistant one. */
@@ -169,7 +171,8 @@ export function buildReferenceGroups(
         entry,
         entry.persona_unwritten
           ? null
-          : entry.persona.replace(/^\s*#+\s*/u, "").trim()
+          : entry.persona.replace(/^\s*#+\s*/u, "").trim(),
+        sources.primaryAssistantName
       )
     )
     .filter((item) => suggestionMatches(item, q))
@@ -245,6 +248,8 @@ export interface UseReferenceSearchOptions {
   labels?: ReferenceGroupLabels
   /** The assistant whose conversation the composer is in: not offered. */
   excludeAssistantUid?: string | null
+  /** The primary's name while it has none of its own (localized). */
+  primaryAssistantName?: string
 }
 
 /**
@@ -275,6 +280,7 @@ export function useReferenceSearch({
   enabled = true,
   labels,
   excludeAssistantUid = null,
+  primaryAssistantName,
 }: UseReferenceSearchOptions): ReferenceSearch {
   const path = defaultPath || null
 
@@ -290,6 +296,7 @@ export function useReferenceSearch({
   const agentsRef = useRef(agents)
   const assistantsRef = useRef(assistants)
   const excludeRef = useRef(excludeAssistantUid)
+  const primaryNameRef = useRef(primaryAssistantName)
   const pathRef = useRef(path)
   const enabledRef = useRef(enabled)
   const labelsRef = useRef(labels)
@@ -313,8 +320,9 @@ export function useReferenceSearch({
     agentsRef.current = agents
     assistantsRef.current = assistants
     excludeRef.current = excludeAssistantUid
+    primaryNameRef.current = primaryAssistantName
     labelsRef.current = labels
-  }, [agents, assistants, excludeAssistantUid, labels])
+  }, [agents, assistants, excludeAssistantUid, primaryAssistantName, labels])
 
   // Lazily-fetched network sources, key-cached so repeat searches reuse the
   // in-flight/resolved promise while a folder switch refetches.
@@ -442,6 +450,7 @@ export function useReferenceSearch({
             agents: wants("agent") ? agentsRef.current : [],
             assistants: wants("assistant") ? assistantsRef.current : [],
             excludeAssistantUid: excludeRef.current,
+            primaryAssistantName: primaryNameRef.current,
             assistantAgents: wants("assistant") ? agentsRef.current : [],
             sessions,
             commits,
