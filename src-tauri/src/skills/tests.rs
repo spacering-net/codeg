@@ -87,7 +87,7 @@ pub(crate) fn fixture_ctx(root: &Path) -> SkillsCtx {
     fixture_ctx_with(root, Arc::new(PlatformLinks))
 }
 
-fn fixture_ctx_with(root: &Path, linker: Arc<dyn LinkStrategy>) -> SkillsCtx {
+pub(crate) fn fixture_ctx_with(root: &Path, linker: Arc<dyn LinkStrategy>) -> SkillsCtx {
     let d = |rel: &str| root.join(rel);
     let agent = |agent, dirs: Vec<PathBuf>, read_only: Vec<PathBuf>, markdown_files| AgentDirs {
         agent,
@@ -139,7 +139,7 @@ fn fixture_ctx_with(root: &Path, linker: Arc<dyn LinkStrategy>) -> SkillsCtx {
     SkillsCtx::new(d("store"), d("locks/skills.lock"), agents, linker)
 }
 
-fn shared_only_agent() -> AgentType {
+pub(crate) fn shared_only_agent() -> AgentType {
     AgentType::custom("k1-shared-store-agent").expect("a valid custom id")
 }
 
@@ -263,7 +263,7 @@ fn codes_of(issues: &[SkillsIssue]) -> Vec<&str> {
 }
 
 /// Where Windows cannot make a junction: every link fails, a copy stands in.
-struct FailingJunction;
+pub(crate) struct FailingJunction;
 
 impl LinkStrategy for FailingJunction {
     fn link(&self, _target: &Path, _link: &Path) -> io::Result<LinkMode> {

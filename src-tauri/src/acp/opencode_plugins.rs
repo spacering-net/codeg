@@ -29,6 +29,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use jsonc_parser::cst::{CstInputValue, CstNode};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -363,6 +364,11 @@ fn file_url_body_to_path(body: &str) -> Option<PathBuf> {
 enum PluginChange<'a> {
     Add(&'a str),
     Remove(&'a str),
+    /// Every declaration of `old` becomes one of `new`, in its place.
+    Replace {
+        old: &'a str,
+        new: &'a str,
+    },
 }
 
 fn validate_new_spec(spec: &str) -> Result<&str, String> {
@@ -383,9 +389,49 @@ fn validate_new_spec(spec: &str) -> Result<&str, String> {
     Ok(spec)
 }
 
+/// A local plugin directory to declare as it is: an absolute path, taken
+/// whole — spaces and all, which a typed spec may not have — but nothing
+/// that trimming would change or that OpenCode would read as a directive.
+fn validate_local_dir(spec: &str) -> Result<&str, String> {
+    if spec.is_empty()
+        || spec != spec.trim()
+        || spec.starts_with('-')
+        || spec.chars().any(char::is_control)
+        || !is_absolute_spec(spec)
+    {
+        return Err(format!("\"{spec}\" is not an absolute plugin directory"));
+    }
+    Ok(spec)
+}
+
 pub(crate) fn add_plugin_at(path: &Path, spec: &str) -> Result<PluginList, String> {
     let spec = validate_new_spec(spec)?;
     apply_plugin_change(path, PluginChange::Add(spec))?;
+    list_plugins_at(path)
+}
+
+/// [`add_plugin_at`] for a local plugin directory named by its absolute
+/// path (Harness plugins in Codeg's store).
+pub(crate) fn add_local_dir_at(path: &Path, dir: &str) -> Result<PluginList, String> {
+    let dir = validate_local_dir(dir)?;
+    apply_plugin_change(path, PluginChange::Add(dir))?;
+    list_plugins_at(path)
+}
+
+/// Declare `new` where `old` is declared, in one edit: the last declaration
+/// of `old` (whose options OpenCode goes by) takes `new` in its place — its
+/// position, the comments around it and, in the object form, its options —
+/// and any other one goes (all of them, when `new` is already declared).
+/// With `old` the same as `new`, a spec declared more than once keeps only
+/// its last declaration. Nothing changes when `old` is not
+/// declared: a replacement never adds a plugin that was taken out.
+pub(crate) fn replace_plugin_at(path: &Path, old: &str, new: &str) -> Result<PluginList, String> {
+    let old = old.trim();
+    if old.is_empty() {
+        return Err("No plugin to replace".to_string());
+    }
+    let new = validate_local_dir(new).or_else(|_| validate_new_spec(new))?;
+    apply_plugin_change(path, PluginChange::Replace { old, new })?;
     list_plugins_at(path)
 }
 
@@ -411,14 +457,34 @@ fn apply_plugin_change(path: &Path, change: PluginChange<'_>) -> Result<(), Stri
     let legacy = plugin_array(&root, "plugin", path)?;
     let native = plugin_array(&root, "plugins", path)?;
     let has_legacy = root.contains_key("plugin");
-    let declared = legacy.iter().chain(native).any(|value| match change {
-        PluginChange::Add(spec) | PluginChange::Remove(spec) => declares(value, spec),
-    });
+    let is_declared = |spec: &str| {
+        legacy
+            .iter()
+            .chain(native)
+            .any(|value| declares(value, spec))
+    };
+    let declared = match change {
+        PluginChange::Add(spec) | PluginChange::Remove(spec) => is_declared(spec),
+        PluginChange::Replace { old, .. } => is_declared(old),
+    };
     let changes_list = match change {
         PluginChange::Add(_) => !declared,
         PluginChange::Remove(_) => declared,
+        // The same spec: only when it is declared more than once.
+        PluginChange::Replace { old, new } if old == new => {
+            legacy
+                .iter()
+                .chain(native)
+                .filter(|value| declares(value, old))
+                .count()
+                > 1
+        }
+        PluginChange::Replace { .. } => declared,
     };
-    if !changes_list && !has_legacy {
+    // A replacement of what is not declared leaves the file as it is, 1.x
+    // entries and all.
+    let replacing = matches!(change, PluginChange::Replace { .. });
+    if !changes_list && (!has_legacy || replacing) {
         return Ok(());
     }
     let migrated: Vec<Value> = legacy.iter().map(native_form).collect();
@@ -458,11 +524,25 @@ fn apply_plugin_change(path: &Path, change: PluginChange<'_>) -> Result<(), Stri
             }
             PluginChange::Remove(spec) => {
                 for element in plugins.elements() {
-                    // The element's own text, comments and all, read back the
-                    // way the file was.
-                    if opencode_config::parse(&element.to_string())
-                        .is_ok_and(|value| declares(&value, spec))
-                    {
+                    if element_declares(&element, spec) {
+                        element.remove();
+                    }
+                }
+            }
+            PluginChange::Replace { old, new } => {
+                // With `new` declared already, the old ones only go. Else the
+                // last declaration takes it — OpenCode goes by the options
+                // of the last one that loads — and the earlier ones go.
+                let mut placed = old != new && is_declared(new);
+                let matching: Vec<CstNode> = plugins
+                    .elements()
+                    .into_iter()
+                    .filter(|element| element_declares(element, old))
+                    .collect();
+                for element in matching.into_iter().rev() {
+                    if !placed && replace_declaration(&element, new) {
+                        placed = true;
+                    } else {
                         element.remove();
                     }
                 }
@@ -478,6 +558,39 @@ fn apply_plugin_change(path: &Path, change: PluginChange<'_>) -> Result<(), Stri
         ));
     }
     opencode_config::write_atomic(path, &updated)
+}
+
+/// Whether a list element declares `spec`: its own text, comments and all,
+/// read back the way the file was.
+fn element_declares(element: &CstNode, spec: &str) -> bool {
+    opencode_config::parse(&element.to_string()).is_ok_and(|value| declares(&value, spec))
+}
+
+/// Make `element` declare `spec` instead: a string becomes `spec`, an
+/// object's `package` does and a 1.x pair's name (their options stay).
+/// `false` for any other form.
+fn replace_declaration(element: &CstNode, spec: &str) -> bool {
+    let value = CstInputValue::String(spec.to_string());
+    if let Some(text) = element.as_string_lit() {
+        text.replace_with(value);
+        return true;
+    }
+    if let Some(pair) = element.as_array() {
+        return match pair.elements().first().and_then(CstNode::as_string_lit) {
+            Some(text) => {
+                text.replace_with(value);
+                true
+            }
+            None => false,
+        };
+    }
+    match element.as_object().and_then(|object| object.get("package")) {
+        Some(package) => {
+            package.set_value(value);
+            true
+        }
+        None => false,
+    }
 }
 
 #[cfg(test)]
@@ -837,6 +950,124 @@ mod tests {
                     serde_json::json!(["from-json"])
                 );
             },
+        );
+    }
+    #[test]
+    fn a_replacement_keeps_the_entry_s_place_its_comments_and_its_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.jsonc");
+        let original = r#"{
+  // My OpenCode setup.
+  "plugins": [
+    "first", // keep this one
+    "/store/p/4", // Codeg's
+    { "package": "/store/q/1", "options": { "x": 1 } },
+    "last",
+  ],
+}
+"#;
+        write(&path, original);
+        replace_plugin_at(&path, "/store/p/4", "/store/p/5").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            original.replace("\"/store/p/4\"", "\"/store/p/5\""),
+            "one edit, nothing else moved"
+        );
+
+        replace_plugin_at(&path, "/store/q/1", "/store/q/2").unwrap();
+        assert_eq!(
+            read_value(&path)["plugins"],
+            serde_json::json!([
+                "first",
+                "/store/p/5",
+                { "package": "/store/q/2", "options": { "x": 1 } },
+                "last"
+            ])
+        );
+
+        // Done already, or never there: nothing changes, nothing is added.
+        let before = std::fs::read_to_string(&path).unwrap();
+        replace_plugin_at(&path, "/store/p/4", "/store/p/5").unwrap();
+        replace_plugin_at(&path, "/store/gone/1", "/store/gone/2").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn a_replacement_leaves_one_declaration() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.json");
+        write(
+            &path,
+            r#"{ "plugins": ["a", "/s/p/3", "b", "/s/p/3"], "plugin": ["/s/p/3"] }"#,
+        );
+        replace_plugin_at(&path, "/s/p/3", "/s/p/4").unwrap();
+        assert_eq!(
+            read_value(&path),
+            serde_json::json!({ "plugins": ["a", "b", "/s/p/4"] })
+        );
+
+        // The options OpenCode goes by (the last declaration's) stay.
+        write(
+            &path,
+            r#"{ "plugin": ["/s/p/3"], "plugins": [{ "package": "/s/p/3", "options": { "o": 1 } }, "z"] }"#,
+        );
+        replace_plugin_at(&path, "/s/p/3", "/s/p/4").unwrap();
+        assert_eq!(
+            read_value(&path),
+            serde_json::json!({ "plugins": [{ "package": "/s/p/4", "options": { "o": 1 } }, "z"] })
+        );
+
+        // `new` declared already: the old ones only go.
+        write(&path, r#"{ "plugins": ["/s/p/3", "x", "/s/p/4"] }"#);
+        replace_plugin_at(&path, "/s/p/3", "/s/p/4").unwrap();
+        assert_eq!(
+            read_value(&path),
+            serde_json::json!({ "plugins": ["x", "/s/p/4"] })
+        );
+
+        // The same spec twice: the last declaration, with its options, stays.
+        write(
+            &path,
+            r#"{ "plugins": ["/s/p/4", "x", { "package": "/s/p/4", "options": { "o": 2 } }] }"#,
+        );
+        replace_plugin_at(&path, "/s/p/4", "/s/p/4").unwrap();
+        assert_eq!(
+            read_value(&path),
+            serde_json::json!({ "plugins": ["x", { "package": "/s/p/4", "options": { "o": 2 } }] })
+        );
+        // Declared once: nothing is written.
+        let before = std::fs::read_to_string(&path).unwrap();
+        replace_plugin_at(&path, "/s/p/4", "/s/p/4").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        // Not declared: not even the 1.x entries move.
+        let legacy = "{\n  \"plugin\": [\"x\"], // 1.x\n  \"plugins\": [\"y\"]\n}\n";
+        write(&path, legacy);
+        replace_plugin_at(&path, "/s/p/3", "/s/p/4").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
+
+        assert!(replace_plugin_at(&path, " ", "/s/p/5").is_err());
+        assert!(replace_plugin_at(&path, "/s/p/4", "-p").is_err());
+    }
+
+    #[test]
+    fn a_local_directory_is_declared_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("opencode.json");
+        let spaced = "/Users/Jane Doe/.codeg/plugins/p/4";
+        add_local_dir_at(&path, spaced).unwrap();
+        add_local_dir_at(&path, spaced).unwrap();
+        assert_eq!(
+            read_value(&path),
+            serde_json::json!({ "plugins": [spaced] })
+        );
+        for refused in ["", "relative/p", " /lead", "/trail ", "-/p", "/a\nb"] {
+            assert!(add_local_dir_at(&path, refused).is_err(), "{refused:?}");
+        }
+        assert_eq!(
+            read_value(&path),
+            serde_json::json!({ "plugins": [spaced] })
         );
     }
 }

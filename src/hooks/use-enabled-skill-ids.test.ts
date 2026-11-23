@@ -1,6 +1,11 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import {
+  rawListedHost,
+  rawListedPlugin,
+} from "@/lib/harness/plugin-install-fixtures"
+import { normalizeListedPlugins } from "@/lib/harness/plugin-install-normalize"
 import type { SkillsChanged, SkillsInventory } from "@/lib/skills/types"
 import type { AcpAgentInfo, ExpertInstallStatus } from "@/lib/types"
 
@@ -18,6 +23,11 @@ vi.mock("@/lib/api", () => ({
   acpListAgents: vi.fn().mockResolvedValue([]),
 }))
 vi.mock("@/lib/skills/api", () => ({ skillsInventory: vi.fn() }))
+// What the host installed from Harness: no plugins unless a test says so.
+vi.mock("@/lib/harness/mcp-install-api", () => ({
+  harnessInstalled: vi.fn(),
+  onHarnessInstalledChanged: vi.fn(async () => () => {}),
+}))
 
 // `skills://changed`, as the shared subscription hands it out.
 const changes = vi.hoisted(() => ({
@@ -94,8 +104,17 @@ async function setup(inventory: SkillsInventory = inventoryOf([])) {
     vi.mocked(fn).mockReset().mockResolvedValue([])
   }
   vi.mocked(skills.skillsInventory).mockReset().mockResolvedValue(inventory)
+  const installed = await import("@/lib/harness/mcp-install-api")
+  vi.mocked(installed.harnessInstalled).mockReset().mockResolvedValue({
+    mcp: [],
+    skills: [],
+    mcp_problem: null,
+    skills_problem: null,
+    plugins: [],
+    plugins_problem: null,
+  })
   const hook = await import("./use-enabled-skill-ids")
-  return { api, skills, hook }
+  return { api, skills, installed, hook }
 }
 
 async function emit(change: SkillsChanged | null) {
@@ -155,6 +174,93 @@ describe("useEnabledSkillIds — what counts as enabled", () => {
     const { result } = renderHook(() => hook.useEnabledSkillIds("codex"))
     await waitFor(() => expect(result.current.ready).toBe(true))
     expect([...result.current.enabledIds].sort()).toEqual(["copied", "through"])
+  })
+
+  it("counts an expert a plugin gives the agent, under the name the agent sees", async () => {
+    const { installed, hook } = await setup(
+      inventoryOf([
+        // The pack's own link was taken over by the plugin.
+        {
+          id: "brainstorming",
+          origin: "experts",
+          cells: [
+            ["claude_code", "not_linked"],
+            ["codex", "not_linked"],
+          ],
+        },
+      ])
+    )
+    const [plugin] = normalizeListedPlugins([
+      rawListedPlugin({
+        hosts: [
+          rawListedHost("claude_code"),
+          rawListedHost("codex", { state: "disabled_by_user" }),
+        ],
+      }),
+    ])
+    vi.mocked(installed.harnessInstalled).mockResolvedValue({
+      mcp: [],
+      skills: [],
+      mcp_problem: null,
+      skills_problem: null,
+      plugins: [plugin],
+      plugins_problem: null,
+    })
+    const claude = renderHook(() => hook.useEnabledSkillIds("claude_code"))
+    await waitFor(() => expect(claude.result.current.ready).toBe(true))
+    expect(claude.result.current.enabledIds.has("brainstorming")).toBe(true)
+    expect(
+      claude.result.current.providers.get("brainstorming")?.invocation
+    ).toBe("superpowers:brainstorming")
+
+    // Switched off for Codex: not enabled, but still the plugin's name.
+    const codex = renderHook(() => hook.useEnabledSkillIds("codex"))
+    await waitFor(() => expect(codex.result.current.ready).toBe(true))
+    expect(codex.result.current.enabledIds.has("brainstorming")).toBe(false)
+    expect(codex.result.current.providers.get("brainstorming")?.active).toBe(
+      false
+    )
+  })
+
+  it("counts a plugin's skills linked as skills only", async () => {
+    const inventory = inventoryOf([])
+    inventory.plugin_skills = inventoryOf([
+      {
+        id: "brainstorming",
+        origin: "harness",
+        cells: [["gemini", "linked"]],
+      },
+    ]).skills.map((skill) => ({ ...skill, plugin: "superpowers" }))
+    const { hook } = await setup(inventory)
+    const { result } = renderHook(() => hook.useEnabledSkillIds("gemini"))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect([...result.current.enabledIds]).toEqual(["brainstorming"])
+  })
+
+  it("reads no plugins, and keeps the rest, where the host cannot list them", async () => {
+    // Not known yet (a failed read with nothing before it): no expert's name
+    // is decided on it.
+    const { installed, hook } = await setup(
+      inventoryOf([
+        { id: "mine", origin: "custom", cells: [["codex", "linked"]] },
+      ])
+    )
+    vi.mocked(installed.harnessInstalled).mockRejectedValue(new Error("old"))
+    const { result } = renderHook(() => hook.useEnabledSkillIds("codex"))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect([...result.current.enabledIds]).toEqual(["mine"])
+    expect(result.current.providers.size).toBe(0)
+    expect(result.current.providersKnown).toBe(false)
+  })
+
+  it("reads a Codeg without the listing as one with no plugins", async () => {
+    const { installed, hook } = await setup()
+    vi.mocked(installed.harnessInstalled).mockRejectedValue({
+      code: "not_implemented",
+    })
+    const { result } = renderHook(() => hook.useEnabledSkillIds("codex"))
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    expect(result.current.providersKnown).toBe(true)
   })
 
   it("reads the packs' own snapshots, Custom and UI included, from an older Codeg", async () => {

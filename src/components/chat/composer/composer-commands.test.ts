@@ -7,6 +7,7 @@ import {
   applyExpertReference,
   isComposerChromeClick,
   isComposerEmpty,
+  restampExpertNames,
   restampSkillPrefixes,
   restoreBlocksIntoEditor,
 } from "./composer-commands"
@@ -227,6 +228,55 @@ describe("restampSkillPrefixes", () => {
   it("is a no-op (returns false) when every prefix already matches", () => {
     applyExpertReference(editor, expertAttrs("reviewer", "$"))
     expect(restampSkillPrefixes(editor, "$")).toBe(false)
+  })
+})
+
+describe("restampExpertNames", () => {
+  let editor: Editor
+
+  beforeEach(() => {
+    editor = new Editor({ extensions: buildComposerExtensions() })
+  })
+  afterEach(() => editor?.destroy())
+
+  /** An expert badge inserted for an agent that has it from a plugin
+   *  installed whole, under the plugin's name. */
+  function pluginExpert(prefix: "/" | "$" = "/"): ReferenceAttrs {
+    return {
+      refType: "skill",
+      id: "superpowers:brainstorming",
+      label: "Brainstorming",
+      uri: null,
+      meta: {
+        scope: "expert",
+        invocationPrefix: prefix,
+        expertId: "brainstorming",
+      },
+    }
+  }
+
+  it("re-names an expert badge for an agent that sees it by its own id", () => {
+    applyExpertReference(editor, pluginExpert("/"))
+    expect(serialized(editor).trimStart()).toMatch(
+      /^\/superpowers:brainstorming\b/
+    )
+    restampSkillPrefixes(editor, "$")
+    expect(restampExpertNames(editor, (id) => id)).toBe(true)
+    expect(serialized(editor).trimStart()).toMatch(/^\$brainstorming\b/)
+  })
+
+  it("names it back under the plugin where the agent sees it so", () => {
+    applyExpertReference(editor, { ...pluginExpert(), id: "brainstorming" })
+    expect(restampExpertNames(editor, (id) => `superpowers:${id}`)).toBe(true)
+    expect(serialized(editor)).toContain("/superpowers:brainstorming")
+  })
+
+  it("leaves a badge without its expert's id, and one already right", () => {
+    applyExpertReference(editor, expertAttrs("reviewer"))
+    expect(restampExpertNames(editor, () => "other")).toBe(false)
+    expect(serialized(editor)).toContain("/reviewer")
+    applyExpertReference(editor, pluginExpert())
+    expect(restampExpertNames(editor, (id) => `superpowers:${id}`)).toBe(false)
   })
 })
 

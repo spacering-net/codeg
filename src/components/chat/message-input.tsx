@@ -115,6 +115,7 @@ import {
   applyExpertReference,
   blankLineAfter,
   isComposerEmpty,
+  restampExpertNames,
   restampSkillPrefixes,
 } from "@/components/chat/composer/composer-commands"
 import { useComposerChromeFocus } from "@/components/chat/composer/use-composer-chrome-focus"
@@ -158,7 +159,9 @@ import { useComposerShortcuts } from "@/components/chat/composer/use-composer-sh
 export type ComposerInjectContent =
   | {
       text: string
-      skill?: { id: string; label: string }
+      /** `expertId`: an expert's own id, where `id` is the name the agent
+       *  sees it under (re-stamped when the agent changes). */
+      skill?: { id: string; label: string; expertId?: string }
       /**
        * How `text` lands in the composer.
        *
@@ -802,7 +805,13 @@ export function MessageInput({
                 id: payload.skill.id,
                 label: payload.skill.label,
                 uri: null,
-                meta: { invocationPrefix: skillPrefix, scope: "expert" },
+                meta: {
+                  invocationPrefix: skillPrefix,
+                  scope: "expert",
+                  ...(payload.skill.expertId
+                    ? { expertId: payload.skill.expertId }
+                    : {}),
+                },
               })
             }
           }
@@ -831,14 +840,20 @@ export function MessageInput({
   // carry no scope and stay `/`). rAF-deferred like the sibling editor-mutation
   // effects to stay off React's commit phase — the badge NodeView re-renders via
   // a synchronous flushSync().
+  // An expert's name goes with the agent too: a Harness plugin installed
+  // whole gives it as `superpowers:<id>` to one agent, as `<id>` to another.
+  const expertInvocation = menuShortcuts.expertInvocation
   useEffect(() => {
     if (!composerReady) return
     const raf = requestAnimationFrame(() => {
       const editor = editorRef.current?.getEditor()
-      if (editor) restampSkillPrefixes(editor, skillPrefix)
+      if (editor) {
+        restampSkillPrefixes(editor, skillPrefix)
+        restampExpertNames(editor, expertInvocation)
+      }
     })
     return () => cancelAnimationFrame(raf)
-  }, [skillPrefix, composerReady])
+  }, [skillPrefix, expertInvocation, composerReady])
 
   const handleComposerChange = useCallback(() => {
     // The history's own writes are not edits. They must not end navigation, and
@@ -1566,7 +1581,10 @@ export function MessageInput({
     // doc — guarantees the wire text matches the current agent regardless of any
     // timing/ordering (Codex needs `$skill`, not the slash-command `/skill`).
     // Cheap: one small-doc walk, and no dispatch when nothing is stale.
-    if (editor) restampSkillPrefixes(editor, skillPrefix)
+    if (editor) {
+      restampSkillPrefixes(editor, skillPrefix)
+      restampExpertNames(editor, expertInvocation)
+    }
     // Inline badges + prose → text/resource_link blocks (file mentions become
     // first-class ResourceLinks; agent/session/commit/skill stay inline text;
     // embedded badges are dropped here and re-added below from the payload map).
@@ -1611,7 +1629,13 @@ export function MessageInput({
       displayProse ||
       `Attached ${attachments.length} attachment${attachments.length > 1 ? "s" : ""}`
     return { blocks, displayText }
-  }, [attachments, skillPrefix, imagePromptBlocks, embeddedPayloadsRef])
+  }, [
+    attachments,
+    skillPrefix,
+    expertInvocation,
+    imagePromptBlocks,
+    embeddedPayloadsRef,
+  ])
 
   // Clear the editor + attachments after a send / enqueue / save.
   const resetComposer = useCallback(() => {

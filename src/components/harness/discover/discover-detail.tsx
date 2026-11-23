@@ -418,6 +418,7 @@ export function DiscoverDetail({
                     item={item}
                     versions={detail.versions}
                     readme={detail.readme}
+                    releases={detail.releases}
                     onRetryPart={(part) => retryDiscoverPart(slots, part)}
                   />
                 </div>

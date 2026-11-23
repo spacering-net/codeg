@@ -1058,12 +1058,14 @@ mod tauri_app {
 
                 // The Harness update check: asks SpaceRing daily what became of
                 // the items installed from Harness, keeps the answer in the
-                // cache and announces changes; it only tells. Not started under
-                // CODEG_HARNESS=off. One per process; mirrored in
-                // `bin/codeg_server.rs`.
+                // cache and announces changes; it only tells, except that it
+                // switches off a plugin's autorun parts SRN no longer vouches
+                // for. Not started under CODEG_HARNESS=off. One per process;
+                // mirrored in `bin/codeg_server.rs`.
                 if let Some(checker) = crate::harness::updates::build(
                     &effective_data_dir,
                     web::event_bridge::EventEmitter::from_app(app.handle()),
+                    &app.state::<db::AppDatabase>(),
                 ) {
                     tauri::async_runtime::spawn(crate::harness::updates::run(checker));
                 }
@@ -2392,6 +2394,7 @@ mod tauri_app {
                 crate::commands::harness::harness_list,
                 crate::commands::harness::harness_item,
                 crate::commands::harness::harness_versions,
+                crate::commands::harness::harness_releases,
                 crate::commands::harness::harness_readme,
                 crate::commands::harness::harness_prompt,
                 crate::commands::harness::harness_blob,
@@ -2403,6 +2406,15 @@ mod tauri_app {
                 crate::commands::harness_skills::harness_skill_plan,
                 crate::commands::harness_skills::harness_skill_install,
                 crate::commands::harness_skills::harness_skill_uninstall,
+                crate::commands::harness_plugins::harness_plugin_plan,
+                crate::commands::harness_plugins::harness_plugin_install,
+                crate::commands::harness_plugins::harness_plugin_uninstall,
+                crate::commands::harness_plugins::harness_plugin_plan_update,
+                crate::commands::harness_plugins::harness_plugin_update,
+                crate::commands::harness_plugins::harness_plugin_set_host,
+                crate::commands::harness_plugins::harness_plugin_set_enabled,
+                crate::commands::harness_plugins::harness_plugin_repair,
+                crate::commands::harness_plugins::harness_plugin_hook_trust,
                 crate::commands::harness_updates::harness_updates,
                 crate::commands::harness_updates::harness_check_updates,
                 crate::commands::srn::srn_account,

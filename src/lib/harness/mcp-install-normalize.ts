@@ -37,6 +37,9 @@ import type {
   HarnessUninstallAgent,
   HarnessVersionState,
 } from "./mcp-install-types"
+// A cycle (that module reads snapshots with this one's reader): only
+// functions cross it, called long after both modules have loaded.
+import { normalizeListedPlugins } from "./plugin-install-normalize"
 import { HARNESS_PERMISSION_KEYS, type HarnessPermissions } from "./types"
 
 type Json = Record<string, unknown>
@@ -467,6 +470,8 @@ export function normalizeInstalled(value: unknown): HarnessInstalled {
     skills: normalizeInstalledSkills(source.skills),
     mcp_problem: problemOf(source.mcp_problem),
     skills_problem: problemOf(source.skills_problem),
+    plugins: normalizeListedPlugins(source.plugins),
+    plugins_problem: problemOf(source.plugins_problem),
   }
 }
 

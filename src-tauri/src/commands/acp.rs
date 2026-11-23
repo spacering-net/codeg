@@ -2451,6 +2451,29 @@ pub(crate) async fn system_probed_version(
     system_probed_version_with(declared_probe, resolved_bin, npm_package).await
 }
 
+/// What [`system_probed_version`] last read for `resolved_bin`, while the
+/// binary is unchanged since; `None` when it has not been asked. Runs
+/// nothing: for a caller that must not start the agent's CLI.
+pub(crate) fn known_system_probed_version(
+    agent_type: AgentType,
+    resolved_bin: &std::path::Path,
+) -> Option<String> {
+    // Read through its own probe, never this cache.
+    if cfg!(windows) && agent_type == AgentType::Qoder {
+        return None;
+    }
+    let declared_probe = agent_type
+        .custom_id()
+        .and_then(crate::acp::custom_registry::version_probe_of);
+    let mtime = std::fs::metadata(resolved_bin).ok()?.modified().ok()?;
+    let key = probe_cache_key(resolved_bin, declared_probe, None);
+    let cache = SYSTEM_PROBE_CACHE.lock().ok()?;
+    match cache.as_ref()?.get(&key) {
+        Some((cached_mtime, version)) if *cached_mtime == mtime => version.clone(),
+        _ => None,
+    }
+}
+
 /// Probe order: the declared `version_probe` command wins when it yields a
 /// version; then `npm list -g` for npx packages (exact installed version,
 /// both prefixes); then the near-universal `<cmd> --version` convention. A
@@ -10424,6 +10447,7 @@ pub(crate) fn build_skill_item(
         owner: crate::acp::types::AgentSkillOwner::Agent,
         pack: None,
         codeg_copy: false,
+        plugin: None,
     }
 }
 
@@ -15724,6 +15748,16 @@ pub(crate) async fn acp_delete_agent_skill_in(
             )),
             codes::READ_ONLY_SKILL,
             None,
+        ));
+    }
+    // A Harness plugin's member skill changes only with the plugin.
+    if let Some(plugin) = crate::skills::owned::plugin_of_entry(ctx, &skill_path) {
+        return Err(skill_page_error(
+            AppCommandError::permission_denied(format!(
+                "'{id}' is the Harness plugin {plugin}'s skill; it changes only with the plugin"
+            )),
+            codes::PLUGIN_OWNED,
+            Some(plugin),
         ));
     }
     let kind = match crate::skills::link::inspect(&skill_path) {

@@ -222,6 +222,18 @@ impl Harness {
         }
     }
 
+    /// The `releases` array of `GET /items/{ref}/releases` (plugins only),
+    /// newest first.
+    pub async fn releases(&self, item_ref: &str) -> Result<Value, HarnessError> {
+        self.ensure_enabled()?;
+        let item_ref = ItemRef::parse(item_ref)?;
+        let mut answer = self.json(&item_ref.api_path("/releases"), &[]).await?;
+        match answer.get_mut("releases").map(Value::take) {
+            Some(releases @ Value::Array(_)) => Ok(releases),
+            _ => Err(HarnessError::invalid_response("/releases has no releases")),
+        }
+    }
+
     /// An item's description: the sanitized HTML fragment, as text. `None`
     /// when the item has none.
     ///

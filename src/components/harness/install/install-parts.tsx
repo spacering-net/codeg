@@ -550,7 +550,7 @@ export function HarnessRecordProblem({
   problem,
   className,
 }: {
-  part: "mcp" | "skills"
+  part: "mcp" | "skills" | "plugins"
   problem: HarnessReason
   className?: string
 }) {

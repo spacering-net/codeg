@@ -62,6 +62,20 @@ vi.mock("./packs/packs-section", async () => {
   }
 })
 
+// Plugins reads the host's installed listing; its stub keeps the plugin a
+// request asked for.
+vi.mock("./plugins/plugins-section", async () => {
+  const { useConsumeHarnessTarget } =
+    await import("@/contexts/harness-view-context")
+  return {
+    PluginsSection: () => {
+      const [itemId, setItemId] = useState("none")
+      useConsumeHarnessTarget("plugins", (target) => setItemId(target.itemId))
+      return <div data-testid="plugins-section" data-item={itemId} />
+    },
+  }
+})
+
 // MCP has tests of its own (mcp/mcp-section.test.tsx), and a backend the
 // page's tests have no business with. Its stub keeps what the page relies on:
 // the server a request asked for.
@@ -153,7 +167,13 @@ describe("HarnessPage — sections", () => {
   it("opens on Discover the first time", () => {
     renderPage()
 
-    expect(tabNames()).toEqual(["Discover", "MCP", "Skills", "Skill Packs"])
+    expect(tabNames()).toEqual([
+      "Discover",
+      "MCP",
+      "Skills",
+      "Plugins",
+      "Skill Packs",
+    ])
     expect(selectedTab()).toEqual(["Discover"])
     const panel = screen.getByRole("tabpanel", { name: "Discover" })
     expect(within(panel).getByTestId("discover-section")).toBeTruthy()
@@ -173,11 +193,12 @@ describe("HarnessPage — sections", () => {
   })
 
   it("counts what each local section holds, and nothing for Discover", () => {
-    mocks.counts = { mcp: 4, skills: 12, packs: 2 }
+    mocks.counts = { mcp: 4, skills: 12, plugins: 1, packs: 2 }
     renderPage()
 
     expect(screen.getByRole("tab", { name: "MCP 4" })).toBeTruthy()
     expect(screen.getByRole("tab", { name: "Skills 12" })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: "Plugins 1" })).toBeTruthy()
     expect(screen.getByRole("tab", { name: "Skill Packs 2" })).toBeTruthy()
     expect(screen.getByRole("tab", { name: "Discover" })).toBeTruthy()
   })
@@ -242,7 +263,7 @@ describe("HarnessPage — sections", () => {
   it("has no Discover, and opens on MCP, with the catalog switched off", async () => {
     renderPage({ discoverEnabled: false })
 
-    expect(tabNames()).toEqual(["MCP", "Skills", "Skill Packs"])
+    expect(tabNames()).toEqual(["MCP", "Skills", "Plugins", "Skill Packs"])
     expect(selectedTab()).toEqual(["MCP"])
     expect(await screen.findByTestId("mcp-section")).toBeTruthy()
   })
@@ -551,6 +572,22 @@ describe("HarnessPage — state that outlives the page", () => {
       "data-tab",
       "ui"
     )
+  })
+
+  it("hands a requested plugin to Plugins", async () => {
+    const user = userEvent.setup()
+    render(
+      <Workbench request={{ section: "plugins", itemId: "itm_superpowers" }} />
+    )
+
+    await user.click(screen.getByText("open harness"))
+
+    expect(selectedTab()).toEqual(["Plugins"])
+    expect(await screen.findByTestId("plugins-section")).toHaveAttribute(
+      "data-item",
+      "itm_superpowers"
+    )
+    expect(screen.getByTestId("parked").textContent).toBe("clear")
   })
 
   it("hands a requested skill to Skills", async () => {

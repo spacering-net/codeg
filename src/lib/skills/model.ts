@@ -177,8 +177,11 @@ export interface CellView {
   only: boolean
   /** The broken link Codeg made that holds the name, to repair or remove. */
   brokenPath: string | null
-  /** Why an off cell cannot be switched on. */
-  why: "noDirectory" | "notReady" | null
+  /** Why an off cell cannot be switched on: no folder to link into, the
+   *  skill not ready, or a Harness plugin giving the agent that name. */
+  why: "noDirectory" | "notReady" | "plugin" | null
+  /** `why: "plugin"`: the plugin's install name. */
+  plugin: string | null
 }
 
 const CODEG_LIVE = new Set(["codeg_link", "codeg_copy"])
@@ -213,6 +216,16 @@ export function cellView(
     only: false,
     brokenPath: null,
     why: null,
+    plugin: null,
+  }
+  // The name is a Harness plugin's in this agent (its skills only, linked
+  // under the skill's own name): not Codeg's skill, and not something in
+  // the way to clear — the plugin gives it, and is managed as a whole.
+  if (
+    cell?.plugin &&
+    (cell.state === "linked_elsewhere" || cell.state === "blocked")
+  ) {
+    return { ...base, why: "plugin", plugin: cell.plugin }
   }
   switch (cell?.state ?? "not_linked") {
     case "linked":

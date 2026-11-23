@@ -135,7 +135,7 @@ function entry(value: unknown): CellEntry | null {
 
 function cell(value: unknown): SkillCell | null {
   if (!isRaw(value) || typeof value.agent !== "string") return null
-  return {
+  const out: SkillCell = {
     agent: value.agent,
     state: str(value.state),
     path: strOrNull(value.path),
@@ -148,6 +148,10 @@ function cell(value: unknown): SkillCell | null {
     shared_with: strings(value.shared_with),
     entries: list(value.entries, entry),
   }
+  if (typeof value.plugin === "string" && value.plugin !== "") {
+    out.plugin = value.plugin
+  }
+  return out
 }
 
 function harnessInfo(value: unknown): HarnessSkillInfo | null {
@@ -157,7 +161,7 @@ function harnessInfo(value: unknown): HarnessSkillInfo | null {
 
 function storeSkill(value: unknown): StoreSkill | null {
   if (!isRaw(value) || typeof value.id !== "string") return null
-  return {
+  const out: StoreSkill = {
     id: value.id,
     origin: str(value.origin),
     path: str(value.path),
@@ -168,6 +172,10 @@ function storeSkill(value: unknown): StoreSkill | null {
     backups: count(value.backups),
     cells: list(value.cells, cell),
   }
+  if (typeof value.plugin === "string" && value.plugin !== "") {
+    out.plugin = value.plugin
+  }
+  return out
 }
 
 function nameTaken(value: unknown): NameTaken | null {
@@ -197,7 +205,7 @@ export function normalizeInventory(value: unknown): SkillsInventory {
       "skills_inventory answered with something that is not an inventory"
     )
   }
-  return {
+  const inventory: SkillsInventory = {
     store: str(value.store),
     agents: list(value.agents, agent),
     skills: list(value.skills, storeSkill),
@@ -205,6 +213,13 @@ export function normalizeInventory(value: unknown): SkillsInventory {
     broken_links: list(value.broken_links, brokenLink),
     problems: list(value.problems, issue),
   }
+  // A plugin's member is only ever one: one without its plugin is not taken
+  // for one of Codeg's own skills.
+  const pluginSkills = list(value.plugin_skills, storeSkill).filter(
+    (skill) => skill.plugin !== undefined
+  )
+  if (pluginSkills.length > 0) inventory.plugin_skills = pluginSkills
+  return inventory
 }
 
 // ─── skills_apply_links / skills_repair_link ──────────────────────────
@@ -401,6 +416,8 @@ export interface AgentSkillFacts {
   ownerRaw: string | null
   pack: string | null
   codegCopy: boolean
+  /** A Harness plugin's member skill: the plugin's install name. */
+  plugin: string | null
 }
 
 export function agentSkillFacts(item: AgentSkillItem): AgentSkillFacts {
@@ -415,6 +432,7 @@ export function agentSkillFacts(item: AgentSkillItem): AgentSkillFacts {
     ownerRaw: owner || null,
     pack: strOrNull(raw.pack),
     codegCopy: bool(raw.codeg_copy),
+    plugin: strOrNull(raw.plugin) || null,
   }
 }
 

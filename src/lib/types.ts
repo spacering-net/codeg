@@ -4491,6 +4491,9 @@ export interface AgentSkillItem {
   pack?: string | null
   /** A copy Codeg made where no link could be made. */
   codeg_copy?: boolean
+  /** A Harness plugin's member skill (`owner: "harness"`): the plugin's
+   *  install name. It is managed with the plugin, as a whole. */
+  plugin?: string | null
 }
 
 export interface AgentSkillsListResult {

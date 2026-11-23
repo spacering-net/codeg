@@ -2336,6 +2336,9 @@ pub struct AgentSkillItem {
     /// A copy Codeg made where no link could be made (Windows); `owner` names
     /// what it is a copy of.
     pub codeg_copy: bool,
+    /// A Harness plugin's member skill (`owner` is `harness`): the plugin's
+    /// install name.
+    pub plugin: Option<String>,
 }
 
 /// Whose skill an agent's listed skill is.
