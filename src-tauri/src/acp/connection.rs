@@ -15506,6 +15506,16 @@ async fn run_conversation_loop(
                     .await;
                     continue;
                 }
+                if agent_type == AgentType::Pi {
+                    let texts: Vec<&str> = prompt_blocks
+                        .iter()
+                        .filter_map(|block| match block {
+                            ContentBlock::Text(text) => Some(text.text.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+                    cb_state.pi_prompt_title.note_prompt(&texts);
+                }
 
                 // A prompt the gate admitted while Grok ran a turn of its own
                 // (the frontend queues behind that turn; a chat channel or an
@@ -21301,6 +21311,10 @@ struct CodeBuddyLiveState {
     /// session belongs to, and the background sub-agents still out (see
     /// [`OpenCodeLiveState`]).
     opencode: OpenCodeLiveState,
+    /// Pi: the name pi-acp gives a new session after its first prompt, which
+    /// is not taken for the session's title (see
+    /// [`crate::acp::session_title::PiPromptTitle`]).
+    pi_prompt_title: crate::acp::session_title::PiPromptTitle,
 }
 
 /// What [`kiro_live_tool`] remembers about one live Kiro tool call.
@@ -27297,11 +27311,19 @@ async fn emit_conversation_update(
             // only ever title a session by its first prompt. Claude Code's is
             // not written here at all: it is held for the transcript watcher,
             // which writes the transcript's own titles instead whenever it can
-            // read the transcript (`session_title::accept_wire_title`).
-            if let Some(title) = crate::acp::session_title::wire_title(
-                agent_type,
-                info.title.value().map(|s| s.as_str()),
-            ) {
+            // read the transcript (`session_title::accept_wire_title`). Nor is
+            // the name pi-acp gives a new pi session after its first prompt,
+            // which pi's history parser does not take for a name either
+            // (`session_title::PiPromptTitle`).
+            let raw_title = info.title.value().map(|s| s.as_str());
+            if let Some(title) = crate::acp::session_title::wire_title(agent_type, raw_title)
+                .filter(|_| {
+                    agent_type != AgentType::Pi
+                        || !cb_state
+                            .pi_prompt_title
+                            .is_prompt_title(raw_title.unwrap_or_default())
+                })
+            {
                 // Shared with the transcript watcher's title path so the
                 // skip-cache and the unbound-row drop have exactly one
                 // spelling — see `session_title::publish_native_title`.
@@ -30376,6 +30398,32 @@ mod tests {
         .await;
     }
 
+    /// [`drive_session_info_title_from`] through the connection's own live
+    /// state `cb`, for what it remembers between frames.
+    async fn drive_session_info_title_through(
+        state: &Arc<RwLock<SessionState>>,
+        agent_type: AgentType,
+        cb: &mut CodeBuddyLiveState,
+        title: &str,
+    ) {
+        let update: SessionUpdate = serde_json::from_value(serde_json::json!({
+            "sessionUpdate": "session_info_update",
+            "title": title,
+        }))
+        .expect("valid session_info_update wire shape");
+        let mut cache = ToolCallOutputCache::default();
+        emit_conversation_update(
+            state,
+            &EventEmitter::Noop,
+            agent_type,
+            update,
+            None,
+            &mut cache,
+            cb,
+        )
+        .await;
+    }
+
     /// Titles emitted on this connection so far, oldest first.
     async fn emitted_native_titles(state: &Arc<RwLock<SessionState>>) -> Vec<String> {
         state
@@ -30425,6 +30473,145 @@ mod tests {
                 "Fix the signup flow".to_string()
             ],
             "only a CHANGED title may reach the lifecycle worker"
+        );
+    }
+
+    /// pi-acp 0.0.35 names a new session after its first prompt and publishes
+    /// the name, untrimmed and then as pi echoes it trimmed. Neither reaches
+    /// the row: pi's history parser does not take that name for one, so
+    /// adopting it would rename the row at the first turn and back at the next
+    /// detail load. A name chosen afterwards (`/name`) does.
+    #[tokio::test]
+    async fn pi_acp_first_prompt_name_is_not_published() {
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        let prompt = format!(
+            "see [main.rs](file:///Users/demo/app/src-tauri/src/main.rs) {}",
+            "why ".repeat(10)
+        );
+        let frame = "\u{1e}{\"kind\":\"codeg_internal_assistant_brief\"}\u{1e}";
+        cb.pi_prompt_title.note_prompt(&[prompt.as_str(), frame]);
+        let auto = crate::parsers::pi::pi_acp_prompt_title([prompt.as_str(), frame])
+            .expect("prompt has text");
+        assert!(auto.ends_with(' '), "the fixture's cut ends on a space");
+
+        // pi's trimmed echo first, then pi-acp's own copy.
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, auto.trim()).await;
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, &auto).await;
+        assert!(emitted_native_titles(&state).await.is_empty());
+
+        // A `/name` spelling the prompt again is a name.
+        cb.pi_prompt_title
+            .note_prompt(&[format!("/name {}", auto.trim()).as_str()]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, auto.trim()).await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec![auto.trim().to_string()]
+        );
+
+        // A later prompt is not the one pi-acp names the session after.
+        cb.pi_prompt_title.note_prompt(&["Rename me"]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "Rename me").await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec![auto.trim().to_string(), "Rename me".to_string()]
+        );
+
+        // An extension renaming the session in answer to pi's echo keeps its
+        // name: pi-acp's own copy, after it, is still left out.
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        cb.pi_prompt_title.note_prompt(&[prompt.as_str(), frame]);
+        for title in [auto.trim(), "Named by an extension", auto.as_str()] {
+            drive_session_info_title_through(&state, AgentType::Pi, &mut cb, title).await;
+        }
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec!["Named by an extension".to_string()]
+        );
+
+        // A cut that does not end on a space is the echo's string. pi-acp
+        // skips it as a repeat, unless an extension renamed the session in
+        // answer to the echo: then it comes after that name and is left out.
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        cb.pi_prompt_title.note_prompt(&["fix the login flow"]);
+        for title in ["fix the login flow", "Login fix", "fix the login flow"] {
+            drive_session_info_title_through(&state, AgentType::Pi, &mut cb, title).await;
+        }
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec!["Login fix".to_string()]
+        );
+        // A `/name` (a prompt of its own) spelling it again is a name.
+        cb.pi_prompt_title
+            .note_prompt(&["/name fix the login flow"]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "fix the login flow")
+            .await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec!["Login fix".to_string(), "fix the login flow".to_string()],
+            "a name given after another title is a name"
+        );
+
+        // Only pi's titles are read this way.
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        cb.pi_prompt_title.note_prompt(&["fix the login flow"]);
+        drive_session_info_title_through(
+            &state,
+            AgentType::CodeBuddy,
+            &mut cb,
+            "fix the login flow",
+        )
+        .await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec!["fix the login flow".to_string()]
+        );
+    }
+
+    /// The prompt pi-acp names a session after is its first turn with text:
+    /// not a prompt with no text, not a slash command (pi-acp runs some of
+    /// those itself and expands others from a prompt file, so the parser keeps
+    /// whatever name follows one), and none sent after a title has arrived.
+    #[tokio::test]
+    async fn pi_prompt_title_waits_for_the_first_prose_prompt() {
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        cb.pi_prompt_title.note_prompt(&[]);
+        cb.pi_prompt_title
+            .note_prompt(&["  /compact keep the plan"]);
+        cb.pi_prompt_title.note_prompt(&["fix the login flow"]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "fix the login flow")
+            .await;
+        assert!(emitted_native_titles(&state).await.is_empty());
+
+        // A slash command's name is the session's title.
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        cb.pi_prompt_title.note_prompt(&["/review src/app.ts"]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "/review src/app.ts")
+            .await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec!["/review src/app.ts".to_string()]
+        );
+
+        // A name pi already had arrives first: no later prompt is noted.
+        let state = title_test_state(Some(7));
+        let mut cb = CodeBuddyLiveState::default();
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "Named by an extension")
+            .await;
+        cb.pi_prompt_title.note_prompt(&["fix the login flow"]);
+        drive_session_info_title_through(&state, AgentType::Pi, &mut cb, "fix the login flow")
+            .await;
+        assert_eq!(
+            emitted_native_titles(&state).await,
+            vec![
+                "Named by an extension".to_string(),
+                "fix the login flow".to_string()
+            ]
         );
     }
 

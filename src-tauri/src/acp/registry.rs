@@ -456,7 +456,9 @@ const ACP_ADAPTER_DOCS_URL: &str = "https://docs.codeg.app/guide/supported-agent
 /// The oldest pi the pinned pi-acp can open a session with. pi-acp 0.0.34 asks
 /// pi for the current model's thinking levels (`get_available_thinking_levels`,
 /// new in pi 0.81.0) on every `session/new` and `session/load`, and fails the
-/// open without it. Move it with the pin (see `AgentType::Pi` below); the
+/// open without it; 0.0.35 still does. (0.0.35's session naming needs nothing
+/// newer: it reads `get_state`'s `sessionName` when there is one, and a pi
+/// without `set_session_name` only leaves the session unnamed.) Move it with the pin (see `AgentType::Pi` below); the
 /// settings panel warns with the same value (`PI_MIN_RUNTIME_VERSION` in
 /// `src/lib/pi-config.ts`, held equal by a test).
 pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
@@ -7217,7 +7219,7 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             supports_mcp: true,
             name: "Pi",
             description: "Self-extensible coding agent (ACP via pi-acp)",
-            // pi-acp 0.0.34 spawns `pi --mode rpc` as a child, so `pi` (npm
+            // pi-acp spawns `pi --mode rpc` as a child, so `pi` (npm
             // `@earendil-works/pi-coding-agent`, at least
             // `PI_MIN_RUNTIME_VERSION`) must be resolvable on PATH — or
             // pointed at a custom build via the `PI_ACP_PI_COMMAND` env (see
@@ -7225,9 +7227,33 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // (`npx -y pi-acp`, no subcommand). `node_required` follows pi's
             // 22+ requirement (pi-acp's own engines say >=20). The embedded
             // context env lets pi-acp advertise `promptCapabilities.embeddedContext`.
+            //
+            // 0.0.35 (`git diff v0.0.34 v0.0.35 -- src`) changes only session
+            // names, and `initialize` is unchanged:
+            // - a session from `session/new` is named when its first turn
+            //   starts, unless pi already has a name for it: the prompt's text
+            //   blocks, collapsed and cut to 80 code points, stored through
+            //   pi's `set_session_name` (a `session_info` entry) and published
+            //   as `session_info_update.title`. codeg does not take that name
+            //   for the session's title, live or in the history parser
+            //   (`session_title::PiPromptTitle`,
+            //   `parsers::pi::is_pi_acp_prompt_name`): it is a worse spelling
+            //   of the title the first prompt already gives the row, with the
+            //   file links codeg writes left unfolded and often cut in half;
+            // - pi's `session_info_changed` event and `/name` are published as
+            //   `session_info_update.title` (`null` once a name is cleared,
+            //   which codeg ignores, as it does every cleared title);
+            // - `session/load` publishes the session's name, or its first
+            //   prompt cut the same way, before it answers. codeg binds a row
+            //   to the connection only at its first prompt, so that title is
+            //   dropped (`session_title::publish_native_title`), and the parser
+            //   reads the same file anyway;
+            // - an empty `session_info` name now clears the name in pi-acp's
+            //   own session list as it does in pi, which codeg's parser has
+            //   always followed (`session_name`).
             distribution: AgentDistribution::Npx {
-                version: "0.0.34",
-                package: "pi-acp@0.0.34",
+                version: "0.0.35",
+                package: "pi-acp@0.0.35",
                 cmd: "pi-acp",
                 args: &[],
                 env: &[("PI_ACP_ENABLE_EMBEDDED_CONTEXT", "true")],
@@ -9874,7 +9900,7 @@ mod tests {
             "@agentclientprotocol/codex-acp@2.10.0",
             Some("20.3.0"),
         );
-        assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));
+        assert_npx_version(AgentType::Pi, "0.0.35", "pi-acp@0.0.35", Some("22.0.0"));
         assert_npx_version(
             AgentType::Grok,
             "1.0.89",
