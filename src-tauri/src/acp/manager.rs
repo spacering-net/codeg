@@ -2509,13 +2509,23 @@ impl ConnectionManager {
                         point
                     }
                     Err(e) => {
+                        // A historical Codex point refuses rather than tail-forks;
+                        // say why it could not be located, not just that it wasn't.
+                        let point =
+                            crate::acp::fork::requested_fork_point(&[], &turn_id, agent_type)
+                                .map_err(|_| {
+                                    AcpError::protocol(format!(
+                                        "Cannot read the conversation to locate the selected \
+                                         Codex fork point {turn_id}: {e}"
+                                    ))
+                                })?;
                         tracing::warn!(
                             connection_id = %conn_id,
                             turn_id = %turn_id,
                             "[ACP] could not read the conversation to resolve a fork point \
-                             ({e})"
+                             ({e}); forking at the tail"
                         );
-                        crate::acp::fork::requested_fork_point(&[], &turn_id, agent_type)?
+                        point
                     }
                 }
             }
