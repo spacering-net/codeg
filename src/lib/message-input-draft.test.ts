@@ -5,6 +5,7 @@ import {
   adoptLegacyNewConversationDraft,
   buildNewConversationDraftStorageKey,
   clearMessageInputDraftV2,
+  loadMessageInputDraft,
   loadMessageInputDraftV2,
   moveMessageInputDraft,
   resetLegacyDraftAdoptionForTests,
@@ -130,6 +131,38 @@ describe("message-input-draft v2", () => {
       kind: "doc",
       doc: DOC,
     })
+  })
+
+  it("reads a durable v1 text draft from storage, not a stale memory copy", () => {
+    saveMessageInputDraft("k-v1-durable", "first")
+    // Another window (or a later write) changes the stored draft.
+    localStorage.setItem(
+      V1("k-v1-durable"),
+      JSON.stringify({ text: "changed" })
+    )
+    expect(loadMessageInputDraft("k-v1-durable")).toBe("changed")
+  })
+
+  it("keeps a v1 text draft in memory when its write fails", () => {
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new Error("quota exceeded")
+      })
+    try {
+      saveMessageInputDraft("k-v1-fail", "kept in memory")
+    } finally {
+      setItem.mockRestore()
+    }
+    expect(localStorage.getItem(V1("k-v1-fail"))).toBeNull()
+    expect(loadMessageInputDraft("k-v1-fail")).toBe("kept in memory")
+    // The next successful write releases the memory copy to storage.
+    saveMessageInputDraft("k-v1-fail", "now stored")
+    expect(JSON.parse(localStorage.getItem(V1("k-v1-fail"))!)).toEqual({
+      text: "now stored",
+    })
+    localStorage.setItem(V1("k-v1-fail"), JSON.stringify({ text: "changed" }))
+    expect(loadMessageInputDraft("k-v1-fail")).toBe("changed")
   })
 
   it("ignores a corrupt v2 payload and falls back to the legacy v1 draft", () => {

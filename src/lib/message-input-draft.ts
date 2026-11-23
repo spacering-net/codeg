@@ -208,8 +208,8 @@ export function sweepOrphanDraftKeys(
   const run = () => {
     const liveDraftTabIds = getLiveDraftTabIds()
     // Track both halves: the storage key to remove and the draft key whose
-    // pending copies must go with it (they can't be derived from each other by string
-    // search — the storage prefix itself contains "draft:").
+    // in-memory copies must go with it (they can't be derived from each other
+    // by string search — the storage prefix itself contains "draft:").
     const stale: { storageKey: string; draftKey: string }[] = []
     try {
       for (let i = 0; i < localStorage.length; i++) {
