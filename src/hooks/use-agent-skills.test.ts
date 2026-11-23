@@ -131,6 +131,9 @@ describe("useAgentSkills", () => {
 
     const recent = renderHook(() => useAgentSkills("codex", "/ws/32"))
     expect(ids(recent.result.current)).toEqual(["/ws/32"])
+    // Exactly 32 closed lists stay: the second-oldest is still served.
+    const boundary = renderHook(() => useAgentSkills("codex", "/ws/1"))
+    expect(ids(boundary.result.current)).toEqual(["/ws/1"])
     const activeReader = renderHook(() => useAgentSkills("codex", "/ws/active"))
     expect(activeReader.result.current).toBe(active.result.current)
     expect(mockListSkills).toHaveBeenCalledTimes(34)
