@@ -260,6 +260,84 @@ describe("DelegationAgentDefaultsPanel probes", () => {
     ).toBeInTheDocument()
   })
 
+  it("refetches the least recently used snapshot after probing 33 models", async () => {
+    describeAgentOptions.mockImplementation(
+      (_agent: AgentType, _dir: string | null, cfg: { model: string } | null) =>
+        Promise.resolve(answer(cfg?.model ?? "no-model"))
+    )
+    const prefix = `delegation-cache-${unique()}`
+    const model = (index: number) => `${prefix}-${index}`
+    const saved = (index: number): Defaults => ({
+      claude_code: { config_values: { model: model(index) } },
+    })
+    const { rerender } = render(panel(saved(0)))
+    await settle()
+
+    async function select(index: number) {
+      rerender(panel(saved(index)))
+      await settle()
+    }
+
+    for (let index = 1; index < 32; index++) {
+      await select(index)
+    }
+    expect(describeAgentOptions).toHaveBeenCalledTimes(32)
+
+    await select(0)
+    await select(32)
+    expect(describeAgentOptions).toHaveBeenCalledTimes(33)
+
+    await select(0)
+    expect(describeAgentOptions).toHaveBeenCalledTimes(33)
+
+    await select(1)
+    expect(describeAgentOptions).toHaveBeenCalledTimes(34)
+    expect(describeAgentOptions).toHaveBeenLastCalledWith("claude_code", null, {
+      model: model(1),
+    })
+  })
+
+  /** An expired snapshot is never served, so it must not hold a slot a fresh
+   *  one would lose — even when it was read more recently than that one. */
+  it("evicts expired snapshots before fresh ones", async () => {
+    describeAgentOptions.mockImplementation(
+      (_agent: AgentType, _dir: string | null, cfg: { model: string } | null) =>
+        Promise.resolve(answer(cfg?.model ?? "no-model"))
+    )
+    const prefix = `delegation-expiry-${unique()}`
+    const model = (index: number) => `${prefix}-${index}`
+    const saved = (index: number): Defaults => ({
+      claude_code: { config_values: { model: model(index) } },
+    })
+    const { rerender } = render(panel(saved(0)))
+    await settle()
+
+    async function select(index: number) {
+      rerender(panel(saved(index)))
+      await settle()
+    }
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+    for (let index = 1; index < 32; index++) {
+      await select(index)
+    }
+    // Model 0 is still fresh: read now, it becomes the most recently used.
+    await select(0)
+    expect(describeAgentOptions).toHaveBeenCalledTimes(32)
+
+    // Model 0 expires; models 1..31 are still fresh.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000)
+    })
+    await select(32)
+    expect(describeAgentOptions).toHaveBeenCalledTimes(33)
+
+    await select(1)
+    expect(describeAgentOptions).toHaveBeenCalledTimes(33)
+  })
+
   /** A tab served from the cache must not be overwritten by the answer of a
    *  probe the user already left — that answer is another agent's options. */
   it("drops a probe answer that lands after a cache hit replaced it", async () => {
