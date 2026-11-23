@@ -235,16 +235,12 @@ type PendingLogin = Extract<AntigravityLoginStart, { alreadySignedIn: false }>
 /**
  * Sign in to Antigravity from a machine that has no browser.
  *
- * Antigravity's OAuth flow is run by the AGENT: it binds a one-shot listener on
- * `127.0.0.1:<random port>`, opens a browser, and blocks for five minutes. On a
- * headless server that browser does not exist, and `webbrowser.open` returns
- * false without raising — so the first session simply hangs and then fails,
- * with no link anywhere the user could open themselves.
- *
- * This runs that same flow out of band and splits it in two: codeg shows the
- * link, the user consents in whatever browser they do have, and codeg — which
- * IS on the machine where that port is listening — performs the redirect their
- * browser could not. See `src-tauri/src/acp/antigravity_login.rs`.
+ * The Antigravity CLI's own `agy acp --login` is already the browser-free
+ * flow: it prints a Google consent link and waits on stdin for the
+ * authorization code (or the full address the browser lands on). This drives
+ * that child from the panel — show the link, let the user consent in whatever
+ * browser they do have, then write the pasted code back to the process. See
+ * `src-tauri/src/acp/antigravity_login.rs`.
  */
 function HeadlessSignIn({
   method,
@@ -1060,16 +1056,11 @@ export function AntigravityConfigPanel({
       // anything changed since is NEWER than what was stored.
       if (valuesRef.current === submitted) dirty.current = false
 
-      // Storing the row is only half of a save. What actually authenticates
-      // Antigravity is `auth.type` in the server's settings.json, and that file
-      // is the user's — it can legitimately be Hjson with comments, or hold an
-      // `auth` key of a shape codeg refuses to overwrite — in which case the
-      // launch leaves it alone and only writes a log line. Saying "saved"
-      // regardless was claiming something that had not happened, and the
-      // consequence lands later and elsewhere: switching methods scrubs the
-      // credentials for the NEW method while the server still reads the OLD
-      // auth.type, so the next session fails with no credential for the method
-      // it believes it is using. Ask, and say so while the user is still here.
+      // Storing the row is the save. `agy acp` owns its credential and reads
+      // no codeg-managed settings.json, so the old second half (projecting
+      // `auth.type` into the standalone server's file) is now a no-op. It is
+      // still called so both panels and older clients keep a single save
+      // round trip; a transport failure is not a failed save.
       let report: AntigravitySyncReport | null = null
       try {
         report = await acpSyncAntigravitySettings()
@@ -1095,10 +1086,10 @@ export function AntigravityConfigPanel({
     }
   }, [agent.enabled, agent.env, onSaveEnv, onSaved, t])
 
-  // A sign-out clears `auth.type` on its way out and the backend writes the
-  // saved method straight back, so its report lands in the same standing notice
-  // a save's does — and matters more here: if that write was refused the file
-  // now names no method at all, and every session fails until someone edits it.
+  // The sign-out report is always `already_current` now: `agy acp` keeps no
+  // settings.json for codeg to rewrite. The standing notice stays wired for a
+  // future agent that does need one, and for the skipped branch the type
+  // already carries.
   const onSignedOut = useCallback((report: AntigravitySyncReport) => {
     setSyncSkip(report.status === "skipped" ? report : null)
   }, [])

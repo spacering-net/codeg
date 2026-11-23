@@ -354,16 +354,15 @@ fn apply_grok_env_policy(merged: &mut Vec<(String, String)>, runtime_env: &BTree
 }
 
 /// codeg-side knob recording which Antigravity auth method the settings panel
-/// chose. It is NOT read by the agent — the server takes its auth intent from
-/// `auth.type` in `antigravity-acp/settings.json` — so the launch path uses it
-/// twice: to decide which credential env vars may reach the process
-/// ([`apply_antigravity_env_policy`]) and to write that file
-/// ([`sync_antigravity_settings_file`]).
+/// chose. `agy acp` does not read it; the launch uses it to decide which
+/// credential env vars may reach the process
+/// ([`apply_antigravity_env_policy`]). The two OAuth methods use the credential
+/// `agy acp --login` stored; the API-key methods read the variables kept below.
 const ANTIGRAVITY_AUTH_METHOD_ENV: &str = "AGY_AUTH_METHOD";
 
-/// The four `auth.type` values Antigravity's ACP server accepts, canonical
-/// spellings only. `vertex-ai` is the pre-rebrand alias for `agent-platform`;
-/// the server still accepts it, but codeg never writes it.
+/// The four auth method ids the Antigravity ACP surface advertises at
+/// `initialize`, canonical spellings only. `vertex-ai` is the pre-rebrand alias
+/// for `agent-platform`; the CLI still accepts it, but codeg never writes it.
 const ANTIGRAVITY_AUTH_METHODS: &[&str] = &[
     "oauth-personal",
     "oauth-business",
@@ -386,19 +385,16 @@ const ANTIGRAVITY_CREDENTIAL_ENV_VARS: &[&str] = &[
 fn antigravity_env_vars_for_method(method: &str) -> &'static [&'static str] {
     match method {
         // `auth.type = gemini-api-key` reads the key from GEMINI_API_KEY and
-        // nothing else (the server's own auth_required message says so).
+        // nothing else (the CLI's own auth_required message says so).
         "gemini-api-key" => &["GEMINI_API_KEY"],
         // Agent Platform (formerly Vertex AI) takes GOOGLE_API_KEY, or a
-        // project + location from the GOOGLE_CLOUD_* pair (with the
-        // settings.json `gcp` block as a per-value fallback behind them).
+        // project + location from the GOOGLE_CLOUD_* pair.
         "agent-platform" => &[
             "GOOGLE_API_KEY",
             "GOOGLE_CLOUD_PROJECT",
             "GOOGLE_CLOUD_LOCATION",
         ],
-        // Both OAuth paths authenticate through the browser; Gemini Enterprise
-        // additionally reads gcp.project/location from settings.json ONLY,
-        // never from the environment.
+        // Both OAuth paths use the credential `agy acp --login` stored.
         _ => &[],
     }
 }
@@ -419,7 +415,7 @@ fn antigravity_env_vars_for_method(method: &str) -> &'static [&'static str] {
 /// come from a stale panel row (the user switched away from API-key auth) or a
 /// shell/container export — and in both cases honoring it authenticates as
 /// something other than what the user picked, silently. Keeping it would also
-/// disagree with the `auth.type` this same launch writes to settings.json.
+/// disagree with the method the panel shows.
 ///
 /// The non-empty half is what makes "reads it" insufficient on its own, and it
 /// is not hypothetical — it is the Agent Platform panel's central choice. That
@@ -447,6 +443,12 @@ fn apply_antigravity_env_policy(
     merged: &mut Vec<(String, String)>,
     runtime_env: &BTreeMap<String, String>,
 ) {
+    // `agy acp` does not read `GEMINI_HOME`, and a set value makes
+    // `session/new` fail outright ("Failed to start Antigravity
+    // conversation"). The launch converts it to `--gemini-dir`
+    // (`antigravity_gemini_dir_arg`), so the child must not see the variable.
+    merged.retain(|(key, _)| key != "GEMINI_HOME");
+
     let Some(method) = runtime_env
         .get(ANTIGRAVITY_AUTH_METHOD_ENV)
         .map(String::as_str)
@@ -467,6 +469,36 @@ fn apply_antigravity_env_policy(
         merged.retain(|(k, _)| k != key);
         merged.push(((*key).to_string(), String::new()));
     }
+}
+
+/// The `--gemini-dir` value for a launch that carries `GEMINI_HOME`, if any.
+///
+/// The standalone server codeg used before took the tree's location from the
+/// `GEMINI_HOME` variable. `agy acp` takes it from `--gemini-dir` instead and
+/// REJECTS a set `GEMINI_HOME` (verified against 1.5.15: `session/new` answers
+/// `Failed to start Antigravity conversation`). Translating the variable keeps
+/// a relocated tree working and keeps the parser (`resolve_gemini_home`) and
+/// the CLI pointed at the same directory.
+pub(crate) fn antigravity_gemini_dir_arg(
+    runtime_env: &BTreeMap<String, String>,
+    merged_env: &[(String, String)],
+) -> Option<String> {
+    let value = runtime_env
+        .get("GEMINI_HOME")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let home = merged_env
+        .iter()
+        .rev()
+        .find(|(key, _)| key == "HOME")
+        .map(|(_, value)| PathBuf::from(value))
+        .or_else(dirs::home_dir);
+    let resolved = crate::parsers::antigravity::resolve_gemini_home_from_value(
+        Some(value.into()),
+        home,
+    );
+    Some(resolved.to_string_lossy().into_owned())
 }
 
 /// Project the panel's Antigravity auth choice into
@@ -506,6 +538,13 @@ fn apply_antigravity_env_policy(
 /// ([`apply_antigravity_env_policy`]) while the server keeps reading the OLD
 /// `auth.type`, so the next session fails with no credential for the method it
 /// thinks it is using. The panel calls this on save and reports the answer.
+/// Legacy: project the panel's auth choice into the standalone server's
+/// `<GEMINI_HOME>/antigravity-acp/settings.json`.
+///
+/// codeg launches `agy acp` now, which reads no such file. The function stays
+/// (test-only) as the reference implementation for the old layout and for the
+/// migration tests; nothing in the launch path calls it.
+#[cfg(test)]
 fn sync_antigravity_settings_file(runtime_env: &BTreeMap<String, String>) -> AntigravitySyncReport {
     let recorded = runtime_env
         .get(ANTIGRAVITY_AUTH_METHOD_ENV)
@@ -695,6 +734,7 @@ const ANTIGRAVITY_ACP_SUBDIR: &str = "antigravity-acp";
 /// for, so for those an empty value is a deletion. For every other method — and
 /// for a legacy row with no recorded method at all — the panel never showed the
 /// fields, so whatever is in the file was hand-written and is left untouched.
+#[cfg(test)]
 enum GcpField<'a> {
     /// Not the panel's to touch.
     Keep,
@@ -703,6 +743,7 @@ enum GcpField<'a> {
     Clear,
 }
 
+#[cfg(test)]
 fn antigravity_gcp_field<'a>(
     runtime_env: &'a BTreeMap<String, String>,
     recorded_method: Option<&str>,
@@ -746,6 +787,7 @@ pub enum AntigravitySyncStatus {
 }
 
 impl AntigravitySyncReport {
+    #[cfg(test)]
     fn written(path: &Path) -> Self {
         Self {
             path: path.display().to_string(),
@@ -754,6 +796,7 @@ impl AntigravitySyncReport {
         }
     }
 
+    #[cfg(test)]
     fn current(path: &Path) -> Self {
         Self {
             path: path.display().to_string(),
@@ -762,6 +805,7 @@ impl AntigravitySyncReport {
         }
     }
 
+    #[cfg(test)]
     fn skipped(path: &Path, reason: impl Into<String>) -> Self {
         Self {
             path: path.display().to_string(),
@@ -773,29 +817,29 @@ impl AntigravitySyncReport {
 
 /// Run the settings-file sync for an agent's STORED environment.
 ///
-/// The panel's half of the launch-time call: same function, same rules, run at
-/// save time so the answer can be shown while the user is still looking at the
-/// form they just submitted.
+/// `agy acp` keeps its credential in the CLI's own store and reads no
+/// codeg-managed settings file, so there is nothing to project. Kept as a
+/// no-op so the panel's save-then-sync call stays a single round trip and old
+/// clients keep working.
 pub fn sync_antigravity_settings_for_env(
-    runtime_env: &BTreeMap<String, String>,
+    _runtime_env: &BTreeMap<String, String>,
 ) -> AntigravitySyncReport {
-    sync_antigravity_settings_file(runtime_env)
+    AntigravitySyncReport {
+        path: String::new(),
+        status: AntigravitySyncStatus::AlreadyCurrent,
+        reason: None,
+    }
 }
 
-/// The environment a real Antigravity launch hands the agent process.
+/// The environment a real Antigravity launch hands the CLI process.
 ///
-/// Factored out of [`build_agent`]'s `Binary` branch so the browser-free
-/// sign-in flow ([`crate::acp::antigravity_login`]) can spawn the SAME binary
-/// with the SAME environment. That identity is the whole point: the sign-in
-/// child is the one that writes the OAuth token, and the token's location is
-/// decided by `GEMINI_HOME` (via `paths.py`) and its storage backend by
-/// `AGY_ACP_FORCE_FILE_STORAGE` — so a child launched with a different
-/// environment would faithfully sign the user in and then leave the credential
-/// somewhere no session ever reads.
-///
-/// Deliberately does NOT run [`sync_antigravity_settings_file`]: this returns a
-/// value and that writes a file, and the sign-in path wants the report rather
-/// than a silently dropped one. Callers run the sync themselves.
+/// Factored out of [`build_agent`]'s `System` branch so the browser-free
+/// sign-in flow ([`crate::acp::antigravity_login`]) spawns `agy acp --login`
+/// with the SAME environment. That identity is the point: `GEMINI_HOME`
+/// decides the CLI's tree, and the panel's `AGY_AUTH_METHOD` decides which
+/// credential variables `apply_antigravity_env_policy` lets through — a child
+/// with a different environment could sign in successfully and then be read by
+/// a launch that filters its credential away.
 ///
 /// `scratch` is `None` for the settings panel, which builds this env to INSPECT
 /// it and spawns nothing; the sign-in/sign-out path passes its own directory.
@@ -805,10 +849,8 @@ pub fn antigravity_launch_env(
 ) -> Vec<(String, String)> {
     let registry_env: &[(&'static str, &'static str)] =
         match registry::get_agent_meta(AgentType::Antigravity).distribution {
+            AgentDistribution::System { env, .. } => env,
             AgentDistribution::Binary { env, .. } => env,
-            // Unreachable while the registry entry stays `Binary`; an empty
-            // base is the correct answer for every other shape anyway, since
-            // `runtime_env` carries everything the panel owns.
             _ => &[],
         };
     let mut merged = merge_agent_env(registry_env, runtime_env, scratch);
@@ -921,6 +963,7 @@ fn read_antigravity_settings(path: &Path) -> Result<Option<serde_json::Value>, S
 /// Stow and chezmoi symlink settings.json, and replacing the link with a
 /// regular file would break their setup — it also keeps the temp file on the
 /// same filesystem, without which the rename is not atomic).
+#[cfg(test)]
 fn write_antigravity_settings(
     acp_dir: &Path,
     path: &Path,
@@ -952,6 +995,7 @@ fn write_antigravity_settings(
 /// `existing` is `None` only for a file that does not exist — the caller
 /// refuses to touch one it could not read or parse — so creating a fresh object
 /// here never destroys anything.
+#[cfg(test)]
 fn merge_antigravity_settings(
     existing: Option<serde_json::Value>,
     method: &str,
@@ -2629,16 +2673,6 @@ async fn build_agent(
                 apply_grok_env_policy(&mut merged_env, runtime_env);
             } else if agent_type == AgentType::Antigravity {
                 apply_antigravity_env_policy(&mut merged_env, runtime_env);
-                // Kept separate from the env policy above: the other
-                // `apply_*_env_policy`s are pure, and this one WRITES the
-                // server's settings.json. It has to happen before the spawn —
-                // the file is read during `session/new`, and without it that
-                // call fails with `Authentication required`.
-                //
-                // The report is for the settings panel, which runs the same
-                // sync at save time; here it is already in the log and must
-                // never block a launch, so it is deliberately dropped.
-                let _ = sync_antigravity_settings_file(runtime_env);
             }
             let env_key_list: Vec<&str> = merged_env.iter().map(|(k, _)| k.as_str()).collect();
             if !merged_env.is_empty() {
@@ -2784,12 +2818,26 @@ async fn build_agent(
             {
                 cmd_args.push("--trust-all-tools".to_string());
             }
+            let mut merged_env = merge_agent_env(env, runtime_env, scratch);
+            prepend_agent_install_dirs_path(&mut merged_env, agent_type);
+            // Antigravity's panel choice decides which credential the CLI is
+            // allowed to see. `agy acp` itself reads `GEMINI_API_KEY` /
+            // `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` for the
+            // non-OAuth methods; without this filter a stale key from another
+            // method could silently change the auth path. The policy also
+            // drops `GEMINI_HOME`, which the CLI rejects; the tree's location
+            // rides on `--gemini-dir` below.
+            if agent_type == AgentType::Antigravity {
+                apply_antigravity_env_policy(&mut merged_env, runtime_env);
+                if let Some(dir) = antigravity_gemini_dir_arg(runtime_env, &merged_env) {
+                    cmd_args.push("--gemini-dir".to_string());
+                    cmd_args.push(dir);
+                }
+            }
             let mut server = McpServerStdio::new(meta.name, &binary_str);
             if !cmd_args.is_empty() {
                 server = server.args(cmd_args.clone());
             }
-            let mut merged_env = merge_agent_env(env, runtime_env, scratch);
-            prepend_agent_install_dirs_path(&mut merged_env, agent_type);
             let env_key_list: Vec<&str> = merged_env.iter().map(|(k, _)| k.as_str()).collect();
             // Same spawn-time dump as the Binary branch: which binary, which
             // args, which env KEYS (never values — they may hold API keys).
@@ -32235,6 +32283,34 @@ mod tests {
             .iter()
             .any(|(k, v)| k == "GOOGLE_CLOUD_LOCATION" && v == "global"));
         assert!(env.iter().any(|(k, v)| k == "GEMINI_API_KEY" && v.is_empty()));
+    }
+
+    #[test]
+    fn antigravity_translates_gemini_home_to_the_cli_flag() {
+        let runtime = BTreeMap::from([("GEMINI_HOME".to_string(), "/srv/agy".to_string())]);
+        let merged = vec![("HOME".to_string(), "/srv".to_string())];
+        assert_eq!(
+            antigravity_gemini_dir_arg(&runtime, &merged).as_deref(),
+            Some("/srv/agy")
+        );
+
+        // A tilde is expanded against the CHILD's home, matching the parser.
+        let tilde = BTreeMap::from([("GEMINI_HOME".to_string(), "~/agy".to_string())]);
+        assert_eq!(
+            antigravity_gemini_dir_arg(&tilde, &merged).as_deref(),
+            Some("/srv/agy")
+        );
+
+        assert_eq!(antigravity_gemini_dir_arg(&BTreeMap::new(), &merged), None);
+
+        // The CLI rejects a set GEMINI_HOME, so the child must never see it.
+        let mut env = vec![
+            ("HOME".to_string(), "/srv".to_string()),
+            ("GEMINI_HOME".to_string(), "/srv/agy".to_string()),
+        ];
+        apply_antigravity_env_policy(&mut env, &runtime);
+        assert!(!env.iter().any(|(key, _)| key == "GEMINI_HOME"));
+        assert!(env.iter().any(|(key, _)| key == "HOME"));
     }
 
     /// A var the method READS but the panel did not store must still be cleared.

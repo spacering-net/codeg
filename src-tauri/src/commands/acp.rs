@@ -6746,22 +6746,11 @@ pub(crate) fn pi_project_trust_launch_block(
     ))
 }
 
-/// Write Antigravity's `auth.type` (and `gcp` block) from the STORED agent row,
-/// and report what happened.
+/// Report Antigravity's auth settings after a save.
 ///
-/// The settings panel calls this straight after saving. The launch path runs the
-/// same sync, but only at launch and only into the log — which made the panel's
-/// "saved" mean less than it looked: the env row is not what authenticates
-/// Antigravity, `<GEMINI_HOME>/antigravity-acp/settings.json` is, and when that
-/// file cannot be rewritten (it is Hjson with comments, it is unreadable, its
-/// `auth` is not an object) the two part ways silently. Switching methods is
-/// where that bites: the launch scrubs the credentials for the NEW method while
-/// the server still reads the OLD `auth.type`, so `session/new` fails with no
-/// credential for the method it believes it is using — hours after the save
-/// that caused it.
-///
-/// Reads the row rather than taking the env from the caller so it reports on
-/// what was actually persisted, not on what the request claimed.
+/// `agy acp` owns its credential and reads no codeg-managed settings file, so
+/// this is a no-op that answers `already_current`. It stays as a separate RPC
+/// because the panel's save flow calls it and older clients keep working.
 pub(crate) async fn acp_sync_antigravity_settings_core(
     db: &AppDatabase,
 ) -> Result<crate::acp::connection::AntigravitySyncReport, AcpError> {
@@ -6775,10 +6764,9 @@ pub(crate) async fn acp_sync_antigravity_settings_core(
 ///
 /// The read error is PROPAGATED, unlike the `.ok().flatten()` the pi trust path
 /// uses. Treating a failed read as "no row" would not merely lose the method —
-/// it would hand the caller an empty environment, which on a machine with no
-/// settings.json yet writes `oauth-personal` and reports success for a choice
-/// the user did not make, and which points the browser-free sign-in at the
-/// default `~/.gemini` rather than the relocated `GEMINI_HOME` a session uses.
+/// it would hand the caller an empty environment, which would point the
+/// browser-free sign-in at the default `~/.gemini` rather than the relocated
+/// `GEMINI_HOME` a session uses.
 async fn antigravity_runtime_env(db: &AppDatabase) -> Result<BTreeMap<String, String>, AcpError> {
     let setting = agent_setting_service::get_by_agent_type(&db.conn, AgentType::Antigravity)
         .await
@@ -6819,83 +6807,30 @@ pub(crate) async fn acp_antigravity_login_cancel_core(handle: String) -> Result<
     crate::acp::antigravity_login::cancel(handle.trim()).await
 }
 
-/// Sign Antigravity out, so the next sign-in can reach a different account.
+/// Sign Antigravity out through the CLI's own ACP `logout`.
 ///
-/// The counterpart to [`acp_antigravity_login_start_core`], and the thing that
-/// makes it usable twice: with a credential in hand the agent refreshes it
-/// silently, so `authenticate` returns without a link and the first Google
-/// account a user picks is the last one they get.
+/// `agy acp` owns the credential store (the system keyring, or its file
+/// fallback), so codeg does not delete tokens itself. Two things still need
+/// codeg's help:
 ///
-/// Three steps around the `logout`, each closing a way for the sign-out to look
-/// like it worked when it did not.
-///
-/// 1. **Refuse unless codeg knows the agent will clear something.** `logout`
-///    clears ONE flavor — the one `settings.json` names — and for a
-///    `gemini-api-key` or `agent-platform` connection that set is empty, since
-///    those read their key per request rather than storing anything. It answers
-///    `{}` regardless. Verified against 1.1.1: with `auth.type=gemini-api-key`
-///    and a `GEMINI_API_KEY` present, `logout` returns `{}`, deletes no token
-///    file, and still strips `auth.type` — so without this check codeg would
-///    report a sign-out that left the account exactly where it was.
-///
-///    The FILE is consulted rather than the stored row because it is the only
-///    thing the server infers from. And a file codeg cannot parse is refused
-///    rather than assumed harmless: the server reads Hjson and codeg does not,
-///    so "codeg sees no method" and "there is no method" are different facts,
-///    and only the second is safe to act on.
-/// 2. **Quiesce this agent first, and keep it quiesced.** Antigravity processes
-///    cache the OAuth credentials in memory behind a per-PROCESS lock and write
-///    them back on every silent refresh, so one left running restores the
-///    account being signed out of — or overwrites the account signed in next —
-///    as soon as its token expires. The lockout is taken BEFORE the connections
-///    are enumerated and held across the `logout`, so a session cannot be
-///    spawned into the window and inherit the credential being erased.
-/// 3. **Write the saved method back afterwards.** `logout` removes `auth.type`
-///    on its way out, and a session whose `auth.type` is missing fails outright
-///    with `Authentication required`. The report is returned for the same
-///    reason a save's is: when that file refuses to be rewritten the user has
-///    to fix it by hand, and this is the moment they are looking.
+/// 1. **Quiesce this agent first, and keep it quiesced.** A live Antigravity
+///    process caches OAuth credentials in memory and writes them back on a
+///    silent refresh, which would restore the account being signed out of.
+///    The lockout is taken BEFORE the connections are enumerated and held
+///    across the `logout`, so a session cannot be spawned into the window and
+///    inherit the credential being erased.
+/// 2. **Report through the panel's existing type.** `agy acp` keeps no
+///    settings.json for codeg to rewrite, so the settings-sync half is a
+///    no-op; the report tells the panel the sign-out itself succeeded.
 pub(crate) async fn acp_antigravity_sign_out_core(
     db: &AppDatabase,
     connection_manager: &crate::acp::manager::ConnectionManager,
 ) -> Result<crate::acp::connection::AntigravitySyncReport, AcpError> {
-    use crate::acp::connection::AntigravityAuthType;
-
     let runtime_env = antigravity_runtime_env(db).await?;
-    match crate::acp::connection::antigravity_effective_auth_type(&runtime_env) {
-        AntigravityAuthType::Declared(active)
-            if !matches!(active.as_str(), "oauth-personal" | "oauth-business") =>
-        {
-            return Err(AcpError::protocol(format!(
-                "Antigravity's settings.json says it authenticates with {active}, not with a \
-                 Google account, so there is no signed-in account to leave. Choose a Google \
-                 sign-in method above and save first, then sign out."
-            )));
-        }
-        AntigravityAuthType::Unreadable => {
-            return Err(AcpError::protocol(
-                "codeg cannot read the authentication method out of Antigravity's settings.json, \
-                 so it cannot tell which account would be signed out — or whether anything would \
-                 be. Make that file strict JSON (the server also accepts comments and trailing \
-                 commas; codeg does not), or move it aside, then try again.",
-            ));
-        }
-        // Declared OAuth clears that flavor; `Absent` leaves the server nothing
-        // to infer from, so it clears BOTH — which is what "get me out of this
-        // account" asks for either way.
-        _ => {}
-    }
 
     // Before the enumeration, and held across the `logout`: a connection
     // spawned into that window would authenticate with the credential about to
     // be erased and then write it back at its next refresh.
-    //
-    // The gate is global rather than per-agent, so this delays starting ANY
-    // agent while it is held — the same cost the external-restore gate accepts,
-    // and bounded the same way. Worth it here: the window is a few seconds in
-    // practice (the ceiling is a cold PAR unpack), it is a rare and explicit
-    // user action, and a blocked spawn merely waits where an admitted one would
-    // silently restore the account being left behind.
     let _lockout = connection_manager.lock_out_new_connections().await;
     let disconnected = connection_manager
         .disconnect_by_agent_type(AgentType::Antigravity)
@@ -10028,31 +9963,30 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
         // Antigravity's roots are `server.py::resolve_skills_paths`, verbatim
         // and in its order:
         //
-        //   home       `<GEMINI_HOME>/config/skills`        ← cross-surface global
+        // codeg launches `agy acp` now, so the CLI's own root leads:
+        //   home       `<GEMINI_HOME>/antigravity-cli/skills` ← the CLI's
         //   workspace  `<cwd>/.gemini/skills`
-        //   home       `<GEMINI_HOME>/antigravity-cli/skills` ← the CLI's, read too
+        //   home       `<GEMINI_HOME>/config/skills`        ← cross-surface global
         //   workspace  `<cwd>/.agents/skills`
         //
         // Both home roots follow the resolved `GEMINI_HOME` on purpose: the
         // server's own comment records that a `$HOME`-anchored entry here used
         // to hand the real `~/.gemini` to the agent even when the home had
-        // been relocated. `config/skills` leads because it is the directory
-        // Antigravity itself calls the global one; `antigravity-cli/skills`
-        // belongs to the CLI and is only READ, so installs must not land
-        // there ahead of it.
+        // been relocated. `config/skills` is kept for users who installed
+        // skills there for the desktop/IDE surfaces; the CLI reads it too.
         //
         // `SkillDirectoryOnly`: the discovery docstring says "SKILL.md files
         // or skill subfolders", which does not distinguish a bundle's
         // `<id>/SKILL.md` from a flat `<id>.md`, and the actual scan happens
-        // inside the Go harness. The directory bundle is the shape every agent
+        // inside the agent. The directory bundle is the shape every agent
         // supports, so codeg installs that rather than guessing at the wider
         // one and writing skills the agent may never load.
         AgentType::Antigravity => Some(SkillStorageSpec {
             kind: SkillStorageKind::SkillDirectoryOnly,
             global_dirs: vec![
+                crate::parsers::antigravity::resolve_antigravity_cli_dir().join("skills"),
                 crate::parsers::antigravity::resolve_antigravity_shared_config_dir()
                     .join("skills"),
-                crate::parsers::antigravity::resolve_antigravity_cli_dir().join("skills"),
             ],
             project_rel_dirs: vec![".gemini/skills", ".agents/skills"],
         }),

@@ -1,5 +1,6 @@
-//! Transcript reader for Google Antigravity's first-party ACP server
-//! (`agy_acp_server`).
+//! Transcript reader for Google Antigravity — both the CLI's own `agy acp`
+//! sessions (the current backend) and the standalone `agy_acp_server` archives
+//! codeg used before.
 //!
 //! LAYOUT. Everything hangs off the *Gemini home* — `$GEMINI_HOME` when set and
 //! non-empty, else `~/.gemini`. Unlike Gemini CLI's `GEMINI_CLI_HOME` (which
@@ -7,25 +8,32 @@
 //! `.gemini` directory itself, so setting it relocates the whole tree:
 //!
 //! ```text
-//! <home>/antigravity-acp/                 this server's private subtree
-//! ├── settings.json                       auth.type + gcp.{project,location}
-//! ├── acp_token.json, acp_business_token.json   OAuth tokens (never archived)
-//! ├── trusted_workspaces.json
+//! <home>/antigravity-cli/                 the CLI's subtree (agy acp writes here)
+//! ├── conversation_summaries.db           title / workspace_uris / step_count
+//! ├── settings.json                       the CLI's own settings
 //! └── conversations/
-//!     ├── <session id>.db                 SQLite trajectory
+//!     └── <session id>.db                 SQLite trajectory (no .meta sidecar)
+//!
+//! <home>/antigravity-acp/                 LEGACY standalone server (read-only)
+//! ├── settings.json, acp_token.json, …
+//! └── conversations/
+//!     ├── <session id>.db
 //!     └── <session id>.meta               sidecar JSON (cwd, mode_id, …)
 //! ```
 //!
 //! FORMAT. The `.db` is a plain SQLite file with a single `steps(idx,
 //! step_payload)` table; each payload is a serialized `gemini_coder.Step`
-//! protobuf. A brand-new session's DB is pre-created EMPTY (0 bytes) before the
-//! Go harness writes the schema, so "no such table: steps" is a normal state,
-//! not a corruption — it reads as an empty conversation.
+//! protobuf. The CLI and the old server use the same schema. A brand-new
+//! session's DB is pre-created EMPTY (0 bytes) before the harness writes the
+//! schema, so "no such table: steps" is a normal state, not a corruption — it
+//! reads as an empty conversation.
 //!
-//! The `.meta` sidecar carries `cwd` (and `mode_id` / `allowed_tool_calls`) but
-//! NO title: the server synthesizes `Session <first 8 chars>` for its own
-//! `session/list`, which is not worth mirroring, so the title comes from the
-//! first user prompt like every other parser.
+//! The CLI keeps no per-session `.meta`; its workspace comes from
+//! `conversation_summaries.workspace_uris` (the same column its own
+//! `session/list` reads). The legacy `.meta` sidecar still supplies `cwd` (and
+//! `mode_id` / `allowed_tool_calls`) for old sessions. Neither carries a title
+//! worth mirroring, so the title comes from the first user prompt like every
+//! other parser.
 //!
 //! WHY A HAND-WRITTEN PROTO SUBSET. The real `Step` has ~130 fields, almost all
 //! of them one arm of a `oneof step` over Google-internal `exa.cortex_pb`
@@ -41,6 +49,7 @@
 //! arm is self-describing, while the enum has 118 values whose numbering is
 //! upstream's to change.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -68,6 +77,8 @@ const TEXT_CAP: usize = 200_000;
 
 const SESSIONS_DIR_NAME: &str = "conversations";
 const ACP_SUBDIR: &str = "antigravity-acp";
+const CLI_SUBDIR: &str = "antigravity-cli";
+const SUMMARY_DB_NAME: &str = "conversation_summaries.db";
 const METADATA_FILE_SUFFIX: &str = "meta";
 
 // ---------------------------------------------------------------------------
@@ -125,20 +136,29 @@ fn resolve_gemini_home_from(
     }
 }
 
-/// `<home>/antigravity-acp` — the ACP server's private directory. Also holds
-/// `settings.json` (see `acp::connection::sync_antigravity_settings_file`) and
-/// the OAuth token files.
+/// `<home>/antigravity-acp` — the STANDALONE ACP server's private directory.
+/// codeg no longer launches that server (see `AgentType::Antigravity`), but
+/// the tree is still read for sessions written before the switch.
 pub(crate) fn resolve_antigravity_acp_dir() -> PathBuf {
     resolve_gemini_home().join(ACP_SUBDIR)
 }
 
-/// `<home>/antigravity-acp/conversations` — the session trajectories.
+/// `<home>/antigravity-cli/conversations` — the Antigravity CLI's session
+/// trajectories, which `agy acp` writes too.
 pub(crate) fn resolve_antigravity_sessions_dir() -> PathBuf {
     resolve_antigravity_sessions_dir_for_env(&AgentEnv::inherited())
 }
 
-/// [`resolve_antigravity_sessions_dir`] for the server launched with `env`.
+/// [`resolve_antigravity_sessions_dir`] for the CLI launched with `env`.
 pub(crate) fn resolve_antigravity_sessions_dir_for_env(env: &AgentEnv) -> PathBuf {
+    resolve_gemini_home_for_env(env)
+        .join(CLI_SUBDIR)
+        .join(SESSIONS_DIR_NAME)
+}
+
+/// [`resolve_antigravity_legacy_sessions_dir_for_env`] for the process's own
+/// environment.
+pub(crate) fn resolve_antigravity_legacy_sessions_dir_for_env(env: &AgentEnv) -> PathBuf {
     resolve_gemini_home_for_env(env)
         .join(ACP_SUBDIR)
         .join(SESSIONS_DIR_NAME)
@@ -541,6 +561,9 @@ impl ErrorDetails {
 
 pub struct AntigravityParser {
     base_dir: PathBuf,
+    /// Sessions the standalone `agy_acp_server` wrote before codeg switched to
+    /// `agy acp`. Still listed so that history does not disappear.
+    legacy_dir: Option<PathBuf>,
 }
 
 impl AntigravityParser {
@@ -548,10 +571,14 @@ impl AntigravityParser {
         Self::for_env(&AgentEnv::inherited())
     }
 
-    /// The history of the Antigravity server launched with `env`.
+    /// The history of the Antigravity CLI launched with `env`.
     pub fn for_env(env: &AgentEnv) -> Self {
+        let base_dir = resolve_antigravity_sessions_dir_for_env(env);
+        let legacy = resolve_antigravity_legacy_sessions_dir_for_env(env);
+        let legacy_dir = (legacy != base_dir).then_some(legacy);
         Self {
-            base_dir: resolve_antigravity_sessions_dir_for_env(env),
+            base_dir,
+            legacy_dir,
         }
     }
 
@@ -559,22 +586,45 @@ impl AntigravityParser {
     /// (test fixtures).
     #[cfg(any(test, feature = "test-utils"))]
     pub fn with_base_dir(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+        Self {
+            base_dir,
+            legacy_dir: None,
+        }
     }
 
-    fn db_path(&self, conversation_id: &str) -> PathBuf {
-        self.base_dir.join(format!("{conversation_id}.db"))
+    fn dirs(&self) -> impl Iterator<Item = &PathBuf> {
+        std::iter::once(&self.base_dir).chain(self.legacy_dir.iter())
     }
 
-    fn meta_path(&self, conversation_id: &str) -> PathBuf {
+    fn resolve_db(&self, conversation_id: &str) -> Option<PathBuf> {
+        self.dirs()
+            .map(|dir| dir.join(format!("{conversation_id}.db")))
+            .find(|path| path.is_file())
+    }
+
+    fn resolve_meta(&self, conversation_id: &str) -> Option<PathBuf> {
+        self.dirs()
+            .map(|dir| dir.join(format!("{conversation_id}.{METADATA_FILE_SUFFIX}")))
+            .find(|path| path.is_file())
+    }
+
+    /// `<cli>/conversation_summaries.db`, the CLI's own index beside the
+    /// `conversations/` directory. The standalone server kept no such index;
+    /// its cwd came from the `.meta` sidecar.
+    fn summary_db_path(&self) -> PathBuf {
         self.base_dir
-            .join(format!("{conversation_id}.{METADATA_FILE_SUFFIX}"))
+            .parent()
+            .map(|parent| parent.join(SUMMARY_DB_NAME))
+            .unwrap_or_default()
     }
 
-    fn build(&self, conversation_id: &str) -> SessionParse {
-        let steps = read_steps(&self.db_path(conversation_id));
+    fn build(&self, conversation_id: &str, db_path: &Path) -> SessionParse {
+        let steps = read_steps(db_path);
         let mut parsed = project_steps(&steps);
-        parsed.cwd = read_sidecar_cwd(&self.meta_path(conversation_id));
+        parsed.cwd = self
+            .resolve_meta(conversation_id)
+            .and_then(|path| read_sidecar_cwd(&path))
+            .or_else(|| read_summary_cwd(&self.summary_db_path(), conversation_id));
         parsed
     }
 
@@ -606,27 +656,40 @@ impl Default for AntigravityParser {
 impl AgentParser for AntigravityParser {
     fn list_conversations(&self) -> Result<Vec<ConversationSummary>, ParseError> {
         let mut conversations = Vec::new();
-        let Ok(entries) = std::fs::read_dir(&self.base_dir) else {
-            return Ok(conversations);
-        };
+        let mut seen = HashSet::new();
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("db") {
-                continue;
-            }
-            let Some(conversation_id) = path.file_stem().map(|s| s.to_string_lossy().into_owned())
-            else {
+        for dir in self.dirs() {
+            let Ok(entries) = std::fs::read_dir(dir) else {
                 continue;
             };
-            let parsed = self.build(&conversation_id);
-            // A session whose DB is still the pre-created empty file (or which
-            // was cleared) has no content to show — matching the other parsers'
-            // "metadata-only is not listed" rule.
-            if parsed.turns.is_empty() {
-                continue;
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("db") {
+                    continue;
+                }
+                let Some(conversation_id) =
+                    path.file_stem().map(|s| s.to_string_lossy().into_owned())
+                else {
+                    continue;
+                };
+                // The CLI directory is scanned first; an id present in both
+                // trees is the same conversation, and the CLI copy is current.
+                if !seen.insert(conversation_id.clone()) {
+                    continue;
+                }
+                let Some(db_path) = self.resolve_db(&conversation_id) else {
+                    continue;
+                };
+                let parsed = self.build(&conversation_id, &db_path);
+                // A session whose DB is still the pre-created empty file (or
+                // which was cleared) has no content to show — matching the
+                // other parsers' "metadata-only is not listed" rule.
+                if parsed.turns.is_empty() {
+                    continue;
+                }
+                conversations.push(self.summary_from(&conversation_id, &parsed));
             }
-            conversations.push(self.summary_from(&conversation_id, &parsed));
         }
 
         conversations.sort_by_key(|c| std::cmp::Reverse(c.started_at));
@@ -634,12 +697,12 @@ impl AgentParser for AntigravityParser {
     }
 
     fn get_conversation(&self, conversation_id: &str) -> Result<ConversationDetail, ParseError> {
-        if !self.db_path(conversation_id).is_file() {
+        let Some(db_path) = self.resolve_db(conversation_id) else {
             return Err(ParseError::ConversationNotFound(
                 conversation_id.to_string(),
             ));
-        }
-        let parsed = self.build(conversation_id);
+        };
+        let parsed = self.build(conversation_id, &db_path);
 
         let mut turns = parsed.turns.clone();
         relocate_orphaned_tool_results(&mut turns);
@@ -751,6 +814,53 @@ fn read_sidecar_cwd(meta_path: &Path) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+/// The workspace the CLI session ran in, from `conversation_summaries`.
+/// `workspace_uris` is a JSON array of `file://` URIs (the CLI's own
+/// `session/list` reads the same column); the first entry is the session's
+/// primary folder.
+fn read_summary_cwd(summary_db: &Path, conversation_id: &str) -> Option<String> {
+    if !summary_db.is_file() {
+        return None;
+    }
+    let conn = try_open_trajectory(
+        summary_db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .or_else(|| {
+        try_open_trajectory(
+            summary_db,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+    })?;
+    let raw: String = conn
+        .query_row(
+            "SELECT workspace_uris FROM conversation_summaries WHERE conversation_id = ?1",
+            [conversation_id],
+            |row| row.get(0),
+        )
+        .ok()?;
+    let uris: Vec<String> = serde_json::from_str(&raw).ok()?;
+    uris.into_iter().next().and_then(|uri| file_uri_to_path(&uri))
+}
+
+/// Turn the CLI's `file:///Users/me/project` into `/Users/me/project`.
+/// Percent escapes are decoded (spaces in a workspace path are common), and
+/// the Windows form `file:///C:/...` loses its URL-leading slash.
+fn file_uri_to_path(uri: &str) -> Option<String> {
+    let raw = uri.strip_prefix("file://")?;
+    let decoded = percent_encoding::percent_decode_str(raw)
+        .decode_utf8()
+        .ok()?;
+    #[cfg(windows)]
+    {
+        let trimmed = decoded.strip_prefix('/').unwrap_or(&decoded);
+        if trimmed.as_bytes().get(1) == Some(&b':') {
+            return Some(trimmed.to_string());
+        }
+    }
+    Some(decoded.into_owned())
 }
 
 // ---------------------------------------------------------------------------
@@ -2191,15 +2301,34 @@ mod tests {
 
     /// #948: built with an agent's launch env, the parser reads where THAT
     /// env puts the agent's files, not where codeg's own environment does.
+    /// The CLI's tree leads; the old standalone server's tree stays readable.
     #[test]
     fn for_env_reads_the_home_of_the_launch_env() {
         let env = AgentEnv::with_overrides(&[("GEMINI_HOME", "/relocated/agy")]);
+        let parser = AntigravityParser::for_env(&env);
         assert_eq!(
-            AntigravityParser::for_env(&env).base_dir,
+            parser.base_dir,
             PathBuf::from("/relocated/agy")
-                .join("antigravity-acp")
+                .join("antigravity-cli")
                 .join("conversations")
         );
+        assert_eq!(
+            parser.legacy_dir,
+            Some(
+                PathBuf::from("/relocated/agy")
+                    .join("antigravity-acp")
+                    .join("conversations")
+            )
+        );
+    }
+
+    #[test]
+    fn decodes_the_cli_file_uris() {
+        assert_eq!(
+            file_uri_to_path("file:///Users/me/my%20repo").as_deref(),
+            Some("/Users/me/my repo")
+        );
+        assert_eq!(file_uri_to_path("https://example.com/repo"), None);
     }
 
     /// One question of an `ask_question` step, options numbered from `"1"` the

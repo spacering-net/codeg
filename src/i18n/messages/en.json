@@ -1077,7 +1077,7 @@
       "saveRawConfig": "Save file"
     },
     "antigravity": {
-      "configDescription": "Antigravity needs an authentication method before it can start a session. The choice is written to auth.type in $GEMINI_HOME/antigravity-acp/settings.json, which is the only place the ACP server looks — without it every new session fails with \"Authentication required\". Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",
+      "configDescription": "Antigravity CLI manages the sign-in. codeg launches `agy acp` directly; this choice only decides how it authenticates: the Google methods reuse the CLI's cached login (use the browser-free sign-in below when the machine has no browser), and the API-key methods read the credential entered here. Model and session mode are not here: Antigravity reports them over ACP, so the composer's own selectors own them per session.",
       "methodLabel": "Authentication method",
       "methods": {
         "oauth-personal": "Sign in with Google",
@@ -1086,8 +1086,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "Your Google account, on any Antigravity plan including the free tier. The first new session opens a browser to finish signing in; the token is then cached and reused. No browser on this machine? Use the browser-free sign-in below.",
-        "oauth-business": "Your Gemini Enterprise account. Needs a GCP project and location, and the first new session opens a browser. No browser on this machine? Use the browser-free sign-in below.",
+        "oauth-personal": "Your Google account, on any Antigravity plan including the free tier. The Antigravity CLI caches the sign-in and reuses it for agy acp. No browser on this machine? Use the browser-free sign-in below.",
+        "oauth-business": "Your Gemini Enterprise account. Needs a GCP project and location. No browser on this machine? Use the browser-free sign-in below.",
         "gemini-api-key": "A key for the Gemini Developer API, passed to the agent as GEMINI_API_KEY.",
         "agent-platform": "Formerly Vertex AI. Use an API key, or a project and location with Application Default Credentials (gcloud auth application-default login)."
       },
@@ -1104,11 +1104,11 @@
       "save": "Save",
       "headless": {
         "title": "Sign in without a browser on this machine",
-        "description": "Antigravity runs the Google sign-in itself, on the machine the agent runs on. When there is no browser there — codeg on a server with no desktop — the first session waits five minutes and then fails. Start the sign-in here instead: open the link on any device, then paste back the address you land on.",
+        "description": "Antigravity CLI prints a Google sign-in link and waits for the authorization code. This works without a browser on this machine: open the link on any device, approve access, then paste the authorization code (or the full address you land on) back here.",
         "start": "Get sign-in link",
         "saveFirst": "Save first — the sign-in uses the stored settings, not what is typed above.",
         "step1": "1. Open this link and sign in to Google.",
-        "step2": "2. Your browser will end up on {redirectUri} and fail to connect — that is expected. Copy that whole address out of the address bar and paste it here.",
+        "step2": "2. Open the link above and approve access. You'll land on {redirectUri}; paste the authorization code (or that full address) here.",
         "copyLink": "Copy link",
         "openLink": "Open in a new tab",
         "complete": "Complete sign-in",

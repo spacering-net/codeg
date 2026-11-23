@@ -1077,7 +1077,7 @@
       "saveRawConfig": "保存文件"
     },
     "antigravity": {
-      "configDescription": "Antigravity 必须先选定认证方式才能开始会话。所选方式会写入 $GEMINI_HOME/antigravity-acp/settings.json 的 auth.type —— 这是 ACP 服务端唯一读取的位置，不写就每次新建会话都会报 “Authentication required”。模型与会话模式不在这里：Antigravity 通过 ACP 上报它们，由输入框的选择器按会话管理。",
+      "configDescription": "Antigravity 的登录由 Antigravity CLI 自己管理。codeg 直接启动 `agy acp`，这里只决定它用哪种方式认证：Google 账号沿用 CLI 已缓存的登录（本机没有浏览器时用下面的免浏览器登录），API Key 方式则读取下面填写的凭据。模型与会话模式不在这里：Antigravity 通过 ACP 上报它们，由输入框的选择器按会话管理。",
       "methodLabel": "认证方式",
       "methods": {
         "oauth-personal": "使用 Google 账号登录",
@@ -1086,8 +1086,8 @@
         "agent-platform": "Gemini Enterprise Agent Platform"
       },
       "methodHints": {
-        "oauth-personal": "你的 Google 账号，任意 Antigravity 套餐（含免费版）均可。首次新建会话会自动打开浏览器完成登录，之后令牌会被缓存复用。本机没有浏览器？用下面的免浏览器登录。",
-        "oauth-business": "你的 Gemini Enterprise 账号。需要填 GCP 项目与区域，首次新建会话会打开浏览器。本机没有浏览器？用下面的免浏览器登录。",
+        "oauth-personal": "你的 Google 账号，任意 Antigravity 套餐（含免费版）均可。登录由 Antigravity CLI 缓存并复用；本机没有浏览器时用下面的免浏览器登录。",
+        "oauth-business": "你的 Gemini Enterprise 账号。需要填 GCP 项目与区域；本机没有浏览器时用下面的免浏览器登录。",
         "gemini-api-key": "Gemini Developer API 的密钥，以 GEMINI_API_KEY 传给智能体。",
         "agent-platform": "即原 Vertex AI。可用 API Key，或用项目 + 区域配合应用默认凭据（gcloud auth application-default login）。"
       },
@@ -1104,11 +1104,11 @@
       "save": "保存",
       "headless": {
         "title": "在没有浏览器的机器上登录",
-        "description": "Antigravity 的 Google 登录由智能体自己发起，浏览器必须开在运行智能体的那台机器上。部署在无桌面服务器上的 codeg 没有浏览器，首次新建会话会等待 5 分钟后失败。改从这里登录：把链接拿到任意设备上打开，再把跳转后的地址粘回来。",
+        "description": "Antigravity CLI 会打印一个 Google 登录链接，然后等待授权码。这个过程不需要本机有浏览器：把链接拿到任意设备上打开并授权，再把授权码（或跳转后的完整地址）粘回这里即可。",
         "start": "获取登录链接",
         "saveFirst": "请先保存——登录用的是已保存的设置，而不是上面刚填的内容。",
         "step1": "1. 打开这个链接并登录 Google 账号。",
-        "step2": "2. 浏览器最终会跳到 {redirectUri} 并提示无法访问——这是正常的。把地址栏里的完整地址复制出来粘贴到下面。",
+        "step2": "2. 打开上面的链接并授权。页面会跳到 {redirectUri}，把授权码（或该完整地址）粘贴到下面。",
         "copyLink": "复制链接",
         "openLink": "在新标签页打开",
         "complete": "完成登录",
