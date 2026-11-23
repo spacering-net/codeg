@@ -1567,6 +1567,30 @@ pub struct SessionConfigSelectOptionInfo {
     pub value: String,
     pub name: String,
     pub description: Option<String>,
+    /// What the agent says about this entry's model's reasoning efforts —
+    /// only on an entry of the model option, and only where the agent names
+    /// them (see [`ModelReasoningEffortsInfo`]). Left off the wire when
+    /// absent, and `#[serde(default)]` so snapshots written before the field
+    /// existed still deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_efforts: Option<ModelReasoningEffortsInfo>,
+}
+
+/// One model's reasoning efforts, as its entry of the `model` option names
+/// them: JetBrains AIR's `reasoningEfforts` (claude-agent-acp 0.110.0,
+/// codex-acp 2.10.0). It lets a model's effort levels be known before that
+/// model is current — the effort option itself lists only the current
+/// model's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelReasoningEffortsInfo {
+    /// The model's effort ids, in the order the agent's effort option lists
+    /// them once the model is current. Never empty.
+    pub values: Vec<String>,
+    /// The one the agent recommends for the model — one of `values`, or
+    /// `None` when the agent names none (codex-acp, when the model's default
+    /// effort is not in its list).
+    #[serde(default)]
+    pub recommended: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

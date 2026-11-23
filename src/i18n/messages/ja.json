@@ -3525,6 +3525,7 @@
         "modelListLabel": "モデル",
         "recommendedBadge": "推奨",
         "recommendedValue": "推奨: {value}",
+        "effortRange": "推論レベル: {range}",
         "searchOptions": "オプションを検索...",
         "searchOptionsAria": "オプションを検索",
         "noOptions": "オプションが見つかりません",

@@ -3525,6 +3525,7 @@
         "modelListLabel": "模型",
         "recommendedBadge": "推薦",
         "recommendedValue": "推薦：{value}",
+        "effortRange": "推理級別：{range}",
         "searchOptions": "搜尋選項...",
         "searchOptionsAria": "搜尋選項",
         "noOptions": "找不到選項",

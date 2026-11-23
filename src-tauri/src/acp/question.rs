@@ -4279,6 +4279,9 @@ mod tests {
             // Right server, right words, wrong tool — the match is anchored at
             // the END so a longer name cannot borrow it.
             "mcp__codeg-mcp__ask_user_question_twice",
+            // A third-party server named `mcp` whose tool borrows the whole
+            // name: claude-agent-acp 0.109.1+ titles it `<server>: <tool>`.
+            "mcp: codeg-mcp__ask_user_question",
             // …and at the start: a server whose name only ends in codeg-mcp
             // is another one, and so is a server `codeg` whose tool is
             // `mcp_ask_user_question`.

@@ -3525,6 +3525,7 @@
         "modelListLabel": "모델",
         "recommendedBadge": "권장",
         "recommendedValue": "권장: {value}",
+        "effortRange": "추론 강도: {range}",
         "searchOptions": "옵션 검색...",
         "searchOptionsAria": "옵션 검색",
         "noOptions": "옵션을 찾을 수 없습니다",

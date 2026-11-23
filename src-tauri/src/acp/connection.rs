@@ -60,8 +60,8 @@ use crate::acp::terminal_runtime::{
 };
 use crate::acp::types::{
     AcpEvent, AsyncTaskDelta, AsyncTaskUsage, AvailableCommandInfo, ConnectionStatus,
-    GrokModelCatalog, GrokModelSpec, KiroReasoning, PermissionAnswerOrigin,
-    PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure, PromptCapabilitiesInfo,
+    GrokModelCatalog, GrokModelSpec, KiroReasoning, ModelReasoningEffortsInfo,
+    PermissionAnswerOrigin, PermissionOptionInfo, PlanEntryInfo, PluginLoadFailure, PromptCapabilitiesInfo,
     PromptInputBlock, RemoteControlInfo, SessionConfigBooleanInfo, SessionConfigKindInfo,
     SessionConfigOptionInfo, SessionConfigSelectGroupInfo, SessionConfigSelectInfo,
     SessionConfigSelectOptionInfo, SessionFailureRecord, SessionModeInfo, SessionModeStateInfo,
@@ -4112,18 +4112,26 @@ fn map_session_config_category(category: &SessionConfigOptionCategory) -> String
     }
 }
 
+/// One entry of a select option. `of_model` says the select is the agent's
+/// model selector, the only option whose entries name a model — and so the
+/// only one whose entries' AIR `reasoningEfforts` is read.
 fn map_session_config_select_option(
     option: &SessionConfigSelectOption,
+    of_model: bool,
 ) -> SessionConfigSelectOptionInfo {
     SessionConfigSelectOptionInfo {
         value: option.value.to_string(),
         name: option.name.clone(),
         description: option.description.clone(),
+        reasoning_efforts: of_model
+            .then(|| air_model_reasoning_efforts(option.meta.as_ref()))
+            .flatten(),
     }
 }
 
 fn map_session_config_select_group(
     group: &SessionConfigSelectGroup,
+    of_model: bool,
 ) -> SessionConfigSelectGroupInfo {
     SessionConfigSelectGroupInfo {
         group: group.group.to_string(),
@@ -4131,9 +4139,56 @@ fn map_session_config_select_group(
         options: group
             .options
             .iter()
-            .map(map_session_config_select_option)
+            .map(|option| map_session_config_select_option(option, of_model))
             .collect(),
     }
+}
+
+/// The reasoning efforts an agent names for ONE model, out of that model's
+/// entry of the `model` option: JetBrains AIR's `reasoningEfforts =
+/// {values, recommended?}` (claude-agent-acp 0.110.0, #1692; codex-acp
+/// 2.10.0, #789; sent to every AIR client, with no capability).
+///
+/// The envelope is validated as [`air_recommended_value`] validates its own
+/// (integer `version >= 1`), and so is the payload, whole: `values` must be a
+/// non-empty list of non-blank strings, or the record is dropped rather than
+/// half-read. Both adapters write the model's effort ids there in the order
+/// its effort option will list them once it is current, so a repeat can only
+/// be noise and is dropped. `recommended` is kept only when it names one of
+/// `values`: codex-acp leaves it out when the model's default effort is not in
+/// its list, and anything else could mark no level.
+fn air_model_reasoning_efforts(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<ModelReasoningEffortsInfo> {
+    let air = meta?.get("jetbrains")?.get("air")?;
+    let version = air.get("version").and_then(serde_json::Value::as_i64)?;
+    if version < 1 {
+        return None;
+    }
+    let efforts = air.get("reasoningEfforts")?;
+    let mut values: Vec<String> = Vec::new();
+    for value in efforts.get("values")?.as_array()? {
+        let level = value.as_str()?.trim();
+        if level.is_empty() {
+            return None;
+        }
+        if !values.iter().any(|known| known == level) {
+            values.push(level.to_string());
+        }
+    }
+    if values.is_empty() {
+        return None;
+    }
+    let recommended = efforts
+        .get("recommended")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|level| values.iter().any(|known| known == level))
+        .map(str::to_string);
+    Some(ModelReasoningEffortsInfo {
+        values,
+        recommended,
+    })
 }
 
 /// The `recommendedValue` an agent attached to ONE config option, out of its
@@ -4168,13 +4223,14 @@ fn air_recommended_value(
 
 fn map_session_config_option(option: &SessionConfigOption) -> Option<SessionConfigOptionInfo> {
     let recommended_value = air_recommended_value(option.meta.as_ref());
+    let of_model = is_model_config_option(option);
     match &option.kind {
         SessionConfigKind::Select(select) => {
             let (flat_options, groups) = match &select.options {
                 SessionConfigSelectOptions::Ungrouped(options) => (
                     options
                         .iter()
-                        .map(map_session_config_select_option)
+                        .map(|entry| map_session_config_select_option(entry, of_model))
                         .collect::<Vec<_>>(),
                     Vec::new(),
                 ),
@@ -4182,12 +4238,15 @@ fn map_session_config_option(option: &SessionConfigOption) -> Option<SessionConf
                     grouped
                         .iter()
                         .flat_map(|group| {
-                            group.options.iter().map(map_session_config_select_option)
+                            group
+                                .options
+                                .iter()
+                                .map(|entry| map_session_config_select_option(entry, of_model))
                         })
                         .collect::<Vec<_>>(),
                     grouped
                         .iter()
-                        .map(map_session_config_select_group)
+                        .map(|group| map_session_config_select_group(group, of_model))
                         .collect::<Vec<_>>(),
                 ),
                 _ => (Vec::new(), Vec::new()),
@@ -4911,6 +4970,7 @@ fn build_grok_effort_option(
             description: desc
                 .clone()
                 .or_else(|| grok_effort_description(id).map(str::to_string)),
+            reasoning_efforts: None,
         })
         .collect();
     if let Some(def) = &spec.default {
@@ -4923,6 +4983,7 @@ fn build_grok_effort_option(
                     // The injected default (grok-4.5's `xhigh`) is absent from grok's
                     // switchable list, so it has no grok description — supply ours.
                     description: grok_effort_description(def).map(str::to_string),
+                    reasoning_efforts: None,
                 },
             );
         }
@@ -5009,6 +5070,7 @@ fn parse_grok_model_catalog(params: &serde_json::Value) -> Option<GrokModelCatal
             value: model_id.to_string(),
             name: name.to_string(),
             description: None,
+            reasoning_efforts: None,
         });
     }
     if models.is_empty() {
@@ -5140,6 +5202,7 @@ fn kept_select_row(
             value: value.to_string(),
             name: name(),
             description: description.map(str::to_string),
+            reasoning_efforts: None,
         })
 }
 
@@ -5206,6 +5269,7 @@ fn synthesize_grok_config_options(
                 .get("description")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            reasoning_efforts: None,
         });
     }
 
@@ -5216,6 +5280,7 @@ fn synthesize_grok_config_options(
                     value: id.to_string(),
                     name: id.to_string(),
                     description: None,
+                    reasoning_efforts: None,
                 });
             }
             model_current = Some(id.to_string());
@@ -5395,6 +5460,7 @@ fn session_model_state_option(
                     .get("description")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
+                reasoning_efforts: None,
             })
         })
         .collect();
@@ -5484,6 +5550,7 @@ fn mode_state_option(
             value: mode.id.to_string(),
             name: mode.name.clone(),
             description: mode.description.clone(),
+            reasoning_efforts: None,
         })
         .collect();
     if options.is_empty() {
@@ -5560,6 +5627,7 @@ fn kiro_thinking_option(reasoning: &KiroReasoning) -> Option<SessionConfigOption
         value: value.to_string(),
         name: value.to_string(),
         description: None,
+        reasoning_efforts: None,
     };
     Some(SessionConfigOptionInfo {
         id: KIRO_THINKING_OPTION_ID.to_string(),
@@ -5604,6 +5672,7 @@ fn kiro_effort_option(reasoning: &KiroReasoning) -> Option<SessionConfigOptionIn
                     value: level.clone(),
                     name: level.clone(),
                     description: None,
+                    reasoning_efforts: None,
                 })
                 .collect(),
             groups: Vec::new(),
@@ -10604,9 +10673,10 @@ async fn handle_grok_ask_user_question(
 ///
 /// The tool is identified by NAME, read from the two places a host puts it:
 /// `toolCall.title` (claude-agent-acp's `toolInfoFromToolUse` falls through to
-/// the raw tool name for MCP tools) and the request-level
-/// `_meta.permission.title` it pairs with (claude-agent-acp 0.73+ / codex-acp
-/// 1.7+, the same block [`hoist_request_permission_meta`] forwards to the card).
+/// the raw tool name for MCP tools, spelled `<server>: <tool>` since 0.109.1)
+/// and the request-level `_meta.permission.title` it pairs with
+/// (claude-agent-acp 0.73+ / codex-acp 1.7+, the same block
+/// [`hoist_request_permission_meta`] forwards to the card).
 /// The ACP `toolCall.name` field would be the exact answer but is UNSTABLE and
 /// dropped by the schema crate codeg pins, so it is not available here.
 ///
@@ -31373,6 +31443,39 @@ mod tests {
         );
     }
 
+    /// claude-agent-acp 0.109.1 (#1674) titles an MCP tool `<server>: <tool>`
+    /// in the permission request's tool call AND in its
+    /// `_meta.permission.title` (live, 0.110.0), so the shortcut must read that
+    /// spelling too — and still only for codeg's own server.
+    #[test]
+    fn codeg_auto_allow_options_read_claudes_readable_mcp_titles() {
+        let ask = claude_mcp_permission_request(
+            "codeg-mcp: ask_user_question",
+            claude_permission_options(),
+        );
+        assert_eq!(
+            codeg_ask_auto_allow_option(&ask).as_deref(),
+            Some("allow-once")
+        );
+        let submit =
+            claude_mcp_permission_request("codeg-mcp: submit_result", claude_permission_options());
+        assert_eq!(
+            codeg_submit_auto_allow_option(&submit, true).as_deref(),
+            Some("allow-once")
+        );
+        for foreign in [
+            "other-server: ask_user_question",
+            "codeg-mcp: delegate_to_agent",
+            "codeg-mcp: ask_user_question_twice",
+        ] {
+            let req = claude_mcp_permission_request(foreign, claude_permission_options());
+            assert!(
+                codeg_ask_auto_allow_option(&req).is_none(),
+                "{foreign} must keep its approval card"
+            );
+        }
+    }
+
     #[test]
     fn codeg_ask_auto_allow_option_leaves_every_other_approval_on_the_card() {
         // Another server's ask tool: approving it is the user's call, not
@@ -38194,6 +38297,193 @@ mod tests {
         );
     }
 
+    /// claude-agent-acp 0.110.0 (#1692) and codex-acp 2.10.0 (#789) name each
+    /// model's reasoning efforts on its entry of the `model` option. The model
+    /// entries below are the shapes captured live off both (codex-acp 2.10.0's
+    /// GPT-6.2 Sol, which recommends low, and GPT-5.5; claude's entries always
+    /// carry `recommended`). They must reach `SessionConfigSelectOptionInfo`
+    /// intact, in grouped lists too — and only on the model option.
+    #[test]
+    fn a_model_entry_carries_its_reasoning_efforts_from_a_valid_air_envelope() {
+        let efforts_meta = |values: serde_json::Value, recommended: Option<&str>| {
+            let mut efforts = serde_json::json!({ "values": values });
+            if let Some(level) = recommended {
+                efforts["recommended"] = serde_json::json!(level);
+            }
+            serde_json::json!({"jetbrains": {"air": {"version": 1, "reasoningEfforts": efforts}}})
+        };
+        let model_option = |id: &str, category: &str, entries: serde_json::Value| {
+            serde_json::from_value::<SessionConfigOption>(serde_json::json!({
+                "id": id,
+                "name": "Model",
+                "category": category,
+                "type": "select",
+                "currentValue": "gpt-5.5",
+                "options": entries,
+            }))
+            .expect("config option fixture")
+        };
+        let entries = serde_json::json!([
+            {"value": "gpt-6.2-sol", "name": "6.2 Sol", "_meta": efforts_meta(
+                serde_json::json!(["low", "medium", "high", "xhigh", "max", "ultra"]),
+                Some("low"),
+            )},
+            {"value": "gpt-5.5", "name": "5.5", "_meta": efforts_meta(
+                serde_json::json!(["low", "medium", "high", "xhigh"]),
+                Some("medium"),
+            )},
+            // A model without efforts gets no `_meta` from either adapter.
+            {"value": "plain", "name": "Plain"},
+        ]);
+        let efforts_of = |info: &SessionConfigOptionInfo| -> Vec<Option<ModelReasoningEffortsInfo>> {
+            match &info.kind {
+                SessionConfigKindInfo::Select(select) => select
+                    .options
+                    .iter()
+                    .map(|entry| entry.reasoning_efforts.clone())
+                    .collect(),
+                SessionConfigKindInfo::Boolean(_) => unreachable!("a select"),
+            }
+        };
+        let read = efforts_of(
+            &map_session_config_option(&model_option("model", "model", entries.clone()))
+                .expect("a select always maps"),
+        );
+        assert_eq!(
+            read,
+            vec![
+                Some(ModelReasoningEffortsInfo {
+                    values: ["low", "medium", "high", "xhigh", "max", "ultra"]
+                        .map(String::from)
+                        .to_vec(),
+                    recommended: Some("low".into()),
+                }),
+                Some(ModelReasoningEffortsInfo {
+                    values: ["low", "medium", "high", "xhigh"].map(String::from).to_vec(),
+                    recommended: Some("medium".into()),
+                }),
+                None,
+            ]
+        );
+        // The model selector is known by either signal, as everywhere else.
+        assert_eq!(
+            efforts_of(
+                &map_session_config_option(&model_option("model", "other", entries.clone()))
+                    .unwrap()
+            ),
+            read
+        );
+        assert_eq!(
+            efforts_of(
+                &map_session_config_option(&model_option("llm", "model", entries.clone()))
+                    .unwrap()
+            ),
+            read
+        );
+        // Grouped lists carry it in both the flat list and the groups.
+        let grouped = map_session_config_option(&model_option(
+            "model",
+            "model",
+            serde_json::json!([{ "group": "gw", "name": "Gateway", "options": entries.clone() }]),
+        ))
+        .unwrap();
+        assert_eq!(efforts_of(&grouped), read);
+        let SessionConfigKindInfo::Select(select) = &grouped.kind else {
+            unreachable!("a select")
+        };
+        assert_eq!(
+            select.groups[0]
+                .options
+                .iter()
+                .map(|entry| entry.reasoning_efforts.clone())
+                .collect::<Vec<_>>(),
+            read
+        );
+        // Another select's entries are not models: the key is not read there.
+        assert_eq!(
+            efforts_of(
+                &map_session_config_option(&model_option(
+                    "reasoning_effort",
+                    "thought_level",
+                    entries
+                ))
+                .unwrap()
+            ),
+            vec![None, None, None]
+        );
+
+        let one = |meta: serde_json::Value| {
+            air_model_reasoning_efforts(meta.as_object())
+        };
+        // `recommended` is optional (codex-acp leaves it out when the model's
+        // default is not in its list), and kept only when it names a level.
+        assert_eq!(
+            one(efforts_meta(serde_json::json!(["low", "high"]), None)),
+            Some(ModelReasoningEffortsInfo {
+                values: vec!["low".into(), "high".into()],
+                recommended: None,
+            })
+        );
+        assert_eq!(
+            one(efforts_meta(serde_json::json!(["low", "high"]), Some("max")))
+                .and_then(|efforts| efforts.recommended),
+            None
+        );
+        // A repeated level is dropped; the order is the agent's.
+        assert_eq!(
+            one(efforts_meta(serde_json::json!(["high", "low", "high"]), Some("low")))
+                .map(|efforts| efforts.values),
+            Some(vec!["high".into(), "low".into()])
+        );
+        // Everything malformed reads as "nothing named", never half-read.
+        for bad in [
+            serde_json::json!({}),
+            serde_json::json!({"jetbrains": {"air": {"reasoningEfforts": {"values": ["low"]}}}}),
+            serde_json::json!({"jetbrains": {"air": {"version": 0, "reasoningEfforts": {"values": ["low"]}}}}),
+            serde_json::json!({"jetbrains": {"air": {"version": "1", "reasoningEfforts": {"values": ["low"]}}}}),
+            serde_json::json!({"jetbrains": {"reasoningEfforts": {"values": ["low"]}}}),
+            efforts_meta(serde_json::json!([]), None),
+            efforts_meta(serde_json::json!("low"), None),
+            efforts_meta(serde_json::json!(["low", 2]), None),
+            efforts_meta(serde_json::json!(["low", "  "]), None),
+            serde_json::json!({"jetbrains": {"air": {"version": 1, "reasoningEfforts": ["low"]}}}),
+        ] {
+            assert_eq!(one(bad.clone()), None, "unexpected read from {bad}");
+        }
+
+        // On the wire to the frontend the field is left off when absent (every
+        // other agent's entries keep their shape), and a snapshot written
+        // before it existed still reads.
+        let plain = SessionConfigSelectOptionInfo {
+            value: "opus".into(),
+            name: "Opus".into(),
+            description: None,
+            reasoning_efforts: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&plain).unwrap(),
+            serde_json::json!({"value": "opus", "name": "Opus", "description": null})
+        );
+        assert_eq!(
+            serde_json::from_value::<SessionConfigSelectOptionInfo>(serde_json::json!({
+                "value": "opus", "name": "Opus", "description": null
+            }))
+            .unwrap(),
+            plain
+        );
+        let named = SessionConfigSelectOptionInfo {
+            reasoning_efforts: Some(ModelReasoningEffortsInfo {
+                values: vec!["low".into(), "max".into()],
+                recommended: Some("low".into()),
+            }),
+            ..plain
+        };
+        assert_eq!(
+            serde_json::to_value(&named).unwrap()["reasoning_efforts"],
+            serde_json::json!({"values": ["low", "max"], "recommended": "low"})
+        );
+    }
+
     #[test]
     fn build_load_session_request_skips_meta_for_non_claude() {
         let cwd = std::path::PathBuf::from("/tmp/codeg");
@@ -38617,11 +38907,13 @@ mod tests {
                         value: "off".to_string(),
                         name: "Thinking: off".to_string(),
                         description: None,
+                        reasoning_efforts: None,
                     },
                     SessionConfigSelectOptionInfo {
                         value: "high".to_string(),
                         name: "Thinking: high".to_string(),
                         description: None,
+                        reasoning_efforts: None,
                     },
                 ],
                 groups: vec![],
@@ -39933,11 +40225,13 @@ mod tests {
                         value: "grok-4.5".to_string(),
                         name: "Grok 4.5".to_string(),
                         description: None,
+                        reasoning_efforts: None,
                     },
                     SessionConfigSelectOptionInfo {
                         value: "grok-composer-2.5-fast".to_string(),
                         name: "Composer 2.5".to_string(),
                         description: None,
+                        reasoning_efforts: None,
                     },
                 ],
                 groups: Vec::new(),
@@ -50912,6 +51206,7 @@ mod tests {
                             value: "opus".to_string(),
                             name: "Opus".to_string(),
                             description: None,
+                            reasoning_efforts: None,
                         }],
                         groups: Vec::new(),
                     }),

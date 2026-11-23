@@ -1714,6 +1714,21 @@ export interface SessionConfigSelectOptionInfo {
   value: string
   name: string
   description?: string | null
+  /** What the agent says about this entry's model's reasoning efforts — only
+   *  on an entry of the model option, and only where the agent names them
+   *  (claude-agent-acp 0.110.0+, codex-acp 2.10.0+). Absent otherwise. */
+  reasoning_efforts?: ModelReasoningEffortsInfo | null
+}
+
+/** One model's reasoning efforts, from its entry of the `model` option
+ *  (JetBrains AIR `reasoningEfforts`): known before that model is current,
+ *  where the effort option lists only the current model's. */
+export interface ModelReasoningEffortsInfo {
+  /** Effort ids, in the order the effort option lists them once the model is
+   *  current. Never empty. */
+  values: string[]
+  /** The one the agent recommends — one of `values` — when it names one. */
+  recommended?: string | null
 }
 
 export interface SessionConfigSelectGroupInfo {

@@ -731,6 +731,14 @@ export function inferLiveToolName(params: {
   // config") as an Agent card before raw_input is even consulted.
   if ((params.title ?? "").trim().toLowerCase() === "agent") return "agent"
 
+  // claude-agent-acp 0.109.1+ titles an MCP call `<server>: <tool>` where it
+  // sent the raw `mcp__<server>__<tool>` before, and keeps that raw name in
+  // `_meta.claudeCode.toolName`. The title rules below were tuned on the raw
+  // spelling, and the history parser names the call by it, so it stands in for
+  // the readable title here: `web-search: search` with a `{query}` input must
+  // stay that server's MCP call rather than turn into the built-in web search.
+  const title = claudeCodeMcpToolName(params.meta) ?? params.title
+
   // Grok plan-mode tools carry their authoritative identity in
   // `_meta["x.ai/tool"].kind` (`enter_plan`/`exit_plan`), while their human
   // `title` MUTATES across the lifecycle (`enter_plan_mode` → "Plan: Enter" →
@@ -797,7 +805,7 @@ export function inferLiveToolName(params: {
   // get_delegation_status / delegate_to_agent stay consistent). Scoped to the
   // companion set, so the input-shape-first ordering below is preserved for
   // everything else.
-  const titleCompanion = normalizeToolName(params.title ?? "")
+  const titleCompanion = normalizeToolName(title ?? "")
   if (DELEGATION_COMPANION_TOOLS.has(titleCompanion)) return titleCompanion
 
   // claude-agent-acp ≥0.63 marks Agent/Task launches with the authoritative
@@ -845,7 +853,7 @@ export function inferLiveToolName(params: {
   // delegations on that title (`is_delegation_invocation`), so take it here.
   // Live frames carry the stamped name above; a `session/load` replay opens
   // with the input already present, so it is never stamped.
-  if (isCodeModeExecuteFrame(params.title, params.rawInput)) {
+  if (isCodeModeExecuteFrame(title, params.rawInput)) {
     return normalizeToolName(CODE_MODE_TOOL_TITLE)
   }
 
@@ -853,7 +861,7 @@ export function inferLiveToolName(params: {
   // `Task` tool routed via `subagent_type`, OpenCode sub-agent calls, etc.)
   // keep priority. The meta-tool-name override below only kicks in when the
   // input shape is silent — i.e. synthesized events with no `rawInput`.
-  const byInput = inferFromInput(params.rawInput, params.kind, params.title)
+  const byInput = inferFromInput(params.rawInput, params.kind, title)
   if (byInput) return byInput
 
   // Claude-Code override: claude-agent-acp embeds the SDK tool name under
@@ -918,13 +926,22 @@ export function inferLiveToolName(params: {
   // `byTitle` for that reason.
   if (codexMarksPlanReview(params.meta)) return "plan_review"
 
-  const byTitle = normalizeToolName(params.title ?? "")
+  const byTitle = normalizeToolName(title ?? "")
   if (byTitle !== "tool") return byTitle
 
   const byKind = normalizeToolName(params.kind ?? "")
   if (byKind !== "tool") return byKind
 
   return "tool"
+}
+
+/** Claude Code's raw name for an MCP tool call (`mcp__<server>__<tool>`), out
+ *  of `_meta.claudeCode.toolName`; `null` for any other tool. */
+function claudeCodeMcpToolName(
+  meta: Record<string, unknown> | null | undefined
+): string | null {
+  const name = extractClaudeCodeToolName(meta)
+  return name && /^mcp__/i.test(name) ? name : null
 }
 
 /** Claude Code's own name for a tool call, `_meta.claudeCode.toolName`

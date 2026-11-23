@@ -3525,6 +3525,7 @@
         "modelListLabel": "Modelos",
         "recommendedBadge": "Recomendado",
         "recommendedValue": "Recomendado: {value}",
+        "effortRange": "Esforço de raciocínio: {range}",
         "searchOptions": "Buscar opções...",
         "searchOptionsAria": "Buscar opções",
         "noOptions": "Nenhuma opção encontrada",

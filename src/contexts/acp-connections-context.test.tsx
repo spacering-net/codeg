@@ -5591,6 +5591,72 @@ describe("AcpConnectionsProvider boolean config option (cline auto-approve)", ()
   })
 })
 
+describe("config option pushes that change only a model's efforts", () => {
+  // claude-agent-acp 0.110.0 / codex-acp 2.10.0 name each model's efforts on
+  // its entry of the model option, and the model list shows them as a range.
+  // A push that changes nothing else (an unselected model gains a level) must
+  // still land, or the row keeps its old range.
+  function modelOptions(lunaTop: string): SessionConfigOptionInfo[] {
+    return [
+      {
+        id: "model",
+        name: "Model",
+        description: null,
+        category: "model",
+        kind: {
+          type: "select",
+          current_value: "gpt-5.5",
+          options: [
+            {
+              value: "gpt-6-luna",
+              name: "6 Luna",
+              description: null,
+              reasoning_efforts: {
+                values: ["low", "medium", lunaTop],
+                recommended: "medium",
+              },
+            },
+            { value: "gpt-5.5", name: "5.5", description: null },
+          ],
+          groups: [],
+        },
+      },
+    ]
+  }
+
+  function lunaEfforts(): string[] | undefined {
+    const model = h
+      .store!.getConnection(TAB)!
+      .configOptions?.find((o) => o.id === "model")
+    if (model?.kind.type !== "select") return undefined
+    return model.kind.options.find((o) => o.value === "gpt-6-luna")
+      ?.reasoning_efforts?.values
+  }
+
+  it("applies the push", async () => {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "codex", "/tmp/x", "sess-1")
+    })
+    const handlers = latestAttachHandlers()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "session_config_options",
+      config_options: modelOptions("max"),
+    })
+    expect(lunaEfforts()).toEqual(["low", "medium", "max"])
+
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "session_config_options",
+      config_options: modelOptions("ultra"),
+    })
+    expect(lunaEfforts()).toEqual(["low", "medium", "ultra"])
+  })
+})
+
 describe("empty-turn error diagnostics", () => {
   async function connectOwner(): Promise<AttachHandlers> {
     await mountProvider()

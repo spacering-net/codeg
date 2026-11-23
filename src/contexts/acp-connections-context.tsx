@@ -83,6 +83,7 @@ import type {
   PlanApprovalAnswer,
   SessionConfigKindInfo,
   SessionConfigOptionInfo,
+  SessionConfigSelectOptionInfo,
   SessionFailureRecord,
   SessionModeStateInfo,
   SessionUsageUpdateInfo,
@@ -1523,6 +1524,35 @@ function samePlanEntries(a: PlanEntryInfo[], b: PlanEntryInfo[]): boolean {
   return true
 }
 
+/**
+ * One select entry against another, everything rendered included: a model
+ * entry's `reasoning_efforts` sets the effort range on its row, and an agent
+ * can change it without touching anything else (a codex catalog refresh that
+ * gives an unselected model another level) — a push swallowed here would leave
+ * the row's range stale.
+ */
+function sameSelectEntry(
+  a: SessionConfigSelectOptionInfo,
+  b: SessionConfigSelectOptionInfo
+): boolean {
+  if (
+    a.value !== b.value ||
+    a.name !== b.name ||
+    a.description !== b.description
+  ) {
+    return false
+  }
+  const left = a.reasoning_efforts ?? null
+  const right = b.reasoning_efforts ?? null
+  if (left === right) return true
+  if (!left || !right) return false
+  return (
+    (left.recommended ?? null) === (right.recommended ?? null) &&
+    left.values.length === right.values.length &&
+    left.values.every((level, index) => level === right.values[index])
+  )
+}
+
 function sameConfigOptions(
   a: SessionConfigOptionInfo[] | null,
   b: SessionConfigOptionInfo[]
@@ -1569,13 +1599,7 @@ function sameConfigOptions(
     if (leftKind.groups.length !== rightKind.groups.length) return false
 
     for (let j = 0; j < leftKind.options.length; j += 1) {
-      const lo = leftKind.options[j]
-      const ro = rightKind.options[j]
-      if (
-        lo.value !== ro.value ||
-        lo.name !== ro.name ||
-        lo.description !== ro.description
-      ) {
+      if (!sameSelectEntry(leftKind.options[j], rightKind.options[j])) {
         return false
       }
     }
@@ -1586,15 +1610,7 @@ function sameConfigOptions(
       if (lg.group !== rg.group || lg.name !== rg.name) return false
       if (lg.options.length !== rg.options.length) return false
       for (let k = 0; k < lg.options.length; k += 1) {
-        const lgo = lg.options[k]
-        const rgo = rg.options[k]
-        if (
-          lgo.value !== rgo.value ||
-          lgo.name !== rgo.name ||
-          lgo.description !== rgo.description
-        ) {
-          return false
-        }
+        if (!sameSelectEntry(lg.options[k], rg.options[k])) return false
       }
     }
   }

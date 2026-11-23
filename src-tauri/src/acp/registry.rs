@@ -465,7 +465,7 @@ pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 /// for when the installed copy's own package.json cannot be read. A runtime
 /// resolved to this value is marked unconfirmed (`codex_runtime`), so it never
 /// counts as the version a catalog was checked against. Move it with the pin.
-pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.170.0";
+pub const CODEX_NESTED_VERSION_FALLBACK: &str = "0.171.0";
 
 /// The npm package the built-in Claude Code entry runs — and the name the
 /// adapter reports as `agentInfo.name` at `initialize`, which is its
@@ -3631,9 +3631,78 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             //     to the `api-request` family. The parser skips it like the
             //     others (pinned in `parsers::claude`). Its other changes that
             //     reach an SDK host are fixes on paths codeg already takes.
+            //
+            // 0.109.1 (2026-11-21) and 0.110.0 (2026-11-23) move the ACP SDK to
+            // 2.9.1 (its v1 schema changes only in comments) and the Claude
+            // Agent SDK to 0.3.330 (Claude Code 2.1.328 → 2.1.330);
+            // `engines.node` stays ">=22". Measured live with the same harness,
+            // 0.109.0 and 0.110.0 side by side: the twenty-two earlier scenarios
+            // match apart from what (yyyyy) says, timing (a gateway reconnect in
+            // one run, request order), the CLI's `count_tokens` and title
+            // requests to the fake gateway, `last-prompt` and `atis-latch`
+            // records in an idle session's transcript, and `/design-sync`'s
+            // reworded description. A new scenario calls, in the `default`
+            // mode, a tool of a third-party MCP server and four of a server
+            // named `codeg-mcp` (task_progress, ask_user_question,
+            // delegate_to_agent, get_delegation_status), each through its
+            // permission request.
+            //
+            // (yyyyy) **Two changes codeg gets with the bump.**
+            //   * #1674 titles an MCP tool call `<server>: <tool>` where it sent
+            //     the raw `mcp__<server>__<tool>`: the tool call, its permission
+            //     request's tool call and the request's `_meta.permission.title`
+            //     all change, while `_meta.claudeCode.toolName` keeps the raw
+            //     name. Measured on the new frames, a live Claude tool is named
+            //     by that meta name (`inferLiveToolName`), so every codeg-mcp
+            //     tool keeps its card and a third-party one its `mcp · <server>`
+            //     row; delegation detection finds `delegate_to_agent` anywhere in
+            //     the title (`lifecycle::is_delegation_invocation`); and history
+            //     reads the transcript's raw name, so a reload draws the same
+            //     rows. Two readers had to learn the new spelling: the live title
+            //     rules now read the raw meta name in the title's place for a
+            //     Claude MCP call (a `{query}` tool titled `web-search: search`
+            //     read as the built-in web search), and the ask and submit
+            //     auto-allows (`delegation::is_codeg_mcp_tool`) take a leading
+            //     `mcp` for a namespace only when its separator matches the
+            //     boundary after it, since a third-party server named `mcp` is
+            //     now titled `mcp: <tool>`. The permission card and the tool
+            //     header now read `github: create_issue`.
+            //   * #1692 names each model's effort levels, and the one the adapter
+            //     recommends, on the model's entry of the `model` option, at
+            //     `_meta.jetbrains.air.reasoningEfforts = {values, recommended}`
+            //     (every AIR client, no capability; levels in Claude Code's
+            //     order, `recommended` is "medium" when offered). codeg reads it
+            //     into `SessionConfigSelectOptionInfo::reasoning_efforts`
+            //     (`connection::air_model_reasoning_efforts`), and the model
+            //     list sets each model's range on its row when the models do
+            //     not all show the same one (`src/lib/model-effort-range.ts`).
+            //     Live, every Claude 5.5 model (and a `modelPicker` row) lists
+            //     low–max, so Claude's list shows none. The effort option
+            //     itself already follows a model switch, and the option editors
+            //     still probe each picked model
+            //     (`AcpManager::probe_agent_options`), since Fast mode moves
+            //     with the model too.
+            //
+            // (zzzzz) Nothing to change in codeg, each checked:
+            //   * #1678 reports an unusable Claude subscription as
+            //     unauthenticated only under `--hide-claude-auth`, which codeg
+            //     does not pass (see (g)); the refusal itself stays
+            //     `auth_required`, which codeg reads by its code.
+            //   * #1679 answers `session/options` and #1691 applies a
+            //     `providers/set` route; codeg sends neither.
+            //   * #1677, #1685, #1686 and #1688 change subagent sessions, which a
+            //     client gets only by declaring `subagents` or the AIR
+            //     `nativeSubagentSessions`; codeg declares neither, so its
+            //     Agent/Task cards and their replay are unchanged.
+            //   * #1672 keeps the built-in `web-fetch` and `claude-code-guide`
+            //     agents out of the `agent` option.
+            //   * CLI 2.1.330 adds no transcript record type (its binary's type
+            //     literals against 2.1.328's). It warns on the first turn
+            //     (`settings_not_in_effect`) when a session's settings fail to
+            //     validate; codeg's `modelPicker` settings raise no warning live.
             distribution: AgentDistribution::Npx {
-                version: "0.109.0",
-                package: "@agentclientprotocol/claude-agent-acp@0.109.0",
+                version: "0.110.0",
+                package: "@agentclientprotocol/claude-agent-acp@0.110.0",
                 cmd: "claude-agent-acp",
                 args: &[],
                 env: &[],
@@ -5126,9 +5195,63 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // only metadata (`history_sequence`, `account_scoped`, …) and a
             // developer-message part, all ignored by the parser, and every
             // `config.toml` key codeg writes keeps its shape.
+            //
+            // 2.9.0 (2026-11-21) moves `@openai/codex` ^0.170.0 → **^0.171.0**
+            // (a fresh install resolves 0.171.0, now
+            // `CODEX_NESTED_VERSION_FALLBACK`) and the inline
+            // `@agentclientprotocol/sdk` ~2.8.0 → ~2.9.1, whose v1 schema
+            // changes only in comments; 2.10.0 (2026-11-23) adds #789.
+            // `engines` is still absent, and the 20.3.0 floor stands: live on
+            // 20.3.0 a session runs a plain and a shell turn, turns a hook
+            // blocks, and an async question. Under codeg's exact
+            // `clientCapabilities` the harness's twenty-one live scenarios
+            // replay as on 2.8.0 bar what (ggg)–(iii) say, timings and the
+            // rollout's metadata.
+            //
+            // (ggg) **codex 0.171 ships 0.170's catalog byte for byte** (`codex
+            // debug models --bundled` equals the snapshot), so the models, their
+            // windows, the default and the placeholders stay. Its one new
+            // `ModelInfo` field, `multi_agent_tools_in_code_mode`, is a strict
+            // optional boolean: a string or a number in it rejects the whole
+            // catalog on 0.171.0, where 0.170.0 ignores the key, so a stored
+            // override has to be a boolean or `null` (`codex_model_catalog.rs`).
+            //
+            // (hhh) #789 names each model's reasoning efforts, and its default
+            // one when the list has it, on the model's entry of the `model`
+            // option, at `_meta.jetbrains.air.reasoningEfforts = {values,
+            // recommended?}` — claude's #1692 key, for every AIR client, no
+            // capability. Unlike Claude's, codex's models differ (live): GPT-5.5
+            // stops at xhigh, the two Lunas at max, the rest at ultra; GPT-6.2
+            // Sol and Astra, GPT-6.1 Terra and Sol, GPT-6 Astra and GPT-5.6 Sol
+            // recommend low, the rest medium. codeg reads it as it reads
+            // claude's (see that entry's (yyyyy)), so codex's model list shows
+            // Low–Ultra, Low–Max and Low–Xhigh beside its models. Measured too,
+            // on 2.10.0 as on 2.8.0: a switch to a model that lacks the
+            // current effort lands on that model's default and keeps it on the
+            // way back (ultra on GPT-6.2 Sol, then GPT-5.5, then GPT-6.2 Sol:
+            // medium) — the range on the row says so before the switch.
+            //
+            // (iii) Inert or not adopted. #782 announces `auth.status` in
+            // `initialize` and sends a session-less `auth/status_update`
+            // before `session/new`; codeg asks for neither, and the frame is
+            // dropped like claude's (see the claude entry). #787 and #788 are
+            // ACP v2 work (`-32800` for a cancelled prompt, joined-prompt
+            // cancels, MCP declaration checks, soft-deleted sessions, replay
+            // holds for child sessions, `plan_removed`) bar one: the MCP
+            // form-elicitation schema is rewritten on v1 too, so a multi-select
+            // with `enumNames` now arrives as `items.anyOf`
+            // (`MultiSelectItems::Titled` in `question.rs`), and a schema with
+            // no `properties` is declined by the adapter instead of reaching
+            // codeg as an empty form. A plan's item id loses its `-plan` suffix
+            // (`plan-review:<uuid>`); codeg reads the id whole. 0.171 adds a
+            // `$create-statusline` system skill (in the slash menu), the
+            // `bioPolicy` error (the adapter files it as a service failure) and
+            // rollout metadata (`model_search_state`, `environment_id`) that
+            // the parser ignores; every `config.toml` key codeg writes keeps
+            // its shape, and every codex sentence codeg matches is unchanged.
             distribution: AgentDistribution::Npx {
-                version: "2.8.0",
-                package: "@agentclientprotocol/codex-acp@2.8.0",
+                version: "2.10.0",
+                package: "@agentclientprotocol/codex-acp@2.10.0",
                 cmd: "codex-acp",
                 args: &[],
                 env: &[],
@@ -9705,8 +9828,8 @@ mod tests {
     fn registry_pins_current_acp_agent_versions() {
         assert_npx_version(
             AgentType::ClaudeCode,
-            "0.109.0",
-            "@agentclientprotocol/claude-agent-acp@0.109.0",
+            "0.110.0",
+            "@agentclientprotocol/claude-agent-acp@0.110.0",
             Some("22.0.0"),
         );
         assert_npx_version(
@@ -9747,8 +9870,8 @@ mod tests {
         );
         assert_npx_version(
             AgentType::Codex,
-            "2.8.0",
-            "@agentclientprotocol/codex-acp@2.8.0",
+            "2.10.0",
+            "@agentclientprotocol/codex-acp@2.10.0",
             Some("20.3.0"),
         );
         assert_npx_version(AgentType::Pi, "0.0.34", "pi-acp@0.0.34", Some("22.0.0"));

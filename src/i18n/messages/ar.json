@@ -3525,6 +3525,7 @@
         "modelListLabel": "النماذج",
         "recommendedBadge": "موصى به",
         "recommendedValue": "موصى به: {value}",
+        "effortRange": "جهد الاستدلال: {range}",
         "searchOptions": "البحث في الخيارات...",
         "searchOptionsAria": "البحث في الخيارات",
         "noOptions": "لم يتم العثور على خيارات",
