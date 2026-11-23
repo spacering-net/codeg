@@ -1,7 +1,6 @@
 "use client"
 
 import { useCallback } from "react"
-import { useTabActions } from "@/contexts/tab-context"
 import { useOptionalWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { workTaskGet } from "@/lib/api"
 import type { WorkTask } from "@/lib/types"
@@ -32,7 +31,6 @@ export function taskConversationSettling(task: Pick<WorkTask, "status">) {
  * conversation while a sheet stays open.
  */
 export function useOpenTaskConversation() {
-  const { openTab } = useTabActions()
   const route = useOptionalWorkbenchRoute()
   return useCallback(
     async (taskId: number): Promise<OpenTaskConversationResult> => {
@@ -40,10 +38,15 @@ export function useOpenTaskConversation() {
       if (taskConversationSettling(fresh)) return "starting"
       const sel = fresh.conversation_selection
       if (!sel) return "none"
+      // Loaded on use: the tab store pulls in the whole workspace store, which
+      // the task dialogs never need until the user navigates.
+      const { useTabStore } = await import("@/stores/tab-store")
       route?.openConversations()
-      openTab(sel.folder_id, sel.conversation_id, sel.agent_type, true)
+      useTabStore
+        .getState()
+        .openTab(sel.folder_id, sel.conversation_id, sel.agent_type, true)
       return "opened"
     },
-    [openTab, route]
+    [route]
   )
 }

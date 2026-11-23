@@ -8317,7 +8317,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         bySelector = new Map()
         inflightSettersRef.current.set(contextKey, bySelector)
       }
-      const tracked = p.finally(() => {
+      const tracked = Promise.resolve(p).finally(() => {
         const cur = inflightSettersRef.current.get(contextKey)
         if (cur?.get(selector) === tracked) cur.delete(selector)
         if (cur && cur.size === 0) inflightSettersRef.current.delete(contextKey)

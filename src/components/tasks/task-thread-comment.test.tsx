@@ -14,6 +14,7 @@ const setWritebackMock = vi.fn(async () => {
 })
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskComplete: (...args: unknown[]) => completeMock(...(args as [])),
   workTaskSetWriteback: (...args: unknown[]) =>
     setWritebackMock(...(args as [])),

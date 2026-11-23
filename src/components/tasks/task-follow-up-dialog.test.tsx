@@ -27,6 +27,7 @@ vi.mock("sonner", () => ({
 }))
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskReturn: (...args: unknown[]) => workTaskReturn(...args),
 }))
 vi.mock("@/stores/app-workspace-store", () => {
