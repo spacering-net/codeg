@@ -3374,6 +3374,54 @@ describe("MessageInput predicted follow-up prompt", () => {
     expect(sendButton).not.toBeDisabled()
   })
 
+  it("offers a button beside Send that fills it in, gone once the composer holds text", async () => {
+    const onSend = vi.fn()
+    const { container } = await mounted({
+      promptSuggestion: "Run the tests",
+      onSend,
+    })
+    const useLabel = enMessages.Folder.chat.messageInput.usePromptSuggestion
+    const useButton = () =>
+      container.querySelector<HTMLButtonElement>(
+        `button[aria-label="${useLabel}"]`
+      )
+    expect(useButton()).not.toBeNull()
+
+    fireEvent.click(useButton()!)
+    expect(composerHandle.current!.getText()).toBe("Run the tests")
+    // Filled, not sent.
+    expect(onSend).not.toHaveBeenCalled()
+    await waitFor(() => expect(useButton()).toBeNull())
+
+    // Clearing the composer brings it back.
+    act(() => composerHandle.current!.clear())
+    await waitFor(() => expect(useButton()).not.toBeNull())
+
+    // Text the user typed hides it too.
+    act(() => composerHandle.current!.setText("my own words"))
+    await waitFor(() => expect(useButton()).toBeNull())
+  })
+
+  it("shows no fill button without a suggestion or while one is not offered", async () => {
+    const useLabel = enMessages.Folder.chat.messageInput.usePromptSuggestion
+    for (const props of [
+      { promptSuggestion: null },
+      {
+        promptSuggestion: "Run the tests",
+        isPrompting: true,
+        onCancel: vi.fn(),
+      },
+      { promptSuggestion: "Run the tests", disabled: true },
+      { promptSuggestion: "Run the tests", isEditingQueueItem: true },
+    ]) {
+      const { container, unmount } = await mounted(props)
+      expect(
+        container.querySelector(`button[aria-label="${useLabel}"]`)
+      ).toBeNull()
+      unmount()
+    }
+  })
+
   it("does not offer it while a turn runs, while disabled, or while editing a queued message", async () => {
     for (const props of [
       { isPrompting: true },

@@ -11,14 +11,11 @@
 //!
 //! ## Isolation contract
 //!
-//! - Different `connection_id`s use distinct Tauri event channels
-//!   (`remote-ws-event-{id}`) AND distinct background WS tasks. Two remote
-//!   workspaces opened side-by-side never mix events.
+//! - Different `connection_id`s use distinct Tauri event channels and
+//!   distinct background WS tasks.
 //! - Within one `connection_id`, multiple webviews (main + remote-settings
-//!   child window, etc.) share **one** underlying WS connection but each
-//!   event is dispatched only to the webview labels that have explicitly
-//!   subscribed. We never `app.emit(...)` globally — every emit is
-//!   `app.emit_to(EventTarget::webview(label), ...)`.
+//!   child window, etc.) share one underlying WS connection. Each subscriber
+//!   label has its own event name (`remote-ws-event-{id}-{label}`) and target.
 //! - When the last subscriber for a connection unsubscribes (or its window
 //!   is destroyed), the WS task shuts down and the entry is removed from
 //!   the proxy state.
@@ -1600,7 +1597,6 @@ pub async fn remote_ws_subscribe(
     window_instance_id: String,
 ) -> Result<(), AppCommandError> {
     let label = window.label().to_string();
-    let event_name = format!("remote-ws-event-{connection_id}");
     let proxy_arc: Arc<RemoteProxyState> = (*proxy).clone();
     let subscriber = WsSubscriber {
         label: label.clone(),
@@ -1630,7 +1626,7 @@ pub async fn remote_ws_subscribe(
     };
 
     if let Some(entry) = existing_entry {
-        acknowledge_ready_subscriber(&app, &entry, &label, &event_name).await;
+        acknowledge_ready_subscriber(&app, &entry, connection_id, &label).await;
         return Ok(());
     }
 
@@ -1676,7 +1672,7 @@ pub async fn remote_ws_subscribe(
         }
     };
     if let Some(existing) = raced_entry {
-        acknowledge_ready_subscriber(&app, &existing, &label, &event_name).await;
+        acknowledge_ready_subscriber(&app, &existing, connection_id, &label).await;
         return Ok(());
     }
 
@@ -1810,14 +1806,13 @@ async fn run_ws_task(
     mut shutdown_rx: watch::Receiver<bool>,
     mut outbound_rx: mpsc::Receiver<String>,
 ) {
-    let event_name = format!("remote-ws-event-{connection_id}");
     run_ws_connection(
         target,
         |last_known| stored_ws_target(db.clone(), connection_id, last_known),
         &entry,
         &mut shutdown_rx,
         &mut outbound_rx,
-        |frame| forward_frame(&app, &entry, &event_name, frame),
+        |frame| forward_frame(&app, &entry, connection_id, frame),
     )
     .await;
 
@@ -2059,47 +2054,56 @@ async fn backoff_sleep(shutdown_rx: &mut watch::Receiver<bool>, fail_count: u32)
 /// Forward a text frame from the remote WS to all current subscribers of
 /// this connection. The remote codeg-server's `ws.rs` emits frames shaped
 /// `{ "channel": "...", "payload": ... }` (see `WebEventBroadcaster`).
-/// We re-emit the payload as-is into the Tauri event named
-/// `remote-ws-event-{connection_id}`, but only to webview labels listed in
-/// the subscriber set — never broadcast.
+/// Re-emit the payload as-is to the subscribed webviews.
 async fn forward_frame(
     app: &AppHandle,
     entry: &Arc<WsTaskEntry>,
-    event_name: &str,
+    connection_id: i32,
     envelope: Value,
 ) {
-    let labels = snapshot_subscribers(entry).await;
-    for label in labels {
-        if let Err(e) = app.emit_to(EventTarget::webview(&label), event_name, &envelope) {
-            tracing::error!("[RemoteProxy] emit_to {label} for {event_name} failed: {e}");
-        }
+    for label in snapshot_subscribers(entry).await {
+        emit_frame_to_label(app, connection_id, &label, &envelope);
     }
 }
 
-/// Emit one of the internal lifecycle channels (`__ready__`,
-/// `__disconnected__`, `__unauthorized__`) to all current subscribers.
+/// Build one of the internal lifecycle envelopes (`__ready__`,
+/// `__disconnected__`, `__unauthorized__`).
 fn lifecycle_frame(channel: &'static str) -> Value {
     serde_json::json!({ "channel": channel, "payload": Value::Null })
 }
 
-fn emit_internal_to_label(app: &AppHandle, label: &str, event_name: &str, channel: &'static str) {
-    let envelope = lifecycle_frame(channel);
-    if let Err(e) = app.emit_to(EventTarget::webview(label), event_name, &envelope) {
-        tracing::error!("[RemoteProxy] emit_to {label} for {event_name} ({channel}) failed: {e}");
+/// Tauri event name for one subscriber webview of one connection. Must match
+/// the name `RemoteDesktopTransport.startWs` listens on. Webview labels only
+/// use characters Tauri also allows in event names, so this is always valid.
+fn remote_ws_event_name(connection_id: i32, label: &str) -> String {
+    format!("remote-ws-event-{connection_id}-{label}")
+}
+
+fn emit_frame_to_label(app: &AppHandle, connection_id: i32, label: &str, envelope: &Value) {
+    // Tauri evaluates an event script in other webviews with the same event
+    // name, even when the target filter leaves them no recipients.
+    let event_name = remote_ws_event_name(connection_id, label);
+    if let Err(e) = app.emit_to(EventTarget::webview(label), &event_name, envelope) {
+        tracing::error!("[RemoteProxy] emit_to {label} for {event_name} failed: {e}");
     }
 }
 
 async fn acknowledge_ready_subscriber(
     app: &AppHandle,
     entry: &WsTaskEntry,
+    connection_id: i32,
     label: &str,
-    event_name: &str,
 ) {
     // Hold readiness through the acknowledgement so it cannot overtake a
     // disconnect notification. Also used after the slow-path insert race.
     let ready = entry.ready.read().await;
     if *ready {
-        emit_internal_to_label(app, label, event_name, WS_READY_CHANNEL);
+        emit_frame_to_label(
+            app,
+            connection_id,
+            label,
+            &lifecycle_frame(WS_READY_CHANNEL),
+        );
     }
 }
 
@@ -2288,6 +2292,19 @@ mod tests {
             shutdown_tx,
             outbound_tx,
         })
+    }
+
+    #[test]
+    fn ws_event_name_is_scoped_to_connection_and_webview() {
+        // Same literal the transport tests pin on the listening side.
+        assert_eq!(
+            remote_ws_event_name(17, "main-webview"),
+            "remote-ws-event-17-main-webview"
+        );
+        assert_ne!(
+            remote_ws_event_name(7, "remote-webview-a"),
+            remote_ws_event_name(7, "remote-webview-b")
+        );
     }
 
     // ─── Host pinning for credential-carrying requests ──────────────────

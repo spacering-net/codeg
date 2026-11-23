@@ -67,7 +67,6 @@ import { cn } from "@/lib/utils"
 import { Code } from "../discover/detail-sections"
 import { DiscoverMark } from "../discover/discover-card"
 import { useDiscoverLabels } from "../discover/use-discover-labels"
-import { HarnessHostLabel } from "../harness-host-label"
 import { MachineText } from "../machine-text"
 import { RevealButton } from "../mcp/mcp-bits"
 import { McpDefinitionView } from "../mcp/mcp-definition-view"
@@ -827,7 +826,8 @@ function KeyPart({
   return (
     <InstallPart title={t("title")}>
       <div className="min-w-0 space-y-1.5">
-        <label htmlFor={id} className="text-sm font-medium">
+        {/* The part's title already names the field. */}
+        <label htmlFor={id} className="sr-only">
           {t("label")}
         </label>
         <Input
@@ -923,9 +923,8 @@ function useTargetNote(
           warn: false,
         }
       }
-      if (recorded) return { note: t("staysInstalled"), warn: false }
       // Not ticked, and holding the name already: worth knowing before
-      // ticking it.
+      // ticking it. A row says nothing where all is as expected.
       return {
         note: row.existing
           ? t.rich("holdsName", { key, owner: by(row), code: machine })
@@ -933,12 +932,17 @@ function useTargetNote(
         warn: false,
       }
     }
-    if (!row.existing) return { note: t("willAdd"), warn: false }
+    if (!row.existing) return { note: null, warn: false }
     const replacing = row.agent !== null && input.replace.includes(row.agent)
     if (ownerOf(row) === "this_item") {
+      // Replacing what this item put there is the update itself: worth a
+      // word only where the user changed it since.
+      if (replacing && row.conflict?.state !== "changed_locally") {
+        return { note: null, warn: false }
+      }
       return {
         note: replacing ? t("willUpdate") : t("ownNotTicked"),
-        warn: !replacing || row.conflict?.state === "changed_locally",
+        warn: true,
       }
     }
     return {
@@ -1254,7 +1258,6 @@ function InputBody({
             {t("dialog.alreadyNewest")}
           </p>
         )}
-        <HarnessHostLabel />
       </div>
       {dialog.notice === "changedElsewhere" && (
         <Headline tone="neutral">{t("notices.changedElsewhere")}</Headline>
@@ -1640,11 +1643,6 @@ export function McpInstallDialog({
         title,
         name: (chunks) => <bdi>{chunks}</bdi>,
       })}
-      description={
-        dialog.step === "input" && plan?.blocking.length === 0
-          ? t("dialog.description")
-          : undefined
-      }
       onRequestClose={() => !installing && close()}
       footer={footer}
       step={`${dialog.step}:${dialog.planPhase}:${dialog.request}`}

@@ -1913,9 +1913,15 @@ async fn the_skills_page_never_overwrites_or_writes_through_a_link_into_the_stor
     super::world::annotate_items(&store, &mut listed);
     let linked = listed.iter().find(|s| s.id == "linked").unwrap();
     assert_eq!(linked.owner, AgentSkillOwner::Custom);
-    assert_eq!(
-        linked.link_target.as_deref().map(Path::new),
-        Some(store.join("linked").as_path())
+    // (On Windows the store here is a verbatim path, the junction's target
+    // is not.)
+    assert!(
+        linked
+            .link_target
+            .as_deref()
+            .is_some_and(|target| super::fsio::same_path(Path::new(target), &store.join("linked"))),
+        "{:?}",
+        linked.link_target
     );
     let own = listed.iter().find(|s| s.id == "dup").unwrap();
     assert_eq!(
@@ -1961,10 +1967,14 @@ fn a_backup_name_or_folder_that_leads_out_of_the_backups_is_never_touched() {
     // A name that is a drive-relative path on Windows is refused everywhere
     // (here it is an ordinary folder name, which shows the refusal).
     assert!(!super::fsio::plain_name("C:victim"));
+    // (Windows has no such folder to plant.)
+    #[cfg(not(windows))]
     let drive = home.store(".user-backups/foo/C:victim");
+    #[cfg(not(windows))]
     plant(&drive);
     let refused = super::backups::delete(&home.ctx, "foo", "C:victim");
     assert_eq!(codes_of(&refused.issues), vec![codes::BACKUP_NOT_FOUND]);
+    #[cfg(not(windows))]
     assert!(drive.join("SKILL.md").is_file());
     for (skill, name) in [
         ("foo", ".."),
@@ -2036,7 +2046,11 @@ fn a_repair_path_that_climbs_out_of_an_agent_directory_is_refused() {
     .unwrap();
     let outside = home.path("elsewhere/x");
     platform_link(&home.store("x"), &outside).unwrap();
-    let climbing = home.path("claude/skills/sub/../x");
+    // Not through `home.path`: joined onto a verbatim root (`\\?\C:\…`,
+    // what Windows' `canonicalize` gives) the `..` would be folded away.
+    let climbing = super::fsio::strip_verbatim(&home.path("claude/skills/sub"))
+        .join("..")
+        .join("x");
     for action in [RepairAction::Remove, RepairAction::Repoint] {
         let refused = repair(&home, climbing.clone(), action, None, false);
         assert_eq!(
@@ -3193,4 +3207,20 @@ async fn a_delete_checks_its_ack_against_who_reads_the_folder_when_it_runs() {
         "{params:?}"
     );
     assert!(shared.is_dir(), "nothing deleted");
+}
+
+/// A canonical path (verbatim prefix) and the same path as written, or as a
+/// junction's target reads, are one place.
+#[cfg(windows)]
+#[test]
+fn a_verbatim_path_is_the_same_path_as_written() {
+    use super::fsio::same_path;
+    assert!(same_path(
+        Path::new(r"\\?\C:\Users\me\.codeg\skills"),
+        Path::new(r"c:\users\me\.codeg\skills")
+    ));
+    assert!(!same_path(
+        Path::new(r"\\?\UNC\host\share\skills"),
+        Path::new(r"UNC\host\share\skills")
+    ));
 }

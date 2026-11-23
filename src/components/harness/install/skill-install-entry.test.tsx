@@ -240,7 +240,7 @@ describe("A record that cannot be read, part by part", () => {
     await openItem("anthropics/pdf")
     expect(
       await screen.findByText(
-        /Codeg could not read its record of the skills it installed from Harness/
+        /Codeg could not read its record of the skills it installed from SRN Harness/
       )
     ).toBeInTheDocument()
     expect(screen.getByText(SKILLS_PROBLEM.detail)).toBeInTheDocument()
@@ -269,7 +269,7 @@ describe("A record that cannot be read, part by part", () => {
     await openItem("acme.dev/notes")
     expect(
       await screen.findByText(
-        /Codeg could not read its record of the MCP servers it installed from Harness/
+        /Codeg could not read its record of the MCP servers it installed from SRN Harness/
       )
     ).toBeInTheDocument()
     backend.harness_item = () => skillItem()

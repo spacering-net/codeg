@@ -365,7 +365,7 @@ pub async fn science_apply_links(
     ops: Vec<LinkOp>,
     app: tauri::AppHandle,
 ) -> Result<Vec<LinkOpResult>, ScienceError> {
-    science_apply_links_core(&EventEmitter::Tauri(app), ops).await
+    science_apply_links_core(&EventEmitter::from_app(&app), ops).await
 }
 
 /// One-shot snapshot of every (science skill, agent) link state — lets the
@@ -455,6 +455,7 @@ mod tests {
         assert!(!supported_agents().contains(&agent));
     }
 
+    #[cfg(not(windows))] // only the hermetic-home tests below
     use tokio::time::{timeout, Duration};
 
     // These tests run against a home of their own (`with_hermetic_home`), and

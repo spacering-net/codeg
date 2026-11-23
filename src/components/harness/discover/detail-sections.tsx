@@ -114,8 +114,7 @@ const README_FOLD_SLACK_REM = 6
 
 /** A section's title. Set apart from the headings a description brings with
  *  it, which are the author's and can say anything. */
-const SECTION_TITLE_CLASS =
-  "text-2xs font-semibold tracking-wide text-muted-foreground uppercase"
+const SECTION_TITLE_CLASS = "text-[0.9375rem] font-semibold text-foreground"
 
 /**
  * Whether one of the open item's long parts is shown in full, and the way to
@@ -177,7 +176,7 @@ export function DetailSection({
   const headingId = useId()
   return (
     <section aria-labelledby={headingId} className={cn("min-w-0", className)}>
-      <div className="flex min-w-0 items-baseline justify-between gap-3 pb-2">
+      <div className="flex min-w-0 items-baseline justify-between gap-3 pb-3">
         <h3 id={headingId} className={SECTION_TITLE_CLASS}>
           {title}
         </h3>
@@ -292,7 +291,13 @@ export function DescriptionSection({
     return null
   } else {
     content = (
-      <FoldedBox part="readme" foldRem={foldRem}>
+      <FoldedBox
+        part="readme"
+        foldRem={foldRem}
+        className=""
+        contentClassName=""
+        bare
+      >
         <ReadmeContent
           fragment={readme.value}
           // The page's heading already says what the item is called.
@@ -317,6 +322,9 @@ interface FoldedBoxProps {
   className?: string
   /** Around the content: its padding. */
   contentClassName?: string
+  /** No box at all: the part runs on in the page, and "Show all" follows
+   *  it without a rule above. */
+  bare?: boolean
   children: ReactNode
 }
 
@@ -335,6 +343,7 @@ export function FoldedBox({
   foldRem,
   className = "rounded-lg border",
   contentClassName = "px-3 py-3",
+  bare = false,
   children,
 }: FoldedBoxProps) {
   const t = useTranslations("Harness.discover.detail")
@@ -383,7 +392,7 @@ export function FoldedBox({
         <div ref={contentRef}>{children}</div>
       </div>
       {long && (
-        <div className="border-t px-1.5 py-1">
+        <div className={bare ? "-ms-3 pt-1" : "border-t px-1.5 py-1"}>
           <Button
             type="button"
             variant="ghost"
@@ -519,6 +528,45 @@ const RISK_ICONS: Record<"low" | "medium" | "high" | "unknown", LucideIcon> = {
   medium: ShieldAlert,
   high: ShieldAlert,
   unknown: ShieldQuestion,
+}
+
+const RISK_BANNER_TONES: Record<
+  "low" | "medium" | "high" | "unknown",
+  { band: string; text: string }
+> = {
+  low: { band: "bg-tone-success/10", text: "text-tone-success" },
+  medium: { band: "bg-tone-warning/10", text: "text-tone-warning" },
+  high: { band: "bg-tone-danger/10", text: "text-tone-danger" },
+  unknown: { band: "bg-muted/60", text: "text-muted-foreground" },
+}
+
+/** What the checks made of the item, in a line: the band at the head of the
+ *  detail's side card. The whole story is in the Checks section. */
+export function RiskBanner({ risk }: { risk: string }) {
+  const t = useTranslations("Harness.discover.detail")
+  const labels = useDiscoverLabels()
+  const known = knownRisk(risk) ?? "unknown"
+  const Icon = RISK_ICONS[known]
+  const tone = RISK_BANNER_TONES[known]
+  return (
+    <div
+      className={cn(
+        "flex min-w-0 items-start gap-2 border-b px-4 py-3 text-[0.8125rem]",
+        tone.band
+      )}
+    >
+      <Icon
+        aria-hidden="true"
+        className={cn("mt-0.5 size-4 shrink-0", tone.text)}
+      />
+      <p className="min-w-0">
+        <span className={cn("font-semibold", tone.text)}>
+          {labels.risk(risk)}
+        </span>{" "}
+        <span className="text-muted-foreground">{t(`riskNote.${known}`)}</span>
+      </p>
+    </div>
+  )
 }
 
 /** High before medium before anything else a newer catalog might send. */
@@ -893,9 +941,9 @@ export function Fact({
   children: ReactNode
 }) {
   return (
-    <div className="flex min-w-0 items-baseline justify-between gap-3 py-1.5 max-md:py-2.5">
+    <div className="flex min-w-0 items-baseline justify-between gap-4 py-2">
       <dt className="shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 text-end break-words">{children}</dd>
+      <dd className="min-w-0 text-end font-medium break-words">{children}</dd>
     </div>
   )
 }
@@ -906,7 +954,9 @@ export function LicenseFact({ item }: { item: HarnessItemDetail }) {
   return (
     <Fact label={t("license")}>
       {item.license ? (
-        <Code>{item.license}</Code>
+        <bdi dir="ltr">
+          <MachineText>{item.license}</MachineText>
+        </bdi>
       ) : (
         <span className="text-muted-foreground">{t("noLicense")}</span>
       )}
@@ -932,33 +982,40 @@ export function FactsPanel({ item, head, sayRights = false }: FactsPanelProps) {
   const headingId = useId()
   const source = oneOf(ITEM_SOURCES, item.source)
   const sourceLabel = t(`sources.${source ?? "unknown"}`)
-  const updated = formatDate(item.latest.publishedAt, labels.locale)
 
   return (
     <section
       aria-labelledby={headingId}
-      className="min-w-0 rounded-lg border px-3 py-2.5 text-xs"
+      className="min-w-0 rounded-2xl border bg-card px-3.5 pt-2.5 pb-0.5 text-sm"
     >
-      <h3 id={headingId} className={cn(SECTION_TITLE_CLASS, "pb-1")}>
-        {t("facts")}
-      </h3>
+      <div className="flex min-w-0 items-center justify-between gap-3 border-b pb-2.5">
+        <h3 id={headingId} className="shrink-0 font-semibold">
+          {t("facts")}
+        </h3>
+        <div className="flex min-w-0 flex-wrap justify-end gap-1.5">
+          <span className="inline-flex h-6 items-center rounded-full bg-muted px-2.5 text-xs">
+            {labels.kind(item.kind)}
+          </span>
+          {showsRuntime(item) && (
+            <span className="inline-flex h-6 min-w-0 items-center rounded-full border px-2.5 text-xs">
+              <bdi className="truncate">{labels.runtime(item.runtime)}</bdi>
+            </span>
+          )}
+        </div>
+      </div>
       <dl className="divide-y">
         {head}
         {item.latest.version && (
           <Fact label={t("version")}>
-            <Code>{item.latest.version}</Code>
+            <bdi dir="ltr">
+              <MachineText>{item.latest.version}</MachineText>
+            </bdi>
           </Fact>
         )}
         <Fact label={t("revision")}>
-          <Code>#{item.latest.revision}</Code>
+          <bdi dir="ltr">#{item.latest.revision}</bdi>
         </Fact>
-        {updated && <Fact label={t("updated")}>{updated}</Fact>}
         {!sayRights && <LicenseFact item={item} />}
-        {showsRuntime(item) && (
-          <Fact label={t("runtime")}>
-            <bdi>{labels.runtime(item.runtime)}</bdi>
-          </Fact>
-        )}
         <Fact label={t("source")}>
           <HarnessLink href={item.sourceUrl} className={FACT_LINK_CLASS}>
             {sourceLabel}
@@ -976,5 +1033,47 @@ export function FactsPanel({ item, head, sayRights = false }: FactsPanelProps) {
         )}
       </dl>
     </section>
+  )
+}
+
+const FACT_SKELETON_WIDTHS = ["w-10", "w-12", "w-16", "w-28", "w-14", "w-20"]
+
+/** The facts card's place while the item is read: its heading and chips,
+ *  then rows of a label and a value, as the card will have them — `rows` of
+ *  them, and a second chip when the runtime will have one. */
+export function FactsSkeleton({
+  rows = 4,
+  runtime = true,
+}: {
+  rows?: number
+  runtime?: boolean
+}) {
+  return (
+    <div
+      aria-hidden="true"
+      data-testid="discover-facts-loading"
+      className="min-w-0 rounded-2xl border bg-card px-3.5 pt-2.5 pb-0.5"
+    >
+      <div className="flex items-center justify-between gap-3 border-b pb-2.5">
+        <Skeleton className="h-4 w-12" />
+        <div className="flex gap-1.5">
+          <Skeleton className="h-6 w-12 rounded-full" />
+          {runtime && <Skeleton className="h-6 w-14 rounded-full" />}
+        </div>
+      </div>
+      <div className="divide-y">
+        {Array.from({ length: rows }, (_, index) => (
+          <div key={index} className="flex items-center justify-between py-2.5">
+            <Skeleton className="h-3.5 w-12" />
+            <Skeleton
+              className={cn(
+                "h-3.5",
+                FACT_SKELETON_WIDTHS[index % FACT_SKELETON_WIDTHS.length]
+              )}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }

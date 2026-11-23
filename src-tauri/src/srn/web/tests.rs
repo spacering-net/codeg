@@ -13,7 +13,9 @@ use chrono::{DateTime, Utc};
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde_json::{json, Value};
 
-use super::config::{ClientSecret, WebConfig, CALLBACK_PATH, CHILD_HIDDEN_ENV};
+#[cfg(unix)]
+use super::config::CHILD_HIDDEN_ENV;
+use super::config::{ClientSecret, WebConfig, CALLBACK_PATH};
 use super::routes::{ACCOUNT_PATH, FLOW_COOKIE, LOGIN_PATH, LOGOUT_PATH, SESSION_COOKIE};
 use super::seal::{KeySource, Sealer, KEY_FILE_NAME};
 use super::service::{Clock, SrnWeb, Waits};
@@ -919,7 +921,17 @@ async fn spacering_s_401_ends_the_session_here() {
 
 #[tokio::test]
 async fn an_unanswered_or_busy_spacering_keeps_the_session() {
-    let rig = rig().await;
+    // A read waits out the whole check: on Windows a refused connection
+    // takes about two seconds (its connect retries), as long as a read's
+    // own wait.
+    let rig = rig_waiting(
+        Access::Token,
+        Waits {
+            check: super::service::CHECK_DEADLINE,
+            ..Waits::default()
+        },
+    )
+    .await;
     let mut browser = Browser::default();
     rig.sign_in(&mut browser).await;
     let cases: Vec<(Reply, &str, Duration)> = vec![

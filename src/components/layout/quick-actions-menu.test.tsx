@@ -8,8 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 // between the SRN account's head and its sign-in row (`status-bar-srn.tsx`),
 // opened from the account's trigger — the routes, then, after a divider, the
 // launch group: "Open project", "Open remote workspace" (desktop), "Open
-// local workspace" (a remote workspace window) and "More" (desktop). The menu is a thin router over existing entry points, so
-// every one of them is stubbed: the test's job is to prove each row reaches
+// local workspace" (a remote workspace window), then "Open browser tab" and
+// "Show pet" (desktop). The menu is a thin router over existing entry points,
+// so every one of them is stubbed: the test's job is to prove each row reaches
 // the right door (and that the desktop-only rows disappear off the desktop),
 // not to re-test the doors. The account itself is stubbed too — signed out —
 // and is `status-bar-srn.test.tsx`'s.
@@ -223,19 +224,27 @@ describe("Quick actions, in the status bar's account menu", () => {
       "To-dos",
       FORGE_ROW,
       "Infinite Canvas",
-      "Harness",
+      "Harness Engineering",
       "—",
       "Open project",
       "Open remote workspace",
-      "More",
+      "Open browser tab",
+      "Show pet",
       "—",
       "Sign in to SRN",
     ])
-    for (const name of ["Open project", "Open remote workspace", "More"]) {
+    for (const name of ["Open project", "Open remote workspace"]) {
       const row = screen.getByRole("menuitem", { name })
       expect(row).toHaveAttribute("aria-haspopup", "menu")
       expect(row).toHaveAttribute("aria-expanded", "false")
     }
+    // The window-level extras are plain rows: the old "More" submenu is gone.
+    for (const name of ["Open browser tab", "Show pet"]) {
+      expect(screen.getByRole("menuitem", { name })).not.toHaveAttribute(
+        "aria-haspopup"
+      )
+    }
+    expect(screen.queryByRole("menuitem", { name: "More" })).toBeNull()
     // Their rows are not in the top level until opened; the old "Workspace"
     // submenu is gone.
     for (const name of [
@@ -245,8 +254,6 @@ describe("Quick actions, in the status bar's account menu", () => {
       "Project Boot",
       "Open local workspace",
       "Manage remote workspace",
-      "Open browser tab",
-      "Show pet",
     ]) {
       expect(screen.queryByRole("menuitem", { name })).toBeNull()
     }
@@ -324,17 +331,6 @@ describe("Quick actions, in the status bar's account menu", () => {
     expect(mocks.listRemoteWorkspaceConnections).toHaveBeenCalledTimes(2)
   })
 
-  it("More opens on click, with the window-level extras", async () => {
-    await mountAndOpen()
-    await openSub("More")
-    const sub = screen.getByRole("menu", { name: "More" })
-    expect(
-      within(sub)
-        .getAllByRole("menuitem")
-        .map((el) => el.textContent)
-    ).toEqual(["Open browser tab", "Show pet"])
-  })
-
   it.each(["{ArrowRight}", "{Enter}"])(
     "a submenu opens from the keyboard (%s), on its first row, and ← goes back",
     async (key) => {
@@ -358,7 +354,6 @@ describe("Quick actions, in the status bar's account menu", () => {
 
   it("opens a blank browser tab, returning to the conversations route first", async () => {
     await mountAndOpen()
-    await openSub("More")
     await clickItem("Open browser tab")
 
     // The file column that holds browser tabs only exists on the conversations
@@ -373,13 +368,12 @@ describe("Quick actions, in the status bar's account menu", () => {
   it("drops the browser row when there is no built-in browser", async () => {
     browserAvailable = false
     await mountAndOpen()
-    await openSub("More")
 
     expect(
       screen.queryByRole("menuitem", { name: "Open browser tab" })
     ).toBeNull()
-    // The rest of the submenu survives, so this is the gate and not the
-    // submenu failing to render.
+    // The pet row survives, so this is the gate and not the extras failing
+    // to render.
     expect(
       await screen.findByRole("menuitem", { name: "Show pet" })
     ).toBeVisible()
@@ -415,7 +409,7 @@ describe("Quick actions, in the status bar's account menu", () => {
     await mountAndOpen()
 
     // The routes are platform-neutral route switches and must survive off
-    // the desktop; the remote workspaces and "More" are the desktop's, so
+    // the desktop; the remote workspaces and the extras are the desktop's, so
     // they go whole.
     expect(layout()).toEqual([
       "head",
@@ -424,7 +418,7 @@ describe("Quick actions, in the status bar's account menu", () => {
       "To-dos",
       FORGE_ROW,
       "Infinite Canvas",
-      "Harness",
+      "Harness Engineering",
       "—",
       "Open project",
       "—",
@@ -439,6 +433,9 @@ describe("Quick actions, in the status bar's account menu", () => {
     expect(screen.queryByText(/remote workspace/i)).toBeNull()
     expect(screen.queryByText("Open local workspace")).toBeNull()
     expect(screen.queryByRole("menuitem", { name: "Show pet" })).toBeNull()
+    expect(
+      screen.queryByRole("menuitem", { name: "Open browser tab" })
+    ).toBeNull()
     expect(mocks.listRemoteWorkspaceConnections).not.toHaveBeenCalled()
   })
 
@@ -450,11 +447,12 @@ describe("Quick actions, in the status bar's account menu", () => {
       "To-dos",
       FORGE_ROW,
       "Infinite Canvas",
-      "Harness",
+      "Harness Engineering",
       "Open project",
       "Open remote workspace",
       "Open local workspace",
-      "More",
+      "Open browser tab",
+      "Show pet",
       "Sign in to SRN",
     ])
     const local = screen.getByRole("menuitem", { name: "Open local workspace" })
@@ -519,18 +517,17 @@ describe("Quick actions, in the status bar's account menu", () => {
     expect(mocks.setRoute).toHaveBeenCalledWith("forge")
 
     await reopen()
-    await clickItem("Harness")
+    await clickItem("Harness Engineering")
     expect(mocks.setRoute).toHaveBeenCalledWith("harness")
 
     await reopen()
-    await openSub("More")
     await clickItem("Show pet")
     expect(mocks.openPetWindow).toHaveBeenCalled()
   })
 
   it("lists every sidebar route, in the sidebar's own order", async () => {
     await mountAndOpen()
-    await screen.findByRole("menuitem", { name: "Harness" })
+    await screen.findByRole("menuitem", { name: "Harness Engineering" })
 
     // The same list the sidebar builds its rows from, so a route added there
     // cannot be left out of — or misplaced in — the one menu that still
@@ -543,7 +540,7 @@ describe("Quick actions, in the status bar's account menu", () => {
       .map((text) => labels.find((label) => text?.startsWith(label)))
       .filter((label) => label !== undefined)
     expect(rows).toEqual(labels)
-    expect(labels[labels.length - 1]).toBe("Harness")
+    expect(labels[labels.length - 1]).toBe("Harness Engineering")
   })
 
   it("keeps Harness reachable off the desktop", async () => {
@@ -552,21 +549,23 @@ describe("Quick actions, in the status bar's account menu", () => {
 
     // A route switch, not a desktop feature: it is how a web client — or
     // anyone who hid the sidebar row — gets to the page at all.
-    await clickItem("Harness")
+    await clickItem("Harness Engineering")
     expect(mocks.setRoute).toHaveBeenCalledWith("harness")
   })
 
   it("carries no Harness badge while nothing has an update", async () => {
     await mountAndOpen()
-    const row = await screen.findByRole("menuitem", { name: "Harness" })
-    expect(row.textContent).toBe("Harness")
+    const row = await screen.findByRole("menuitem", {
+      name: "Harness Engineering",
+    })
+    expect(row.textContent).toBe("Harness Engineering")
   })
 
   it("carries the sidebar's updates badge on the Harness row", async () => {
     await mountAndOpen({ harnessUpdates: 4 })
 
     const row = await screen.findByRole("menuitem", {
-      name: "Harness 4 updates available",
+      name: "Harness Engineering 4 updates available",
     })
     const badge = row.querySelector('[title="4 updates available"]')
     expect(badge).not.toBeNull()
@@ -633,21 +632,21 @@ describe("Quick actions, in the status bar's account menu", () => {
   function layOutMenu() {
     const root = screen.getByRole("menu")
     const rect = HTMLElement.prototype.getBoundingClientRect
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-      function (this: HTMLElement) {
+    return vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
         return this === root
           ? DOMRect.fromRect({ x: 8, y: 300, width: 304, height: 420 })
           : rect.call(this)
-      }
-    )
-    return root
+      })
   }
 
   it("on a phone, a submenu opens over its menu, above its own row, and the menu fades behind it", async () => {
     // A 390px window: no room beside the menu.
     window.innerWidth = 390
     await mountAndOpen()
-    const root = layOutMenu()
+    layOutMenu()
+    const root = screen.getByRole("menu")
     for (const name of ["Open project", "Open remote workspace"]) {
       await openSub(name)
       const row = screen.getByRole("menuitem", { name })
@@ -666,15 +665,19 @@ describe("Quick actions, in the status bar's account menu", () => {
     // Over the menu, a submenu is 288px wide; beside it, it starts 4px out
     // and keeps 8px from the window's edge. So it needs 300px past the
     // menu's end (312px): a window of 612px. Narrower, beside would squeeze
-    // it and cut its labels short, so it opens over the menu.
+    // it and cut its labels short, so it opens over the menu. Each case opens
+    // from a fresh menu: where a submenu goes is measured as it opens, so one
+    // left open by the case before would keep that case's answer.
     await mountAndOpen()
-    layOutMenu()
+    await userEvent.keyboard("{Escape}")
     for (const [width, name, over] of [
       [530, "Open project", true],
       [611, "Open remote workspace", true],
-      [612, "More", false],
+      [612, "Open project", false],
     ] as const) {
       window.innerWidth = width
+      await reopen()
+      const spy = layOutMenu()
       await openSub(name)
       const row = screen.getByRole("menuitem", { name })
       const sub = screen.getByRole("menu", { name })
@@ -685,6 +688,9 @@ describe("Quick actions, in the status bar's account menu", () => {
         expect(row).not.toHaveAttribute("data-over")
         expect(sub.style.width).toBe("")
       }
+      spy.mockRestore()
+      await userEvent.keyboard("{Escape}")
+      expect(screen.queryByRole("menu")).toBeNull()
     }
   })
 })

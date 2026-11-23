@@ -391,8 +391,10 @@ const PROCESS_EXITED_RE = /^process exited with code\s+(-?\d+)\s*$/i
  * (packages/core/src/shell/result.ts `notice`). Through 2.2.6 it read
  * `Exited with code 1`, or `Killed by SIGTERM`; from 2.2.7 it reads
  * `Exit code: 1`, or `Exit code: 143 (SIGTERM)` (128 plus the signal's
- * number), a timeout's explanation standing on the line before it. OpenCode
- * completes such a command successfully. A numeric code also reaches the
+ * number), a timeout's explanation standing on the line before it (2.3.1
+ * moves a foreground command that outlives its timeout to the background
+ * instead, so its call carries no such notice). OpenCode completes such a
+ * command successfully. A numeric code also reaches the
  * card as a field (see {@link EXIT_CODE_META_KEY}); a signal, which OpenCode
  * keeps in `metadata.signal`, is not lifted, so for a killed command the
  * notice is what the card reads. 2.2.7's plain `Exit code: 1` is not read

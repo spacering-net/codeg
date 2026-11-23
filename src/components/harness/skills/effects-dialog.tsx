@@ -26,7 +26,6 @@ import { notableOps, reachesOthers } from "@/lib/skills/ops"
 import type { SkillOpResult, SkillsApplyResult } from "@/lib/skills/types"
 import { cn } from "@/lib/utils"
 import { Code } from "../discover/detail-sections"
-import { HarnessHostLabel } from "../harness-host-label"
 import { AgentGlyph } from "../mcp/mcp-bits"
 import { McpDialogFrame } from "../mcp/mcp-dialog-frame"
 import { FailureText, IssueList, SkillPath } from "./skill-bits"
@@ -376,7 +375,6 @@ function EffectsDialogView({
         aria-busy={checking}
         className="min-w-0 space-y-3"
       >
-        <HarnessHostLabel />
         {dialog.notice === "effectsChanged" && (
           <Headline tone="neutral">{t("changed")}</Headline>
         )}

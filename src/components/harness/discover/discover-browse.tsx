@@ -13,15 +13,17 @@ import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useHarnessSlot, useHarnessView } from "@/contexts/harness-view-context"
-import { useIsMobile } from "@/hooks/use-mobile"
 import {
   applyDiscoverFilters,
   DISCOVER_CONFIG,
   DISCOVER_FILTERS,
+  DISCOVER_KIND_TOTALS,
+  DISCOVER_LAYOUT,
   DISCOVER_LIST,
   DISCOVER_LIST_SCROLL,
   DISCOVER_RETURN_FOCUS,
   ensureDiscoverConfig,
+  ensureDiscoverKindTotals,
   ensureDiscoverList,
   loadMoreDiscover,
   openDiscoverItem,
@@ -33,32 +35,58 @@ import type {
   HarnessItemSummary,
 } from "@/lib/harness/types"
 import { cn } from "@/lib/utils"
+import { HarnessScroller } from "../harness-scroller"
 import { DiscoverCard } from "./discover-card"
 import { DiscoverFailure } from "./discover-failure"
-import { DiscoverToolbar } from "./discover-toolbar"
+import {
+  DiscoverFilters,
+  DiscoverKindSwitch,
+  DiscoverLayoutSwitch,
+  DiscoverSearchBox,
+  useDiscoverApply,
+} from "./discover-toolbar"
 
 /** How far before the end of the list the next page is asked for: about two
  *  rows of cards, so it is usually there by the time the end is reached. */
 const LOAD_MORE_MARGIN = "320px"
 
 const GRID_CLASS =
-  "grid grid-cols-1 gap-2 @xl/discover:grid-cols-2 @4xl/discover:grid-cols-3 @7xl/discover:grid-cols-4"
+  "grid grid-cols-1 gap-4 @2xl/discover:grid-cols-2 @5xl/discover:grid-cols-3"
+
+const LIST_CLASS = "flex flex-col gap-4"
 
 function CardSkeletons() {
   return (
     <ul aria-hidden="true" className={GRID_CLASS}>
-      {Array.from({ length: 9 }, (_, index) => (
+      {Array.from({ length: 6 }, (_, index) => (
         <li
           key={index}
-          className="flex flex-col gap-2 rounded-lg border bg-card p-3"
+          className="flex flex-col gap-3 rounded-xl border bg-card p-4"
         >
-          <Skeleton className="h-4 w-24" />
-          <Skeleton className="h-4 w-2/3" />
-          <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-4 w-20" />
+          <div className="flex items-center gap-3">
+            <Skeleton className="size-9 rounded-lg" />
+            <div className="flex-1 space-y-1.5">
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-3.5 w-1/4" />
+            </div>
+          </div>
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-6 w-28" />
         </li>
       ))}
     </ul>
+  )
+}
+
+/** Where the focus goes for "/", from anywhere on the page that is not
+ *  taking text itself. */
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return (
+    target.isContentEditable ||
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
   )
 }
 
@@ -100,17 +128,46 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
   const [filters] = useHarnessSlot(DISCOVER_FILTERS)
   const [list] = useHarnessSlot(DISCOVER_LIST)
   const [config] = useHarnessSlot(DISCOVER_CONFIG)
-  const isMobile = useIsMobile()
+  const [totals] = useHarnessSlot(DISCOVER_KIND_TOTALS)
+  const [layout] = useHarnessSlot(DISCOVER_LAYOUT)
+  const apply = useDiscoverApply()
   const scrollerRef = useRef<HTMLDivElement>(null)
+  const resultsRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const announcement = useListAnnouncement(list)
 
   useEffect(() => {
     ensureDiscoverConfig(slots)
+    ensureDiscoverKindTotals(slots)
     // Also applies a search that was typed just before the page was left,
     // and asks again for a list that had failed.
     ensureDiscoverList(slots, { retry: true })
   }, [slots])
+
+  // "/" takes the focus to the search box from anywhere on the page that is
+  // not taking text itself — the box may have scrolled away with the
+  // heading.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "/" ||
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        isTyping(event.target)
+      ) {
+        return
+      }
+      // Only while nothing modal is open over the page.
+      if (document.querySelector('[role="dialog"][data-state="open"]')) return
+      event.preventDefault()
+      searchRef.current?.focus()
+    }
+    document.addEventListener("keydown", onKeyDown)
+    return () => document.removeEventListener("keydown", onKeyDown)
+  }, [])
 
   // Back where it was. In a layout effect, so the first frame is already at
   // the remembered offset; the cards are all there, since they come from the
@@ -130,12 +187,18 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
     ;(card ?? scroller)?.focus({ preventScroll: true })
   }, [slots])
 
-  // A new first page starts from the top; the same list coming back does not.
+  // A new first page starts from the head of the results — not from the top
+  // of the page: the heading above them is not what changed. The same list
+  // coming back does not move at all.
   const shownRequest = useRef(list.request)
   useLayoutEffect(() => {
     if (shownRequest.current === list.request) return
     shownRequest.current = list.request
-    if (scrollerRef.current) scrollerRef.current.scrollTop = 0
+    const scroller = scrollerRef.current
+    const results = resultsRef.current
+    if (!scroller) return
+    const head = results ? results.offsetTop : 0
+    if (scroller.scrollTop > head) scroller.scrollTop = head
   }, [list.request])
 
   const hasMore = list.phase === "ready" && list.next !== null
@@ -173,28 +236,18 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
   )
 
   const filtered = filters.tag !== null || filters.runtime !== null
-  const toolbar = (
-    <DiscoverToolbar
-      config={config.value}
-      onRetryConfig={
-        config.phase === "error" && !config.value
-          ? () => ensureDiscoverConfig(slots)
-          : undefined
-      }
-    />
-  )
-
-  // What stands in for the list is centred in the pane — where it has the
-  // pane to itself. On a phone the controls share the scroller with it, and
-  // "the full height" would push it below the fold.
-  const fillClass = isMobile ? undefined : "h-full"
+  const catalogTotal = totals.value?.all
+  const shownTotal =
+    list.phase === "ready" || list.items.length > 0
+      ? (list.approxTotal ?? (list.next === null ? list.items.length : null))
+      : null
 
   let body: ReactNode
   if (list.phase === "error" && list.error) {
     body = (
       <DiscoverFailure
         failure={list.error}
-        className={fillClass}
+        className="min-h-64"
         onRetry={() => {
           ensureDiscoverConfig(slots)
           reloadDiscoverList(slots)
@@ -205,12 +258,7 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
     body = <CardSkeletons />
   } else if (list.items.length === 0 && !hasMore) {
     body = (
-      <div
-        className={cn(
-          "flex min-h-48 items-center justify-center p-6",
-          fillClass
-        )}
-      >
+      <div className="flex min-h-64 items-center justify-center p-6">
         <div className="flex max-w-md flex-col items-center gap-2 text-center">
           <span className="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground">
             <SearchX aria-hidden="true" className="size-5" />
@@ -236,16 +284,11 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
   } else {
     body = (
       <>
-        {list.approxTotal !== null && list.approxTotal > 0 && (
-          <p className="pb-2 text-xs text-muted-foreground">
-            {t("list.total", { count: list.approxTotal })}
-          </p>
-        )}
         <ul
           aria-label={t("list.label")}
           aria-busy={list.phase === "loading"}
           className={cn(
-            GRID_CLASS,
+            layout === "list" ? LIST_CLASS : GRID_CLASS,
             // The previous answer, while the next one is on its way.
             list.phase === "loading" && "opacity-60 transition-opacity"
           )}
@@ -256,10 +299,11 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
               item={item}
               installed={installed?.get(item.id)}
               onOpen={open}
+              layout={layout}
             />
           ))}
         </ul>
-        <div className="flex min-h-12 items-center justify-center pt-3 text-xs text-muted-foreground">
+        <div className="flex min-h-14 items-center justify-center pt-4 text-xs text-muted-foreground">
           {list.more.phase === "error" && list.more.error ? (
             <DiscoverFailure
               variant="inline"
@@ -293,10 +337,7 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
-      {/* Beside a wide list the controls stay put; on a phone they would take
-          a third of the screen, so there they scroll away with the list. */}
-      {!isMobile && <div className="shrink-0 px-4 pt-3">{toolbar}</div>}
-      <div
+      <HarnessScroller
         ref={scrollerRef}
         onScroll={(event) =>
           slots.set(DISCOVER_LIST_SCROLL, event.currentTarget.scrollTop)
@@ -304,16 +345,66 @@ export function DiscoverBrowse({ installed }: DiscoverBrowseProps) {
         // Focusable from code only: where the focus lands after a detail
         // whose item is not in the list.
         tabIndex={-1}
-        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3 outline-none md:px-4"
+        className="flex-1"
       >
-        {isMobile && <div className="pb-3">{toolbar}</div>}
-        {body}
-        {/* What the observer watches. Present whenever a further page
-            exists, including under an empty first page. */}
-        {hasMore && (
-          <div ref={sentinelRef} aria-hidden="true" className="h-px" />
-        )}
-      </div>
+        <div className="mx-auto w-full max-w-6xl min-w-0 px-4 pb-4">
+          <header className="flex min-w-0 flex-col items-center pt-6 pb-5 text-center @2xl/discover:pt-10 @2xl/discover:pb-6">
+            <h2 className="text-2xl leading-tight font-bold tracking-tight text-balance @2xl/discover:text-3xl">
+              {t.rich("hero.title", {
+                accent: (chunks) => (
+                  <span className="text-primary">{chunks}</span>
+                ),
+              })}
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm text-balance text-muted-foreground">
+              {catalogTotal !== undefined
+                ? t("hero.subtitle", { count: catalogTotal })
+                : t("hero.subtitleNoCount")}
+            </p>
+          </header>
+          <div role="search" className="min-w-0">
+            <div className="mx-auto flex w-full max-w-2xl min-w-0 flex-col items-stretch gap-4">
+              <DiscoverSearchBox apply={apply} inputRef={searchRef} />
+              <DiscoverKindSwitch apply={apply} totals={totals.value} />
+            </div>
+            <div
+              ref={resultsRef}
+              className="mt-6 flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b pb-3 @2xl/discover:mt-8"
+            >
+              <p className="min-w-0 text-sm text-muted-foreground">
+                {shownTotal !== null &&
+                  t.rich("list.count", {
+                    count: shownTotal,
+                    num: (chunks) => (
+                      <strong className="font-semibold text-foreground tabular-nums">
+                        {chunks}
+                      </strong>
+                    ),
+                  })}
+              </p>
+              <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                <DiscoverFilters
+                  apply={apply}
+                  config={config.value}
+                  onRetryConfig={
+                    config.phase === "error" && !config.value
+                      ? () => ensureDiscoverConfig(slots)
+                      : undefined
+                  }
+                />
+                <span aria-hidden="true" className="mx-1 h-5 w-px bg-border" />
+                <DiscoverLayoutSwitch />
+              </div>
+            </div>
+          </div>
+          <div className="pt-4">{body}</div>
+          {/* What the observer watches. Present whenever a further page
+              exists, including under an empty first page. */}
+          {hasMore && (
+            <div ref={sentinelRef} aria-hidden="true" className="h-px" />
+          )}
+        </div>
+      </HarnessScroller>
       <p role="status" aria-live="polite" className="sr-only">
         {announcement}
       </p>

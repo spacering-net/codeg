@@ -37,10 +37,13 @@ function reasonKey(error: HarnessCheckError) {
  */
 export function HarnessUpdateStatus({
   itemId,
+  inline = false,
   className,
 }: {
   /** The item the detail is of: its own "not checked yet" is said too. */
   itemId?: string
+  /** One line in a card's footer: "Check now" a link after the words. */
+  inline?: boolean
   className?: string
 }) {
   const t = useTranslations("Harness.updateCheck")
@@ -106,16 +109,25 @@ export function HarnessUpdateStatus({
       </p>
       <Button
         type="button"
-        variant="ghost"
+        variant={inline ? "link" : "ghost"}
         size="sm"
         disabled={state.checking}
         onClick={() => void checkHarnessUpdates(slots, true)}
-        className="-ms-2 h-7 px-2 text-xs max-md:h-9"
+        className={cn(
+          "text-xs max-md:h-9",
+          inline
+            ? "h-auto gap-1 p-0 text-primary hover:no-underline hover:opacity-80 [&_svg]:size-3.5"
+            : "-ms-2 h-7 px-2"
+        )}
       >
-        <RefreshCw
-          aria-hidden="true"
-          className={cn(checking && "animate-spin motion-reduce:animate-none")}
-        />
+        {(!inline || checking) && (
+          <RefreshCw
+            aria-hidden="true"
+            className={cn(
+              checking && "animate-spin motion-reduce:animate-none"
+            )}
+          />
+        )}
         {t("checkNow")}
       </Button>
     </div>

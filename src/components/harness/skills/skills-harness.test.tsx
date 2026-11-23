@@ -157,7 +157,7 @@ describe("SkillsSection — skills from Harness", () => {
   it("marks a Harness skill with its version and how its folder stands", async () => {
     render(<Harness />)
     expect(
-      (await screen.findAllByText("Harness 1.2.0")).length
+      (await screen.findAllByText("SRN Harness 1.2.0")).length
     ).toBeGreaterThan(0)
     expect(await screen.findByText("Changed here")).toBeInTheDocument()
     const article = await openSkill("PDF tools")
@@ -209,7 +209,7 @@ describe("SkillsSection — skills from Harness", () => {
     const user = userEvent.setup()
     render(<Harness />)
     const list = await screen.findByRole("region", {
-      name: "From Harness, folder missing",
+      name: "From SRN Harness, folder missing",
     })
     await user.click(within(list).getByRole("button", { name: /gone/ }))
     const article = await screen.findByRole("article")
@@ -235,7 +235,7 @@ describe("SkillsSection — skills from Harness", () => {
     render(<Harness />)
     expect(
       await screen.findByText(
-        /Codeg could not read its record of the skills it installed from Harness/
+        /Codeg could not read its record of the skills it installed from SRN Harness/
       )
     ).toBeInTheDocument()
     expect(
@@ -258,7 +258,7 @@ describe("SkillsSection — skills from Harness", () => {
       within(article).queryByRole("button", { name: "Update…" })
     ).toBeNull()
     expect(article).toHaveTextContent(
-      "Harness is switched off on this host: it can be uninstalled, not updated."
+      "SRN Harness is switched off on this host: it can be uninstalled, not updated."
     )
   })
 
@@ -269,7 +269,9 @@ describe("SkillsSection — skills from Harness", () => {
     render(<Harness />)
     const article = await openSkill("PDF tools")
     await waitFor(() => expect(callsOf("harness_installed").length).toBe(1))
-    expect(article).toHaveTextContent("Installed from Harness, and read only")
+    expect(article).toHaveTextContent(
+      "Installed from SRN Harness, and read only"
+    )
     expect(
       within(article).queryByRole("button", { name: "Update…" })
     ).toBeNull()

@@ -189,6 +189,7 @@ export function AutomationEditor({
   // uses, so the previewed time can never diverge from the actual fire.
   useEffect(() => {
     if (trigger !== "schedule" || !cron.trim()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the preview owned by the debounced backend query below
       setNextRun(null)
       return
     }
@@ -221,6 +222,7 @@ export function AutomationEditor({
       automation?.root_folder_id == null &&
       selectableFolders.length > 0
     ) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot backfill once folders hydrate, including on mount
       setFolderId(selectableFolders[0].id)
     }
   }, [selectableFolders, folderId, automation])

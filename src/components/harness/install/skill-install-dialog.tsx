@@ -1,7 +1,13 @@
 "use client"
 
 import { useId, useState, type ReactNode } from "react"
-import { Loader2, RefreshCw, TriangleAlert } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  RefreshCw,
+  TriangleAlert,
+} from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
@@ -45,19 +51,21 @@ import type {
   HarnessSkillPhase,
   HarnessSkillPlan,
 } from "@/lib/harness/skill-install-types"
-import { isApplied, reachesOthers } from "@/lib/skills/ops"
+import { affectedAgents, isApplied, reachesOthers } from "@/lib/skills/ops"
 import type { SkillsApplyResult } from "@/lib/skills/types"
 import { cn } from "@/lib/utils"
 import { Code } from "../discover/detail-sections"
 import { DiscoverMark } from "../discover/discover-card"
 import { useDiscoverLabels } from "../discover/use-discover-labels"
-import { HarnessHostLabel } from "../harness-host-label"
 import { MachineText } from "../machine-text"
 import { AgentGlyph } from "../mcp/mcp-bits"
 import { McpDialogFrame } from "../mcp/mcp-dialog-frame"
+import { SHOW_ALL_AGENTS_CLASS } from "../mcp/mcp-server-detail"
+import { AgentSelectAll } from "../mcp/mcp-target-list"
 import { Headline, Technical } from "../mcp/mcp-plan"
 import { OpList } from "../skills/effects-dialog"
 import { SkillPath } from "../skills/skill-bits"
+import { useSkillsLabels } from "../skills/use-skills-labels"
 import {
   InstallBlocked,
   InstallChangeList,
@@ -215,7 +223,8 @@ function NamePart({
   return (
     <InstallPart title={t("title")}>
       <div className="min-w-0 space-y-1.5">
-        <label htmlFor={id} className="text-sm font-medium">
+        {/* The part's title already names the field. */}
+        <label htmlFor={id} className="sr-only">
           {t("label")}
         </label>
         <Input
@@ -363,26 +372,48 @@ function AllowedToolsPart({
   )
 }
 
-/** What one ticked agent's link would come to, by the preview on show. */
+/** What is worth saying of one ticked agent's link, by the preview on show:
+ *  only what is in the way or reaches beyond it — a link that just goes
+ *  where the tick says goes without a word. */
 function useAgentNote(links: SkillsApplyResult | null) {
   const t = useTranslations("Harness.skillInstall.agents")
-  return (agent: string): { note: string; warn: boolean } | null => {
+  const skills = useSkillsLabels()
+  return (agent: string): { note: ReactNode; warn: boolean } | null => {
     const op = links?.ops.find((entry) => entry.agent === agent)
     if (!op) return null
-    if (op.status === "blocked") return { note: t("cannotLink"), warn: true }
-    if (op.status === "unchanged")
-      return { note: t("alreadySees"), warn: false }
-    if (reachesOthers(op)) return { note: t("needsAck"), warn: true }
-    return { note: t("willLink"), warn: false }
+    if (op.status === "blocked") {
+      const reason = op.issues[0]
+      return {
+        note: reason ? (
+          <>
+            {t("cannotLink")} · {skills.issue(reason)}
+          </>
+        ) : (
+          t("cannotLink")
+        ),
+        warn: true,
+      }
+    }
+    if (reachesOthers(op)) {
+      return {
+        note: t("needsAck", {
+          agents: skills.agents(
+            affectedAgents(op).filter((other) => other !== agent)
+          ),
+        }),
+        warn: true,
+      }
+    }
+    const warning = op.warnings[0] ?? op.issues[0]
+    return warning ? { note: skills.issue(warning), warn: true } : null
   }
 }
 
 /**
- * The agents to link it to: each with where its link would go and what that
- * comes to — a shared folder others read too, nothing to link into, an
- * agent that sees it already — and under the list, what linking the ticked
- * ones does, as the Skills section shows a change to the links: who else
- * starts seeing it, what is in the way. Confirming the dialog confirms that.
+ * The agents to link it to: each with where its link would go, and a word
+ * only where something is off — a shared folder others read too, nothing to
+ * link into, a link in the way, other agents it reaches. Confirming the
+ * dialog confirms that.
  */
 function AgentsPart({
   dialog,
@@ -415,10 +446,14 @@ function AgentsPart({
       input.agents.includes(info.agent)
   )
   const hidden = plan.agents.length - rows.length
+  // Select-all speaks for the agents on show that can be ticked.
+  const tickable = rows.filter(
+    (info) => info.link_dir !== null && !kept.includes(info.agent)
+  )
   const blocked = links?.ops.some((op) => op.status === "blocked") ?? false
   const others = links?.ops.some(reachesOthers) ?? false
   return (
-    <div className="min-w-0 space-y-3">
+    <div className="flex min-w-0 flex-col gap-3">
       <fieldset className="min-w-0 space-y-1.5">
         <legend className="pb-1 text-2xs font-semibold tracking-wide text-muted-foreground uppercase">
           {t("title")}
@@ -426,97 +461,147 @@ function AgentsPart({
         <p className="text-xs text-muted-foreground">
           {t(mode === "install" ? "hint" : "hintInstalled")}
         </p>
-        <ul className="divide-y rounded-lg border">
-          {rows.map((info) => {
-            const id = `${baseId}-${info.agent}`
-            const checked = input.agents.includes(info.agent)
-            const keeps = kept.includes(info.agent)
-            const linkable = info.link_dir !== null
-            const status = checked && !keeps ? noteOf(info.agent) : null
-            // What the row says of the agent, most specific first; a
-            // shared folder is worth a warning only where it is about to be
-            // linked into.
-            const note = !linkable
-              ? { text: t("noFolder"), warn: false }
-              : keeps
-                ? { text: t("keeps"), warn: false }
-                : status
-                  ? { text: status.note, warn: status.warn }
-                  : info.link_dir_shared
-                    ? { text: t("shared"), warn: checked }
-                    : null
-            return (
-              <li key={info.agent} className="min-w-0 px-3 py-2">
-                <div className="flex min-w-0 items-start gap-3">
-                  <Checkbox
-                    id={id}
-                    checked={checked}
-                    disabled={!linkable || keeps}
-                    aria-describedby={`${id}-note`}
-                    onCheckedChange={(next) =>
-                      updateSkillInput(slots, dialog.id, (prev, current) =>
-                        toggleSkillAgent(
-                          current,
-                          prev,
-                          info.agent,
-                          next === true
+        {rows.length > 0 && (
+          <div className="overflow-hidden rounded-lg border">
+            <AgentSelectAll
+              total={tickable.length}
+              checked={
+                tickable.filter((info) => input.agents.includes(info.agent))
+                  .length
+              }
+              // One change for the lot: each change of agents asks the host
+              // for a new preview.
+              onChange={(on) =>
+                updateSkillInput(slots, dialog.id, (prev, current) =>
+                  tickable.reduce(
+                    (next, info) =>
+                      toggleSkillAgent(current, next, info.agent, on),
+                    prev
+                  )
+                )
+              }
+            />
+            <ul className="divide-y">
+              {rows.map((info) => {
+                const id = `${baseId}-${info.agent}`
+                const checked = input.agents.includes(info.agent)
+                const keeps = kept.includes(info.agent)
+                const linkable = info.link_dir !== null
+                const status = checked && !keeps ? noteOf(info.agent) : null
+                // What the row says of the agent, most specific first; a
+                // shared folder is worth a warning only where it is about to
+                // be linked into.
+                const note = !linkable
+                  ? { text: t("noFolder"), warn: false }
+                  : keeps
+                    ? { text: t("keeps"), warn: false }
+                    : status
+                      ? { text: status.note, warn: status.warn }
+                      : info.link_dir_shared && checked
+                        ? { text: t("shared"), warn: true }
+                        : null
+                return (
+                  <li
+                    key={info.agent}
+                    className="flex min-w-0 items-center gap-3 px-3 py-2"
+                  >
+                    <Checkbox
+                      id={id}
+                      checked={checked}
+                      disabled={!linkable || keeps}
+                      aria-describedby={`${id}-note`}
+                      onCheckedChange={(next) =>
+                        updateSkillInput(slots, dialog.id, (prev, current) =>
+                          toggleSkillAgent(
+                            current,
+                            prev,
+                            info.agent,
+                            next === true
+                          )
                         )
-                      )
-                    }
-                    className="mt-0.5 max-md:size-5"
-                  />
-                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      }
+                      className="max-md:size-5"
+                    />
                     <label
                       htmlFor={id}
                       className={cn(
-                        "flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm font-medium",
+                        "flex min-w-0 flex-1 items-center gap-x-3",
                         linkable && !keeps && "cursor-pointer"
                       )}
                     >
-                      <AgentGlyph agent={info.agent} />
-                      {labels.agent(info.agent)}
-                      {info.installed === false && (
-                        <span className="text-xs font-normal text-muted-foreground">
-                          {t("notInstalled")}
+                      <span className="flex shrink-0 items-center gap-2 text-sm">
+                        <AgentGlyph agent={info.agent} />
+                        <span
+                          className={cn(
+                            "font-medium whitespace-nowrap",
+                            !linkable && "text-muted-foreground"
+                          )}
+                        >
+                          {labels.agent(info.agent)}
+                        </span>
+                        {info.installed === false && (
+                          <span className="text-xs whitespace-nowrap text-muted-foreground">
+                            {t("notInstalled")}
+                          </span>
+                        )}
+                      </span>
+                      <span
+                        id={`${id}-note`}
+                        className={cn(
+                          "flex min-w-0 items-start gap-1 text-xs leading-snug",
+                          note?.warn
+                            ? "text-tone-warning"
+                            : "text-muted-foreground"
+                        )}
+                      >
+                        {note?.warn && (
+                          <TriangleAlert
+                            aria-hidden="true"
+                            className="mt-px size-3 shrink-0"
+                          />
+                        )}
+                        <span className="min-w-0">{note?.text}</span>
+                      </span>
+                      {/* Where the link would go, at the row's end. Cut
+                          short from its start, so the agent's own folder at
+                          its end stays in view; whole on hover. */}
+                      {info.link_dir && (
+                        <span
+                          dir="rtl"
+                          title={info.link_dir}
+                          className="ms-auto hidden max-w-[45%] min-w-0 truncate text-start font-mono text-2xs text-muted-foreground/80 sm:block"
+                        >
+                          <bdi dir="ltr">{info.link_dir}</bdi>
                         </span>
                       )}
                     </label>
-                    {info.link_dir && <SkillPath path={info.link_dir} />}
-                    <span
-                      id={`${id}-note`}
-                      className={cn(
-                        "text-xs",
-                        note?.warn
-                          ? "text-tone-warning"
-                          : "text-muted-foreground"
-                      )}
-                    >
-                      {note?.text}
-                    </span>
-                  </div>
-                </div>
-              </li>
-            )
-          })}
-        </ul>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        )}
         {(hidden > 0 || showAll) && (
           <Button
             type="button"
-            variant="ghost"
+            variant="link"
             size="sm"
             aria-expanded={showAll}
             onClick={() => setShowAll(!showAll)}
-            className="max-md:h-10"
+            className={SHOW_ALL_AGENTS_CLASS}
           >
+            {showAll ? (
+              <ChevronUp aria-hidden="true" />
+            ) : (
+              <ChevronDown aria-hidden="true" />
+            )}
             {showAll ? t("hideNotInstalled") : t("showAll", { count: hidden })}
           </Button>
         )}
       </fieldset>
-      <section
-        aria-label={t("effects")}
-        aria-busy={checking}
-        className="min-w-0 space-y-2"
-      >
+      {/* What is left to say of the ticked ones as a whole: none ticked, a
+          preview on its way, a warning. Each agent's own is on its row. */}
+      <div aria-live="polite" className="min-w-0 space-y-2 empty:hidden">
         {input.agents.length === 0 && !checking ? (
           <p className="text-xs text-muted-foreground">{t("none")}</p>
         ) : dialog.replanning ? (
@@ -544,15 +629,14 @@ function AgentsPart({
         ) : links ? (
           <>
             {blocked && <Headline tone="warning">{t("blocked")}</Headline>}
-            {others && <Headline tone="neutral">{t("others")}</Headline>}
-            <OpList result={links} phase="review" named="agent" />
+            {others && <Headline tone="warning">{t("others")}</Headline>}
           </>
         ) : otherName ? (
           <p className="text-xs text-muted-foreground">
             {t.rich("otherName", { name: input.name.trim(), code: machine })}
           </p>
         ) : null}
-      </section>
+      </div>
     </div>
   )
 }
@@ -732,7 +816,6 @@ function ItemHead({
       {mode === "reinstall" && (
         <p className="text-xs text-muted-foreground">{t("reinstallNote")}</p>
       )}
-      <HarnessHostLabel />
     </div>
   )
 }
@@ -1233,13 +1316,6 @@ export function SkillInstallDialog({
         title,
         name: (chunks) => <bdi>{chunks}</bdi>,
       })}
-      description={
-        dialog.step === "input" &&
-        dialog.planPhase === "ready" &&
-        plan?.blocking.length === 0
-          ? tSkill("description")
-          : undefined
-      }
       onRequestClose={() => !installing && close()}
       footer={footer}
       // Not the request: a new link preview for other ticks is the same

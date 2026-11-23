@@ -719,9 +719,6 @@ export function AssistantActions({ item }: DiscoverDetailActionsProps) {
               : t("copy")}
         </Button>
       )}
-      <p className="basis-full text-xs text-muted-foreground">
-        {t("installLater")}
-      </p>
       {state.phase === "copied" && (
         <p className="basis-full text-xs text-muted-foreground">
           {t("copiedNote")}

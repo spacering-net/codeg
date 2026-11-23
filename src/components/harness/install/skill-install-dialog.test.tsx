@@ -183,16 +183,54 @@ describe("Skill install dialog — what it shows", () => {
     expect(within(agents).getByLabelText(/^Codex/)).toBeChecked()
     expect(within(agents).getByLabelText(/Kiro CLI/)).toBeDisabled()
     expect(agents).toHaveTextContent("No skills folder to link into")
-    expect(agents).toHaveTextContent("Other agents see it too: see below")
+    // Only what is off gets a word: Codex reaches OpenCode, said on its
+    // row; Claude Code's link goes where the tick says, unremarked.
+    expect(
+      within(agents)
+        .getByLabelText(/^Codex/)
+        .closest("li")
+    ).toHaveTextContent("Also affects OpenCode")
+    expect(
+      within(agents)
+        .getByLabelText(/Claude Code/)
+        .closest("li")
+    ).not.toHaveTextContent(/Will link|Already sees/)
     // Gemini is not installed: folded away.
     expect(within(agents).queryByLabelText(/Gemini/)).toBeNull()
-    const effects = within(body).getByRole("region", {
-      name: "What linking does",
-    })
-    expect(effects).toHaveTextContent("Also turns it on for:")
-    expect(effects).toHaveTextContent("OpenCode")
-    expect(effects).toHaveTextContent("/home/u/.agents/skills/pdf")
+    // No list of the links' effects under the agents: a warning, if any.
+    expect(within(body).queryByText("Also turns it on for:")).toBeNull()
+    expect(body).toHaveTextContent(
+      "Linking also changes what other agents see. Confirming confirms this too."
+    )
     expect(callsOf("harness_skill_install")).toHaveLength(0)
+  })
+
+  it("says on an agent's own row why it cannot be linked", async () => {
+    const links = rawLinks(["claude_code", "codex"]) as {
+      ok: boolean
+      ops: Record<string, unknown>[]
+    }
+    links.ok = false
+    links.ops[0] = {
+      ...links.ops[0],
+      status: "blocked",
+      creates: [],
+      issues: [
+        { code: "target_occupied", path: "/home/u/.claude_code/skills/pdf" },
+      ],
+    }
+    backend.harness_skill_plan = planFor({ links })
+    await openDialog()
+    await ready()
+    const agents = within(dialog()).getByRole("group", { name: "Link to" })
+    expect(
+      within(agents)
+        .getByLabelText(/Claude Code/)
+        .closest("li")
+    ).toHaveTextContent(
+      "Cannot be linked · A folder or file of the same name is in the way."
+    )
+    expect(dialog()).toHaveTextContent("Some agents cannot be linked.")
   })
 
   it("says why the skill's own name was not used, and that SKILL.md's name follows", async () => {
@@ -425,7 +463,11 @@ describe("Skill install dialog — confirming", () => {
       installName: "pdf-mine",
       acks: {},
     })
-    expect(dialog()).toHaveTextContent("/home/u/.agents/skills/pdf-mine")
+    expect(
+      within(dialog())
+        .getByLabelText(/^Codex/)
+        .closest("li")
+    ).toHaveTextContent("Also affects OpenCode")
     await user.click(button("Install"))
     expect(await screen.findByText("Installed.")).toBeInTheDocument()
     expect(callsOf("harness_skill_install")[1]).toMatchObject({
@@ -460,7 +502,7 @@ describe("Skill install dialog — confirming", () => {
     await user.click(button("Install"))
     expect(
       await screen.findByText(
-        "Harness's account of this version changed after you opened this"
+        "SRN Harness's account of this version changed after you opened this"
       )
     ).toBeInTheDocument()
     expect(dialog()).toHaveTextContent("Risk: low → high")
@@ -541,14 +583,14 @@ describe("Skill install dialog — confirming", () => {
     await user.click(button("Install"))
     expect(
       await screen.findByText(
-        "The package is not what Harness lists, so nothing was installed; Codeg's store is as it was."
+        "The package is not what SRN Harness lists, so nothing was installed; Codeg's store is as it was."
       )
     ).toBeInTheDocument()
     expect(dialog()).toHaveTextContent(
-      "scripts/fill.py is not the file Harness lists: its SHA-256 differs."
+      "scripts/fill.py is not the file SRN Harness lists: its SHA-256 differs."
     )
     expect(dialog()).toHaveTextContent(
-      "The archive downloaded is 4.9 KB, not the 4 KB Harness lists."
+      "The archive downloaded is 4.9 KB, not the 4 KB SRN Harness lists."
     )
     expect(dialog()).toHaveTextContent("Check the files")
     expect(
@@ -575,7 +617,7 @@ describe("Skill install dialog — confirming", () => {
       await screen.findByText("Codeg did not install it, and wrote nothing:")
     ).toBeInTheDocument()
     expect(dialog()).toHaveTextContent(
-      "pdf is taken: another skill from Harness (acme/pdf)"
+      "pdf is taken: another skill from SRN Harness (acme/pdf)"
     )
     expect(within(dialog()).getByLabelText("Install name")).toBeInTheDocument()
   })
@@ -881,7 +923,7 @@ describe("Skill install dialog — an older Codeg", () => {
     await openDialog()
     expect(
       await screen.findByText(
-        "This Codeg is too old to install from Harness. Update it."
+        "This Codeg is too old to install from SRN Harness. Update it."
       )
     ).toBeInTheDocument()
     expect(

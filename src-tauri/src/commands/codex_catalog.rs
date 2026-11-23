@@ -920,7 +920,7 @@ pub async fn codex_refresh_endpoint_catalog(
     db: tauri::State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<CodexCatalogStatus, AppCommandError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     codex_refresh_endpoint_catalog_core(&db, &emitter).await
 }
 

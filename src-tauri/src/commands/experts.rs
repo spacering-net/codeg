@@ -326,7 +326,7 @@ pub(crate) fn create_link_raw(src: &Path, dst: &Path) -> io::Result<bool> {
     crate::skills::link::platform_link(src, dst).map(|_| false)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn path_is_symlink(path: &Path) -> bool {
     fs::symlink_metadata(path)
         .map(|m| m.file_type().is_symlink())
@@ -506,7 +506,7 @@ pub async fn experts_apply_links(
     ops: Vec<LinkOp>,
     app: tauri::AppHandle,
 ) -> Result<Vec<LinkOpResult>, ExpertsError> {
-    experts_apply_links_core(&EventEmitter::Tauri(app), ops).await
+    experts_apply_links_core(&EventEmitter::from_app(&app), ops).await
 }
 
 // ─── Commands: read / open ──────────────────────────────────────────────
@@ -647,6 +647,7 @@ mod tests {
         assert!(!supported_agents().contains(&agent));
     }
 
+    #[cfg(not(windows))] // only the hermetic-home tests below
     use tokio::time::{timeout, Duration};
 
     // These tests run against a home of their own (`with_hermetic_home`):

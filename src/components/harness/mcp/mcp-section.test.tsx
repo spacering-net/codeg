@@ -75,6 +75,7 @@ import type {
 } from "@/lib/mcp/types"
 import { MASK } from "@/lib/mcp/secrets"
 import { McpSection } from "./mcp-section"
+import { fitFaces } from "./mcp-server-list"
 
 // ─── A stand-in engine ────────────────────────────────────────────────
 
@@ -334,15 +335,26 @@ describe("MCP — by server", () => {
     expect(within(detail).getByRole("heading", { level: 2 })).toHaveTextContent(
       "linear"
     )
-    expect(within(detail).getByText("Definition A")).toBeInTheDocument()
-    expect(within(detail).getByText("Definition B")).toBeInTheDocument()
-    expect(agentRow(detail, "Claude Code")).toHaveTextContent(
-      "On · definition A"
-    )
-    expect(agentRow(detail, "Codex")).toHaveTextContent("Off · definition B")
-    expect(agentRow(detail, "Gemini CLI")).toHaveTextContent(
-      "On · definition A"
-    )
+    const definitions = within(detail)
+      .getByRole("heading", { name: "Definitions" })
+      .closest("section") as HTMLElement
+    expect(within(definitions).getByText("Definition A")).toBeInTheDocument()
+    expect(within(definitions).getByText("Definition B")).toBeInTheDocument()
+    // The short words are chips beside the name: which definition, and
+    // "Off" — "On" is the switch's to say.
+    const chips = (name: string) =>
+      Array.from(agentRow(detail, name).querySelectorAll("span.rounded-full"))
+        .map((chip) => chip.textContent)
+        // The switch's thumb is round too, and says nothing.
+        .filter(Boolean)
+    expect(chips("Claude Code")).toEqual(["Definition A"])
+    expect(chips("Codex")).toEqual(["Off", "Definition B"])
+    expect(chips("Gemini CLI")).toEqual(["Definition A"])
+    expect(
+      within(detail).getByRole("switch", { name: "Codex" })
+    ).toHaveAccessibleDescription("Off Definition B")
+    // Where it is not there, it says so — and, under it, why it cannot be.
+    expect(chips("ZCode")).toEqual(["Not set up"])
     // ZCode runs local servers only.
     expect(agentRow(detail, "ZCode")).toHaveTextContent(
       "Cannot use HTTP, SSE servers"
@@ -362,6 +374,104 @@ describe("MCP — by server", () => {
     // The real path, as the agent's environment makes it.
     expect(agentRow(detail, "Codex")).toHaveTextContent(
       "/home/u/.codex/config.json"
+    )
+  })
+
+  it("says how far a server reaches, and copies its command as shown", async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    const detail = await openServer(user, "fs")
+    // Under the name: how it is reached, and in how many agents it is on —
+    // said there only, not again over the agents.
+    const header = within(detail).getByRole("banner")
+    expect(header).toHaveTextContent("stdio")
+    expect(header).toHaveTextContent("On in 1 agent")
+    expect(detail.textContent?.match(/On in 1 agent| of \d+ on/g)).toEqual([
+      "On in 1 agent",
+    ])
+    // One definition: its lines, with Edit by its title. Who holds it, the
+    // agents' rows say.
+    const definition = within(detail)
+      .getByRole("heading", { name: "Definition" })
+      .closest("section") as HTMLElement
+    expect(definition).not.toHaveTextContent("Codex")
+    expect(
+      within(definition).getByRole("button", { name: "Edit" })
+    ).toBeEnabled()
+    await user.click(
+      within(definition).getByRole("button", { name: "Copy the command" })
+    )
+    expect(await navigator.clipboard.readText()).toBe("npx -y fs-server")
+  })
+
+  it("titles each list with its count", async () => {
+    const user = userEvent.setup()
+    render(<Harness />)
+    await screen.findByRole("list", { name: "MCP servers" })
+    expect(screen.getByText("MCP servers").textContent).toBe("MCP servers3")
+    await user.click(screen.getByRole("radio", { name: "Agents" }))
+    const list = await screen.findByRole("list", { name: "Agents" })
+    const shown = within(list).getAllByRole("button").length
+    expect(screen.getByText("Agents", { selector: "p" }).textContent).toBe(
+      `Agents${shown}`
+    )
+  })
+
+  it("shows a row's agents as a group of faces, the rest as a count", async () => {
+    for (const index of [0, 1, 2, 3, 6]) {
+      files.agents[index].entries.push(entry("shared", stdio("shared-mcp")))
+    }
+    render(<Harness />)
+    await screen.findByRole("list", { name: "MCP servers" })
+    const rowOf = (key: string) =>
+      within(serverList())
+        .getAllByRole("button")
+        .find((button) => button.dataset.mcpRow === key)!
+    const faces = (row: HTMLElement) =>
+      row.querySelectorAll('[data-slot="avatar"]').length
+    const count = (row: HTMLElement) =>
+      row.querySelector('[data-slot="avatar-group-count"]')?.textContent
+    // Five agents: three faces and "+2" — one row's width, not five.
+    expect(faces(rowOf("shared"))).toBe(3)
+    expect(count(rowOf("shared"))).toBe("+2")
+    // Four fit as they are.
+    expect(faces(rowOf("fs"))).toBe(1)
+    expect(count(rowOf("fs"))).toBeUndefined()
+    // In words, every one of them.
+    expect(rowOf("shared")).toHaveTextContent(
+      "On in Claude Code, Codex, Gemini CLI, ZCode, OpenClaw."
+    )
+  })
+
+  it("fits as many faces as the row has room for, in turn across definitions", () => {
+    // Not measured yet: a fixed few.
+    expect(fitFaces(0, [9], false)).toEqual([4])
+    expect(fitFaces(0, [5, 5], true)).toEqual([3, 3])
+    // 24 for the first, 18 for each more, room kept for a wide count.
+    expect(fitFaces(24 + 18 * 7 + 6, [20], false)).toEqual([8])
+    expect(fitFaces(400, [5], false)).toEqual([5])
+    // Several definitions take turns; one with fewer agents leaves the rest.
+    expect(fitFaces(12 * 2 + 10 + 24 * 2 + 18 * 6 + 6, [9, 9], true)).toEqual([
+      4, 4,
+    ])
+    expect(fitFaces(12 * 2 + 10 + 24 * 2 + 18 * 6 + 6, [1, 9], true)).toEqual([
+      1, 7,
+    ])
+    // Too narrow for even one each: one place each all the same.
+    expect(fitFaces(10, [3, 3], true)).toEqual([1, 1])
+  })
+
+  it("says, in the list and the detail, that a server is on nowhere", async () => {
+    const user = userEvent.setup()
+    files.agents[1].entries[1].enabled = false
+    render(<Harness />)
+    const detail = await openServer(user, "fs")
+    const row = within(serverList())
+      .getAllByRole("button")
+      .find((button) => button.dataset.mcpRow === "fs")!
+    expect(row).toHaveTextContent("Off everywhere")
+    expect(within(detail).getByRole("banner")).toHaveTextContent(
+      "On in no agent"
     )
   })
 
@@ -1011,44 +1121,6 @@ describe("MCP — what will be written", () => {
   })
 })
 
-describe("MCP — the host on a phone", () => {
-  const HINT = "Changes here are saved on this computer."
-
-  it("is the chip alone at the head of the list, its sentence in the tooltip", async () => {
-    mocks.mobile = true
-    const { container } = render(<Harness />)
-    await screen.findByRole("list", { name: "MCP servers" })
-
-    const host = container.querySelector("[data-harness-host]") as HTMLElement
-    expect(within(host).getByText(HINT)).toHaveClass("sr-only")
-    expect(
-      within(host).getByText("This computer").closest("[title]")
-    ).toHaveAttribute("title", HINT)
-  })
-
-  it("is said in full where a save is reviewed", async () => {
-    mocks.mobile = true
-    const user = userEvent.setup()
-    render(<Harness />)
-    const detail = await openServer(user, "linear")
-    await user.click(within(detail).getByRole("button", { name: "Edit A" }))
-    const editor = await screen.findByRole("dialog")
-    await user.click(within(editor).getByRole("radio", { name: "stdio" }))
-    await user.type(
-      within(editor).getByRole("textbox", { name: "Command" }),
-      "linear-mcp"
-    )
-    await user.click(
-      within(editor).getByRole("button", { name: "Review changes" })
-    )
-
-    const review = await within(editor).findByRole("region", {
-      name: "What will be written",
-    })
-    expect(within(review).getByText(HINT)).not.toHaveClass("sr-only")
-  })
-})
-
 describe("MCP — results", () => {
   async function saveAnEdit(user: ReturnType<typeof userEvent.setup>) {
     const detail = await openServer(user, "linear")
@@ -1433,17 +1505,18 @@ describe("MCP — paste", () => {
     await within(paste).findByText("Found 1 server.")
     const row = (name: RegExp) =>
       within(paste).getByRole("checkbox", { name }).closest("li")!
+    // Getting every server chosen goes without saying; the cost does not.
     expect(row(/Hermes/)).toHaveTextContent(
-      "Gets 1 server · saving removes the comments in its file"
+      "Saving removes the comments in its file"
     )
-    // Not installed, so not ticked — and said so.
+    expect(row(/Hermes/)).not.toHaveTextContent("Gets")
+    // Not installed, so not ticked: nothing to say of it.
     expect(
       within(paste).getByRole("checkbox", { name: /Cursor/ })
     ).not.toBeChecked()
-    expect(row(/Cursor/)).toHaveTextContent("Gets none of them")
+    expect(row(/Cursor/)).not.toHaveTextContent("Gets")
     // Unticked, a save costs Hermes nothing: no warning any more.
     await user.click(within(paste).getByRole("checkbox", { name: /Hermes/ }))
-    expect(row(/Hermes/)).toHaveTextContent("Gets none of them")
     expect(row(/Hermes/)).not.toHaveTextContent("comments")
   })
 
@@ -1730,7 +1803,7 @@ describe("MCP — Find on Harness", () => {
     await screen.findByRole("list", { name: "MCP servers" })
     await user.click(screen.getByRole("button", { name: "Add" }))
     await user.click(
-      await screen.findByRole("menuitem", { name: /Find on Harness/ })
+      await screen.findByRole("menuitem", { name: /Find on SRN Harness/ })
     )
     expect(view.section).toBe("discover")
     expect(view.slots.get(DISCOVER_FILTERS)).toMatchObject({

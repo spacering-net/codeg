@@ -29,6 +29,9 @@ vi.mock("@/components/canvas/canvas-page", () => ({
   CanvasPage: () => <div>PAGE canvas</div>,
   CanvasPageTitle: () => <div>TITLE canvas</div>,
 }))
+vi.mock("@/components/harness/harness-chrome-actions", () => ({
+  HarnessChromeActions: () => <div>ACTIONS harness</div>,
+}))
 vi.mock("@/components/harness/harness-page", () => ({
   HarnessPage: () => <div>PAGE harness</div>,
   HarnessPageTitle: () => <div>TITLE harness</div>,
@@ -126,15 +129,18 @@ describe("workbench route registry", () => {
     expect(screen.getByTestId("page").textContent).toBe("")
   })
 
-  it("puts no buttons of Harness's own in the window chrome", () => {
-    renderWorkbench(["harness", "tasks"])
+  it("puts Harness's refresh in the window chrome, as Tasks puts its own", () => {
+    renderWorkbench(["harness", "tasks", "canvas"])
 
     fireEvent.click(screen.getByText("go harness"))
-    expect(screen.getByTestId("actions").textContent).toBe("")
+    expect(screen.getByTestId("actions").textContent).toBe("ACTIONS harness")
 
-    // Control: the slot does render for a route that fills it.
     fireEvent.click(screen.getByText("go tasks"))
     expect(screen.getByTestId("actions").textContent).toBe("ACTIONS tasks")
+
+    // Control: a route with nothing of its own leaves the slot empty.
+    fireEvent.click(screen.getByText("go canvas"))
+    expect(screen.getByTestId("actions").textContent).toBe("")
   })
 
   it("has a page behind every row the sidebar can show", () => {

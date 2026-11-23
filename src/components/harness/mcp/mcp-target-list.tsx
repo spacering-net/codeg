@@ -64,10 +64,56 @@ export function useTargetBlockText(): (block: McpTargetBlock) => ReactNode {
 }
 
 /**
+ * The head of an agent list: one box that ticks every agent that can be
+ * ticked, or clears them all when they all are, and how many are ticked.
+ * Half-ticked while some are.
+ */
+export function AgentSelectAll({
+  total,
+  checked,
+  onChange,
+}: {
+  /** The agents the box speaks for — those that can be ticked. */
+  total: number
+  /** How many of them are ticked. */
+  checked: number
+  onChange: (checked: boolean) => void
+}) {
+  const t = useTranslations("Harness.agentList")
+  const id = useId()
+  const all = total > 0 && checked >= total
+  return (
+    <div className="flex min-w-0 items-center gap-3 border-b bg-muted/30 px-3 py-1.5">
+      <Checkbox
+        id={id}
+        checked={all ? true : checked > 0 ? "indeterminate" : false}
+        disabled={total === 0}
+        onCheckedChange={() => onChange(!all)}
+        className="max-md:size-5"
+      />
+      <label
+        htmlFor={id}
+        className={cn(
+          "min-w-0 flex-1 text-xs font-medium",
+          total === 0 ? "text-muted-foreground" : "cursor-pointer"
+        )}
+      >
+        {t("selectAll")}
+      </label>
+      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+        {t("selected", { count: checked, total })}
+      </span>
+    </div>
+  )
+}
+
+/**
  * The agents a save can go to, each with a box to tick. One that cannot take
  * it is listed all the same — greyed, with the reason — so nobody wonders
  * where it went. Agents that are not installed and hold nothing are folded
  * away behind "Show all agents".
+ *
+ * Each agent is one line: its name, and after it what saving would do to it.
  */
 export function McpTargetList({
   rows,
@@ -88,77 +134,91 @@ export function McpTargetList({
   const visible = rows.filter(
     (row) => showAll || row.checked || row.holds || !isFolded(row.info)
   )
+  // Select-all speaks for the agents on show that can be ticked.
+  const tickable = visible.filter((row) => row.block === null)
+  const ticked = tickable.filter((row) => row.checked).length
   return (
     <fieldset className="min-w-0">
       <legend className={cn(MCP_SECTION_TITLE_CLASS, "pb-2")}>{legend}</legend>
       {hint && (
         <p className="-mt-1 pb-2 text-xs text-muted-foreground">{hint}</p>
       )}
-      <ul className="divide-y rounded-lg border">
-        {visible.map((row) => {
-          const id = `${baseId}-${row.agent}`
-          const noteId = `${id}-note`
-          return (
-            <li
-              key={row.agent}
-              className="flex min-w-0 items-start gap-3 px-3 py-2"
-            >
-              <Checkbox
-                id={id}
-                checked={row.checked}
-                disabled={row.block !== null}
-                aria-describedby={noteId}
-                onCheckedChange={(checked) =>
-                  onToggle(row.agent, checked === true)
-                }
-                className="mt-0.5 max-md:size-5"
-              />
-              <label
-                htmlFor={id}
-                className={cn(
-                  "flex min-w-0 flex-1 flex-col gap-0.5",
-                  row.block ? "cursor-default" : "cursor-pointer"
-                )}
-              >
-                <span className="flex min-w-0 items-center gap-2 text-sm">
-                  <AgentGlyph agent={row.agent} />
-                  <span
+      {visible.length > 0 && (
+        <div className="overflow-hidden rounded-lg border">
+          <AgentSelectAll
+            total={tickable.length}
+            checked={ticked}
+            onChange={(on) => {
+              for (const row of tickable) {
+                if (row.checked !== on) onToggle(row.agent, on)
+              }
+            }}
+          />
+          <ul className="divide-y">
+            {visible.map((row) => {
+              const id = `${baseId}-${row.agent}`
+              const noteId = `${id}-note`
+              const note = row.block
+                ? (row.blockNote ?? blockText(row.block))
+                : row.note
+              const warn = row.warn && !row.block && !!row.note
+              return (
+                <li
+                  key={row.agent}
+                  className="flex min-w-0 items-center gap-3 px-3 py-2"
+                >
+                  <Checkbox
+                    id={id}
+                    checked={row.checked}
+                    disabled={row.block !== null}
+                    aria-describedby={noteId}
+                    onCheckedChange={(checked) =>
+                      onToggle(row.agent, checked === true)
+                    }
+                    className="max-md:size-5"
+                  />
+                  <label
+                    htmlFor={id}
                     className={cn(
-                      "min-w-0 truncate font-medium",
-                      row.block && "text-muted-foreground"
+                      "flex min-w-0 flex-1 items-center gap-x-3",
+                      row.block ? "cursor-default" : "cursor-pointer"
                     )}
                   >
-                    {labels.agent(row.agent)}
-                  </span>
-                </span>
-                <span
-                  id={noteId}
-                  className={cn(
-                    "flex min-w-0 items-start gap-1 text-xs",
-                    row.warn && !row.block
-                      ? "text-tone-warning"
-                      : "text-muted-foreground"
-                  )}
-                >
-                  {/* A note worth noticing is marked by more than its
-                      colour. */}
-                  {row.warn && !row.block && row.note && (
-                    <TriangleAlert
-                      aria-hidden="true"
-                      className="mt-0.5 size-3 shrink-0"
-                    />
-                  )}
-                  <span className="min-w-0">
-                    {row.block
-                      ? (row.blockNote ?? blockText(row.block))
-                      : row.note}
-                  </span>
-                </span>
-              </label>
-            </li>
-          )
-        })}
-      </ul>
+                    <span className="flex shrink-0 items-center gap-2 text-sm">
+                      <AgentGlyph agent={row.agent} />
+                      <span
+                        className={cn(
+                          "font-medium whitespace-nowrap",
+                          row.block && "text-muted-foreground"
+                        )}
+                      >
+                        {labels.agent(row.agent)}
+                      </span>
+                    </span>
+                    <span
+                      id={noteId}
+                      className={cn(
+                        "flex min-w-0 items-start gap-1 text-xs leading-snug",
+                        warn ? "text-tone-warning" : "text-muted-foreground"
+                      )}
+                    >
+                      {/* A note worth noticing is marked by more than its
+                          colour. */}
+                      {warn && (
+                        <TriangleAlert
+                          aria-hidden="true"
+                          className="mt-px size-3 shrink-0"
+                        />
+                      )}
+                      <span className="min-w-0">{note}</span>
+                    </span>
+                  </label>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
       <ShowAllAgentsToggle hidden={rows.length - visible.length} />
     </fieldset>
   )

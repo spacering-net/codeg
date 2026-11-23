@@ -16,6 +16,7 @@ import {
   FolderInput,
   PencilLine,
   PowerOff,
+  Sparkles,
   Trash2,
   TriangleAlert,
   Unlink,
@@ -68,17 +69,24 @@ import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { DiscoverMark } from "../discover/discover-card"
 import { MachineText } from "../machine-text"
+import {
+  HARNESS_DETAIL_CLASS,
+  HARNESS_FILTER_CLASS,
+  HARNESS_ROW_CLASS,
+  HARNESS_ROW_TILE_CLASS,
+  HARNESS_SEGMENT_CLASS,
+  HARNESS_SEGMENTS_CLASS,
+} from "../harness-styles"
 import { AgentGlyph } from "../mcp/mcp-bits"
-import { ContentPart, DetailFrame, ShowInFolder } from "./skill-detail"
+import {
+  ContentPart,
+  DETAIL_NOTE_CLASS,
+  DetailFrame,
+  ShowInFolder,
+  SkillDetailHeader,
+} from "./skill-detail"
 import { useSkillsLabels } from "./use-skills-labels"
 import { SkillPath } from "./skill-bits"
-
-const SEGMENT_CLASS = cn(
-  "h-8 flex-1 rounded-full px-3 text-[0.8125rem] font-medium whitespace-nowrap",
-  "text-muted-foreground outline-none transition-colors hover:text-foreground max-md:h-9",
-  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-  "data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
-)
 
 /** The agent and scope the view lists: which agent, and where — its global
  *  folders, or a project's. A project defaults to the workspace's own. */
@@ -130,50 +138,60 @@ export function AgentScopePicker({
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-2">
-      <Select
-        value={scope.agent ?? ""}
-        onValueChange={(value) => setAgentScope(slots, { agent: value })}
-      >
-        <SelectTrigger aria-label={t("agent")} className="w-full max-md:h-10">
-          <SelectValue placeholder={t("pickAgent")} />
-        </SelectTrigger>
-        <SelectContent align="start">
-          {agents.map((agent, index) => (
-            <Fragment key={agent.agent}>
-              {index === firstMissing && index > 0 && <SelectSeparator />}
-              <SelectItem value={agent.agent}>
-                <span className="flex min-w-0 items-center gap-2">
-                  <AgentGlyph agent={agent.agent} />
-                  <span className="min-w-0 truncate">
-                    {labels.agent(agent.agent)}
+    // One row — whose skills, and where — over the list, the folder under it
+    // once a project is asked for.
+    <div className="flex min-w-0 flex-col gap-2 pb-1">
+      <div className="flex min-w-0 items-center gap-2">
+        <Select
+          value={scope.agent ?? ""}
+          onValueChange={(value) => setAgentScope(slots, { agent: value })}
+        >
+          <SelectTrigger
+            aria-label={t("agent")}
+            className={cn(
+              HARNESS_FILTER_CLASS,
+              "min-w-0 flex-1 justify-between"
+            )}
+          >
+            <SelectValue placeholder={t("pickAgent")} />
+          </SelectTrigger>
+          <SelectContent align="start">
+            {agents.map((agent, index) => (
+              <Fragment key={agent.agent}>
+                {index === firstMissing && index > 0 && <SelectSeparator />}
+                <SelectItem value={agent.agent}>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <AgentGlyph agent={agent.agent} />
+                    <span className="min-w-0 truncate">
+                      {labels.agent(agent.agent)}
+                    </span>
+                    {notInstalled.has(agent.agent) && (
+                      <DiscoverMark>{t("notInstalled")}</DiscoverMark>
+                    )}
                   </span>
-                  {notInstalled.has(agent.agent) && (
-                    <DiscoverMark>{t("notInstalled")}</DiscoverMark>
-                  )}
-                </span>
-              </SelectItem>
-            </Fragment>
-          ))}
-        </SelectContent>
-      </Select>
-      <ToggleGroup.Root
-        type="single"
-        value={scope.scope}
-        aria-label={t("scope")}
-        onValueChange={chooseScope}
-        className="flex h-9 min-w-0 items-center gap-0.5 rounded-full bg-muted/70 p-0.5 ws-msg-chip max-md:h-10"
-      >
-        <ToggleGroup.Item value="global" className={SEGMENT_CLASS}>
-          {t("global")}
-        </ToggleGroup.Item>
-        <ToggleGroup.Item value="project" className={SEGMENT_CLASS}>
-          {t("project")}
-        </ToggleGroup.Item>
-      </ToggleGroup.Root>
+                </SelectItem>
+              </Fragment>
+            ))}
+          </SelectContent>
+        </Select>
+        <ToggleGroup.Root
+          type="single"
+          value={scope.scope}
+          aria-label={t("scope")}
+          onValueChange={chooseScope}
+          className={HARNESS_SEGMENTS_CLASS}
+        >
+          <ToggleGroup.Item value="global" className={HARNESS_SEGMENT_CLASS}>
+            {t("global")}
+          </ToggleGroup.Item>
+          <ToggleGroup.Item value="project" className={HARNESS_SEGMENT_CLASS}>
+            {t("project")}
+          </ToggleGroup.Item>
+        </ToggleGroup.Root>
+      </div>
       {scope.scope === "project" &&
         (folders.length === 0 ? (
-          <p className="text-xs text-muted-foreground">{t("noFolders")}</p>
+          <p className="px-1 text-xs text-muted-foreground">{t("noFolders")}</p>
         ) : (
           <Select
             value={scope.folder ?? ""}
@@ -181,7 +199,7 @@ export function AgentScopePicker({
           >
             <SelectTrigger
               aria-label={t("folder")}
-              className="w-full max-md:h-10"
+              className={cn(HARNESS_FILTER_CLASS, "w-full justify-between")}
             >
               <SelectValue placeholder={t("pickFolder")} />
             </SelectTrigger>
@@ -210,9 +228,11 @@ export function AgentScopePicker({
 function OwnerMarks({
   item,
   facts,
+  size,
 }: {
   item: AgentSkillItem
   facts: AgentSkillFacts
+  size?: "sm" | "md"
 }) {
   const t = useTranslations("Harness.skills.byAgent")
   const labels = useSkillsLabels()
@@ -226,12 +246,16 @@ function OwnerMarks({
           : "info"
   return (
     <>
-      <DiscoverMark tone={tone}>
+      <DiscoverMark size={size} tone={tone}>
         {facts.owner === "broken" && <Unlink aria-hidden="true" />}
         {labels.owner(facts.owner, facts.pack)}
       </DiscoverMark>
-      {facts.codegCopy && <DiscoverMark>{t("copyMark")}</DiscoverMark>}
-      {item.read_only && <DiscoverMark>{t("systemMark")}</DiscoverMark>}
+      {facts.codegCopy && (
+        <DiscoverMark size={size}>{t("copyMark")}</DiscoverMark>
+      )}
+      {item.read_only && (
+        <DiscoverMark size={size}>{t("systemMark")}</DiscoverMark>
+      )}
     </>
   )
 }
@@ -253,29 +277,38 @@ export const AgentSkillRow = memo(function AgentSkillRow({
         data-mcp-row={item.id}
         aria-current={selected ? "true" : undefined}
         onClick={() => onOpen(item.id)}
-        className={cn(
-          "flex w-full min-w-0 flex-col gap-1 rounded-lg px-2.5 py-2 text-start transition-colors outline-none",
-          "hover:bg-muted/50 focus-visible:ring-[3px] focus-visible:ring-ring/50",
-          "max-md:py-2.5",
-          selected && "bg-muted hover:bg-muted"
-        )}
+        className={HARNESS_ROW_CLASS}
       >
-        <span className="flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <bdi
-            dir="ltr"
-            className="min-w-0 truncate text-sm font-medium text-foreground"
-          >
-            {item.name || item.id}
-          </bdi>
-          <span className="flex flex-wrap items-center gap-1">
-            <OwnerMarks item={item} facts={facts} />
-          </span>
+        <span
+          className={cn(
+            HARNESS_ROW_TILE_CLASS,
+            facts.owner === "broken" && "text-tone-warning"
+          )}
+        >
+          {facts.owner === "broken" ? (
+            <Unlink aria-hidden="true" />
+          ) : (
+            <Sparkles aria-hidden="true" />
+          )}
         </span>
-        {item.description && (
-          <span className="line-clamp-2 text-2xs leading-4 text-muted-foreground">
-            <bdi>{item.description}</bdi>
+        <span className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="flex min-w-0 items-center gap-2">
+            <bdi
+              dir="ltr"
+              className="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
+            >
+              {item.name || item.id}
+            </bdi>
+            <span className="flex shrink-0 items-center gap-1">
+              <OwnerMarks item={item} facts={facts} size="sm" />
+            </span>
           </span>
-        )}
+          {item.description && (
+            <span className="truncate text-xs text-muted-foreground">
+              <bdi>{item.description}</bdi>
+            </span>
+          )}
+        </span>
       </button>
     </li>
   )
@@ -567,29 +600,28 @@ export function AgentSkillDetail({
       scrollId={contentKey}
       onBack={onBack}
     >
-      <article
-        aria-labelledby={headingId}
-        className="mx-auto w-full max-w-4xl min-w-0 space-y-5 px-3 py-4 md:px-5"
-      >
-        <header className="min-w-0 space-y-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <OwnerMarks item={item} facts={facts} />
-          </div>
-          <h2
-            id={headingId}
-            ref={headingRef}
-            tabIndex={-1}
-            className="text-lg leading-snug font-semibold outline-none"
-          >
+      <article aria-labelledby={headingId} className={HARNESS_DETAIL_CLASS}>
+        <SkillDetailHeader
+          headingId={headingId}
+          headingRef={headingRef}
+          icon={
+            facts.owner === "broken" ? (
+              <Unlink aria-hidden="true" className="text-tone-warning" />
+            ) : (
+              <Sparkles aria-hidden="true" />
+            )
+          }
+          title={
             <bdi dir="ltr">
               <MachineText>{item.name || item.id}</MachineText>
             </bdi>
-          </h2>
-          {item.description && (
-            <p className="text-sm text-muted-foreground">
-              <bdi>{item.description}</bdi>
-            </p>
-          )}
+          }
+          marks={<OwnerMarks item={item} facts={facts} />}
+          description={
+            item.description ? <bdi>{item.description}</bdi> : undefined
+          }
+          actions={actions}
+        >
           <SkillPath path={item.path} />
           {facts.linkTarget && (
             <p className="text-xs text-muted-foreground">
@@ -597,9 +629,7 @@ export function AgentSkillDetail({
               <SkillPath path={facts.linkTarget} />
             </p>
           )}
-          <p className="rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-            {about}
-          </p>
+          <p className={DETAIL_NOTE_CLASS}>{about}</p>
           {readers.length > 0 && (
             <p className="flex min-w-0 items-start gap-1.5 text-xs text-tone-warning">
               <TriangleAlert
@@ -611,10 +641,7 @@ export function AgentSkillDetail({
               </span>
             </p>
           )}
-          <div className="flex min-w-0 flex-wrap items-center gap-2 pt-1">
-            {actions}
-          </div>
-        </header>
+        </SkillDetailHeader>
         <ContentPart
           links={SKILLS_LINKS}
           contentKey={contentKey}

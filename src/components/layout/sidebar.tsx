@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react"
 import {
-  Blocks,
+  DraftingCompass,
   Crosshair,
   Eye,
   FolderSync,
@@ -129,7 +129,7 @@ const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
   tasks: ListTodo,
   forge: LayoutTemplate,
   canvas: MapIcon,
-  harness: Blocks,
+  harness: DraftingCompass,
 }
 
 /**
@@ -668,7 +668,7 @@ export function Sidebar() {
         )}
         {isNavItemVisible(navItems, "harness") && (
           <SidebarNavButton
-            icon={Blocks}
+            icon={DraftingCompass}
             label={t("harness")}
             active={routeId === "harness"}
             onClick={() => {

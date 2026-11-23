@@ -187,17 +187,41 @@ export function getAgentInitial(agentType: AgentType): string {
 export function isMonochromeSvgDataUrl(url: string | null): boolean {
   if (!url || !url.startsWith(SVG_BASE64_PREFIX)) return false
   const cached = monoSvgCache.get(url)
-  if (cached !== undefined) return cached
-  // Decoded once per distinct URL for the whole session; AgentIcon renders in
-  // hot lists (sidebar rows, selectors), so the classification must never be
+  if (cached !== undefined) {
+    // Least-recently-used order: an icon still on screen keeps its slot while
+    // replaced uploads and previews age out behind it.
+    monoSvgCache.delete(url)
+    monoSvgCache.set(url, cached)
+    return cached
+  }
+  // Classified once per distinct URL while it stays in use; AgentIcon renders
+  // in hot lists (sidebar rows, selectors), so a displayed icon must not be
   // re-derived per render.
   const result = classifyMonoSvg(url.slice(SVG_BASE64_PREFIX.length))
+  if (url.length > MONO_SVG_CACHE_MAX_UNITS) return result
+  for (const oldest of monoSvgCache.keys()) {
+    if (
+      monoSvgCache.size < MONO_SVG_CACHE_MAX_ENTRIES &&
+      monoSvgCacheUnits + url.length <= MONO_SVG_CACHE_MAX_UNITS
+    ) {
+      break
+    }
+    monoSvgCache.delete(oldest)
+    monoSvgCacheUnits -= oldest.length
+  }
   monoSvgCache.set(url, result)
+  monoSvgCacheUnits += url.length
   return result
 }
 
 const SVG_BASE64_PREFIX = "data:image/svg+xml;base64,"
+const MONO_SVG_CACHE_MAX_ENTRIES = 128
+// Icons are capped at 256 KiB (~350 Ki base64 chars as a data URL), so this
+// keeps several maximum-size icons on screen at once without them evicting
+// each other on every render.
+const MONO_SVG_CACHE_MAX_UNITS = 2 * 1024 * 1024
 const monoSvgCache = new Map<string, boolean>()
+let monoSvgCacheUnits = 0
 
 /** Explicit paints in attribute (`fill="#000"`) or CSS (`fill:#000`) form. */
 const PAINT_RE =

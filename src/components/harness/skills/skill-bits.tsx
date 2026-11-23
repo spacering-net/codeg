@@ -268,13 +268,17 @@ export function EmptyState({
   children?: ReactNode
 }) {
   return (
-    <div className="flex min-h-48 items-center justify-center p-6">
+    // Top-aligned, not centred: a list's and a detail's stand side by side,
+    // and their icons line up whatever each says under them.
+    <div className="flex justify-center px-6 pt-10 pb-6">
       <div className="flex max-w-sm min-w-0 flex-col items-center gap-2 text-center">
         <span className="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground">
           {icon}
         </span>
         <p className="text-sm font-medium">{title}</p>
-        {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
+        {hint && (
+          <p className="text-xs text-balance text-muted-foreground">{hint}</p>
+        )}
         {children}
       </div>
     </div>

@@ -6,7 +6,8 @@
 //! picked from the provider's list as `modelPicker` rows — only for the CLI
 //! codeg launches, through the `--settings` tier
 //! (`_meta.claudeCode.options.settings`), so a Claude run from a terminal never
-//! shows them.
+//! shows them. claude-agent-acp 0.109.0 hands that tier to the CLI it ships in
+//! its initialize request instead of on its command line; the tier is the same.
 //!
 //! That tier wins over the user's own `settings.json` outright: Claude takes
 //! the highest-precedence tier that defines `modelPicker` and merges nothing

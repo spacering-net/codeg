@@ -6,7 +6,6 @@ import {
   Compass,
   PencilLine,
   Plus,
-  RefreshCw,
   Search,
   X,
 } from "lucide-react"
@@ -38,23 +37,19 @@ import {
 import type { McpHarnessSeam } from "@/lib/harness/mcp-marks"
 import {
   MCP_FILTERS,
-  MCP_INVENTORY,
   MCP_VIEW,
   openCreateEditor,
   openPasteDialog,
-  reloadMcpInventory,
   type McpShow,
   type McpView,
 } from "@/lib/harness/mcp-state"
 import { cn } from "@/lib/utils"
-
-const SEGMENT_CLASS = cn(
-  "h-8 flex-1 rounded-full px-3 text-[0.8125rem] font-medium whitespace-nowrap",
-  "max-md:h-9 text-muted-foreground outline-none transition-colors hover:text-foreground",
-  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-  "data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm",
-  "@3xl/mcp:h-7"
-)
+import {
+  HARNESS_FILTER_CLASS,
+  HARNESS_SEARCH_CLASS,
+  HARNESS_SEGMENT_CLASS,
+  HARNESS_SEGMENTS_CLASS,
+} from "../harness-styles"
 
 /** The filters a list can be narrowed with. "From Harness" and "Update
  *  available" only once the Harness seam has something they could match. */
@@ -71,9 +66,11 @@ export function showOptions(harness: McpHarnessSeam | undefined): McpShow[] {
 }
 
 /**
- * The section's controls: which view, the search box and the filter, a
- * refresh, and the ways to add a server. Applied as they change — the list is
- * local, so nothing waits for a pause in typing.
+ * The section's controls, on one row where the pane is wide: which view, the
+ * search box and the filter, and the ways to add a server (Refresh is in the
+ * window's chrome, as on every section). Applied as they change — the list
+ * is local, so nothing waits for a pause in typing. Narrow, the search and
+ * the filter take a second row.
  */
 export function McpToolbar({
   harness,
@@ -84,8 +81,6 @@ export function McpToolbar({
   const { slots, discoverEnabled, setSection } = useHarnessView()
   const [view, setView] = useHarnessSlot(MCP_VIEW)
   const [filters, setFilters] = useHarnessSlot(MCP_FILTERS)
-  const [inventory] = useHarnessSlot(MCP_INVENTORY)
-  const loading = inventory.phase === "loading"
   const options = showOptions(harness)
   // A filter whose source went away falls back to all, rather than leaving a
   // list that can never match anything.
@@ -107,7 +102,7 @@ export function McpToolbar({
   }
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2">
+    <>
       <ToggleGroup.Root
         type="single"
         value={view}
@@ -116,96 +111,19 @@ export function McpToolbar({
           if (value === "servers" || value === "agents")
             setView(value as McpView)
         }}
-        className="no-scrollbar order-1 flex h-9 min-w-0 items-center gap-0.5 overflow-x-auto rounded-full bg-muted/70 p-0.5 ws-msg-chip max-md:h-10 @3xl/mcp:h-8"
+        className={HARNESS_SEGMENTS_CLASS}
       >
-        <ToggleGroup.Item value="servers" className={SEGMENT_CLASS}>
+        <ToggleGroup.Item value="servers" className={HARNESS_SEGMENT_CLASS}>
           {t("views.servers")}
         </ToggleGroup.Item>
-        <ToggleGroup.Item value="agents" className={SEGMENT_CLASS}>
+        <ToggleGroup.Item value="agents" className={HARNESS_SEGMENT_CLASS}>
           {t("views.agents")}
         </ToggleGroup.Item>
       </ToggleGroup.Root>
 
-      <div className="order-2 ms-auto flex shrink-0 items-center gap-1 @3xl/mcp:order-4 @3xl/mcp:ms-0">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={t("refresh")}
-          title={t("refresh")}
-          aria-busy={loading}
-          onClick={() => void reloadMcpInventory(slots)}
-          className="text-muted-foreground max-md:size-10"
-        >
-          <RefreshCw
-            aria-hidden="true"
-            className={cn(loading && "animate-spin")}
-          />
-        </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              size="sm"
-              aria-label={t("add.label")}
-              className="max-md:h-10"
-            >
-              <Plus aria-hidden="true" />
-              {/* On the narrowest phones the plus says it, and the button
-                  keeps its name for whoever cannot see it. */}
-              <span className="hidden @sm/mcp:inline">{t("add.label")}</span>
-              <ChevronDown aria-hidden="true" className="-me-1 opacity-70" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            className="w-72 max-w-[calc(100vw-2rem)]"
-          >
-            <DropdownMenuItem
-              onSelect={() => openCreateEditor(slots)}
-              className="items-start"
-            >
-              <PencilLine aria-hidden="true" className="mt-0.5" />
-              <span className="min-w-0">
-                <span className="block">{t("add.manual")}</span>
-                <span className="block text-xs text-muted-foreground">
-                  {t("add.manualHint")}
-                </span>
-              </span>
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => openPasteDialog(slots)}
-              className="items-start"
-            >
-              <ClipboardPaste aria-hidden="true" className="mt-0.5" />
-              <span className="min-w-0">
-                <span className="block">{t("add.paste")}</span>
-                <span className="block text-xs text-muted-foreground">
-                  {t("add.pasteHint")}
-                </span>
-              </span>
-            </DropdownMenuItem>
-            {discoverEnabled && (
-              <DropdownMenuItem
-                onSelect={findOnHarness}
-                className="items-start"
-              >
-                <Compass aria-hidden="true" className="mt-0.5" />
-                <span className="min-w-0">
-                  <span className="block">{t("add.harness")}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {t("add.harnessHint")}
-                  </span>
-                </span>
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
       <div
         role="search"
-        className="order-3 flex w-full min-w-0 items-center gap-2 @3xl/mcp:order-2 @3xl/mcp:w-auto @3xl/mcp:flex-1"
+        className="order-last flex w-full min-w-0 items-center gap-2 @3xl/mcp:order-none @3xl/mcp:w-auto @3xl/mcp:flex-1"
       >
         <div className="relative min-w-0 flex-1">
           <Search
@@ -223,7 +141,8 @@ export function McpToolbar({
             aria-label={t("search.label")}
             placeholder={t("search.placeholder")}
             className={cn(
-              "h-10 ps-9 md:h-9 @3xl/mcp:h-8",
+              "ps-9",
+              HARNESS_SEARCH_CLASS,
               // Room for the clear button only when there is one.
               filters.text !== "" ? "pe-10" : "pe-3"
             )}
@@ -238,7 +157,7 @@ export function McpToolbar({
               size="icon-sm"
               aria-label={t("search.clear")}
               title={t("search.clear")}
-              className="absolute end-1 top-1/2 -translate-y-1/2 text-muted-foreground md:size-7 @3xl/mcp:size-6"
+              className="absolute end-1 top-1/2 size-6 -translate-y-1/2 rounded-full text-muted-foreground max-md:size-8"
               onClick={() => setFilters((prev) => ({ ...prev, text: "" }))}
             >
               <X aria-hidden="true" />
@@ -253,13 +172,12 @@ export function McpToolbar({
           }}
         >
           <SelectTrigger
-            size="sm"
             aria-label={t("show.label")}
-            className="max-w-[45%] shrink-0 max-md:h-10 @3xl/mcp:max-w-48"
+            className={cn(HARNESS_FILTER_CLASS, "max-w-[45%] shrink-0")}
           >
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent position="popper" align="end">
             {options.map((option) => (
               <SelectItem key={option} value={option}>
                 {t(`show.${option}`)}
@@ -268,6 +186,62 @@ export function McpToolbar({
           </SelectContent>
         </Select>
       </div>
-    </div>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            aria-label={t("add.label")}
+            className="ms-auto h-8 rounded-full px-3 text-[0.8125rem] max-md:h-10 @3xl/mcp:ms-0"
+          >
+            <Plus aria-hidden="true" />
+            {/* On the narrowest phones the plus says it, and the button
+                keeps its name for whoever cannot see it. */}
+            <span className="hidden @sm/mcp:inline">{t("add.label")}</span>
+            <ChevronDown aria-hidden="true" className="-me-1 opacity-70" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="w-72 max-w-[calc(100vw-2rem)]"
+        >
+          <DropdownMenuItem
+            onSelect={() => openCreateEditor(slots)}
+            className="items-start"
+          >
+            <PencilLine aria-hidden="true" className="mt-0.5" />
+            <span className="min-w-0">
+              <span className="block">{t("add.manual")}</span>
+              <span className="block text-xs text-muted-foreground">
+                {t("add.manualHint")}
+              </span>
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => openPasteDialog(slots)}
+            className="items-start"
+          >
+            <ClipboardPaste aria-hidden="true" className="mt-0.5" />
+            <span className="min-w-0">
+              <span className="block">{t("add.paste")}</span>
+              <span className="block text-xs text-muted-foreground">
+                {t("add.pasteHint")}
+              </span>
+            </span>
+          </DropdownMenuItem>
+          {discoverEnabled && (
+            <DropdownMenuItem onSelect={findOnHarness} className="items-start">
+              <Compass aria-hidden="true" className="mt-0.5" />
+              <span className="min-w-0">
+                <span className="block">{t("add.harness")}</span>
+                <span className="block text-xs text-muted-foreground">
+                  {t("add.harnessHint")}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
   )
 }

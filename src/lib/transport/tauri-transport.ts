@@ -9,6 +9,8 @@ type TauriEventListenersWindow = {
   }
 }
 
+function ignorePayload() {}
+
 export class TauriTransport implements Transport {
   async call<T>(
     command: string,
@@ -40,6 +42,9 @@ export class TauriTransport implements Transport {
       handler(e.payload)
     })
     const releaseCallback = () => {
+      // A retained cleanup (or queued payload wrapper) can share this scope.
+      // Drop the subscriber explicitly; minifiers can inline cleanup factories.
+      handler = ignorePayload
       const internals = (window as unknown as TauriEventListenersWindow)
         .__TAURI_INTERNALS__
       internals?.unregisterCallback?.(handlerId)

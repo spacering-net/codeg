@@ -514,14 +514,26 @@ pub(crate) fn entry_key(path: &Path) -> PathBuf {
     }
 }
 
-/// Equality for two normalized paths; case-blind on Windows.
+/// `\\?\C:\x` → `C:\x`: how Windows hands back some targets, and every
+/// canonical path.
+pub(crate) fn strip_verbatim(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
+}
+
+/// Equality for two normalized paths; on Windows case-blind, and blind to
+/// the verbatim prefix (`canonicalize` adds it, a junction's target and a
+/// path as written lack it).
 pub(crate) fn same_path(a: &Path, b: &Path) -> bool {
     #[cfg(windows)]
     {
         a == b
-            || a.as_os_str()
+            || strip_verbatim(a)
                 .to_string_lossy()
-                .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+                .eq_ignore_ascii_case(&strip_verbatim(b).to_string_lossy())
     }
     #[cfg(not(windows))]
     {

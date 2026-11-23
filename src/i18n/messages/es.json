@@ -1398,7 +1398,7 @@
         "description": "Valores predeterminados de la sesión, compactación del contexto, herramientas experimentales y límites de salida de herramientas. Se escribe en la configuración de OpenCode y se aplica al guardar abajo.",
         "docsLink": "Documentación de configuración",
         "unset": "Sin configurar",
-        "ignoredLegacyKeys": "OpenCode 2 ignora estos ajustes de OpenCode 1 del archivo: {keys}.",
+        "ignoredLegacyKeys": "OpenCode ya no lee estos ajustes del archivo: {keys}.",
         "removeIgnoredLegacyKeys": "Quitar",
         "defaultAgent": "Agente por defecto",
         "defaultAgentHint": "Con qué agente principal se abre una sesión nueva. Si está vacío o no existe, se usa build.",
@@ -1412,7 +1412,7 @@
         "compactionAuto": "Compactación automática",
         "compactionAutoHint": "Resume la conversación automáticamente cuando se llena la ventana de contexto.",
         "backgroundCompaction": "Compactación en segundo plano",
-        "backgroundCompactionHint": "Experimental: resume en segundo plano cuando el contexto se acerca a su límite, para que la compactación automática no espere. Los resúmenes no usados también consumen tokens.",
+        "backgroundCompactionHint": "Activado por defecto: resume en segundo plano cuando el contexto se acerca a su límite, para que la compactación automática no espere. Los resúmenes no usados también consumen tokens.",
         "todo": "Herramienta de lista de tareas",
         "todoHint": "Experimental: da al agente la herramienta todowrite, para que Codeg muestre su plan como lista de tareas.",
         "fields": {
@@ -1814,7 +1814,7 @@
       "installBinary": "Instalar pi",
       "installing": "Instalando…",
       "recheck": "Volver a comprobar",
-      "configDirSkillsNote": "Con un directorio de configuración personalizado, las habilidades, los expertos y las herramientas de oficina gestionados en Harness no se aplican a este pi; gestiona sus habilidades directamente en esa carpeta.",
+      "configDirSkillsNote": "Con un directorio de configuración personalizado, las habilidades, los expertos y las herramientas de oficina gestionados en Ingeniería de harness no se aplican a este pi; gestiona sus habilidades directamente en esa carpeta.",
       "dirHistoryNote": "Estos directorios solo llegan al proceso de pi. El historial de conversaciones de codeg lee la ubicación predeterminada de pi, así que las sesiones escritas en un directorio personalizado no aparecerán en la lista.",
       "projectTrustTitle": "Confianza del proyecto",
       "projectTrustDescription": "Carpetas desde las que permitiste que pi cargue archivos del proyecto. Una carpeta de confianza permite que las .pi/extensions de ese repositorio ejecuten código al iniciar pi, se aplica a todas las carpetas que contiene y también se usa cuando ejecutas pi en una terminal.",
@@ -2297,7 +2297,7 @@
       "loadingSubsessions": "Cargando subconversaciones…",
       "forge": "Panel del repositorio",
       "canvas": "Lienzo infinito",
-      "harness": "Harness",
+      "harness": "Ingeniería de harness",
       "folderGroup": {
         "newGroup": "Nuevo grupo",
         "newGroupTitle": "Nuevo grupo de carpetas",
@@ -2520,7 +2520,6 @@
       "quickActions": {
         "title": "Acciones rápidas",
         "openProject": "Abrir proyecto",
-        "more": "Más",
         "browserTab": "Abrir pestaña del navegador",
         "showPet": "Mostrar mascota"
       },
@@ -2778,8 +2777,8 @@
       "officeFullRender": "Renderizado completo",
       "officeFullRenderHint": "Renderiza animaciones Morph, 3D y fórmulas (ejecuta los scripts de la diapositiva)",
       "officeNotInstalled": "OfficeCLI no está instalado",
-      "officeNotInstalledHint": "Instala OfficeCLI en Harness › Paquetes de habilidades › Office para previsualizar archivos de Word, Excel y PowerPoint.",
-      "officeOpenHarness": "Abrir Harness",
+      "officeNotInstalledHint": "Instala OfficeCLI en Ingeniería de harness › Paquetes de habilidades › Office para previsualizar archivos de Word, Excel y PowerPoint.",
+      "officeOpenHarness": "Abrir Ingeniería de harness",
       "officeWatchFailed": "No se pudo iniciar la vista previa en vivo",
       "officeWatchRetry": "Reintentar",
       "officeServerInstallHint": "OfficeCLI debe instalarse en el host del servidor. Ejecuta este comando allí y vuelve a intentarlo:",
@@ -3435,7 +3434,8 @@
           "sessionLoadFallback": "{agent} no pudo restaurar la sesión anterior y empezó una nueva; ya no tiene el contexto previo.",
           "turnFailedEmpty": "{agent} finalizó el turno sin producir ninguna respuesta.",
           "turnFailedEmptyProtocol": "{agent} produjo una salida que codeg no pudo analizar; la versión del agente podría no coincidir con el protocolo.",
-          "turnFailedEmptyMetadata": "{agent} solo envió actualizaciones de estado en este turno (plan / modo / uso) y ninguna respuesta."
+          "turnFailedEmptyMetadata": "{agent} solo envió actualizaciones de estado en este turno (plan / modo / uso) y ninguna respuesta.",
+          "turnFailedEmptyHook": "Un hook detuvo a {agent} antes de que respondiera."
         },
         "unableReadAgentConfig": "No se puede leer la configuración del agente: {message}",
         "connectFailedTitle": "Falló la conexión de {agent}",
@@ -3494,6 +3494,7 @@
       "messageInput": {
         "askAnything": "Pregunta lo que sea...",
         "promptSuggestion": "{suggestion} (Tab para usarla)",
+        "usePromptSuggestion": "Usar la respuesta sugerida",
         "removeAttachmentAria": "Quitar {name}",
         "attachFiles": "Adjuntar archivos",
         "addActions": "Añadir",
@@ -3612,7 +3613,7 @@
           "importSessions": "¿Ya ejecutaste sesiones en la terminal? El menú de una carpeta tiene Importar sesiones locales para traer ese historial a codeg.",
           "subSessions": "Cuando un agente delega, la subsesión aparece anidada bajo él en la barra lateral: despliega la fila para seguir lo que hizo cada una.",
           "liveFeedback": "Comentarios en vivo, en el menú +, inserta una nota en el turno que el agente ya está ejecutando, sin interrumpirlo.",
-          "skillPacks": "Harness › Paquetes de habilidades reúne expertos de programación, investigación científica y ofimática; actívalos por agente.",
+          "skillPacks": "Ingeniería de harness › Paquetes de habilidades reúne expertos de programación, investigación científica y ofimática; actívalos por agente.",
           "modelProviders": "Configuración → Proveedores de Modelos acepta tu propia clave de API o endpoint, y el modelo lo eliges desde el cuadro de entrada.",
           "workspaceBackground": "Configuración → Apariencia define una imagen de fondo del espacio de trabajo, la opacidad de los paneles y las fuentes de la app."
         },
@@ -3685,7 +3686,7 @@
           },
           "notEnabled": {
             "title": "La habilidad «{skill}» aún no está activada para {agent}",
-            "description": "Actívala en Harness › Paquetes de habilidades para usarla aquí.",
+            "description": "Actívala en Ingeniería de harness › Paquetes de habilidades para usarla aquí.",
             "action": "Activar",
             "hint": "Habilidad no activada"
           },
@@ -4724,7 +4725,7 @@
     "agentTypeRequired": "El tipo de agente es obligatorio.",
     "agentTypeImmutableHint": "El tipo de agente no se puede cambiar después de la creación.",
     "model": "Modelo",
-    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6.1-terra",
+    "modelPlaceholderCodex": "gpt-6.2-sol / gpt-6.2-astra",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "Modelo Principal",
     "claudeReasoningModel": "Modelo de Razonamiento (pensamiento)",
@@ -6885,7 +6886,6 @@
   },
   "DeepSeekModelEditor": {
     "title": "Lista de modelos",
-    "builtInCatalogNotice": "Desde deepseek-acp 0.10.0 la lista de modelos viene integrada en el agente y ya no se lee del documento de ajustes del harness, así que no se puede editar aquí. Una lista guardada aquí antes sigue en el archivo, pero no tiene efecto.",
     "description": "Los modelos entre los que puede cambiar una sesión de DeepSeek. Se guardan en el documento de ajustes del harness, que el agente lee al iniciarse: al guardar, se aplica a las sesiones iniciadas después.",
     "inheritedBadge": "Valores del agente",
     "inheritedHint": "Todavía no hay ninguna lista guardada, así que estos son los modelos integrados del agente. Guardarla los fija, y las versiones posteriores del agente ya no los cambiarán por su cuenta. Archivo:",
@@ -6925,6 +6925,43 @@
     "toastRestored": "Usando la lista de modelos integrada del agente",
     "toastSaveFailed": "No se pudo guardar la lista de modelos"
   },
+  "DeepSeekProviderEditor": {
+    "title": "Proveedores de modelos",
+    "description": "Otros proveedores entre cuyos modelos puede cambiar una sesión de DeepSeek. Cada ruta añade el catálogo de modelos pi-ai de ese proveedor al selector de modelos del compositor.Las sesiones iniciadas después de guardar lo aplican.",
+    "configuredBadge": "Rutas: {count}",
+    "loading": "Leyendo el documento de ajustes de proveedores…",
+    "loadFailed": "No se pudo leer el documento de ajustes de proveedores.",
+    "unreadable": "Este documento de ajustes no se puede editar desde aquí sin arriesgar lo que ya contiene. Edítalo a mano.",
+    "invalidStored": "El agente rechaza estas rutas guardadas; las sesiones mantienen sus rutas actuales hasta que se corrijan:",
+    "empty": "No hay rutas de proveedor. Añade una, o déjalo vacío para servir solo los modelos oficiales de DeepSeek.",
+    "addProvider": "Añadir proveedor",
+    "remove": "Quitar proveedor",
+    "advanced": "Más",
+    "fieldProvider": "Proveedor",
+    "fieldApiKeyEnv": "Referencia de clave de API",
+    "fieldDisplayName": "Nombre visible",
+    "fieldApi": "Protocolo",
+    "fieldBaseUrl": "Punto de conexión",
+    "placeholderProvider": "Elegir proveedor",
+    "placeholderApiKeyEnv": "Variable de entorno del propio proveedor",
+    "placeholderDisplayName": "Se muestra en el selector",
+    "placeholderBaseUrl": "Valor predeterminado del catálogo",
+    "apiCatalogDefault": "Valor predeterminado del catálogo",
+    "errorMissingId": "Cada ruta de proveedor necesita un proveedor.",
+    "errorDuplicateId": "Dos rutas comparten el id «{id}».",
+    "errorBadApiKeyEnv": "La referencia de clave de API de «{id}» debe ser un nombre de variable de entorno.",
+    "errorBadApi": "El protocolo de «{id}» no es uno que el agente admita.",
+    "errorBadBaseUrl": "El punto de conexión de «{id}» debe ser una URL http(s) sin credenciales, consulta ni fragmento.",
+    "hintApiKeyEnv": "La referencia de clave se resuelve desde el almacén de credenciales del harness (~/.dsh/.credentials.yaml). Déjala vacía para usar la variable de entorno propia del proveedor —por ejemplo OPENCODE_API_KEY— del entorno del agente.Una ruta cuya clave no se pueda resolver no aporta ningún modelo.",
+    "importedHint": "Importadas de un documento antiguo que el agente lee hasta que este panel escriba el suyo:",
+    "storedHint": "Guardadas en el documento de ajustes propio del puente. Los campos que este panel no modela se conservan tal cual. Archivo:",
+    "clear": "Quitar todas las rutas",
+    "save": "Guardar proveedores",
+    "saving": "Guardando…",
+    "toastSaved": "Proveedores de modelos guardados",
+    "toastCleared": "Proveedores de modelos eliminados",
+    "toastSaveFailed": "No se pudieron guardar los proveedores de modelos"
+  },
   "DiagnosticsSettings": {
     "title": "Diagnóstico del entorno",
     "description": "Comprueba cómo esta app resuelve la CLI del agente en su propio proceso, que puede diferir de tu terminal.",
@@ -6952,9 +6989,10 @@
   "TokenUsage": {
     "title": "Uso de tokens",
     "rangeLabel": "Periodo",
+    "rangeToday": "Hoy",
+    "range24h": "24 horas",
     "range7d": "7 días",
     "range30d": "30 días",
-    "range90d": "90 días",
     "rangeThisMonth": "Este mes",
     "rangeThisYear": "Este año",
     "rangeAll": "Todo",
@@ -6962,9 +7000,11 @@
     "moreRanges": "Más",
     "customRangePick": "Elegir un intervalo",
     "bucketLabel": "Agrupar por",
+    "bucketHour": "Hora",
     "bucketDay": "Día",
     "bucketWeek": "Semana",
     "bucketMonth": "Mes",
+    "bucketUnitHour": "Hora",
     "bucketUnitDay": "Día",
     "bucketUnitWeek": "Semana",
     "bucketUnitMonth": "Mes",
@@ -7527,12 +7567,12 @@
     "deleteBoardConfirm": "Eliminar lienzo"
   },
   "Harness": {
-    "title": "Harness",
-    "description": "Gestiona los servidores MCP, las habilidades y los paquetes de habilidades de tus agentes, y encuentra más en SRN Harness desde «Descubrir».",
-    "descriptionNoDiscover": "Gestiona los servidores MCP, las habilidades y los paquetes de habilidades de tus agentes.",
-    "descriptionMore": "Más",
-    "descriptionLess": "Menos",
-    "sectionsLabel": "Secciones de Harness",
+    "title": "Ingeniería de harness",
+    "sectionsLabel": "Secciones de Ingeniería de harness",
+    "agentList": {
+      "selectAll": "Seleccionar todo",
+      "selected": "{count, number} de {total, number} seleccionados"
+    },
     "sections": {
       "discover": "Descubrir",
       "mcp": "MCP",
@@ -7548,29 +7588,23 @@
       "shownFrom": "Lo que se muestra es de {time}.",
       "checkNow": "Comprobar ahora",
       "itemNotChecked": "Este elemento aún no se ha comprobado.",
-      "itemUnavailable": "Harness no incluye esta versión.",
+      "itemUnavailable": "SRN Harness no incluye esta versión.",
       "reasons": {
         "network": "No se pudo conectar con SRN Harness.",
-        "rateLimited": "Harness pidió una pausa.",
-        "server": "Harness respondió con un error ({status}).",
-        "other": "Harness envió una respuesta que este Codeg no puede leer."
+        "rateLimited": "SRN Harness pidió una pausa.",
+        "server": "SRN Harness respondió con un error ({status}).",
+        "other": "SRN Harness envió una respuesta que este Codeg no puede leer."
       }
     },
     "link": {
       "discoverOff": "«Descubrir» está desactivado en este Codeg, así que {ref} no se puede abrir aquí."
     },
-    "host": {
-      "label": "Equipo que se configura:",
-      "local": "Este equipo",
-      "localHint": "Los cambios que hagas aquí se guardan en este equipo.",
-      "remoteHint": "Los cambios que hagas aquí se guardan en el equipo remoto, no en este.",
-      "webHint": "Los cambios que hagas aquí se guardan en el servidor que sirve esta página."
-    },
     "discover": {
       "search": {
-        "label": "Buscar en Harness",
+        "label": "Buscar en SRN Harness",
         "placeholder": "Busca habilidades, servidores MCP, asistentes…",
-        "clear": "Borrar la búsqueda"
+        "clear": "Borrar la búsqueda",
+        "shortcut": "Pulsa / para buscar"
       },
       "kinds": {
         "label": "Tipo",
@@ -7618,7 +7652,8 @@
         "moreLoaded": "{count, plural, one {Se cargó # más} other {Se cargaron # más}}",
         "end": "Eso es todo.",
         "empty": "No hay coincidencias.",
-        "emptyHint": "Prueba con menos palabras, en otro idioma o con una dirección como anthropics/pdf."
+        "emptyHint": "Prueba con menos palabras, en otro idioma o con una dirección como anthropics/pdf.",
+        "count": "{count, plural, one {<num>#</num> elemento} other {<num>#</num> elementos}}"
       },
       "card": {
         "stars": "Estrellas en GitHub",
@@ -7656,7 +7691,7 @@
         "repository": "Repositorio",
         "website": "Sitio web",
         "description": "Descripción",
-        "readmeElsewhere": "Su licencia no permite que Harness guarde una copia, así que la descripción se lee en el origen.",
+        "readmeElsewhere": "Su licencia no permite que SRN Harness guarde una copia, así que la descripción se lee en el origen.",
         "openSource": "Abrir el origen",
         "expand": "Mostrar todo",
         "collapse": "Mostrar menos",
@@ -7750,7 +7785,8 @@
           "prompt_short": "es demasiado corto para usarlo por sí solo",
           "needs_plugin": "solo funciona junto con el resto de su plugin"
         },
-        "backTo": "Volver a <title>{name}</title>"
+        "backTo": "Volver a <title>{name}</title>",
+        "breadcrumb": "Ruta"
       },
       "prompt": {
         "title": "Prompt",
@@ -7827,7 +7863,7 @@
         "model": "Modelo",
         "inherit": "Sigue a la sesión principal",
         "skills": "Habilidades que carga",
-        "notInHarness": "no está en Harness",
+        "notInHarness": "no está en SRN Harness",
         "mcpServers": "Servidores MCP que usa",
         "mcpServersNote": "Por los nombres que tienen en el agente donde se ejecuta.",
         "mcpLaunches": "Servidores MCP que inicia",
@@ -7841,9 +7877,8 @@
         "copied": "Copiado",
         "copiedNote": "Definición copiada. Guárdala como archivo en ~/.claude/agents/ para usarla en Claude Code.",
         "copyFailed": "No se pudo copiar al portapapeles.",
-        "installLater": "Codeg puede mostrar asistentes. Instalarlos llegará más adelante.",
         "copyErrors": {
-          "notFound": "Harness no guarda una copia de esta definición.",
+          "notFound": "SRN Harness no guarda una copia de esta definición.",
           "tooLarge": "La definición es más grande de lo que Codeg copia (256 KB).",
           "invalidResponse": "La definición no es un texto que Codeg pueda copiar.",
           "invalidRef": "Codeg no puede pedir esta definición: el hash de su archivo no es válido.",
@@ -7851,7 +7886,18 @@
           "unsupportedRemote": "El Codeg del host remoto aún no puede copiar definiciones. Actualízalo allí para copiarlas.",
           "unsupportedWeb": "El servidor de Codeg aún no puede copiar definiciones. Actualiza el servidor para copiarlas."
         }
-      }
+      },
+      "hero": {
+        "title": "Encuentra <accent>nuevas capacidades</accent> para tus agentes",
+        "subtitle": "{count, number} habilidades, servidores MCP, prompts y asistentes de la comunidad: instala una vez y úsalos en tus agentes",
+        "subtitleNoCount": "Habilidades, servidores MCP, prompts y asistentes de la comunidad: instala una vez y úsalos en tus agentes"
+      },
+      "layout": {
+        "label": "Diseño",
+        "grid": "Cuadrícula",
+        "list": "Lista"
+      },
+      "refresh": "Volver a cargar el catálogo"
     },
     "mcp": {
       "listSeparator": ", ",
@@ -7869,7 +7915,7 @@
         "label": "Mostrar",
         "all": "Todos los servidores",
         "problems": "Con problemas",
-        "harness": "De Harness",
+        "harness": "De SRN Harness",
         "updates": "Con actualización"
       },
       "refresh": "Volver a leer la configuración",
@@ -7879,7 +7925,7 @@
         "manualHint": "Escribe tú mismo un comando o una dirección.",
         "paste": "Pegar configuración",
         "pasteHint": "De un README o del archivo de otro agente.",
-        "harness": "Buscar en Harness",
+        "harness": "Buscar en SRN Harness",
         "harnessHint": "Explora los servidores MCP de SRN Harness."
       },
       "list": {
@@ -7889,7 +7935,8 @@
         "noneHint": "Aquí aparecen los servidores de la configuración de cualquier agente en este host.",
         "noMatch": "Ningún servidor coincide.",
         "noAgentMatch": "Ningún agente tiene un servidor que coincida.",
-        "clearFilters": "Borrar búsqueda y filtro"
+        "clearFilters": "Borrar búsqueda y filtro",
+        "groupManual": "Añadidos a mano"
       },
       "row": {
         "onIn": "Activado en {agents}.",
@@ -7897,7 +7944,8 @@
         "noDefinition": "Ilegible",
         "definitions": "{count, plural, one {# definición} other {# definiciones}}",
         "problems": "Problema",
-        "reserved": "Nombre reservado"
+        "reserved": "Nombre reservado",
+        "off": "Desactivado en todos"
       },
       "transport": {
         "stdio": "stdio",
@@ -7916,7 +7964,6 @@
         "pickAgent": "Elige un agente para ver su configuración.",
         "notFound": "Ningún agente aquí tiene un servidor llamado <code>{key}</code>.",
         "notFoundHint": "Puede que se haya renombrado o eliminado. La lista muestra lo que tiene cada agente ahora.",
-        "inAgents": "{count, plural, one {en # agente} other {en # agentes}}",
         "rename": "Renombrar",
         "remove": "Eliminar…",
         "notEditable": "Codeg no puede cambiar este servidor en ninguno de los agentes que lo tienen; cada agente de abajo dice por qué.",
@@ -7924,19 +7971,18 @@
         "definition": "Definición",
         "definitions": "Definiciones",
         "definitionLetter": "Definición {letter}",
-        "heldBy": "Lo usan {agents}",
         "edit": "Editar",
         "editLetter": "Editar {letter}",
         "noDefinition": "Ningún agente tiene una definición que Codeg pueda leer. Cada agente de abajo dice qué le pasa a su entrada.",
         "agents": "Agentes",
         "extra": "Campos propios, que se conservan tal cual:",
-        "saving": "Guardando…"
+        "saving": "Guardando…",
+        "enabledIn": "{count, plural, =0 {Activado en ningún agente} one {Activado en # agente} other {Activado en # agentes}}",
+        "source": "Origen"
       },
       "agentState": {
         "on": "Activado",
         "off": "Desactivado",
-        "withDefinition": "{state} · definición {letter}",
-        "undescribed": "{state} · Codeg no puede leer esta entrada",
         "notConfigured": "Sin configurar",
         "cannotHold": "No puede usar servidores {transports}",
         "keyNotNew": "Este nombre tiene caracteres que una entrada nueva no puede usar, así que no se puede añadir aquí. Renombra antes el servidor.",
@@ -7944,7 +7990,8 @@
         "unreadable": "No se pudo leer su archivo.",
         "reserved": "nombre del servidor integrado, solo se muestra",
         "readOnly": "solo lectura",
-        "skipped": "se omite en sus sesiones"
+        "skipped": "se omite en sus sesiones",
+        "entryUnreadable": "Codeg no puede leer esta entrada"
       },
       "agents": {
         "showAll": "Mostrar todos los agentes ({count, number} sin instalar)",
@@ -8004,7 +8051,8 @@
         "env": "Entorno",
         "url": "Dirección",
         "headers": "Cabeceras",
-        "secretArgs": "los argumentos secretos"
+        "secretArgs": "los argumentos secretos",
+        "copyCommand": "Copiar el comando"
       },
       "rowResult": {
         "unsupported": "No se guardó: este Codeg es demasiado antiguo para hacerlo. Actualízalo.",
@@ -8015,16 +8063,15 @@
         "dismiss": "Descartar aviso"
       },
       "harness": {
-        "mark": "Harness",
-        "markVersion": "Harness · {version}",
-        "title": "De Harness",
-        "agents": "Dónde está instalado",
-        "view": "Ver en Harness",
+        "mark": "SRN Harness",
+        "markVersion": "SRN Harness · {version}",
+        "title": "De SRN Harness",
+        "view": "Ver en SRN Harness",
         "update": "Actualizar",
         "manage": "Gestionar agentes",
         "uninstall": "Desinstalar…",
         "changedNote": "Una entrada cambiada aquí se sustituye al actualizar, y se conserva al desinstalar salvo que la marques allí.",
-        "catalogOff": "Para actualizarlo o añadirlo a más agentes hay que consultar a Harness, que está desactivado en este Codeg. Desinstalar sigue funcionando.",
+        "catalogOff": "Para actualizarlo o añadirlo a más agentes hay que consultar a SRN Harness, que está desactivado en este Codeg. Desinstalar sigue funcionando.",
         "states": {
           "asInstalled": "Como se instaló",
           "changedLocally": "Cambiado aquí",
@@ -8034,8 +8081,11 @@
           "updateAvailable": "Actualización disponible",
           "yanked": "Versión retirada",
           "disabledByAuthor": "Desactivado por su autor",
-          "removedByHarness": "Retirado de Harness"
-        }
+          "removedByHarness": "Retirado de SRN Harness"
+        },
+        "editDefinition": "Editar la definición",
+        "editDefinitionLetter": "Editar la definición {letter}",
+        "state": "Estado"
       },
       "plan": {
         "reviewTitle": "Lo que se va a escribir",
@@ -8085,14 +8135,9 @@
       "targets": {
         "cannotHold": "No puede usar servidores {transport}",
         "keyNotNew": "No lo tiene, y este nombre no se puede usar en una entrada nueva",
-        "willAdd": "Se añadirá",
-        "unchanged": "Ya tiene esta definición",
-        "willUpdate": "Se actualizará",
         "willReplace": "Tiene otra definición, que se sustituirá",
-        "staysOff": "sigue desactivado",
-        "commentsLost": "guardar elimina los comentarios de su archivo",
-        "keeps": "Conserva lo que tiene",
-        "notConfigured": "Sin configurar",
+        "staysOff": "Sigue desactivado",
+        "commentsLost": "Guardar elimina los comentarios de su archivo",
         "entryReadOnly": "Tiene una entrada con este nombre que Codeg no modifica"
       },
       "dialog": {
@@ -8340,8 +8385,7 @@
           "update": "Actualizar <name>{title}</name>",
           "manage": "Agentes de <name>{title}</name>"
         },
-        "description": "No se escribe nada hasta que confirmes. Codeg vuelve a consultar a Harness justo antes de escribir.",
-        "loading": "Consultando a Harness sobre esta versión…",
+        "loading": "Consultando a SRN Harness sobre esta versión…",
         "updateFromTo": "De la versión <code>{from}</code> a la <code>{to}</code>.",
         "alreadyNewest": "Esta ya es la versión más reciente. Aun así, puedes añadirla a más agentes.",
         "working": {
@@ -8374,21 +8418,21 @@
         "published": "publicado el {date}"
       },
       "snapshot": {
-        "title": "Lo que dice Harness ahora",
+        "title": "Lo que dice SRN Harness ahora",
         "fresh": "Consultado ahora mismo",
-        "none": "Harness no indicó en qué estado está esta versión.",
+        "none": "SRN Harness no indicó en qué estado está esta versión.",
         "riskNotStated": "Riesgo no indicado",
-        "reviewNotStated": "Harness no indicó si lo revisó una persona.",
-        "checksNotStated": "Harness no dio los resultados de sus comprobaciones.",
+        "reviewNotStated": "SRN Harness no indicó si lo revisó una persona.",
+        "checksNotStated": "SRN Harness no dio los resultados de sus comprobaciones.",
         "noFindings": "Las comprobaciones no encontraron nada.",
         "findings": "Hallazgos: {high} altos, {medium} medios, {low} bajos",
         "secrets": "{count, plural, one {# credencial encontrada en el paquete} other {# credenciales encontradas en el paquete}}",
         "packages": "Paquetes",
         "package": "Paquete",
-        "packagesNotStated": "Harness no indicó cómo se comprobaron sus paquetes.",
+        "packagesNotStated": "SRN Harness no indicó cómo se comprobaron sus paquetes.",
         "installScript": "Ejecuta scripts de instalación",
         "permissions": "Lo que pide",
-        "permissionsNotStated": "Harness no indicó lo que pide.",
+        "permissionsNotStated": "SRN Harness no indicó lo que pide.",
         "noPermissions": "Nada en particular.",
         "undeclared": "encontrado, no declarado",
         "declaredOnly": "declarado, no encontrado"
@@ -8430,7 +8474,7 @@
           "json": "Esto no es JSON válido.",
           "choice": "Elige uno de los valores de la lista."
         },
-        "secretsPlain": "Los valores secretos se escriben en texto plano en el archivo de configuración de cada agente que marques. No se envían a Harness.",
+        "secretsPlain": "Los valores secretos se escriben en texto plano en el archivo de configuración de cada agente que marques. No se envían a SRN Harness.",
         "choose": "Elige…",
         "recovered": "Completado con lo que hay ahora en {agents}.",
         "recoveredAside": "Completado a partir de las entradas instaladas",
@@ -8450,21 +8494,19 @@
         "hint": "Marcados al principio: los agentes instalados que pueden usar este servidor.",
         "hintInstalled": "Marcados al principio: los agentes en los que está instalado.",
         "manageNote": "Desmarcar un agente lo deja como está. Para quitar el servidor de un agente, usa Desinstalar.",
-        "willAdd": "Se añadirá",
         "willUpdate": "Se sustituirá su entrada de este elemento",
         "ownNotTicked": "Ya tiene este elemento: márcalo abajo para sustituirlo",
         "willReplace": "Se sustituirá su servidor llamado <code>{key}</code> ({owner})",
         "hasOther": "Tiene un servidor llamado <code>{key}</code> ({owner}): márcalo abajo para sustituirlo",
-        "newer": "Tiene una versión más reciente ({version}) de Harness",
-        "staysInstalled": "Instalado aquí; se queda como está",
+        "newer": "Tiene una versión más reciente ({version}) de SRN Harness",
         "unreadable": "No se pudo leer su archivo de configuración.",
         "readOnly": "Codeg no modifica el archivo de este agente.",
         "notWritten": "Codeg solo muestra los servidores de este agente.",
         "holdsName": "Tiene un servidor llamado <code>{key}</code> ({owner})",
         "owner": {
           "this_item": "de este elemento",
-          "other_item": "de otro elemento de Harness",
-          "elsewhere": "no viene de Harness",
+          "other_item": "de otro elemento de SRN Harness",
+          "elsewhere": "no viene de SRN Harness",
           "unknown": "origen desconocido"
         }
       },
@@ -8474,8 +8516,8 @@
         "agent": "Sustituirlo en {agent}",
         "ownerThis": "Instalado desde este elemento",
         "ownerThisChanged": "Instalado desde este elemento y luego cambiado aquí: esos cambios se perderán",
-        "ownerOther": "Instalado desde otro elemento de Harness: <code>{ref}</code>",
-        "ownerElsewhere": "No viene de Harness: se añadió a mano o con otro programa",
+        "ownerOther": "Instalado desde otro elemento de SRN Harness: <code>{ref}</code>",
+        "ownerElsewhere": "No viene de SRN Harness: se añadió a mano o con otro programa",
         "ownerUnknown": "Codeg no sabe de dónde viene",
         "off": "desactivado allí",
         "overwrites": "Lo que se sustituirá:",
@@ -8491,18 +8533,18 @@
         "targets": "Marca al menos un agente.",
         "replace": "Marca sustituir <code>{key}</code> en {agents}, o desmarca esos agentes.",
         "yanked": "Confirma que quieres instalar la versión retirada.",
-        "state": "Harness no dio un estado de esta versión que confirmar.",
+        "state": "SRN Harness no dio un estado de esta versión que confirmar.",
         "disagree": "Elige el valor de <code>{name}</code>: los agentes no coinciden en él."
       },
       "notices": {
         "changedElsewhere": "La configuración de un agente cambió después de abrir esto. Esto es lo que se escribiría ahora; revísalo y vuelve a confirmar.",
         "refused": "Codeg no lo instaló y no escribió nada:",
-        "unsupported": "Este Codeg es demasiado antiguo para instalar desde Harness. Actualízalo.",
-        "unsupportedRemote": "El Codeg del host remoto es demasiado antiguo para instalar desde Harness. Actualízalo allí.",
-        "unsupportedWeb": "El servidor de Codeg es demasiado antiguo para instalar desde Harness. Actualiza el servidor."
+        "unsupported": "Este Codeg es demasiado antiguo para instalar desde SRN Harness. Actualízalo.",
+        "unsupportedRemote": "El Codeg del host remoto es demasiado antiguo para instalar desde SRN Harness. Actualízalo allí.",
+        "unsupportedWeb": "El servidor de Codeg es demasiado antiguo para instalar desde SRN Harness. Actualiza el servidor."
       },
       "changes": {
-        "title": "Lo que dice Harness de esta versión cambió después de abrir esto",
+        "title": "Lo que dice SRN Harness de esta versión cambió después de abrir esto",
         "body": "No se escribió nada. Mira qué cambió y vuelve a confirmar con el nuevo estado, o cancela.",
         "status_changed": "Estado: {from} → {to}",
         "risk_changed": "Riesgo: {from} → {to}",
@@ -8527,7 +8569,7 @@
       "status": {
         "ok": "Disponible",
         "yanked": "Retirada por su autor",
-        "blocked": "Bloqueada por Harness",
+        "blocked": "Bloqueada por SRN Harness",
         "unknown": "Estado desconocido"
       },
       "riskLevel": {
@@ -8560,26 +8602,26 @@
       },
       "reasons": {
         "not_an_mcp_server": "Esto no es un servidor MCP (es: {kind}).",
-        "item_unavailable": "Harness no ofrece este elemento ahora.",
+        "item_unavailable": "SRN Harness no ofrece este elemento ahora.",
         "item_unavailable_retired": "Su autor dio de baja este elemento.",
-        "item_unavailable_removed": "Harness retiró este elemento.",
-        "revision_unavailable": "Harness no tiene la revisión {revision} de este elemento.",
-        "version_blocked": "Harness bloqueó esta versión.",
-        "version_status_unknown": "Harness dio a esta versión un estado que este Codeg no conoce, así que no se instala. Actualizar Codeg puede ayudar.",
-        "snapshot_incomplete": "A la respuesta de Harness le faltaba un dato de esta versión del que depende la instalación: {field}.",
+        "item_unavailable_removed": "SRN Harness retiró este elemento.",
+        "revision_unavailable": "SRN Harness no tiene la revisión {revision} de este elemento.",
+        "version_blocked": "SRN Harness bloqueó esta versión.",
+        "version_status_unknown": "SRN Harness dio a esta versión un estado que este Codeg no conoce, así que no se instala. Actualizar Codeg puede ayudar.",
+        "snapshot_incomplete": "A la respuesta de SRN Harness le faltaba un dato de esta versión del que depende la instalación: {field}.",
         "nothing_to_install": "Este elemento no tiene nada que Codeg pueda instalar: ni un paquete que ejecutar ni una dirección a la que conectarse.",
         "server_unreadable": "No se pudo leer la definición del servidor (server.json).",
-        "record_unreadable": "No se puede leer el registro de Codeg de lo que instaló desde Harness, así que no se instala nada, para mantener ese registro intacto.",
+        "record_unreadable": "No se puede leer el registro de Codeg de lo que instaló desde SRN Harness, así que no se instala nada, para mantener ese registro intacto.",
         "registry_unsupported": "Los paquetes de <code>{registry}</code> no se ejecutan: solo los de npm y PyPI.",
         "runtime_unsupported": "El paquete pide iniciarse con <code>{runtime}</code>, que Codeg no usa para los paquetes de <code>{registry}</code>.",
-        "identifier_has_version": "El nombre del paquete <code>{identifier}</code> lleva su propia versión, así que no se puede aplicar la versión que comprobó Harness.",
+        "identifier_has_version": "El nombre del paquete <code>{identifier}</code> lleva su propia versión, así que no se puede aplicar la versión que comprobó SRN Harness.",
         "runtime_arguments_unsupported": "<code>{identifier}</code> declara opciones para el programa que lo ejecuta (<code>{argument}</code>). Podrían hacer que ejecute algo distinto del paquete comprobado, así que esta forma no se ofrece.",
         "runner_environment_unsupported": "El paquete define <code>{name}</code>, que cambia el funcionamiento del programa que lo ejecuta, así que esta forma no se ofrece.",
-        "package_not_pinned": "Harness no ha fijado una versión de <code>{identifier}</code>.",
-        "package_version_inexact": "La versión de <code>{identifier}</code> en Harness no es una única versión exacta ({version}).",
-        "package_version_inexact_none": "Harness no tiene una versión exacta de <code>{identifier}</code>.",
+        "package_not_pinned": "SRN Harness no ha fijado una versión de <code>{identifier}</code>.",
+        "package_version_inexact": "La versión de <code>{identifier}</code> en SRN Harness no es una única versión exacta ({version}).",
+        "package_version_inexact_none": "SRN Harness no tiene una versión exacta de <code>{identifier}</code>.",
         "package_missing": "<code>{identifier}@{version}</code> no está en su registro de paquetes.",
-        "package_verification_unknown": "Harness comprobó <code>{identifier}@{version}</code> de una forma que este Codeg no conoce, así que no se usa.",
+        "package_verification_unknown": "SRN Harness comprobó <code>{identifier}@{version}</code> de una forma que este Codeg no conoce, así que no se usa.",
         "remote_not_public": "La dirección no es una dirección HTTPS pública.",
         "remote_not_public_host": "La dirección no es una dirección HTTPS pública (<code>{host}</code>).",
         "secret_in_query": "El secreto <code>{name}</code> solo podría enviarse dentro de la propia dirección, así que esta forma no se ofrece.",
@@ -8614,7 +8656,7 @@
         "unknown": "Este Codeg no puede saber cómo fue la instalación. La sección MCP muestra lo que tienen ahora los agentes."
       },
       "record": {
-        "failed": "Los servidores están escritos, pero Codeg no pudo registrarlos como de Harness, así que no aparecen marcados como tales.",
+        "failed": "Los servidores están escritos, pero Codeg no pudo registrarlos como de SRN Harness, así que no aparecen marcados como tales.",
         "uninstallFailed": "Los servidores se eliminaron, pero Codeg no pudo actualizar su registro de ellos. Lo pondrá al día la próxima vez que lea lo que está instalado.",
         "record_unreadable": "No se pudo leer su registro.",
         "record_write_failed": "No se pudo escribir su registro.",
@@ -8671,7 +8713,7 @@
         "label": "Mostrar",
         "all": "Todas las habilidades",
         "custom": "Personalizadas",
-        "harness": "De Harness",
+        "harness": "De SRN Harness",
         "problems": "Con problemas",
         "updates": "Con actualización"
       },
@@ -8688,7 +8730,7 @@
         "importHint": "Una carpeta con un SKILL.md, copiada al almacén de Codeg como habilidad personalizada.",
         "importTitle": "Elige la carpeta de habilidad que quieres importar",
         "importFailed": "La carpeta no se importó.",
-        "harness": "Buscar en Harness",
+        "harness": "Buscar en SRN Harness",
         "harnessHint": "Explora las habilidades de SRN Harness."
       },
       "list": {
@@ -8702,7 +8744,7 @@
         "problems": "Codeg encontró algo que revisar en su almacén de habilidades"
       },
       "marks": {
-        "harnessVersion": "Harness {version}",
+        "harnessVersion": "SRN Harness {version}",
         "problem": "Requiere atención"
       },
       "harnessStates": {
@@ -8710,7 +8752,7 @@
         "updateAvailable": "Actualización disponible",
         "yanked": "Versión retirada",
         "disabledByAuthor": "Desactivada por su autor",
-        "removedByHarness": "Retirada de Harness",
+        "removedByHarness": "Retirada de SRN Harness",
         "changedLocally": "Cambiada aquí",
         "filesMissing": "Faltan archivos"
       },
@@ -8719,13 +8761,13 @@
         "science": "Ciencia",
         "office": "Oficina",
         "ui": "Interfaz",
-        "harness": "Harness",
+        "harness": "SRN Harness",
         "custom": "Personalizada",
         "unknown": "De {origin}"
       },
       "owners": {
         "pack": "Paquete · {pack}",
-        "harness": "De Harness",
+        "harness": "De SRN Harness",
         "custom": "Personalizada",
         "agent": "Propia del agente",
         "linked_elsewhere": "Enlazada a otro sitio",
@@ -8744,6 +8786,15 @@
         "broken": "Un enlace roto creado por Codeg ocupa el nombre",
         "brokenOther": "Un enlace roto con el mismo nombre lo impide",
         "unknown": "Estado desconocido ({state})"
+      },
+      "cellChips": {
+        "taken": "Nombre ocupado"
+      },
+      "cellNotes": {
+        "through": "A través de la carpeta compartida <code>{dir}</code>",
+        "copy": "Como copia que no se actualiza sola",
+        "copyOutdated": "Como copia antigua: la habilidad ha cambiado desde entonces",
+        "copyChanged": "Como copia cambiada por el agente"
       },
       "cellsText": {
         "through": "Activada, a través de la carpeta compartida {dir}"
@@ -8770,7 +8821,7 @@
         "name_taken": "Otra habilidad ya usa este nombre.",
         "id_taken": "Ya existe una habilidad con este nombre.",
         "id_reserved": "Este nombre pertenece a uno de los paquetes de habilidades de Codeg.",
-        "id_reserved_harness": "Harness instaló esta habilidad, así que Codeg la conserva tal como llegó. Para cambiarla, cópiala como habilidad personalizada.",
+        "id_reserved_harness": "SRN Harness instaló esta habilidad, así que Codeg la conserva tal como llegó. Para cambiarla, cópiala como habilidad personalizada.",
         "target_occupied": "Una carpeta o archivo con el mismo nombre lo impide.",
         "target_linked_elsewhere": "Un enlace con el mismo nombre a otro sitio lo impide.",
         "target_broken": "Un enlace roto con el mismo nombre lo impide. Repáralo o elimínalo primero.",
@@ -8899,9 +8950,9 @@
         "duplicate": "Duplicar…",
         "delete": "Eliminar…",
         "copyAsCustom": "Copiar como habilidad personalizada…",
-        "viewOnHarness": "Ver en Harness",
+        "viewOnHarness": "Ver en SRN Harness",
         "update": "Actualizar",
-        "harnessReadOnly": "Instalada desde Harness y de solo lectura aquí: una actualización reemplazaría cualquier cambio. Para cambiarla, cópiala como habilidad personalizada.",
+        "harnessReadOnly": "Instalada desde SRN Harness y de solo lectura aquí: una actualización reemplazaría cualquier cambio. Para cambiarla, cópiala como habilidad personalizada.",
         "harnessSource": "Elemento:",
         "pickSkill": "Elige una habilidad para ver sus agentes."
       },
@@ -9136,7 +9187,7 @@
         "turnOff": "Desactivar esos enlaces…"
       },
       "settingsWindow": {
-        "acknowledgementRequired": "Este cambio también afectaría a otros agentes que comparten una carpeta de habilidades. Hazlo desde la página Harness del espacio de trabajo (Harness › Habilidades o Paquetes de habilidades), que muestra a quién afecta y pregunta antes."
+        "acknowledgementRequired": "Este cambio también afectaría a otros agentes que comparten una carpeta de habilidades. Hazlo desde la página Ingeniería de harness del espacio de trabajo (Ingeniería de harness › Habilidades o Paquetes de habilidades), que muestra a quién afecta y pregunta antes."
       }
     },
     "packs": {
@@ -9203,8 +9254,7 @@
           "update": "Actualizar <name>{title}</name>",
           "reinstall": "Reinstalar <name>{title}</name>"
         },
-        "description": "No se escribe nada hasta que confirmes. Codeg descarga los archivos, los comprueba uno por uno y vuelve a consultar a Harness justo antes de colocar la habilidad en su sitio.",
-        "loading": "Consultando a Harness sobre esta versión…",
+        "loading": "Consultando a SRN Harness sobre esta versión…",
         "updateFromTo": "De la versión <code>{from}</code> a la <code>{to}</code>.",
         "reinstallNote": "Esta versión ya está instalada. Volver a instalarla restaura sus archivos tal como se publicaron; los archivos que cambiaste se guardan en las copias de seguridad de Codeg.",
         "working": {
@@ -9226,7 +9276,7 @@
       },
       "notices": {
         "effectsChanged": "Enlazarla ya no hace lo que se mostró antes. No se escribió nada. Esto es lo que hace ahora; revísalo y vuelve a confirmar.",
-        "stateMoved": "Lo que dice Harness de esta versión cambió mientras esto estaba abierto. Abajo se muestra lo que dice ahora.",
+        "stateMoved": "Lo que dice SRN Harness de esta versión cambió mientras esto estaba abierto. Abajo se muestra lo que dice ahora.",
         "refused": "Codeg no la instaló y no escribió nada:"
       },
       "warnings": {
@@ -9237,9 +9287,9 @@
         "size": "{count, plural, one {# archivo} other {# archivos}}, {size}",
         "license": "Licencia: {license}",
         "compatibility": "Funciona con: {compatibility}",
-        "archive": "Se descarga de la copia de Harness, se comprueba con su SHA-256 <code>{hash}</code>… y luego archivo por archivo.",
+        "archive": "Se descarga de la copia de SRN Harness, se comprueba con su SHA-256 <code>{hash}</code>… y luego archivo por archivo.",
         "source": "Se obtiene de GitHub: <code>{repository}</code> en el commit <code>{commit}</code>, carpeta <code>{path}</code>. Cada archivo se comprueba con su SHA-256.",
-        "noSource": "Harness no ofrece ni una copia de sus archivos ni un origen del que obtenerlos.",
+        "noSource": "SRN Harness no ofrece ni una copia de sus archivos ni un origen del que obtenerlos.",
         "files": "Mostrar {count, plural, one {el archivo} other {los # archivos}}",
         "executable": "ejecutable"
       },
@@ -9257,7 +9307,7 @@
         "reserved": "una habilidad del paquete {pack} de Codeg",
         "pack": "la habilidad del paquete {pack} en el almacén de Codeg",
         "custom": "tu habilidad personalizada en el almacén de Codeg",
-        "harness": "otra habilidad de Harness (<code>{ref}</code>)",
+        "harness": "otra habilidad de SRN Harness (<code>{ref}</code>)",
         "store": "una carpeta del almacén de Codeg",
         "codeg_link": "un enlace de Codeg en la carpeta de habilidades de {agents}",
         "codeg_linkAt": "un enlace de Codeg en <code>{path}</code>",
@@ -9281,15 +9331,12 @@
         "notInstalled": "sin instalar",
         "noFolder": "Sin carpeta de habilidades donde enlazar",
         "shared": "Enlaza en una carpeta que también leen otros agentes",
-        "willLink": "Se enlazará",
-        "alreadySees": "Ya la ve",
-        "needsAck": "Otros agentes también la ven: mira abajo",
-        "cannotLink": "No se puede enlazar: mira abajo",
+        "needsAck": "También afecta a {agents}",
+        "cannotLink": "No se puede enlazar",
         "showAll": "Mostrar todos los agentes ({count, number} sin instalar)",
         "hideNotInstalled": "Ocultar los agentes sin instalar",
         "none": "Ningún agente marcado: solo va al almacén de Codeg. Puedes activarla para agentes en Habilidades.",
         "checking": "Calculando qué hace el enlace…",
-        "effects": "Lo que hace el enlace",
         "blocked": "Algunos agentes no se pueden enlazar. La habilidad se instala de todos modos y ellos se quedan como están; cada uno dice por qué.",
         "others": "Enlazarla también cambia lo que ven otros agentes. Al confirmar, confirmas también esto.",
         "otherName": "Lo que hace el enlace con el nombre <code>{name}</code> se calcula al confirmar. Si afecta a otros agentes, Codeg te lo muestra primero y no escribe nada hasta que vuelvas a confirmar."
@@ -9305,8 +9352,8 @@
         "grownChecking": "Comparando con la versión instalada…",
         "grownTitle": "La nueva versión pide más que la instalada:",
         "grownNone": "La nueva versión no pide nada que la instalada no pidiera, y su riesgo no es mayor.",
-        "grownPartial": "Harness no indicó lo que pide una de las versiones, así que no se pudo comparar todo.",
-        "grownUnknown": "No se pudo leer lo que dice Harness de la versión instalada, así que no se puede listar lo que añade la nueva."
+        "grownPartial": "SRN Harness no indicó lo que pide una de las versiones, así que no se pudo comparar todo.",
+        "grownUnknown": "No se pudo leer lo que dice SRN Harness de la versión instalada, así que no se puede listar lo que añade la nueva."
       },
       "missing": {
         "title": "Antes de poder instalarla:",
@@ -9316,7 +9363,7 @@
         "nameFixed": "Mantén el nombre con el que está instalada.",
         "links": "Espera a que Codeg calcule qué hace el enlace.",
         "yanked": "Confirma que quieres instalar la versión retirada.",
-        "state": "Harness no dio un estado de esta versión que confirmar."
+        "state": "SRN Harness no dio un estado de esta versión que confirmar."
       },
       "sourceField": {
         "repository": "repositorio",
@@ -9326,8 +9373,8 @@
       },
       "reasons": {
         "not_a_skill": "Esto no es una habilidad (es: {kind}).",
-        "manifest_unreadable": "No se puede leer el registro de Codeg de las habilidades que instaló desde Harness (o lo escribió un Codeg más reciente), así que no se instala nada, para mantener ese registro intacto.",
-        "nothing_to_install": "Harness no ofrece ni una copia de los archivos de esta habilidad ni un origen del que obtenerlos.",
+        "manifest_unreadable": "No se puede leer el registro de Codeg de las habilidades que instaló desde SRN Harness (o lo escribió un Codeg más reciente), así que no se instala nada, para mantener ese registro intacto.",
+        "nothing_to_install": "SRN Harness no ofrece ni una copia de los archivos de esta habilidad ni un origen del que obtenerlos.",
         "unsafe_path": "El paquete incluye un archivo en una ruta en la que Codeg no escribe: <code>{path}</code>.",
         "duplicate_path": "El paquete incluye <code>{path}</code> dos veces (sin distinguir mayúsculas), o como archivo y como carpeta a la vez.",
         "too_many_files": "El paquete tiene {count, number} archivos; se permiten como máximo {limit}.",
@@ -9339,15 +9386,15 @@
         "skill_md_missing": "El paquete no tiene un SKILL.md en su raíz.",
         "hash_invalid": "El SHA-256 que da el paquete para <code>{path}</code> no es un SHA-256 válido.",
         "hash_invalid_archive": "El SHA-256 del archivo comprimido no es un SHA-256 válido.",
-        "archive_address_invalid": "La dirección del archivo comprimido no está en Harness.",
+        "archive_address_invalid": "La dirección del archivo comprimido no está en SRN Harness.",
         "source_invalid": "Su origen en GitHub no se puede usar: el campo «{field}» no es válido.",
-        "archive_size_mismatch": "El archivo comprimido descargado ocupa {actual}, no los {expected} que indica Harness.",
-        "archive_hash_mismatch": "El archivo comprimido descargado no es el que indica Harness: su SHA-256 es distinto.",
+        "archive_size_mismatch": "El archivo comprimido descargado ocupa {actual}, no los {expected} que indica SRN Harness.",
+        "archive_hash_mismatch": "El archivo comprimido descargado no es el que indica SRN Harness: su SHA-256 es distinto.",
         "archive_unreadable": "No se pudo leer el archivo comprimido descargado.",
         "file_missing": "<code>{path}</code> figura en la lista, pero no está en la descarga.",
         "file_unexpected": "La descarga contiene <code>{path}</code>, que no figura en la lista.",
-        "file_size_mismatch": "<code>{path}</code> no ocupa los {expected} que indica Harness.",
-        "file_hash_mismatch": "<code>{path}</code> no es el archivo que indica Harness: su SHA-256 es distinto.",
+        "file_size_mismatch": "<code>{path}</code> no ocupa los {expected} que indica SRN Harness.",
+        "file_hash_mismatch": "<code>{path}</code> no es el archivo que indica SRN Harness: su SHA-256 es distinto.",
         "compression_ratio": "<code>{path}</code> se descomprime a más de {limit} veces su tamaño comprimido.",
         "link_in_archive": "El archivo comprimido contiene un enlace o un archivo especial: <code>{path}</code>.",
         "source_file_unavailable": "GitHub no tiene <code>{path}</code> en ese commit.",
@@ -9360,11 +9407,11 @@
         "acknowledgement_required": "Enlazarla a {agent} cambia lo que ven otros agentes, y necesita tu confirmación.",
         "effects_changed": "Enlazarla a {agent} ya no hace lo que se mostró.",
         "allowed_tools": "SKILL.md permite a los agentes usar herramientas sin preguntar (<code>{tools}</code>). Codeg lo quita salvo que lo conserves.",
-        "fetched_from_source": "Harness no tiene copia de sus archivos: se obtienen de GitHub (<code>{repository}</code> en <code>{commit}</code>) y cada uno se comprueba con su SHA-256.",
+        "fetched_from_source": "SRN Harness no tiene copia de sus archivos: se obtienen de GitHub (<code>{repository}</code> en <code>{commit}</code>) y cada uno se comprueba con su SHA-256.",
         "files_changed_locally": "{count, plural, one {# archivo se cambió o añadió} other {# archivos se cambiaron o añadieron}} aquí; la carpeta instalada se guarda en las copias de seguridad de Codeg.",
         "files_unreadable": "La carpeta instalada no se puede comparar con lo que se instaló; una actualización la guarda entera en las copias de seguridad de Codeg.",
         "io_error": "No se pudo leer, escribir o mover un archivo o carpeta.",
-        "manifest_write_failed": "No se pudo escribir el registro de Codeg de sus habilidades de Harness, así que todo se restauró.",
+        "manifest_write_failed": "No se pudo escribir el registro de Codeg de sus habilidades de SRN Harness, así que todo se restauró.",
         "rollback_failed": "No se pudo deshacer. No se eliminó nada; Codeg lo termina en su próximo inicio.",
         "unlink_failed": "No se pudo eliminar un enlace (<code>{path}</code>):",
         "lock_busy": "Había otro cambio de habilidades en curso.",
@@ -9374,7 +9421,7 @@
         "download": "Descargar",
         "verify": "Comprobar los archivos",
         "stage": "Preparar",
-        "snapshot": "Volver a consultar a Harness",
+        "snapshot": "Volver a consultar a SRN Harness",
         "unlink": "Desenlazar de los agentes",
         "swap": "Colocar en su sitio",
         "commit": "Registrar",
@@ -9398,7 +9445,7 @@
           "reinstall": "Reinstalada."
         },
         "aborted": "Esto ya no se puede instalar. No se escribió nada.",
-        "invalidPackage": "El paquete no es el que indica Harness, así que no se instaló nada; el almacén de Codeg está como estaba.",
+        "invalidPackage": "El paquete no es el que indica SRN Harness, así que no se instaló nada; el almacén de Codeg está como estaba.",
         "busy": "Había otro cambio de habilidades en curso, así que no se escribió nada. Vuelve a intentarlo.",
         "writeFailed": "La instalación falló a medias. Lo que se hizo se deshizo; cada paso dice qué pasó.",
         "unknown": "Este Codeg no puede saber cómo fue la instalación. La sección Habilidades muestra lo que hay ahora.",
@@ -9448,7 +9495,7 @@
         }
       },
       "detail": {
-        "mark": "Harness",
+        "mark": "SRN Harness",
         "installedAt": "instalada el {date}",
         "state": {
           "asInstalled": "Sus archivos están como se instalaron.",
@@ -9465,30 +9512,30 @@
         "folderGone": "Su carpeta ya no está en el almacén de Codeg. Actualízala para restaurarla, o desinstálala.",
         "update": "Actualizar…",
         "uninstall": "Desinstalar…",
-        "catalogOff": "Harness está desactivado en este host: se puede desinstalar, no actualizar.",
-        "missingList": "De Harness, falta la carpeta"
+        "catalogOff": "SRN Harness está desactivado en este host: se puede desinstalar, no actualizar.",
+        "missingList": "De SRN Harness, falta la carpeta"
       },
-      "ownershipUnresolved": "Codeg no pudo leer su registro de las habilidades que instaló desde Harness, así que no puede saber si esta es de Harness. Se deja tal cual hasta que se pueda leer el registro."
+      "ownershipUnresolved": "Codeg no pudo leer su registro de las habilidades que instaló desde SRN Harness, así que no puede saber si esta es de SRN Harness. Se deja tal cual hasta que se pueda leer el registro."
     },
     "record": {
-      "mcp": "Codeg no pudo leer su registro de los servidores MCP que instaló desde Harness, así que aquí ninguno aparece marcado como de Harness. Hasta que se pueda leer, no se instala ni desinstala nada desde Harness.",
-      "skills": "Codeg no pudo leer su registro de las habilidades que instaló desde Harness, así que aquí ninguna aparece marcada como de Harness. Hasta que se pueda leer, no se instala ni desinstala nada desde Harness, y las habilidades que puedan ser de Harness se dejan tal cual."
+      "mcp": "Codeg no pudo leer su registro de los servidores MCP que instaló desde SRN Harness, así que aquí ninguno aparece marcado como de SRN Harness. Hasta que se pueda leer, no se instala ni desinstala nada desde SRN Harness.",
+      "skills": "Codeg no pudo leer su registro de las habilidades que instaló desde SRN Harness, así que aquí ninguna aparece marcada como de SRN Harness. Hasta que se pueda leer, no se instala ni desinstala nada desde SRN Harness, y las habilidades que puedan ser de SRN Harness se dejan tal cual."
     },
     "errors": {
       "disabled": "«Descubrir» está desactivado en este Codeg.",
       "network": "No se pudo conectar con SRN Harness. Comprueba la conexión e inténtalo de nuevo.",
       "rateLimited": "Demasiadas solicitudes. Inténtalo de nuevo en {seconds, plural, one {# segundo} other {# segundos}}.",
-      "notFound": "Harness no tiene ningún elemento en esta dirección. Puede que se haya renombrado o eliminado.",
-      "invalidRef": "Eso no es una dirección de Harness. Una dirección tiene la forma publicador/nombre.",
+      "notFound": "SRN Harness no tiene ningún elemento en esta dirección. Puede que se haya renombrado o eliminado.",
+      "invalidRef": "Eso no es una dirección de SRN Harness. Una dirección tiene la forma publicador/nombre.",
       "server": "SRN Harness respondió con un error ({status}). Inténtalo de nuevo en un momento.",
       "tooLarge": "La respuesta de SRN Harness es más grande de lo que Codeg acepta.",
       "invalidResponse": "SRN Harness envió una respuesta que este Codeg no sabe leer. Actualizar Codeg puede ayudar.",
-      "recordUnreadable": "No se pudo leer el registro de Codeg de lo que instaló desde Harness.",
-      "resolveUnavailable": "Codeg no puede confirmar ahora con Harness el estado actual de este elemento, así que no se instaló nada. Inténtalo más tarde.",
-      "unsupported": "Este Codeg es demasiado antiguo para Harness. Actualízalo para explorar el catálogo.",
-      "unsupportedRemote": "El Codeg del host remoto es demasiado antiguo para Harness. Actualízalo allí para explorar el catálogo.",
-      "unsupportedWeb": "El servidor de Codeg es demasiado antiguo para Harness. Actualiza el servidor para explorar el catálogo.",
-      "unknown": "No se pudo cargar Harness.",
+      "recordUnreadable": "No se pudo leer el registro de Codeg de lo que instaló desde SRN Harness.",
+      "resolveUnavailable": "Codeg no puede confirmar ahora con SRN Harness el estado actual de este elemento, así que no se instaló nada. Inténtalo más tarde.",
+      "unsupported": "Este Codeg es demasiado antiguo para SRN Harness. Actualízalo para explorar el catálogo.",
+      "unsupportedRemote": "El Codeg del host remoto es demasiado antiguo para SRN Harness. Actualízalo allí para explorar el catálogo.",
+      "unsupportedWeb": "El servidor de Codeg es demasiado antiguo para SRN Harness. Actualiza el servidor para explorar el catálogo.",
+      "unknown": "No se pudo cargar SRN Harness.",
       "retry": "Reintentar"
     }
   },

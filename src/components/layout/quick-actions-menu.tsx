@@ -18,8 +18,8 @@
  * workspaces are a submenu of their own beside it (the desktop's only), the
  * local workspace is one row (in a remote workspace window only: it is about
  * which window, not which project), and the two window-level extras (a
- * browser tab, the desktop pet) fold into "More". Search and the
- * per-folder session actions (manage / import) are the deliberate omissions —
+ * browser tab, the desktop pet) are rows of their own after them. Search and
+ * the per-folder session actions (manage / import) are the deliberate omissions —
  * search has a permanent button in the window's top-left chrome, and the
  * session actions are folder-scoped, so they live where a folder is: "Manage
  * conversations" in the folder row's context menu, "Import local sessions"
@@ -40,8 +40,7 @@
 
 import { useCallback, useState } from "react"
 import {
-  Blocks,
-  Ellipsis,
+  DraftingCompass,
   FolderGit2,
   FolderOpen,
   FolderOpenDot,
@@ -107,7 +106,7 @@ export function useQuickActions() {
 
   // Remote connections are only reachable on the desktop runtime (a web client
   // can't spawn another window bound to a different server), so their whole
-  // submenu — and the "More" one, whose pet is the desktop's too —
+  // submenu — and the window-level extras, whose pet is the desktop's too —
   // self-hide elsewhere.
   const {
     desktop,
@@ -255,7 +254,7 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
         onSelect={() => setRoute("canvas")}
       />
       <MenuRow
-        icon={<Blocks />}
+        icon={<DraftingCompass />}
         label={tSidebar("harness")}
         trailing={
           harnessUpdates > 0 && <HarnessUpdatesBadge count={harnessUpdates} />
@@ -336,25 +335,23 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
         />
       )}
 
-      {/* The window-level extras. Desktop only: the pet is the desktop's,
-          and the browser row is gated on the backend's own answer rather
-          than on the platform — where there is no built-in browser there is
-          nothing to open. */}
+      {/* The window-level extras, as rows of their own. Desktop only: the
+          pet is the desktop's, and the browser row is gated on the backend's
+          own answer rather than on the platform — where there is no built-in
+          browser there is nothing to open. */}
+      {desktop && browserRow && (
+        <MenuRow
+          icon={<Globe />}
+          label={t("browserTab")}
+          onSelect={handleOpenBrowser}
+        />
+      )}
       {desktop && (
-        <MenuSub icon={<Ellipsis />} label={t("more")}>
-          {browserRow && (
-            <MenuRow
-              icon={<Globe />}
-              label={t("browserTab")}
-              onSelect={handleOpenBrowser}
-            />
-          )}
-          <MenuRow
-            icon={<PawPrint />}
-            label={t("showPet")}
-            onSelect={handleShowPet}
-          />
-        </MenuSub>
+        <MenuRow
+          icon={<PawPrint />}
+          label={t("showPet")}
+          onSelect={handleShowPet}
+        />
       )}
     </>
   )

@@ -45,7 +45,9 @@ export function useFileTree({
 }: UseFileTreeOptions): UseFileTreeResult {
   const [allFiles, setAllFiles] = useState<FlatFileEntry[]>([])
   const [loading, setLoading] = useState(false)
-  const loadedForPathRef = useRef<string | null>(null)
+  // State, not a ref: `loaded` is returned from render, so it must re-render
+  // when it changes rather than be read off a ref.
+  const [loadedForPath, setLoadedForPath] = useState<string | null>(null)
   const [revision, setRevision] = useState(0)
   const generation = useRef(0)
   const refresh = useRef(false)
@@ -64,9 +66,12 @@ export function useFileTree({
   useEffect(() => {
     const current = ++generation.current
     const scope = `${enabled}\0${folderPath ?? ""}\0${filesOnly}`
+    // The synchronous resets and loading flag belong to the search request
+    // issued below (an external system), keyed by the scope ref.
+    /* eslint-disable react-hooks/set-state-in-effect */
     if (scopeRef.current !== scope) {
       scopeRef.current = scope
-      loadedForPathRef.current = null
+      setLoadedForPath(null)
       setAllFiles([])
     }
     if (!enabled || !folderPath) {
@@ -76,6 +81,7 @@ export function useFileTree({
     let canceled = false
     const abort = new AbortController()
     setLoading(true)
+    /* eslint-enable react-hooks/set-state-in-effect */
     if (refresh.current) {
       refresh.current = false
       freshSince.current = performance.now()
@@ -114,7 +120,7 @@ export function useFileTree({
 
         if (!canceled && generation.current === current) {
           setAllFiles(flat)
-          loadedForPathRef.current = folderPath!
+          setLoadedForPath(folderPath!)
         }
       } catch {
         if (!canceled && generation.current === current) setAllFiles([])
@@ -132,7 +138,7 @@ export function useFileTree({
   }, [enabled, folderPath, query, limit, filesOnly, revision])
 
   const reset = useCallback((refreshIndex = false) => {
-    loadedForPathRef.current = null
+    setLoadedForPath(null)
     scopeRef.current = null
     generation.current += 1
     if (refreshIndex) {
@@ -146,7 +152,7 @@ export function useFileTree({
   return {
     allFiles,
     loading,
-    loaded: loadedForPathRef.current === folderPath,
+    loaded: loadedForPath === folderPath,
     reset,
   }
 }

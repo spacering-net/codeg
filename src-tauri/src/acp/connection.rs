@@ -1517,6 +1517,99 @@ async fn unless_cancelled<T>(
         .ok_or_else(|| agent_client_protocol::util::internal_error(HANDSHAKE_CANCELLED_SENTINEL))
 }
 
+/// Total extra time `retry_session_establishment` may spend waiting for an
+/// agent that is still bringing its services up.
+const AGENT_STARTUP_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
+/// First pause between two attempts; doubles up to
+/// [`AGENT_STARTUP_RETRY_MAX_DELAY`].
+const AGENT_STARTUP_RETRY_FIRST_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+const AGENT_STARTUP_RETRY_MAX_DELAY: std::time::Duration = std::time::Duration::from_millis(4_000);
+/// The budget `run_connection` grants a handshake: [`AGENT_STARTUP_RETRY_BUDGET`],
+/// shortened under test so a handshake test that spends it runs in real time
+/// (the handshake harness drives codeg on a thread of its own, out of reach of
+/// tokio's paused clock).
+const HANDSHAKE_STARTUP_RETRY_BUDGET: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_secs(2)
+} else {
+    AGENT_STARTUP_RETRY_BUDGET
+};
+
+/// Whether `e` is an agent reporting that the session request arrived before
+/// it finished starting.
+///
+/// OpenCode 2.x is the case this exists for: until a location's plugins have
+/// activated, its server answers the catalog reads `session/new`, `session/load`
+/// and `session/resume` depend on with HTTP 503 `ServiceUnavailableError`
+/// ("Location plugins did not finish activating", `server/src/location.ts`).
+/// The ACP bridge turns that defect into `Internal service failure` with
+/// `data: {"errorName": "ServiceUnavailableError"}`, dropping the sentence that
+/// explains it (`cli/src/acp/error.ts` `fromUnknown`).
+///
+/// Only that error name counts. A free-text "service unavailable" would match
+/// whatever an arbitrary agent wraps in that phrase, and OpenCode 1.x's
+/// "OpenCode service failure" was its catch-all for every failure — including
+/// permanent ones like a proxy misrouting its loopback server (see
+/// `network::proxy`) — besides 1.x being refused before launch. The name is
+/// looked up in the rendered error and in `data`: ACP renders `data` into
+/// `Display`, but not every adapter puts the name there.
+fn session_establishment_is_retryable(e: &agent_client_protocol::Error) -> bool {
+    const STARTING: &str = "ServiceUnavailableError";
+    e.to_string().contains(STARTING)
+        || e.data
+            .as_ref()
+            .is_some_and(|data| data.to_string().contains(STARTING))
+}
+
+/// Run a session-establishing RPC, retrying while the agent says it is still
+/// starting. Session establishment is safe to repeat: a request the agent
+/// rejected as unavailable did not create or mutate a session.
+///
+/// The delay doubles from [`AGENT_STARTUP_RETRY_FIRST_DELAY`] to
+/// [`AGENT_STARTUP_RETRY_MAX_DELAY`], and no attempt is made once `deadline`
+/// would be exceeded. The outer `Result` is the handshake cancellation
+/// ([`HANDSHAKE_CANCELLED_SENTINEL`]), the inner one is the agent's answer —
+/// the same split `unless_cancelled(...).await?` produces. One `deadline`
+/// shared by resume, load and new bounds the extra wait for the whole
+/// establishment instead of granting each step its own budget.
+async fn retry_session_establishment<F, Fut, T>(
+    handshake: &CancellationToken,
+    deadline: tokio::time::Instant,
+    mut call: F,
+) -> Result<Result<T, agent_client_protocol::Error>, agent_client_protocol::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, agent_client_protocol::Error>>,
+{
+    let mut delay = AGENT_STARTUP_RETRY_FIRST_DELAY;
+    let mut attempt = 1u32;
+    loop {
+        match unless_cancelled(handshake, call()).await? {
+            Ok(value) => return Ok(Ok(value)),
+            Err(e)
+                if session_establishment_is_retryable(&e)
+                    && tokio::time::Instant::now() + delay <= deadline =>
+            {
+                tracing::info!(
+                    "[ACP] agent still starting; retrying session request in {delay:?} \
+                     (attempt {attempt}): {e}"
+                );
+                attempt += 1;
+                if handshake
+                    .run_until_cancelled(tokio::time::sleep(delay))
+                    .await
+                    .is_none()
+                {
+                    return Err(agent_client_protocol::util::internal_error(
+                        HANDSHAKE_CANCELLED_SENTINEL,
+                    ));
+                }
+                delay = (delay * 2).min(AGENT_STARTUP_RETRY_MAX_DELAY);
+            }
+            Err(e) => return Ok(Err(e)),
+        }
+    }
+}
+
 /// Sentinel appended to a `session/new` failure when codeg had just forwarded
 /// MCP servers to a *custom* agent, so the outer `.map_err(...)` can raise
 /// `AcpError::McpRejectedByAgent` and point the user at the `supports_mcp`
@@ -2153,9 +2246,9 @@ fn agent_debug_callback(
 /// codeg's own question and result tools ([`codeg_tool_auto_allow_option`]),
 /// and the history parser. So codeg turns lazy loading off, as it was through
 /// 1.1.83 (which takes the flag too). An option `qoder --acp` does not know
-/// makes it exit, but each release tried from 1.1.0 to 1.1.89 (1.1.0, 1.1.30,
+/// makes it exit, but each release tried from 1.1.0 to 1.1.91 (1.1.0, 1.1.30,
 /// 1.1.50, 1.1.64, 1.1.75, 1.1.81, 1.1.83, 1.1.84, 1.1.86, 1.1.87, 1.1.88,
-/// 1.1.89) takes `--settings`, and 1.1.30 and 1.1.64 open sessions with this
+/// 1.1.89, 1.1.91) takes `--settings`, and 1.1.30 and 1.1.64 open sessions with this
 /// one as without it.
 pub(crate) const QODER_LAUNCH_SETTINGS: &str = r#"{"mcp":{"lazyLoad":false}}"#;
 
@@ -5069,9 +5162,18 @@ fn kept_select_row(
 /// that list into the same `SessionConfigOptionInfo` shape every other agent's
 /// selectors flow through, so Grok reaches selector parity with zero new
 /// frontend code. Returns `None` when there is no usable sessionConfig.
+///
+/// `reported_model` is the answer's `models.currentModelId`. It decides the
+/// current model when no row is `selected`: since 1.0.88 a loaded or resumed
+/// session keeps its saved model even when that model is no longer listed
+/// (renamed or removed `[model.<id>]`, or a failed first catalog fetch), and
+/// the answer then marks no row and sends no effort rows, where 1.0.77
+/// switched the session to the default model. The first row would show a model
+/// the session is not using, so the saved one is listed and shown instead.
 fn synthesize_grok_config_options(
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
     specs: &HashMap<String, GrokModelSpec>,
+    reported_model: Option<&str>,
 ) -> Option<Vec<SessionConfigOptionInfo>> {
     let options = meta?
         .get("x.ai/sessionConfig")?
@@ -5117,8 +5219,22 @@ fn synthesize_grok_config_options(
         });
     }
 
+    if model_current.is_none() {
+        if let Some(id) = reported_model.filter(|id| !id.is_empty()) {
+            if !model_opts.iter().any(|o| o.value == id) {
+                model_opts.push(SessionConfigSelectOptionInfo {
+                    value: id.to_string(),
+                    name: id.to_string(),
+                    description: None,
+                });
+            }
+            model_current = Some(id.to_string());
+        }
+    }
+
     let mut result: Vec<SessionConfigOptionInfo> = Vec::new();
-    // Current model id (the `selected` one, else the first) — needed both for
+    // Current model id (the `selected` one, else the reported one, else the
+    // first) — needed both for
     // the model selector's `current_value` and to pick the per-model effort spec.
     let current_model = model_current
         .clone()
@@ -6805,7 +6921,10 @@ async fn apply_and_emit_session_config_options(
     state.write().await.asserted_config_values.clear();
     if agent_type == AgentType::Grok {
         let specs = grok_model_specs.cloned().unwrap_or_default();
-        if let Some(mut opts) = synthesize_grok_config_options(grok_meta, &specs) {
+        let reported_model = session_models
+            .and_then(|models| models.get("currentModelId"))
+            .and_then(|id| id.as_str());
+        if let Some(mut opts) = synthesize_grok_config_options(grok_meta, &specs, reported_model) {
             // Cache the per-model effort map so a later model switch can rebuild
             // the effort selector for the target model (grok ships it only at
             // session birth, and on a catalog broadcast). `None` when empty
@@ -9499,6 +9618,11 @@ async fn run_connection(
             // the same Claude settings (see `claude_raw_sdk_session_meta`).
             let claude = state.read().await.claude_session_options();
 
+            // One startup-retry budget for the whole resume → load → new
+            // chain below (see `retry_session_establishment`).
+            let startup_deadline =
+                tokio::time::Instant::now() + HANDSHAKE_STARTUP_RETRY_BUDGET;
+
             if let Some(sid) = session_id {
                 // Prefer session/resume when the agent advertises the
                 // capability: it restores session context WITHOUT replaying
@@ -9515,7 +9639,12 @@ async fn run_connection(
                         mcp_servers.clone(),
                         &claude,
                     );
-                    match unless_cancelled(&handshake, send_resume_session(&cx, resume_req)).await? {
+                    let resume_result =
+                        retry_session_establishment(&handshake, startup_deadline, || {
+                            send_resume_session(&cx, resume_req.clone())
+                        })
+                        .await?;
+                    match resume_result {
                         Ok((resume_resp, models_raw)) => {
                             let initial_config_options = resume_resp.config_options.clone();
                             let new_resp = NewSessionResponse::new(SessionId::new(sid.clone()))
@@ -9661,22 +9790,23 @@ async fn run_connection(
                         &claude,
                     );
                     if matches!(agent_type, AgentType::Kiro | AgentType::Hermes) {
-                        unless_cancelled(
-                            &handshake,
+                        retry_session_establishment(&handshake, startup_deadline, || {
                             send_capturing_models::<LoadSessionResponse>(
                                 &cx,
                                 AGENT_METHOD_NAMES.session_load,
-                                load_req,
-                            ),
-                        )
+                                load_req.clone(),
+                            )
+                        })
                         .await?
                         .map(|(resp, models)| {
                             load_models_raw = models;
                             resp
                         })
                     } else {
-                        unless_cancelled(&handshake, cx.send_request_to(Agent, load_req).block_task())
-                            .await?
+                        retry_session_establishment(&handshake, startup_deadline, || {
+                            cx.send_request_to(Agent, load_req.clone()).block_task()
+                        })
+                        .await?
                     }
                 } else {
                     Err(agent_client_protocol::Error::method_not_found()
@@ -9953,6 +10083,21 @@ async fn run_connection(
                             );
                             return Err(e);
                         }
+                        // An agent still starting once the startup budget is
+                        // spent (see `retry_session_establishment`) has the
+                        // session — it just could not serve it yet. Falling
+                        // back to session/new would bind the conversation to an
+                        // empty session the moment the agent finishes starting,
+                        // so the handshake fails instead and a reconnect opens
+                        // the original session.
+                        if session_establishment_is_retryable(&e) {
+                            tracing::warn!(
+                                "[ACP][{agent_type}] session/load: agent still starting after \
+                                 the startup budget ({}); not falling back to session/new",
+                                agent_error_text(&e)
+                            );
+                            return Err(e);
+                        }
                         let err_str = agent_error_text(&e);
                         let forgotten_session = classify_session_load_error(&e);
                         let recovers_locally =
@@ -9965,7 +10110,9 @@ async fn run_connection(
                             // in `details`, which names both providers; the
                             // banner quotes that rather than the error dump.
                             let message = if code == "provider_mismatch" {
-                                error_details_text(&e).unwrap_or(err_str)
+                                error_details_text(&e)
+                                    .map(|details| codex_provider_refusal_text(&details).to_string())
+                                    .unwrap_or(err_str)
                             } else {
                                 err_str
                             };
@@ -10032,18 +10179,21 @@ async fn run_connection(
                             )
                             .await;
                         }
-                        let (new_resp, models_raw) = unless_cancelled(
+                        let (new_resp, models_raw) = retry_session_establishment(
                             &handshake,
-                            send_new_session_capturing_models(
-                                &cx,
-                                new_session_request_for(
-                                    agent_type,
-                                    &cwd,
-                                    mcp_servers.clone(),
-                                    &claude,
-                                    one_shot,
-                                ),
-                            ),
+                            startup_deadline,
+                            || {
+                                send_new_session_capturing_models(
+                                    &cx,
+                                    new_session_request_for(
+                                        agent_type,
+                                        &cwd,
+                                        mcp_servers.clone(),
+                                        &claude,
+                                        one_shot,
+                                    ),
+                                )
+                            },
                         )
                         .await?
                         .map_err(|e| tag_new_session_failure(e, agent_type, &mcp_servers))?;
@@ -10157,18 +10307,21 @@ async fn run_connection(
                 }
             } else {
                 // Create new session
-                let (new_resp, models_raw) = unless_cancelled(
+                let (new_resp, models_raw) = retry_session_establishment(
                     &handshake,
-                    send_new_session_capturing_models(
-                        &cx,
-                        new_session_request_for(
-                            agent_type,
-                            &cwd,
-                            mcp_servers.clone(),
-                            &claude,
-                            one_shot,
-                        ),
-                    ),
+                    startup_deadline,
+                    || {
+                        send_new_session_capturing_models(
+                            &cx,
+                            new_session_request_for(
+                                agent_type,
+                                &cwd,
+                                mcp_servers.clone(),
+                                &claude,
+                                one_shot,
+                            ),
+                        )
+                    },
                 )
                 .await?
                 .map_err(|e| tag_new_session_failure(e, agent_type, &mcp_servers))?;
@@ -11910,6 +12063,15 @@ fn config_option_already_holds(option: &SessionConfigOption, value: &str) -> boo
 /// `claude-agent-acp` is on PATH — so "this is the built-in Claude Code agent"
 /// says nothing about which release is actually running, and pruning on that
 /// assumption would silently discard a still-valid pick on an older adapter.
+///
+/// One selector no longer makes the error certain: since claude-agent-acp
+/// 0.107.3 (#1630), Claude Code's model selector passes an id it does not list
+/// to the CLI, which checks it with a one-token API request and runs it if the
+/// account or gateway serves it. The screen still applies there. A saved pick
+/// that the selector stopped listing moves to the row that replaced it when
+/// codeg recognizes the rename ([`heal_retired_model_pick`]); any other is
+/// skipped as before, since replaying a stale pick would cost that request on
+/// every connect.
 ///
 /// Deliberately narrow, in three ways:
 ///
@@ -13863,7 +14025,7 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
 /// How long after the answer to a prompt that a Stop cancelled codeg holds
 /// CodeBuddy's next prompt.
 ///
-/// CodeBuddy (2.171.0 through 2.184.0) answers a `session/prompt` that starts
+/// CodeBuddy (2.171.0 through 2.185.0) answers a `session/prompt` that starts
 /// within 500 ms of a `session/cancel` it took mid-turn with `cancelled`, and
 /// does not run the prompt or keep it in its history (`isCancelBarrierActive`
 /// in its ACP view). It arms that barrier while it handles the cancel, before
@@ -13949,7 +14111,7 @@ async fn wait_out_codebuddy_cancel(held: &mut HeldPrompt) {
 /// CodeBuddy's stop reason for a prompt codeg did not cancel.
 ///
 /// After a Stop that caught a permission request, CodeBuddy (2.171.0 through
-/// 2.184.0) answers the next prompt it runs `cancelled` even though that
+/// 2.185.0) answers the next prompt it runs `cancelled` even though that
 /// prompt ran to the end: its forwarding keeps the session's aborted signal
 /// from the Stop. Such an answer carries `_meta["codebuddy.ai/finishReason"]:
 /// "stop"`, which a cancelled run never has. A prompt codeg cancelled never
@@ -14099,6 +14261,11 @@ fn error_details_text(e: &agent_client_protocol::Error) -> Option<String> {
 /// * "This chat’s model provider settings no longer match your organization’s
 ///   requirements. …"
 ///
+/// codex 0.170 (codex-acp 2.8.0) refuses the resume itself earlier, while it
+/// loads the thread's config, in a sentence of its own wrapped in the config
+/// error ([`CODEX_PROVIDER_CHANGE_REFUSAL`]); the four above stay in the
+/// binary for the other paths.
+///
 /// The session is intact: switching the provider back opens it, which is why
 /// this must not fall through to `session/new`. That would rebind the row to an
 /// empty session on the new provider and drop the only pointer to the history.
@@ -14108,6 +14275,35 @@ fn codex_thread_provider_refused(message: &str) -> bool {
             || message.contains("which is no longer configured")
             || message.contains("but your organization requires")))
         || message.contains("This chat\u{2019}s model provider settings no longer match")
+        || message.contains(CODEX_PROVIDER_CHANGE_REFUSAL)
+}
+
+/// The start of codex 0.170's resume refusal (`app-server/src/config_manager.rs`),
+/// which codex-acp 2.8.0 hands on in `data.details` as
+///
+/// "failed to load configuration: Cannot change this thread's model provider
+/// from `fake` to `fake2` on resume.\n\nCheck /…/.codex and project .codex
+/// directories, especially their config.toml files, or any CODEX_CONFIG
+/// override."
+///
+/// (measured live: a thread made on provider `fake`, reopened after
+/// config.toml moved to `fake2`, by `session/load` and `session/resume` alike).
+const CODEX_PROVIDER_CHANGE_REFUSAL: &str = "Cannot change this thread's model provider from ";
+
+/// The words the `provider_mismatch` banner quotes: codex's sentence naming
+/// both providers. codex 0.170 wraps it in a config-load error whose advice
+/// (check config.toml and `CODEX_CONFIG`) points away from the fix the banner
+/// gives (switch the provider back in codeg's settings), so only the sentence
+/// is kept; the 0.166 sentences are the whole `details` already.
+fn codex_provider_refusal_text(details: &str) -> &str {
+    let Some(start) = details.find(CODEX_PROVIDER_CHANGE_REFUSAL) else {
+        return details;
+    };
+    let sentence = &details[start..];
+    match sentence.find(" on resume.") {
+        Some(end) => &sentence[..end + " on resume.".len()],
+        None => sentence.lines().next().unwrap_or(sentence),
+    }
 }
 
 /// [`classify_session_load_failure`] for the error itself: the structured
@@ -14623,6 +14819,10 @@ struct TurnOutputProbe {
     /// `StderrTail` write position at turn start, so the diagnosis can scope
     /// stderr to this turn.
     stderr_mark: u64,
+    /// The last notice this turn in which the agent said a hook blocked or
+    /// stopped it, as the text an empty turn is then explained by (see
+    /// [`EmptyTurnCause::HookStopped`] and [`hook_stop_notice_text`]).
+    hook_stop: Option<String>,
 }
 
 impl TurnOutputProbe {
@@ -14647,11 +14847,54 @@ impl TurnOutputProbe {
             self.first_drop = Some(summarize_parser_error(&error.to_string()));
         }
     }
+
+    /// Keep a notice the agent raised during the turn if it says a hook
+    /// blocked or stopped it. Still not agent output (see the in-turn seam):
+    /// it only explains an empty turn.
+    fn note_notice(&mut self, agent_type: AgentType, notice: &SessionNotice) {
+        if let Some(text) = hook_stop_notice_text(agent_type, notice) {
+            self.hook_stop = Some(text);
+        }
+    }
+}
+
+/// The text of a notice in which the agent says one of the user's hooks
+/// blocked or stopped it, or `None` for any other notice.
+///
+/// Only codex-acp's are recognised (2.7.0, #767 `createHookCompletedEvent`):
+/// a `hook/completed` with status `blocked` or `stopped` becomes a `warning`
+/// titled "<Event> hook blocked <the prompt | the tool call | the tool result
+/// | the model request | the compaction | the subagent | the request>" or
+/// "<Event> hook stopped the turn", with the hook's reason as the
+/// description. Any other notice the turn raised (claude-agent-acp's "MCP
+/// server … failed to start" in a first turn, a config warning) says nothing
+/// about why the turn ended, so it must not stand as its explanation.
+fn hook_stop_notice_text(agent_type: AgentType, notice: &SessionNotice) -> Option<String> {
+    if agent_type != AgentType::Codex || notice.severity != "warning" {
+        return None;
+    }
+    let title = notice.title.trim();
+    let (event, outcome) = title.split_once(" hook ")?;
+    let is_event = !event.is_empty() && event.chars().all(|c| c.is_ascii_alphabetic());
+    if !is_event || !(outcome.starts_with("blocked ") || outcome == "stopped the turn") {
+        return None;
+    }
+    Some(match notice.description.as_deref().map(str::trim) {
+        Some(description) if !description.is_empty() => format!("{title}: {description}"),
+        _ => title.to_string(),
+    })
 }
 
 /// Why a turn ended with `EndTurn` but no agent output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EmptyTurnCause {
+    /// One of the user's hooks blocked or stopped the turn, as the agent said
+    /// in a notice during it ([`hook_stop_notice_text`]): codex-acp 2.7.0
+    /// (#767) tells a blocked prompt as "UserPromptSubmit hook blocked the
+    /// prompt" with the hook's reason, and the turn then ends with no reply.
+    /// Its words replace codeg's guess, which would blame the agent ("sent
+    /// only status updates") for a turn the user's own hook ended.
+    HookStopped,
     /// codeg dropped updates it could not parse — the agent may well have
     /// replied; we just couldn't read it.
     ProtocolMismatch,
@@ -14670,6 +14913,7 @@ impl EmptyTurnCause {
             EmptyTurnCause::NoOutput => "turn_failed_empty",
             EmptyTurnCause::ProtocolMismatch => "turn_failed_empty_protocol",
             EmptyTurnCause::MetadataOnly => "turn_failed_empty_metadata",
+            EmptyTurnCause::HookStopped => "turn_failed_empty_hook",
         }
     }
 
@@ -14685,6 +14929,11 @@ impl EmptyTurnCause {
             EmptyTurnCause::MetadataOnly => format!(
                 "{agent_type} sent only status updates this turn and no reply."
             ),
+            // The report's `hook_stop` is the message; this is only the
+            // fallback for a report that lost it.
+            EmptyTurnCause::HookStopped => {
+                format!("A hook stopped {agent_type} before it replied.")
+            }
         }
     }
 }
@@ -14694,13 +14943,20 @@ impl EmptyTurnCause {
 struct EmptyTurnReport {
     cause: EmptyTurnCause,
     details: Option<String>,
+    /// The agent's account of the hook, for [`EmptyTurnCause::HookStopped`].
+    hook_stop: Option<String>,
 }
 
-/// Classify an empty turn. `ProtocolMismatch` wins over `MetadataOnly`:
-/// "we couldn't read the output" is a stronger signal than "we only saw
-/// metadata", and it changes where the user should look.
+/// Classify an empty turn. A hook the agent said stopped it wins over every
+/// guess.
+/// Then `ProtocolMismatch` wins over `MetadataOnly`: "we couldn't read the
+/// output" is a stronger signal than "we only saw metadata", and it changes
+/// where the user should look. Dropped updates still reach the report's
+/// `details` when a hook explains the turn.
 fn diagnose_empty_turn(probe: &TurnOutputProbe) -> EmptyTurnCause {
-    if probe.dropped > 0 {
+    if probe.hook_stop.is_some() {
+        EmptyTurnCause::HookStopped
+    } else if probe.dropped > 0 {
         EmptyTurnCause::ProtocolMismatch
     } else if probe.saw_metadata_update {
         EmptyTurnCause::MetadataOnly
@@ -14782,7 +15038,15 @@ fn finish_turn_reason<'a>(
     }
     let cause = diagnose_empty_turn(probe);
     let details = build_empty_turn_details(probe, stderr_tail);
-    ("empty", Some(EmptyTurnReport { cause, details }))
+    let hook_stop = probe.hook_stop.clone();
+    (
+        "empty",
+        Some(EmptyTurnReport {
+            cause,
+            details,
+            hook_stop,
+        }),
+    )
 }
 
 /// Build an `AcpEvent::Error` for a non-success stop reason so the user gets a
@@ -14834,11 +15098,11 @@ fn turn_failure_error_event(
             // diagnosis; fall back to the pre-split behavior rather than
             // dropping the error entirely.
             let cause = empty.map(|r| r.cause).unwrap_or(EmptyTurnCause::NoOutput);
-            (
-                cause.code(),
-                cause.message(agent_type),
-                empty.and_then(|r| r.details.clone()),
-            )
+            let message = match (cause, empty.and_then(|r| r.hook_stop.clone())) {
+                (EmptyTurnCause::HookStopped, Some(hook_stop)) => hook_stop,
+                _ => cause.message(agent_type),
+            };
+            (cause.code(), message, empty.and_then(|r| r.details.clone()))
         }
         _ => return None,
     };
@@ -15454,7 +15718,10 @@ async fn run_conversation_loop(
                                 // its own result-text fallback can skip
                                 // a result that merely repeats one. A
                                 // turn whose only output was "a hook
-                                // blocked this" IS an empty turn.
+                                // blocked this" IS an empty turn — one
+                                // the notice explains, so the probe
+                                // keeps it for the verdict.
+                                probe.note_notice(agent_type, &notice);
                                 emit_with_state(
                                     &st,
                                     &h,
@@ -27039,6 +27306,177 @@ mod tests {
         }
     }
 
+    // ── Session-establishment startup retry ─────────────────────────────────
+
+    /// OpenCode's ACP bridge as codeg sees it on the wire: the 503's sentence
+    /// is dropped, only the error name survives.
+    fn opencode_starting_error() -> agent_client_protocol::Error {
+        let mut e = agent_client_protocol::Error::internal_error()
+            .data(serde_json::json!({ "errorName": "ServiceUnavailableError" }));
+        e.message = "Internal service failure".to_string();
+        e
+    }
+
+    #[test]
+    fn recognizes_an_agent_still_starting() {
+        assert!(session_establishment_is_retryable(
+            &opencode_starting_error()
+        ));
+
+        // Adapters that put the error name in the message or a string `data`.
+        let mut named_in_message = agent_client_protocol::Error::internal_error();
+        named_in_message.message = "ServiceUnavailableError: plugins".to_string();
+        assert!(session_establishment_is_retryable(&named_in_message));
+        assert!(session_establishment_is_retryable(
+            &agent_client_protocol::util::internal_error(
+                "Internal service failure: ServiceUnavailableError"
+            )
+        ));
+
+        // OpenCode 1.x's catch-all and a bare 503 phrase say nothing about
+        // startup: a misrouted proxy fails this way forever.
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::util::internal_error("OpenCode service failure")
+        ));
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::util::internal_error("Service Unavailable")
+        ));
+        // OpenCode's other internal failures carry other error names.
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::util::internal_error("Internal service failure")
+                .data(serde_json::json!({ "errorName": "UnknownError" }))
+        ));
+
+        // Ordinary session failures stay terminal, or every typo would wait
+        // out the whole budget.
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::Error::method_not_found()
+        ));
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::Error::auth_required()
+        ));
+        assert!(!session_establishment_is_retryable(
+            &agent_client_protocol::util::internal_error("session_busy")
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn retries_session_establishment_until_the_agent_answers() {
+        let handshake = CancellationToken::new();
+        let deadline = tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let result = retry_session_establishment(&handshake, deadline, || {
+            let calls = Arc::clone(&calls);
+            async move {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if attempt < 3 {
+                    Err(opencode_starting_error())
+                } else {
+                    Ok(attempt)
+                }
+            }
+        })
+        .await
+        .expect("no cancellation");
+
+        assert_eq!(result.expect("third attempt succeeds"), 3);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_non_startup_failure_is_not_retried() {
+        let handshake = CancellationToken::new();
+        let deadline = tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let result = retry_session_establishment(&handshake, deadline, || {
+            let calls = Arc::clone(&calls);
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err::<(), _>(agent_client_protocol::Error::method_not_found())
+            }
+        })
+        .await
+        .expect("no cancellation");
+
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn startup_retries_stop_at_the_deadline() {
+        let handshake = CancellationToken::new();
+        let deadline = tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let result = retry_session_establishment(&handshake, deadline, || {
+            let calls = Arc::clone(&calls);
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err::<(), _>(opencode_starting_error())
+            }
+        })
+        .await
+        .expect("no cancellation");
+
+        assert!(result.is_err());
+        let attempts = calls.load(Ordering::SeqCst);
+        assert!(
+            attempts > 1,
+            "a still-starting agent must be retried at least once"
+        );
+        assert!(
+            tokio::time::Instant::now() <= deadline,
+            "the budget must bound the extra wait"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_cancelled_handshake_stops_the_retry_wait() {
+        let handshake = CancellationToken::new();
+        handshake.cancel();
+        let deadline = tokio::time::Instant::now() + AGENT_STARTUP_RETRY_BUDGET;
+
+        let result = retry_session_establishment(&handshake, deadline, || async {
+            Err::<(), _>(opencode_starting_error())
+        })
+        .await;
+
+        let err = result.expect_err("cancellation is the outer error");
+        assert!(err.to_string().contains(HANDSHAKE_CANCELLED_SENTINEL));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancelling_during_the_backoff_stops_before_the_next_attempt() {
+        let handshake = CancellationToken::new();
+        let start = tokio::time::Instant::now();
+        let deadline = start + AGENT_STARTUP_RETRY_BUDGET;
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let cancel = handshake.clone();
+        let result = retry_session_establishment(&handshake, deadline, || {
+            let calls = Arc::clone(&calls);
+            let cancel = cancel.clone();
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                // Cancelled after this attempt answered, i.e. while the
+                // retry loop is sleeping before the next one.
+                cancel.cancel();
+                Err::<(), _>(opencode_starting_error())
+            }
+        })
+        .await;
+
+        let err = result.expect_err("cancellation is the outer error");
+        assert!(err.to_string().contains(HANDSHAKE_CANCELLED_SENTINEL));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            tokio::time::Instant::now() < start + AGENT_STARTUP_RETRY_FIRST_DELAY,
+            "the backoff sleep is cut short, not waited out"
+        );
+    }
+
     // ── ConnectionCleanupGuard ──────────────────────────────────────────────
     //
     // The driver thread drops its guard after `block_on` returns, i.e. outside
@@ -31349,6 +31787,31 @@ mod tests {
                 "{details}"
             );
         }
+        // codex 0.170 (codex-acp 2.8.0), measured live the same way: its own
+        // refusal, wrapped in the config-load error. The banner keeps only the
+        // sentence naming both providers.
+        let codex_0_170 = "failed to load configuration: Cannot change this thread's model \
+             provider from `fake` to `fake2` on resume.\n\nCheck /h/.codex and project .codex \
+             directories, especially their config.toml files, or any CODEX_CONFIG override.";
+        assert_eq!(
+            classify_session_load_error(&error(codex_0_170)),
+            Some("provider_mismatch")
+        );
+        assert_eq!(
+            codex_provider_refusal_text(codex_0_170),
+            "Cannot change this thread's model provider from `fake` to `fake2` on resume."
+        );
+        // Without the closing words, the sentence's own line; the 0.166
+        // sentences pass through whole.
+        assert_eq!(
+            codex_provider_refusal_text(
+                "x: Cannot change this thread's model provider from `a` to `b`\nmore"
+            ),
+            "Cannot change this thread's model provider from `a` to `b`"
+        );
+        let codex_0_166 =
+            "This chat uses a, but your current provider is b. Switch to a to continue.";
+        assert_eq!(codex_provider_refusal_text(codex_0_166), codex_0_166);
         // Nothing else reads as one: a chat that merely mentions a provider.
         assert_eq!(
             classify_session_load_error(&error("This chat uses a lot of tokens")),
@@ -36091,6 +36554,157 @@ mod tests {
         // is the stronger signal and points somewhere else entirely.
         none.note_dropped(&drop_err("boom"));
         assert_eq!(diagnose_empty_turn(&none), EmptyTurnCause::ProtocolMismatch);
+
+        // A hook the agent said stopped the turn outranks every guess.
+        none.note_notice(
+            AgentType::Codex,
+            &notice("warning", "PreToolUse hook blocked the tool call", None),
+        );
+        assert_eq!(diagnose_empty_turn(&none), EmptyTurnCause::HookStopped);
+    }
+
+    fn notice(severity: &str, title: &str, description: Option<&str>) -> SessionNotice {
+        SessionNotice {
+            severity: severity.into(),
+            title: title.into(),
+            description: description.map(Into::into),
+        }
+    }
+
+    /// Every title codex-acp 2.7.0 gives a blocking or stopping hook
+    /// (`createHookCompletedEvent` / `hookBlockTarget`) is recognised, and
+    /// nothing else: not another notice, not another agent's.
+    #[test]
+    fn hook_stop_notice_text_reads_codex_hook_notices_only() {
+        for title in [
+            "UserPromptSubmit hook blocked the prompt",
+            "PreToolUse hook blocked the tool call",
+            "PermissionRequest hook blocked the tool call",
+            "PostToolUse hook blocked the tool result",
+            "PreModelRequest hook blocked the model request",
+            "PreCompact hook blocked the compaction",
+            "SubagentStart hook blocked the subagent",
+            "Stop hook blocked the request",
+            "SessionStart hook stopped the turn",
+        ] {
+            assert_eq!(
+                hook_stop_notice_text(AgentType::Codex, &notice("warning", title, None)).as_deref(),
+                Some(title),
+            );
+        }
+        assert_eq!(
+            hook_stop_notice_text(
+                AgentType::Codex,
+                &notice(
+                    "warning",
+                    "UserPromptSubmit hook blocked the prompt",
+                    Some(" why \n")
+                ),
+            )
+            .as_deref(),
+            Some("UserPromptSubmit hook blocked the prompt: why"),
+        );
+        for (agent, n) in [
+            (
+                AgentType::Codex,
+                notice("warning", "MCP server \"x\" failed to start", None),
+            ),
+            (AgentType::Codex, notice("warning", "Model rerouted", None)),
+            (
+                AgentType::Codex,
+                notice("warning", "Pre Tool hook blocked the prompt", None),
+            ),
+            (
+                AgentType::Codex,
+                notice("warning", "Stop hook stopped the session", None),
+            ),
+            (
+                AgentType::Codex,
+                notice("info", "Stop hook stopped the turn", None),
+            ),
+            (
+                AgentType::ClaudeCode,
+                notice("warning", "Stop hook stopped the turn", None),
+            ),
+        ] {
+            assert!(hook_stop_notice_text(agent, &n).is_none(), "{agent} {n:?}");
+        }
+    }
+
+    /// Only a hook notice is kept, and the latest one wins: it is the one
+    /// closest to the turn's end.
+    #[test]
+    fn note_notice_keeps_the_last_hook_stop() {
+        let mut probe = TurnOutputProbe::new(0);
+        probe.note_notice(AgentType::Codex, &notice("warning", "Config warning", None));
+        assert!(
+            probe.hook_stop.is_none(),
+            "an unrelated warning explains nothing"
+        );
+
+        probe.note_notice(
+            AgentType::Codex,
+            &notice("warning", "PreToolUse hook blocked the tool call", None),
+        );
+        probe.note_notice(
+            AgentType::Codex,
+            &notice("warning", "Stop hook stopped the turn", Some("why")),
+        );
+        probe.note_notice(AgentType::Codex, &notice("warning", "Later warning", None));
+        assert_eq!(
+            probe.hook_stop.as_deref(),
+            Some("Stop hook stopped the turn: why")
+        );
+        assert!(!probe.saw_agent_output, "a notice is never agent output");
+    }
+
+    /// codex-acp 2.7.0's notice for a prompt its `UserPromptSubmit` hook
+    /// blocked, as recorded live: the turn ends `end_turn` with no output, and
+    /// codeg's verdict is the agent's account instead of "only status
+    /// updates", with the turn's evidence kept.
+    #[test]
+    fn an_empty_turn_a_hook_stopped_reports_the_agents_words() {
+        let tail = StderrTail::new();
+        let mut probe = TurnOutputProbe::new(0);
+        probe.saw_metadata_update = true;
+        probe.note_dropped(&drop_err("boom"));
+        probe.note_notice(
+            AgentType::Codex,
+            &notice(
+                "warning",
+                "UserPromptSubmit hook blocked the prompt",
+                Some("blocked by probe policy"),
+            ),
+        );
+
+        let (reason, report) = finish_turn_reason(&probe, "end_turn", &tail);
+        assert_eq!(reason, "empty");
+        let report = report.expect("an empty turn is diagnosed");
+        assert_eq!(report.cause, EmptyTurnCause::HookStopped);
+        let Some(AcpEvent::Error {
+            message,
+            code,
+            details,
+            terminal,
+            ..
+        }) = turn_failure_error_event(reason, AgentType::Codex, Some(&report))
+        else {
+            panic!("an empty turn raises its verdict");
+        };
+        assert_eq!(code.as_deref(), Some("turn_failed_empty_hook"));
+        assert_eq!(
+            message,
+            "UserPromptSubmit hook blocked the prompt: blocked by probe policy"
+        );
+        assert!(
+            details.as_deref().is_some_and(|d| d.contains("dropped 1")),
+            "the dropped-update evidence is kept: {details:?}"
+        );
+        assert!(!terminal, "an empty turn never kills the connection");
+
+        // A turn that did reply is not empty, whatever it warned about.
+        probe.saw_agent_output = true;
+        assert!(finish_turn_reason(&probe, "end_turn", &tail).1.is_none());
     }
 
     #[test]
@@ -36282,6 +36896,7 @@ mod tests {
             let report = EmptyTurnReport {
                 cause,
                 details: Some("evidence".into()),
+                hook_stop: None,
             };
             let Some(AcpEvent::Error {
                 code,
@@ -37075,6 +37690,16 @@ mod tests {
     async fn reopen_with(
         script: HandshakeScript,
     ) -> (Result<(), AcpError>, Vec<AcpEvent>, Vec<String>) {
+        reopen_with_quiet_gap(script, std::time::Duration::from_millis(500)).await
+    }
+
+    /// [`reopen_with`], taking the handshake as over once codeg has sent the
+    /// agent nothing for `quiet_gap` — longer than any pause it makes between
+    /// two requests of its own.
+    async fn reopen_with_quiet_gap(
+        script: HandshakeScript,
+        quiet_gap: std::time::Duration,
+    ) -> (Result<(), AcpError>, Vec<AcpEvent>, Vec<String>) {
         let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
         let mut agent = HandshakeAgent::start(agent_end, script);
         let run = HandshakeRun::start_reopening(client_end, Some("s-old")).await;
@@ -37082,9 +37707,7 @@ mod tests {
         // A `session/new` fallback is held by the agent until released: let
         // the handshake go there, as `a_cancelled_handshake_stops_waiting_for_the_session`.
         // One that comes later leaves the handshake waiting, so `ended` fails.
-        while let Ok(Some(next)) =
-            tokio::time::timeout(std::time::Duration::from_millis(500), agent.seen.recv()).await
-        {
+        while let Ok(Some(next)) = tokio::time::timeout(quiet_gap, agent.seen.recv()).await {
             let fallback = next == "session/new";
             requests.push(next);
             if fallback {
@@ -37156,6 +37779,52 @@ mod tests {
                     | AcpEvent::Error { .. }
             )),
             "no fresh start is announced: {emitted:#?}"
+        );
+    }
+
+    /// OpenCode 2.x still activating its plugins answers session/resume and
+    /// session/load with `ServiceUnavailableError` for as long as that takes.
+    /// Once the startup budget is spent the reopen fails, and no session/new
+    /// goes out: it would succeed as soon as the agent is up and bind the
+    /// conversation to an empty session while the original one is intact.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_agent_still_starting_past_the_budget_keeps_the_original_session() {
+        let starting = serde_json::json!({
+            "code": -32603,
+            "message": "Internal service failure",
+            "data": { "errorName": "ServiceUnavailableError" }
+        });
+        // Wider than the longest backoff the test budget allows.
+        let quiet_gap = HANDSHAKE_STARTUP_RETRY_BUDGET + std::time::Duration::from_secs(1);
+        let (ended, emitted, requests) = reopen_with_quiet_gap(
+            HandshakeScript {
+                load_error: Some(starting.clone()),
+                resume_error: Some(starting),
+                ..Default::default()
+            },
+            quiet_gap,
+        )
+        .await;
+
+        assert_eq!(requests.first().map(String::as_str), Some("initialize"));
+        let resumes = requests.iter().filter(|r| *r == "session/resume").count();
+        let loads = requests.iter().filter(|r| *r == "session/load").count();
+        assert!(resumes > 1, "resume is retried: {requests:?}");
+        assert!(loads >= 1, "load still gets its attempt: {requests:?}");
+        assert!(
+            !requests.iter().any(|r| r == "session/new"),
+            "no fresh session replaces the original: {requests:?}"
+        );
+        assert!(
+            matches!(&ended, Err(AcpError::Protocol(text)) if text.contains("ServiceUnavailableError")),
+            "{ended:?}"
+        );
+        assert!(
+            !emitted.iter().any(|e| matches!(
+                e,
+                AcpEvent::SessionStarted { .. } | AcpEvent::SessionLoadFailed { .. }
+            )),
+            "{emitted:#?}"
         );
     }
 
@@ -37886,7 +38555,7 @@ mod tests {
         // Empty specs → the effort selector comes from the flat `x.ai/sessionConfig`
         // "mode" list (the no-`models` fallback path).
         let opts =
-            synthesize_grok_config_options(Some(&meta), &HashMap::new()).expect("should synthesize");
+            synthesize_grok_config_options(Some(&meta), &HashMap::new(), None).expect("should synthesize");
         assert_eq!(opts.len(), 2, "model + effort selectors");
 
         let model = &opts[0];
@@ -37925,7 +38594,7 @@ mod tests {
         // Empty specs → the effort selector comes from the flat `x.ai/sessionConfig`
         // "mode" list (the no-`models` fallback path).
         let opts =
-            synthesize_grok_config_options(Some(&meta), &HashMap::new()).expect("should synthesize");
+            synthesize_grok_config_options(Some(&meta), &HashMap::new(), None).expect("should synthesize");
         assert_eq!(opts.len(), 1);
         assert_eq!(opts[0].id, GROK_MODEL_OPTION_ID);
     }
@@ -38953,8 +39622,8 @@ mod tests {
     #[test]
     fn synthesize_grok_config_options_none_without_sessionconfig() {
         let empty: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-        assert!(synthesize_grok_config_options(Some(&empty), &HashMap::new()).is_none());
-        assert!(synthesize_grok_config_options(None, &HashMap::new()).is_none());
+        assert!(synthesize_grok_config_options(Some(&empty), &HashMap::new(), None).is_none());
+        assert!(synthesize_grok_config_options(None, &HashMap::new(), None).is_none());
     }
 
     /// Raw top-level `models` mirroring grok 0.2.99's `session/new`: grok-4.5
@@ -39056,6 +39725,67 @@ mod tests {
     }
 
     #[test]
+    fn grok_resumed_session_shows_its_unlisted_saved_model() {
+        // Grok 1.0.89 resuming a session whose saved `[model.fake]` is gone
+        // (captured live): `currentModelId` keeps "fake", no sessionConfig row
+        // is `selected` and no effort rows come with it.
+        let meta: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"x.ai/sessionConfig": {"options": [
+                {"id": "grok-4.6", "category": "model", "label": "Grok 4.6", "selected": false},
+                {"id": "grok-4.5", "category": "model", "label": "Grok 4.5", "selected": false}
+            ]}}),
+        )
+        .unwrap();
+        let models = serde_json::json!({
+            "currentModelId": "fake",
+            "availableModels": [{
+                "modelId": "grok-4.6",
+                "name": "Grok 4.6",
+                "_meta": {
+                    "supportsReasoningEffort": true,
+                    "reasoningEffort": "high",
+                    "reasoningEfforts": [{"id": "high", "value": "high", "label": "High"}]
+                }
+            }]
+        });
+        let specs = parse_grok_model_specs(Some(&models));
+        let opts = synthesize_grok_config_options(Some(&meta), &specs, Some("fake"))
+            .expect("synthesize");
+        let model = opts
+            .iter()
+            .find(|o| o.id == GROK_MODEL_OPTION_ID)
+            .expect("model selector");
+        let model_sel = expect_select(&model.kind);
+        assert_eq!(model_sel.current_value, "fake", "not the first row");
+        assert_eq!(
+            model_sel.options.iter().map(|o| o.value.as_str()).collect::<Vec<_>>(),
+            ["grok-4.6", "grok-4.5", "fake"],
+            "the saved model is listed after Grok's own"
+        );
+        assert!(
+            opts.iter().all(|o| o.id != GROK_EFFORT_OPTION_ID),
+            "no effort selector borrowed from grok-4.6"
+        );
+
+        // A `selected` row still wins over the reported id, and a listed
+        // reported id is not added twice.
+        let selected: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"x.ai/sessionConfig": {"options": [
+                {"id": "grok-4.6", "category": "model", "label": "Grok 4.6", "selected": true},
+                {"id": "grok-4.5", "category": "model", "label": "Grok 4.5", "selected": false}
+            ]}}),
+        )
+        .unwrap();
+        for reported in [Some("fake"), Some("grok-4.5"), None] {
+            let opts = synthesize_grok_config_options(Some(&selected), &HashMap::new(), reported)
+                .expect("synthesize");
+            let sel = expect_select(&opts[0].kind);
+            assert_eq!(sel.current_value, "grok-4.6", "{reported:?}");
+            assert_eq!(sel.options.len(), 2, "{reported:?}");
+        }
+    }
+
+    #[test]
     fn grok_custom_model_effort_selector_follows_its_declared_levels() {
         // #993, both `session/new` replies captured from grok 1.0.62 for a
         // custom `[model."grok-4.7"]` whose endpoint lists no levels: before and
@@ -39079,7 +39809,7 @@ mod tests {
                     "_meta": custom_meta
                 }]
             });
-            synthesize_grok_config_options(Some(&meta), &parse_grok_model_specs(Some(&models)))
+            synthesize_grok_config_options(Some(&meta), &parse_grok_model_specs(Some(&models)), None)
                 .expect("synthesize")
         };
 
@@ -39155,7 +39885,7 @@ mod tests {
         )
         .unwrap();
         let specs = parse_grok_model_specs(Some(&grok_models_fixture()));
-        let opts = synthesize_grok_config_options(Some(&meta), &specs).expect("synthesize");
+        let opts = synthesize_grok_config_options(Some(&meta), &specs, None).expect("synthesize");
         assert_eq!(opts.len(), 2, "model + effort");
         let effort = opts
             .iter()
@@ -39181,7 +39911,7 @@ mod tests {
         )
         .unwrap();
         let specs = parse_grok_model_specs(Some(&grok_models_fixture()));
-        let opts = synthesize_grok_config_options(Some(&meta), &specs).expect("synthesize");
+        let opts = synthesize_grok_config_options(Some(&meta), &specs, None).expect("synthesize");
         assert_eq!(opts.len(), 1);
         assert_eq!(opts[0].id, GROK_MODEL_OPTION_ID);
     }
@@ -48000,7 +48730,7 @@ mod tests {
     ) -> (Vec<SessionConfigOptionInfo>, HashMap<String, GrokModelSpec>) {
         let (meta, models) = grok_bundled_handshake();
         let specs = parse_grok_model_specs(Some(&models));
-        let mut opts = synthesize_grok_config_options(Some(&meta), &specs).expect("a picker");
+        let mut opts = synthesize_grok_config_options(Some(&meta), &specs, None).expect("a picker");
         let effort_selector = opts
             .iter_mut()
             .find(|o| o.id == GROK_EFFORT_OPTION_ID)

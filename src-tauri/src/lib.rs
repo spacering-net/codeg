@@ -261,7 +261,7 @@ mod tauri_app {
         let running_terminals = |app: &tauri::AppHandle| {
             app.try_state::<TerminalManager>()
                 .map(|tm| {
-                    let emitter = web::event_bridge::EventEmitter::Tauri(app.clone());
+                    let emitter = web::event_bridge::EventEmitter::from_app(app);
                     tm.count_live_by_owner_window(label, Some(&emitter))
                 })
                 .unwrap_or(0)
@@ -765,6 +765,18 @@ mod tauri_app {
             // same download progress; lets the upgrade UI survive navigation.
             .manage(crate::update::new_update_state_handle())
             .setup(|app| {
+                // Retain the one `AppHandle` this process will ever clone for
+                // event emission, right here on the main thread, before any
+                // worker that emits is spawned. Every `EventEmitter::Tauri`
+                // afterwards just clones an atomic `Arc`.
+                //
+                // This is a correctness requirement, not an optimisation:
+                // `AppHandle::clone`/`drop` reach `tao`'s non-atomic
+                // `Rc<EventLoopRunner>`, so letting the ACP connection threads
+                // do it races the event loop and aborts the process with
+                // `0xC0000374`. See `web::event_bridge::EventEmitter`.
+                web::event_bridge::install_tauri_app_handle(app.handle());
+
                 let app_data_dir = app.path().app_data_dir()?;
 
                 // Unify the data root across every consumer:
@@ -899,8 +911,8 @@ mod tauri_app {
                     &db.conn,
                 ));
                 if let Some(hub) = crate::logging::hub::log_hub() {
-                    hub.set_emitter(crate::web::event_bridge::EventEmitter::Tauri(
-                        app.handle().clone(),
+                    hub.set_emitter(crate::web::event_bridge::EventEmitter::from_app(
+                        app.handle(),
                     ));
                 }
 
@@ -949,7 +961,7 @@ mod tauri_app {
                 // startup; failures are logged but non-fatal.
                 {
                     let emitter =
-                        crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                        crate::web::event_bridge::EventEmitter::from_app(app.handle());
                     tauri::async_runtime::spawn(crate::skills::startup::run(emitter));
                 }
 
@@ -1021,8 +1033,8 @@ mod tauri_app {
                 // configures a WebDAV endpoint.
                 {
                     let db_for_sync = app.state::<db::AppDatabase>().conn.clone();
-                    let emitter = std::sync::Arc::new(web::event_bridge::EventEmitter::Tauri(
-                        app.handle().clone(),
+                    let emitter = std::sync::Arc::new(web::event_bridge::EventEmitter::from_app(
+                        app.handle(),
                     ));
                     tauri::async_runtime::spawn(async move {
                         crate::commands::config_sync::auto_sync::run_auto_sync_loop(
@@ -1039,7 +1051,7 @@ mod tauri_app {
                 // what a release left behind. One per process; mirrored in
                 // `bin/codeg_server.rs`.
                 if let Some(scheduler) = crate::acp::codex_catalog_refresh::build(
-                    web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                    web::event_bridge::EventEmitter::from_app(app.handle()),
                 ) {
                     tauri::async_runtime::spawn(crate::acp::codex_catalog_refresh::run(scheduler));
                 }
@@ -1051,7 +1063,7 @@ mod tauri_app {
                 // `bin/codeg_server.rs`.
                 if let Some(checker) = crate::harness::updates::build(
                     &effective_data_dir,
-                    web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                    web::event_bridge::EventEmitter::from_app(app.handle()),
                 ) {
                     tauri::async_runtime::spawn(crate::harness::updates::run(checker));
                 }
@@ -1070,7 +1082,7 @@ mod tauri_app {
                     let db = db::AppDatabase {
                         conn: app.state::<db::AppDatabase>().conn.clone(),
                     };
-                    let emitter = web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
                     tauri::async_runtime::spawn(async move {
                         let n =
                             crate::commands::folders::backfill_worktree_folder_aliases(&emitter, &db)
@@ -1108,7 +1120,7 @@ mod tauri_app {
                         .inner()
                         .clone();
                     let cm = app.state::<ConnectionManager>().clone_ref();
-                    let emitter = web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
                     tauri::async_runtime::spawn(async move {
                         ccm_ref
                             .start_background(br, bus, db_conn, data_dir, cm, emitter)
@@ -1131,7 +1143,7 @@ mod tauri_app {
                         .state::<std::sync::Arc<web::event_bridge::WebEventBroadcaster>>()
                         .inner()
                         .clone();
-                    let emitter = web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
                     let pet_state_handle = app
                         .state::<crate::pet_state_mapper::PetStateHandle>()
                         .inner()
@@ -1162,7 +1174,7 @@ mod tauri_app {
                         .state::<std::sync::Arc<web::event_bridge::WebEventBroadcaster>>()
                         .inner()
                         .clone();
-                    let emitter = web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                    let emitter = web::event_bridge::EventEmitter::from_app(app.handle());
                     let manager = app.state::<ConnectionManager>().inner().clone_ref();
                     let db_conn = app.state::<db::AppDatabase>().conn.clone();
                     tauri::async_runtime::spawn(
@@ -1315,8 +1327,8 @@ mod tauri_app {
                                 std::sync::Arc::new(db::AppDatabase {
                                     conn: db_conn.clone(),
                                 }),
-                                crate::web::event_bridge::EventEmitter::Tauri(
-                                    app.handle().clone(),
+                                crate::web::event_bridge::EventEmitter::from_app(
+                                    app.handle(),
                                 ),
                                 chat_authoring_config.clone(),
                             ),
@@ -1382,7 +1394,7 @@ mod tauri_app {
                     let service = crate::cli_run::CliRunService::new(
                         &app.state::<db::AppDatabase>(),
                         &app.state::<ConnectionManager>(),
-                        crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                        crate::web::event_bridge::EventEmitter::from_app(app.handle()),
                         app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
                             .inner()
                             .clone(),
@@ -1456,7 +1468,7 @@ mod tauri_app {
                         conn: app.state::<crate::db::AppDatabase>().conn.clone(),
                     },
                     app.state::<ConnectionManager>().clone_ref(),
-                    crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                    crate::web::event_bridge::EventEmitter::from_app(app.handle()),
                     app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
                         .inner()
                         .clone(),
@@ -1473,7 +1485,7 @@ mod tauri_app {
                         conn: app.state::<crate::db::AppDatabase>().conn.clone(),
                     },
                     app.state::<ConnectionManager>().clone_ref(),
-                    crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                    crate::web::event_bridge::EventEmitter::from_app(app.handle()),
                     app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
                         .inner()
                         .clone(),
@@ -1487,7 +1499,7 @@ mod tauri_app {
                         crate::db::AppDatabase {
                             conn: app.state::<crate::db::AppDatabase>().conn.clone(),
                         },
-                        crate::web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                        crate::web::event_bridge::EventEmitter::from_app(app.handle()),
                     ) {
                         tauri::async_runtime::spawn(crate::forge::auto::run(processor));
                     }
@@ -2191,6 +2203,8 @@ mod tauri_app {
                 acp_commands::acp_update_kimi_code_config,
                 deepseek_settings_commands::acp_load_deepseek_model_catalog,
                 deepseek_settings_commands::acp_update_deepseek_model_catalog,
+                deepseek_settings_commands::acp_load_deepseek_provider_routes,
+                deepseek_settings_commands::acp_update_deepseek_provider_routes,
                 acp_commands::acp_update_pi_config,
                 acp_commands::acp_load_pi_config,
                 acp_commands::acp_list_pi_model_capabilities,

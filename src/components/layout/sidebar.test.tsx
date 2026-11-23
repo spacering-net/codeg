@@ -579,7 +579,7 @@ describe("Sidebar — Harness row", () => {
     "To-dos",
     "Repository panel",
     "Infinite Canvas",
-    "Harness",
+    "Harness Engineering",
   ]
   const navRowTitles = () =>
     screen
@@ -615,7 +615,7 @@ describe("Sidebar — Harness row", () => {
 
   it("carries no badge while nothing has an update", () => {
     renderSidebar()
-    expect(harnessRow().textContent).toBe("Harness")
+    expect(harnessRow().textContent).toBe("Harness Engineering")
   })
 
   it("counts the available updates in a trailing badge", () => {
@@ -623,7 +623,7 @@ describe("Sidebar — Harness row", () => {
 
     // Read out as a sentence, not as a bare digit after the name…
     const row = screen.getByRole("button", {
-      name: "Harness 3 updates available",
+      name: "Harness Engineering 3 updates available",
     })
     // …and shown as the same chip the To-dos count uses.
     const badge = within(row).getByTitle("3 updates available")
@@ -635,7 +635,9 @@ describe("Sidebar — Harness row", () => {
   it("says one update in the singular", () => {
     renderSidebar({ harnessUpdates: 1 })
     expect(
-      screen.getByRole("button", { name: "Harness 1 update available" })
+      screen.getByRole("button", {
+        name: "Harness Engineering 1 update available",
+      })
     ).toBeTruthy()
   })
 
@@ -653,12 +655,12 @@ describe("Sidebar — Harness row", () => {
       "To-dos",
       "Repository panel",
       "Infinite Canvas",
-      "Harness",
+      "Harness Engineering",
     ])
     const harness = toggles[toggles.length - 1]
     expect(harness).toHaveAttribute("aria-checked", "true")
     // The toggle mirrors the row it switches, glyph included.
-    expect(harness.querySelector("svg.lucide-blocks")).not.toBeNull()
+    expect(harness.querySelector("svg.lucide-drafting-compass")).not.toBeNull()
     await userEvent.keyboard("{Escape}")
   })
 
@@ -667,7 +669,7 @@ describe("Sidebar — Harness row", () => {
 
     await openViewOptionsGroup("Navigation items")
     await userEvent.click(
-      screen.getByRole("menuitemcheckbox", { name: "Harness" })
+      screen.getByRole("menuitemcheckbox", { name: "Harness Engineering" })
     )
     // Close before looking at the rows: an open Radix menu aria-hides the
     // sidebar behind it.
@@ -682,7 +684,7 @@ describe("Sidebar — Harness row", () => {
 
     await openViewOptionsGroup("Navigation items")
     await userEvent.click(
-      screen.getByRole("menuitemcheckbox", { name: "Harness" })
+      screen.getByRole("menuitemcheckbox", { name: "Harness Engineering" })
     )
     await userEvent.keyboard("{Escape}")
 

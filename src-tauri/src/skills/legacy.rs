@@ -235,14 +235,14 @@ pub(crate) fn apply_one(
             .unwrap_or_default();
         let error = if op.enable {
             format!(
-                "{} has no skill directory of its own: the link would go into {}, which {} also read. Turn it on from the Harness page, which asks first",
+                "{} has no skill directory of its own: the link would go into {}, which {} also read. Turn it on from the Harness Engineering page, which asks first",
                 op.agent_type,
                 dir.display(),
                 list(&others)
             )
         } else {
             format!(
-                "the link is in {}, which {} also read: turning it off here would turn it off for them too. Do it from the Harness page, which asks first",
+                "the link is in {}, which {} also read: turning it off here would turn it off for them too. Do it from the Harness Engineering page, which asks first",
                 dir.display(),
                 list(&others)
             )

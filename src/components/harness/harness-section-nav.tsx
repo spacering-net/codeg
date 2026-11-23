@@ -1,141 +1,120 @@
 "use client"
 
-import { useEffect, useRef } from "react"
-import {
-  BookOpenText,
-  Boxes,
-  Compass,
-  PlugZap,
-  type LucideIcon,
-} from "lucide-react"
+import { useEffect, useRef, type KeyboardEvent } from "react"
 import { useTranslations } from "next-intl"
-import { Tabs as TabsPrimitive } from "radix-ui"
+import { Direction } from "radix-ui"
 
-import { Button } from "@/components/ui/button"
+import { useHarnessView } from "@/contexts/harness-view-context"
 import type { HarnessSectionId } from "@/lib/harness-sections"
 import { cn } from "@/lib/utils"
+import { useHarnessSectionCounts } from "./harness-section-counts"
 
-// MCP, Skills and Skill packs keep the glyphs the Settings window's nav gave
-// them, so the three read as the same places they were there.
-const SECTION_ICONS: Record<HarnessSectionId, LucideIcon> = {
-  discover: Compass,
-  mcp: PlugZap,
-  skills: BookOpenText,
-  packs: Boxes,
-}
-
-const SEGMENT_CLASS = cn(
-  "h-8 flex-1 rounded-full px-2.5 text-[0.8125rem] font-medium whitespace-nowrap",
-  "text-muted-foreground outline-none transition-colors hover:text-foreground",
-  // Inset: the track scrolls sideways when the labels outgrow it, and a
-  // scroller clips a ring drawn outside the segment.
-  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-  // `data-*` rules come after `hover:` in the generated CSS, so the selected
-  // segment keeps its colour under the pointer.
-  "data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
-  "@md/harness:h-7 @md/harness:flex-none @md/harness:px-3"
-)
-
-interface HarnessSectionNavProps {
-  /** The sections on offer, in order. */
-  sections: readonly HarnessSectionId[]
-  /** The selected one — the column marks it the way the Settings nav does. */
-  section: HarnessSectionId
-  /** The switch on top of the page instead of the column beside it. */
-  compact: boolean
-}
+/** The ids that tie a tab to its panel (`HarnessPage` draws the panel). */
+export const harnessTabId = (id: HarnessSectionId) => `harness-tab-${id}`
+export const harnessPanelId = (id: HarnessSectionId) => `harness-panel-${id}`
 
 /**
- * The Harness page's section switcher, in its two shapes:
+ * The Harness page's sections, as tabs in the window-chrome strip after the
+ * page's title — `驾驭工程 | Discover  MCP 4  Skills 12  Skill packs 2`.
  *
- * - a column down the page's leading edge, looking like the Settings window's
- *   nav (the three sections that moved here from that window sit where a user
- *   of it expects them), while the page is wide enough for one;
- * - a segmented switch across the top of the page otherwise — a narrow window,
- *   a wide sidebar, a phone.
+ * The strip and the page are drawn by different hosts (the route's strip and
+ * its page), so this is a tab list of its own rather than a Radix `Tabs`: the
+ * section it selects lives in `HarnessViewProvider`, which both sides read.
+ * It keeps a tab list's keys — the arrows along it (mirrored in a
+ * right-to-left language), Home and End — and moving the focus selects, as
+ * every other tab list in the app does.
  *
- * Either way it is ONE tab list (the Radix `Tabs` the page wraps it in), so
- * both shapes get the same roles, the same roving focus and the same keys:
- * the arrows along the list's axis (↑/↓ in the column, ←/→ in the switch,
- * mirrored in a right-to-left language), Home and End. Moving focus selects,
- * as it does for every other tab list in the app.
- *
- * Built on the Radix primitives rather than the shared `ui/tabs` wrappers, for
- * the reason the aux panel's tab rail gives: those are one particular
- * segmented control, and both shapes here would have to undo most of it.
+ * Each local section carries what it holds (`useHarnessSectionCounts`);
+ * Discover's size is the catalog's, said on the page itself.
  */
-export function HarnessSectionNav({
-  sections,
-  section,
-  compact,
-}: HarnessSectionNavProps) {
+export function HarnessSectionNav() {
   const t = useTranslations("Harness")
-  const switchRef = useRef<HTMLDivElement>(null)
+  const { sections, section, setSection } = useHarnessView()
+  const counts = useHarnessSectionCounts(section)
+  const listRef = useRef<HTMLDivElement>(null)
+  const rtl = Direction.useDirection() === "rtl"
 
-  // On a phone the four labels can outgrow the track in the wordier languages
-  // ("Paquetes de habilidades"), and the track then scrolls sideways with no
-  // scrollbar to say so. A tap can only land on a segment that is in view, but
-  // the page also opens on a remembered section and is sent to one by
-  // `openHarness` — so the selected segment is brought into view whenever it
-  // changes, or the switch could show three segments, none of them selected.
+  // In a narrow window the tabs scroll sideways with no scrollbar to say so:
+  // the selected one is kept in view, however it was selected.
   useEffect(() => {
-    if (!compact) return
-    switchRef.current
-      ?.querySelector<HTMLElement>('[data-state="active"]')
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" })
-  }, [compact, section])
+    listRef.current
+      ?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" })
+  }, [section])
 
-  if (compact) {
-    return (
-      <div className="shrink-0 px-3 pt-3 md:px-4">
-        <TabsPrimitive.List
-          ref={switchRef}
-          aria-label={t("sectionsLabel")}
-          className={cn(
-            // Full width with equal-growing segments on a phone, where the
-            // four labels nearly fill the row anyway and a larger target is
-            // welcome; sized to its labels once there is room to spare.
-            "no-scrollbar flex h-9 w-full items-center gap-0.5 overflow-x-auto rounded-full bg-muted/70 p-0.5 ws-msg-chip",
-            "@md/harness:h-8 @md/harness:w-fit"
-          )}
-        >
-          {sections.map((id) => (
-            <TabsPrimitive.Trigger
-              key={id}
-              value={id}
-              className={SEGMENT_CLASS}
-            >
-              {t(`sections.${id}`)}
-            </TabsPrimitive.Trigger>
-          ))}
-        </TabsPrimitive.List>
-      </div>
-    )
+  const move = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const index = sections.indexOf(section)
+    let next: number | null = null
+    switch (event.key) {
+      case "ArrowRight":
+        next = index + (rtl ? -1 : 1)
+        break
+      case "ArrowLeft":
+        next = index + (rtl ? 1 : -1)
+        break
+      case "Home":
+        next = 0
+        break
+      case "End":
+        next = sections.length - 1
+        break
+    }
+    if (next === null) return
+    event.preventDefault()
+    const target = sections[(next + sections.length) % sections.length]
+    setSection(target)
+    document.getElementById(harnessTabId(target))?.focus()
   }
 
   return (
-    <TabsPrimitive.List
+    <div
+      ref={listRef}
+      role="tablist"
       aria-label={t("sectionsLabel")}
-      className="flex w-48 shrink-0 flex-col gap-1 border-e border-border/50 px-2 py-3 ws-chrome-border"
+      aria-orientation="horizontal"
+      className="no-scrollbar flex h-10 min-w-0 items-stretch overflow-x-auto"
     >
       {sections.map((id) => {
-        const Icon = SECTION_ICONS[id]
-        // The Settings nav's row: same button, same variants, same icon size
-        // (the Button's own 1rem default).
+        const selected = id === section
+        const count = counts[id]
         return (
-          <TabsPrimitive.Trigger key={id} value={id} asChild>
-            <Button
-              type="button"
-              variant={id === section ? "secondary" : "ghost"}
-              size="sm"
-              className="w-full justify-start px-2"
-            >
-              <Icon aria-hidden="true" />
-              <span className="truncate">{t(`sections.${id}`)}</span>
-            </Button>
-          </TabsPrimitive.Trigger>
+          <button
+            key={id}
+            id={harnessTabId(id)}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-controls={harnessPanelId(id)}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => setSection(id)}
+            onKeyDown={move}
+            className={cn(
+              // Words, not pills: at rest a tab is only its label, so the
+              // divider before the first one sits halfway between the title
+              // and that label. The tab on show is underlined on the strip's
+              // bottom edge.
+              "relative inline-flex h-10 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[0.8125rem] font-medium whitespace-nowrap outline-none transition-colors",
+              "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              "after:absolute after:inset-x-2.5 after:bottom-0 after:h-0.5 after:rounded-full after:transition-colors",
+              selected
+                ? "text-foreground after:bg-primary"
+                : "text-muted-foreground after:bg-transparent hover:text-foreground"
+            )}
+          >
+            {t(`sections.${id}`)}
+            {count !== undefined && (
+              <span
+                className={cn(
+                  "text-xs font-normal tabular-nums",
+                  selected ? "text-primary" : "text-muted-foreground/70"
+                )}
+              >
+                {count}
+              </span>
+            )}
+          </button>
         )
       })}
-    </TabsPrimitive.List>
+    </div>
   )
 }

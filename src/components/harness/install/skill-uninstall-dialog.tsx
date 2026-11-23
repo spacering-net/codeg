@@ -20,7 +20,6 @@ import type {
 } from "@/lib/harness/skill-install-types"
 import { cn } from "@/lib/utils"
 import { Code } from "../discover/detail-sections"
-import { HarnessHostLabel } from "../harness-host-label"
 import { MachineText } from "../machine-text"
 import { McpDialogFrame } from "../mcp/mcp-dialog-frame"
 import { Headline, Technical } from "../mcp/mcp-plan"
@@ -288,7 +287,6 @@ export function SkillUninstallDialog({
     const refused = preflight !== null && preflight.outcome !== "preflight"
     body = (
       <div className="min-w-0 space-y-4">
-        <HarnessHostLabel />
         {dialog.notice === "effectsChanged" && (
           <Headline tone="neutral">{t("changed")}</Headline>
         )}

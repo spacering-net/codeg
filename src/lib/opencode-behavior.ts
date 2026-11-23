@@ -9,10 +9,10 @@
  *   "default_agent": "build"              // primary agent a new session opens in
  *   "update": "auto" | "notify" | "disable"  // the TUI's self-updater
  *   "snapshots": true                     // snapshots behind undo/revert
- *   "compaction": { "auto": true, "keep": { "tokens": 15000 }, "buffer": 20000 | "20%" }
+ *   "compaction": { "auto": true, "background": true, "keep": { "tokens": 15000 },
+ *                   "buffer": 20000 | "20%" }
  *   "tool_output": { "max_lines": 2000, "max_bytes": 51200 }
- *   "experimental": { "todo": false, "background_compaction": false,
- *                     "subagent_depth": 1 }
+ *   "experimental": { "todo": false, "subagent_depth": 1 }
  *
  * OpenCode 2 still loads 1.x's spellings of some of these
  * (`core/src/config/normalize.ts`): `autoupdate` → `update`, `snapshot` →
@@ -22,7 +22,9 @@
  * 1.x spelling so the file says one thing. Others it drops with a warning —
  * a top-level `subagent_depth`, `compaction.tail_turns`, `compaction.prune` —
  * and `share` it accepts but no longer acts on; the view lists the ones a
- * document still carries.
+ * document still carries. So does 2.3.1's `experimental.background_compaction`,
+ * which `compaction.background` replaced (on by default) and which OpenCode
+ * now drops without a word.
  *
  * Every write goes through `patchJsoncText`, so the user's comments and
  * formatting survive. A control set back to its unset state DELETES the key
@@ -52,8 +54,8 @@ export type OpenCodeNumberField =
 export type OpenCodeToggleField =
   | "snapshots"
   | "compaction.auto"
+  | "compaction.background"
   | "experimental.todo"
-  | "experimental.background_compaction"
 
 /**
  * A numeric field's value: an integer, or for a field that takes one
@@ -98,8 +100,10 @@ export const OPENCODE_TOGGLE_DEFAULTS: Readonly<
 > = {
   snapshots: true,
   "compaction.auto": true,
+  // `compaction.background` (2.3.1): "default: true". An unused summary still
+  // costs tokens, so this is the switch that saves them.
+  "compaction.background": true,
   "experimental.todo": false,
-  "experimental.background_compaction": false,
 }
 
 const PATHS: Record<OpenCodeNumberField | OpenCodeToggleField, string[]> = {
@@ -110,11 +114,8 @@ const PATHS: Record<OpenCodeNumberField | OpenCodeToggleField, string[]> = {
   "tool_output.max_bytes": ["tool_output", "max_bytes"],
   snapshots: ["snapshots"],
   "compaction.auto": ["compaction", "auto"],
+  "compaction.background": ["compaction", "background"],
   "experimental.todo": ["experimental", "todo"],
-  "experimental.background_compaction": [
-    "experimental",
-    "background_compaction",
-  ],
 }
 
 /** The 1.x spelling OpenCode 2 still reads for a field, removed on write. */
@@ -126,21 +127,24 @@ const LEGACY_PATHS: Partial<
   "compaction.buffer": ["compaction", "reserved"],
 }
 
-/** 1.x keys a field's write also removes although OpenCode 2 ignores them:
- *  setting the 2.x key is the user saying what they want instead. */
+/** Retired keys a field's write also removes although OpenCode ignores them:
+ *  setting the current key is the user saying what they want instead. */
 const DROPPED_ON_WRITE: Partial<
   Record<OpenCodeNumberField | OpenCodeToggleField, string[][]>
 > = {
   "experimental.subagent_depth": [["subagent_depth"]],
+  "compaction.background": [["experimental", "background_compaction"]],
 }
 
-/** 1.x keys OpenCode 2 drops (or, for `share`, accepts and ignores). */
+/** Retired keys OpenCode drops (or, for `share`, accepts and ignores): 1.x's,
+ *  and 2.3.1's `experimental.background_compaction`. */
 const IGNORED_LEGACY_KEYS: string[][] = [
   ["subagent_depth"],
   ["compaction", "tail_turns"],
   ["compaction", "prune"],
   ["share"],
   ["autoshare"],
+  ["experimental", "background_compaction"],
 ]
 
 export interface OpenCodeBehaviorView {
@@ -150,7 +154,7 @@ export interface OpenCodeBehaviorView {
   toggles: Record<OpenCodeToggleField, boolean | null>
   /** A string only for a `percent` field, and only one OpenCode accepts. */
   numbers: Record<OpenCodeNumberField, OpenCodeNumberValue | null>
-  /** 1.x keys the document carries that OpenCode 2 does not act on. */
+  /** Retired keys the document carries that OpenCode does not act on. */
   ignoredLegacyKeys: string[]
   /** True when the document could not be parsed, so nothing here is authoritative. */
   invalid: boolean
@@ -391,7 +395,7 @@ export function setOpenCodeNumber(
   })
 }
 
-/** Remove the 1.x keys OpenCode 2 does not act on. */
+/** Remove the retired keys OpenCode does not act on. */
 export function removeIgnoredLegacyKeys(configText: string): string {
   return patch(configText, (config) => {
     for (const path of IGNORED_LEGACY_KEYS) deletePath(config, path)

@@ -8758,7 +8758,7 @@ async fn hermes_setup_argvs() -> (Vec<String>, Vec<String>) {
         // Unreachable: Hermes is always an Npx distribution. Fall through to
         // the npx guidance with the same pinned spec so a future match-arm
         // change can't resurrect a stale recipe.
-        _ => "hermes-agent@0.23.1",
+        _ => "hermes-agent@0.23.2",
     };
     (
         hermes_npx_argv(package, &["acp", "--setup"]),
@@ -12658,7 +12658,7 @@ pub async fn acp_connect(
     // can prompt the user to install it from Agent Settings.
     verify_agent_installed(agent_type).await?;
 
-    let emitter = EventEmitter::Tauri(app_handle);
+    let emitter = EventEmitter::from_app(&app_handle);
     spawn_with_conversation_selection(
         &manager,
         &db.conn,
@@ -13610,7 +13610,7 @@ pub async fn acp_update_agent_preferences(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_agent_preferences_and_refresh(
         agent_type,
         enabled,
@@ -13761,7 +13761,7 @@ pub async fn acp_update_agent_env(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_agent_env_and_refresh(
         agent_type,
         enabled,
@@ -14032,7 +14032,7 @@ pub async fn acp_update_agent_config(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_agent_config_and_refresh(
         agent_type,
         config_json,
@@ -14065,7 +14065,7 @@ pub async fn acp_update_hermes_config(
     raw_config_yaml: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_hermes_config_core(
         HermesConfigUpdate {
             provider,
@@ -14123,7 +14123,7 @@ pub async fn acp_update_kimi_code_config(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_kimi_code_config_and_refresh(
         KimiCodeConfigUpdate {
             mode,
@@ -14167,7 +14167,7 @@ pub async fn acp_update_pi_config(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_pi_config_core(
         PiConfigUpdate {
             provider,
@@ -14574,7 +14574,7 @@ pub async fn acp_download_agent_binary(
     task_id: String,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_download_agent_binary_core(agent_type, version, task_id, &emitter).await
 }
 
@@ -14741,7 +14741,7 @@ pub async fn acp_update_system_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<Option<String>, AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_update_system_agent_core(agent_type, task_id, &db, &emitter).await
 }
 
@@ -14800,7 +14800,7 @@ pub async fn acp_install_uv_tool(
     task_id: String,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_install_uv_tool_core(task_id, &emitter).await
 }
 
@@ -14891,7 +14891,7 @@ pub async fn acp_detect_agent_local_version(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<Option<String>, AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_detect_agent_local_version_core(agent_type, &db.conn, &emitter).await
 }
 
@@ -15174,7 +15174,7 @@ pub async fn acp_prepare_npx_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<String, AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_prepare_npx_agent_core(
         agent_type,
         registry_version,
@@ -15260,7 +15260,7 @@ pub async fn acp_uninstall_agent(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_uninstall_agent_core(agent_type, task_id, &db, &emitter).await
 }
 
@@ -15307,7 +15307,7 @@ pub async fn acp_install_pi_binary(
     task_id: String,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_install_pi_binary_core(task_id, &emitter).await
 }
 
@@ -15352,7 +15352,7 @@ pub async fn acp_uninstall_pi_binary(
     task_id: String,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_uninstall_pi_binary_core(task_id, &emitter).await
 }
 
@@ -15385,7 +15385,7 @@ pub async fn acp_reorder_agents(
     db: State<'_, AppDatabase>,
     app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     acp_reorder_agents_core(&agent_types, &db, &emitter).await
 }
 
@@ -16207,7 +16207,7 @@ pub mod skill_page {
         app: tauri::AppHandle,
     ) -> Result<AgentSkillItem, AppCommandError> {
         super::acp_save_agent_skill_core(
-            &EventEmitter::Tauri(app),
+            &EventEmitter::from_app(&app),
             agent_type,
             scope,
             skill_id,
@@ -16231,7 +16231,7 @@ pub mod skill_page {
         app: tauri::AppHandle,
     ) -> Result<SkillPageDeleteResult, AppCommandError> {
         super::acp_delete_agent_skill_core(
-            &EventEmitter::Tauri(app),
+            &EventEmitter::from_app(&app),
             agent_type,
             scope,
             skill_id,
@@ -21735,7 +21735,7 @@ wire_api = "chat"
     // version is also the recorded fallback when detection comes up empty.
     #[test]
     fn hermes_custom_version_spec_keeps_lifecycle_scripts_and_records_its_version() {
-        let spec = build_npm_install_spec("hermes-agent@0.23.1", Some("0.24.0")).unwrap();
+        let spec = build_npm_install_spec("hermes-agent@0.23.2", Some("0.24.0")).unwrap();
         assert_eq!(spec, "hermes-agent@0.24.0");
         assert!(npm_package_requires_scripts(&spec));
         assert!(npm_package_bootstraps_runtime(&spec));
@@ -23566,11 +23566,11 @@ wire_api = "chat"
     fn installs_name_the_packages_whose_scripts_npm_must_run() {
         for (specs, name) in [
             (
-                &["hermes-agent@0.23.1", "hermes-agent@0.24.0", "hermes-agent"][..],
+                &["hermes-agent@0.23.2", "hermes-agent@0.24.0", "hermes-agent"][..],
                 "hermes-agent",
             ),
             (
-                &["@xai-official/grok@1.0.77", "@xai-official/grok"][..],
+                &["@xai-official/grok@1.0.89", "@xai-official/grok"][..],
                 "@xai-official/grok",
             ),
         ] {
@@ -23595,16 +23595,16 @@ wire_api = "chat"
             assert!(npm_run_scripts_args(spec).is_empty(), "{spec}");
         }
         // Grok's postinstall downloads nothing and leaves no runtime to check.
-        assert!(!npm_package_bootstraps_runtime("@xai-official/grok@1.0.77"));
+        assert!(!npm_package_bootstraps_runtime("@xai-official/grok@1.0.89"));
         assert_eq!(
-            hermes_npx_argv("hermes-agent@0.23.1", &["acp", "--setup"]),
+            hermes_npx_argv("hermes-agent@0.23.2", &["acp", "--setup"]),
             [
                 "npx",
                 "-y",
                 "--ignore-scripts=false",
                 "--allow-scripts=hermes-agent",
                 "--package",
-                "hermes-agent@0.23.1",
+                "hermes-agent@0.23.2",
                 "hermes",
                 "acp",
                 "--setup",
@@ -23631,7 +23631,7 @@ wire_api = "chat"
                     .expect("npx recipe must pin via --package");
                 assert_eq!(
                     argv.get(pkg_idx + 1).map(String::as_str),
-                    Some("hermes-agent@0.23.1")
+                    Some("hermes-agent@0.23.2")
                 );
                 assert_eq!(argv.get(pkg_idx + 2).map(String::as_str), Some("hermes"));
             } else {
@@ -24243,7 +24243,7 @@ model = "gpt"
             )
         };
 
-        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.23.1", download());
+        let annotated = annotate_npm_bootstrap_failure("hermes-agent@0.23.2", download());
         let text = annotated.to_string();
         assert!(text.contains("fetch failed"), "keeps the original error");
         assert!(text.contains("HTTP(S)_PROXY"), "adds the proxy hint");
@@ -24253,7 +24253,7 @@ model = "gpt"
         // whose postinstall codeg also runs but which downloads nothing.
         for other in [
             "@zed-industries/claude-code-acp",
-            "@xai-official/grok@1.0.77",
+            "@xai-official/grok@1.0.89",
         ] {
             let other = annotate_npm_bootstrap_failure(other, download());
             assert!(!other.to_string().contains("HTTP(S)_PROXY"));
@@ -24261,7 +24261,7 @@ model = "gpt"
 
         // A hermes failure that isn't a download stays untouched.
         let permissions = annotate_npm_bootstrap_failure(
-            "hermes-agent@0.23.1",
+            "hermes-agent@0.23.2",
             AcpError::Protocol("failed to install npm package globally: EACCES".to_string()),
         );
         assert!(!permissions.to_string().contains("HTTP(S)_PROXY"));

@@ -25,7 +25,7 @@ const WS_DISCONNECTED_CHANNEL = "__disconnected__"
 /// The server refused the token on the socket's handshake (HTTP 401).
 const WS_UNAUTHORIZED_CHANNEL = "__unauthorized__"
 
-// Two wire shapes flow on the same `remote-ws-event-{id}` Tauri event:
+// Two wire shapes flow on the same per-webview Tauri event:
 //   1. Legacy `{channel, payload}` envelopes from the WebEventBroadcaster
 //      firehose (`__ready__`, folder/app channels, etc.).
 //   2. Top-level attach-protocol frames `{type, ...}` from the per-connection
@@ -93,12 +93,8 @@ function isAuthenticationFailed(err: unknown): boolean {
  * `app.emit` broadcasting. Two remote workspaces opened side-by-side
  * see entirely separate event streams.
  *
- * That targeting only holds if the listener is scoped to this webview.
- * Tauri delivers `emit_to(EventTarget::webview(label))` to every listener
- * registered with the `Any` target, in every webview, so a global
- * `listen()` here would also receive the copies addressed to other windows
- * sharing this connection (duplicated terminal output, foreign ready /
- * disconnected signals). Keep `getCurrentWebview().listen()`.
+ * Include the current webview label in the event name so Tauri avoids
+ * evaluating frames addressed to other webviews sharing this connection.
  */
 export class RemoteDesktopTransport implements Transport {
   private handlers = new Map<string, Set<(payload: unknown) => void>>()
@@ -120,7 +116,7 @@ export class RemoteDesktopTransport implements Transport {
   private connectionState: RemoteConnectionState = "reconnecting"
   private connectionListeners = new Set<() => void>()
   private readyCallbacks = new Set<() => void>()
-  /// Listener handle for `remote-ws-event-{id}`. Null when not subscribed.
+  /// Listener handle for the per-webview event. Null when not subscribed.
   private unlistenWsEvent: UnlistenFn | null = null
   /// Opaque ID generated at construction time, passed to `remote_ws_subscribe`
   /// and `remote_ws_unsubscribe`. Because it is known before the invoke
@@ -426,8 +422,9 @@ export class RemoteDesktopTransport implements Transport {
   private async startWs() {
     this.wsStarted = true
     try {
-      const unlisten = await getCurrentWebview().listen<WsFrame>(
-        `remote-ws-event-${this.config.id}`,
+      const webview = getCurrentWebview()
+      const unlisten = await webview.listen<WsFrame>(
+        `remote-ws-event-${this.config.id}-${webview.label}`,
         (event) => this.handleWsEvent(event.payload)
       )
       if (this.destroyed) {

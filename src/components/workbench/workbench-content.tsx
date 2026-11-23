@@ -12,6 +12,7 @@ import {
 import { CanvasPage, CanvasPageTitle } from "@/components/canvas/canvas-page"
 import { ForgeChromeActions } from "@/components/forge/forge-chrome-actions"
 import { ForgePage, ForgePageTitle } from "@/components/forge/forge-page"
+import { HarnessChromeActions } from "@/components/harness/harness-chrome-actions"
 import {
   HarnessPage,
   HarnessPageTitle,
@@ -68,6 +69,7 @@ const WORKBENCH_ROUTE_CHROME_ACTIONS: Partial<
 > = {
   forge: ForgeChromeActions,
   tasks: TasksChromeActions,
+  harness: HarnessChromeActions,
 }
 
 /**

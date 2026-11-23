@@ -15,7 +15,6 @@ import type { McpFlow } from "@/lib/harness/mcp-state"
 import { headlineOf, isAgentFine } from "@/lib/mcp/results"
 import type { McpAgentResult, McpApplyResult } from "@/lib/mcp/types"
 import { cn } from "@/lib/utils"
-import { HarnessHostLabel } from "../harness-host-label"
 import { MachineText } from "../machine-text"
 import { AgentGlyph, PathText } from "./mcp-bits"
 import { useMcpLabels } from "./use-mcp-labels"
@@ -239,7 +238,6 @@ export function McpReview({ flow }: { flow: McpFlow }) {
       aria-busy={!preflight && !flow.failure}
       className="min-w-0 space-y-3"
     >
-      <HarnessHostLabel />
       {flow.notice === "changedElsewhere" && (
         <Headline tone="neutral">{t("reread")}</Headline>
       )}

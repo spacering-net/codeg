@@ -47,7 +47,7 @@ mod tauri_commands {
         let data_dir = crate::paths::resolve_effective_data_dir(
             &app.path().app_data_dir().unwrap_or_default(),
         );
-        crate::harness::updates::checker_for(&data_dir, &EventEmitter::Tauri(app.clone()))
+        crate::harness::updates::checker_for(&data_dir, &EventEmitter::from_app(app))
     }
 
     #[tauri::command]

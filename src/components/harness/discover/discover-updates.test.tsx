@@ -178,4 +178,40 @@ describe("Discover — what the update check says", () => {
       ]).toContain(command)
     }
   })
+
+  it("shapes a loading detail's action placeholders after what is installed", async () => {
+    let resolveItem: (value: unknown) => void = () => {}
+    const pending = new Promise((resolve) => {
+      resolveItem = resolve
+    })
+    const original = backend.harness_item
+    backend.harness_item = (args) =>
+      pending.then(() => original(args)) as unknown
+    try {
+      render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <HarnessViewProvider>
+            <Capture />
+            <DiscoverSection />
+          </HarnessViewProvider>
+        </NextIntlClientProvider>
+      )
+      await screen.findByText("Item 1")
+      const card = (title: string) =>
+        screen.getByRole("heading", { level: 3, name: title }).closest("li")!
+      expect(await within(card("Item 1")).findByText("Installed")).toBeTruthy()
+      seedUpdates()
+
+      // A skill installed with an update waiting: "Update" and "Manage".
+      await userEvent.click(screen.getByRole("button", { name: "Item 1" }))
+      const detail = await screen.findByRole("article")
+      expect(detail).toHaveAttribute("aria-busy", "true")
+      expect(
+        within(detail).getAllByTestId("discover-action-loading")
+      ).toHaveLength(2)
+    } finally {
+      await act(async () => resolveItem(null))
+      backend.harness_item = original
+    }
+  })
 })

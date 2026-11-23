@@ -44,7 +44,11 @@ import {
   promptTextOf,
   quickMessageDraft,
 } from "@/lib/harness/prompt"
-import type { HarnessItemDetail, HarnessShowcase } from "@/lib/harness/types"
+import type {
+  HarnessItemDetail,
+  HarnessItemSummary,
+  HarnessShowcase,
+} from "@/lib/harness/types"
 import { useSrnAsset } from "@/lib/harness/use-srn-asset"
 import { cn, copyTextToClipboard } from "@/lib/utils"
 import { ActionAlert, refocus } from "./detail-actions"
@@ -475,6 +479,14 @@ export function PromptFacts({ item }: DiscoverDetailPartProps) {
       )}
     </>
   )
+}
+
+/** How many rows `PromptFacts` will have, from what the list knew: the
+ *  model and the results when its card names them; the language, the length
+ *  and whose it is nearly always. */
+export function promptFactsGuess(item: HarnessItemSummary): number {
+  const card = item.prompt
+  return (card?.model ? 1 : 0) + (card && card.results > 0 ? 1 : 0) + 3
 }
 
 // ─── Actions ──────────────────────────────────────────────────────────

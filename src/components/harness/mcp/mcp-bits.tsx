@@ -60,6 +60,10 @@ export function PathText({
   )
 }
 
+/** A part's title: plain words, a step under the detail's heading. */
+export const DETAIL_PART_TITLE_CLASS =
+  "text-[0.9375rem] font-semibold text-foreground"
+
 /** A titled part of a detail. */
 export function McpDetailPart({
   title,
@@ -75,14 +79,14 @@ export function McpDetailPart({
   const headingId = useId()
   return (
     <section aria-labelledby={headingId} className={cn("min-w-0", className)}>
-      <div className="flex min-w-0 items-baseline justify-between gap-3 pb-2">
-        <h3 id={headingId} className={MCP_SECTION_TITLE_CLASS}>
+      <div className="flex min-h-8 min-w-0 items-center justify-between gap-3 pb-2">
+        <h3 id={headingId} className={DETAIL_PART_TITLE_CLASS}>
           {title}
         </h3>
         {aside && (
-          <span className="shrink-0 text-xs text-muted-foreground">
+          <div className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
             {aside}
-          </span>
+          </div>
         )}
       </div>
       {children}

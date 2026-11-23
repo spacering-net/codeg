@@ -243,9 +243,9 @@ describe("Harness install dialog — what it shows", () => {
     await openDialog()
     const body = await screen.findByRole("alert")
     expect(body).toHaveTextContent("This cannot be installed")
-    expect(body).toHaveTextContent("Harness blocked this version.")
+    expect(body).toHaveTextContent("SRN Harness blocked this version.")
     expect(body).toHaveTextContent(
-      "Harness's answer left out this version's risk"
+      "SRN Harness's answer left out this version's risk"
     )
     expect(body).toHaveTextContent("Its author retired this item.")
     expect(body).toHaveTextContent("server.json) could not be read.")
@@ -418,9 +418,15 @@ describe("Harness install dialog — what it shows", () => {
     await fillToken(user)
     const body = dialog()
     expect(body).toHaveTextContent(
-      "Has a server named notes (not from Harness): tick it below to replace it"
+      "Has a server named notes (not from SRN Harness): tick it below to replace it"
     )
-    expect(body).toHaveTextContent("Not from Harness")
+    expect(body).toHaveTextContent("Not from SRN Harness")
+    // Codex only gains the server: its row goes without a word.
+    const codex = within(body).getByRole("checkbox", { name: /Codex/ })
+    expect(codex).toBeChecked()
+    expect(
+      document.getElementById(codex.getAttribute("aria-describedby")!)
+    ).toHaveTextContent(/^$/)
     expect(body).toHaveTextContent("https://old.example/mcp")
     // The old secret is masked by default.
     expect(body).not.toHaveTextContent("old-secret")
@@ -647,7 +653,7 @@ describe("Harness install dialog — what an install comes back with", () => {
     expect(dialog()).toHaveTextContent(
       "@acme/notes-mcp@1.2.0 is not at its registry."
     )
-    expect(dialog()).toHaveTextContent("Blocked by Harness")
+    expect(dialog()).toHaveTextContent("Blocked by SRN Harness")
     expect(
       within(dialog()).queryByRole("button", { name: /Install/ })
     ).toBeNull()
@@ -742,7 +748,9 @@ describe("Harness install dialog — what an install comes back with", () => {
     await fillToken(user)
     await user.click(button("Install"))
     await screen.findByText("Installed.")
-    expect(dialog()).toHaveTextContent("could not record them as from Harness")
+    expect(dialog()).toHaveTextContent(
+      "could not record them as from SRN Harness"
+    )
     expect(dialog()).toHaveTextContent("Its record could not be written.")
     expect(dialog()).toHaveTextContent("permission denied")
   })
@@ -770,7 +778,7 @@ describe("Harness install dialog — when the plan cannot be had", () => {
     await openDialog()
     expect(
       await screen.findByText(
-        "The Codeg server is too old to install from Harness. Update the server."
+        "The Codeg server is too old to install from SRN Harness. Update the server."
       )
     ).toBeInTheDocument()
   })
@@ -1404,13 +1412,13 @@ describe("Harness install dialog — choices, agents and names", () => {
     await user.type(name, "team-notes")
     const body = dialog()
     expect(body).toHaveTextContent(
-      "Has a server named team-notes (from another Harness item): tick it below to replace it"
+      "Has a server named team-notes (from another SRN Harness item): tick it below to replace it"
     )
     expect(body).toHaveTextContent(
-      "Has a server named team-notes (not from Harness)"
+      "Has a server named team-notes (not from SRN Harness)"
     )
     expect(body).toHaveTextContent(
-      "Installed from another Harness item: someone.example/team-notes"
+      "Installed from another SRN Harness item: someone.example/team-notes"
     )
     expect(button("Install")).toBeDisabled()
     await user.click(

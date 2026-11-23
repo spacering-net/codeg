@@ -10,6 +10,7 @@ import { knownKind } from "@/lib/harness/display"
 import type {
   HarnessInstalledMark,
   HarnessItemDetail,
+  HarnessItemSummary,
   HarnessKnownKind,
   HarnessVersionSummary,
 } from "@/lib/harness/types"
@@ -27,7 +28,12 @@ import {
   ServerSection,
   VersionsSection,
 } from "./detail-sections"
-import { PromptActions, PromptBody, PromptFacts } from "./prompt-detail"
+import {
+  PromptActions,
+  PromptBody,
+  PromptFacts,
+  promptFactsGuess,
+} from "./prompt-detail"
 import { McpInstallActions } from "../install/mcp-install-actions"
 import { SkillInstallActions } from "../install/skill-install-actions"
 
@@ -61,6 +67,11 @@ export interface DiscoverKindView {
   Facts?: ComponentType<DiscoverDetailPartProps>
   /** `Facts` say whose the item is, in place of the license row. */
   factsSayRights?: boolean
+  /** How many buttons `Actions` will draw, for their placeholders while the
+   *  item is on its way. */
+  loadingActions?: (installed: HarnessInstalledMark | null) => number
+  /** How many rows `Facts` will add, guessed from what the list knew. */
+  loadingFacts?: (item: HarnessItemSummary) => number
 }
 
 export interface DiscoverDetailBodyProps {
@@ -174,17 +185,32 @@ const GENERIC_VIEW: DiscoverKindView = { Body: GenericBody }
  * definition.
  */
 export const DISCOVER_KIND_VIEWS: Record<HarnessKnownKind, DiscoverKindView> = {
-  skill: { Body: SkillBody, Actions: SkillInstallActions },
-  mcp: { Body: McpBody, Actions: McpInstallActions },
+  // Install; or, once installed, manage — after update when there is one.
+  skill: {
+    Body: SkillBody,
+    Actions: SkillInstallActions,
+    loadingActions: (installed) => (installed?.updateAvailable ? 2 : 1),
+  },
+  // Install; or, once installed, manage and show in MCP — after update when
+  // there is one.
+  mcp: {
+    Body: McpBody,
+    Actions: McpInstallActions,
+    loadingActions: (installed) =>
+      installed ? (installed.updateAvailable ? 3 : 2) : 1,
+  },
   prompt: {
     Body: PromptBody,
     Actions: PromptActions,
     Facts: PromptFacts,
     factsSayRights: true,
+    loadingActions: () => 2,
+    loadingFacts: promptFactsGuess,
   },
   assistant: {
     Body: AssistantBody,
     Actions: AssistantActions,
+    loadingActions: () => 1,
     Lead: AssistantLead,
     Byline: AssistantByline,
   },

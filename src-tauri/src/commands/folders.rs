@@ -1133,7 +1133,7 @@ pub async fn open_folder_in_workspace(
     db: tauri::State<'_, AppDatabase>,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
-    let emitter = EventEmitter::Tauri(app);
+    let emitter = EventEmitter::from_app(&app);
     open_folder_in_workspace_core(&emitter, &db, path).await
 }
 
@@ -1153,7 +1153,7 @@ pub async fn remove_folder_from_workspace(
     db: tauri::State<'_, AppDatabase>,
     folder_id: i32,
 ) -> Result<(), AppCommandError> {
-    remove_folder_from_workspace_core(&EventEmitter::Tauri(app), &db, folder_id).await
+    remove_folder_from_workspace_core(&EventEmitter::from_app(&app), &db, folder_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1172,7 +1172,7 @@ pub async fn create_folder_group(
     name: String,
     color: Option<String>,
 ) -> Result<FolderGroupDetail, AppCommandError> {
-    create_folder_group_core(&EventEmitter::Tauri(app), &db, name, color).await
+    create_folder_group_core(&EventEmitter::from_app(&app), &db, name, color).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1184,7 +1184,7 @@ pub async fn update_folder_group(
     name: Option<String>,
     color: Option<String>,
 ) -> Result<FolderGroupDetail, AppCommandError> {
-    update_folder_group_core(&EventEmitter::Tauri(app), &db, group_id, name, color).await
+    update_folder_group_core(&EventEmitter::from_app(&app), &db, group_id, name, color).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1194,7 +1194,7 @@ pub async fn delete_folder_group(
     db: tauri::State<'_, AppDatabase>,
     group_id: i32,
 ) -> Result<(), AppCommandError> {
-    delete_folder_group_core(&EventEmitter::Tauri(app), &db, group_id).await
+    delete_folder_group_core(&EventEmitter::from_app(&app), &db, group_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1204,7 +1204,7 @@ pub async fn apply_sidebar_layout(
     db: tauri::State<'_, AppDatabase>,
     entries: Vec<SidebarLayoutEntry>,
 ) -> Result<(), AppCommandError> {
-    apply_sidebar_layout_core(&EventEmitter::Tauri(app), &db, entries).await
+    apply_sidebar_layout_core(&EventEmitter::from_app(&app), &db, entries).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1215,7 +1215,7 @@ pub async fn set_folder_group(
     folder_id: i32,
     group_id: Option<i32>,
 ) -> Result<(), AppCommandError> {
-    set_folder_group_core(&EventEmitter::Tauri(app), &db, folder_id, group_id).await
+    set_folder_group_core(&EventEmitter::from_app(&app), &db, folder_id, group_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1247,7 +1247,7 @@ pub async fn update_folder_default_agent(
     default_agent_type: Option<crate::models::agent::AgentType>,
 ) -> Result<FolderDetail, AppCommandError> {
     update_folder_default_agent_core(
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &db,
         folder_id,
         default_agent_type,
@@ -2116,7 +2116,7 @@ pub async fn git_push(
     // `CODEG_DATA_DIR` reaches the git credential helper invoked by
     // this subprocess.
     let data_dir = crate::paths::resolve_effective_data_dir(&data_dir);
-    let emitter = EventEmitter::Tauri(app.clone());
+    let emitter = EventEmitter::from_app(&app);
     git_push_core(
         &data_dir,
         &emitter,
@@ -3105,7 +3105,7 @@ pub async fn git_commit(
             .strip_prefix("commit-")
             .and_then(|value| value.parse::<i32>().ok())
     });
-    let emitter = EventEmitter::Tauri(app.clone());
+    let emitter = EventEmitter::from_app(&app);
     git_commit_core(&emitter, folder_id, &db.conn, &path, &message, &files).await
 }
 
@@ -3644,7 +3644,7 @@ pub async fn git_remove_worktree(
     force: bool,
 ) -> Result<GitWorktreeRemoval, AppCommandError> {
     git_remove_worktree_core(
-        &EventEmitter::Tauri(app),
+        &EventEmitter::from_app(&app),
         &db,
         path,
         branch_name,
@@ -4878,8 +4878,19 @@ pub async fn get_file_tree(
 ) -> Result<Vec<FileTreeNode>, AppCommandError> {
     let root = PathBuf::from(&path);
     let depth = max_depth.unwrap_or(usize::MAX);
-    let mut visited = HashSet::new();
-    build_file_tree(&root, depth, &mut visited)
+    // Blocking filesystem walk: keep it off the async workers. On a slow
+    // network mount a single `readdir` can stall for minutes, and walking
+    // inline pinned the worker awaiting it — enough of those starved the
+    // runtime and codeg-server stopped accepting connections (issue #1292).
+    tokio::task::spawn_blocking(move || {
+        let mut visited = HashSet::new();
+        build_file_tree(&root, depth, &mut visited)
+    })
+    .await
+    .map_err(|e| {
+        AppCommandError::task_execution_failed("Failed to build file tree")
+            .with_detail(e.to_string())
+    })?
 }
 
 /// Build the tree under `root`, grafting in the subtree of every directory the
@@ -6744,6 +6755,50 @@ mod tests {
     use super::*;
     use crate::db::test_helpers::fresh_in_memory_db;
     use crate::models::agent::AgentType;
+
+    /// Issue #1292: the tree walk is blocking filesystem I/O, and on a slow
+    /// network mount (SSHFS) one `getdents64` can stall for minutes. Run
+    /// inline it pinned the async worker that awaited it, and a few of those
+    /// starved the whole runtime — codeg-server stopped accepting
+    /// connections. On this single-threaded runtime an inline walk finishes
+    /// without ever yielding, so the ticker never gets a turn (verified
+    /// before the fix: `ticks == 0`); off-loaded, awaiting it yields.
+    #[tokio::test]
+    async fn get_file_tree_does_not_walk_on_the_async_worker() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        for i in 0..40 {
+            let sub = dir.path().join(format!("d{i:02}"));
+            std::fs::create_dir(&sub).expect("mkdir");
+            for j in 0..50 {
+                std::fs::write(sub.join(format!("f{j:02}.txt")), b"x").expect("write");
+            }
+        }
+
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let ticker = {
+            let ticks = Arc::clone(&ticks);
+            tokio::spawn(async move {
+                loop {
+                    ticks.fetch_add(1, Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            })
+        };
+
+        let tree = get_file_tree(dir.path().to_string_lossy().into_owned(), None)
+            .await
+            .expect("tree");
+        ticker.abort();
+
+        assert_eq!(tree.len(), 40, "the walk itself still completes");
+        assert!(
+            ticks.load(Ordering::Relaxed) > 0,
+            "the runtime thread must stay free while the tree is walked"
+        );
+    }
 
     /// The frontend reads `symlink` as an optional boolean, and the tree
     /// snapshot is rebroadcast over the WebSocket on every filesystem change —

@@ -314,23 +314,34 @@ describe("The MCP section's Harness marks", () => {
     backend.harness_installed = () => installedListing()
   })
 
-  it("marks each server from Harness with its version and how it stands", async () => {
+  it("lists the servers from Harness first, under its name, each with its version and how it stands", async () => {
     render(<Harness section="mcp" />)
     await waitFor(async () =>
-      expect(await rowOf("docs")).toHaveTextContent("Harness · 2.0.0")
+      expect(await rowOf("docs")).toHaveTextContent("2.0.0")
     )
+    const fromHarness = screen.getByRole("list", { name: "From SRN Harness" })
+    const byHand = screen.getByRole("list", { name: "Added by hand" })
+    const keys = (list: HTMLElement) =>
+      within(list)
+        .getAllByRole("button")
+        .map((button) => button.dataset.mcpRow)
+    expect(keys(fromHarness)).toEqual(
+      expect.arrayContaining(["docs", "notes", "web"])
+    )
+    expect(keys(byHand)).toEqual(["plain"])
+    // The group says where they came from; a row says only what differs.
+    expect(await rowOf("docs")).not.toHaveTextContent("SRN Harness")
     expect(await rowOf("docs")).not.toHaveTextContent("As installed")
-    expect(await rowOf("notes")).toHaveTextContent("Harness · 1.2.0")
+    expect(await rowOf("notes")).toHaveTextContent("1.2.0")
     expect(await rowOf("notes")).toHaveTextContent("Changed here")
-    expect(await rowOf("web")).toHaveTextContent("Harness")
     expect(await rowOf("web")).toHaveTextContent("Cannot be checked")
-    expect(await rowOf("plain")).not.toHaveTextContent("Harness")
-    // "From Harness" can match; "Update available" cannot yet.
+    expect(await rowOf("plain")).not.toHaveTextContent("SRN Harness")
+    // "From SRN Harness" can match; "Update available" cannot yet.
     await userEvent
       .setup()
       .click(screen.getByRole("combobox", { name: "Show" }))
     expect(
-      await screen.findByRole("option", { name: "From Harness" })
+      await screen.findByRole("option", { name: "From SRN Harness" })
     ).toBeInTheDocument()
     expect(
       screen.queryByRole("option", { name: "Update available" })
@@ -341,13 +352,44 @@ describe("The MCP section's Harness marks", () => {
     const user = userEvent.setup()
     render(<Harness section="mcp" />)
     await user.click(await rowOf("notes"))
-    const part = await screen.findByRole("heading", { name: "From Harness" })
+    const part = await screen.findByRole("heading", { name: "Source" })
     const box = part.closest("section") as HTMLElement
-    // The recorded title first, the address under it.
-    expect(box).toHaveTextContent("Acme Notesacme.dev/notes")
-    expect(box).toHaveTextContent("Version 1.2.0, revision 3")
-    expect(box).toHaveTextContent("Claude CodeAs installed")
-    expect(box).toHaveTextContent("CodexChanged here")
+    // The recorded title first, where it is from, the address under it,
+    // the version and the revision at the end of that line; under a rule,
+    // how it stands, labelled as the command under it is.
+    expect(box).toHaveTextContent(
+      "Acme NotesFrom SRN Harnessacme.dev/notesv1.2.0Revision 3StatusChanged here"
+    )
+    // Which agent's entry differs, that agent's own row says — once: the
+    // part does not list the agents again.
+    expect(box).not.toHaveTextContent("Claude Code")
+    const detail = screen.getByRole("article")
+    const agentRow = (name: string) =>
+      within(detail).getByRole("switch", { name }).closest("li")!
+    expect(agentRow("Codex")).toHaveTextContent("Changed here")
+    expect(agentRow("Claude Code")).not.toHaveTextContent("Changed here")
+    expect(agentRow("Claude Code")).not.toHaveTextContent("As installed")
+    // What it runs is the card's too — each definition under its letter —
+    // not a part of its own.
+    expect(box).toHaveTextContent(
+      /Definition A.*npx -y @acme\/notes-mcp@1\.2\.0.*Definition B.*--edited/
+    )
+    expect(
+      within(detail).queryByRole("heading", { name: /^Definitions?$/ })
+    ).toBeNull()
+    // Status and commands are rows of one grid: one label column for all,
+    // so their values start together.
+    const grid = within(box).getByText("Status").closest("dl")
+    expect(grid).not.toBeNull()
+    for (const label of within(box).getAllByText("Command")) {
+      expect(label.closest("dl")).toBe(grid)
+    }
+    // Removing it is uninstalling it, once, in the header.
+    expect(within(box).queryByRole("button", { name: "Uninstall…" })).toBeNull()
+    expect(within(detail).queryByRole("button", { name: "Remove…" })).toBeNull()
+    expect(
+      within(detail).getByRole("button", { name: "Uninstall…" })
+    ).toBeEnabled()
 
     await user.click(within(box).getByRole("button", { name: "Update" }))
     await screen.findByRole("dialog")
@@ -362,7 +404,17 @@ describe("The MCP section's Harness marks", () => {
         })
       )
     )
-    await user.click(within(box).getByRole("button", { name: "Manage agents" }))
+    // Changing it is one menu: each definition, and its agents.
+    await user.click(within(box).getByRole("button", { name: "Edit" }))
+    const menu = await screen.findByRole("menu")
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent)
+    ).toEqual(["Edit definition A", "Edit definition B", "Manage agents"])
+    await user.click(
+      within(menu).getByRole("menuitem", { name: "Manage agents" })
+    )
     await screen.findByRole("dialog")
     expect(last(callsOf("harness_mcp_plan"))).toEqual({
       itemRef: "acme.dev/notes",
@@ -413,10 +465,12 @@ describe("The MCP section's Harness marks", () => {
     }
     render(<Harness section="mcp" />)
     await user.click(await rowOf("notes"))
-    const box = (
-      await screen.findByRole("heading", { name: "From Harness" })
-    ).closest("section") as HTMLElement
-    await user.click(within(box).getByRole("button", { name: "Uninstall…" }))
+    await screen.findByRole("heading", { name: "Source" })
+    await user.click(
+      within(screen.getByRole("article")).getByRole("button", {
+        name: "Uninstall…",
+      })
+    )
     const dialog = await screen.findByRole("dialog")
     await waitFor(() =>
       expect(dialog).toHaveTextContent("kept unless you tick it below")
@@ -490,10 +544,12 @@ describe("The MCP section's Harness marks", () => {
           }
     render(<Harness section="mcp" />)
     await user.click(await rowOf("docs"))
-    const box = (
-      await screen.findByRole("heading", { name: "From Harness" })
-    ).closest("section") as HTMLElement
-    await user.click(within(box).getByRole("button", { name: "Uninstall…" }))
+    await screen.findByRole("heading", { name: "Source" })
+    await user.click(
+      within(screen.getByRole("article")).getByRole("button", {
+        name: "Uninstall…",
+      })
+    )
     const dialog = await screen.findByRole("dialog")
     expect(dialog).toHaveTextContent("Acme Notes")
     await waitFor(() =>
@@ -519,14 +575,17 @@ describe("The MCP section's Harness marks", () => {
     render(<Harness section="mcp" discoverEnabled={false} />)
     await user.click(await rowOf("docs"))
     const box = (
-      await screen.findByRole("heading", { name: "From Harness" })
+      await screen.findByRole("heading", { name: "Source" })
     ).closest("section") as HTMLElement
     expect(within(box).queryByRole("button", { name: "Update" })).toBeNull()
     expect(
       within(box).queryByRole("button", { name: "Manage agents" })
     ).toBeNull()
+    expect(within(box).getByRole("button", { name: "Edit" })).toBeEnabled()
     expect(
-      within(box).getByRole("button", { name: "Uninstall…" })
+      within(screen.getByRole("article")).getByRole("button", {
+        name: "Uninstall…",
+      })
     ).toBeEnabled()
     expect(box).toHaveTextContent("which is switched off on this Codeg")
   })
@@ -550,6 +609,6 @@ describe("The MCP section's Harness marks", () => {
       throw { code: "not_implemented", message: "Not implemented" }
     }
     render(<Harness section="mcp" />)
-    expect(await rowOf("notes")).not.toHaveTextContent("Harness")
+    expect(await rowOf("notes")).not.toHaveTextContent("SRN Harness")
   })
 })

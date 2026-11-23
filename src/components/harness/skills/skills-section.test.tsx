@@ -257,7 +257,7 @@ describe("SkillsSection — Codeg-managed skills", () => {
     expect(screen.queryByRole("button", { name: "brainstorming" })).toBeNull()
     // Each marked with where it comes from; Harness with its version.
     expect(screen.getAllByText(m.origins.custom).length).toBeGreaterThan(0)
-    expect(screen.getAllByText("Harness 1.2.0").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("SRN Harness 1.2.0").length).toBeGreaterThan(0)
   })
 
   it("shows each agent's cell in words, a shared folder said as such", async () => {
@@ -266,12 +266,19 @@ describe("SkillsSection — Codeg-managed skills", () => {
     const article = await openSkill("PDF tools")
     const rows = within(article).getAllByRole("listitem")
     const codex = rows.find((row) => row.textContent?.includes("Codex"))!
-    expect(codex.textContent).toContain("On, through the shared folder")
+    // A mark beside the name says on or off; the line under it, how.
+    expect(
+      within(codex).getByRole("switch", { name: "Codex" })
+    ).toHaveAccessibleDescription(
+      new RegExp(`^${m.cells.on} Through the shared folder`)
+    )
     expect(codex.textContent).toContain(SHARED_DIR)
     expect(codex.textContent).toContain("Also seen by")
-    // Claude Code has nothing of it.
+    // Claude Code has nothing of it: the mark alone says so.
     const claude = rows.find((row) => row.textContent?.includes("Claude Code"))!
-    expect(claude.textContent).toContain(m.cells.off)
+    expect(
+      within(claude).getByRole("switch", { name: "Claude Code" })
+    ).toHaveAccessibleDescription(m.cells.off)
   })
 
   it("draws the matrix on a wide pane, a cell per agent", async () => {
@@ -287,6 +294,31 @@ describe("SkillsSection — Codeg-managed skills", () => {
         name: `PDF tools, Codex: On, through the shared folder ${SHARED_DIR}`,
       })
     ).toHaveAttribute("aria-checked", "true")
+  })
+
+  it("lists the skills instead of a matrix with no agent's column to draw", async () => {
+    wide()
+    setup({
+      agents: [{ agent: "codex", shared: true }],
+      skills: [{ id: "my-flow", origin: "custom", name: "My flow", cells: {} }],
+    })
+    // Codex is not installed and holds none of them: folded away.
+    engine.answer.acp_list_agents = () => [
+      {
+        agent_type: "codex",
+        name: "codex",
+        skills_capable: true,
+        sort_order: 0,
+        installed_version: null,
+        custom_source: null,
+        env: {},
+        enabled: true,
+      },
+    ]
+    render(<Harness />)
+    const row = await screen.findByRole("button", { name: /^My flow/ })
+    expect(row.textContent).toContain("No agents shown")
+    expect(screen.queryByRole("table")).toBeNull()
   })
 })
 
@@ -657,14 +689,14 @@ describe("SkillsSection — copies (where no link can be made)", () => {
     setup(copyHost("copy"))
     render(<Harness />)
     const article = await openSkill("My flow")
-    expect(article.textContent).toContain(m.cells.copy)
+    expect(article.textContent).toContain(m.cellNotes.copy)
   })
 
   it("updates an outdated copy nobody changed, without asking", async () => {
     setup(copyHost("copyOutdated"))
     render(<Harness />)
     const article = await openSkill("My flow")
-    expect(article.textContent).toContain(m.cells.copyOutdated)
+    expect(article.textContent).toContain(m.cellNotes.copyOutdated)
     await userEvent.click(
       within(article).getByRole("button", { name: m.agentRow.refresh })
     )
@@ -678,7 +710,7 @@ describe("SkillsSection — copies (where no link can be made)", () => {
     setup(copyHost("copyChanged"))
     render(<Harness />)
     const article = await openSkill("My flow")
-    expect(article.textContent).toContain(m.cells.copyChanged)
+    expect(article.textContent).toContain(m.cellNotes.copyChanged)
     // Its switch would not take it away: there is none to flip.
     expect(
       within(article).getByRole("switch", { name: "Claude Code" })
@@ -2259,21 +2291,6 @@ describe("SkillsSection — codes and states a newer Codeg may send", () => {
 // ─── On a phone ───────────────────────────────────────────────────────
 
 describe("SkillsSection — on a phone", () => {
-  it("names the host by its chip alone, its sentence in the tooltip", async () => {
-    mocks.mobile = true
-    setup(usualHost())
-    const { container } = render(<Harness />)
-    const HINT = "Changes here are saved on this computer."
-    await screen.findByRole("button", { name: /^My flow/ })
-    const host = container.querySelector("[data-harness-host]")!
-    expect(within(host as HTMLElement).getByText(HINT)).toHaveClass("sr-only")
-    expect(
-      within(host as HTMLElement)
-        .getByText("This computer")
-        .closest("[title]")
-    ).toHaveAttribute("title", HINT)
-  })
-
   it("lists the skills, each with the agents it is on for, and opens one as a screen", async () => {
     mocks.mobile = true
     setup(usualHost())

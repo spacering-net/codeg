@@ -1,6 +1,7 @@
 "use client"
 
 import {
+  Fragment,
   useEffect,
   useId,
   useLayoutEffect,
@@ -10,6 +11,9 @@ import {
 import {
   ArrowLeft,
   ArrowUpCircle,
+  ChevronDown,
+  ChevronUp,
+  CircleCheck,
   ExternalLink,
   Layers,
   Loader2,
@@ -19,7 +23,6 @@ import {
   PencilLine,
   RotateCw,
   SearchX,
-  TextCursorInput,
   Trash2,
   TriangleAlert,
   Users,
@@ -28,6 +31,13 @@ import {
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { useHarnessSlot, useHarnessView } from "@/contexts/harness-view-context"
@@ -64,11 +74,25 @@ import {
 } from "@/lib/mcp/model"
 import { headlineOf } from "@/lib/mcp/results"
 import { cn } from "@/lib/utils"
+import { HarnessScroller } from "../harness-scroller"
 import { DiscoverMark } from "../discover/discover-card"
 import { HarnessUpdateStatus } from "../harness-update-status"
+import {
+  HARNESS_CARD_CLASS,
+  HARNESS_DETAIL_CLASS,
+  HARNESS_DETAIL_HEADER_CLASS,
+  HARNESS_DETAIL_TILE_CLASS,
+  HARNESS_DETAIL_TITLE_CLASS,
+} from "../harness-styles"
 import { MachineText } from "../machine-text"
 import { AgentGlyph, McpDetailPart, PathText } from "./mcp-bits"
-import { McpDefinitionView } from "./mcp-definition-view"
+import {
+  McpDefinitionRow,
+  McpDefinitionRows,
+  McpDefinitionRowsHead,
+  McpDefinitionView,
+} from "./mcp-definition-view"
+import { ServerGlyph } from "./mcp-server-list"
 import { useMcpLabels, type McpLabels } from "./use-mcp-labels"
 
 /** The bar above a detail on a pane that shows one screen at a time. */
@@ -81,7 +105,7 @@ export function McpBackBar({
 }) {
   const t = useTranslations("Harness.mcp")
   return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-2 py-1.5 ws-chrome-border md:px-3">
+    <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-1 py-1.5 ws-chrome-border @2xl/harness:px-2">
       <Button
         type="button"
         variant="ghost"
@@ -94,6 +118,45 @@ export function McpBackBar({
       </Button>
       {children}
     </div>
+  )
+}
+
+/** A detail's place while the configuration is read: its header, then two
+ *  boxes, at the detail's own inset. */
+export function DetailBodySkeleton() {
+  return (
+    <div aria-hidden="true" className={HARNESS_DETAIL_CLASS}>
+      <div
+        className={cn(
+          HARNESS_DETAIL_HEADER_CLASS,
+          "flex items-start gap-4 space-y-0"
+        )}
+      >
+        <Skeleton className="size-12 rounded-xl" />
+        <div className="flex-1 space-y-2.5 pt-1">
+          <Skeleton className="h-7 w-48" />
+          <Skeleton className="h-4 w-72 max-w-full" />
+        </div>
+      </div>
+      <div className="space-y-3">
+        <Skeleton className="h-5 w-16" />
+        <Skeleton className="h-36 w-full rounded-xl" />
+      </div>
+      <div className="space-y-3">
+        <Skeleton className="h-5 w-16" />
+        <Skeleton className="h-28 w-full rounded-xl" />
+      </div>
+    </div>
+  )
+}
+
+/** The dot between two facts of a detail's line. */
+export function MetaDot() {
+  return (
+    <span
+      aria-hidden="true"
+      className="size-1 shrink-0 rounded-full bg-muted-foreground/40"
+    />
   )
 }
 
@@ -112,19 +175,36 @@ export function useDetailScroll(id: string) {
 }
 
 /** "Show all agents" — one choice for every list of agents in the section. */
-export function ShowAllAgentsToggle({ hidden }: { hidden: number }) {
+/** "Show all agents" under an agent list: a quiet link flush with the
+ *  list's edge, not a button that reads like a heading. */
+export const SHOW_ALL_AGENTS_CLASS =
+  "mt-1.5 h-auto gap-1 px-0 py-1 text-xs font-normal text-muted-foreground hover:text-foreground hover:no-underline max-md:h-10 [&_svg]:size-3.5"
+
+export function ShowAllAgentsToggle({
+  hidden,
+  className,
+}: {
+  hidden: number
+  /** Under a list, the link lines up with the rows' text. */
+  className?: string
+}) {
   const t = useTranslations("Harness.mcp.agents")
   const [showAll, setShowAll] = useHarnessSlot(MCP_SHOW_ALL_AGENTS)
   if (hidden === 0 && !showAll) return null
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="link"
       size="sm"
       aria-expanded={showAll}
       onClick={() => setShowAll(!showAll)}
-      className="mt-1 max-md:h-10"
+      className={cn(SHOW_ALL_AGENTS_CLASS, className)}
     >
+      {showAll ? (
+        <ChevronUp aria-hidden="true" />
+      ) : (
+        <ChevronDown aria-hidden="true" />
+      )}
       {showAll ? t("hideNotInstalled") : t("showAll", { count: hidden })}
     </Button>
   )
@@ -226,76 +306,96 @@ export function RowWriteNotice({
   )
 }
 
-/** The state of an agent for a server, in words. */
-function stateText(
+interface StateChip {
+  label: string
+  tone?: "neutral" | "info" | "warning"
+  icon?: ReactNode
+}
+
+/**
+ * The state of an agent for a server: the short words as chips beside the
+ * agent's name — not set up, off, which definition, read-only — and, in a
+ * line under it, whatever takes a sentence to say: why it cannot be added
+ * or changed here. "On" is no chip: the switch says it.
+ */
+function stateParts(
   state: McpAgentServerState,
   server: McpServer,
   labels: McpLabels,
   t: ReturnType<typeof useTranslations<"Harness.mcp">>
-): ReactNode {
+): { chips: StateChip[]; reasons: ReactNode[] } {
   const { info } = state
+  const chips: StateChip[] = []
+  const reasons: ReactNode[] = []
   if (state.kind === "unreadable") {
-    return (
+    reasons.push(
       <>
         {t("agentState.unreadable")}{" "}
         {info.editBlock && labels.block(info.editBlock)}
       </>
     )
+    return { chips, reasons }
   }
   if (state.kind === "absent") {
+    chips.push({ label: t("agentState.notConfigured") })
     const block = state.block
-    if (!block) return t("agentState.notConfigured")
-    switch (block.kind) {
-      case "agent":
-        return labels.block(block.block)
-      case "transport":
-        return t("agentState.cannotHold", {
-          transports: labels.transports(block.transports),
-        })
-      case "key":
-        return t("agentState.keyNotNew")
-      case "noDefinition":
-        return t("agentState.noDefinition")
+    if (block) {
+      switch (block.kind) {
+        case "agent":
+          reasons.push(labels.block(block.block))
+          break
+        case "transport":
+          reasons.push(
+            t("agentState.cannotHold", {
+              transports: labels.transports(block.transports),
+            })
+          )
+          break
+        case "key":
+          reasons.push(t("agentState.keyNotNew"))
+          break
+        case "noDefinition":
+          reasons.push(t("agentState.noDefinition"))
+          break
+      }
     }
+    return { chips, reasons }
   }
   const { holder, readOnly } = state
-  const entry = holder.entry
-  const letter =
-    server.groups.length > 1 && holder.group !== null
-      ? server.groups[holder.group].letter
-      : null
-  const onOff = entry.enabled ? t("agentState.on") : t("agentState.off")
-  const base = letter
-    ? t("agentState.withDefinition", { state: onOff, letter })
-    : holder.group === null
-      ? t("agentState.undescribed", { state: onOff })
-      : onOff
-  if (!readOnly) return base
-  let why: ReactNode
-  switch (readOnly.kind) {
+  if (!holder.entry.enabled) chips.push({ label: t("agentState.off") })
+  if (server.groups.length > 1 && holder.group !== null) {
+    chips.push({
+      label: t("detail.definitionLetter", {
+        letter: server.groups[holder.group].letter,
+      }),
+      tone: "info",
+      icon: <Layers aria-hidden="true" />,
+    })
+  }
+  if (holder.group === null) reasons.push(t("agentState.entryUnreadable"))
+  switch (readOnly?.kind) {
     case "agent":
-      why = labels.block(readOnly.block)
+      reasons.push(labels.block(readOnly.block))
       break
     case "reserved":
-      why = t("agentState.reserved")
+      reasons.push(t("agentState.reserved"))
       break
     case "duplicate":
-      why = labels.issue(
-        { code: "duplicate_key", field: readOnly.field ?? undefined },
-        "entry"
+      reasons.push(
+        labels.issue(
+          { code: "duplicate_key", field: readOnly.field ?? undefined },
+          "entry"
+        )
       )
       break
     case "entry":
-      why = t("agentState.readOnly")
+      chips.push({
+        label: t("agentState.readOnly"),
+        icon: <Lock aria-hidden="true" />,
+      })
       break
   }
-  return (
-    <>
-      {base}
-      {" · "}
-      {why}
-    </>
-  )
+  return { chips, reasons }
 }
 
 /** Problems the state line words itself: listing them as well would say the
@@ -309,17 +409,27 @@ interface AgentRowProps {
   server: McpServer
   info: McpAgentInfo
   model: McpModel
+  /** The server came from Harness: how this agent's entry stands against
+   *  what was installed, said where it is not "as installed". */
+  harness?: McpHarnessMark
 }
 
 /** One agent, for one server: what it has, why it cannot be changed if it
  *  cannot, and the switch. */
-function AgentRow({ server, info, model }: AgentRowProps) {
+function AgentRow({ server, info, model, harness }: AgentRowProps) {
   const t = useTranslations("Harness.mcp")
+  const tHarness = useTranslations("Harness.mcp.harness")
+  const installed = harness?.agents.find((agent) => agent.agent === info.id)
+  const otherVersion =
+    installed?.version && installed.version !== harness?.version
+      ? installed.version
+      : null
   const labels = useMcpLabels()
   const { slots } = useHarnessView()
   const [writes] = useHarnessSlot(MCP_ROW_WRITES)
   const [busy] = useHarnessSlot(MCP_BUSY)
   const stateId = useId()
+  const chipsId = useId()
   const state = agentServerState(server, info, model.rules)
   const control = switchOf(state)
   const write = writes[rowId(info.id, server.key)]
@@ -340,27 +450,59 @@ function AgentRow({ server, info, model }: AgentRowProps) {
   const skipped =
     holder && holder.entry.enabled && isSkippedInSessions(info, holder.entry)
   const name = labels.agent(info.id)
+  const { chips, reasons } = stateParts(state, server, labels, t)
+  if (skipped) reasons.push(t("agentState.skipped"))
 
   return (
-    <li className="flex min-w-0 items-start gap-3 px-3 py-2.5">
+    <li className="flex min-w-0 items-start gap-3 px-4 py-2.5">
       <AgentGlyph agent={info.id} className="mt-0.5 size-5" />
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span className="text-sm font-medium">{name}</span>
+          {chips.length > 0 && (
+            <span
+              id={chipsId}
+              className="inline-flex flex-wrap items-center gap-x-2 gap-y-1"
+            >
+              {chips.map((chip) => (
+                <DiscoverMark size="sm" key={chip.label} tone={chip.tone}>
+                  {chip.icon}
+                  {chip.label}
+                </DiscoverMark>
+              ))}
+            </span>
+          )}
           {info.installed === false && (
-            <DiscoverMark>{t("agents.notInstalled")}</DiscoverMark>
+            <DiscoverMark size="sm">{t("agents.notInstalled")}</DiscoverMark>
           )}
-          {!info.agent && <DiscoverMark>{t("agents.unknown")}</DiscoverMark>}
+          {!info.agent && (
+            <DiscoverMark size="sm">{t("agents.unknown")}</DiscoverMark>
+          )}
+          {installed &&
+            (installed.local !== "asInstalled" || otherVersion !== null) && (
+              <DiscoverMark
+                size="sm"
+                tone={installed.local === "asInstalled" ? "neutral" : "warning"}
+              >
+                <Package aria-hidden="true" />
+                {installed.local !== "asInstalled"
+                  ? tHarness(`states.${installed.local}`)
+                  : null}
+                {installed.local !== "asInstalled" && otherVersion && " · "}
+                {otherVersion}
+              </DiscoverMark>
+            )}
         </div>
-        <p id={stateId} className="mt-0.5 text-xs text-muted-foreground">
-          {stateText(state, server, labels, t)}
-          {skipped && (
-            <>
-              {" · "}
-              {t("agentState.skipped")}
-            </>
-          )}
-        </p>
+        {reasons.length > 0 && (
+          <p id={stateId} className="mt-0.5 text-xs text-muted-foreground">
+            {reasons.map((reason, index) => (
+              <span key={index}>
+                {index > 0 && " · "}
+                {reason}
+              </span>
+            ))}
+          </p>
+        )}
         {info.inventory.config.path && (
           <PathText path={info.inventory.config.path} className="mt-0.5" />
         )}
@@ -437,7 +579,11 @@ function AgentRow({ server, info, model }: AgentRowProps) {
           disabled={control.action === null || agentBusy || pending}
           onCheckedChange={() => requestSwitch(slots, server.key, info.id)}
           aria-label={name}
-          aria-describedby={stateId}
+          aria-describedby={
+            [chips.length > 0 && chipsId, reasons.length > 0 && stateId]
+              .filter(Boolean)
+              .join(" ") || undefined
+          }
           className="relative after:absolute after:-inset-2.5"
         />
       </div>
@@ -445,68 +591,140 @@ function AgentRow({ server, info, model }: AgentRowProps) {
   )
 }
 
-/** One of the server's definitions, with the agents that hold it. */
-function DefinitionCard({
+/** Whether an edit to a definition could be saved: it writes to the agents
+ *  that hold the definition, and where none of them can change there is
+ *  nothing it could save. (Adding the server to another agent is that
+ *  agent's switch.) */
+function groupEditable(
+  group: McpDefinitionGroup,
+  changeable: readonly string[]
+): boolean {
+  return group.holders.some(
+    (holder) =>
+      holder.info.agent !== null && changeable.includes(holder.info.agent)
+  )
+}
+
+/** Edit one definition — "Edit", or "Edit A" where there are several. */
+function EditDefinitionButton({
   server,
   group,
   editable,
-  explain,
+  describedBy,
 }: {
   server: McpServer
   group: McpDefinitionGroup
   editable: boolean
-  /** Say why it cannot be edited, when that is not said above. */
+  describedBy?: string
+}) {
+  const t = useTranslations("Harness.mcp.detail")
+  const { slots } = useHarnessView()
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      disabled={!editable}
+      aria-describedby={describedBy}
+      onClick={() => openEditEditor(slots, server.key, group.fingerprint)}
+      className="h-7 rounded-full text-foreground max-md:h-10"
+    >
+      <PencilLine aria-hidden="true" />
+      {server.groups.length > 1
+        ? t("editLetter", { letter: group.letter })
+        : t("edit")}
+    </Button>
+  )
+}
+
+/**
+ * What the server is. One definition is one card — its lines, then who uses
+ * it — with Edit beside the part's title; several are a card each, headed
+ * by their letter, their agents and their own Edit.
+ */
+function DefinitionPart({
+  server,
+  changeable,
+  explain,
+}: {
+  server: McpServer
+  /** The agents Codeg can change the server in. */
+  changeable: readonly string[]
+  /** Say why a definition cannot be edited, when that is not said above. */
   explain: boolean
 }) {
   const t = useTranslations("Harness.mcp.detail")
-  const labels = useMcpLabels()
-  const { slots } = useHarnessView()
-  const several = server.groups.length > 1
   const noteId = useId()
-  const agents = labels.list(holderAgentIds(group.holders).map(labels.agent))
-  return (
-    <div className="min-w-0 rounded-lg border">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-2">
-        <span className="min-w-0 flex-1 text-xs">
-          {several ? (
-            <>
-              <span className="font-semibold text-foreground">
-                {t("definitionLetter", { letter: group.letter })}
-              </span>
-              <span className="text-muted-foreground"> · {agents}</span>
-            </>
-          ) : (
-            <span className="text-muted-foreground">
-              {t("heldBy", { agents })}
-            </span>
-          )}
-        </span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={!editable}
-          aria-describedby={!editable && explain ? noteId : undefined}
-          onClick={() => openEditEditor(slots, server.key, group.fingerprint)}
-          className="max-md:h-10"
-        >
-          <PencilLine aria-hidden="true" />
-          {several ? t("editLetter", { letter: group.letter }) : t("edit")}
-        </Button>
-      </div>
-      {!editable && explain && (
-        <p
-          id={noteId}
-          className="border-b px-3 py-1.5 text-xs text-muted-foreground"
-        >
-          {t("definitionNotEditable")}
+  const several = server.groups.length > 1
+  const editableGroup = (group: McpDefinitionGroup) =>
+    groupEditable(group, changeable)
+  const note = (group: McpDefinitionGroup, id: string) =>
+    !editableGroup(group) && explain ? (
+      <p id={id} className="border-b px-4 py-3 text-xs text-muted-foreground">
+        {t("definitionNotEditable")}
+      </p>
+    ) : null
+
+  if (server.groups.length === 0) {
+    return (
+      <McpDetailPart title={t("definition")}>
+        <p className="rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground">
+          {t("noDefinition")}
         </p>
-      )}
-      <McpDefinitionView
-        definition={group.definition}
-        className="px-3 py-2.5"
-      />
-    </div>
+      </McpDetailPart>
+    )
+  }
+
+  if (!several) {
+    const group = server.groups[0]
+    const editable = editableGroup(group)
+    return (
+      <McpDetailPart
+        title={t("definition")}
+        aside={
+          <EditDefinitionButton
+            server={server}
+            group={group}
+            editable={editable}
+            describedBy={!editable && explain ? noteId : undefined}
+          />
+        }
+      >
+        <div className={HARNESS_CARD_CLASS}>
+          {note(group, noteId)}
+          <McpDefinitionView definition={group.definition} layout="rows" />
+        </div>
+      </McpDetailPart>
+    )
+  }
+
+  return (
+    <McpDetailPart title={t("definitions")}>
+      <div className="space-y-2.5">
+        {server.groups.map((group) => {
+          const editable = editableGroup(group)
+          const id = `${noteId}-${group.letter}`
+          return (
+            <div key={group.fingerprint} className={HARNESS_CARD_CLASS}>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-muted/30 py-1.5 ps-4 pe-2">
+                {/* Which agents hold it, each agent's row says. */}
+                <span className="min-w-0 flex-1 text-sm font-semibold text-foreground">
+                  {t("definitionLetter", { letter: group.letter })}
+                </span>
+                <EditDefinitionButton
+                  server={server}
+                  group={group}
+                  editable={editable}
+                  describedBy={!editable && explain ? id : undefined}
+                />
+              </div>
+              {note(group, id)}
+              <McpDefinitionView definition={group.definition} layout="rows" />
+            </div>
+          )
+        })}
+      </div>
+    </McpDetailPart>
   )
 }
 
@@ -514,21 +732,43 @@ function DefinitionCard({
  *  stands — changed here, files missing, not checkable — where that is not
  *  the ordinary "as installed", and what the update check says of its
  *  version (an update, a withdrawn version) where that is not "up to date". */
-export function HarnessMarks({ mark }: { mark: McpHarnessMark }) {
+export function HarnessMarks({
+  mark,
+  size,
+  source = true,
+  local = true,
+}: {
+  mark: McpHarnessMark
+  size?: "sm" | "md"
+  /** Also the "SRN Harness · version" mark — not where the place says it
+   *  already (a list's group, a detail's line). */
+  source?: boolean
+  /** Also how the entries stand against the install — not where a line
+   *  says it in words. */
+  local?: boolean
+}) {
   const t = useTranslations("Harness.mcp.harness")
   return (
     <>
-      <DiscoverMark>
-        <Package aria-hidden="true" />
-        {mark.version ? t("markVersion", { version: mark.version }) : t("mark")}
-      </DiscoverMark>
-      {mark.local !== "asInstalled" && (
-        <DiscoverMark tone={mark.local === "unknown" ? "neutral" : "warning"}>
+      {source && (
+        <DiscoverMark size={size}>
+          <Package aria-hidden="true" />
+          {mark.version
+            ? t("markVersion", { version: mark.version })
+            : t("mark")}
+        </DiscoverMark>
+      )}
+      {local && mark.local !== "asInstalled" && (
+        <DiscoverMark
+          size={size}
+          tone={mark.local === "unknown" ? "neutral" : "warning"}
+        >
           {t(`states.${mark.local}`)}
         </DiscoverMark>
       )}
       {mark.remote !== null && mark.remote !== "latest" && (
         <DiscoverMark
+          size={size}
           tone={mark.remote === "updateAvailable" ? "info" : "warning"}
         >
           {mark.remote === "updateAvailable" && (
@@ -538,7 +778,7 @@ export function HarnessMarks({ mark }: { mark: McpHarnessMark }) {
         </DiscoverMark>
       )}
       {mark.updateAvailable && mark.remote !== "updateAvailable" && (
-        <DiscoverMark tone="info">
+        <DiscoverMark size={size} tone="info">
           <ArrowUpCircle aria-hidden="true" />
           {t("states.updateAvailable")}
         </DiscoverMark>
@@ -547,147 +787,312 @@ export function HarnessMarks({ mark }: { mark: McpHarnessMark }) {
   )
 }
 
+/** The definitions inside the source card's grid, under its status: each
+ *  one's rows — headed by its letter where there are several — and why one
+ *  cannot be edited, when the header does not say so. */
+function SourceDefinitions({
+  server,
+  changeable,
+  explain,
+  noteId,
+}: {
+  server: McpServer
+  changeable: readonly string[]
+  explain: boolean
+  noteId: string
+}) {
+  const t = useTranslations("Harness.mcp.detail")
+  // Inside the card's grid: what is not a row spans it, under a rule.
+  const across = "col-span-full border-t px-4 text-muted-foreground"
+  if (server.groups.length === 0) {
+    return <p className={cn(across, "py-3")}>{t("noDefinition")}</p>
+  }
+  const several = server.groups.length > 1
+  const blocked =
+    explain && server.groups.some((group) => !groupEditable(group, changeable))
+  return (
+    <>
+      {blocked && (
+        <p id={noteId} className={cn(across, "py-3 text-xs")}>
+          {t("definitionNotEditable")}
+        </p>
+      )}
+      {server.groups.map((group) => (
+        <Fragment key={group.fingerprint}>
+          {several && (
+            <McpDefinitionRowsHead>
+              {t("definitionLetter", { letter: group.letter })}
+            </McpDefinitionRowsHead>
+          )}
+          <McpDefinitionView definition={group.definition} bare />
+        </Fragment>
+      ))}
+    </>
+  )
+}
+
 /**
- * Where a server from Harness came from — the item, the version — how its
- * entry stands in each agent it was installed in, and what can be done with
- * it as a Harness item: update it, add it to more agents, uninstall it. The
- * first two ask the catalog, so where the catalog is switched off only
- * uninstalling is offered, and the part says why.
+ * Changing a server from Harness, in one place: its definition — each of
+ * several on its own — and which agents it is installed in. One choice is a
+ * button; more are a menu behind "Edit".
+ */
+function SourceEditMenu({
+  server,
+  changeable,
+  manage,
+  describedBy,
+}: {
+  server: McpServer
+  changeable: readonly string[]
+  manage?: () => void
+  describedBy?: string
+}) {
+  const t = useTranslations("Harness.mcp.harness")
+  const tDetail = useTranslations("Harness.mcp.detail")
+  const { slots } = useHarnessView()
+  const several = server.groups.length > 1
+  const edits = server.groups.map((group) => ({
+    key: group.fingerprint,
+    label: several
+      ? t("editDefinitionLetter", { letter: group.letter })
+      : t("editDefinition"),
+    disabled: !groupEditable(group, changeable),
+    onSelect: () => openEditEditor(slots, server.key, group.fingerprint),
+  }))
+  const buttonClass = "rounded-full max-md:h-10"
+  if (edits.length + (manage ? 1 : 0) === 0) return null
+  if (edits.length === 0 && manage) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        onClick={manage}
+        className={buttonClass}
+      >
+        <Users aria-hidden="true" />
+        {t("manage")}
+      </Button>
+    )
+  }
+  if (edits.length === 1 && !manage) {
+    const [edit] = edits
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="secondary"
+        disabled={edit.disabled}
+        aria-describedby={edit.disabled ? describedBy : undefined}
+        onClick={edit.onSelect}
+        className={buttonClass}
+      >
+        <PencilLine aria-hidden="true" />
+        {tDetail("edit")}
+      </Button>
+    )
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className={buttonClass}
+        >
+          <PencilLine aria-hidden="true" />
+          {tDetail("edit")}
+          <ChevronDown aria-hidden="true" className="-me-0.5 opacity-60" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-44">
+        {edits.map((edit) => (
+          <DropdownMenuItem
+            key={edit.key}
+            disabled={edit.disabled}
+            onSelect={edit.onSelect}
+          >
+            <PencilLine aria-hidden="true" />
+            {edit.label}
+          </DropdownMenuItem>
+        ))}
+        {manage && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={manage}>
+              <Users aria-hidden="true" />
+              {t("manage")}
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * A server from Harness, in one card: the item and its version; how its
+ * entries stand against the install and what the update check says; what
+ * the server runs; and what can be done with it as a Harness item — view
+ * it, change it (its definition, its agents), update it. Updating and
+ * adding agents ask the catalog, so where the catalog is switched off the
+ * card says why they are missing. Which agent's entry differs from the
+ * install, that agent's row says; uninstalling is the header's.
  */
 function HarnessPart({
-  serverKey,
+  server,
   mark,
   harness,
+  changeable,
+  explain,
   onView,
 }: {
-  serverKey: string
+  server: McpServer
   mark: McpHarnessMark
   harness: McpHarnessSeam
+  changeable: readonly string[]
+  explain: boolean
   onView: () => void
 }) {
   const t = useTranslations("Harness.mcp.harness")
+  const tDetail = useTranslations("Harness.mcp.detail")
   const tItem = useTranslations("Harness.install.item")
   const labels = useMcpLabels()
+  const noteId = useId()
   // The catalog's title as the record keeps it, in the reader's language;
   // the address stays under it.
   const title = pickLocalized(mark.title, harnessLang(labels.locale))
+  const ref = (
+    <bdi dir="ltr" className="font-mono">
+      <MachineText>{mark.itemRef}</MachineText>
+    </bdi>
+  )
+  const asInstalled = mark.local === "asInstalled"
+  const notes = mark.local === "changedLocally" || !harness.catalog
+  const manage = harness.manage
   return (
-    <McpDetailPart title={t("title")}>
-      <div className="min-w-0 space-y-2.5 rounded-lg border px-3 py-2.5 text-xs">
-        <div className="min-w-0 space-y-0.5">
-          {title && (
-            <p
-              dir="auto"
-              className="text-sm font-medium break-words text-foreground"
-            >
-              {title}
+    <McpDetailPart title={tDetail("source")}>
+      <div className={cn(HARNESS_CARD_CLASS, "divide-y")}>
+        <div className="flex min-w-0 items-start gap-3 p-4">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary [&_svg]:size-5">
+            <Package aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1 space-y-1">
+            <p className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+              <span
+                dir="auto"
+                className="min-w-0 text-base font-semibold break-words text-foreground"
+              >
+                {title || ref}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {t("title")}
+              </span>
             </p>
-          )}
-          <p className="min-w-0">
-            <bdi
-              dir="ltr"
-              className={cn(
-                "font-mono",
-                title ? "text-muted-foreground" : "text-foreground"
-              )}
-            >
-              <MachineText>{mark.itemRef}</MachineText>
-            </bdi>
-          </p>
-          <p className="text-muted-foreground">
-            {mark.version
-              ? tItem.rich("version", {
-                  version: mark.version,
-                  revision: mark.revision,
-                  code: (chunks) => (
-                    <bdi dir="ltr" className="font-mono">
-                      <MachineText>{chunks}</MachineText>
-                    </bdi>
-                  ),
-                })
-              : tItem("revisionOnly", { revision: mark.revision })}
-          </p>
+            {title && (
+              <p className="min-w-0 text-sm text-muted-foreground">{ref}</p>
+            )}
+          </div>
+          <div className="shrink-0 space-y-1 text-end">
+            {mark.version && (
+              <p className="font-mono text-sm font-semibold text-foreground">
+                <bdi dir="ltr">
+                  {/^\d/.test(mark.version) ? `v${mark.version}` : mark.version}
+                </bdi>
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {tItem("revisionOnly", { revision: mark.revision })}
+            </p>
+          </div>
         </div>
-        <ul aria-label={t("agents")} className="min-w-0 space-y-1">
-          {mark.agents.map((agent) => (
-            <li
-              key={agent.agent}
-              className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5"
-            >
-              <AgentGlyph agent={agent.agent} />
-              <span className="font-medium">{labels.agent(agent.agent)}</span>
+        {/* How the entries stand against the install, and what the update
+            check says — a labelled row, in the same columns as the command
+            under it; which agent differs, its row says. */}
+        <McpDefinitionRows>
+          <McpDefinitionRow
+            label={t("state")}
+            align={notes ? "start" : "center"}
+          >
+            <div className="flex min-h-5 min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               <span
                 className={cn(
-                  agent.local === "asInstalled"
-                    ? "text-muted-foreground"
-                    : "text-tone-warning"
+                  "inline-flex items-center gap-1.5",
+                  asInstalled ? "text-foreground" : "text-tone-warning"
                 )}
               >
-                {t(`states.${agent.local}`)}
-                {agent.version &&
-                  agent.version !== mark.version &&
-                  ` · ${agent.version}`}
+                {asInstalled ? (
+                  <CircleCheck
+                    aria-hidden="true"
+                    className="size-4 text-tone-success"
+                  />
+                ) : (
+                  <TriangleAlert aria-hidden="true" className="size-4" />
+                )}
+                {t(`states.${mark.local}`)}
               </span>
-            </li>
-          ))}
-        </ul>
-        {mark.local === "changedLocally" && (
-          <p className="text-muted-foreground">{t("changedNote")}</p>
-        )}
-        {harness.catalog && <HarnessUpdateStatus itemId={mark.itemId} />}
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {harness.update && (
-            <Button
-              type="button"
-              size="sm"
-              variant={mark.updateAvailable ? "default" : "outline"}
-              onClick={() => harness.update?.(serverKey)}
-              className="max-md:h-10"
-            >
-              <ArrowUpCircle aria-hidden="true" />
-              {t("update")}
-            </Button>
-          )}
-          {harness.manage && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => harness.manage?.(serverKey)}
-              className="max-md:h-10"
-            >
-              <Users aria-hidden="true" />
-              {t("manage")}
-            </Button>
-          )}
-          {harness.uninstall && (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => harness.uninstall?.(serverKey)}
-              className="max-md:h-10"
-            >
-              <PackageMinus aria-hidden="true" />
-              {t("uninstall")}
-            </Button>
-          )}
+              <HarnessMarks mark={mark} source={false} local={false} />
+            </div>
+            {mark.local === "changedLocally" && (
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {t("changedNote")}
+              </p>
+            )}
+            {!harness.catalog && (
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                {t("catalogOff")}
+              </p>
+            )}
+          </McpDefinitionRow>
+          <SourceDefinitions
+            server={server}
+            changeable={changeable}
+            explain={explain}
+            noteId={noteId}
+          />
+        </McpDefinitionRows>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 bg-muted/40 px-4 py-2">
           {harness.catalog && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={onView}
-              className="max-md:h-10"
-            >
-              <ExternalLink aria-hidden="true" />
-              {t("view")}
-            </Button>
+            <HarnessUpdateStatus
+              itemId={mark.itemId}
+              inline
+              className="min-w-0 flex-[1_1_auto]"
+            />
           )}
+          <div className="ms-auto flex flex-wrap items-center gap-1.5">
+            {harness.catalog && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onView}
+                className="rounded-full max-md:h-10"
+              >
+                <ExternalLink aria-hidden="true" />
+                {t("view")}
+              </Button>
+            )}
+            <SourceEditMenu
+              server={server}
+              changeable={changeable}
+              manage={manage && (() => manage(server.key))}
+              describedBy={noteId}
+            />
+            {harness.update && (
+              <Button
+                type="button"
+                size="sm"
+                variant={mark.updateAvailable ? "default" : "secondary"}
+                onClick={() => harness.update?.(server.key)}
+                className="rounded-full max-md:h-10"
+              >
+                <ArrowUpCircle aria-hidden="true" />
+                {t("update")}
+              </Button>
+            )}
+          </div>
         </div>
-        {!harness.catalog && (
-          <p className="text-muted-foreground">{t("catalogOff")}</p>
-        )}
       </div>
     </McpDetailPart>
   )
@@ -732,13 +1137,7 @@ export function McpServerDetail({
 
   let body: ReactNode
   if (!model) {
-    body = (
-      <div aria-hidden="true" className="space-y-3 px-3 py-4 md:px-5">
-        <Skeleton className="h-6 w-40" />
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-40 w-full" />
-      </div>
-    )
+    body = <DetailBodySkeleton />
   } else if (!server) {
     body = (
       <div
@@ -771,6 +1170,7 @@ export function McpServerDetail({
     )
   } else {
     const mark = harness?.marks.get(server.key)
+    const uninstall = mark ? harness?.uninstall : undefined
     const changeable = server.reserved ? [] : editableHolders(model, server.key)
     const editable = changeable.length > 0
     const visible = model.agents.filter(
@@ -780,16 +1180,92 @@ export function McpServerDetail({
         server.holders.some((holder) => holder.info === info)
     )
     const hidden = model.agents.length - visible.length
+    const on = holderAgentIds(
+      server.holders.filter((holder) => holder.entry.enabled)
+    ).length
     body = (
-      <article
-        aria-labelledby={headingId}
-        className="mx-auto w-full max-w-4xl min-w-0 space-y-5 px-3 py-4 md:px-5"
-      >
-        <header className="min-w-0 space-y-2">
+      <article aria-labelledby={headingId} className={HARNESS_DETAIL_CLASS}>
+        <header className={HARNESS_DETAIL_HEADER_CLASS}>
+          <div className="flex min-w-0 flex-wrap items-start gap-x-3 gap-y-3">
+            <span className={HARNESS_DETAIL_TILE_CLASS}>
+              <ServerGlyph transports={server.transports} />
+            </span>
+            <div className="min-w-0 flex-1 basis-56 space-y-1 pt-1">
+              <h2
+                id={headingId}
+                ref={headingRef}
+                tabIndex={-1}
+                className={HARNESS_DETAIL_TITLE_CLASS}
+              >
+                <bdi dir="ltr">
+                  <MachineText>{server.key}</MachineText>
+                </bdi>
+              </h2>
+              <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+                {server.transports.length > 0 ? (
+                  <bdi dir="ltr" className="font-mono">
+                    {labels.transports(server.transports)}
+                  </bdi>
+                ) : (
+                  <span>{t("row.noDefinition")}</span>
+                )}
+                <MetaDot />
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    className={cn(
+                      "size-1.5 rounded-full",
+                      on > 0 ? "bg-tone-success" : "bg-muted-foreground/40"
+                    )}
+                  />
+                  {t("detail.enabledIn", { count: on })}
+                </span>
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!editable}
+                onClick={() => openRenameDialog(slots, server.key)}
+                className="rounded-full max-md:h-10"
+              >
+                <PencilLine aria-hidden="true" />
+                {t("detail.rename")}
+              </Button>
+              {uninstall ? (
+                // From Harness, removing it is uninstalling it: the entries
+                // go, and the record forgets it — "Remove" would leave the
+                // record behind, pointing at entries no longer there.
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => uninstall(server.key)}
+                  className="rounded-full max-md:h-10"
+                >
+                  <PackageMinus aria-hidden="true" />
+                  {t("harness.uninstall")}
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  disabled={!editable}
+                  onClick={() => openRemoveDialog(slots, server.key)}
+                  className="rounded-full max-md:h-10"
+                >
+                  <Trash2 aria-hidden="true" />
+                  {t("detail.remove")}
+                </Button>
+              )}
+            </div>
+          </div>
           {(server.groups.length > 1 ||
             server.hasProblems ||
-            server.reserved ||
-            mark) && (
+            server.reserved) && (
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
               {server.groups.length > 1 && (
                 <DiscoverMark tone="info">
@@ -809,57 +1285,13 @@ export function McpServerDetail({
                   {t("row.reserved")}
                 </DiscoverMark>
               )}
-              {mark && <HarnessMarks mark={mark} />}
             </div>
           )}
-          <h2
-            id={headingId}
-            ref={headingRef}
-            tabIndex={-1}
-            className="text-lg leading-snug font-semibold outline-none"
-          >
-            <bdi dir="ltr">
-              <MachineText>{server.key}</MachineText>
-            </bdi>
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            {server.transports.length > 0
-              ? labels.transports(server.transports)
-              : t("row.noDefinition")}
-            {" · "}
-            {t("detail.inAgents", {
-              count: holderAgentIds(server.holders).length,
-            })}
-          </p>
           {server.reserved && (
-            <p className="rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            <p className="rounded-xl border bg-muted/40 px-4 py-2.5 text-xs text-muted-foreground">
               {labels.issue({ code: "reserved_key" }, "entry")}
             </p>
           )}
-          <div className="flex min-w-0 flex-wrap items-center gap-2 pt-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!editable}
-              onClick={() => openRenameDialog(slots, server.key)}
-              className="max-md:h-10"
-            >
-              <TextCursorInput aria-hidden="true" />
-              {t("detail.rename")}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!editable}
-              onClick={() => openRemoveDialog(slots, server.key)}
-              className="max-md:h-10"
-            >
-              <Trash2 aria-hidden="true" />
-              {t("detail.remove")}
-            </Button>
-          </div>
           {!editable && !server.reserved && (
             <p className="text-xs text-muted-foreground">
               {t("detail.notEditable")}
@@ -867,64 +1299,41 @@ export function McpServerDetail({
           )}
         </header>
 
-        {mark && harness && (
+        {mark && harness ? (
           <HarnessPart
-            serverKey={server.key}
+            server={server}
             mark={mark}
             harness={harness}
+            changeable={changeable}
+            // The header already says so when no agent can change at all.
+            explain={editable}
             onView={() =>
               openHarness({ section: "discover", itemRef: mark.itemRef })
             }
           />
+        ) : (
+          <DefinitionPart
+            server={server}
+            changeable={changeable}
+            // The header already says so when no agent can change at all; one
+            // definition among others says it for itself.
+            explain={editable}
+          />
         )}
 
-        <McpDetailPart
-          title={
-            server.groups.length > 1
-              ? t("detail.definitions")
-              : t("detail.definition")
-          }
-        >
-          <div className="space-y-2">
-            {server.groups.map((group) => (
-              <DefinitionCard
-                key={group.fingerprint}
-                server={server}
-                group={group}
-                // As Rename and Remove: an edit writes to the agents that
-                // hold this definition, and where none of them can change,
-                // there is nothing it could save. (Adding the server to
-                // another agent is that agent's switch, below.)
-                editable={group.holders.some(
-                  (holder) =>
-                    holder.info.agent !== null &&
-                    changeable.includes(holder.info.agent)
-                )}
-                // The header already says so when no agent can change at
-                // all; one definition among others says it for itself.
-                explain={editable}
-              />
-            ))}
-            {server.groups.length === 0 && (
-              <p className="rounded-lg border px-3 py-2.5 text-xs text-muted-foreground">
-                {t("detail.noDefinition")}
-              </p>
-            )}
-          </div>
-        </McpDetailPart>
-
         <McpDetailPart title={t("detail.agents")}>
-          <ul className="divide-y rounded-lg border">
+          <ul className={cn("divide-y", HARNESS_CARD_CLASS)}>
             {visible.map((info) => (
               <AgentRow
                 key={info.id}
                 server={server}
                 info={info}
                 model={model}
+                harness={mark}
               />
             ))}
           </ul>
-          <ShowAllAgentsToggle hidden={hidden} />
+          <ShowAllAgentsToggle hidden={hidden} className="px-1" />
         </McpDetailPart>
       </article>
     )
@@ -933,13 +1342,9 @@ export function McpServerDetail({
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
       {onBack && <McpBackBar onBack={onBack} />}
-      <div
-        ref={scrollerRef}
-        onScroll={onScroll}
-        className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto"
-      >
+      <HarnessScroller ref={scrollerRef} onScroll={onScroll} className="flex-1">
         {body}
-      </div>
+      </HarnessScroller>
     </div>
   )
 }

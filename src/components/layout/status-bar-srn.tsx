@@ -15,7 +15,7 @@
  *    own up there;
  *  - the rows: the quick actions (`quick-actions-menu.tsx`) — the workbench
  *    routes, then the launch group (open a project, the remote and local
- *    workspaces, "More");
+ *    workspaces, the browser tab and the pet);
  *  - at the foot, the one account action that moves the state forward, or
  *    none. Whatever else a state can do is a small link in its note, and
  *    only where that is the way out: opening the menu re-reads the state,

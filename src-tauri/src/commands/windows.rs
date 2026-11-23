@@ -1087,7 +1087,7 @@ pub async fn cleanup_dangling_merge(app: &AppHandle, merge_window_label: &str) {
             .output()
             .await;
 
-        let emitter = crate::web::event_bridge::EventEmitter::Tauri(app.clone());
+        let emitter = crate::web::event_bridge::EventEmitter::from_app(app);
         crate::web::event_bridge::emit_event(
             &emitter,
             "folder://merge-aborted",

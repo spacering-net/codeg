@@ -43,6 +43,7 @@ import {
 } from "@/lib/office-preview-prefs"
 import type { SkillSyncReport } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { HarnessScroller } from "../harness-scroller"
 import { DiscoverMark } from "../discover/discover-card"
 import {
   FailureNote,
@@ -260,25 +261,27 @@ export function OfficeCard() {
             )}
           </div>
           {install.log.length > 0 && (
-            <div
+            <HarnessScroller
               ref={logRef}
               role="log"
               aria-label={t("log")}
               dir="ltr"
-              className="max-h-48 overflow-y-auto rounded-md border bg-muted/50 p-2 font-mono text-2xs leading-4 leading-relaxed text-muted-foreground"
+              className="max-h-48 rounded-md border bg-muted/50"
             >
-              {install.log.map((line, index) => (
-                <div
-                  key={index}
-                  className={cn(
-                    "[overflow-wrap:anywhere]",
-                    line.startsWith("ERROR:") && "text-destructive"
-                  )}
-                >
-                  {line}
-                </div>
-              ))}
-            </div>
+              <div className="p-2 font-mono text-2xs leading-relaxed text-muted-foreground">
+                {install.log.map((line, index) => (
+                  <div
+                    key={index}
+                    className={cn(
+                      "[overflow-wrap:anywhere]",
+                      line.startsWith("ERROR:") && "text-destructive"
+                    )}
+                  >
+                    {line}
+                  </div>
+                ))}
+              </div>
+            </HarnessScroller>
           )}
           {install.failure && (
             <FailureNote>

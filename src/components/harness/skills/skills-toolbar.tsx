@@ -8,7 +8,6 @@ import {
   Loader2,
   PencilLine,
   Plus,
-  RefreshCw,
   Search,
   Sparkles,
   X,
@@ -56,20 +55,17 @@ import {
 import type { SkillsHarnessSeam } from "@/lib/harness/skills-marks"
 import { modelOf } from "@/lib/harness/skill-links"
 import { isLocalDesktop } from "@/lib/platform"
-import { HarnessHostLabel } from "../harness-host-label"
 import { hasOwnDirectory } from "@/lib/skills/model"
 import { defaultCustomSkillTemplate } from "@/lib/skill-frontmatter"
 import { cn } from "@/lib/utils"
+import {
+  HARNESS_FILTER_CLASS,
+  HARNESS_SEARCH_CLASS,
+  HARNESS_SEGMENT_CLASS,
+  HARNESS_SEGMENTS_CLASS,
+} from "../harness-styles"
 import { newSkillLayout } from "./agent-view"
 import { useSkillsLabels } from "./use-skills-labels"
-
-const SEGMENT_CLASS = cn(
-  "h-8 flex-1 rounded-full px-3 text-[0.8125rem] font-medium whitespace-nowrap",
-  "max-md:h-9 text-muted-foreground outline-none transition-colors hover:text-foreground",
-  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-  "data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm",
-  "@3xl/skills:h-7"
-)
 
 /** The filters the managed list can be narrowed with: "From Harness" once
  *  there is a Harness skill, "Update available" once the seam can say. */
@@ -103,18 +99,17 @@ function useAgentTemplate() {
 }
 
 /**
- * The section's controls: which view, a refresh, the ways to add a skill,
- * and — on the list of Codeg's skills — the search and the filter.
+ * The section's controls, on one row where the pane is wide: which view, the
+ * search and — on the list of Codeg's skills — the filter, then the ways to
+ * add a skill (Refresh is in the window's chrome, as on every section).
+ * Narrow, the search and the filter take a second row.
  */
 export function SkillsToolbar({
   hasHarness,
   harness,
-  foldHint,
 }: {
   hasHarness: boolean
   harness: SkillsHarnessSeam | undefined
-  /** A phone: the host's sentence folds into its chip. */
-  foldHint: boolean
 }) {
   const t = useTranslations("Harness.skills")
   const labels = useSkillsLabels()
@@ -128,7 +123,6 @@ export function SkillsToolbar({
   const [importing] = useHarnessSlot(SKILLS_IMPORT)
   const [browsing, setBrowsing] = useState(false)
   const template = useAgentTemplate()
-  const loading = inventory.phase === "loading" || list.phase === "loading"
   const options = showOptions(hasHarness, harness)
   const show = options.includes(filters.show) ? filters.show : "all"
   const text = view === "managed" ? filters.text : agentFilter
@@ -228,118 +222,7 @@ export function SkillsToolbar({
   }
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2">
-      {/* Which machine, and the refresh and the ways to add: on a narrow pane
-          they share the machine's line, so the view switch and the search
-          take a line each at most; on a wide one the machine has its own
-          line and the buttons close the toolbar's row. */}
-      <div className="order-1 flex w-full min-w-0 items-center gap-2 @3xl/skills:contents">
-        <HarnessHostLabel
-          foldHint={foldHint}
-          className="min-w-0 flex-1 @3xl/skills:order-1 @3xl/skills:basis-full"
-        />
-        <div className="flex shrink-0 items-center gap-1 @3xl/skills:order-4">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("refresh")}
-            title={t("refresh")}
-            aria-busy={loading}
-            onClick={() => void reloadSkills(slots)}
-            className="text-muted-foreground max-md:size-10"
-          >
-            <RefreshCw
-              aria-hidden="true"
-              className={cn(loading && "animate-spin")}
-            />
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                size="sm"
-                aria-label={t("add.label")}
-                className="max-md:h-10"
-              >
-                {importing.phase === "saving" ? (
-                  <Loader2 aria-hidden="true" className="animate-spin" />
-                ) : (
-                  <Plus aria-hidden="true" />
-                )}
-                <span className="hidden @sm/skills:inline">
-                  {t("add.label")}
-                </span>
-                <ChevronDown aria-hidden="true" className="-me-1 opacity-70" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              className="w-72 max-w-[calc(100vw-2rem)]"
-            >
-              <DropdownMenuItem onSelect={newCustom} className="items-start">
-                <Sparkles aria-hidden="true" className="mt-0.5" />
-                <span className="min-w-0">
-                  <span className="block">{t("add.newCustom")}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {t("add.newCustomHint")}
-                  </span>
-                </span>
-              </DropdownMenuItem>
-              {view === "agent" && scope.agent && (
-                <DropdownMenuItem
-                  disabled={!canNewForAgent}
-                  onSelect={newForAgent}
-                  className="items-start"
-                >
-                  <PencilLine aria-hidden="true" className="mt-0.5" />
-                  <span className="min-w-0">
-                    <span className="block">
-                      {t("add.newForAgent", {
-                        agent: labels.agent(scope.agent),
-                      })}
-                    </span>
-                    <span className="block text-xs text-muted-foreground">
-                      {viaCustom
-                        ? t("add.newForAgentCustomHint", {
-                            agent: labels.agent(scope.agent),
-                          })
-                        : t("add.newForAgentHint")}
-                    </span>
-                  </span>
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem
-                disabled={importing.phase === "saving"}
-                onSelect={() => void importFolder()}
-                className="items-start"
-              >
-                <FolderInput aria-hidden="true" className="mt-0.5" />
-                <span className="min-w-0">
-                  <span className="block">{t("add.import")}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {t("add.importHint")}
-                  </span>
-                </span>
-              </DropdownMenuItem>
-              {discoverEnabled && (
-                <DropdownMenuItem
-                  onSelect={findOnHarness}
-                  className="items-start"
-                >
-                  <Compass aria-hidden="true" className="mt-0.5" />
-                  <span className="min-w-0">
-                    <span className="block">{t("add.harness")}</span>
-                    <span className="block text-xs text-muted-foreground">
-                      {t("add.harnessHint")}
-                    </span>
-                  </span>
-                </DropdownMenuItem>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </div>
+    <>
       <ToggleGroup.Root
         type="single"
         value={view}
@@ -350,19 +233,19 @@ export function SkillsToolbar({
             if (value === "agent") void reloadSkills(slots)
           }
         }}
-        className="no-scrollbar order-2 flex h-9 min-w-0 items-center gap-0.5 overflow-x-auto rounded-full bg-muted/70 p-0.5 ws-msg-chip max-md:h-10 @3xl/skills:h-8"
+        className={HARNESS_SEGMENTS_CLASS}
       >
-        <ToggleGroup.Item value="managed" className={SEGMENT_CLASS}>
+        <ToggleGroup.Item value="managed" className={HARNESS_SEGMENT_CLASS}>
           {t("views.managed")}
         </ToggleGroup.Item>
-        <ToggleGroup.Item value="agent" className={SEGMENT_CLASS}>
+        <ToggleGroup.Item value="agent" className={HARNESS_SEGMENT_CLASS}>
           {t("views.agent")}
         </ToggleGroup.Item>
       </ToggleGroup.Root>
 
       <div
         role="search"
-        className="order-3 flex min-w-64 flex-1 items-center gap-2"
+        className="order-last flex w-full min-w-0 items-center gap-2 @3xl/skills:order-none @3xl/skills:w-auto @3xl/skills:flex-1"
       >
         <div className="relative min-w-0 flex-1">
           <Search
@@ -380,7 +263,8 @@ export function SkillsToolbar({
             aria-label={t("search.label")}
             placeholder={t("search.placeholder")}
             className={cn(
-              "h-10 ps-9 md:h-9 @3xl/skills:h-8",
+              "ps-9",
+              HARNESS_SEARCH_CLASS,
               text !== "" ? "pe-10" : "pe-3"
             )}
             onChange={(event) => setText(event.target.value)}
@@ -392,7 +276,7 @@ export function SkillsToolbar({
               size="icon-sm"
               aria-label={t("search.clear")}
               title={t("search.clear")}
-              className="absolute end-1 top-1/2 -translate-y-1/2 text-muted-foreground md:size-7 @3xl/skills:size-6"
+              className="absolute end-1 top-1/2 size-6 -translate-y-1/2 rounded-full text-muted-foreground max-md:size-8"
               onClick={() => setText("")}
             >
               <X aria-hidden="true" />
@@ -408,13 +292,12 @@ export function SkillsToolbar({
             }}
           >
             <SelectTrigger
-              size="sm"
               aria-label={t("show.label")}
-              className="max-w-[45%] shrink-0 max-md:h-10 @3xl/skills:max-w-48"
+              className={cn(HARNESS_FILTER_CLASS, "max-w-[45%] shrink-0")}
             >
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent position="popper" align="end">
               {options.map((option) => (
                 <SelectItem key={option} value={option}>
                   {t(`show.${option}`)}
@@ -424,12 +307,91 @@ export function SkillsToolbar({
           </Select>
         )}
       </div>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            aria-label={t("add.label")}
+            className="ms-auto h-8 rounded-full px-3 text-[0.8125rem] max-md:h-10 @3xl/skills:ms-0"
+          >
+            {importing.phase === "saving" ? (
+              <Loader2 aria-hidden="true" className="animate-spin" />
+            ) : (
+              <Plus aria-hidden="true" />
+            )}
+            <span className="hidden @sm/skills:inline">{t("add.label")}</span>
+            <ChevronDown aria-hidden="true" className="-me-1 opacity-70" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          align="end"
+          className="w-72 max-w-[calc(100vw-2rem)]"
+        >
+          <DropdownMenuItem onSelect={newCustom} className="items-start">
+            <Sparkles aria-hidden="true" className="mt-0.5" />
+            <span className="min-w-0">
+              <span className="block">{t("add.newCustom")}</span>
+              <span className="block text-xs text-muted-foreground">
+                {t("add.newCustomHint")}
+              </span>
+            </span>
+          </DropdownMenuItem>
+          {view === "agent" && scope.agent && (
+            <DropdownMenuItem
+              disabled={!canNewForAgent}
+              onSelect={newForAgent}
+              className="items-start"
+            >
+              <PencilLine aria-hidden="true" className="mt-0.5" />
+              <span className="min-w-0">
+                <span className="block">
+                  {t("add.newForAgent", {
+                    agent: labels.agent(scope.agent),
+                  })}
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  {viaCustom
+                    ? t("add.newForAgentCustomHint", {
+                        agent: labels.agent(scope.agent),
+                      })
+                    : t("add.newForAgentHint")}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem
+            disabled={importing.phase === "saving"}
+            onSelect={() => void importFolder()}
+            className="items-start"
+          >
+            <FolderInput aria-hidden="true" className="mt-0.5" />
+            <span className="min-w-0">
+              <span className="block">{t("add.import")}</span>
+              <span className="block text-xs text-muted-foreground">
+                {t("add.importHint")}
+              </span>
+            </span>
+          </DropdownMenuItem>
+          {discoverEnabled && (
+            <DropdownMenuItem onSelect={findOnHarness} className="items-start">
+              <Compass aria-hidden="true" className="mt-0.5" />
+              <span className="min-w-0">
+                <span className="block">{t("add.harness")}</span>
+                <span className="block text-xs text-muted-foreground">
+                  {t("add.harnessHint")}
+                </span>
+              </span>
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <DirectoryBrowserDialog
         open={browsing}
         onOpenChange={setBrowsing}
         onSelect={(path) => void runImport(slots, path)}
         title={t("add.importTitle")}
       />
-    </div>
+    </>
   )
 }
