@@ -2269,6 +2269,7 @@ const ConversationTabView = memo(function ConversationTabView({
           availableCommands={connectionCommands}
           connStatus={connStatus}
           isActive={isActive}
+          isVisible={isVisible}
           sendSignal={sendSignal}
           detailLoading={detailLoading}
           detailError={detailError}
