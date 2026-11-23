@@ -177,7 +177,7 @@ pub(crate) async fn launch_envs(
 impl Guard {
     /// A guard over `local` as it is (tests: stand-in hosts and
     /// environments).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn fixed(local: PluginsLocal) -> Self {
         Self {
             ctx: local.plugins.clone(),

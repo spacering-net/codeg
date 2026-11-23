@@ -77,7 +77,7 @@ const COMMAND_DEFAULTS: &[(&str, &str)] = &[("DISABLE_AUTOUPDATER", "1")];
 enum Locate {
     /// As a session's launch finds them.
     System,
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     Fixed {
         wrapper: Option<PathBuf>,
         native: Option<PathBuf>,
@@ -110,7 +110,7 @@ impl ClaudeAdapter {
     }
 
     /// With `runner`, these programs and this MCP lock: for tests.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn sandboxed(
         runner: Arc<dyn HostRunner>,
         wrapper: Option<PathBuf>,
@@ -126,7 +126,7 @@ impl ClaudeAdapter {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -136,7 +136,7 @@ impl ClaudeAdapter {
     async fn programs(&self) -> (Option<PathBuf>, Option<PathBuf>) {
         match &self.locate {
             Locate::System => system_programs(AgentType::ClaudeCode).await,
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             Locate::Fixed { wrapper, native } => (wrapper.clone(), native.clone()),
         }
     }

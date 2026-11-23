@@ -296,6 +296,7 @@ export function TaskDetailSheet({
   const selStatus = task?.status ?? null
   useEffect(() => {
     if (!open || selTaskId == null || selConversationId == null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears the selection owned by the fetch below
       setConversationSelection(null)
       return
     }

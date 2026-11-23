@@ -353,7 +353,7 @@ impl UpdateChecker {
     }
 
     /// With the plugins guard `guard` (tests: stand-in hosts).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_guard(mut self, guard: Guard) -> Self {
         self.guard = Some(guard);
         self
@@ -539,7 +539,7 @@ impl UpdateChecker {
     }
 
     /// One look of the scheduler now (tests outside this module).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn look(&self) -> DateTime<Utc> {
         self.turn_now().await
     }

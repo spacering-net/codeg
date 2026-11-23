@@ -15,6 +15,8 @@ use crate::harness::plugins::switches::AdapterSwitches;
 use crate::harness::types::{InstallInfo, PluginInfo};
 
 const NAME: &str = "superpowers";
+/// The variable the agent's home comes from ([`HostEnv::child_home`]).
+const HOME_VAR: &str = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
 
 struct Sandbox {
     _dir: tempfile::TempDir,
@@ -584,7 +586,7 @@ async fn the_config_is_the_agent_s() {
     // No XDG_CONFIG_HOME: `.config/opencode` in the agent's own HOME, not
     // Codeg's.
     let agent_home = s.root.join("agent-home");
-    let env = HostEnv::sandboxed(&s.home, &[("HOME", agent_home.to_str().unwrap())]);
+    let env = HostEnv::sandboxed(&s.home, &[(HOME_VAR, agent_home.to_str().unwrap())]);
     let found = detect(&adapter, &env).await;
     assert!(found.supported, "{found:?}");
     with_cx!(s, env, found, |cx| {
@@ -597,7 +599,7 @@ async fn the_config_is_the_agent_s() {
     });
 
     // The agent's XDG_CONFIG_HOME.
-    let env = s.env(&[("HOME", agent_home.to_str().unwrap())]);
+    let env = s.env(&[(HOME_VAR, agent_home.to_str().unwrap())]);
     with_cx!(s, env, found, |cx| {
         adapter.install(&cx, &plugin(&n, 4)).await.unwrap();
         let config = s.config_dir().join("opencode.json");

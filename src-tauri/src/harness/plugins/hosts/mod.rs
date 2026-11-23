@@ -833,12 +833,12 @@ async fn read_capped<R: AsyncRead + Unpin>(reader: Option<R>) -> Vec<u8> {
 /// The tests' runner: runs only a program inside `root` (its real path),
 /// with nothing of the test process's environment — no `PATH`, no `HOME` —
 /// beyond the overrides it is given.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) struct SandboxRunner {
     root: PathBuf,
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl SandboxRunner {
     pub(crate) fn new(root: &Path) -> Self {
         Self {
@@ -847,7 +847,7 @@ impl SandboxRunner {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 impl SandboxRunner {
     fn command(
         &self,
@@ -875,7 +875,7 @@ impl SandboxRunner {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 #[async_trait::async_trait]
 impl HostRunner for SandboxRunner {
     async fn run(

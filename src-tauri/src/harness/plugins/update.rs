@@ -3391,7 +3391,7 @@ pub(crate) async fn repair(
 
 /// What the check under the lock says of a change planned from `before`
 /// (the code it refuses with), for the tests.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) async fn stale_check(local: &PluginsLocal, before: PluginEntry) -> Option<String> {
     let (ctx, id) = (local.plugins.clone(), before.item_id.clone());
     let (name, _) = off_thread(move || find_entry(&ctx, &id, false))

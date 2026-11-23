@@ -118,7 +118,7 @@ const HOOKS_LIST_ID: u64 = 2;
 enum Locate {
     /// As a session's launch finds them.
     System,
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     Fixed {
         wrapper: Option<PathBuf>,
         native: Option<PathBuf>,
@@ -149,7 +149,7 @@ impl CodexAdapter {
     }
 
     /// With `runner` and these programs: for tests.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn sandboxed(
         runner: Arc<dyn HostRunner>,
         wrapper: Option<PathBuf>,
@@ -163,7 +163,7 @@ impl CodexAdapter {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn with_timeouts(mut self, command: Duration, trust: Duration) -> Self {
         self.timeout = command;
         self.trust_timeout = trust;
@@ -174,7 +174,7 @@ impl CodexAdapter {
     async fn programs(&self) -> (Option<PathBuf>, Option<PathBuf>) {
         match &self.locate {
             Locate::System => system_programs(AgentType::Codex).await,
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             Locate::Fixed { wrapper, native } => (wrapper.clone(), native.clone()),
         }
     }

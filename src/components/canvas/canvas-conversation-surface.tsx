@@ -285,6 +285,7 @@ export function CanvasConversationSurface({
     if (seededAgentRef.current === agentType) return
     seededAgentRef.current = agentType
     if (conversationId != null) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- re-seeds the draft's mode when its agent changes
     setModeId(getSavedModeId(agentType))
   }, [agentType, conversationId])
   // Sends handed back to the composer, which cleared itself as each went out
