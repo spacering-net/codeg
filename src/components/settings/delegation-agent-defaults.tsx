@@ -70,6 +70,13 @@ const snapshotCache = new Map<string, CachedSnapshot>()
 function rememberSnapshot(key: string, entry: CachedSnapshot): void {
   snapshotCache.delete(key)
   snapshotCache.set(key, entry)
+  // Expired snapshots are never served, so they go first: otherwise one read
+  // shortly before it expired would outrank a fresh one in recency order and
+  // push it out.
+  const now = Date.now()
+  for (const [cachedKey, cached] of snapshotCache) {
+    if (now - cached.ts > SNAPSHOT_TTL_MS) snapshotCache.delete(cachedKey)
+  }
   if (snapshotCache.size > MAX_CACHED_SNAPSHOTS) {
     const oldest = snapshotCache.keys().next()
     if (!oldest.done) snapshotCache.delete(oldest.value)
