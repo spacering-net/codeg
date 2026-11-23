@@ -341,9 +341,8 @@ export interface MessageTurn {
    * nothing an agent could look up.
    *
    * Present only where the turn can be a fork point ("fork from here"), which
-   * today means Claude and DeepSeek assistant turns. Its absence does NOT mean
-   * the turn cannot be forked at: codex forks by content fingerprint instead,
-   * and DeepSeek falls back to one — all resolved entirely in the backend, so
+   * includes Codex, Claude and DeepSeek assistant turns. A transcript without
+   * an id can still fork by a content fingerprint, resolved in the backend, so
    * never gate the fork affordance on this. */
   agent_message_id?: string | null
   /** CLIENT-ONLY, never on the wire. The id the PARSER gave this turn.
