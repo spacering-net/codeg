@@ -334,6 +334,83 @@ describe("parseAskQuestionOutcome", () => {
     })
   })
 
+  // DSH (the `deepseek` agent) splits an answer into the labels it matched
+  // (`selected`) and the user's typed text (`custom`), and keys it by the
+  // question `id` with no header/question text. Reading only `selected` showed
+  // a typed "Other" answer as "no selection" although the model received it.
+  it("folds DSH's `custom` free text into the answer's picks", () => {
+    const output = JSON.stringify({
+      answers: [
+        {
+          id: "free",
+          selected: [],
+          custom:
+            "不影响啊，规则就是：claude出口跟随我的节点选择，不允许直连。",
+        },
+      ],
+    })
+    expect(parseAskQuestionOutcome(output)).toEqual({
+      declined: false,
+      answers: [
+        {
+          id: "free",
+          header: "",
+          question: "",
+          selected: [
+            "不影响啊，规则就是：claude出口跟随我的节点选择，不允许直连。",
+          ],
+        },
+      ],
+    })
+  })
+
+  it("keeps DSH's `id` so the card can match an answer to its question", () => {
+    const output = JSON.stringify({
+      answers: [{ id: "exit", selected: ["跟随主选择 🚀 节点选择"] }],
+    })
+    expect(parseAskQuestionOutcome(output)?.answers[0].id).toBe("exit")
+  })
+
+  it("keeps a picked label and the typed text together, in DSH's order", () => {
+    // A multi-select answer the user extended with their own text.
+    const output = JSON.stringify({
+      answers: [{ id: "q", selected: ["Alpha", "Beta"], custom: "my own" }],
+    })
+    expect(parseAskQuestionOutcome(output)?.answers[0].selected).toEqual([
+      "Alpha",
+      "Beta",
+      "my own",
+    ])
+  })
+
+  it("reads DSH's multi-line custom answer as one pick per line", () => {
+    // DSH joins a multi-select's typed entries with "\n".
+    const output = JSON.stringify({
+      answers: [{ id: "q", selected: [], custom: "first\nsecond" }],
+    })
+    expect(parseAskQuestionOutcome(output)?.answers[0].selected).toEqual([
+      "first",
+      "second",
+    ])
+  })
+
+  it("adds nothing for an empty or absent custom field", () => {
+    // DSH omits `custom` entirely when the user typed nothing (its plan gate
+    // reads the field's absence), so neither shape may invent a pick.
+    const absent = JSON.stringify({
+      answers: [{ id: "q", selected: ["Alpha"] }],
+    })
+    const empty = JSON.stringify({
+      answers: [{ id: "q", selected: ["Alpha"], custom: "" }],
+    })
+    expect(parseAskQuestionOutcome(absent)?.answers[0].selected).toEqual([
+      "Alpha",
+    ])
+    expect(parseAskQuestionOutcome(empty)?.answers[0].selected).toEqual([
+      "Alpha",
+    ])
+  })
+
   it("reads a declined envelope from the JSON", () => {
     expect(
       parseAskQuestionOutcome(JSON.stringify({ answers: [], declined: true }))
