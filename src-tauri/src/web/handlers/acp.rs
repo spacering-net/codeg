@@ -438,10 +438,6 @@ pub struct AcpForkParams {
 pub struct AcpSetModeParams {
     pub connection_id: String,
     pub mode_id: String,
-    /// The client's setter sequence number (see
-    /// `ConnectionManager::set_mode_ordered`); older clients omit it.
-    #[serde(default)]
-    pub client_seq: Option<u64>,
 }
 
 pub async fn acp_set_mode(
@@ -450,7 +446,7 @@ pub async fn acp_set_mode(
 ) -> Result<Json<()>, AppCommandError> {
     let manager = &state.connection_manager;
     manager
-        .set_mode_ordered(&params.connection_id, params.mode_id, params.client_seq)
+        .set_mode(&params.connection_id, params.mode_id)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
@@ -462,8 +458,6 @@ pub struct AcpSetConfigOptionParams {
     pub connection_id: String,
     pub config_id: String,
     pub value_id: String,
-    #[serde(default)]
-    pub client_seq: Option<u64>,
 }
 
 pub async fn acp_set_config_option(
@@ -472,12 +466,7 @@ pub async fn acp_set_config_option(
 ) -> Result<Json<()>, AppCommandError> {
     let manager = &state.connection_manager;
     manager
-        .set_config_option_ordered(
-            &params.connection_id,
-            params.config_id,
-            params.value_id,
-            params.client_seq,
-        )
+        .set_config_option(&params.connection_id, params.config_id, params.value_id)
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))

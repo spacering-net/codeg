@@ -12721,12 +12721,9 @@ pub async fn acp_prompt(
 pub async fn acp_set_mode(
     connection_id: String,
     mode_id: String,
-    client_seq: Option<u64>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<(), AcpError> {
-    manager
-        .set_mode_ordered(&connection_id, mode_id, client_seq)
-        .await
+    manager.set_mode(&connection_id, mode_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -12735,11 +12732,10 @@ pub async fn acp_set_config_option(
     connection_id: String,
     config_id: String,
     value_id: String,
-    client_seq: Option<u64>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<(), AcpError> {
     manager
-        .set_config_option_ordered(&connection_id, config_id, value_id, client_seq)
+        .set_config_option(&connection_id, config_id, value_id)
         .await
 }
 

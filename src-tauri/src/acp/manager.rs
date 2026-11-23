@@ -500,15 +500,7 @@ pub struct ConnectionManager {
     /// Per-conversation selection persistence: the serialized persister and
     /// the one-writer-per-row authority map (see `acp::selection`).
     pub(crate) selection: Arc<crate::acp::selection::SelectionPersister>,
-    /// Per connection: the highest client sequence number applied per
-    /// selector (`mode`, `config:<id>`), each behind a gate held across the
-    /// check AND the enqueue. A client's setter requests may arrive out of
-    /// order (independent HTTP requests); an older one arriving after a newer
-    /// one is dropped instead of overriding it (codeg#1179).
-    setter_order: Arc<std::sync::Mutex<HashMap<String, SetterGate>>>,
 }
-
-type SetterGate = Arc<tokio::sync::Mutex<HashMap<String, u64>>>;
 
 /// A parked `ask_user_question` awaiting its answer. The `sender` resolves the
 /// blocked listener round-trip; `questions` is retained so `answer_question` can
@@ -708,7 +700,6 @@ impl ConnectionManager {
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
             relocated: Arc::new(std::sync::Mutex::new(Default::default())),
             selection: Arc::new(crate::acp::selection::SelectionPersister::default()),
-            setter_order: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -729,7 +720,6 @@ impl ConnectionManager {
             pending_plan_approvals: self.pending_plan_approvals.clone(),
             relocated: self.relocated.clone(),
             selection: self.selection.clone(),
-            setter_order: self.setter_order.clone(),
         }
     }
 
@@ -786,7 +776,6 @@ impl ConnectionManager {
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
             relocated: Arc::new(std::sync::Mutex::new(Default::default())),
             selection: Arc::new(crate::acp::selection::SelectionPersister::default()),
-            setter_order: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -2093,80 +2082,6 @@ impl ConnectionManager {
         }
     }
 
-    fn setter_gate(&self, conn_id: &str) -> SetterGate {
-        let mut gates = self
-            .setter_order
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        gates.entry(conn_id.to_string()).or_default().clone()
-    }
-
-    /// Enqueue a selector setter carrying the client's sequence number: one
-    /// older than the newest already enqueued for the same selector is
-    /// dropped (`Ok`). Without a number (older clients, internal callers) it
-    /// is enqueued as before.
-    async fn enqueue_ordered_setter(
-        &self,
-        conn_id: &str,
-        key: String,
-        client_seq: Option<u64>,
-        cmd: ConnectionCommand,
-    ) -> Result<(), AcpError> {
-        let cmd_tx = self.cmd_sender(conn_id).await?;
-        let Some(seq) = client_seq else {
-            return cmd_tx.send(cmd).await.map_err(|_| AcpError::ProcessExited);
-        };
-        let gate = self.setter_gate(conn_id);
-        let mut last = gate.lock().await;
-        if last.get(&key).is_some_and(|newest| *newest >= seq) {
-            return Ok(());
-        }
-        cmd_tx.send(cmd).await.map_err(|_| AcpError::ProcessExited)?;
-        last.insert(key, seq);
-        Ok(())
-    }
-
-    /// [`Self::set_mode`] with the client's sequence number (see
-    /// [`Self::enqueue_ordered_setter`]).
-    pub async fn set_mode_ordered(
-        &self,
-        conn_id: &str,
-        mode_id: String,
-        client_seq: Option<u64>,
-    ) -> Result<(), AcpError> {
-        self.enqueue_ordered_setter(
-            conn_id,
-            "mode".to_string(),
-            client_seq,
-            ConnectionCommand::SetMode {
-                mode_id,
-                reply: None,
-            },
-        )
-        .await
-    }
-
-    /// [`Self::set_config_option`] with the client's sequence number.
-    pub async fn set_config_option_ordered(
-        &self,
-        conn_id: &str,
-        config_id: String,
-        value_id: String,
-        client_seq: Option<u64>,
-    ) -> Result<(), AcpError> {
-        self.enqueue_ordered_setter(
-            conn_id,
-            format!("config:{config_id}"),
-            client_seq,
-            ConnectionCommand::SetConfigOption {
-                config_id,
-                value_id,
-                reply: None,
-            },
-        )
-        .await
-    }
-
     pub async fn set_mode(&self, conn_id: &str, mode_id: String) -> Result<(), AcpError> {
         let cmd_tx = {
             let connections = self.connections.lock().await;
@@ -3015,10 +2930,6 @@ impl ConnectionManager {
         };
         if let Some(conn) = removed {
             tracing::info!("[ACP] disconnect connection={}", conn_id);
-            self.setter_order
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .remove(conn_id);
             // A dying process may never report its turn's end.
             crate::agent_turn_files::end_turn(conn_id, false, std::time::SystemTime::now());
             // First: a connection still in its handshake is not reading

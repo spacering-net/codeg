@@ -8302,19 +8302,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // Selector setters still in flight per contextKey. A setter's IPC returns
   // once its command is enqueued on the connection, and the prompt goes
   // through the same queue — so a prompt issued after every earlier setter's
-  // IPC returned runs with what the composer showed (codeg#1179). Each setter
-  // carries a client sequence number, so the backend drops one that arrives
-  // after a newer pick of the same selector (independent web requests can be
-  // delivered out of order).
+  // IPC returned runs with what the composer showed (codeg#1179). Setters are
+  // issued at once, as before; the row records whatever the session ends up
+  // running with.
   const inflightSettersRef = useRef(new Map<string, Set<Promise<unknown>>>())
-  const setterSeqRef = useRef(0)
   const trackSetter = useCallback(
-    <T,>(
-      contextKey: string,
-      run: (clientSeq: number) => Promise<T>
-    ): Promise<T> => {
-      setterSeqRef.current += 1
-      const p = run(setterSeqRef.current)
+    <T,>(contextKey: string, p: Promise<T>): Promise<T> => {
       let set = inflightSettersRef.current.get(contextKey)
       if (!set) {
         set = new Set()
@@ -8381,9 +8374,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       const conn = storeRef.current.connections.get(contextKey)
       if (!conn) return
       lastActivityRef.current.set(contextKey, Date.now())
-      await trackSetter(contextKey, (seq) =>
-        acpSetMode(conn.connectionId, modeId, seq)
-      )
+      await trackSetter(contextKey, acpSetMode(conn.connectionId, modeId))
     },
     [trackSetter]
   )
@@ -8410,8 +8401,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         saveConfigPreference(conn.agentType, configId, valueId)
       }
       lastActivityRef.current.set(contextKey, Date.now())
-      await trackSetter(contextKey, (seq) =>
-        acpSetConfigOption(conn.connectionId, configId, valueId, seq)
+      await trackSetter(
+        contextKey,
+        acpSetConfigOption(conn.connectionId, configId, valueId)
       )
     },
     [dispatch, trackSetter]
