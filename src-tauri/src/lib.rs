@@ -166,10 +166,14 @@ mod tauri_app {
         // tears them down.
         workspace_windows::remember_on_quit(app);
         // The pet goes down with the process instead of being closed, so its
-        // close handler never writes this.
-        if app.get_webview_window("pet").is_some() {
+        // close handler never writes this. Its live origin goes with it: the
+        // renderer only records a drop ~220 ms after a drag settles, and a
+        // quit inside that window would otherwise bring the pet back where it
+        // was before the drag.
+        if let Some(pet) = app.get_webview_window(windows::PET_WINDOW_LABEL) {
+            let origin = windows::pet_window_live_origin(&pet);
             if let Some(db) = app.try_state::<db::AppDatabase>() {
-                tauri::async_runtime::block_on(persist_pet_closed(&db.conn));
+                tauri::async_runtime::block_on(persist_pet_closed(&db.conn, origin));
             }
         }
         // Unpublished first: from here on no CLI may pick this process.
@@ -207,15 +211,21 @@ mod tauri_app {
     /// before the user asks for it. `active_pet_id` is deliberately kept: the
     /// user chose that pet, and they want it back the next time they open the
     /// window.
-    async fn persist_pet_closed(conn: &sea_orm::DatabaseConnection) {
+    ///
+    /// `origin` is the pet's live `(x, y, scale factor)` when the caller could
+    /// read it; `None` leaves the saved position alone.
+    async fn persist_pet_closed(
+        conn: &sea_orm::DatabaseConnection,
+        origin: Option<(f64, f64, Option<f64>)>,
+    ) {
         let _ = crate::commands::pet::pet_save_window_state_core(
             conn,
             crate::models::pet::PetWindowStatePatch {
-                x: None,
-                y: None,
-                scale: None,
-                always_on_top: None,
+                x: origin.map(|o| o.0),
+                y: origin.map(|o| o.1),
+                position_scale_factor: origin.and_then(|o| o.2),
                 enabled: Some(false),
+                ..Default::default()
             },
         )
         .await;
@@ -660,6 +670,16 @@ mod tauri_app {
             // Computer use's strip and action marker are placed by codeg each
             // time they are made and must never come back where (or as
             // visible as) a previous run left them.
+            //
+            // The desktop pet and its session panel also own their own
+            // geometry: `pet` derives its logical size strictly from
+            // `pet.config.scale` (192×208 × scale) and persists its own
+            // position in SQLite; `pet-panel` anchors to `pet` and resizes to
+            // its live content. Letting `tauri-plugin-window-state` restore
+            // saved physical pixels onto a window built on a different-DPI
+            // primary display halves or doubles `pet` (e.g. 144×157 saved on a
+            // 1× external display becomes 72×79 logical on a 2× Retina primary)
+            // and overrides scale changes.
             .plugin(
                 tauri_plugin_window_state::Builder::new()
                     .with_state_flags(
@@ -669,6 +689,8 @@ mod tauri_app {
                     .with_denylist(&[
                         crate::computer::indicator::INDICATOR_LABEL,
                         crate::computer::marker::MARKER_LABEL,
+                        windows::PET_WINDOW_LABEL,
+                        windows::PET_PANEL_LABEL,
                     ])
                     .build(),
             )
@@ -1758,7 +1780,9 @@ mod tauri_app {
                 {
                     if let Some(db) = window.app_handle().try_state::<db::AppDatabase>() {
                         let conn = db.conn.clone();
-                        tauri::async_runtime::spawn(async move { persist_pet_closed(&conn).await });
+                        tauri::async_runtime::spawn(async move {
+                            persist_pet_closed(&conn, None).await
+                        });
                     }
                 }
 
