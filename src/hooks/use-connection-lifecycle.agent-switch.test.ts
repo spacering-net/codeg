@@ -94,6 +94,10 @@ describe("useConnectionLifecycle config edits across an agent switch", () => {
 
     result.current.handleSetConfigOption("model", "gpt-5.4")
 
-    expect(conn.setConfigOption).toHaveBeenCalledWith("model", "gpt-5.4")
+    expect(conn.setConfigOption).toHaveBeenCalledWith(
+      "model",
+      "gpt-5.4",
+      undefined
+    )
   })
 })

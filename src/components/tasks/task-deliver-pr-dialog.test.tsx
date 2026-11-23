@@ -18,6 +18,7 @@ const setWritebackMock = vi.fn().mockResolvedValue(undefined)
 const uncommittedMock = vi.fn()
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskDeliverPr: (...args: unknown[]) => deliverMock(...args),
   workTaskSettingsEffective: (...args: unknown[]) => settingsMock(...args),
   folderForgeRemote: (...args: unknown[]) => remoteMock(...args),

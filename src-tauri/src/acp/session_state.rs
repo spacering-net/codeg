@@ -529,6 +529,39 @@ pub struct SessionState {
     /// on the snapshot so a frontend that reconnects after refresh can see
     /// "init complete" without waiting for an event that already fired.
     pub selectors_ready: bool,
+    /// True while a session establishment is in progress and its selectors
+    /// are not settled yet: from creation / every `SessionStarted` (new,
+    /// resumed, loaded, forked session) until the following `SelectorsReady`.
+    /// The conversation's stored selection is never written while this is set
+    /// — that is exactly when the agent's pre-application defaults are
+    /// visible (a resume emits `session.modes()` before replaying the stored
+    /// selection; a fork emits the forked session's defaults before restoring
+    /// the inherited ones). Backend-internal; not serialized.
+    pub selectors_settling: bool,
+    /// The conversation row this connection writes its selection to before
+    /// the first prompt links it (`conversation_id` is only set by
+    /// `ConversationLinked`): set by `acp_connect` for an existing
+    /// conversation (`ConnectionManager::bind_selection_conversation`).
+    /// Backend-internal; not serialized.
+    pub selection_conversation_id: Option<i32>,
+    /// A mode the user picked in a tab's composer that the tab applies at its
+    /// next send (legacy-modes picks are deferred to send time), recorded so a
+    /// close-and-reopen without sending keeps the pick. Never sent to the
+    /// agent from here. Written only by `AcpEvent::ComposerModeChanged`;
+    /// carried on `to_snapshot()`.
+    pub composer_mode_id: Option<String>,
+    /// Latched by the first EXPLICIT composer pick on this connection, never
+    /// reset. A draft's one-time hand-over of its pick (and a reconnect's
+    /// restore of the stored intent) applies only while this is false, so it
+    /// can never overwrite a pick another surface already made.
+    /// Backend-internal; not serialized.
+    pub composer_mode_touched: bool,
+    /// Set by the connection's driver once its loop has ended, right before
+    /// the final selection flush. From then on direct selection mutations
+    /// (`acp_set_composer_mode`, `bind_selection_conversation`) are refused,
+    /// so a pick is either in the flushed row or rejected, never accepted and
+    /// lost. Backend-internal; not serialized.
+    pub selection_finalized: bool,
 
     /// Most recent unresolved `AcpEvent::Error` payload. Cleared when a new
     /// prompt starts, matching the frontend reducer's live-event behavior. The
@@ -968,6 +1001,11 @@ impl SessionState {
             claude_settings: None,
             remote_control: None,
             selectors_ready: false,
+            selectors_settling: true,
+            selection_conversation_id: None,
+            composer_mode_id: None,
+            composer_mode_touched: false,
+            selection_finalized: false,
             last_error: None,
             session_started_tx: None,
             event_seq: 0,
@@ -1230,6 +1268,9 @@ impl SessionState {
                 }
                 self.external_id = Some(session_id.clone());
                 self.status = ConnectionStatus::Connected;
+                // A new establishment begins: its selectors are transitional
+                // until the `SelectorsReady` that follows it.
+                self.selectors_settling = true;
                 // Fire the dedup waiter (if any). Take()-and-send is
                 // single-shot: a duplicate SessionStarted (replay, agent
                 // re-init) finds None here and is a no-op, which is
@@ -1299,6 +1340,12 @@ impl SessionState {
                 // stream has long since corrected it.
                 if let Some(modes) = self.modes.as_mut() {
                     modes.current_mode_id = mode_id.clone();
+                }
+            }
+            AcpEvent::ComposerModeChanged { mode_id, explicit } => {
+                self.composer_mode_id = mode_id.clone();
+                if *explicit {
+                    self.composer_mode_touched = true;
                 }
             }
             AcpEvent::SessionConfigOptions { config_options } => {
@@ -1739,6 +1786,7 @@ impl SessionState {
                 // after browser refresh) can tell the initial handshake is
                 // already done — the event fires only once per connection.
                 self.selectors_ready = true;
+                self.selectors_settling = false;
             }
             AcpEvent::Error {
                 message,
@@ -2692,6 +2740,7 @@ impl SessionState {
             fork_supported: self.fork_supported,
             available_commands: self.available_commands.clone(),
             selectors_ready: self.selectors_ready,
+            composer_mode_id: self.composer_mode_id.clone(),
             config_stale: self.config_stale,
             config_stale_kind: self.config_stale_kind,
             last_error: self.last_error.clone(),
@@ -2866,6 +2915,11 @@ pub struct LiveSessionSnapshot {
     pub fork_supported: bool,
     pub available_commands: Vec<AvailableCommandInfo>,
     pub selectors_ready: bool,
+    /// The composer's pending mode pick (see `SessionState.composer_mode_id`).
+    /// Omitted when there is none, so the common snapshot keeps its
+    /// pre-feature wire shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer_mode_id: Option<String>,
     /// Whether the running session is on stale (launch-time) config after a
     /// later settings save (see `SessionState.config_stale`). `#[serde(default)]`
     /// so older server payloads without the field deserialize to `false`; always

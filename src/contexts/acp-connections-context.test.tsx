@@ -1836,7 +1836,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
   })
@@ -1860,7 +1861,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
   })
@@ -1887,7 +1889,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
   })
 
@@ -1933,7 +1936,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
   })
 
@@ -2052,7 +2056,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      42
     )
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
   })
@@ -2142,7 +2147,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "snapshot-session",
       undefined,
-      {}
+      {},
+      42
     )
   })
 
@@ -2182,7 +2188,8 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
       "/tmp/x",
       "minted-1",
       undefined,
-      {}
+      {},
+      42
     )
   })
 })
@@ -2239,7 +2246,8 @@ describe("AcpConnectionsProvider disconnect teardown confirmation", () => {
       "/tmp/x",
       "sess-1",
       undefined,
-      {}
+      {},
+      null
     )
     // ...but the caller must not show an "applied" confirmation for a restart
     // that may have landed right back on the process it meant to replace.
@@ -5075,7 +5083,10 @@ describe("AcpConnectionsProvider Grok cross-agent-type model switch", () => {
     // User optimistically switches to the cross-agent-type Composer model.
     vi.mocked(saveConfigPreference).mockClear()
     await act(async () => {
-      await h.actions!.setConfigOption(TAB, "model", "grok-composer-2.5-fast")
+      // A draft's pick: it is also the new-conversation default.
+      await h.actions!.setConfigOption(TAB, "model", "grok-composer-2.5-fast", {
+        saveAsDefault: true,
+      })
     })
     // Optimistic: the selector shows the pick and the preference is persisted.
     expect(
@@ -5510,7 +5521,9 @@ describe("AcpConnectionsProvider boolean config option (cline auto-approve)", ()
     expect(autoApproveValue()).toBe(false)
 
     await act(async () => {
-      await h.actions!.setConfigOption(TAB, "auto_approve", "true")
+      await h.actions!.setConfigOption(TAB, "auto_approve", "true", {
+        saveAsDefault: true,
+      })
     })
 
     expect(autoApproveValue()).toBe(true)
@@ -5519,6 +5532,24 @@ describe("AcpConnectionsProvider boolean config option (cline auto-approve)", ()
       "auto_approve",
       "true"
     )
+  })
+
+  it("never writes the new-conversation default for an existing conversation's pick (#1179)", async () => {
+    const handlers = await connectClineOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "session_config_options",
+      config_options: clineOptions(false),
+    })
+    vi.mocked(saveConfigPreference).mockClear()
+
+    await act(async () => {
+      await h.actions!.setConfigOption(TAB, "auto_approve", "true")
+    })
+
+    expect(autoApproveValue()).toBe(true)
+    expect(saveConfigPreference).not.toHaveBeenCalled()
   })
 
   it("applies the agent's own flip of a boolean option", async () => {

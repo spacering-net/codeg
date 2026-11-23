@@ -21,6 +21,7 @@ import type { WorkTask } from "@/lib/types"
 import { TaskDetailSheet } from "./task-detail-sheet"
 
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskArchive: vi.fn().mockResolvedValue(undefined),
   workTaskCancel: vi.fn().mockResolvedValue(undefined),
   getFolderConversation: vi.fn().mockRejectedValue(new Error("no transcript")),

@@ -2167,6 +2167,7 @@ mod tauri_app {
                 acp_commands::acp_prompt,
                 acp_commands::acp_set_mode,
                 acp_commands::acp_set_config_option,
+                acp_commands::acp_set_composer_mode,
                 acp_commands::acp_goal_control,
                 acp_commands::acp_describe_agent_options,
                 acp_commands::acp_cancel,

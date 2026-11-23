@@ -27,6 +27,7 @@ vi.mock("@/contexts/acp-connections-context", () => ({
 }))
 const workTaskEvents = vi.fn().mockResolvedValue([])
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   getFolderConversation: vi.fn().mockResolvedValue({
     summary: { agent_type: "claude_code" },
   }),

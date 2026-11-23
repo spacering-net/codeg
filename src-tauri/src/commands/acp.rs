@@ -12293,6 +12293,338 @@ pub(crate) async fn acp_update_agent_preferences_and_refresh(
     Ok(refresh_config_staleness(manager, db, data_dir, &[agent_type], ConfigStaleKind::AgentConfig).await)
 }
 
+/// What a connect replays on the session, and which conversation row the
+/// connection is bound to for persisting its selection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConnectSelection {
+    pub mode_id: Option<String>,
+    pub config_values: BTreeMap<String, String>,
+    /// The conversation row resolved for this connect; `None` for a draft.
+    pub row_id: Option<i32>,
+    /// The row's pending composer mode, restored onto the connection.
+    pub composer_mode_id: Option<String>,
+}
+
+/// Resolve the selection a connect replays (codeg#1179).
+///
+/// The row is `conversation_id` when it is live and runs `agent_type`, else —
+/// given `session_id` — the live row holding `(session_id, agent_type)`.
+///
+/// - Row with a stored selection → ONLY that is replayed; the client's
+///   new-conversation default never reaches an existing conversation, and an
+///   option the snapshot lacks is left to the resumed agent.
+/// - Row without one (legacy NULL / unparsable) → once, then frozen by the
+///   persister: a to-do task's CURRENT conversation whose task names the
+///   row's agent replays the task's tuple; any other task row (agent differs)
+///   or an automation run's row replays nothing (the resumed agent's own
+///   selection gets frozen); only an ordinary conversation takes the client's
+///   default.
+/// - No row (draft) → the client's default.
+///
+/// The row, the task binding and the automation-run link are read in ONE read
+/// transaction under the persister lock, so it never mixes a pre-relink NULL
+/// selection with a post-relink "no owner" and never reads mid-write.
+pub async fn resolve_connect_selection(
+    db: &sea_orm::DatabaseConnection,
+    manager: &ConnectionManager,
+    agent_type: AgentType,
+    conversation_id: Option<i32>,
+    session_id: Option<&str>,
+    client_mode_id: Option<String>,
+    client_config_values: BTreeMap<String, String>,
+) -> ConnectSelection {
+    let client = ConnectSelection {
+        mode_id: client_mode_id,
+        config_values: client_config_values,
+        row_id: None,
+        composer_mode_id: None,
+    };
+    let _guard = manager.selection.lock().await;
+    match resolve_connect_selection_tx(db, agent_type, conversation_id, session_id, &client).await
+    {
+        Ok(sel) => sel,
+        Err(e) => {
+            tracing::warn!("[ACP] resolve_connect_selection failed, using the client's: {e}");
+            client
+        }
+    }
+}
+
+async fn resolve_connect_selection_tx(
+    db: &sea_orm::DatabaseConnection,
+    agent_type: AgentType,
+    conversation_id: Option<i32>,
+    session_id: Option<&str>,
+    client: &ConnectSelection,
+) -> Result<ConnectSelection, crate::db::error::DbError> {
+    use crate::db::entities::{automation_run, conversation, work_task};
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait};
+
+    let agent_str = serde_json::to_value(agent_type)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    let txn = db.begin().await?;
+    let mut row = match conversation_id.filter(|id| *id > 0) {
+        Some(id) => conversation::Entity::find_by_id(id)
+            .filter(conversation::Column::DeletedAt.is_null())
+            .one(&txn)
+            .await?
+            .filter(|r| r.agent_type == agent_str),
+        None => None,
+    };
+    if row.is_none() {
+        if let Some(sid) = session_id.filter(|s| !s.is_empty()) {
+            row = conversation::Entity::find()
+                .filter(conversation::Column::ExternalId.eq(sid))
+                .filter(conversation::Column::AgentType.eq(agent_str.clone()))
+                .filter(conversation::Column::DeletedAt.is_null())
+                .one(&txn)
+                .await?;
+        }
+    }
+    let Some(row) = row else {
+        txn.commit().await?;
+        return Ok(client.clone());
+    };
+    if let Some(stored) =
+        crate::models::ConversationSelection::parse(row.selector_state.as_deref())
+    {
+        txn.commit().await?;
+        return Ok(ConnectSelection {
+            mode_id: stored.mode_id,
+            config_values: stored.config_values,
+            row_id: Some(row.id),
+            composer_mode_id: stored.composer_mode_id,
+        });
+    }
+    // Legacy row: no selection recorded yet.
+    let task = work_task::Entity::find()
+        .filter(work_task::Column::ConversationId.eq(row.id))
+        .one(&txn)
+        .await?;
+    let selection = if let Some(task) = task {
+        let cfg: crate::models::WorkTaskConfig =
+            serde_json::from_str(&task.config).unwrap_or_default();
+        let (agent, mode, values) =
+            crate::db::service::work_task_service::resolve_agent_config(&txn, task.folder_id, &cfg)
+                .await?;
+        if agent.as_deref() == Some(agent_str.as_str()) {
+            ConnectSelection {
+                mode_id: mode,
+                config_values: values,
+                row_id: Some(row.id),
+                composer_mode_id: None,
+            }
+        } else {
+            ConnectSelection {
+                row_id: Some(row.id),
+                ..Default::default()
+            }
+        }
+    } else {
+        let automation = automation_run::Entity::find()
+            .filter(automation_run::Column::ConversationId.eq(row.id))
+            .one(&txn)
+            .await?;
+        if automation.is_some() {
+            ConnectSelection {
+                row_id: Some(row.id),
+                ..Default::default()
+            }
+        } else {
+            ConnectSelection {
+                row_id: Some(row.id),
+                ..client.clone()
+            }
+        }
+    };
+    txn.commit().await?;
+    Ok(selection)
+}
+
+/// [`resolve_connect_selection`] + spawn + bind: the connect path every
+/// user-facing entry point (Tauri, web, chat channel) shares.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn spawn_with_conversation_selection(
+    manager: &ConnectionManager,
+    db: &sea_orm::DatabaseConnection,
+    agent_type: AgentType,
+    working_dir: Option<String>,
+    session_id: Option<String>,
+    runtime_env: BTreeMap<String, String>,
+    owner_window_label: String,
+    emitter: EventEmitter,
+    conversation_id: Option<i32>,
+    client_mode_id: Option<String>,
+    client_config_values: BTreeMap<String, String>,
+) -> Result<String, AcpError> {
+    let selection = resolve_connect_selection(
+        db,
+        manager,
+        agent_type,
+        conversation_id,
+        session_id.as_deref(),
+        client_mode_id,
+        client_config_values,
+    )
+    .await;
+    let connection_id = manager
+        .spawn_agent(
+            agent_type,
+            working_dir,
+            session_id,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            selection.mode_id.clone(),
+            selection.config_values.clone(),
+        )
+        .await?;
+    if let Some(row_id) = selection.row_id {
+        // Before returning, so a setter right after connect finds the binding.
+        // A connection that already ended is reported like a closed one.
+        manager
+            .bind_selection_conversation(&connection_id, row_id, selection.composer_mode_id)
+            .await?;
+    }
+    Ok(connection_id)
+}
+
+#[cfg(test)]
+mod connect_selection_tests {
+    use super::*;
+    use crate::db::service::conversation_service;
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+    use crate::models::ConversationSelection;
+
+    fn client() -> (Option<String>, BTreeMap<String, String>) {
+        let mut v = BTreeMap::new();
+        v.insert("model".to_string(), "default-model".to_string());
+        v.insert("effort".to_string(), "high".to_string());
+        (Some("default-mode".to_string()), v)
+    }
+
+    #[tokio::test]
+    async fn a_stored_selection_is_replayed_alone() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-1179-connect").await;
+        let conv = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        let mut values = BTreeMap::new();
+        values.insert("model".to_string(), "picked".to_string());
+        conversation_service::set_selector_state(
+            &db.conn,
+            conv.id,
+            &ConversationSelection {
+                mode_id: None,
+                composer_mode_id: Some("plan".into()),
+                config_values: values.clone(),
+            },
+        )
+        .await
+        .unwrap();
+        let manager = ConnectionManager::new();
+        let (mode, vals) = client();
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::Codex,
+            Some(conv.id),
+            None,
+            mode,
+            vals,
+        )
+        .await;
+        // Neither the default's mode nor its extra option leaks in.
+        assert_eq!(sel.mode_id, None);
+        assert_eq!(sel.config_values, values);
+        assert_eq!(sel.row_id, Some(conv.id));
+        assert_eq!(sel.composer_mode_id.as_deref(), Some("plan"));
+    }
+
+    #[tokio::test]
+    async fn drafts_legacy_rows_and_other_agents_fall_back_as_specified() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-1179-connect-legacy").await;
+        let conv = conversation_service::create(&db.conn, folder, AgentType::Codex, None, None)
+            .await
+            .unwrap();
+        let manager = ConnectionManager::new();
+        let (mode, vals) = client();
+
+        // Legacy ordinary row → the client's default, bound to the row.
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::Codex,
+            Some(conv.id),
+            None,
+            mode.clone(),
+            vals.clone(),
+        )
+        .await;
+        assert_eq!(sel.mode_id, mode);
+        assert_eq!(sel.config_values, vals);
+        assert_eq!(sel.row_id, Some(conv.id));
+
+        // Another agent / unknown row → treated as a draft.
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::ClaudeCode,
+            Some(conv.id),
+            None,
+            mode.clone(),
+            vals.clone(),
+        )
+        .await;
+        assert_eq!(sel.row_id, None);
+        assert_eq!(sel.config_values, vals);
+
+        // A legacy task conversation whose task names another agent → nothing.
+        let task = crate::db::service::work_task_service::create(
+            &db.conn,
+            crate::models::WorkTaskDraft {
+                folder_id: folder,
+                title: "t".into(),
+                config: serde_json::json!({
+                    "display_text": "x",
+                    "prompt_blocks": [{ "type": "text", "text": "x" }],
+                    "agent_type": "claude_code",
+                }),
+            },
+        )
+        .await
+        .unwrap();
+        {
+            use crate::db::entities::work_task;
+            use sea_orm::sea_query::Expr;
+            use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+            work_task::Entity::update_many()
+                .col_expr(work_task::Column::ConversationId, Expr::value(Some(conv.id)))
+                .filter(work_task::Column::Id.eq(task.id))
+                .exec(&db.conn)
+                .await
+                .unwrap();
+        }
+        let sel = resolve_connect_selection(
+            &db.conn,
+            &manager,
+            AgentType::Codex,
+            Some(conv.id),
+            None,
+            mode,
+            vals,
+        )
+        .await;
+        assert_eq!(sel.row_id, Some(conv.id));
+        assert_eq!(sel.mode_id, None);
+        assert!(sel.config_values.is_empty());
+    }
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 #[allow(clippy::too_many_arguments)]
@@ -12302,6 +12634,7 @@ pub async fn acp_connect(
     session_id: Option<String>,
     preferred_mode_id: Option<String>,
     preferred_config_values: Option<BTreeMap<String, String>>,
+    conversation_id: Option<i32>,
     manager: State<'_, ConnectionManager>,
     db: State<'_, AppDatabase>,
     app_handle: tauri::AppHandle,
@@ -12326,17 +12659,35 @@ pub async fn acp_connect(
     verify_agent_installed(agent_type).await?;
 
     let emitter = EventEmitter::from_app(&app_handle);
+    spawn_with_conversation_selection(
+        &manager,
+        &db.conn,
+        agent_type,
+        working_dir,
+        session_id,
+        runtime_env,
+        window.label().to_string(),
+        emitter,
+        conversation_id,
+        preferred_mode_id,
+        preferred_config_values.unwrap_or_default(),
+    )
+    .await
+}
+
+/// Record the composer's pending mode pick on a connection (never sent to the
+/// agent; the tab applies it at its next send). `initial` = a draft's
+/// one-time hand-over at its first send. Returns whether it applied.
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn acp_set_composer_mode(
+    connection_id: String,
+    mode_id: Option<String>,
+    initial: Option<bool>,
+    manager: State<'_, ConnectionManager>,
+) -> Result<bool, AcpError> {
     manager
-        .spawn_agent(
-            agent_type,
-            working_dir,
-            session_id,
-            runtime_env,
-            window.label().to_string(),
-            emitter,
-            preferred_mode_id,
-            preferred_config_values.unwrap_or_default(),
-        )
+        .set_composer_mode(&connection_id, mode_id, initial.unwrap_or(false))
         .await
 }
 

@@ -74,6 +74,11 @@ export interface UseConnectionReturn {
   promptCapabilities: PromptCapabilitiesInfo
   supportsFork: boolean
   selectorsReady: boolean
+  /** The composer's pending mode pick recorded on this connection (see
+   *  `ConnectionState.composerModeId`), or `null`. */
+  composerModeId: string | null
+  /** True while a draft's first send is being admitted: selectors disabled. */
+  selectorsLocked: boolean
   hasCachedSelectors: boolean
   sessionId: string | null
   /** The working directory the live connection was established with (null when
@@ -163,7 +168,17 @@ export interface UseConnectionReturn {
     }
   ) => Promise<void>
   setMode: (modeId: string) => Promise<void>
-  setConfigOption: (configId: string, valueId: string) => Promise<void>
+  setConfigOption: (
+    configId: string,
+    valueId: string,
+    opts?: { saveAsDefault?: boolean }
+  ) => Promise<void>
+  setComposerMode: (
+    modeId: string | null,
+    opts?: { initial?: boolean }
+  ) => Promise<boolean>
+  beginFirstSend: () => number
+  releaseFirstSend: (token: number) => void
   cancel: () => Promise<void>
   respondPermission: (requestId: string, optionId: string) => Promise<void>
   answerQuestion: (questionId: string, answer: QuestionAnswer) => Promise<void>
@@ -294,6 +309,8 @@ export function useConnection(contextKey: string): UseConnectionReturn {
     connection?.promptCapabilities ?? DEFAULT_PROMPT_CAPABILITIES
   const supportsFork = connection?.supportsFork ?? false
   const selectorsReady = connection?.selectorsReady ?? false
+  const composerModeId = connection?.composerModeId ?? null
+  const selectorsLocked = connection?.selectorsLocked ?? false
   const sessionId = connection?.sessionId ?? null
   const cached = connection?.agentType
     ? getCachedSelectors(connection.agentType)
@@ -371,8 +388,24 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   )
 
   const setConfigOption = useCallback(
-    (configId: string, valueId: string) =>
-      actions.setConfigOption(contextKey, configId, valueId),
+    (configId: string, valueId: string, opts?: { saveAsDefault?: boolean }) =>
+      actions.setConfigOption(contextKey, configId, valueId, opts),
+    [actions, contextKey]
+  )
+
+  const setComposerMode = useCallback(
+    (modeId: string | null, opts?: { initial?: boolean }) =>
+      actions.setComposerMode(contextKey, modeId, opts),
+    [actions, contextKey]
+  )
+
+  const beginFirstSend = useCallback(
+    () => actions.beginFirstSend(contextKey),
+    [actions, contextKey]
+  )
+
+  const releaseFirstSend = useCallback(
+    (token: number) => actions.releaseFirstSend(contextKey, token),
     [actions, contextKey]
   )
 
@@ -413,6 +446,8 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       promptCapabilities,
       supportsFork,
       selectorsReady,
+      composerModeId,
+      selectorsLocked,
       hasCachedSelectors,
       sessionId,
       connectedWorkingDir,
@@ -448,6 +483,9 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       sendPrompt,
       setMode,
       setConfigOption,
+      setComposerMode,
+      beginFirstSend,
+      releaseFirstSend,
       cancel,
       respondPermission,
       answerQuestion,
@@ -461,6 +499,8 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       promptCapabilities,
       supportsFork,
       selectorsReady,
+      composerModeId,
+      selectorsLocked,
       hasCachedSelectors,
       sessionId,
       connectedWorkingDir,
@@ -496,6 +536,9 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       sendPrompt,
       setMode,
       setConfigOption,
+      setComposerMode,
+      beginFirstSend,
+      releaseFirstSend,
       cancel,
       respondPermission,
       answerQuestion,
