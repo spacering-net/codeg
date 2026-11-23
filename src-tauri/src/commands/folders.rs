@@ -4878,8 +4878,19 @@ pub async fn get_file_tree(
 ) -> Result<Vec<FileTreeNode>, AppCommandError> {
     let root = PathBuf::from(&path);
     let depth = max_depth.unwrap_or(usize::MAX);
-    let mut visited = HashSet::new();
-    build_file_tree(&root, depth, &mut visited)
+    // Blocking filesystem walk: keep it off the async workers. On a slow
+    // network mount a single `readdir` can stall for minutes, and walking
+    // inline pinned the worker awaiting it — enough of those starved the
+    // runtime and codeg-server stopped accepting connections (issue #1292).
+    tokio::task::spawn_blocking(move || {
+        let mut visited = HashSet::new();
+        build_file_tree(&root, depth, &mut visited)
+    })
+    .await
+    .map_err(|e| {
+        AppCommandError::task_execution_failed("Failed to build file tree")
+            .with_detail(e.to_string())
+    })?
 }
 
 /// Build the tree under `root`, grafting in the subtree of every directory the
@@ -6744,6 +6755,50 @@ mod tests {
     use super::*;
     use crate::db::test_helpers::fresh_in_memory_db;
     use crate::models::agent::AgentType;
+
+    /// Issue #1292: the tree walk is blocking filesystem I/O, and on a slow
+    /// network mount (SSHFS) one `getdents64` can stall for minutes. Run
+    /// inline it pinned the async worker that awaited it, and a few of those
+    /// starved the whole runtime — codeg-server stopped accepting
+    /// connections. On this single-threaded runtime an inline walk finishes
+    /// without ever yielding, so the ticker never gets a turn (verified
+    /// before the fix: `ticks == 0`); off-loaded, awaiting it yields.
+    #[tokio::test]
+    async fn get_file_tree_does_not_walk_on_the_async_worker() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        for i in 0..40 {
+            let sub = dir.path().join(format!("d{i:02}"));
+            std::fs::create_dir(&sub).expect("mkdir");
+            for j in 0..50 {
+                std::fs::write(sub.join(format!("f{j:02}.txt")), b"x").expect("write");
+            }
+        }
+
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let ticker = {
+            let ticks = Arc::clone(&ticks);
+            tokio::spawn(async move {
+                loop {
+                    ticks.fetch_add(1, Ordering::Relaxed);
+                    tokio::task::yield_now().await;
+                }
+            })
+        };
+
+        let tree = get_file_tree(dir.path().to_string_lossy().into_owned(), None)
+            .await
+            .expect("tree");
+        ticker.abort();
+
+        assert_eq!(tree.len(), 40, "the walk itself still completes");
+        assert!(
+            ticks.load(Ordering::Relaxed) > 0,
+            "the runtime thread must stay free while the tree is walked"
+        );
+    }
 
     /// The frontend reads `symlink` as an optional boolean, and the tree
     /// snapshot is rebroadcast over the WebSocket on every filesystem change —
