@@ -2298,6 +2298,7 @@
       "forge": "리포지토리 패널",
       "canvas": "무한 캔버스",
       "harness": "하네스 엔지니어링",
+      "harnessHint": "스킬 · MCP",
       "folderGroup": {
         "newGroup": "새 그룹",
         "newGroupTitle": "새 폴더 그룹",
@@ -7615,7 +7616,8 @@
         "skill": "스킬",
         "mcp": "MCP",
         "prompt": "프롬프트",
-        "assistant": "어시스턴트"
+        "assistant": "어시스턴트",
+        "plugin": "플러그인"
       },
       "kind": {
         "skill": "스킬",
@@ -7904,8 +7906,8 @@
       },
       "hero": {
         "title": "에이전트에게 <accent>새로운 능력</accent>을",
-        "subtitle": "커뮤니티 스킬, MCP 서버, 프롬프트, 어시스턴트 {count, number}개 — 한 번 설치하면 여러 에이전트에서 사용",
-        "subtitleNoCount": "커뮤니티 스킬, MCP 서버, 프롬프트, 어시스턴트 — 한 번 설치하면 여러 에이전트에서 사용"
+        "subtitle": "커뮤니티 스킬, 플러그인, MCP 서버, 프롬프트, 어시스턴트 {count, number}개 — 한 번 설치하면 여러 에이전트에서 사용",
+        "subtitleNoCount": "커뮤니티 스킬, 플러그인, MCP 서버, 프롬프트, 어시스턴트 — 한 번 설치하면 여러 에이전트에서 사용"
       },
       "layout": {
         "label": "레이아웃",

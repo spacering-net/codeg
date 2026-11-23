@@ -2298,6 +2298,7 @@
       "forge": "Repository panel",
       "canvas": "Infinite Canvas",
       "harness": "Harness Engineering",
+      "harnessHint": "Skills · MCP",
       "folderGroup": {
         "newGroup": "New group",
         "newGroupTitle": "New folder group",
@@ -7615,7 +7616,8 @@
         "skill": "Skills",
         "mcp": "MCP",
         "prompt": "Prompts",
-        "assistant": "Assistants"
+        "assistant": "Assistants",
+        "plugin": "Plugins"
       },
       "kind": {
         "skill": "Skill",
@@ -7904,8 +7906,8 @@
       },
       "hero": {
         "title": "Find <accent>new abilities</accent> for your agents",
-        "subtitle": "{count, number} community skills, MCP servers, prompts and assistants — install once, use them across your agents",
-        "subtitleNoCount": "Community skills, MCP servers, prompts and assistants — install once, use them across your agents"
+        "subtitle": "{count, number} community skills, plugins, MCP servers, prompts and assistants — install once, use them across your agents",
+        "subtitleNoCount": "Community skills, plugins, MCP servers, prompts and assistants — install once, use them across your agents"
       },
       "layout": {
         "label": "Layout",

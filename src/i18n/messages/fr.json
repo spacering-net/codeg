@@ -2298,6 +2298,7 @@
       "forge": "Panneau du dépôt",
       "canvas": "Canevas infini",
       "harness": "Ingénierie du harness",
+      "harnessHint": "Compétences · MCP",
       "folderGroup": {
         "newGroup": "Nouveau groupe",
         "newGroupTitle": "Nouveau groupe de dossiers",
@@ -7615,7 +7616,8 @@
         "skill": "Compétences",
         "mcp": "MCP",
         "prompt": "Prompts",
-        "assistant": "Assistants"
+        "assistant": "Assistants",
+        "plugin": "Plugins"
       },
       "kind": {
         "skill": "Compétence",
@@ -7904,8 +7906,8 @@
       },
       "hero": {
         "title": "Trouvez de <accent>nouvelles capacités</accent> pour vos agents",
-        "subtitle": "{count, number} compétences, serveurs MCP, prompts et assistants de la communauté — installez une fois, utilisez-les dans vos agents",
-        "subtitleNoCount": "Compétences, serveurs MCP, prompts et assistants de la communauté — installez une fois, utilisez-les dans vos agents"
+        "subtitle": "{count, number} compétences, plugins, serveurs MCP, prompts et assistants de la communauté — installez une fois, utilisez-les dans vos agents",
+        "subtitleNoCount": "Compétences, plugins, serveurs MCP, prompts et assistants de la communauté — installez une fois, utilisez-les dans vos agents"
       },
       "layout": {
         "label": "Disposition",

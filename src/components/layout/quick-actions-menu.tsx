@@ -58,6 +58,7 @@ import {
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { HarnessUpdatesBadge } from "@/components/harness/harness-updates-badge"
+import { LabelWithHint } from "@/components/layout/label-with-hint"
 import {
   MENU_TEXT,
   MenuRow,
@@ -255,7 +256,12 @@ export function QuickActionsItems({ actions }: { actions: QuickActions }) {
       />
       <MenuRow
         icon={<DraftingCompass />}
-        label={tSidebar("harness")}
+        label={
+          <LabelWithHint
+            label={tSidebar("harness")}
+            hint={tSidebar("harnessHint")}
+          />
+        }
         trailing={
           harnessUpdates > 0 && <HarnessUpdatesBadge count={harnessUpdates} />
         }

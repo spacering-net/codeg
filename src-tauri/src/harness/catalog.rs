@@ -132,7 +132,7 @@ pub(crate) fn validate_sha256(sha256: &str) -> Result<&str, HarnessError> {
 pub struct ListQuery {
     /// Search text. Without it the catalog is browsed in `sort` order.
     pub q: Option<String>,
-    /// `skill`, `mcp`, `prompt` or `assistant`.
+    /// `skill`, `mcp`, `prompt`, `assistant` or `plugin`.
     pub kind: Option<String>,
     pub tag: Option<String>,
     pub runtime: Option<String>,

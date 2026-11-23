@@ -2298,6 +2298,7 @@
       "forge": "仓库面板",
       "canvas": "无限画布",
       "harness": "驾驭工程",
+      "harnessHint": "技能 · MCP",
       "folderGroup": {
         "newGroup": "新建分组",
         "newGroupTitle": "新建文件夹分组",
@@ -7615,7 +7616,8 @@
         "skill": "技能",
         "mcp": "MCP",
         "prompt": "提示词",
-        "assistant": "助手"
+        "assistant": "助手",
+        "plugin": "插件"
       },
       "kind": {
         "skill": "技能",
@@ -7904,8 +7906,8 @@
       },
       "hero": {
         "title": "为你的智能体找到<accent>新能力</accent>",
-        "subtitle": "{count, number} 个社区技能、MCP 服务、提示词与助手，安装一次，多个智能体都能用",
-        "subtitleNoCount": "社区技能、MCP 服务、提示词与助手，安装一次，多个智能体都能用"
+        "subtitle": "{count, number} 个社区技能、插件、MCP 服务、提示词与助手，安装一次，多个智能体都能用",
+        "subtitleNoCount": "社区技能、插件、MCP 服务、提示词与助手，安装一次，多个智能体都能用"
       },
       "layout": {
         "label": "布局",

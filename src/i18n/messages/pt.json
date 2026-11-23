@@ -2298,6 +2298,7 @@
       "forge": "Painel do repositório",
       "canvas": "Canvas infinito",
       "harness": "Engenharia de harness",
+      "harnessHint": "Habilidades · MCP",
       "folderGroup": {
         "newGroup": "Novo grupo",
         "newGroupTitle": "Novo grupo de pastas",
@@ -7615,7 +7616,8 @@
         "skill": "Habilidades",
         "mcp": "MCP",
         "prompt": "Prompts",
-        "assistant": "Assistentes"
+        "assistant": "Assistentes",
+        "plugin": "Plugins"
       },
       "kind": {
         "skill": "Habilidade",
@@ -7904,8 +7906,8 @@
       },
       "hero": {
         "title": "Encontre <accent>novas capacidades</accent> para seus agentes",
-        "subtitle": "{count, number} habilidades, servidores MCP, prompts e assistentes da comunidade — instale uma vez e use em seus agentes",
-        "subtitleNoCount": "Habilidades, servidores MCP, prompts e assistentes da comunidade — instale uma vez e use em seus agentes"
+        "subtitle": "{count, number} habilidades, plugins, servidores MCP, prompts e assistentes da comunidade — instale uma vez e use em seus agentes",
+        "subtitleNoCount": "Habilidades, plugins, servidores MCP, prompts e assistentes da comunidade — instale uma vez e use em seus agentes"
       },
       "layout": {
         "label": "Layout",
