@@ -8299,26 +8299,30 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     teardownAttachSubscription,
   ])
 
-  // Selector setters still in flight per contextKey. A setter's IPC returns
-  // once its command is enqueued on the connection, and the prompt goes
-  // through the same queue — so a prompt issued after every earlier setter's
-  // IPC returned runs with what the composer showed (codeg#1179). Setters are
-  // issued at once, as before; the row records whatever the session ends up
-  // running with.
-  const inflightSettersRef = useRef(new Map<string, Set<Promise<unknown>>>())
+  // The newest setter still in flight per contextKey and selector. A
+  // setter's IPC returns once its command is enqueued on the connection, and
+  // the prompt goes through the same queue — so a prompt issued after the
+  // newest pick of every selector was enqueued runs with what the composer
+  // showed (codeg#1179). Only the NEWEST per selector is waited for: waiting
+  // for a superseded one too would hold the prompt until that stale request
+  // landed. Setters are issued at once, as before; the row records whatever
+  // the session ends up running with.
+  const inflightSettersRef = useRef(
+    new Map<string, Map<string, Promise<unknown>>>()
+  )
   const trackSetter = useCallback(
-    <T,>(contextKey: string, p: Promise<T>): Promise<T> => {
-      let set = inflightSettersRef.current.get(contextKey)
-      if (!set) {
-        set = new Set()
-        inflightSettersRef.current.set(contextKey, set)
+    <T,>(contextKey: string, selector: string, p: Promise<T>): Promise<T> => {
+      let bySelector = inflightSettersRef.current.get(contextKey)
+      if (!bySelector) {
+        bySelector = new Map()
+        inflightSettersRef.current.set(contextKey, bySelector)
       }
       const tracked = p.finally(() => {
         const cur = inflightSettersRef.current.get(contextKey)
-        cur?.delete(tracked)
+        if (cur?.get(selector) === tracked) cur.delete(selector)
         if (cur && cur.size === 0) inflightSettersRef.current.delete(contextKey)
       })
-      set.add(tracked)
+      bySelector.set(selector, tracked)
       return tracked
     },
     []
@@ -8336,7 +8340,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
     ) => {
       // Cut-off taken synchronously: only the setters already in flight.
       const pendingSetters = [
-        ...(inflightSettersRef.current.get(contextKey) ?? []),
+        ...(inflightSettersRef.current.get(contextKey)?.values() ?? []),
       ]
       if (pendingSetters.length > 0) {
         await Promise.allSettled(pendingSetters)
@@ -8374,7 +8378,11 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       const conn = storeRef.current.connections.get(contextKey)
       if (!conn) return
       lastActivityRef.current.set(contextKey, Date.now())
-      await trackSetter(contextKey, acpSetMode(conn.connectionId, modeId))
+      await trackSetter(
+        contextKey,
+        "mode",
+        acpSetMode(conn.connectionId, modeId)
+      )
     },
     [trackSetter]
   )
@@ -8403,6 +8411,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       lastActivityRef.current.set(contextKey, Date.now())
       await trackSetter(
         contextKey,
+        `config:${configId}`,
         acpSetConfigOption(conn.connectionId, configId, valueId)
       )
     },
