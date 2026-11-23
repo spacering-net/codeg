@@ -111,6 +111,11 @@ pub struct WorkTaskInfo {
     /// `latest_progress`, from the generation's open `background_wait` event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_wait: Option<WorkTaskBackgroundWait>,
+    /// The bound conversation's own model / options, as the next rerun will
+    /// run them (codeg#1179) — stamped only on a single-task fetch
+    /// (`work_task_get`), absent on lists and on a task with no conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_selection: Option<WorkTaskConversationSelection>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
@@ -253,6 +258,22 @@ pub struct WorkTaskConfig {
     /// it from a client payload.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub agent_config_frozen: bool,
+}
+
+/// What [`WorkTaskInfo::conversation_selection`] reports.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkTaskConversationSelection {
+    pub conversation_id: i32,
+    /// The conversation's agent (a task with a conversation keeps it).
+    pub agent_type: String,
+    /// Config option values (model, effort, …) by option id.
+    pub config_values: std::collections::BTreeMap<String, String>,
+    /// The conversation predates stored selections: these are what its next
+    /// connect would replay once and then keep.
+    pub legacy: bool,
+    /// A legacy task whose agent was changed while bound: its next run starts
+    /// a new conversation with the task's own tuple instead.
+    pub replaces_conversation: bool,
 }
 
 /// The one recognized [`WorkTaskConfig::deliverable`] value.

@@ -114,6 +114,7 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
         latest_progress: None,
         compacting: false,
         background_wait: None,
+        conversation_selection: None,
         created_at: m.created_at,
         updated_at: m.updated_at,
         started_at: m.started_at,
@@ -640,6 +641,82 @@ pub async fn freeze_agent_config<C: ConnectionTrait>(
     Ok(())
 }
 
+/// Overwrite a config JSON's selector tuple and marker with `chosen`'s,
+/// leaving every other key (including ones this build does not know) as is.
+fn write_selector_tuple(config: &mut serde_json::Value, chosen: &WorkTaskConfig) {
+    let Some(obj) = config.as_object_mut() else {
+        return;
+    };
+    let tuple = serde_json::json!({
+        "agent_type": chosen.agent_type,
+        "mode_id": chosen.mode_id,
+        "config_values": chosen.config_values,
+        "label_snapshot": chosen.label_snapshot,
+    });
+    for (k, v) in tuple.as_object().into_iter().flatten() {
+        obj.insert(k.clone(), v.clone());
+    }
+    if chosen.agent_config_frozen {
+        obj.insert("agent_config_frozen".into(), serde_json::Value::Bool(true));
+    } else {
+        obj.remove("agent_config_frozen");
+    }
+}
+
+/// A draft's config with its selector tuple frozen (see
+/// [`freeze_agent_config`]): what every create path stores.
+pub async fn frozen_draft_config<C: ConnectionTrait>(
+    conn: &C,
+    folder_id: i32,
+    config: &serde_json::Value,
+) -> Result<serde_json::Value, DbError> {
+    let mut cfg = parse_config(config);
+    if cfg.agent_config_frozen {
+        return Ok(config.clone());
+    }
+    freeze_agent_config(conn, folder_id, &mut cfg).await?;
+    let mut out = config.clone();
+    write_selector_tuple(&mut out, &cfg);
+    Ok(out)
+}
+
+/// A launch's config: a frozen one as stored; a legacy one resolved now and
+/// written back frozen, guarded on the row still holding the config text,
+/// status and generation the launch read. `Ok(None)` = that write lost to a
+/// concurrent cancel / edit: abandon the launch. Nothing resolvable leaves
+/// the legacy config as is (today's "no agent configured" failure follows).
+pub async fn backfill_frozen_config(
+    conn: &DatabaseConnection,
+    task: &work_task::Model,
+) -> Result<Option<WorkTaskConfig>, DbError> {
+    let cfg: WorkTaskConfig = serde_json::from_str(&task.config).unwrap_or_default();
+    if cfg.agent_config_frozen {
+        return Ok(Some(cfg));
+    }
+    let original: serde_json::Value =
+        serde_json::from_str(&task.config).unwrap_or(serde_json::Value::Null);
+    let frozen_json = frozen_draft_config(conn, task.folder_id, &original).await?;
+    let frozen = parse_config(&frozen_json);
+    if frozen.agent_type.is_none() {
+        return Ok(Some(cfg));
+    }
+    let text = serde_json::to_string(&frozen_json)
+        .map_err(|e| DbError::Validation(format!("config not serializable: {e}")))?;
+    let res = work_task::Entity::update_many()
+        .col_expr(work_task::Column::Config, Expr::value(text))
+        .filter(work_task::Column::Id.eq(task.id))
+        .filter(work_task::Column::Config.eq(task.config.clone()))
+        .filter(work_task::Column::Status.eq(task.status.clone()))
+        .filter(work_task::Column::RunSeq.eq(task.run_seq))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(conn)
+        .await?;
+    if res.rows_affected != 1 {
+        return Ok(None);
+    }
+    Ok(Some(frozen))
+}
+
 /// The selector part of a task config, for "did the client change it?"
 fn selector_tuple(cfg: &WorkTaskConfig) -> AgentTuple {
     (
@@ -683,6 +760,10 @@ pub async fn create(
             "tasks must target a project folder, not a worktree".into(),
         ));
     }
+    // Fixed at creation: the task runs with this tuple, never with whatever
+    // the folder's task settings say at a later launch.
+    let mut draft = draft;
+    draft.config = frozen_draft_config(conn, draft.folder_id, &draft.config).await?;
     let config_str = serde_json::to_string(&draft.config)
         .map_err(|e| DbError::Validation(format!("config not serializable: {e}")))?;
     let now = Utc::now();
@@ -769,6 +850,9 @@ pub async fn create_from_forge_by(
             "tasks must target a project folder, not a worktree".into(),
         ));
     }
+    // Frozen at creation, read OUTSIDE the insert-first dedup transaction.
+    let mut draft = draft;
+    draft.config = frozen_draft_config(conn, draft.folder_id, &draft.config).await?;
     let config_str = serde_json::to_string(&draft.config)
         .map_err(|e| DbError::Validation(format!("config not serializable: {e}")))?;
     let now = Utc::now();
@@ -1092,17 +1176,121 @@ async fn insert_todo_row<C: ConnectionTrait>(
 /// Edit title/config. Only meaningful outside an active run: allowed in
 /// todo / failed / canceled. Moving to another folder is allowed only for a
 /// pristine todo (no worktree minted yet).
+/// How an edit treats the task's selector tuple (agent / mode / options).
+/// Both default to `false`, which is what an older client sends.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkTaskUpdateFlags {
+    /// The editor's selectors were not touched: keep the CURRENT row's tuple
+    /// and marker, whatever the (possibly stale) dialog sent.
+    #[serde(default)]
+    pub selection_untouched: bool,
+    /// "Back to task settings": resolve the folder's task settings NOW and
+    /// freeze that.
+    #[serde(default)]
+    pub selection_reset: bool,
+}
+
 pub async fn update(
     conn: &DatabaseConnection,
     id: i32,
     draft: WorkTaskDraft,
 ) -> Result<WorkTaskInfo, DbError> {
+    update_with(conn, id, draft, WorkTaskUpdateFlags::default()).await
+}
+
+/// The JSON keys of a config's selector tuple; the rest is the work order.
+const SELECTOR_KEYS: [&str; 5] = [
+    "agent_type",
+    "mode_id",
+    "config_values",
+    "label_snapshot",
+    "agent_config_frozen",
+];
+
+/// A config's work order, without its selector tuple — for "did a review
+/// edit change anything but the selection?".
+fn work_order_part(config: &serde_json::Value) -> serde_json::Value {
+    let mut v = config.clone();
+    if let Some(obj) = v.as_object_mut() {
+        for k in SELECTOR_KEYS {
+            obj.remove(k);
+        }
+    }
+    v
+}
+
+/// Edit a task. The selector tuple is merged server-side (codeg#1179):
+///
+/// - a task that already has a conversation keeps its AGENT — any edit that
+///   would change it is rejected — and its tuple is kept verbatim: its model
+///   and options are changed in that conversation, and a rerun continues it
+///   with the conversation's own selection. The exception is a legacy task
+///   whose agent was changed while bound (its conversation runs another
+///   agent): its next run starts a new conversation with the task's tuple, so
+///   deliberate tuple edits ARE kept (agent still locked), also as a
+///   selector-only edit while the task is in review;
+/// - otherwise an untouched selection, the same tuple, or an ambiguous
+///   `agent_type: null` without a reset keeps the CURRENT tuple and marker;
+///   a reset resolves the folder's task settings now; any other tuple is an
+///   explicit change. Every outcome is frozen — no edit ever re-inherits.
+///
+/// The marker is never taken from the payload. Read and written in one
+/// write-first transaction.
+pub async fn update_with(
+    conn: &DatabaseConnection,
+    id: i32,
+    draft: WorkTaskDraft,
+    flags: WorkTaskUpdateFlags,
+) -> Result<WorkTaskInfo, DbError> {
     validate_draft(&draft)?;
-    let row = get_model(conn, id).await?;
-    if !matches!(
+    let txn = conn.begin().await?;
+    // Write first: claim the writer lock before reading (see
+    // `persist_fork_outcome` for why a read-first transaction can fail).
+    work_task::Entity::update_many()
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .exec(&txn)
+        .await?;
+    let row = work_task::Entity::find_by_id(id)
+        .one(&txn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("work task {id}")))?;
+
+    let current: WorkTaskConfig = serde_json::from_str(&row.config).unwrap_or_default();
+    let incoming = parse_config(&draft.config);
+    let conv_agent = match row.conversation_id {
+        Some(cid) => crate::db::entities::conversation::Entity::find_by_id(cid)
+            .one(&txn)
+            .await?
+            .map(|c| c.agent_type),
+        None => None,
+    };
+    let bound = conv_agent.is_some();
+    let (current_agent, _, _) = resolve_agent_config(&txn, row.folder_id, &current).await?;
+    // A legacy task whose agent was changed while bound: its conversation
+    // runs another agent, so its next run replaces the conversation.
+    let mismatched = bound && current_agent.is_some() && current_agent != conv_agent;
+    let locked_agent = if mismatched {
+        current_agent.clone()
+    } else {
+        conv_agent.clone()
+    };
+
+    let editable = matches!(
         row.status,
         WorkTaskStatus::Todo | WorkTaskStatus::Failed | WorkTaskStatus::Canceled
-    ) {
+    );
+    let selector_only_review_edit = row.status == WorkTaskStatus::Review
+        && mismatched
+        && draft.folder_id == row.folder_id
+        && draft.title.trim() == row.title
+        && work_order_part(&draft.config)
+            == work_order_part(
+                &serde_json::from_str::<serde_json::Value>(&row.config)
+                    .unwrap_or(serde_json::Value::Null),
+            );
+    if !editable && !selector_only_review_edit {
         return Err(DbError::Validation(
             "only todo, failed, or canceled tasks can be edited".into(),
         ));
@@ -1123,6 +1311,41 @@ pub async fn update(
             "a forge-sourced task cannot move to another folder; trigger it again from the issue instead".into(),
         ));
     }
+
+    // The tuple the edit asks for, if it asks for one at all.
+    let requested: Option<WorkTaskConfig> = if flags.selection_untouched {
+        None
+    } else if flags.selection_reset {
+        let mut reset = WorkTaskConfig::default();
+        freeze_agent_config(&txn, draft.folder_id, &mut reset).await?;
+        Some(reset)
+    } else if selector_tuple(&incoming) == selector_tuple(&current) {
+        None
+    } else if incoming.agent_type.is_none() {
+        // Ambiguous: an older client's untouched save, possibly from a dialog
+        // opened before the task froze. Never a silent re-inherit.
+        None
+    } else {
+        let mut explicit = incoming.clone();
+        explicit.agent_config_frozen = true;
+        Some(explicit)
+    };
+    if bound {
+        if let Some(req) = requested.as_ref() {
+            if req.agent_type.is_some() && req.agent_type != locked_agent {
+                return Err(DbError::Validation(
+                    "this task already has a conversation — its agent can't be changed".into(),
+                ));
+            }
+        }
+    }
+    // What is stored: the requested tuple where an edit may change it, the
+    // current one otherwise.
+    let chosen: WorkTaskConfig = match requested {
+        Some(req) if !bound || mismatched => req,
+        _ => current.clone(),
+    };
+
     // `deliverable` is trigger-owned (a forge scenario stamps it; no editor
     // shows or edits it), and the dialog rebuilds the config from its own
     // fields — so an ABSENT key on an edit means "the client never knew",
@@ -1142,6 +1365,7 @@ pub async fn update(
             }
         }
     }
+    write_selector_tuple(&mut config, &chosen);
     let config_str = serde_json::to_string(&config)
         .map_err(|e| DbError::Validation(format!("config not serializable: {e}")))?;
     let mut active = row.into_active_model();
@@ -1149,7 +1373,9 @@ pub async fn update(
     active.title = Set(draft.title.trim().to_string());
     active.config = Set(config_str);
     active.updated_at = Set(Utc::now());
-    Ok(to_info(active.update(conn).await?))
+    let updated = active.update(&txn).await?;
+    txn.commit().await?;
+    Ok(to_info(updated))
 }
 
 /// Soft-delete, guarded on the status the caller validated.
@@ -1820,6 +2046,11 @@ pub async fn mark_preparing_live(
     conversation_id: i32,
     connection_id: &str,
 ) -> Result<bool, DbError> {
+    let txn = conn.begin().await?;
+    if !claim_binding(&txn, id, run_seq, WorkTaskStatus::Preparing, conversation_id).await? {
+        txn.rollback().await?;
+        return Ok(false);
+    }
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::ConversationId,
@@ -1834,9 +2065,81 @@ pub async fn mark_preparing_live(
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Preparing))
         .filter(work_task::Column::RunSeq.eq(run_seq))
         .filter(work_task::Column::DeletedAt.is_null())
-        .exec(conn)
+        .exec(&txn)
         .await?;
+    txn.commit().await?;
     Ok(res.rows_affected == 1)
+}
+
+/// The first statement of a binding CAS (`mark_preparing_live` /
+/// `mark_running` / `mark_merging_live`): a write that claims the row for
+/// this generation (write-first, see `persist_fork_outcome`), then — when the
+/// binding is about to REPLACE the task's conversation — freeze the outgoing
+/// one's selection in the same transaction. Returns `false` when the
+/// generation lost.
+async fn claim_binding<C: ConnectionTrait>(
+    txn: &C,
+    id: i32,
+    run_seq: i32,
+    status: WorkTaskStatus,
+    new_conversation_id: i32,
+) -> Result<bool, DbError> {
+    let claimed = work_task::Entity::update_many()
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(status))
+        .filter(work_task::Column::RunSeq.eq(run_seq))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(txn)
+        .await?;
+    if claimed.rows_affected != 1 {
+        return Ok(false);
+    }
+    if let Some(task) = work_task::Entity::find_by_id(id).one(txn).await? {
+        freeze_outgoing_task_conversation(txn, &task, new_conversation_id).await?;
+    }
+    Ok(true)
+}
+
+/// A task's conversation is being replaced (resume fallback, legacy agent
+/// mismatch): give the outgoing conversation a selection of its own if it has
+/// none, so reopening it never applies the new-conversation default — the
+/// task's tuple when it names that conversation's agent, else an empty one
+/// (replay nothing; the agent's restored selection is kept at its next bind).
+pub async fn freeze_outgoing_task_conversation<C: ConnectionTrait>(
+    txn: &C,
+    task: &work_task::Model,
+    new_conversation_id: i32,
+) -> Result<(), DbError> {
+    let Some(old) = task
+        .conversation_id
+        .filter(|old| *old != new_conversation_id)
+    else {
+        return Ok(());
+    };
+    let Some(conv) = crate::db::entities::conversation::Entity::find_by_id(old)
+        .one(txn)
+        .await?
+    else {
+        return Ok(());
+    };
+    if conv.selector_state.is_some() {
+        return Ok(());
+    }
+    let cfg: WorkTaskConfig = serde_json::from_str(&task.config).unwrap_or_default();
+    let (agent, mode_id, config_values) = resolve_agent_config(txn, task.folder_id, &cfg).await?;
+    let selection = if agent.as_deref() == Some(conv.agent_type.as_str()) {
+        crate::models::ConversationSelection {
+            mode_id,
+            composer_mode_id: None,
+            config_values,
+        }
+    } else {
+        crate::models::ConversationSelection::default()
+    };
+    crate::db::service::conversation_service::set_selector_state_if_absent(txn, old, &selection)
+        .await?;
+    Ok(())
 }
 
 /// preparing → running for the given generation; binds conversation +
@@ -1850,6 +2153,10 @@ pub async fn mark_running(
 ) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
+    if !claim_binding(&txn, id, run_seq, WorkTaskStatus::Preparing, conversation_id).await? {
+        txn.rollback().await?;
+        return Ok(false);
+    }
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Status,
@@ -1898,6 +2205,11 @@ pub async fn mark_merging_live(
     conversation_id: i32,
     connection_id: &str,
 ) -> Result<bool, DbError> {
+    let txn = conn.begin().await?;
+    if !claim_binding(&txn, id, run_seq, WorkTaskStatus::Merging, conversation_id).await? {
+        txn.rollback().await?;
+        return Ok(false);
+    }
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::ConversationId,
@@ -1912,8 +2224,9 @@ pub async fn mark_merging_live(
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Merging))
         .filter(work_task::Column::RunSeq.eq(run_seq))
         .filter(work_task::Column::DeletedAt.is_null())
-        .exec(conn)
+        .exec(&txn)
         .await?;
+    txn.commit().await?;
     Ok(res.rows_affected == 1)
 }
 

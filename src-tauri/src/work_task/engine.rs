@@ -1298,14 +1298,26 @@ impl TaskEngine {
             .await
             .map_err(|e| e.to_string())?;
 
-        // Effective agent + config: task override > folder task settings >
-        // folder default agent. Audited via a config_effective event (values
-        // are inherited live, never frozen).
-        let cfg: WorkTaskConfig =
-            serde_json::from_str(&task.config).unwrap_or_default();
+        // Effective agent + config: the task's own tuple, fixed when it was
+        // created or explicitly edited (codeg#1179). A task from before that
+        // (`agent_config_frozen == false`) is resolved once here — task
+        // override > folder task settings > folder default agent — and
+        // written back frozen under a generation guard; losing that write to a
+        // concurrent cancel / edit abandons this launch (the next claim
+        // re-reads). Audited via a config_effective event.
         let settings = work_task_service::settings_get_effective(&self.db.conn, task.folder_id)
             .await
             .unwrap_or_default();
+        let cfg: WorkTaskConfig = match work_task_service::backfill_frozen_config(
+            &self.db.conn,
+            &task,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        {
+            Some(cfg) => cfg,
+            None => return Ok(()),
+        };
         let (agent_str, mode_id, config_values) = effective_agent_config(&cfg, &settings, &root);
         let agent_str = agent_str.ok_or_else(|| {
             "no agent configured: set a task agent or a folder default".to_string()
@@ -1395,8 +1407,12 @@ impl TaskEngine {
             emit_folder_upsert(&self.emitter, detail);
         }
 
-        // Resume the previous session for retry/return/merge when we have one.
-        let resume_session_id = match mode {
+        // Resume the previous session for retry/return/merge when we have one
+        // — only when it runs the task's agent: a legacy task whose agent was
+        // changed while bound keeps its launch mode but starts a new
+        // conversation (the `resumed = false` fallback composes the full
+        // prompt), leaving the old one intact.
+        let previous_conversation = match mode {
             LaunchMode::Fresh => None,
             LaunchMode::Retry | LaunchMode::Return { .. } | LaunchMode::Merge { .. } => {
                 match task.conversation_id {
@@ -1404,11 +1420,53 @@ impl TaskEngine {
                         .one(&self.db.conn)
                         .await
                         .ok()
-                        .flatten()
-                        .and_then(|c| c.external_id),
+                        .flatten(),
                     None => None,
                 }
             }
+        };
+        let agent_matches_previous = previous_conversation
+            .as_ref()
+            .is_some_and(|c| c.agent_type == agent_str);
+        if let Some(prev) = previous_conversation.as_ref().filter(|_| !agent_matches_previous) {
+            // Replacing it: never under a turn the user can see running in a
+            // tab. Retryable — the user stops it, then retries.
+            if let Some(live) = self.manager.find_connection_by_conversation_id(prev.id).await {
+                if let Some(state) = self.manager.get_state(&live).await {
+                    if state.read().await.turn_in_flight {
+                        return Err("the task's previous conversation is still running in a \
+                                    tab — stop it, then retry"
+                            .to_string());
+                    }
+                }
+            }
+        }
+        let resume_session_id = previous_conversation
+            .as_ref()
+            .filter(|_| agent_matches_previous)
+            .and_then(|c| c.external_id.clone());
+        // A rerun continues the SAME conversation with the conversation's own
+        // selection — the task's starting tuple plus every pick made in it
+        // since (a legacy row with none falls back to the task's tuple). A
+        // reused live connection already runs it and is left as is.
+        let resume_selection = match previous_conversation.as_ref().filter(|_| agent_matches_previous) {
+            Some(prev) => Some(
+                crate::commands::acp::resolve_connect_selection(
+                    &self.db.conn,
+                    &self.manager,
+                    agent_type,
+                    Some(prev.id),
+                    resume_session_id.as_deref(),
+                    mode_id.clone(),
+                    config_values.clone(),
+                )
+                .await,
+            ),
+            None => None,
+        };
+        let (spawn_mode_id, spawn_config_values) = match resume_selection.as_ref() {
+            Some(sel) => (sel.mode_id.clone(), sel.config_values.clone()),
+            None => (mode_id.clone(), config_values.clone()),
         };
 
         let runtime_env =
@@ -1434,8 +1492,8 @@ impl TaskEngine {
                 runtime_env.clone(),
                 "work_task".to_string(),
                 self.emitter.clone(),
-                mode_id.clone(),
-                config_values.clone(),
+                spawn_mode_id.clone(),
+                spawn_config_values.clone(),
             )
             .await
         {
@@ -1454,6 +1512,9 @@ impl TaskEngine {
                 )
                 .await;
                 resumed = false;
+                // The new conversation starts from the old one's selection
+                // (its stored one, else the task's tuple — what
+                // `resume_selection` resolved).
                 self.manager
                     .spawn_agent(
                         agent_type,
@@ -1462,8 +1523,8 @@ impl TaskEngine {
                         runtime_env,
                         "work_task".to_string(),
                         self.emitter.clone(),
-                        mode_id.clone(),
-                        config_values.clone(),
+                        spawn_mode_id.clone(),
+                        spawn_config_values.clone(),
                     )
                     .await
                     .map_err(|e| e.to_string())?
@@ -1474,7 +1535,20 @@ impl TaskEngine {
         // Conversation row: reuse when resuming the same session; otherwise a
         // fresh row (fresh runs and resume fallbacks).
         let conversation_id = if resumed {
-            task.conversation_id.expect("resumed implies conversation")
+            let cid = task.conversation_id.expect("resumed implies conversation");
+            // Persist this connection's selection onto the row from now on
+            // (idempotent for a reused connection that already owns it).
+            let composer = resume_selection.as_ref().and_then(|s| s.composer_mode_id.clone());
+            if let Err(e) = self
+                .manager
+                .bind_selection_conversation(&conn_id, cid, composer)
+                .await
+            {
+                tracing::warn!(
+                    "[work_task] task {task_id}: could not bind conversation {cid} selection: {e}"
+                );
+            }
+            cid
         } else {
             let title = conversation_title_for_task(&task.title);
             let id = match create_conversation_core(
@@ -7694,23 +7768,19 @@ fn chosen_base_branch(task: &crate::db::entities::work_task::Model) -> Option<St
 
 /// Layered agent config: task override wins wholesale; else the folder's task
 /// settings; else the folder's default agent with no extra options.
+///
+/// A frozen config is the task's own and is used verbatim (possibly with no
+/// agent); only a legacy one is layered.
 fn effective_agent_config(
     cfg: &WorkTaskConfig,
     settings: &WorkTaskFolderSettings,
     root: &crate::models::FolderDetail,
-) -> (
-    Option<String>,
-    Option<String>,
-    std::collections::BTreeMap<String, String>,
-) {
-    if let Some(agent) = cfg.agent_type.clone() {
-        return (Some(agent), cfg.mode_id.clone(), cfg.config_values.clone());
-    }
-    if let Some(agent) = settings.default_agent_type.clone() {
+) -> work_task_service::AgentTuple {
+    if cfg.agent_config_frozen {
         return (
-            Some(agent),
-            settings.mode_id.clone(),
-            settings.config_values.clone(),
+            cfg.agent_type.clone(),
+            cfg.mode_id.clone(),
+            cfg.config_values.clone(),
         );
     }
     let folder_default = root
@@ -7718,11 +7788,7 @@ fn effective_agent_config(
         .as_ref()
         .and_then(|a| serde_json::to_value(a).ok())
         .and_then(|v| v.as_str().map(String::from));
-    (
-        folder_default,
-        settings.mode_id.clone(),
-        settings.config_values.clone(),
-    )
+    work_task_service::layer_agent_config(cfg, settings, folder_default)
 }
 
 /// Compose the prompt for a launch mode. Fresh runs replay the task's blocks.

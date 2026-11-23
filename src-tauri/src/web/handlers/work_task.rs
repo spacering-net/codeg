@@ -47,6 +47,11 @@ pub struct CreateParams {
 pub struct UpdateParams {
     pub id: i32,
     pub draft: WorkTaskDraft,
+    /// See `work_task_service::WorkTaskUpdateFlags`; older clients omit both.
+    #[serde(default)]
+    pub selection_untouched: bool,
+    #[serde(default)]
+    pub selection_reset: bool,
 }
 
 #[derive(Deserialize)]
@@ -287,6 +292,10 @@ pub async fn work_task_update(
         &state.chat_channel_manager,
         params.id,
         params.draft,
+        crate::db::service::work_task_service::WorkTaskUpdateFlags {
+            selection_untouched: params.selection_untouched,
+            selection_reset: params.selection_reset,
+        },
     )
     .await
     .map_err(AppCommandError::from)?;
