@@ -11,14 +11,14 @@
  * every assistant shares are a button in the window chrome, by the panel's
  * toggle, and what acts on the assistant itself — the session underneath,
  * compacting, a new session — is in the "⋯" by its face on the panel. The
- * roster stands beside the conversation only when the owner keeps it shown.
- * The sessions it reaches — its own, and those of the work it handed out —
+ * assistants are listed on the workspace's sidebar ("Personal assistants");
+ * the capsule lists them too, for a collapsed sidebar or a phone. The
+ * sessions it reaches — its own, and those of the work it handed out —
  * open in a drawer on the right, over the page.
  *
  * In place of the conversation, two pages, the side panel standing aside
- * while either is open: the assistant's own page, the roster (when shown)
- * kept beside it, and the settings every assistant shares, across the whole
- * page.
+ * while either is open: the assistant's own page, and the preferences every
+ * assistant shares, across the whole page.
  *
  * Switching assistants: the capsule names the one picked at once, a
  * spinner for its chevron, while the page goes on showing the last one —
@@ -105,7 +105,6 @@ import {
   useRosterUpkeep,
   type RosterDialogs,
 } from "./roster"
-import { useRosterShown } from "./roster-resize"
 import { PersonalAgentComposer } from "./composer"
 import { usePersonalAgentAttachment } from "./live-turn"
 import { MessageList } from "./message-list"
@@ -429,7 +428,6 @@ export function PersonalAgentPage() {
   // The roster's upkeep, drawn or not; drawn as a column only when the
   // owner keeps it shown (the title's capsule lists them either way).
   useRosterUpkeep(readOnly)
-  const [rosterShown] = useRosterShown()
   const agentName = agent?.name?.trim() || t("title")
   // Its face's colour, which the owner's bubbles take; with "follow the
   // assistant's colour" on, the theme's colour in its conversation too
@@ -531,9 +529,6 @@ export function PersonalAgentPage() {
   ) : (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex min-h-0 flex-1">
-        {isMobile || !rosterShown ? null : (
-          <PersonalAgentRoster variant="column" readOnly={readOnly} />
-        )}
         {botPageOpen ? (
           <div className="flex min-w-0 flex-1 flex-col">
             <BotPage />
@@ -547,9 +542,6 @@ export function PersonalAgentPage() {
               (accent === "bot" && faceColor != null) || undefined
             }
           >
-            {isMobile && rosterShown ? (
-              <PersonalAgentRoster variant="strip" readOnly={readOnly} />
-            ) : null}
             {readOnly || workOff ? (
               <div className="mx-auto flex w-full chat-content-w shrink-0 flex-col gap-1 px-4 pt-2">
                 {readOnly ? (

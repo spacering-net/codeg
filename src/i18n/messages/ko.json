@@ -2377,7 +2377,8 @@
       "recentFilterMenuLabel": "최근 항목 표시",
       "personalAgent": "개인 에이전트",
       "personalAgentUnreadBots": "읽지 않은 메시지가 있는 어시스턴트 {count}명",
-      "personalAgentBadge": "개인 에이전트가 배정함"
+      "personalAgentBadge": "개인 에이전트가 배정함",
+      "sectionAssistants": "개인 에이전트"
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",
@@ -11277,8 +11278,6 @@
         "add": "새 어시스턴트",
         "pinned": "고정됨",
         "others": "기타",
-        "hiddenCount": "{count}명 숨김",
-        "hideHidden": "접기",
         "muted": "음소거됨",
         "handWork": "맡은 일",
         "awaiting": "답장 대기 중",
@@ -11314,10 +11313,13 @@
         "resize": "어시스턴트 목록 너비 조정",
         "dropNewGroup": "여기에 놓아 새 그룹 만들기",
         "switch": "어시스턴트 전환",
-        "showColumn": "사이드바에 표시",
-        "sidebar": "사이드바",
         "addShort": "새 어시스턴트",
-        "opening": "{name} 여는 중…"
+        "opening": "{name} 여는 중…",
+        "noBrainLine": "메인 어시스턴트를 설정하면 대화할 수 있어요",
+        "hiddenMark": "숨김",
+        "setUpPrimary": "메인 어시스턴트 설정",
+        "filter": "필터",
+        "showHidden": "숨긴 어시스턴트 표시 ({count})"
       },
       "choice": {
         "other": "기타",

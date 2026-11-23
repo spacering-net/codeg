@@ -1084,8 +1084,30 @@ export interface SubsessionLoadingRow {
   recent?: true
 }
 
+/**
+ * The owner's personal assistants, under the "assistants" section header:
+ * one row holding all of them (the roster, drawn whole — a few dozen at
+ * most), so its own groups, its dragging between them and its hover cards
+ * work as one piece; `virtua` measures it like any other row, so it scrolls
+ * with the rest of the list.
+ */
+export interface AssistantsRow {
+  kind: "assistants"
+}
+
+/**
+ * The fully empty workspace's "open a folder" actions — no folders and no
+ * conversations — drawn as a row of the list, under the assistants, so the
+ * way to set the primary assistant up is there from the first start.
+ */
+export interface WorkspaceEmptyRow {
+  kind: "workspace-empty"
+}
+
 export type SidebarRow =
   | SectionHeaderRow
+  | AssistantsRow
+  | WorkspaceEmptyRow
   | FolderGroupHeaderRow
   | GroupEmptyRow
   | FolderHeaderRow
@@ -1323,6 +1345,10 @@ export function buildRows(args: {
    * omitted keeps every folder, as before.
    */
   hideEmptyFolders?: boolean
+  /** The assistants' section: its header's count and whether it is open.
+   *  Optional — omitted (e.g. in tests) emits no assistants rows, matching
+   *  the row model from before them. */
+  assistants?: { expanded: boolean; count: number }
 }): SidebarRow[] {
   const {
     pinned,
@@ -1347,6 +1373,7 @@ export function buildRows(args: {
     layout,
     groupExpanded = EMPTY_GROUP_EXPANDED,
     hideEmptyFolders = false,
+    assistants,
   } = args
   const rows: SidebarRow[] = []
 
@@ -1575,9 +1602,18 @@ export function buildRows(args: {
   // Normalized (not consumed raw) so a truncated / repeated / unknown-entry
   // order can never drop a section off the sidebar or emit one twice.
   for (const section of normalizeSectionOrder(sectionOrder)) {
-    if (section === "folders") pushFolders()
+    if (section === "assistants") {
+      if (!assistants) continue
+      rows.push({
+        kind: "section",
+        section: "assistants",
+        expanded: assistants.expanded,
+        count: assistants.count,
+      })
+      if (assistants.expanded) rows.push({ kind: "assistants" })
+    } else if (section === "folders") pushFolders()
     else if (section === "chats") pushChats()
-    else if (showRecent) pushRecent()
+    else if (section === "recent" && showRecent) pushRecent()
   }
 
   return rows

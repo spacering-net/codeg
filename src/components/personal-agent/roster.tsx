@@ -1,47 +1,43 @@
 "use client"
 
 /**
- * The roster, the assistants page's left column (10.1, 4.14).
+ * The roster (10.1, 4.14): the owner's assistants, as the workspace's
+ * sidebar lists them under "Personal assistants" (`variant="sidebar"`), and
+ * as the page title's capsule opens them in a popover.
  *
- * - On top, the primary: a square tile, its face large with its star, and
- *   its name. What it is up to shows when hovered, with its work in hand.
- * - Then a row each: face, name, one line, a time. The line says first what
+ * - First the primary — or, before it is set up, one row that sets it up —
+ *   then a row each: face, name, one line, a time. The line says first what
  *   the owner should know — what waits on them, what it is doing — and its
  *   last words when nothing does. The face is its state (10.6), the dot in
  *   its corner what it wants of the owner. Hovering shows the whole activity
  *   and the work in hand.
  * - Groups: the pinned ones (in the owner's order), the owner's own groups
  *   (folding), the rest. Within a group: waiting on the owner, working,
- *   idle, done, the most recent first. Each group's name on its rows' faces'
- *   edge; a row's time as short as a chat list has it.
- * - A work assistant's row is dragged onto a group to put it there — among
- *   the pinned ones at the slot it is let go over, in a group of the
- *   owner's, with the rest — or onto "new group" to name one. By the
- *   pointer, not the page's drag and drop: the desktop's webview takes that
- *   for an OS drop and never hands the page its drop.
- * - After them, "N hidden", which opens to show them; at the foot, [+ new
- *   work assistant] as a row is drawn.
- * - One measure for the room: the list as far from the top as the primary's
- *   tile from the list, the rail's tiles as far from the top as from its
- *   sides.
- * - Dragged narrower than its least width, the list folds to a rail of
- *   faces (roster-resize.tsx): the primary's, a rule, the others' in the
- *   list's order; each one's name, line and work in hand when hovered.
+ *   idle, done, the most recent first. A row's time as short as a chat list
+ *   has it.
+ * - An assistant's row is dragged onto a group to put it there — among the
+ *   pinned ones at the slot it is let go over, in a group of the owner's,
+ *   with the rest — or onto "new group" to name one. By the pointer, not the
+ *   page's drag and drop: the desktop's webview takes that for an OS drop
+ *   and never hands the page its drop. The groups and their rows are one
+ *   piece of the sidebar's list, so a group holds its rows.
+ * - The hidden ones (D6) show only when the owner asked for them (the
+ *   filter by the section's title, `roster-filter.ts`): last, faint, with
+ *   their mark, neither dragged nor dropped on — but the one the page shows
+ *   is listed all the same, so it is there to be seen chosen.
+ * - One converted from the collaboration settings before there was a
+ *   primary has no brain yet: its line says it can be talked to once the
+ *   primary is set up.
  * - A row's context menu: its page, pin, move to a group, hide, mute,
  *   mark unread, notifications, copy, stop everything, delete. (Its name
  *   and face are changed on its page, or on the side panel's head.)
  * - Rows come and go by their height (the motion tokens), not at once.
- * - On a narrow screen, a strip of faces over the page.
- * - The column (or the strip) shows only when the owner keeps it shown
- *   (`useRosterShown`): the workspace has its own sidebar. The title's
- *   capsule opens the same list in a popover either way — the primary's
- *   square tile on top as on the column, no dragging, no hover cards — and
- *   at its foot, one row: the switch that shows the column at its start, a
- *   new work assistant at its end.
+ * - The popover: the primary's square tile on top, no dragging, no hover
+ *   cards, the same filter, and [+ new] at its foot.
  *
  * Opening an assistant takes away the owner's own unread mark on it, and
  * one deleted takes the page back to the primary (`useRosterUpkeep`, the
- * page's, shown or not).
+ * page's, drawn or not).
  */
 
 import {
@@ -99,14 +95,13 @@ import {
   HoverCardTrigger,
 } from "@/components/ui/hover-card"
 import { Input } from "@/components/ui/input"
-import { Switch } from "@/components/ui/switch"
 import {
   personalAgentBotCopy,
   personalAgentRosterAct,
   personalAgentStopAll,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
-import type { RosterAct, RosterEntry } from "@/lib/types"
+import type { BotMade, RosterAct, RosterEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { useRoster } from "@/stores/personal-agent-roster-store"
 import { usePrefetchAssistant } from "@/contexts/personal-agent-context"
@@ -128,12 +123,7 @@ import {
   viewOf,
   type BotView,
 } from "./roster-order"
-import {
-  ROSTER_RAIL_WIDTH,
-  RosterResizeHandle,
-  useRosterShown,
-  useRosterWidth,
-} from "./roster-resize"
+import { useShowHiddenAssistants } from "./roster-filter"
 import { useBotName, usePersonaText } from "./shared"
 
 /** How often the roster reads the clock while something on it moves
@@ -444,7 +434,13 @@ async function runActs(id: number, acts: RosterAct[]): Promise<void> {
 
 /** The roster's dialogs — a new assistant, deleting one, naming a group for
  *  one — and the way to open each. */
-export function useRosterDialogs(): { api: RosterDialogs; node: ReactNode } {
+export function useRosterDialogs(
+  opts: {
+    /** A new one made: where it is shown (default: its conversation, on
+     *  the page this is on). */
+    onMade?: (made: BotMade) => void
+  } = {}
+): { api: RosterDialogs; node: ReactNode } {
   const [adding, setAdding] = useState(false)
   const [deleting, setDeleting] = useState<number | null>(null)
   const [grouping, setGrouping] = useState<RosterEntry | null>(null)
@@ -458,7 +454,11 @@ export function useRosterDialogs(): { api: RosterDialogs; node: ReactNode } {
   )
   const node = (
     <>
-      <NewBotDialog open={adding} onOpenChange={setAdding} />
+      <NewBotDialog
+        open={adding}
+        onOpenChange={setAdding}
+        onMade={opts.onMade}
+      />
       <BotDeleteDialog
         botId={deleting}
         onOpenChange={(open) => {
@@ -517,16 +517,20 @@ export function PersonalAgentRoster({
   readOnly,
   dialogs: heldDialogs,
   onPick,
+  active = true,
 }: {
-  /** A column beside the conversation; a strip of faces (a narrow
-   *  screen); or the title capsule's popover. */
-  variant: "column" | "strip" | "popover"
+  /** The sidebar's group of them, or the title capsule's popover. */
+  variant: "sidebar" | "popover"
   readOnly: boolean
-  /** Its dialogs, when what holds it closes before they would (the
-   *  popover); otherwise its own. */
+  /** Its dialogs, when what holds it keeps them (the sidebar's section,
+   *  whose [+] is on its header; the popover, which closes before they
+   *  would); otherwise its own. */
   dialogs?: RosterDialogs
   /** Told when an assistant is opened (its conversation or its page). */
   onPick?: () => void
+  /** Whether the assistants page is what the workspace shows: only then
+   *  is the one it shows marked as chosen. */
+  active?: boolean
 }) {
   const t = useTranslations("PersonalAgent")
   const tt = useActivityTranslate()
@@ -542,7 +546,7 @@ export function PersonalAgentRoster({
   const own = useRosterDialogs()
   const dialogs = heldDialogs ?? own.api
   const popover = variant === "popover"
-  const [showHidden, setShowHidden] = useState(false)
+  const [showHidden] = useShowHiddenAssistants()
   const [folded, toggleFold] = useFolded()
   // A row dragged by the pointer: where it is, and the group under it.
   const [drag, setDrag] = useState<{ id: number; x: number; y: number } | null>(
@@ -563,8 +567,6 @@ export function PersonalAgentRoster({
   // The click a drag ends in is the drop's, not a click on the row.
   const swallowClick = useRef(false)
   const navRef = useRef<HTMLElement | null>(null)
-  const [size, setSize] = useRosterWidth()
-  const [shown, setShown] = useRosterShown()
   const now = useRosterNow(entries)
   const list = useMemo(() => entries ?? [], [entries])
 
@@ -681,7 +683,32 @@ export function PersonalAgentRoster({
       typeof document.elementFromPoint === "function"
         ? (document.elementFromPoint(x, y) as HTMLElement | null)
         : null
-    const zone = el?.closest<HTMLElement>("[data-pa-drop]") ?? null
+    // Under the pointer — or, where the list lets no pointer through (the
+    // sidebar's while it scrolls), by where each group is drawn, within what
+    // the list shows of it (never over what is outside the list).
+    const view = scrollerOf(navRef.current)?.getBoundingClientRect()
+    const inView =
+      !view ||
+      (x >= view.left && x <= view.right && y >= view.top && y <= view.bottom)
+    const zone =
+      el?.closest<HTMLElement>("[data-pa-drop]") ??
+      (inView
+        ? [
+            ...(navRef.current?.querySelectorAll<HTMLElement>(
+              "[data-pa-drop]"
+            ) ?? []),
+          ].find((z) => {
+            const r = z.getBoundingClientRect()
+            return (
+              r.width > 0 &&
+              x >= r.left &&
+              x <= r.right &&
+              y >= r.top &&
+              y <= r.bottom
+            )
+          })
+        : undefined) ??
+      null
     if (!zone || !navRef.current?.contains(zone)) return null
     const key = zone.dataset.paDrop ?? ""
     const group = dropGroupOf(key)
@@ -710,6 +737,32 @@ export function PersonalAgentRoster({
     return { key, group, before }
   }
 
+  // Held at the list's edge with a row: the list goes on scrolling, a step
+  // at a time, the target read again at each step.
+  const lastPointer = useRef<{ x: number; y: number } | null>(null)
+  const edgeTimer = useRef<number | null>(null)
+  const stopEdge = () => {
+    if (edgeTimer.current != null) window.clearInterval(edgeTimer.current)
+    edgeTimer.current = null
+  }
+  const keepScrollingAtEdge = () => {
+    if (edgeTimer.current != null) return
+    edgeTimer.current = window.setInterval(() => {
+      const d = dragRef.current
+      const at = lastPointer.current
+      if (!d || !at || !scrollNearEdge(navRef.current, at.x, at.y)) {
+        stopEdge()
+        return
+      }
+      const next = hitTest(at.x, at.y, d.id)
+      d.target = next
+      setTarget((held) =>
+        held?.key === next?.key && held?.before === next?.before ? held : next
+      )
+    }, EDGE_TICK_MS)
+  }
+  useEffect(() => stopEdge, [])
+
   /** The click the press ends in is the drag's, not a click on the row. */
   const swallowNextClick = () => {
     swallowClick.current = true
@@ -732,6 +785,7 @@ export function PersonalAgentRoster({
     }
     // A press that never moved: its click opens the row.
     if (!d) return
+    stopEdge()
     delete document.documentElement.dataset.paRosterDragging
     setDrag(null)
     setTarget(null)
@@ -767,7 +821,7 @@ export function PersonalAgentRoster({
   /** A work assistant's row, dragged by the pointer onto a group. Not by
    *  touch: a finger on the list scrolls it. */
   const dragHandlers = (b: RosterEntry) =>
-    readOnly || popover || b.kind === "primary"
+    readOnly || popover || b.kind === "primary" || b.roster?.hidden
       ? {}
       : {
           onPointerDown: (e: ReactPointerEvent<HTMLElement>) => {
@@ -800,6 +854,8 @@ export function PersonalAgentRoster({
               document.documentElement.dataset.paRosterDragging = ""
             }
             const d = dragRef.current
+            lastPointer.current = { x: e.clientX, y: e.clientY }
+            keepScrollingAtEdge()
             const next = hitTest(e.clientX, e.clientY, p.id)
             d.target = next
             setDrag({ id: p.id, x: e.clientX, y: e.clientY })
@@ -809,8 +865,16 @@ export function PersonalAgentRoster({
                 : next
             )
           },
-          onPointerUp: (e: ReactPointerEvent<HTMLElement>) =>
-            endDrag(e.pointerId, true),
+          onPointerUp: (e: ReactPointerEvent<HTMLElement>) => {
+            // Where it is let go of, not where it last moved over: the list
+            // may have scrolled under it since.
+            const d = dragRef.current
+            const p = press.current
+            if (d && p && p.pointer === e.pointerId && !p.dropped) {
+              d.target = hitTest(e.clientX, e.clientY, p.id)
+            }
+            endDrag(e.pointerId, true)
+          },
           onPointerCancel: (e: ReactPointerEvent<HTMLElement>) =>
             endDrag(e.pointerId, false),
           onLostPointerCapture: (e: ReactPointerEvent<HTMLElement>) =>
@@ -1049,7 +1113,8 @@ export function PersonalAgentRoster({
             {notify ? <span aria-hidden>✓</span> : null}
           </ContextMenuItem>
           <ContextMenuSeparator />
-          {worker ? (
+          {/* A copy's brain is the primary's: none to copy before it. */}
+          {worker && groups.primary ? (
             <ContextMenuItem disabled={readOnly} onSelect={() => void copy(b)}>
               <Copy aria-hidden />
               {tr("menu.copy")}
@@ -1085,9 +1150,14 @@ export function PersonalAgentRoster({
 
   const row = (b: RosterEntry) => {
     const view = viewOf(b.live, now, b.roster?.unread_mark)
-    const shownLine = shownLineOf(b, view)
+    // One with no brain yet (D3): what it waits for, not what it did.
+    const shownLine: RowLine | null =
+      b.kind === "worker" && !b.has_brain
+        ? { text: tr("noBrainLine"), tone: "plain" }
+        : shownLineOf(b, view)
     const at = b.live?.last_activity_at
-    const isCurrent = b.id === currentId
+    const isCurrent = active && b.id === currentId
+    const hidden = b.roster?.hidden === true
     const line = slotLine(b)
     const lifted = drag?.id === b.id
     const button = (
@@ -1105,11 +1175,13 @@ export function PersonalAgentRoster({
         onFocus={hoverOnly}
         {...dragHandlers(b)}
         {...warmOn(b)}
+        data-pa-roster-hidden={hidden || undefined}
         className={cn(
           "relative flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-start transition-colors",
           isCurrent
             ? "bg-accent text-accent-foreground"
             : "text-foreground/85 hover:bg-muted",
+          hidden && !isCurrent && "opacity-60",
           lifted && "cursor-grabbing opacity-40"
         )}
       >
@@ -1129,6 +1201,12 @@ export function PersonalAgentRoster({
             <span className="min-w-0 flex-1 truncate text-sm">
               {botName(b)}
             </span>
+            {hidden ? (
+              <EyeOff
+                className="size-3 shrink-0 text-muted-foreground"
+                aria-label={tr("hiddenMark")}
+              />
+            ) : null}
             {b.roster?.muted ? (
               <VolumeX
                 className="size-3 shrink-0 text-muted-foreground"
@@ -1169,65 +1247,8 @@ export function PersonalAgentRoster({
     )
   }
 
-  const add = (
-    <Button
-      size="icon-sm"
-      variant="ghost"
-      disabled={readOnly}
-      aria-label={tr("add")}
-      title={tr("add")}
-      onClick={() => dialogs.add()}
-      data-pa-roster-add
-    >
-      <Plus aria-hidden />
-    </Button>
-  )
-
   // Its own dialogs, unless what holds it keeps them.
   const dialogNodes = heldDialogs ? null : own.node
-
-  if (variant === "strip") {
-    const strip = [
-      ...(groups.primary ? [groups.primary] : []),
-      ...groups.pinned,
-      ...groups.sections.flatMap((s) => s.entries),
-      ...groups.rest,
-    ]
-    return (
-      <>
-        <div
-          data-pa-roster
-          className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border/50 px-2 py-1.5"
-        >
-          {strip.map((b) => {
-            const view = viewOf(b.live, now, b.roster?.unread_mark)
-            return (
-              <button
-                key={b.id}
-                type="button"
-                data-pa-roster-bot={b.id}
-                aria-current={b.id === currentId ? "page" : undefined}
-                aria-label={faceLabel(b, view)}
-                title={botName(b)}
-                onClick={() => go(b)}
-                {...warmOn(b)}
-                className={cn(
-                  "shrink-0 rounded-full p-0.5 transition-colors",
-                  b.id === currentId
-                    ? "bg-accent ring-1 ring-ring"
-                    : "hover:bg-muted"
-                )}
-              >
-                {face(b, 28)}
-              </button>
-            )
-          })}
-          {add}
-        </div>
-        {dialogNodes}
-      </>
-    )
-  }
 
   const primary = groups.primary
 
@@ -1254,9 +1275,6 @@ export function PersonalAgentRoster({
             ? "bg-accent text-accent-foreground"
             : "text-foreground/85 hover:bg-muted"
         )}
-        {...(size.rail && !popover
-          ? { "aria-label": faceLabel(b, view), "data-pa-rail-tile": "" }
-          : {})}
       >
         {look(view)}
       </button>
@@ -1289,122 +1307,39 @@ export function PersonalAgentRoster({
     </div>
   )
 
-  /** A face on the rail. */
-  const railTile = (b: RosterEntry) =>
-    tile(b, () => (
-      <span className="flex size-13 items-center justify-center">
-        {face(b, 36)}
-      </span>
-    ))
+  /** The hidden ones the owner asked to see (D6), last — and the one the
+   *  page shows, hidden or not, listed all the same. */
+  const hiddenShown = groups.hidden.filter(
+    (b) => showHidden || (active && b.id === currentId)
+  )
 
-  /** "N hidden", after the list: it opens to show them under it — on the
-   *  rail, an eye and the count. */
-  const hiddenToggle = (rail: boolean) => {
-    const count = tr("hiddenCount", { count: groups.hidden.length })
-    const toggle = (
-      <button
-        type="button"
-        className={
-          rail
-            ? "mt-1 flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-xs text-muted-foreground tabular-nums transition-colors hover:bg-muted hover:text-foreground"
-            : FOLD_CLASS
-        }
-        aria-expanded={showHidden}
-        aria-label={rail ? (showHidden ? tr("hideHidden") : count) : undefined}
-        title={rail ? count : undefined}
-        onClick={() => setShowHidden((v) => !v)}
-        data-pa-roster-hidden-toggle
-      >
-        {rail ? (
-          <>
-            <EyeOff className="size-3.5" aria-hidden />
-            {groups.hidden.length}
-          </>
-        ) : (
-          <>
-            <span className="truncate">{count}</span>
-            <FoldChevron open={showHidden} />
-          </>
-        )}
-      </button>
-    )
-    return rail ? toggle : <div className={HEAD_CLASS}>{toggle}</div>
-  }
-
-  /** [+ new work assistant], at the foot: a row's geometry, a circle with a
-   *  plus where a face would be; on the rail, a tile's, the circle alone. */
-  const addButton = (rail: boolean) => (
+  /** Before the primary is set up: one row that sets it up — the page's
+   *  first setup, which then gives the others their brains. */
+  const setupRow = (
     <button
       type="button"
-      disabled={readOnly}
-      onClick={() => dialogs.add()}
-      aria-label={rail ? tr("add") : undefined}
-      title={rail ? tr("add") : undefined}
-      data-pa-roster-add
+      onClick={() => {
+        setViewBot(null)
+        showConversation()
+        onPick?.()
+      }}
+      data-pa-roster-setup
       className={cn(
-        "group/add flex items-center rounded-xl text-sm text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50",
-        rail ? "size-13 shrink-0 justify-center" : "w-full gap-2.5 px-2 py-1.5"
+        "group/add flex w-full items-center gap-2.5 rounded-xl px-2 py-1.5 text-start text-sm transition-colors",
+        active && viewBot == null
+          ? "bg-accent text-accent-foreground"
+          : "text-foreground/80 hover:bg-muted hover:text-foreground"
       )}
     >
       <span
         aria-hidden
-        className={cn(
-          "flex shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors group-hover/add:text-foreground",
-          rail ? "size-9" : "size-7"
-        )}
+        className="flex size-7 shrink-0 items-center justify-center rounded-full border border-dashed border-border bg-background text-muted-foreground transition-colors group-hover/add:text-foreground"
       >
         <Plus className="size-4" />
       </span>
-      {rail ? null : (
-        <span className="min-w-0 truncate text-start">{tr("add")}</span>
-      )}
+      <span className="min-w-0 truncate">{tr("setUpPrimary")}</span>
     </button>
   )
-
-  if (size.rail && !popover) {
-    const others = [
-      ...groups.pinned,
-      ...groups.sections.flatMap((s) => s.entries),
-      ...groups.rest,
-    ]
-    // As wide as a tile, as far from the faces on either side as the
-    // tiles are from the rail's edges.
-    const rule = (
-      <div aria-hidden className="my-2 h-px w-13 shrink-0 bg-border" />
-    )
-    return (
-      <>
-        <nav
-          data-pa-roster
-          data-pa-roster-rail
-          aria-label={tr("title")}
-          style={{ width: `${ROSTER_RAIL_WIDTH}rem` }}
-          className="flex max-w-[50%] shrink-0 flex-col"
-        >
-          <div className="flex min-h-0 flex-1 flex-col items-center gap-1 overflow-x-hidden overflow-y-auto pt-4 pb-3">
-            {primary ? railTile(primary) : null}
-            {primary && others.length > 0 ? rule : null}
-            {others.map(railTile)}
-            {groups.hidden.length > 0 ? hiddenToggle(true) : null}
-            {showHidden && groups.hidden.length > 0 ? (
-              <>
-                {rule}
-                {groups.hidden.map(railTile)}
-              </>
-            ) : null}
-          </div>
-          <div
-            data-pa-roster-foot
-            className="flex justify-center border-t border-border/50 py-2"
-          >
-            {addButton(true)}
-          </div>
-        </nav>
-        <RosterResizeHandle size={size} onSize={setSize} />
-        {dialogNodes}
-      </>
-    )
-  }
 
   /** A group's name over its rows, on their faces' edge; one the owner
    *  made folds — pressed on its name and chevron, not across the row. */
@@ -1473,38 +1408,21 @@ export function PersonalAgentRoster({
                 {rows(groups.rest)}
               </div>
             ) : null}
-            {groups.hidden.length > 0 ? (
-              <div data-pa-roster-group="hidden">
-                {hiddenToggle(false)}
-                {showHidden ? rows(groups.hidden) : null}
-              </div>
+            {hiddenShown.length > 0 ? (
+              <div data-pa-roster-group="hidden">{rows(hiddenShown)}</div>
             ) : null}
           </div>
         </div>
-        {/* One row: whether the list also stands beside the conversation,
-            and a new one. */}
+        {/* At its foot: a new one. */}
         <div
           data-pa-roster-foot
-          className="flex items-center justify-between gap-2 border-t border-border/60 p-1.5"
+          className="flex items-center justify-end gap-2 border-t border-border/60 p-1.5"
         >
-          <label
-            htmlFor="pa-roster-shown"
-            title={tr("showColumn")}
-            className="flex min-w-0 cursor-pointer items-center gap-2 rounded-full py-1 ps-1.5 pe-2.5 text-sm text-foreground/80 transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <Switch
-              id="pa-roster-shown"
-              checked={shown}
-              onCheckedChange={setShown}
-              aria-label={tr("showColumn")}
-              data-pa-roster-shown
-            />
-            <span className="min-w-0 truncate">{tr("sidebar")}</span>
-          </label>
           <Button
             variant="ghost"
             size="sm"
-            disabled={readOnly}
+            // A new one's brain is the primary's: none before it is set up.
+            disabled={readOnly || !groups.primary}
             onClick={() => dialogs.add()}
             className="min-w-0 shrink text-foreground/80 hover:text-foreground"
             data-pa-roster-add
@@ -1523,77 +1441,71 @@ export function PersonalAgentRoster({
       <nav
         ref={navRef}
         data-pa-roster
+        data-pa-roster-sidebar
         aria-label={tr("title")}
-        // Its width is the owner's (dragged on the handle after it), never
-        // past half the room the conversation and it share.
-        style={{ width: `${size.width}rem` }}
-        className="flex max-w-[50%] shrink-0 flex-col"
+        className="flex flex-col px-0.5 pb-1"
       >
-        <div className="min-h-0 flex-1 overflow-y-auto px-2 pt-4 pb-3">
-          {primary ? primaryTile(primary) : null}
-          {/* The groups, each its name over its rows, a little apart. */}
-          <div className="flex flex-col gap-2">
-            {groups.pinned.length > 0 ? (
-              <div
-                data-pa-roster-group="pinned"
-                {...dropZone({ kind: "pinned" })}
-              >
-                {groupHead(tr("pinned"))}
-                <AnimatedRows entries={groups.pinned} render={row} />
-              </div>
-            ) : null}
-            {groups.sections.map((s) => (
-              <div
-                key={s.name}
-                data-pa-roster-group={s.name}
-                {...dropZone({ kind: "section", name: s.name })}
-              >
-                {groupHead(s.name, s.name)}
-                {folded.has(s.name) ? null : (
-                  <AnimatedRows entries={s.entries} render={row} />
-                )}
-              </div>
-            ))}
-            {groups.rest.length > 0 || (drag && hasGroups) ? (
-              <div data-pa-roster-group="rest" {...dropZone({ kind: "rest" })}>
-                {hasGroups ? groupHead(tr("others")) : null}
-                <AnimatedRows entries={groups.rest} render={row} />
-              </div>
-            ) : null}
-            {groups.hidden.length > 0 ? (
-              <div data-pa-roster-group="hidden">
-                {hiddenToggle(false)}
-                {showHidden
-                  ? groups.hidden.map((b) => (
-                      <div key={b.id} className="py-0.5">
-                        {row(b)}
-                      </div>
-                    ))
-                  : null}
-              </div>
-            ) : null}
-            {/* While a row is dragged: a group to name, for it. */}
-            {drag ? (
-              <div
-                {...dropZone({ kind: "new" })}
-                className={cn(
-                  "flex h-9 items-center justify-center gap-1.5 rounded-xl border border-dashed text-xs transition-colors",
-                  target?.key === "new"
-                    ? "border-primary/40 bg-accent/50 text-foreground"
-                    : "border-border text-muted-foreground"
-                )}
-              >
-                <Plus className="size-3.5" aria-hidden />
-                {tr("dropNewGroup")}
-              </div>
-            ) : null}
-          </div>
-        </div>
-        <div data-pa-roster-foot className="border-t border-border/50 p-2">
-          {addButton(false)}
+        {primary ? (
+          <div className="py-0.5">{row(primary)}</div>
+        ) : entries ? (
+          <div className="py-0.5">{setupRow}</div>
+        ) : null}
+        {/* The groups, each its name over its rows, a little apart. */}
+        <div className="flex flex-col gap-1">
+          {groups.pinned.length > 0 ? (
+            <div
+              data-pa-roster-group="pinned"
+              {...dropZone({ kind: "pinned" })}
+            >
+              {groupHead(tr("pinned"))}
+              <AnimatedRows entries={groups.pinned} render={row} />
+            </div>
+          ) : null}
+          {groups.sections.map((sec) => (
+            <div
+              key={sec.name}
+              data-pa-roster-group={sec.name}
+              {...dropZone({ kind: "section", name: sec.name })}
+            >
+              {groupHead(sec.name, sec.name)}
+              {folded.has(sec.name) ? null : (
+                <AnimatedRows entries={sec.entries} render={row} />
+              )}
+            </div>
+          ))}
+          {groups.rest.length > 0 || (drag && hasGroups) ? (
+            <div data-pa-roster-group="rest" {...dropZone({ kind: "rest" })}>
+              {hasGroups ? groupHead(tr("others")) : null}
+              <AnimatedRows entries={groups.rest} render={row} />
+            </div>
+          ) : null}
+          {/* The hidden ones asked for: last, never a drop's place. */}
+          {hiddenShown.length > 0 ? (
+            <div data-pa-roster-group="hidden">
+              {hiddenShown.map((b) => (
+                <div key={b.id} className="py-0.5">
+                  {row(b)}
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {/* While a row is dragged: a group to name, for it. */}
+          {drag ? (
+            <div
+              {...dropZone({ kind: "new" })}
+              className={cn(
+                "flex h-9 items-center justify-center gap-1.5 rounded-xl border border-dashed text-xs transition-colors",
+                target?.key === "new"
+                  ? "border-primary/40 bg-accent/50 text-foreground"
+                  : "border-border text-muted-foreground"
+              )}
+            >
+              <Plus className="size-3.5" aria-hidden />
+              {tr("dropNewGroup")}
+            </div>
+          ) : null}
         </div>
       </nav>
-      <RosterResizeHandle size={size} onSize={setSize} />
       {dialogNodes}
       {/* The row dragged, under the pointer. */}
       {drag && dragged
@@ -1616,6 +1528,48 @@ export function PersonalAgentRoster({
         : null}
     </>
   )
+}
+
+/** How near the edge of the list it scrolls in, the pointer dragging a
+ *  row, by how much a step, and how often. */
+const EDGE_PX = 32
+const EDGE_STEP_PX = 12
+const EDGE_TICK_MS = 40
+
+/** The list `from` scrolls in: its nearest ancestor that scrolls. */
+function scrollerOf(from: HTMLElement | null): HTMLElement | null {
+  let el = from?.parentElement ?? null
+  while (el) {
+    const style = window.getComputedStyle(el)
+    if (
+      (style.overflowY === "auto" || style.overflowY === "scroll") &&
+      el.scrollHeight > el.clientHeight
+    ) {
+      return el
+    }
+    el = el.parentElement
+  }
+  return null
+}
+
+/** A row dragged near the top or the bottom of the list it is in (the
+ *  sidebar's), the pointer inside the list: the list scrolls that way, a
+ *  step. Whether it did. */
+function scrollNearEdge(
+  from: HTMLElement | null,
+  x: number,
+  y: number
+): boolean {
+  const el = scrollerOf(from)
+  if (!el) return false
+  const box = el.getBoundingClientRect()
+  if (x < box.left || x > box.right || y < box.top || y > box.bottom) {
+    return false
+  }
+  if (y < box.top + EDGE_PX) el.scrollTop -= EDGE_STEP_PX
+  else if (y > box.bottom - EDGE_PX) el.scrollTop += EDGE_STEP_PX
+  else return false
+  return true
 }
 
 /** A face's card opens on the pointer alone, not on focus: the focus a

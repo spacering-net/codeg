@@ -11,6 +11,7 @@
  * the icon of the notifications it posts and the menu bar's face.
  */
 
+import { showSidebarAssistants } from "@/components/personal-agent/sidebar-assistants"
 import { useEffect, useRef } from "react"
 
 import { usePrimaryAgent } from "@/contexts/personal-agent-context"
@@ -43,9 +44,11 @@ export function PersonalAgentOpenBridge() {
     const open = (page: PersonalAgentPage) => {
       const ui = usePersonalAgentUi.getState()
       if (page === "assistants") {
-        // The primary's conversation, whichever one the page showed last.
+        // The primary's conversation, whichever one the page showed last,
+        // and the sidebar's group of them open.
         ui.setViewBot(null)
         ui.showConversation()
+        showSidebarAssistants()
       }
       else if (isBotTab(page)) ui.openBotPage(page)
       else ui.openSettings(page)

@@ -2377,7 +2377,8 @@
       "recentFilterMenuLabel": "عرض في الأحدث",
       "personalAgent": "الوكيل الشخصي",
       "personalAgentUnreadBots": "{count, plural, zero {لا مساعدين لديهم رسائل غير مقروءة} one {مساعد واحد لديه رسائل غير مقروءة} two {مساعدان لديهما رسائل غير مقروءة} few {# مساعدين لديهم رسائل غير مقروءة} many {# مساعدًا لديهم رسائل غير مقروءة} other {# مساعد لديهم رسائل غير مقروءة}}",
-      "personalAgentBadge": "أسندها الوكيل الشخصي"
+      "personalAgentBadge": "أسندها الوكيل الشخصي",
+      "sectionAssistants": "الوكلاء الشخصيون"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
@@ -11277,8 +11278,6 @@
         "add": "مساعد جديد",
         "pinned": "المثبّتون",
         "others": "الآخرون",
-        "hiddenCount": "{count, plural, zero {لا مساعدين مخفيين} one {مساعد واحد مخفي} two {مساعدان مخفيان} few {# مساعدين مخفيين} many {# مساعدًا مخفيًا} other {# مساعد مخفي}}",
-        "hideHidden": "إخفاؤهم",
         "muted": "مكتوم",
         "handWork": "بين يديه",
         "awaiting": "بانتظار الردود",
@@ -11314,10 +11313,13 @@
         "resize": "تغيير عرض قائمة المساعدين",
         "dropNewGroup": "أفلِته هنا لإنشاء مجموعة جديدة",
         "switch": "تبديل المساعد",
-        "showColumn": "العرض في شريط جانبي",
-        "sidebar": "الشريط الجانبي",
         "addShort": "مساعد جديد",
-        "opening": "جارٍ فتح {name}…"
+        "opening": "جارٍ فتح {name}…",
+        "noBrainLine": "اضبط المساعد الرئيسي لتتحدث إليه",
+        "hiddenMark": "مخفي",
+        "setUpPrimary": "إعداد المساعد الرئيسي",
+        "filter": "تصفية",
+        "showHidden": "إظهار المساعدين المخفيين ({count})"
       },
       "choice": {
         "other": "غير ذلك",

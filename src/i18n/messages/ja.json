@@ -2377,7 +2377,8 @@
       "recentFilterMenuLabel": "最近の表示",
       "personalAgent": "パーソナルエージェント",
       "personalAgentUnreadBots": "未読のあるアシスタント {count} 人",
-      "personalAgentBadge": "パーソナルエージェントが依頼"
+      "personalAgentBadge": "パーソナルエージェントが依頼",
+      "sectionAssistants": "パーソナルエージェント"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",
@@ -11277,8 +11278,6 @@
         "add": "新しいアシスタント",
         "pinned": "ピン留め",
         "others": "その他",
-        "hiddenCount": "非表示 {count} 人",
-        "hideHidden": "折りたたむ",
         "muted": "ミュート中",
         "handWork": "手持ちの作業",
         "awaiting": "返信待ち",
@@ -11314,10 +11313,13 @@
         "resize": "アシスタント一覧の幅を変更",
         "dropNewGroup": "ここにドロップして新しいグループに",
         "switch": "アシスタントを切り替え",
-        "showColumn": "サイドバーに表示",
-        "sidebar": "サイドバー",
         "addShort": "新しいアシスタント",
-        "opening": "{name} を開いています…"
+        "opening": "{name} を開いています…",
+        "noBrainLine": "メインアシスタントを設定すると会話できます",
+        "hiddenMark": "非表示",
+        "setUpPrimary": "メインアシスタントを設定",
+        "filter": "フィルター",
+        "showHidden": "非表示のアシスタントを表示（{count}）"
       },
       "choice": {
         "other": "その他",

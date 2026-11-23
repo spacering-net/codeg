@@ -1,5 +1,6 @@
 "use client"
 
+import { showSidebarAssistants } from "@/components/personal-agent/sidebar-assistants"
 import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -63,6 +64,7 @@ export function useComposerMentionLabels(): ComposerMentionLabels {
             const ui = usePersonalAgentUi.getState()
             ui.setViewBot(null)
             ui.showConversation()
+            showSidebarAssistants()
             setRoute("personalAgent")
             return
           }

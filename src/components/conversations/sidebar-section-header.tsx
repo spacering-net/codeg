@@ -1,6 +1,6 @@
 "use client"
 
-import { memo } from "react"
+import { memo, type ReactNode } from "react"
 import {
   ChevronRight,
   Download,
@@ -52,6 +52,8 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
   recentFilter,
   onRecentFilterChange,
   topGap = false,
+  trailing,
+  labelBadge,
 }: {
   section: SidebarSectionKey
   expanded: boolean
@@ -108,6 +110,12 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
    * accounted for instead of overlapping the previous row.
    */
   topGap?: boolean
+  /** The assistants section's own right-edge actions (its filter, [+]),
+   *  drawn by the assistants' own code in the head's button look. */
+  trailing?: (buttonClassName: string) => ReactNode
+  /** Beside the title: the assistants' "waiting on you" badge while the
+   *  section is folded. */
+  labelBadge?: ReactNode
 }) {
   const t = useTranslations("Folder.sidebar")
   // Tooltips/aria-labels for the folders-section actions reuse the existing
@@ -118,7 +126,9 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
   const label =
     section === "pinned"
       ? t("sectionPinned")
-      : section === "chats"
+      : section === "assistants"
+        ? t("sectionAssistants")
+        : section === "chats"
         ? t("sectionChats")
         : section === "recent"
           ? t("sectionRecent")
@@ -203,6 +213,7 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
           )}
         >
           <span className="text-[0.875rem] font-normal">{label}</span>
+          {labelBadge}
           <ChevronRight
             aria-hidden
             className={cn(
@@ -284,6 +295,11 @@ export const SidebarSectionHeader = memo(function SidebarSectionHeader({
                 <SquarePen className="h-[0.875rem] w-[0.875rem]" />
               </button>
             )}
+          </div>
+        )}
+        {trailing != null && (
+          <div className="absolute top-1/2 right-[0.375rem] flex -translate-y-1/2 items-center gap-px">
+            {trailing(actionButtonClassName)}
           </div>
         )}
         {showFolderActions && (

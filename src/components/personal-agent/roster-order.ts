@@ -100,10 +100,14 @@ function activeAt(e: RosterEntry): number {
   return Number.isFinite(t) ? t : 0
 }
 
+/** By state, then the latest activity — and, for ones as recent as each
+ *  other (the assistants converted on upgrade share one time, and have done
+ *  nothing yet), the order they had. */
 function byTierThenRecent(now: number) {
   return (a: RosterEntry, b: RosterEntry) =>
     tierOf(a.live, now) - tierOf(b.live, now) ||
     activeAt(b) - activeAt(a) ||
+    (a.roster?.sort_order ?? 0) - (b.roster?.sort_order ?? 0) ||
     a.id - b.id
 }
 

@@ -26,14 +26,11 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
-import { BotAvatar } from "@/components/personal-agent/bot-avatar"
-import { UserRoundStar } from "@/components/icons/user-round-star"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions } from "@/contexts/tab-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useHarnessView } from "@/contexts/harness-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
-import { usePrimaryAgent } from "@/contexts/personal-agent-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useFolderTabsStore } from "@/stores/folder-tabs-store"
 import {
@@ -89,8 +86,6 @@ import {
   type SidebarSectionOrder,
 } from "@/lib/sidebar-view-mode-storage"
 import { useCanvasBoardsStore } from "@/stores/canvas-boards-store"
-import { useRoster } from "@/stores/personal-agent-roster-store"
-import { usePersonalAgentUi } from "@/stores/personal-agent-ui-store"
 import { useConversationTagsStore } from "@/stores/conversation-tags-store"
 import {
   EMPTY_TAG_FILTER,
@@ -130,17 +125,12 @@ const RECENT_HIDDEN: ReadonlySet<SidebarSectionId> = new Set(["recent"])
 // carry the same glyph as the row they switch, so that group reads as a mirror
 // of the nav block rather than a column of bare labels.
 const NAV_ITEM_ICONS: Record<SidebarNavItemId, LucideIcon> = {
-  personalAgent: UserRoundStar,
   automations: Zap,
   tasks: ListTodo,
   forge: LayoutTemplate,
   canvas: MapIcon,
   harness: DraftingCompass,
 }
-
-/** The personal agent's avatar on its row, in px at 100% zoom: larger than
- *  the other rows' icons, so a picture or emoji still reads. */
-const NAV_AVATAR_SIZE = 20
 
 /**
  * A fixed top-of-sidebar action / route row. `active` marks the row as the
@@ -194,45 +184,9 @@ function SidebarNavButton({
   )
 }
 
-/**
- * The assistants' badge on the sidebar (1.13): how many assistants have
- * something the owner has not seen — not the hidden or muted ones, nor the
- * one the page is showing them right now — and whether any (not hidden)
- * waits on them. Until the roster is read, the primary's own. The web's
- * page title counts them too (10.10).
- */
-export function useAssistantsBadge(
-  primaryId: number | null,
-  primaryUnseen: number,
-  primaryNeeds: boolean
-): { unreadBots: number; needsOwner: boolean } {
-  const roster = useRoster()
-  const watching = usePersonalAgentUi((s) => s.watching)
-  const viewBot = usePersonalAgentUi((s) => s.viewBot)
-  const watched = watching ? (viewBot ?? primaryId) : null
-  if (!roster) {
-    const seen = watching && viewBot == null
-    return {
-      unreadBots: primaryUnseen > 0 && !seen ? 1 : 0,
-      needsOwner: primaryNeeds,
-    }
-  }
-  let unreadBots = 0
-  let needsOwner = false
-  for (const e of roster) {
-    if (e.roster.hidden) continue
-    if (e.live.attention === "needs_you") needsOwner = true
-    if (e.roster.muted || e.id === watched) continue
-    if (
-      e.live.unread > 0 ||
-      e.roster.unread_mark ||
-      e.live.attention === "unread"
-    ) {
-      unreadBots += 1
-    }
-  }
-  return { unreadBots, needsOwner }
-}
+// The assistants' badge lives with the assistants; the window title reads
+// it from here as before.
+export { useAssistantsBadge } from "@/components/personal-agent/use-assistants-badge"
 
 export function Sidebar() {
   const t = useTranslations("Folder.sidebar")
@@ -241,17 +195,6 @@ export function Sidebar() {
   const { openNewConversationTab, openChatModeTab } = useTabActions()
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
-  const { needsOwner: personalAgentNeedsOwner, snapshot: personalAgentState } =
-    usePrimaryAgent()
-  // Once set up, the agent's row is the agent: its avatar and name.
-  const personalAgent = personalAgentState?.agent ?? null
-  const personalAgentLabel = personalAgent?.name.trim() || t("personalAgent")
-  const { unreadBots: personalAgentUnseen, needsOwner: anyNeedsOwner } =
-    useAssistantsBadge(
-      personalAgent?.id ?? null,
-      personalAgentState?.status.unseen ?? 0,
-      personalAgentNeedsOwner
-    )
   const { updatesCount: harnessUpdates } = useHarnessView()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
   const isMac = useIsMac()
@@ -672,47 +615,6 @@ export function Sidebar() {
             They all close the mobile Drawer on the way out, like tapping a
             conversation card (handled by the list wrapper below) — otherwise the
             page they just opened stays hidden behind the sidebar. */}
-        {isNavItemVisible(navItems, "personalAgent") && (
-          <SidebarNavButton
-            icon={UserRoundStar}
-            leading={
-              personalAgent ? (
-                <BotAvatar
-                  avatar={personalAgent.avatar}
-                  name={personalAgentLabel}
-                  size={NAV_AVATAR_SIZE}
-                />
-              ) : undefined
-            }
-            label={personalAgentLabel}
-            active={routeId === "personalAgent"}
-            onClick={() => {
-              if (isMobile) toggle()
-              setRoute("personalAgent")
-            }}
-            trailing={
-              personalAgentUnseen > 0 ? (
-                // The assistants with something unread: a count on the
-                // theme colour, as a messenger shows one (the tasks count's
-                // geometry). It stands for the waiting dot too: the page
-                // says the rest.
-                <span
-                  className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-primary px-1 font-mono text-[0.625rem] font-medium leading-none text-primary-foreground"
-                  aria-label={t("personalAgentUnreadBots", {
-                    count: personalAgentUnseen,
-                  })}
-                >
-                  {personalAgentUnseen > 99 ? "99+" : personalAgentUnseen}
-                </span>
-              ) : anyNeedsOwner ? (
-                // An assistant waits on the owner (a question, a permission
-                // request, a card): the same quiet dot-badge as the tasks
-                // count.
-                <span className="ml-auto inline-flex size-2 shrink-0 rounded-full bg-primary" />
-              ) : null
-            }
-          />
-        )}
         {isNavItemVisible(navItems, "automations") && (
           <SidebarNavButton
             icon={Zap}
@@ -811,7 +713,13 @@ export function Sidebar() {
           isMobile
             ? (e) => {
                 const target = e.target as HTMLElement
-                if (target.closest("[data-conversation-id]")) {
+                // A conversation card, or an assistant on its group's row
+                // (`data-pa-roster-bot`, its set-up row too).
+                if (
+                  target.closest(
+                    "[data-conversation-id], [data-pa-roster-bot], [data-pa-roster-setup]"
+                  )
+                ) {
                   toggle()
                 }
               }

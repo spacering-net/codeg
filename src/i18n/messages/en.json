@@ -2377,7 +2377,8 @@
       "recentFilterMenuLabel": "Show in Recent",
       "personalAgent": "Personal agent",
       "personalAgentUnreadBots": "{count, plural, one {# assistant has unread messages} other {# assistants have unread messages}}",
-      "personalAgentBadge": "Dispatched by the personal agent"
+      "personalAgentBadge": "Dispatched by the personal agent",
+      "sectionAssistants": "Personal assistants"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
@@ -11277,8 +11278,6 @@
         "add": "New assistant",
         "pinned": "Pinned",
         "others": "Others",
-        "hiddenCount": "{count, plural, one {# hidden} other {# hidden}}",
-        "hideHidden": "Hide them",
         "muted": "Muted",
         "handWork": "In hand",
         "awaiting": "Waiting for replies",
@@ -11314,10 +11313,13 @@
         "resize": "Resize the assistant list",
         "dropNewGroup": "Drop here for a new group",
         "switch": "Switch assistant",
-        "showColumn": "Show in a sidebar",
-        "sidebar": "Sidebar",
         "addShort": "New assistant",
-        "opening": "Opening {name}…"
+        "opening": "Opening {name}…",
+        "noBrainLine": "Set up the primary assistant to talk to it",
+        "hiddenMark": "Hidden",
+        "setUpPrimary": "Set up the primary assistant",
+        "filter": "Filter",
+        "showHidden": "Show hidden assistants ({count})"
       },
       "choice": {
         "other": "Other",

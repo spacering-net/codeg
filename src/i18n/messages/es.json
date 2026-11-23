@@ -2377,7 +2377,8 @@
       "recentFilterMenuLabel": "Mostrar en Recientes",
       "personalAgent": "Agente personal",
       "personalAgentUnreadBots": "{count, plural, one {# asistente tiene mensajes sin leer} other {# asistentes tienen mensajes sin leer}}",
-      "personalAgentBadge": "Asignada por el agente personal"
+      "personalAgentBadge": "Asignada por el agente personal",
+      "sectionAssistants": "Agentes personales"
     },
     "conversation": {
       "reloadFailed": "No se pudo recargar la conversación: {message}",
@@ -11277,8 +11278,6 @@
         "add": "Nuevo asistente",
         "pinned": "Fijados",
         "others": "Otros",
-        "hiddenCount": "{count, plural, one {# oculto} other {# ocultos}}",
-        "hideHidden": "Ocultarlos",
         "muted": "Silenciado",
         "handWork": "Entre manos",
         "awaiting": "Esperando respuestas",
@@ -11314,10 +11313,13 @@
         "resize": "Cambiar el ancho de la lista de asistentes",
         "dropNewGroup": "Suelta aquí para un grupo nuevo",
         "switch": "Cambiar de asistente",
-        "showColumn": "Mostrar en una barra lateral",
-        "sidebar": "Barra lateral",
         "addShort": "Nuevo asistente",
-        "opening": "Abriendo {name}…"
+        "opening": "Abriendo {name}…",
+        "noBrainLine": "Configura el asistente principal para hablar con él",
+        "hiddenMark": "Oculto",
+        "setUpPrimary": "Configurar el asistente principal",
+        "filter": "Filtrar",
+        "showHidden": "Mostrar asistentes ocultos ({count})"
       },
       "choice": {
         "other": "Otro",

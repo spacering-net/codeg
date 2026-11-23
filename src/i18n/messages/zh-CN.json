@@ -2377,7 +2377,8 @@
       "recentFilterMenuLabel": "最近显示",
       "personalAgent": "个人助手",
       "personalAgentUnreadBots": "{count} 个助手有未读消息",
-      "personalAgentBadge": "由个人助手派出"
+      "personalAgentBadge": "由个人助手派出",
+      "sectionAssistants": "个人助手"
     },
     "conversation": {
       "reloadFailed": "会话重新加载失败：{message}",
@@ -11277,8 +11278,6 @@
         "add": "新建助手",
         "pinned": "置顶",
         "others": "其余",
-        "hiddenCount": "已隐藏 {count} 个",
-        "hideHidden": "收起",
         "muted": "已静音",
         "handWork": "手上的活",
         "awaiting": "在等回信",
@@ -11314,10 +11313,13 @@
         "resize": "调整助手列表宽度",
         "dropNewGroup": "拖到这里新建分组",
         "switch": "切换助手",
-        "showColumn": "在侧边栏显示",
-        "sidebar": "侧边栏",
         "addShort": "新建助手",
-        "opening": "正在打开 {name}…"
+        "opening": "正在打开 {name}…",
+        "noBrainLine": "初始化主助手后可以和它对话",
+        "hiddenMark": "已隐藏",
+        "setUpPrimary": "初始化主助手",
+        "filter": "筛选",
+        "showHidden": "显示已隐藏的助手（{count}）"
       },
       "choice": {
         "other": "其他",

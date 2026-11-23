@@ -30,18 +30,34 @@ const NAV_ITEMS_KEY = "workspace:sidebar-nav-items"
 
 describe("normalizeSectionOrder", () => {
   it("passes a complete order through unchanged", () => {
+    expect(
+      normalizeSectionOrder(["recent", "chats", "assistants", "folders"])
+    ).toEqual(["recent", "chats", "assistants", "folders"])
+  })
+
+  it("puts the assistants right above the folders in a store from before them", () => {
+    // A store written before the assistants' section existed gets it where a
+    // new user has it — above the folders — not at the bottom.
     expect(normalizeSectionOrder(["recent", "chats", "folders"])).toEqual([
       "recent",
       "chats",
+      "assistants",
       "folders",
+    ])
+    expect(normalizeSectionOrder(["folders", "chats", "recent"])).toEqual([
+      "assistants",
+      "folders",
+      "chats",
+      "recent",
     ])
   })
 
-  it("appends missing sections in default order", () => {
+  it("appends the other missing sections in default order", () => {
     // Forward compatibility in reverse: a store written before "Recent" existed
     // gets it at the bottom rather than losing the section entirely.
     expect(normalizeSectionOrder(["chats", "folders"])).toEqual([
       "chats",
+      "assistants",
       "folders",
       "recent",
     ])
@@ -50,12 +66,13 @@ describe("normalizeSectionOrder", () => {
   it("drops unknown entries and repeats", () => {
     expect(
       normalizeSectionOrder(["recent", "bogus", "recent", 7, null, "chats"])
-    ).toEqual(["recent", "chats", "folders"])
+    ).toEqual(["recent", "chats", "assistants", "folders"])
   })
 
   it("migrates the legacy two-way strings, preserving the user's choice", () => {
     expect(normalizeSectionOrder("chats-first")).toEqual([
       "chats",
+      "assistants",
       "folders",
       "recent",
     ])
@@ -64,7 +81,8 @@ describe("normalizeSectionOrder", () => {
     )
   })
 
-  it("falls back to the default for anything unusable", () => {
+  it("falls back to the default — the assistants first — for anything unusable", () => {
+    expect(DEFAULT_SECTION_ORDER[0]).toBe("assistants")
     expect(normalizeSectionOrder(undefined)).toEqual(DEFAULT_SECTION_ORDER)
     expect(normalizeSectionOrder("nonsense")).toEqual(DEFAULT_SECTION_ORDER)
     expect(normalizeSectionOrder({ folders: 1 })).toEqual(DEFAULT_SECTION_ORDER)
