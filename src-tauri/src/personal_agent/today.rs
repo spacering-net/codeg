@@ -14,6 +14,7 @@
 //! The day is the owner's: from [`DAY_BREAK_HOUR`]:00 to [`DAY_BREAK_HOUR`]:00
 //! in their zone, as their usual hours are counted (1.12).
 
+use super::read_check::OrFailed;
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
@@ -319,7 +320,10 @@ async fn worktree_gone(db: &AppDatabase, t: &crate::db::entities::work_task::Mod
         Ok(Some(f)) => !std::path::Path::new(&f.path).exists(),
         Ok(None) => true,
         // Unread: the merge stays the safe default, as on the board.
-        Err(_) => false,
+        Err(e) => {
+            super::read_check::note(e.to_string());
+            false
+        }
     }
 }
 
@@ -328,13 +332,13 @@ async fn card_row_of(
     db: &AppDatabase,
     n: &notice_entity::Model,
 ) -> Option<crate::db::entities::personal_agent_timeline::Model> {
-    svc::get_row(&db.conn, n.timeline_id?).await.ok().flatten()
+    svc::get_row(&db.conn, n.timeline_id?).await.or_failed()
 }
 
 /// The card the latest firing of a matter's reminder raised (C1): its
 /// notice — the newest on the matter's subject whose time is the matter's
 /// due time now, written with it in one go — and its row on the timeline.
-async fn reminder_card(
+pub(crate) async fn reminder_card(
     db: &AppDatabase,
     item: &item_entity::Model,
 ) -> Option<(notice_entity::Model, crate::db::entities::personal_agent_timeline::Model)> {
@@ -345,7 +349,7 @@ async fn reminder_card(
         .order_by_desc(notice_entity::Column::Id)
         .all(&db.conn)
         .await
-        .ok()?;
+        .or_failed();
     let n = notices.into_iter().find(|n| {
         payload_of(&n.payload)["due_at"]
             .as_str()
@@ -382,7 +386,7 @@ async fn represent(
         .filter(notice_entity::Column::Kind.eq(NoticeKind::Acceptance))
         .all(&db.conn)
         .await
-        .unwrap_or_default()
+        .or_failed()
         .into_iter()
         .filter_map(|n| Some((n.timeline_id?, n)))
         .collect();
@@ -391,7 +395,7 @@ async fn represent(
         .values()
         .filter_map(|n| int(&payload_of(&n.payload)["dispatch_id"]))
         .collect();
-    let latest = vsvc::latest_of(&db.conn, &works).await.unwrap_or_default();
+    let latest = vsvc::latest_of(&db.conn, &works).await.or_failed();
     let mut stood_for: HashMap<i32, usize> = HashMap::new();
     let mut kept = Vec::with_capacity(view.needs.len());
     let mut needs = std::mem::take(&mut view.needs);
@@ -503,7 +507,7 @@ fn payload_of(raw: &str) -> Value {
 
 /// The owner's account preferences: the primary's settings.
 async fn account_prefs(db: &AppDatabase) -> Prefs {
-    match svc::primary_bot(&db.conn).await.ok().flatten() {
+    match svc::primary_bot(&db.conn).await.or_failed() {
         Some(p) => AccountView::from_settings(&p.settings).prefs,
         None => Prefs::default(),
     }
@@ -530,7 +534,7 @@ pub async fn today_from(
     let tz = clock::zone_of(&prefs.time_zone);
     let (day_start, day_end) = day_of(now, tz);
     let done_from = done_from.unwrap_or(day_start);
-    let bots = svc::list_bots(&db.conn).await.unwrap_or_default();
+    let bots = svc::list_bots(&db.conn).await.or_failed();
     let folders = Folders::load(db).await;
     let tasks = board(db, None).await;
     let glances = manager.session_glances().await;
@@ -617,7 +621,7 @@ pub async fn today_from(
         .order_by_asc(notice_entity::Column::Id)
         .all(&db.conn)
         .await
-        .unwrap_or_default()
+        .or_failed()
     {
         let payload = payload_of(&n.payload);
         // One of codeg's proposal rules (6.7): the ones whose thing no
@@ -671,8 +675,7 @@ pub async fn today_from(
         let title = match n.timeline_id {
             Some(id) => svc::get_row(&db.conn, id)
                 .await
-                .ok()
-                .flatten()
+                .or_failed()
                 .map(|r| one_line(&r.body))
                 .unwrap_or_default(),
             None => String::new(),
@@ -697,7 +700,7 @@ pub async fn today_from(
         .order_by_asc(notice_entity::Column::Id)
         .all(&db.conn)
         .await
-        .unwrap_or_default()
+        .or_failed()
     {
         let Some(bot) = n.bot_id.filter(|b| bots.iter().any(|x| x.id == *b)) else {
             continue;
@@ -733,7 +736,7 @@ pub async fn today_from(
             20,
         )
         .await
-        .unwrap_or_default()
+        .or_failed()
         .into_iter()
         .filter(|d| d.updated_at > now - Duration::days(FAILED_FRESH_DAYS))
         {
@@ -748,9 +751,10 @@ pub async fn today_from(
                     if shown {
                         continue;
                     }
-                    let left = crate::db::service::work_task_service::get_model(&db.conn, tid)
-                        .await
-                        .is_ok_and(|t| t.deferred_at.is_some() || t.archived_at.is_some());
+                    let left = super::read_check::found(
+                        crate::db::service::work_task_service::get_model(&db.conn, tid).await,
+                    )
+                    .is_some_and(|t| t.deferred_at.is_some() || t.archived_at.is_some());
                     if left {
                         continue;
                     }
@@ -772,8 +776,7 @@ pub async fn today_from(
             // Its result card, for one that never opened a session to go to.
             row.row_id = svc::latest_result_row(&db.conn, d.id)
                 .await
-                .ok()
-                .flatten()
+                .or_failed()
                 .map(|r| r.id);
             dispatch_ids.push(d.id);
             // Just failed: its assistant, woken by it, has a moment to pick
@@ -809,7 +812,7 @@ pub async fn today_from(
         &db.conn, &reviewed,
     )
     .await
-    .unwrap_or_default();
+    .or_failed();
     // Queued to merge: nothing left for the owner to do — watched, not
     // waiting on them.
     let mut queued: Vec<TodayRow> = Vec::new();
@@ -820,7 +823,7 @@ pub async fn today_from(
         // Its failed run taken over by other work (B1): that work's row.
         if matches!(t.status, WorkTaskStatus::Failed | WorkTaskStatus::Canceled) {
             if let Some(d) = t.personal_agent_dispatch_id {
-                if let Ok(Some(d)) = svc::get_dispatch(&db.conn, d).await {
+                if let Some(d) = svc::get_dispatch(&db.conn, d).await.or_failed() {
                     if super::dispatch::superseded(db, &d).await {
                         continue;
                     }
@@ -919,7 +922,7 @@ pub async fn today_from(
         .order_by_asc(item_entity::Column::DueAt)
         .all(&db.conn)
         .await
-        .unwrap_or_default();
+        .or_failed();
     let mut reminders_handed: Vec<TodayRow> = Vec::new();
     for i in &items {
         let (Some(due_at), Some(bot)) = (i.due_at, i.bot_id) else {
@@ -991,7 +994,7 @@ pub async fn today_from(
     // The routines that run in the rest of the day (6.9).
     let routines = crate::db::service::personal_agent_routine_service::list_all(&db.conn)
         .await
-        .unwrap_or_default();
+        .or_failed();
     let routine_titles: HashMap<i32, String> =
         routines.iter().map(|r| (r.id, r.title.clone())).collect();
     for r in &routines {
@@ -1042,7 +1045,7 @@ pub async fn today_from(
         .order_by_desc(dispatch_entity::Column::Id)
         .all(&db.conn)
         .await
-        .unwrap_or_default()
+        .or_failed()
     {
         let Some(bot) = d.bot_id.filter(|b| bot_ids.contains(b)) else {
             continue;
@@ -1127,7 +1130,7 @@ pub async fn today_from(
     // waits on the owner (its card, above).
     for w in crate::db::service::personal_agent_watch_service::watching(&db.conn, None)
         .await
-        .unwrap_or_default()
+        .or_failed()
     {
         if !bot_ids.contains(&w.bot_id) || w.kind != "pr" || w.phase.as_deref() == Some("mergeable")
         {
@@ -1163,7 +1166,7 @@ pub async fn today_from(
     // or the owner's confirmation it waits for (6.9).
     for run in crate::db::service::personal_agent_routine_service::running_runs(&db.conn)
         .await
-        .unwrap_or_default()
+        .or_failed()
     {
         let Some(title) = routine_titles.get(&run.routine_id) else {
             continue;
@@ -1198,7 +1201,7 @@ pub async fn today_from(
         .order_by_desc(dispatch_entity::Column::FinishedAt)
         .all(&db.conn)
         .await
-        .unwrap_or_default();
+        .or_failed();
     // A check of other work under acceptance says its word on that work's
     // row (7.5), not as one more piece of work with the same title; a check
     // of a message the owner asked about is listed, as what it is.
@@ -1206,7 +1209,7 @@ pub async fn today_from(
     let acceptance_checks =
         crate::db::service::personal_agent_verification_service::of_checks(&db.conn, &check_ids)
             .await
-            .unwrap_or_default();
+            .or_failed();
     for d in ended {
         let Some(bot) = d.bot_id.filter(|b| bot_ids.contains(b)) else {
             continue;
@@ -1238,7 +1241,7 @@ pub async fn today_from(
     // Pull requests merged today, as their watches read it (7.4).
     for w in crate::db::service::personal_agent_watch_service::ended_since(&db.conn, done_from)
         .await
-        .unwrap_or_default()
+        .or_failed()
     {
         if !bot_ids.contains(&w.bot_id) || w.ended_reason.as_deref() != Some("merged") {
             continue;
@@ -1294,7 +1297,7 @@ pub async fn today_from(
         done_from,
     )
     .await
-    .unwrap_or_default()
+    .or_failed()
     {
         let payload = payload_of(&n.payload);
         // A work assistant's change as the primary records it is the same
@@ -1312,7 +1315,7 @@ pub async fn today_from(
             continue;
         }
         let card = match n.timeline_id {
-            Some(id) => svc::get_row(&db.conn, id).await.ok().flatten(),
+            Some(id) => svc::get_row(&db.conn, id).await.or_failed(),
             None => None,
         };
         let title = card.as_ref().map(|r| one_line(&r.body)).unwrap_or_default();
@@ -1337,7 +1340,7 @@ pub async fn today_from(
         done_from,
     )
     .await
-    .unwrap_or_default()
+    .or_failed()
     {
         let Some(bot) = n.bot_id.filter(|b| bot_ids.contains(b)) else {
             continue;
@@ -1349,8 +1352,7 @@ pub async fn today_from(
         let title = match n.timeline_id {
             Some(id) => svc::get_row(&db.conn, id)
                 .await
-                .ok()
-                .flatten()
+                .or_failed()
                 .map(|r| one_line(&r.body))
                 .unwrap_or_default(),
             None => String::new(),
@@ -1383,7 +1385,7 @@ pub async fn today_from(
             done_from,
         )
         .await
-        .unwrap_or_default()
+        .or_failed()
         {
             let Some(bot) = n.bot_id.filter(|b| bot_ids.contains(b)) else {
                 continue;
@@ -1405,7 +1407,7 @@ pub async fn today_from(
         done_from,
     )
     .await
-    .unwrap_or_default()
+    .or_failed()
     {
         let Some(bot) = n.bot_id.filter(|b| bot_ids.contains(b)) else {
             continue;
@@ -1417,8 +1419,7 @@ pub async fn today_from(
         let title = match n.timeline_id {
             Some(id) => svc::get_row(&db.conn, id)
                 .await
-                .ok()
-                .flatten()
+                .or_failed()
                 .map(|r| one_line(&r.body))
                 .unwrap_or_default(),
             None => String::new(),
@@ -1435,7 +1436,7 @@ pub async fn today_from(
         &db.conn, done_from, day_end,
     )
     .await
-    .unwrap_or_default()
+    .or_failed()
     {
         use crate::db::entities::personal_agent_routine_run::RunOutcome;
         if !matches!(run.outcome, RunOutcome::Reported | RunOutcome::Silent) {
@@ -1460,8 +1461,7 @@ pub async fn today_from(
         if let Some(b) = run.batch_id {
             row.row_id = svc::reply_row_of_batch(&db.conn, b)
                 .await
-                .ok()
-                .flatten()
+                .or_failed()
                 .filter(|r| !svc::is_discarded(r))
                 .map(|r| r.id);
         }
@@ -1484,7 +1484,7 @@ pub async fn today_from(
             .filter(dispatch_entity::Column::Id.is_in(dispatch_ids))
             .all(&db.conn)
             .await
-            .unwrap_or_default()
+            .or_failed()
     };
     (view, dispatches)
 }

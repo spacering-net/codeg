@@ -35,6 +35,7 @@ use serde_json::{json, Value};
 
 use super::dispatch::{cut, executor_of, mode_label, FollowupAuth};
 use super::engine::{brain_of, PersonalAgentEngine};
+use super::read_check::OrFailed;
 use crate::acp::plan_approval::{PlanApprovalAnswer, PlanApprovalDecision};
 use crate::acp::question::{QuestionAnswer, QuestionAnswerItem, QuestionSpec};
 use crate::acp::types::{
@@ -1952,7 +1953,7 @@ pub async fn answering_dispatches(
 ) -> std::collections::HashSet<i32> {
     svc::ask_rows_of_dispatches(&db.conn, ids)
         .await
-        .unwrap_or_default()
+        .or_failed()
         .iter()
         .filter_map(|r| r.data.as_deref().and_then(AskCard::read))
         .filter(|c| c.mirror_of.is_none() && matches!(c.state.as_str(), "asking" | "submitting"))
@@ -1965,7 +1966,7 @@ pub async fn answering_dispatches(
 pub async fn asked_dispatches(db: &crate::db::AppDatabase) -> std::collections::HashSet<i32> {
     svc::open_asks(&db.conn, None)
         .await
-        .unwrap_or_default()
+        .or_failed()
         .iter()
         .filter_map(|n| AskCard::read(&n.payload))
         .filter(|c| c.is_open())
@@ -1982,7 +1983,7 @@ pub async fn answered_for_owner(
     let mut out = std::collections::HashMap::new();
     for c in svc::ask_rows_of_dispatches(&db.conn, ids)
         .await
-        .unwrap_or_default()
+        .or_failed()
         .iter()
         .filter_map(|r| r.data.as_deref().and_then(AskCard::read))
         .filter(|c| c.mirror_of.is_none() && c.state == "answered")
@@ -2024,7 +2025,7 @@ pub async fn answered_for_owner_since(
     let mut out = Vec::new();
     for n in svc::notices_since(&db.conn, NoticeKind::Ask, &[NoticeState::Acted], since)
         .await
-        .unwrap_or_default()
+        .or_failed()
     {
         let Some(card) = AskCard::read(&n.payload) else {
             continue;

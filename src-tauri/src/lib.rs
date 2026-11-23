@@ -1932,6 +1932,7 @@ mod tauri_app {
                 crate::commands::personal_agent::personal_agent_history_status,
                 crate::commands::personal_agent::personal_agent_history_rebuild,
                 crate::commands::personal_agent::personal_agent_today,
+                crate::commands::personal_agent::personal_agent_activity,
                 crate::commands::personal_agent::notification_prefs_sync,
                 crate::commands::personal_agent::personal_agent_avatar_png,
                 crate::commands::personal_agent::personal_agent_card_act,

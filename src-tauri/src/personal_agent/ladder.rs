@@ -11,6 +11,7 @@ use crate::db::entities::personal_agent_dispatch::{
 };
 use crate::db::entities::work_task::{self, WorkTaskStatus};
 use crate::db::AppDatabase;
+use super::read_check::OrFailed;
 use crate::models::personal_agent_overview::{Ladder, TaskFacts};
 
 /// Where dispatch `d` stands; `task` is its kanban task when it has one.
@@ -201,7 +202,7 @@ pub async fn tasks_of(
         .filter(work_task::Column::DeletedAt.is_null())
         .all(&db.conn)
         .await
-        .unwrap_or_default()
+        .or_failed()
         .into_iter()
         .map(|t| (t.id, t))
         .collect()

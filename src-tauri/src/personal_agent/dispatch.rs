@@ -22,6 +22,7 @@
 use chrono::Utc;
 
 use super::engine::{enum_str, settings_of, PersonalAgentEngine};
+use super::read_check::OrFailed;
 use super::DISPATCH_OWNER_LABEL;
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope, PromptInputBlock};
 use crate::db::entities::folder::FolderKind;
@@ -295,15 +296,16 @@ pub(crate) async fn superseded_with(
     let Some(by) = d.replaced_by else {
         return false;
     };
-    let taken = match svc::get_dispatch(&db.conn, by).await {
-        Ok(Some(n)) => n.replaces_run_seq,
-        _ => None,
-    };
+    let taken = svc::get_dispatch(&db.conn, by)
+        .await
+        .or_failed()
+        .and_then(|n| n.replaces_run_seq);
     match (taken, d.work_task_id, seen) {
         (Some(run), Some(t), Some(task)) if task.id == t => task.run_seq == run,
-        (Some(run), Some(t), _) => crate::db::service::work_task_service::get_model(&db.conn, t)
-            .await
-            .map_or(true, |task| task.run_seq == run),
+        (Some(run), Some(t), _) => super::read_check::found(
+            crate::db::service::work_task_service::get_model(&db.conn, t).await,
+        )
+        .is_none_or(|task| task.run_seq == run),
         _ => true,
     }
 }

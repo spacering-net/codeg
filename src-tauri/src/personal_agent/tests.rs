@@ -12066,6 +12066,116 @@ async fn a_reminder_handed_to_its_assistant_is_watched_not_waiting_on_the_owner(
     assert_eq!(item.waits_for, Some(WaitsFor::Time));
 }
 
+/// The activity tab's one list (C1): each thing once — a matter in the row
+/// of "today" that stands for it, or a row of its own in the group it waits
+/// in — its routines coming up with the rest; a work assistant's page has
+/// its own rows only; one read, whole, or none.
+#[tokio::test]
+async fn the_activity_lists_each_thing_once_in_the_group_it_waits_in() {
+    use sea_orm::ConnectionTrait;
+    let (engine, tmp) = ready().await;
+    let bot = engine.bot().await;
+    let conn = &engine.db.conn;
+    let read = |bot: Option<i32>| {
+        let engine = engine.clone();
+        async move {
+            crate::commands::personal_agent::personal_agent_activity_core(&engine.db, &engine.manager, bot).await
+        }
+    };
+    // A matter waiting on the owner, with no row of "today": its own row.
+    let ask = svc::create_item(conn, bot, ItemKind::Followup, None, ItemStatus::Open, Some(WaitsFor::Owner), "Pick a venue".into(), None, None)
+        .await
+        .unwrap();
+    // Many more matters than the page's list holds: none is lost.
+    for i in 0..510 {
+        svc::create_item(conn, bot, ItemKind::Followup, None, ItemStatus::Open, Some(WaitsFor::Time), format!("later {i}"), None, None)
+            .await
+            .unwrap();
+    }
+    // Failed work and its matter: one row, "today"'s, the matter in it.
+    let failed = session_dispatch(&engine, DispatchState::Failed, "conn-act").await;
+    let mut am: crate::db::entities::personal_agent_dispatch::ActiveModel =
+        svc::get_dispatch(conn, failed).await.unwrap().unwrap().into();
+    use sea_orm::{ActiveModelTrait, Set};
+    am.finished_at = Set(Some(chrono::Utc::now() - chrono::Duration::hours(1)));
+    am.update(conn).await.unwrap();
+    let work = svc::create_item(conn, bot, ItemKind::Dispatch, Some(failed), ItemStatus::Open, Some(WaitsFor::Owner), "the work".into(), None, None)
+        .await
+        .unwrap();
+    // A routine of its own.
+    let out = call(&engine, "routine_create", json!({ "title": "Morning check", "what": "Look.", "cron": "0 9 * * *" })).await;
+    assert!(out.ok, "{}", out.text);
+
+    let view = read(None).await.unwrap();
+    let all: Vec<_> = view.needs.iter().chain(&view.watching).chain(&view.next).collect();
+    let rows_of = |id: i32| all.iter().filter(|r| r.item.as_ref().is_some_and(|i| i.id == id)).count();
+    assert_eq!(rows_of(ask.id), 1);
+    assert!(view.needs.iter().any(|r| r.key == format!("item:{}", ask.id) && r.today.is_none()));
+    assert_eq!(rows_of(work.id), 1, "in its work's row");
+    let failed_row = view.needs.iter().find(|r| r.today.as_ref().is_some_and(|t| t.dispatch_id == Some(failed))).unwrap();
+    assert_eq!(failed_row.item.as_ref().map(|i| i.id), Some(work.id));
+    assert_eq!(failed_row.thing, format!("item:{}", work.id));
+    assert_eq!(view.next.iter().filter(|r| r.item.is_some()).count(), 510);
+    assert!(view.next.iter().any(|r| r.routine.as_ref().is_some_and(|x| x.title == "Morning check")));
+    assert!(view.dispatches.iter().any(|d| d.id == failed));
+    // The counts: what waits on the owner, and "today"'s for the pill.
+    assert_eq!(view.waiting, view.needs.len());
+    assert_eq!(view.pill.count, view.needs.iter().filter(|r| r.today.is_some()).count());
+    assert_eq!(view.pill.first.as_deref(), Some(failed_row.key.as_str()));
+
+    // A work assistant's page: its own rows, none of the primary's.
+    let made = engine.create_bot(BotSpec::named("Developer")).await.unwrap();
+    let theirs = read(Some(made.bot.id)).await.unwrap();
+    assert!(theirs.needs.iter().chain(&theirs.watching).chain(&theirs.next).all(|r| {
+        r.today.as_ref().is_none_or(|t| t.bot_id == Some(made.bot.id)) && r.item.is_none() && r.routine.is_none()
+    }), "{:#?}", theirs.needs);
+    // Its matter waiting on the owner is on its page, and on the primary's.
+    let theirs_ask = svc::create_item(conn, made.bot.id, ItemKind::Followup, None, ItemStatus::Open, Some(WaitsFor::Owner), "Which branch?".into(), None, None)
+        .await
+        .unwrap();
+    let key = format!("item:{}", theirs_ask.id);
+    assert!(read(Some(made.bot.id)).await.unwrap().needs.iter().any(|r| r.key == key));
+    let view = read(None).await.unwrap();
+    let row = view.needs.iter().find(|r| r.key == key).expect("on the primary's page");
+    assert_eq!(row.bot_id, Some(made.bot.id), "its actions go to its assistant");
+    assert_eq!(view.waiting, view.needs.len());
+
+    // A reminder from another day still open: waiting on the owner, with
+    // its card — "today" lists only today's.
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Renew the domain", "due": "1m" })).await;
+    let rid = out.data["item_id"].as_i64().unwrap() as i32;
+    engine.fire_due_at(super::clock::now() + chrono::Duration::minutes(2)).await;
+    let card = reminder_rows(&engine, rid).await.remove(0);
+    let yesterday = chrono::Utc::now() - chrono::Duration::days(2);
+    let item = svc::get_item(conn, rid).await.unwrap().unwrap();
+    let mut am: crate::db::entities::personal_agent_item::ActiveModel = item.into();
+    am.due_at = Set(Some(yesterday));
+    am.fired_at = Set(Some(yesterday));
+    am.update(conn).await.unwrap();
+    let notice = svc::get_notice(conn, notice_of_row(&card)).await.unwrap().unwrap();
+    let mut payload: serde_json::Value = serde_json::from_str(&notice.payload).unwrap();
+    payload["due_at"] = json!(yesterday);
+    svc::set_notice_payload(conn, notice.id, &payload).await.unwrap();
+    let view = read(None).await.unwrap();
+    let row = view.needs.iter().find(|r| r.key == format!("item:{rid}")).expect("waits on the owner");
+    assert_eq!((row.card_row_id, row.today.is_none()), (Some(card.id), true));
+
+    // A part that cannot be read fails the read, not a group shown empty —
+    // what orders the groups, the brief being prepared too. Each is put
+    // back after.
+    for table in ["personal_agent_profile", "personal_agent_brief"] {
+        conn.execute_unprepared(&format!("ALTER TABLE {table} RENAME TO gone")).await.unwrap();
+        let err = read(None).await.unwrap_err();
+        assert!(err.to_string().contains("could not be read whole"), "{table}: {err}");
+        conn.execute_unprepared(&format!("ALTER TABLE gone RENAME TO {table}")).await.unwrap();
+        read(None).await.unwrap();
+    }
+    conn.execute_unprepared("DROP TABLE personal_agent_watch").await.unwrap();
+    let err = read(None).await.unwrap_err();
+    assert!(err.to_string().contains("could not be read whole"), "{err}");
+    let _ = tmp;
+}
+
 // ── 2.2: the team from the conversation ─────────────────────────────────────
 
 #[tokio::test]

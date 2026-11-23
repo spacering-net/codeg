@@ -417,6 +417,16 @@ pub async fn personal_agent_today(
     ))
 }
 
+pub async fn personal_agent_activity(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<BotParams>,
+) -> Result<Json<crate::personal_agent::activity_view::ActivityView>, AppCommandError> {
+    Ok(Json(
+        pa::personal_agent_activity_core(&state.db, &state.connection_manager, params.bot_id)
+            .await?,
+    ))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationPrefsSyncParams {

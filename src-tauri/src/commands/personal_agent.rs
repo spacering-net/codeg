@@ -31,6 +31,7 @@ use crate::models::personal_agent::{
     PersonalAgentUsagePoint, TimelineChanges, TimelineCursor, TimelinePage, TimelineRow,
 };
 use crate::personal_agent::engine::{self as pa_engine, PersonalAgentEngine};
+use crate::personal_agent::read_check::OrFailed;
 use crate::personal_agent::workdir;
 
 /// What an action answers in a process that does not run the engine.
@@ -243,15 +244,15 @@ pub(crate) async fn dispatch_infos(
     };
     let latest = crate::db::service::personal_agent_verification_service::latest_of(&db.conn, &ids)
         .await
-        .unwrap_or_default();
+        .or_failed();
     let checks = crate::db::service::personal_agent_verification_service::of_checks(&db.conn, &ids)
         .await
-        .unwrap_or_default();
+        .or_failed();
     // The routines whose runs handed them out (6.9).
     let routines =
         crate::db::service::personal_agent_routine_service::routines_of_dispatches(&db.conn, &ids)
             .await
-            .unwrap_or_default();
+            .or_failed();
     let mut out = Vec::with_capacity(rows.len());
     for d in rows {
         let task = d.work_task_id.and_then(|id| tasks.get(&id));
@@ -294,9 +295,12 @@ pub(crate) async fn dispatch_infos(
             None => None,
         };
         let conversation_folder_id = match d.conversation_id {
-            Some(cid) => crate::db::service::conversation_service::get_by_id(&db.conn, cid)
+            // One deleted has none.
+            Some(cid) => crate::db::entities::conversation::Entity::find_by_id(cid)
+                .filter(crate::db::entities::conversation::Column::DeletedAt.is_null())
+                .one(&db.conn)
                 .await
-                .ok()
+                .or_failed()
                 .map(|c| c.folder_id),
             None => None,
         };
@@ -696,6 +700,119 @@ pub async fn personal_agent_today_core(
 ) -> Result<crate::personal_agent::today::TodayView, AppCommandError> {
     let (mut view, rows) =
         crate::personal_agent::today::today(db, manager, crate::personal_agent::clock::now()).await;
+    view.dispatches = dispatch_infos(db, rows).await?;
+    Ok(view)
+}
+
+/// The activity tab's one list (C1): "today", the page assistant's open
+/// matters and its routines, merged — read from one snapshot of the
+/// database, and as a whole: a part that could not be read fails it all,
+/// and the page keeps what it had, rather than showing that part empty.
+pub async fn personal_agent_activity_core(
+    db: &AppDatabase,
+    manager: &crate::acp::manager::ConnectionManager,
+    bot_id: Option<i32>,
+) -> Result<crate::personal_agent::activity_view::ActivityView, AppCommandError> {
+    use crate::personal_agent::read_check::{checked, Snapshot};
+    let snap = Snapshot::of(db)
+        .await
+        .map_err(AppCommandError::task_execution_failed)?;
+    let (out, failed) = checked(activity_in(snap.db(), manager, bot_id)).await;
+    snap.finish().await;
+    match failed {
+        Some(e) => Err(AppCommandError::task_execution_failed(format!(
+            "the activity could not be read whole: {e}"
+        ))),
+        None => out,
+    }
+}
+
+async fn activity_in(
+    db: &AppDatabase,
+    manager: &crate::acp::manager::ConnectionManager,
+    bot_id: Option<i32>,
+) -> Result<crate::personal_agent::activity_view::ActivityView, AppCommandError> {
+    use crate::db::entities::personal_agent_item::WaitsFor;
+    use crate::db::entities::personal_agent_notice::NoticeState;
+    use crate::personal_agent::activity_view::{merge, Inputs, ItemCard};
+    let bot = resolve_bot(db, bot_id).await?;
+    let primary = svc::get_bot(&db.conn, bot)
+        .await?
+        .is_some_and(|b| b.kind == crate::db::entities::personal_agent::BotKind::Primary);
+    let now = crate::personal_agent::clock::now();
+    let (today, mut rows) = crate::personal_agent::today::today_from(db, manager, now, None).await;
+    // Its open matters, all of them, as they are now — none another's work
+    // took over (B1); on the primary's page, every assistant's, as "today"
+    // has.
+    let page_bots = if primary {
+        svc::list_bots(&db.conn).await?.into_iter().map(|b| b.id).collect()
+    } else {
+        vec![bot]
+    };
+    let mut open = Vec::new();
+    for b in page_bots {
+        open.extend(
+            svc::list_items(&db.conn, b, &[ItemStatus::Open, ItemStatus::Waiting], i64::MAX as u64)
+                .await?,
+        );
+    }
+    let mut items = Vec::new();
+    let mut item_bots = HashMap::new();
+    let mut item_tasks = HashMap::new();
+    let mut item_cards = HashMap::new();
+    for i in open {
+        let dispatch = match i.dispatch_id {
+            Some(id) => svc::get_dispatch(&db.conn, id).await?,
+            None => None,
+        };
+        if let Some(d) = &dispatch {
+            if crate::personal_agent::dispatch::superseded(db, d).await {
+                continue;
+            }
+            if let Some(t) = d.work_task_id {
+                item_tasks.insert(d.id, t);
+            }
+            if !rows.iter().any(|r| r.id == d.id) {
+                rows.push(d.clone());
+            }
+        }
+        // Fired and still on this firing: its card.
+        let fired = i.due_at.is_some_and(|due| i.fired_at.is_some_and(|f| f >= due))
+            && matches!(i.waits_for, Some(WaitsFor::Owner | WaitsFor::Agent));
+        if fired {
+            if let Some((notice, card)) = crate::personal_agent::today::reminder_card(db, &i).await {
+                let state = card
+                    .data
+                    .as_deref()
+                    .and_then(|d| serde_json::from_str::<serde_json::Value>(d).ok())
+                    .and_then(|d| d["state"].as_str().map(str::to_string));
+                item_cards.insert(
+                    i.id,
+                    ItemCard {
+                        row_id: card.id,
+                        open: notice.state == NoticeState::Open && state.as_deref() == Some("open"),
+                        handed: state.as_deref() == Some("handed"),
+                    },
+                );
+            }
+        }
+        item_bots.insert(i.id, i.bot_id.unwrap_or(bot));
+        items.push(item_info(i, dispatch.map(|d| d.state)));
+    }
+    let routines = crate::personal_agent::routines::routines_of(db, Some(bot))
+        .await
+        .map_err(AppCommandError::task_execution_failed)?;
+    let mut view = merge(Inputs {
+        bot,
+        primary,
+        today,
+        items,
+        item_bots,
+        item_tasks,
+        item_cards,
+        routines,
+        as_of: now,
+    });
     view.dispatches = dispatch_infos(db, rows).await?;
     Ok(view)
 }
@@ -1809,6 +1926,16 @@ pub async fn personal_agent_today(
     manager: State<'_, crate::acp::manager::ConnectionManager>,
 ) -> Result<crate::personal_agent::today::TodayView, AppCommandError> {
     personal_agent_today_core(&db, &manager).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn personal_agent_activity(
+    db: State<'_, AppDatabase>,
+    manager: State<'_, crate::acp::manager::ConnectionManager>,
+    bot_id: Option<i32>,
+) -> Result<crate::personal_agent::activity_view::ActivityView, AppCommandError> {
+    personal_agent_activity_core(&db, &manager, bot_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

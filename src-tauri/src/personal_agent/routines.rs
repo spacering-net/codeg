@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::clock;
+use super::read_check::OrFailed;
 use super::dispatch::{DispatchAuth, DispatchRequest};
 use super::due;
 use super::engine::{enum_str, PersonalAgentEngine};
@@ -691,8 +692,7 @@ pub async fn run_view(conn: &sea_orm::DatabaseConnection, r: run_entity::Model) 
     let row_id = match r.batch_id {
         Some(b) => svc::reply_row_of_batch(conn, b)
             .await
-            .ok()
-            .flatten()
+            .or_failed()
             .map(|row| row.id),
         None => None,
     };
@@ -719,7 +719,7 @@ pub async fn routine_view(
     runs: u64,
 ) -> RoutineView {
     let mut last = Vec::new();
-    for run in rsvc::runs_of(conn, r.id, runs).await.unwrap_or_default() {
+    for run in rsvc::runs_of(conn, r.id, runs).await.or_failed() {
         last.push(run_view(conn, run).await);
     }
     let zone = zone_of(r.timezone.as_deref(), owner).name().to_string();
@@ -3321,7 +3321,7 @@ pub async fn routines_of(
     db: &crate::db::AppDatabase,
     bot: Option<i32>,
 ) -> Result<Vec<RoutineView>, String> {
-    let owner = match svc::primary_bot(&db.conn).await.ok().flatten() {
+    let owner = match svc::primary_bot(&db.conn).await.or_failed() {
         Some(p) => {
             let prefs =
                 crate::models::personal_agent_prefs::AccountView::from_settings(&p.settings).prefs;

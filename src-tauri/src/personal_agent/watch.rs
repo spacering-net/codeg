@@ -39,6 +39,7 @@ use serde_json::{json, Value};
 use super::engine::PersonalAgentEngine;
 use super::host::EngineHost;
 use super::tools::ToolOutcome;
+use super::read_check::OrFailed;
 use crate::db::entities::personal_agent_dispatch as dispatch_entity;
 use crate::db::entities::personal_agent_item::ItemStatus;
 use crate::db::entities::personal_agent_notice::{
@@ -432,7 +433,7 @@ pub async fn facts_of_tasks(
     task_ids: &[i32],
 ) -> HashMap<i32, PrFacts> {
     let now = Utc::now();
-    let mut watches = wsvc::of_tasks(&db.conn, task_ids).await.unwrap_or_default();
+    let mut watches = wsvc::of_tasks(&db.conn, task_ids).await.or_failed();
     let missing: Vec<i32> = task_ids
         .iter()
         .copied()
@@ -461,13 +462,14 @@ async fn watches_by_delivery(
             .filter(work_task::Column::Id.is_in(chunk.to_vec()))
             .all(&db.conn)
             .await
-            .unwrap_or_default();
+            .or_failed();
         for t in tasks.iter().filter(|t| delivered_pr(t)) {
             let Some((target, number)) = super::ladder::pr_target(t) else {
                 continue;
             };
-            if let Ok(Some(w)) =
-                wsvc::by_key(&db.conn, &wsvc::item_key(&target, "pr", number)).await
+            if let Some(w) = wsvc::by_key(&db.conn, &wsvc::item_key(&target, "pr", number))
+                .await
+                .or_failed()
             {
                 out.insert(t.id, w);
             }

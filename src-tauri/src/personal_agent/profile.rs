@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::clock;
+use super::read_check::OrFailed;
 use super::overview::Folders;
 use super::presence::{DayHours, Hours, DAY_BREAK_HOUR};
 use crate::db::entities::conversation::{self, ConversationKind};
@@ -74,8 +75,7 @@ fn now() -> DateTime<Utc> {
 async fn read(db: &AppDatabase, key: &str) -> Value {
     psvc::get(&db.conn, key)
         .await
-        .ok()
-        .flatten()
+        .or_failed()
         .unwrap_or(Value::Null)
 }
 
@@ -367,7 +367,7 @@ pub(super) async fn recent_projects(
         .filter(conversation::Column::UpdatedAt.gte(since))
         .all(&db.conn)
         .await
-        .unwrap_or_default()
+        .or_failed()
         .iter()
         .filter_map(|c| folders.project(c.folder_id).map(|(id, _)| id))
         .filter(|id| !out.contains(id))

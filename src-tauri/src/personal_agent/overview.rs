@@ -8,6 +8,7 @@
 //! with a bound). The text is for the model: facts with their numbers and
 //! ids as the pages show them, and links to the conversations.
 
+use super::read_check::OrFailed;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -207,7 +208,7 @@ impl Folders {
         let rows = folder::Entity::find()
             .all(&db.conn)
             .await
-            .unwrap_or_default()
+            .or_failed()
             .into_iter()
             .map(|f| (f.id, f))
             .collect();
@@ -244,7 +245,7 @@ impl Folders {
 async fn assistants(
     engine: &PersonalAgentEngine,
 ) -> Vec<(agent_entity::Model, BotLive, Vec<NeedsYou>)> {
-    let rows = svc::list_bots(&engine.db.conn).await.unwrap_or_default();
+    let rows = svc::list_bots(&engine.db.conn).await.or_failed();
     let host = engine.host_ref();
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
@@ -271,7 +272,7 @@ pub(super) async fn board(db: &AppDatabase, project: Option<i32>) -> Vec<work_ta
         .order_by_asc(work_task::Column::Id)
         .all(&db.conn)
         .await
-        .unwrap_or_default()
+        .or_failed()
 }
 
 /// A task waits on the owner as the sidebar badge counts it: awaiting
@@ -310,7 +311,7 @@ impl Provenance {
                 .filter(dispatch_entity::Column::Id.is_in(dispatch_ids.to_vec()))
                 .all(&db.conn)
                 .await
-                .unwrap_or_default()
+                .or_failed()
             {
                 by_id.insert(d.id, d);
             }
@@ -321,7 +322,7 @@ impl Provenance {
                 .filter(dispatch_entity::Column::ConversationId.is_in(conversation_ids.to_vec()))
                 .all(&db.conn)
                 .await
-                .unwrap_or_default()
+                .or_failed()
             {
                 if let Some(c) = d.conversation_id {
                     by_conversation.insert(c, d.id);
@@ -331,7 +332,7 @@ impl Provenance {
         }
         let names = svc::list_bots(&db.conn)
             .await
-            .unwrap_or_default()
+            .or_failed()
             .iter()
             .map(|b| (b.id, display_name(b)))
             .collect();
@@ -373,7 +374,7 @@ pub(super) async fn conversations(
         .filter(conversation::Column::Id.is_in(ids.to_vec()))
         .all(&db.conn)
         .await
-        .unwrap_or_default()
+        .or_failed()
         .into_iter()
         .map(|c| (c.id, c))
         .collect()
@@ -551,7 +552,7 @@ pub(super) async fn with_children(
                 .filter(conversation::Column::ParentId.is_in(chunk.to_vec()))
                 .all(&db.conn)
                 .await
-                .unwrap_or_default();
+                .or_failed();
             for c in children {
                 let Some(parent) = c.parent_id else { continue };
                 if !seen.insert(c.id) {
@@ -627,8 +628,7 @@ impl PersonalAgentEngine {
             let works_with = match row.executor_assistant_id {
                 Some(id) => crate::db::service::assistant_service::get_live_enabled(&self.db.conn, id)
                     .await
-                    .ok()
-                    .flatten()
+                    .or_failed()
                     .map(|a| super::dispatch::label_words(a.agent_type, Some(&a.label_snapshot))),
                 None => None,
             };
@@ -681,7 +681,7 @@ impl PersonalAgentEngine {
             // its own work that were done (codeg's checks left out).
             let done = svc::recent_done(&self.db.conn, row.id, RECENT_DONE)
                 .await
-                .unwrap_or_default();
+                .or_failed();
             let now = Utc::now();
             if !done.is_empty() {
                 let lines: Vec<String> = done
@@ -793,7 +793,7 @@ impl PersonalAgentEngine {
                 20,
             )
             .await
-            .unwrap_or_default();
+            .or_failed();
             for d in failed.iter().filter(|d| {
                 d.mode != DispatchMode::Task
                     && d.updated_at > now - Duration::days(FAILED_FRESH_DAYS)
@@ -884,13 +884,13 @@ impl PersonalAgentEngine {
             .collect();
         let runs = crate::db::service::automation_service::list_active_runs(&db.conn)
             .await
-            .unwrap_or_default();
+            .or_failed();
         let automations: HashMap<i32, String> = if runs.is_empty() {
             HashMap::new()
         } else {
             crate::db::service::automation_service::list(&db.conn)
                 .await
-                .unwrap_or_default()
+                .or_failed()
                 .into_iter()
                 .map(|a| (a.id, a.name))
                 .collect()
@@ -1081,7 +1081,7 @@ impl PersonalAgentEngine {
                 .limit(limit as u64)
                 .all(&db.conn)
                 .await
-                .unwrap_or_default();
+                .or_failed();
             let ids: Vec<i32> = rows.iter().map(|c| c.id).collect();
             let prov = Provenance::load(db, &[], &ids).await;
             let mut text_rows = Vec::new();
@@ -1182,10 +1182,10 @@ impl PersonalAgentEngine {
         let db = &self.db;
         let all = crate::db::service::automation_service::list(&db.conn)
             .await
-            .unwrap_or_default();
+            .or_failed();
         let runs = crate::db::service::automation_service::list_active_runs(&db.conn)
             .await
-            .unwrap_or_default();
+            .or_failed();
         let folders = Folders::load(db).await;
         if all.is_empty() {
             return ToolOutcome::ok("No automations are set up.", json!({ "automations": [] }));
@@ -1269,7 +1269,7 @@ impl PersonalAgentEngine {
             let Ok(d) = i32::try_from(id) else {
                 return ToolOutcome::refused("no such dispatch");
             };
-            let d = match svc::get_dispatch(&db.conn, d).await.ok().flatten() {
+            let d = match svc::get_dispatch(&db.conn, d).await.or_failed() {
                 Some(d) => d,
                 None => return ToolOutcome::refused(format!("no dispatch #{id}")),
             };
@@ -1354,8 +1354,7 @@ impl PersonalAgentEngine {
             let key = wsvc::item_key(&target, "pr", number);
             if let Some(feedback) = wsvc::by_key(&db.conn, &key)
                 .await
-                .ok()
-                .flatten()
+                .or_failed()
                 .filter(|w| w.bot_id == me)
                 .and_then(|w| PersonalAgentEngine::feedback_text_of(&w))
             {
@@ -1409,9 +1408,9 @@ impl PersonalAgentEngine {
         // By assistant: its own sessions, and the work it handed out.
         let mut own_of: HashMap<i32, i32> = HashMap::new();
         let mut handed_of: HashMap<i32, i32> = HashMap::new();
-        let bots = svc::list_bots(&db.conn).await.unwrap_or_default();
+        let bots = svc::list_bots(&db.conn).await.or_failed();
         for b in &bots {
-            for s in svc::list_segments(&db.conn, b.id).await.unwrap_or_default() {
+            for s in svc::list_segments(&db.conn, b.id).await.or_failed() {
                 if let Some(c) = s.conversation_id {
                     own_of.insert(c, b.id);
                 }
@@ -1421,7 +1420,7 @@ impl PersonalAgentEngine {
             .filter(dispatch_entity::Column::UpdatedAt.gte(since))
             .all(&db.conn)
             .await
-            .unwrap_or_default();
+            .or_failed();
         let tasks = ladder::tasks_of(db, &dispatches).await;
         for d in &dispatches {
             let Some(bot) = d.bot_id else { continue };
@@ -1449,7 +1448,7 @@ impl PersonalAgentEngine {
                     .filter(conversation::Column::DeletedAt.is_null())
                     .all(&db.conn)
                     .await
-                    .unwrap_or_default()
+                    .or_failed()
                     .into_iter()
                     .map(|c| c.id),
             );
@@ -1465,7 +1464,7 @@ impl PersonalAgentEngine {
                     .filter(token_usage_turn::Column::OccurredAt.lt(now))
                     .all(&db.conn)
                     .await
-                    .unwrap_or_default();
+                    .or_failed();
                 for t in turns {
                     let tokens = u64::try_from(t.total_tokens).unwrap_or(0);
                     if let Some(b) = own_of.get(&t.conversation_id) {

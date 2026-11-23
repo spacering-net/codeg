@@ -31,6 +31,7 @@ use serde_json::{json, Value};
 
 use super::dispatch::{cut, executor_of, mode_label};
 use super::engine::PersonalAgentEngine;
+use super::read_check::OrFailed;
 use super::tools::ToolOutcome;
 use crate::db::entities::personal_agent_dispatch::{
     self as dispatch_entity, DispatchMode, DispatchState,
@@ -222,7 +223,7 @@ pub async fn views_of(
         return HashMap::new();
     }
     let ids: Vec<i32> = wanted.iter().map(|d| d.id).collect();
-    let latest = vsvc::latest_of(&db.conn, &ids).await.unwrap_or_default();
+    let latest = vsvc::latest_of(&db.conn, &ids).await.or_failed();
     let mut out = HashMap::new();
     for d in wanted {
         let Some(task) = d.work_task_id.and_then(|t| tasks.get(&t)) else {
@@ -256,7 +257,7 @@ pub fn view_of(latest: Option<&round_entity::Model>, task: &work_task::Model) ->
 
 /// The account's settings, read without an engine (the board asks).
 async fn account_of(db: &AppDatabase) -> AccountView {
-    match svc::primary_bot(&db.conn).await.ok().flatten() {
+    match svc::primary_bot(&db.conn).await.or_failed() {
         Some(p) => AccountView::from_settings(&p.settings),
         None => AccountView::default(),
     }
@@ -316,12 +317,12 @@ pub async fn being_accepted(
         .iter()
         .filter_map(|t| t.personal_agent_dispatch_id)
         .collect();
-    let latest = vsvc::latest_of(&db.conn, &ids).await.unwrap_or_default();
+    let latest = vsvc::latest_of(&db.conn, &ids).await.or_failed();
     for t in ours {
         let Some(id) = t.personal_agent_dispatch_id else {
             continue;
         };
-        let Ok(Some(d)) = svc::get_dispatch(&db.conn, id).await else {
+        let Some(d) = svc::get_dispatch(&db.conn, id).await.or_failed() else {
             continue;
         };
         if !wants_acceptance(&d, t, &prefs) {

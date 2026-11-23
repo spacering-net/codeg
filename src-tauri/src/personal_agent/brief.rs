@@ -39,6 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::clock;
+use super::read_check::OrFailed;
 use super::due;
 use super::engine::PersonalAgentEngine;
 use super::host::EngineHost;
@@ -356,7 +357,7 @@ fn cut(text: &str, max: usize) -> String {
 
 /// The owner's account preferences, and the primary they are kept on.
 async fn account(db: &AppDatabase) -> Option<(agent_entity::Model, Prefs)> {
-    let primary = svc::primary_bot(&db.conn).await.ok().flatten()?;
+    let primary = svc::primary_bot(&db.conn).await.or_failed()?;
     let prefs = AccountView::from_settings(&primary.settings).prefs;
     Some((primary, prefs))
 }
@@ -2171,8 +2172,8 @@ pub async fn today_note(db: &AppDatabase, now: DateTime<Utc>) -> Option<TodayBri
     let (primary, prefs) = account(db).await?;
     let tz = clock::zone_of(&prefs.time_zone);
     let day = day_key(now, tz);
-    let mut all = bsvc::of_day(&db.conn, primary.id, BRIEF, &day).await.ok()?;
-    all.extend(bsvc::of_day(&db.conn, primary.id, WRAP, &day).await.ok()?);
+    let mut all = bsvc::of_day(&db.conn, primary.id, BRIEF, &day).await.or_failed();
+    all.extend(bsvc::of_day(&db.conn, primary.id, WRAP, &day).await.or_failed());
     all.into_iter()
         .filter(|b| b.state == PREPARING)
         .max_by_key(|b| b.id)

@@ -27,6 +27,7 @@
 //! A process that does not run the assistants reads the database only: the
 //! work and the attention, never the activity (`activity_known`).
 
+use super::read_check::OrFailed;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -248,7 +249,7 @@ async fn needs_of(
     let mut needs = Vec::new();
     for r in svc::pending_prompt_rows(&db.conn, bot)
         .await
-        .unwrap_or_default()
+        .or_failed()
     {
         let data = r.data.as_deref().map(payload_of).unwrap_or_default();
         let kind = match r.kind {
@@ -269,7 +270,7 @@ async fn needs_of(
     }
     let open = svc::notices_in_state(&db.conn, bot, NoticeState::Open)
         .await
-        .unwrap_or_default();
+        .or_failed();
     let cards: Vec<_> = open
         .into_iter()
         .filter_map(|n| {
@@ -327,7 +328,7 @@ async fn needs_of(
     let row_ids: Vec<i32> = cards.iter().filter_map(|(n, _)| n.timeline_id).collect();
     let rows: HashMap<i32, String> = svc::rows_by_ids(&db.conn, bot, &row_ids)
         .await
-        .unwrap_or_default()
+        .or_failed()
         .into_iter()
         .map(|r| (r.id, r.body))
         .collect();
@@ -354,7 +355,7 @@ async fn needs_of(
     let mut asked: std::collections::HashSet<i32> = std::collections::HashSet::new();
     for r in svc::ask_rows(&db.conn, bot, svc::ASK_OPEN_STATES)
         .await
-        .unwrap_or_default()
+        .or_failed()
     {
         let data = r.data.as_deref().map(payload_of).unwrap_or_default();
         let mirror = data.get("mirror_of").is_some_and(|m| !m.is_null());
@@ -408,12 +409,12 @@ pub(super) async fn db_facts(db: &AppDatabase, row: &agent_entity::Model) -> DbF
     let bot = row.id;
     let mut dispatches = svc::list_dispatches(&db.conn, bot, MOVING, None, 50)
         .await
-        .unwrap_or_default();
+        .or_failed();
     // Delivered as a pull request it watches: still on its hands (7.4).
     let watched: Vec<i32> =
         crate::db::service::personal_agent_watch_service::watching(&db.conn, Some(bot))
             .await
-            .unwrap_or_default()
+            .or_failed()
             .into_iter()
             .filter_map(|w| w.dispatch_id)
             .filter(|id| !dispatches.iter().any(|d| d.id == *id))
@@ -422,7 +423,7 @@ pub(super) async fn db_facts(db: &AppDatabase, row: &agent_entity::Model) -> DbF
         dispatches.extend(
             svc::dispatches_by_ids(&db.conn, bot, &watched)
                 .await
-                .unwrap_or_default(),
+                .or_failed(),
         );
         dispatches.sort_by_key(|d| std::cmp::Reverse(d.id));
     }
@@ -465,21 +466,20 @@ pub(super) async fn db_facts(db: &AppDatabase, row: &agent_entity::Model) -> DbF
         .collect();
     hand.reverse();
     let needs = needs_of(db, bot, &hand, &hand_since).await;
-    let unread = svc::count_unseen(&db.conn, bot).await.unwrap_or(0) as u32;
-    let has_open_items = svc::has_open_matters(&db.conn, bot).await.unwrap_or(false);
+    let unread = svc::count_unseen(&db.conn, bot).await.or_failed() as u32;
+    let has_open_items = svc::has_open_matters(&db.conn, bot).await.or_failed();
     let mut awaiting = Vec::new();
     let mut names: HashMap<i32, String> = HashMap::new();
     for m in msvc::live_messages_from(&db.conn, bot)
         .await
-        .unwrap_or_default()
+        .or_failed()
         .into_iter()
         .filter(|m| m.wants_reply)
     {
         if let std::collections::hash_map::Entry::Vacant(slot) = names.entry(m.to_bot_id) {
             let name = svc::get_bot_any(&db.conn, m.to_bot_id)
                 .await
-                .ok()
-                .flatten()
+                .or_failed()
                 .map(|b| super::messages::display_name(&b))
                 .unwrap_or_else(|| format!("assistant #{}", m.to_bot_id));
             slot.insert(name);
@@ -492,8 +492,7 @@ pub(super) async fn db_facts(db: &AppDatabase, row: &agent_entity::Model) -> DbF
     }
     let last_line = svc::last_said(&db.conn, bot)
         .await
-        .ok()
-        .flatten()
+        .or_failed()
         .map(|r| LastLine {
             text: first_line(
                 &crate::acp::reply_turn::display_text(&r.body),
@@ -504,12 +503,11 @@ pub(super) async fn db_facts(db: &AppDatabase, row: &agent_entity::Model) -> DbF
         .filter(|l| !l.text.is_empty());
     let last_activity_at = svc::latest_row(&db.conn, bot)
         .await
-        .ok()
-        .flatten()
+        .or_failed()
         .map(|r| r.updated_at.max(r.created_at));
     let brain_running = !svc::running_batches(&db.conn, bot)
         .await
-        .unwrap_or_default()
+        .or_failed()
         .is_empty();
     DbFacts {
         needs,
@@ -639,7 +637,7 @@ pub async fn live_from_db_with_needs(
 pub(super) async fn names(db: &AppDatabase) -> Names {
     let bots = svc::list_bots(&db.conn)
         .await
-        .unwrap_or_default()
+        .or_failed()
         .iter()
         .map(|b| (b.id, super::messages::display_name(b)))
         .collect();
@@ -1099,7 +1097,7 @@ impl PersonalAgentEngine {
 /// The roster as a process that does not run the assistants reads it.
 pub async fn roster_from_db(db: &AppDatabase) -> Vec<(agent_entity::Model, BotLive)> {
     let mut out = Vec::new();
-    for row in svc::list_bots(&db.conn).await.unwrap_or_default() {
+    for row in svc::list_bots(&db.conn).await.or_failed() {
         let live = live_from_db(db, &row).await;
         out.push((row, live));
     }

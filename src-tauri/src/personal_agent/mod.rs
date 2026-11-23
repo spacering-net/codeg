@@ -24,6 +24,7 @@
 
 pub mod acceptance;
 pub mod activity;
+pub mod activity_view;
 pub mod asks;
 pub mod awake;
 pub mod brief;
@@ -42,6 +43,7 @@ pub mod engine;
 pub mod fact_check;
 pub mod forge_acts;
 pub mod gist;
+pub mod read_check;
 pub mod history;
 pub mod host;
 pub mod ledger;

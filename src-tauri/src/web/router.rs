@@ -508,6 +508,10 @@ pub fn build_router_with_srn(
             post(handlers::personal_agent::personal_agent_today),
         )
         .route(
+            "/personal_agent_activity",
+            post(handlers::personal_agent::personal_agent_activity),
+        )
+        .route(
             "/notification_prefs_sync",
             post(handlers::personal_agent::notification_prefs_sync),
         )

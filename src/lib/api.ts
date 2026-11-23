@@ -67,6 +67,7 @@ import type {
   PersonalAgentProfile,
   PersonalAgentProfileOp,
   PersonalAgentToday,
+  PersonalAgentActivity,
   Routine,
   RoutineAction,
   RoutineDraft,
@@ -2728,6 +2729,15 @@ export async function personalAgentAvatarPng(
  *  assistants keep an eye on, the rest of the day, what was done today. */
 export async function personalAgentToday(): Promise<PersonalAgentToday> {
   return getTransport().call("personal_agent_today", {})
+}
+
+/** The activity tab's one list (C1): "today", the assistant's open
+ *  matters and its routines, merged into four groups by the server, read
+ *  from one snapshot. A part that could not be read fails it all. */
+export async function personalAgentActivity(
+  bot?: number | null
+): Promise<PersonalAgentActivity> {
+  return getTransport().call("personal_agent_activity", { botId: bot ?? null })
 }
 
 /** An assistant's routines, with their latest runs (6.9). */

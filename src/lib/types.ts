@@ -3242,6 +3242,43 @@ export interface PersonalAgentToday {
   stale_acceptance?: number[]
 }
 
+/** One thing in the activity list (C1): "today"'s row of it, the matter it
+ *  stands for, or a routine. */
+export interface ActivityRow {
+  /** Unique in the list. */
+  key: string
+  /** The assistant it is of: what its actions go to (another's, on the
+   *  primary's page); null, the owner's own. */
+  bot_id: number | null
+  /** The thing it is, kept across groups and reads: what its unfolding is
+   *  kept by. */
+  thing: string
+  today: TodayRow | null
+  item: ItemInfo | null
+  routine: Routine | null
+  /** The card of a matter's latest firing with no "today" row. */
+  card_row_id: number | null
+}
+
+/** The activity tab's one list (C1). */
+export interface PersonalAgentActivity {
+  needs: ActivityRow[]
+  watching: ActivityRow[]
+  next: ActivityRow[]
+  done: ActivityRow[]
+  /** What waits on the owner: the badge and the group's head. */
+  waiting: number
+  /** The primary's pill: "today"'s count and the first of them. */
+  pill: { count: number; first: string | null }
+  brief: TodayBrief | null
+  /** Acceptance cards on the timeline nothing can be done on any more. */
+  stale_acceptance: number[]
+  dispatches: DispatchInfo[]
+  day_start: string
+  day_end: string
+  as_of: string
+}
+
 /** A morning brief or a wrap-up "today" mentions. */
 export interface TodayBrief {
   id: number
