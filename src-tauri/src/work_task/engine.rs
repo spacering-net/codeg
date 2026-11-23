@@ -1740,6 +1740,17 @@ impl TaskEngine {
                 .await;
                 Ok(())
             }
+            // Refused because another prompt holds the connection's turn: a
+            // resumed session's connection is shared with the conversation it
+            // belongs to, and someone sent it a turn after this launch's last
+            // check (a reply queued in the conversation view, say). That turn
+            // is theirs — tearing the connection down would kill it. Let go of
+            // the connection and fail this launch only; when the turn ends, it
+            // is an ordinary turn outside the task again.
+            Err(crate::acp::error::AcpError::TurnInProgress) if resumed => {
+                self.forget_connection(&conn_id).await;
+                Err(crate::acp::error::AcpError::TurnInProgress.to_string())
+            }
             Err(e) => {
                 self.forget_connection(&conn_id).await;
                 let _ = self.manager.disconnect(&conn_id).await;
@@ -6534,6 +6545,16 @@ impl TaskEngine {
             if self.live_worktree(&task).await.is_none() {
                 continue;
             }
+            // Someone is working in this task's session or worktree: it is not
+            // ready to land, and waiting on it must not hold up the rest of the
+            // column (a turn can sit on a question for hours).
+            if self
+                .manager
+                .has_turn_in_flight_for(task.conversation_id, task.worktree_folder_id)
+                .await
+            {
+                continue;
+            }
             match self
                 // No instructions: nobody was at the keyboard to write any.
                 .merge_task(task.id, None, settings.delete_worktree_default, None, true)
@@ -6542,6 +6563,10 @@ impl TaskEngine {
                 // An unattended dispatch never queues (see `merge_task`), so
                 // this is always the live generation.
                 Ok(_) => {}
+                // This one changed (or got busy) between the read above and the
+                // dispatch's own check under the folder lock — the next
+                // candidate may still land.
+                Err(e) if e == AUTO_MERGE_NO_LONGER_ELIGIBLE => continue,
                 Err(e) if is_benign_merge_race(&e) => {}
                 Err(e) => {
                     tracing::warn!(
