@@ -26,9 +26,10 @@ export interface AskQuestion {
   /** Codex `request_user_input` marks secret answers (API keys etc.) with
    *  `isSecret`; the read-only card masks them. */
   isSecret: boolean
-  /** Codex `request_user_input` gives each question a stable `id`; its chosen
-   *  answer envelope is keyed by that id rather than the question text (unlike
-   *  the codeg-mcp ask, which the card matches by header+question). */
+  /** Codex `request_user_input` and DSH (the `deepseek` agent) give each
+   *  question a stable `id`; their answer envelopes are keyed by that id rather
+   *  than the question text (unlike the codeg-mcp ask, which the card matches
+   *  by header+question). */
   id?: string
   allowOther?: boolean
 }
