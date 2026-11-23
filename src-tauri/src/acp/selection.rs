@@ -157,10 +157,32 @@ impl SelectionPersister {
         row_id: i32,
     ) {
         let mut owners = self.owners.lock().await;
-        if state.read().await.selection_finalized {
+        let (finalized, snapshot) = {
+            let s = state.read().await;
+            let settled = s.selectors_ready && !s.selectors_settling;
+            (
+                s.selection_finalized,
+                settled.then(|| selection_snapshot(&s)),
+            )
+        };
+        if !finalized {
+            owners.insert(row_id, conn_id.to_string());
             return;
         }
-        owners.insert(row_id, conn_id.to_string());
+        // The loop already ended (its final flush ran before this link, so it
+        // had no row to write): record the selection the connection ended
+        // with — but only into a row that has none yet and no live writer,
+        // so it can never overwrite anyone's newer selection.
+        if owners.contains_key(&row_id) {
+            return;
+        }
+        if let (Some(db), Some(snapshot)) = (self.db.get(), snapshot) {
+            if let Err(e) =
+                conversation_service::set_selector_state_if_absent(db, row_id, &snapshot).await
+            {
+                tracing::warn!("[selection] late link of conversation {row_id} failed: {e}");
+            }
+        }
     }
 
     /// Persist the connection's current selection to its row, if it has one,

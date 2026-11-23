@@ -8055,10 +8055,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         ...(inflightSettersRef.current.get(contextKey) ?? []),
       ]
       if (pendingSetters.length > 0) {
+        const activityBefore = lastActivityRef.current.get(contextKey)
         await Promise.race([
           Promise.allSettled(pendingSetters),
           new Promise((resolve) => setTimeout(resolve, 5000)),
         ])
+        // The wait yielded: the connection may have been picked up again
+        // meanwhile (a reopen re-keying it to a new tab, or a send on this
+        // key). Tearing it down then would end work the user just started —
+        // leave it to whoever holds it now.
+        const current = storeRef.current.connections.get(contextKey)
+        const movedOrReused =
+          current?.connectionId !== conn.connectionId ||
+          lastActivityRef.current.get(contextKey) !== activityBefore ||
+          Array.from(storeRef.current.connections).some(
+            ([key, other]) =>
+              key !== contextKey && other.connectionId === conn.connectionId
+          )
+        if (movedOrReused) return true
       }
       let tornDown = true
       await acpDisconnect(conn.connectionId).catch((error: unknown) => {
