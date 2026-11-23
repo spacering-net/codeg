@@ -19,31 +19,50 @@ import { cn } from "@/lib/utils"
  * rehype-harden percent-encodes non-ASCII characters in URLs (a document in
  * `docs/04-方案设计/` references `架构图.svg`, but the rendered `src` is
  * `04-%E6%96%B9%E6%A1%88%E8%AE%BE%E8%AE%A1/.../%E6%9E%B6%E6%9E%84%E5%9B%BE.svg`).
- * The backend wants a real filesystem path, not a URL. Decode once; a path
- * containing a literal, malformed `%` is left untouched rather than throwing.
+ * The backend wants a real filesystem path, not a URL, so decode it — one
+ * segment at a time. A segment that would decode into a separator (`%2F`,
+ * `%5C`) stays encoded: decoding must never add path structure, or
+ * "/%2Fhost/share/x.png" would turn into the network path "//host/share/x.png"
+ * after the remote-URL guard has already passed it as local. A segment with a
+ * malformed `%` sequence is left untouched rather than throwing.
  */
 function decodeLocalPath(path: string): string {
-  try {
-    return decodeURIComponent(path)
-  } catch {
-    return path
-  }
+  return path
+    .split("/")
+    .map((segment) => {
+      try {
+        const decoded = decodeURIComponent(segment)
+        return /[/\\]/.test(decoded) ? segment : decoded
+      } catch {
+        return segment
+      }
+    })
+    .join("/")
 }
 
-function resolveRelativePath(base: string, relative: string): string {
-  // Strip URL fragment (e.g. #gh-light-mode-only) and query string
-  const cleaned = relative.replace(/[#?].*$/, "")
-  // Preserve leading "/" for absolute paths, filter empty segments
-  const isAbsolute = base.startsWith("/")
-  const parts = base.split("/").filter(Boolean)
-  for (const seg of cleaned.split("/")) {
-    if (seg === "..") {
-      if (parts.length > 0) parts.pop()
-    } else if (seg !== "." && seg !== "") {
-      parts.push(seg)
-    }
-  }
-  return (isAbsolute ? "/" : "") + parts.join("/")
+/**
+ * One segment of a filesystem path, escaped for insertion into a Markdown /
+ * HTML URL. Everything URL-significant is encoded — `%` (a directory literally
+ * named "Design%20Notes" must not decode into "Design Notes"), spaces and
+ * parentheses (they end a Markdown destination), quotes (they end a raw HTML
+ * attribute), `#`/`?` (they start a fragment/query) — and `decodeLocalPath`
+ * reverses it exactly.
+ */
+function encodePathSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(
+    /[!'()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`
+  )
+}
+
+/**
+ * `relative` (already decoded, so a `#` or `?` in it is part of a file name)
+ * under the absolute directory `base`. Not `${base}/…`: under the POSIX root
+ * that reads `//…`, a network share.
+ */
+function joinUnder(base: string, relative: string): string {
+  const prefix = base.endsWith("/") ? base : `${base}/`
+  return normalizeAbsPath(prefix + relative.replace(/^\/+/, ""))
 }
 
 /**
@@ -80,8 +99,10 @@ function preprocessMarkdownPaths(
   fileDir: string,
   previewRoot: string | null
 ): string {
+  // `base` is a filesystem path and `pathPart` is the author's URL text:
+  // escape the former so the consumer's single decode restores both exactly.
   const resolveAgainst = (base: string, pathPart: string): string => {
-    const parts = base.split("/").filter(Boolean)
+    const parts = base.split("/").filter(Boolean).map(encodePathSegment)
     for (const seg of pathPart.split("/")) {
       if (seg === "..") {
         if (parts.length > 0) parts.pop()
@@ -93,8 +114,12 @@ function preprocessMarkdownPaths(
   }
 
   const resolveUrl = (url: string, kind: "image" | "link"): string => {
-    // Skip remote URLs, protocol-relative URLs, and anchors
-    if (/^https?:\/\/|^data:|^blob:|^#|^\/\//.test(url)) return url
+    // Protocol-relative "//host/…" is a WEB address. Pin it to https here:
+    // rehype-harden would otherwise strip the host and hand the renderer a
+    // bare "/…", which the image loader and link opener take for a local path.
+    if (url.startsWith("//")) return `https:${url}`
+    // Skip remote URLs and anchors
+    if (/^https?:\/\/|^data:|^blob:|^#/.test(url)) return url
     // Separate fragment/query from path
     const fragIdx = url.search(/[#?]/)
     const pathPart = fragIdx >= 0 ? url.slice(0, fragIdx) : url
@@ -195,16 +220,18 @@ function useLocalImageSrc(
     if (cleaned.startsWith("/")) {
       const absolute = normalizeAbsPath(cleaned)
       candidates.push(absolute)
-      if (previewRoot) {
+      // A drive-letter path is already fully qualified; only a "/"-rooted one
+      // can also mean "from the project root".
+      if (previewRoot && !/^[a-zA-Z]:\//.test(absolute)) {
         const prefix = previewRoot.endsWith("/")
           ? previewRoot
           : `${previewRoot}/`
         if (!absolute.startsWith(prefix)) {
-          candidates.push(resolveRelativePath(previewRoot, absolute))
+          candidates.push(joinUnder(previewRoot, absolute))
         }
       }
     } else if (baseDir) {
-      candidates.push(resolveRelativePath(baseDir, cleaned))
+      candidates.push(joinUnder(baseDir, cleaned))
     }
 
     const ext = (candidates[0] ?? cleaned).split(".").pop()?.toLowerCase() ?? ""

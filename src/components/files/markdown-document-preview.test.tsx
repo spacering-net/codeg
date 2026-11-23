@@ -209,4 +209,115 @@ describe("MarkdownDocumentPreview local images", () => {
     )
     expect(mocks.readFileBase64).toHaveBeenCalledWith("/repo/docs/100%.svg")
   })
+
+  it("keeps decoded '#' and '?' in the file name on the preview-root fallback", async () => {
+    mocks.readFileBase64.mockImplementation(async (path: string) => {
+      if (path !== "/repo/assets/chart#1?.svg") throw new Error("ENOENT")
+      return "QUFB"
+    })
+
+    const { container } = renderDocument(
+      "![c](/assets/chart%231%3F.svg?v=2#view)"
+    )
+
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(
+        "data:image/svg+xml;base64,QUFB"
+      )
+    )
+    expect(mocks.readFileBase64.mock.calls.map(([path]) => path)).toEqual([
+      "/assets/chart#1?.svg",
+      "/repo/assets/chart#1?.svg",
+    ])
+  })
+
+  it("never turns an encoded separator into a network path", async () => {
+    const { container } = renderDocument(
+      [
+        "![a](/%2Fhost.invalid/share/a.png)",
+        "![b](/%5C%5Chost.invalid/share/b.png)",
+      ].join("\n\n")
+    )
+
+    await waitFor(() =>
+      expect(mocks.readFileBase64.mock.calls.length).toBeGreaterThan(0)
+    )
+    expect(container.querySelectorAll("img")).toHaveLength(2)
+    for (const [path] of mocks.readFileBase64.mock.calls) {
+      expect(path).not.toMatch(/^[\\/]{2}/)
+      expect(path).not.toContain("\\")
+    }
+  })
+
+  it("treats protocol-relative destinations as web addresses", async () => {
+    const { container } = renderDocument(
+      [
+        "![md](//cdn.invalid/assets/logo.png)",
+        '<img src="//cdn.invalid/raw.png" alt="raw">',
+        "[page](//cdn.invalid/page)",
+      ].join("\n\n")
+    )
+
+    await waitFor(() =>
+      expect(container.querySelectorAll("img")).toHaveLength(2)
+    )
+    expect(mocks.readFileBase64).not.toHaveBeenCalled()
+    expect(
+      Array.from(container.querySelectorAll("img")).map((img) =>
+        img.getAttribute("src")
+      )
+    ).toEqual([
+      "https://cdn.invalid/assets/logo.png",
+      "https://cdn.invalid/raw.png",
+    ])
+    expect(container.querySelector("a")?.getAttribute("href")).toBe(
+      "https://cdn.invalid/page"
+    )
+  })
+
+  it.each([
+    ["a literal percent escape", "/work/Design%20Notes"],
+    ["spaces and parentheses", "/work/My Docs (v2)"],
+    ["a hash sign", "/work/a#b"],
+  ])(
+    "resolves against a document directory containing %s",
+    async (_label, dir) => {
+      const openFilePreview = vi.fn()
+      const { container } = render(
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <MarkdownDocumentPreview
+            content={"![a](./img/a.png)\n\n[guide](./guide.md)"}
+            fileDir={dir}
+            previewRoot={dir}
+            openFilePreview={openFilePreview}
+          />
+        </NextIntlClientProvider>
+      )
+
+      await waitFor(() =>
+        expect(container.querySelector("img")?.getAttribute("src")).toBe(
+          "data:image/png;base64,QUFB"
+        )
+      )
+      expect(mocks.readFileBase64).toHaveBeenCalledWith(`${dir}/img/a.png`)
+      fireEvent.click(container.querySelector("a")!)
+      expect(openFilePreview).toHaveBeenCalledWith(`${dir}/guide.md`)
+    }
+  )
+
+  it("resolves Windows drive paths without a cross-drive fallback", async () => {
+    mocks.readFileBase64.mockRejectedValue(new Error("ENOENT"))
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+
+    renderDocument("![a](../../other/x.png)", {
+      fileDir: "C:/repo/docs",
+      previewRoot: "C:/repo",
+    })
+
+    await waitFor(() => expect(errorSpy).toHaveBeenCalled())
+    expect(mocks.readFileBase64.mock.calls.map(([path]) => path)).toEqual([
+      "C:/other/x.png",
+    ])
+    errorSpy.mockRestore()
+  })
 })
