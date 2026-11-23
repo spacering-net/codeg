@@ -93,6 +93,7 @@ function BackgroundTaskRowView({
   launch: BackgroundTasksStep["launches"][string] | undefined
 }) {
   const t = useTranslations("Folder.chat.activity")
+  const tDelegation = useTranslations("Folder.chat.delegation")
   const tParts = useTranslations("Folder.chat.contentParts.backgroundTask")
   const statusText = useStatusText()
   const status = rowStatus(row)
@@ -109,7 +110,9 @@ function BackgroundTaskRowView({
         ? t("row.taskFailed")
         : row.badge === "stopped"
           ? t("row.taskStopped")
-          : t("row.taskRunning")
+          : row.isInFlight
+            ? t("row.taskRunning")
+            : t("kind.background")
   const what =
     launch?.description ??
     (row.isSubagent ? null : firstLine(launch?.command ?? row.command))
@@ -153,7 +156,11 @@ function BackgroundTaskRowView({
         ) : row.badge === "stopped" ? (
           t("metric.stopped")
         ) : row.badge === "running" ? (
-          t("metric.running")
+          row.isInFlight ? (
+            t("metric.running")
+          ) : (
+            tDelegation("status.checked")
+          )
         ) : (
           t("metric.done")
         )

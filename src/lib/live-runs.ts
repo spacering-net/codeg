@@ -31,7 +31,7 @@ import type {
 } from "@/lib/adapters/ai-elements-adapter"
 import { toolStepKind } from "@/lib/activity/describe-tool-call"
 import { liveAsyncTasks } from "@/lib/async-tasks"
-import { isUnsettledToolCall } from "@/lib/tool-call-lifecycle"
+import { isToolStatusCancelled } from "@/lib/tool-call-lifecycle"
 import type {
   AgentType,
   AsyncTaskRecord,
@@ -175,14 +175,24 @@ export function runningSubAgentCalls(
   return out
 }
 
+export const EMPTY_LIVE_RUNS: LiveRuns<never> = {
+  tasks: [],
+  subagents: [],
+  delegations: [],
+  count: 0,
+}
+
 function collectRunningSubAgentCalls(
   parts: readonly AdaptedContentPart[],
   out: AdaptedToolCallPart[]
 ): void {
   for (const part of parts) {
     if (part.type === "tool-call") {
-      if (part.toolCallId && isUnsettledToolCall(part) && isSubAgentCall(part))
-        out.push(part)
+      const inFlight =
+        (part.state === "input-available" ||
+          part.state === "input-streaming") &&
+        !isToolStatusCancelled(part.toolStatus)
+      if (part.toolCallId && inFlight && isSubAgentCall(part)) out.push(part)
     } else if (part.type === "goal-run") {
       collectRunningSubAgentCalls(part.items, out)
     }

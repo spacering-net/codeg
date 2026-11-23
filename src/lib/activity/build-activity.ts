@@ -118,7 +118,9 @@ function sameKeys(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
 
 function backgroundStatus(polls: AdaptedToolCallPart[]): StepStatus {
   const rows = buildBackgroundTaskRows(polls)
-  if (rows.some((row) => row.badge === "running")) return "running"
+  if (rows.some((row) => row.badge === "running" && row.isInFlight)) {
+    return "running"
+  }
   if (rows.some((row) => row.badge === "failed")) return "failed"
   if (rows.length > 0 && rows.every((row) => row.badge === "stopped")) {
     return "cancelled"

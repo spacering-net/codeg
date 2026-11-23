@@ -111,7 +111,7 @@ export function summarizeActivity(steps: ActivityStep[]): ActivitySummary {
       const rows = buildBackgroundTaskRows(step.polls)
       for (const row of rows) {
         stepCount += 1
-        if (row.badge === "running") running = true
+        if (row.badge === "running" && row.isInFlight) running = true
         if (row.badge === "failed") {
           failures.push({ key: step.key, signature: null, index })
         }

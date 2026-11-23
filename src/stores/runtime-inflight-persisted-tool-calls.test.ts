@@ -272,10 +272,56 @@ describe("isInFlightRound", () => {
     // the assembled timeline (rather than over the DB projection) would leave
     // this finished reply "running" forever: never collapsing its progress and
     // permanently hiding its stats row and artifacts card.
-    seedSession(makeDetail([userTurn("u1")], "u1"), undefined, [
-      assistantTurn("local-a1", [poll("t1"), pollResult("t1")]),
-    ])
+    seedSession(
+      makeDetail(
+        [userTurn("u1"), assistantTurn("partial-a1", [poll("t1")])],
+        "u1"
+      ),
+      undefined,
+      [assistantTurn("local-a1", [poll("t1"), pollResult("t1")])]
+    )
     expect(inFlightRoundOf("u1")).toBe(false)
+    expect(inFlightRoundOf("partial-a1")).toBe(false)
+    expect(inProgressOf("partial-a1")).toBeUndefined()
     expect(inFlightRoundOf("local-a1")).toBeUndefined()
+  })
+
+  it("clears detail.in_flight_user_turn_id and drops persisted partial reply at COMPLETE_TURN", () => {
+    seedSession(
+      makeDetail(
+        [userTurn("u1"), assistantTurn("partial-a1", [poll("t1")])],
+        "u1"
+      ),
+      {
+        id: "lm-1",
+        role: "assistant",
+        startedAt: Date.now(),
+        content: [
+          {
+            type: "tool_call",
+            info: {
+              tool_call_id: "t1",
+              title: "get_delegation_status",
+              kind: "other",
+              status: "completed",
+              content: '{"tasks":[{"task_id":"task-1","status":"completed"}]}',
+              raw_input: '{"task_ids":["task-1"],"wait_ms":0}',
+              raw_output_chunks: [],
+              raw_output_total_bytes: 0,
+              locations: null,
+              meta: null,
+              images: [],
+            },
+          },
+        ],
+      }
+    )
+    useConversationRuntimeStore.getState().actions.completeTurn(CID)
+    const after = useConversationRuntimeStore
+      .getState()
+      .byConversationId.get(CID)
+    expect(after?.detail?.in_flight_user_turn_id).toBeNull()
+    expect(after?.detail?.turns.map((t) => t.id)).toEqual(["u1"])
+    expect(getTimelineTurns(CID).some((t) => t.isInFlightRound)).toBe(false)
   })
 })

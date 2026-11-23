@@ -236,4 +236,43 @@ describe("summarizeActivity", () => {
     expect(summary.steps).toBe(1)
     expect(summary.failed).toBe(1)
   })
+
+  it("does not mark the turn running for a finished background poll that observed running", () => {
+    const settledRunningPoll: AdaptedToolCallPart = {
+      type: "tool-call",
+      toolCallId: "p-settled",
+      toolName: "TaskOutput",
+      input: JSON.stringify({ task_id: "bg1", block: false }),
+      state: "output-available",
+      output: `<retrieval_status>timeout</retrieval_status>\n<task_id>bg1</task_id>\n<status>running</status>`,
+    }
+    const inFlightPoll: AdaptedToolCallPart = {
+      ...settledRunningPoll,
+      toolCallId: "p-live",
+      state: "input-available",
+      output: null,
+    }
+    expect(
+      summarizeActivity([
+        {
+          type: "background-tasks",
+          key: "bg:p-settled",
+          polls: [settledRunningPoll],
+          status: "succeeded",
+          launches: {},
+        },
+      ]).running
+    ).toBe(false)
+    expect(
+      summarizeActivity([
+        {
+          type: "background-tasks",
+          key: "bg:p-live",
+          polls: [inFlightPoll],
+          status: "running",
+          launches: {},
+        },
+      ]).running
+    ).toBe(true)
+  })
 })

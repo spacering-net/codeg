@@ -45,6 +45,7 @@ import {
   parseBackgroundTaskMarker,
 } from "@/lib/background-agent"
 import { imageCardLabel } from "@/lib/image-tool-label"
+import { toolStatusTerminal } from "@/lib/tool-call-lifecycle"
 
 /**
  * Conversation-runtime shared state as a Zustand store — the per-conversation
@@ -1509,7 +1510,7 @@ export function buildStreamingTurnsFromLiveMessage(
               })
             }
           }
-          if (status === "completed" || status === "failed") {
+          if (toolStatusTerminal(status)) {
             currentGroupHasCompletedTool = true
           }
           break
@@ -1556,8 +1557,7 @@ export function buildStreamingTurnsFromLiveMessage(
           // does not interpret.
           meta: block.info.meta,
         })
-        const isFinalState =
-          block.info.status === "completed" || block.info.status === "failed"
+        const isFinalState = toolStatusTerminal(block.info.status)
         // Output precedence: raw_output_chunks (terminal polling / SDK
         // raw_output field) wins over content. Some agents stream bash output
         // via raw_output with raw_output_append, others via content-only
@@ -1584,8 +1584,7 @@ export function buildStreamingTurnsFromLiveMessage(
           isAgent && children.length > 0
             ? {
                 tool_calls: children.map(({ info: ci, toolName: cn }) => {
-                  const cFinal =
-                    ci.status === "completed" || ci.status === "failed"
+                  const cFinal = toolStatusTerminal(ci.status)
                   const cOutput =
                     ci.raw_output_chunks.length > 0
                       ? getJoinedChunks(ci.raw_output_chunks)
@@ -2715,8 +2714,31 @@ function reducer(
         )
       }
 
+      let nextDetail = current.detail
+      if (nextDetail?.in_flight_user_turn_id != null) {
+        const inFlightId = nextDetail.in_flight_user_turn_id
+        const promptIdx =
+          !current.liveOwnsActiveTurn &&
+          streamingTurns.some((t) => t.role === "assistant")
+            ? nextDetail.turns.findIndex(
+                (t) => t.role === "user" && t.id === inFlightId
+              )
+            : -1
+        nextDetail = {
+          ...nextDetail,
+          turns:
+            promptIdx === -1
+              ? nextDetail.turns
+              : nextDetail.turns.filter(
+                  (t, i) => i <= promptIdx || t.role !== "assistant"
+                ),
+          in_flight_user_turn_id: null,
+        }
+      }
+
       return updateSessionInState(state, action.conversationId, () => ({
         ...current,
+        detail: nextDetail,
         localTurns: promoted,
         optimisticTurns: [],
         liveMessage: null,
@@ -4084,8 +4106,12 @@ function computeTimelinePrefix(
   // Where the still-running round starts inside the persisted projection. -1
   // when the backend reports no in-flight prompt, or names one this window
   // doesn't contain — the whole projection then reads as settled history.
+  const settledLocally =
+    session.localTurns.length > 0 &&
+    session.optimisticTurns.length === 0 &&
+    session.liveMessage === null
   const inFlightRoundStart =
-    inFlightPromptId === null
+    inFlightPromptId === null || settledLocally
       ? -1
       : visiblePersistedTurns.findIndex(
           (t) => t.role === "user" && t.id === inFlightPromptId

@@ -86,6 +86,15 @@ describe("background task row", () => {
     expect(rows()[0]).toHaveAttribute("data-status", "running")
   })
 
+  it("shows a settled poll that observed running as checked rather than still running", () => {
+    renderPolls([poll({ output: RUNNING, state: "output-available" })])
+    expect(rows()[0]).toHaveAttribute("data-status", "succeeded")
+    expect(screen.getByText("Background task")).toBeInTheDocument()
+    expect(screen.getByText("checked")).toBeInTheDocument()
+    expect(screen.queryByText("Task running")).not.toBeInTheDocument()
+    expect(screen.queryByText(/^running$/)).not.toBeInTheDocument()
+  })
+
   it("names a Grok poll after the command it polled", () => {
     // Grok reports the same lifecycle as a JSON envelope.
     renderPolls([

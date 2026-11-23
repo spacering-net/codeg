@@ -227,3 +227,12 @@ export function autonomousTurnCause(description: string): AutonomousTurnCause {
 export function liveAsyncTasks(tasks: AsyncTaskRecord[]): AsyncTaskRecord[] {
   return tasks.filter((t) => !isAsyncTaskTerminal(t))
 }
+
+export function settleAsyncTasksOnDisconnect(
+  tasks: AsyncTaskRecord[]
+): AsyncTaskRecord[] {
+  if (tasks.every(isAsyncTaskTerminal)) return tasks
+  return tasks.map((t) =>
+    isAsyncTaskTerminal(t) ? t : { ...t, state: "stopped", can_stop: false }
+  )
+}

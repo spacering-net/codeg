@@ -6,6 +6,7 @@ import {
   isAsyncTaskTerminal,
   liveAsyncTasks,
   mergeAsyncTasks,
+  settleAsyncTasksOnDisconnect,
   upsertAsyncTask,
 } from "./async-tasks"
 import type { AsyncTaskDelta, AsyncTaskRecord } from "@/lib/types"
@@ -210,6 +211,22 @@ describe("liveAsyncTasks", () => {
     // classify would silently drop work that is still running.
     expect(liveAsyncTasks([{ ...rows[0], state: "throttled" }])).toHaveLength(1)
     expect(isAsyncTaskTerminal({ ...rows[0], state: "throttled" })).toBe(false)
+  })
+})
+
+describe("settleAsyncTasksOnDisconnect", () => {
+  it("stops live rows when the connection dies while preserving already-terminal ones", () => {
+    const running = upsertAsyncTask([], SPAWN)[0]!
+    const done: AsyncTaskRecord = {
+      ...running,
+      task_id: "t2",
+      state: "completed",
+    }
+    const settled = settleAsyncTasksOnDisconnect([running, done])
+    expect(liveAsyncTasks(settled)).toHaveLength(0)
+    expect(settled[0]).toMatchObject({ state: "stopped", can_stop: false })
+    expect(settled[1]).toBe(done)
+    expect(settleAsyncTasksOnDisconnect([done])).toEqual([done])
   })
 })
 

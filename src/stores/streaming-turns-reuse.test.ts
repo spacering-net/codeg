@@ -14,7 +14,7 @@ import {
 
 function bash(
   id: string,
-  status: "in_progress" | "completed",
+  status: "in_progress" | "completed" | "cancelled",
   output: string | null = null
 ): LiveContentBlock {
   const info: ToolCallInfo = {
@@ -106,6 +106,26 @@ describe("buildStreamingTurnsFromLiveMessage — rebuilt on every batch", () => 
     const other = buildStreamingTurnsFromLiveMessage(2, message(content))
     expect(other.turns[0]).not.toBe(first.turns[0])
     expect(other.turns[0]!.id).not.toBe(first.turns[0]!.id)
+  })
+
+  it("settles a cancelled call with partial output instead of keeping it in progress", () => {
+    const built = buildStreamingTurnsFromLiveMessage(
+      1,
+      message([bash("t-cancel", "cancelled", "partial output")])
+    )
+    expect([...built.inProgressToolCallIds]).toEqual([])
+    expect(built.turns[0]!.blocks).toEqual([
+      expect.objectContaining({
+        type: "tool_use",
+        tool_use_id: "t-cancel",
+        status: "cancelled",
+      }),
+      expect.objectContaining({
+        type: "tool_result",
+        tool_use_id: "t-cancel",
+        output_preview: "partial output",
+      }),
+    ])
   })
 })
 

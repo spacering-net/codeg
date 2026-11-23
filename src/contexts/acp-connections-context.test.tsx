@@ -1804,6 +1804,51 @@ describe("AcpConnectionsProvider AIR async tasks", () => {
     })
     expect(h.store!.getConnection(TAB)?.asyncTasks).toHaveLength(0)
   })
+
+  it("settles live async tasks and clears background runs when the connection disconnects or errors", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "async_task",
+      delta: { task_id: "t1", spawned: true, name: "watch", can_stop: true },
+    })
+    emitAcpEvent(handlers, {
+      seq: 2,
+      connection_id: "spawned-conn",
+      type: "background_activity",
+      session_id: "s1",
+      outstanding: 1,
+      outstanding_tasks: [
+        {
+          task_id: "bg1",
+          kind: "agent",
+          description: "sub-agent",
+          tool_use_id: "call-1",
+          started_at_ms: 1000,
+        },
+      ],
+      watermark: 1,
+    })
+    expect(h.store!.getConnection(TAB)?.asyncTasks[0]?.state).toBe("running")
+    expect(h.store!.getConnection(TAB)?.backgroundTasks).toHaveLength(1)
+
+    emitAcpEvent(handlers, {
+      seq: 3,
+      connection_id: "spawned-conn",
+      type: "status_changed",
+      status: "disconnected",
+    })
+    const after = h.store!.getConnection(TAB)!
+    expect(after.asyncTasks[0]).toMatchObject({
+      task_id: "t1",
+      state: "stopped",
+      can_stop: false,
+    })
+    expect(after.backgroundOutstanding).toBe(0)
+    expect(after.backgroundTasks).toEqual([])
+    expect(after.delegatedChildren).toEqual([])
+  })
 })
 
 // The composer's connection-status popover. Unlike `reapplyConfig` (live owners
