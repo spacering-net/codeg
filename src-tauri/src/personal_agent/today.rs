@@ -35,7 +35,8 @@ use crate::acp::manager::ConnectionManager;
 use crate::db::entities::personal_agent_dispatch::{
     self as dispatch_entity, DispatchMode, DispatchState,
 };
-use crate::db::entities::personal_agent_item::{self as item_entity, ItemStatus};
+use crate::db::entities::personal_agent::Model as AgentModel;
+use crate::db::entities::personal_agent_item::{self as item_entity, ItemStatus, WaitsFor};
 use crate::db::entities::personal_agent_notice::{self as notice_entity, NoticeKind, NoticeState};
 use crate::db::entities::work_task::WorkTaskStatus;
 use crate::db::service::personal_agent_service as svc;
@@ -66,6 +67,12 @@ pub struct TodayView {
     pub dispatches: Vec<crate::models::personal_agent::DispatchInfo>,
     /// The morning brief or the wrap-up being prepared (6.4).
     pub brief: Option<super::brief::TodayBrief>,
+    /// The timeline rows of acceptance cards still open that nothing can be
+    /// done on any more (C1): a later round took over, the run moved on, the
+    /// task left review (merging, say). Not listed; the page does not lead
+    /// the owner to them either.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stale_acceptance: Vec<i32>,
 }
 
 /// One row: what it is, whose it is, and what opens it.
@@ -133,6 +140,15 @@ pub struct TodayRow {
     /// title is codeg's plain line, a setting by its key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changes: Option<Value>,
+    /// A board task being checked (C1): the check's own work, and its round.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check_dispatch_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub round: Option<i32>,
+    /// The acceptance it waits on the owner for, its task queued to merge
+    /// meanwhile (C1): said after its state.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub queued: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,6 +180,9 @@ impl TodayRow {
             undo: false,
             reason: None,
             changes: None,
+            check_dispatch_id: None,
+            round: None,
+            queued: false,
         }
     }
 }
@@ -310,6 +329,153 @@ async fn card_row_of(
     n: &notice_entity::Model,
 ) -> Option<crate::db::entities::personal_agent_timeline::Model> {
     svc::get_row(&db.conn, n.timeline_id?).await.ok().flatten()
+}
+
+/// The card the latest firing of a matter's reminder raised (C1): its
+/// notice — the newest on the matter's subject whose time is the matter's
+/// due time now, written with it in one go — and its row on the timeline.
+async fn reminder_card(
+    db: &AppDatabase,
+    item: &item_entity::Model,
+) -> Option<(notice_entity::Model, crate::db::entities::personal_agent_timeline::Model)> {
+    let due_at = item.due_at?;
+    let notices = notice_entity::Entity::find()
+        .filter(notice_entity::Column::Kind.eq(NoticeKind::Reminder))
+        .filter(notice_entity::Column::SubjectKey.eq(svc::reminder_subject(item.id)))
+        .order_by_desc(notice_entity::Column::Id)
+        .all(&db.conn)
+        .await
+        .ok()?;
+    let n = notices.into_iter().find(|n| {
+        payload_of(&n.payload)["due_at"]
+            .as_str()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .is_some_and(|t| t.with_timezone(&Utc) == due_at)
+    })?;
+    let card = card_row_of(db, &n).await?;
+    Some((n, card))
+}
+
+/// One row for a piece of work (C1), in "needs you": an acceptance card the
+/// owner can still act on stands for its task — the board's review row of
+/// the same task goes into it, its time the earliest of them, and a merge
+/// queued meanwhile is said on it (`queued`). One they cannot act on any
+/// more (a later round, the run moved on under an ask, the task out of
+/// review) is not listed: its task is as the board has it now.
+///
+/// Can be acted on: the latest round of its work, its task in review, and —
+/// for an ask, decided against the run it was for — that run still the
+/// task's; one to check again (void, changed) is checked against the
+/// worktree as it is, whatever run it was for.
+async fn represent(
+    db: &AppDatabase,
+    prefs: &Prefs,
+    bots: &[AgentModel],
+    view: &mut TodayView,
+    tasks: &[crate::db::entities::work_task::Model],
+    queued: &mut Vec<TodayRow>,
+) -> HashSet<i32> {
+    use crate::db::entities::personal_agent_verification::VerificationState as V;
+    use crate::db::service::personal_agent_verification_service as vsvc;
+    let cards: HashMap<i32, notice_entity::Model> = notice_entity::Entity::find()
+        .filter(notice_entity::Column::State.eq(NoticeState::Open))
+        .filter(notice_entity::Column::Kind.eq(NoticeKind::Acceptance))
+        .all(&db.conn)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|n| Some((n.timeline_id?, n)))
+        .collect();
+    let int = |v: &Value| v.as_i64().and_then(|n| i32::try_from(n).ok());
+    let works: Vec<i32> = cards
+        .values()
+        .filter_map(|n| int(&payload_of(&n.payload)["dispatch_id"]))
+        .collect();
+    let latest = vsvc::latest_of(&db.conn, &works).await.unwrap_or_default();
+    let mut stood_for: HashMap<i32, usize> = HashMap::new();
+    let mut kept = Vec::with_capacity(view.needs.len());
+    let mut needs = std::mem::take(&mut view.needs);
+    // An open card with no row of its own (raised after its assistant's
+    // needs were read, say): its row, from the card.
+    let listed: HashSet<i32> = needs
+        .iter()
+        .filter(|r| r.kind == "acceptance")
+        .filter_map(|r| r.row_id)
+        .collect();
+    let mut missing: Vec<&notice_entity::Model> = cards
+        .iter()
+        .filter(|(row, n)| !listed.contains(row) && n.bot_id.is_some_and(|b| bots.iter().any(|x| x.id == b)))
+        .map(|(_, n)| n)
+        .collect();
+    missing.sort_by_key(|n| n.id);
+    for n in missing {
+        let (Some(bot), Some(card)) = (n.bot_id, card_row_of(db, n).await) else {
+            continue;
+        };
+        let mut row = TodayRow::new(
+            format!("card:{bot}:{}", card.id),
+            "acceptance",
+            one_line(&card.body),
+            card.created_at,
+        );
+        row.level = Some(prefs.level_of("acceptance"));
+        row.bot_id = Some(bot);
+        row.row_id = Some(card.id);
+        row.state = Some("acceptance".into());
+        needs.push(row);
+    }
+    for mut row in needs {
+        let card = (row.kind == "acceptance")
+            .then(|| row.row_id.and_then(|r| cards.get(&r)))
+            .flatten();
+        let Some(card) = card else {
+            kept.push(row);
+            continue;
+        };
+        let payload = payload_of(&card.payload);
+        let work = int(&payload["dispatch_id"]);
+        let round = int(&payload["round_id"]);
+        let task = int(&payload["work_task_id"]).and_then(|id| tasks.iter().find(|t| t.id == id));
+        let r = work.and_then(|w| latest.get(&w)).filter(|r| Some(r.id) == round);
+        let live = match (r, task) {
+            (Some(r), Some(t)) if t.status == WorkTaskStatus::Review => match r.state {
+                V::Asked => r.run_seq == t.run_seq,
+                V::Void | V::Changed => true,
+                _ => false,
+            },
+            _ => false,
+        };
+        let Some(t) = task.filter(|_| live) else {
+            view.stale_acceptance.extend(row.row_id);
+            continue;
+        };
+        row.dispatch_id = work;
+        row.task_id = Some(t.id);
+        row.queued =
+            crate::db::service::work_task_service::queued_merge(t.pending_merge.as_deref()).is_some();
+        stood_for.insert(t.id, kept.len());
+        kept.push(row);
+    }
+    // The board's own rows of those tasks go into their acceptance's: its
+    // time the earliest, so what waited long still reads so.
+    let board_row = |r: &TodayRow| {
+        (r.kind == "task")
+            .then_some(r.task_id)
+            .flatten()
+            .and_then(|t| stood_for.get(&t).copied())
+    };
+    let earliest: Vec<(usize, DateTime<Utc>)> = kept
+        .iter()
+        .chain(queued.iter())
+        .filter_map(|r| board_row(r).map(|at| (at, r.at)))
+        .collect();
+    for (at, t) in earliest {
+        kept[at].at = kept[at].at.min(t);
+    }
+    kept.retain(|r| board_row(r).is_none());
+    queued.retain(|r| board_row(r).is_none());
+    view.needs = kept;
+    stood_for.into_keys().collect()
 }
 
 /// A tidy-up's or a process skill's card as "today" lists it (7.7, 7.8):
@@ -746,20 +912,6 @@ pub async fn today_from(
         view.needs.push(row);
     }
     // Reminders that came due today and wait on the owner, with their cards.
-    let reminder_cards: HashMap<i32, (i32, Option<i32>)> = notice_entity::Entity::find()
-        .filter(notice_entity::Column::State.eq(NoticeState::Open))
-        .filter(notice_entity::Column::Kind.eq(NoticeKind::Reminder))
-        .all(&db.conn)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|n| {
-            let item = payload_of(&n.payload)["item_id"]
-                .as_i64()
-                .and_then(|v| i32::try_from(v).ok())?;
-            Some((item, (n.id, n.timeline_id)))
-        })
-        .collect();
     let items = item_entity::Entity::find()
         .filter(item_entity::Column::Status.is_in([ItemStatus::Open, ItemStatus::Waiting]))
         .filter(item_entity::Column::DueAt.gte(day_start))
@@ -768,6 +920,7 @@ pub async fn today_from(
         .all(&db.conn)
         .await
         .unwrap_or_default();
+    let mut reminders_handed: Vec<TodayRow> = Vec::new();
     for i in &items {
         let (Some(due_at), Some(bot)) = (i.due_at, i.bot_id) else {
             continue;
@@ -775,26 +928,47 @@ pub async fn today_from(
         if !bots.iter().any(|b| b.id == bot) {
             continue;
         }
-        let fired = i.fired_at.is_some_and(|f| f >= due_at);
+        // Fired, and still waiting on this firing: on the owner, or handed
+        // to its assistant. Put off since (later, no set time), it goes by
+        // the matter, its card's moment over.
+        let fired = i.fired_at.is_some_and(|f| f >= due_at)
+            && matches!(i.waits_for, Some(WaitsFor::Owner | WaitsFor::Agent));
         let at_due = due::AtDue::parse(i.at_due.as_deref());
         if fired {
-            // A reminder waits on the owner while its card is open; a matter
-            // the assistant does woke it, and is its own from then.
-            let Some((notice, card)) = reminder_cards.get(&i.id).copied() else {
+            // A reminder stands as the card this firing raised does (C1):
+            // open, it waits on the owner; handed to its assistant, it is
+            // watched — between the two writes of a hand-over too, when the
+            // matter still says it waits on the owner. A matter the
+            // assistant does woke it, and is its own from then.
+            let Some((notice, card)) = reminder_card(db, i).await else {
                 continue;
             };
+            let card_state = card
+                .data
+                .as_deref()
+                .map(payload_of)
+                .and_then(|d| d["state"].as_str().map(str::to_string));
+            let handed = card_state.as_deref() == Some("handed");
+            if !handed && (notice.state != NoticeState::Open || card_state.as_deref() != Some("open")) {
+                continue;
+            }
             let mut row = TodayRow::new(
                 format!("reminder:{}", i.id),
                 "reminder",
                 one_line(&i.summary),
                 due_at,
             );
-            row.level = Some(prefs.level_of("reminder"));
             row.bot_id = Some(bot);
-            row.row_id = card;
+            row.row_id = Some(card.id);
             row.item_id = Some(i.id);
-            row.notice_id = Some(notice);
-            view.needs.push(row);
+            row.notice_id = Some(notice.id);
+            if handed {
+                row.state = Some("handed".into());
+                reminders_handed.push(row);
+            } else {
+                row.level = Some(prefs.level_of("reminder"));
+                view.needs.push(row);
+            }
         } else {
             // Still to come (or the clock takes it within a tick).
             let mut row = TodayRow::new(
@@ -842,6 +1016,9 @@ pub async fn today_from(
         view.schedule.push(row);
     }
     view.schedule.sort_by_key(|r| r.at);
+    // One row for a piece of work (C1): an acceptance the owner can still
+    // act on stands for its task; one they cannot is not listed.
+    let represented = represent(db, &prefs, &bots, &mut view, &tasks, &mut queued).await;
     // Within a level, what is in a project the owner worked in lately (or
     // in none) before what is in one they left or asked codeg not to mind;
     // then the longest waiting first (5.2).
@@ -888,9 +1065,11 @@ pub async fn today_from(
     }
     for t in tasks.iter().filter(|t| {
         task_running(t)
-            || accepting
+            || (accepting
                 .get(&t.id)
                 .is_some_and(|v| *v == super::acceptance::AcceptView::Checking)
+                // Its acceptance card waits on the owner and stands for it.
+                && !represented.contains(&t.id))
     }) {
         let mut row = TodayRow::new(
             format!("task:{}", t.id),
@@ -917,10 +1096,33 @@ pub async fn today_from(
         }
         row.task_id = Some(t.id);
         row.conversation_id = t.conversation_id;
+        // Its check under way (C1): the check's own work stands in it.
+        if let Some(r) = t
+            .personal_agent_dispatch_id
+            .and_then(|d| rounds.get(&d))
+            .filter(|r| {
+                r.run_seq == t.run_seq
+                    && r.state
+                        == crate::db::entities::personal_agent_verification::VerificationState::Checking
+            })
+        {
+            row.check_dispatch_id = r.check_dispatch_id;
+            row.round = Some(r.round);
+        }
         view.watching.push(row);
     }
     view.watching.extend(queued);
     view.watching.extend(held);
+    view.watching.extend(reminders_handed);
+    // A check whose task's row stands for it is not a row of its own.
+    let checks: HashSet<i32> = view
+        .watching
+        .iter()
+        .filter_map(|r| r.check_dispatch_id)
+        .collect();
+    view.watching
+        .retain(|r| !(r.kind == "dispatch" && r.dispatch_id.is_some_and(|d| checks.contains(&d))));
+
     // The pull requests the assistants watch (7.4): one ready to merge
     // waits on the owner (its card, above).
     for w in crate::db::service::personal_agent_watch_service::watching(&db.conn, None)

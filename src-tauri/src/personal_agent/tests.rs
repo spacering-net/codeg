@@ -11935,7 +11935,8 @@ async fn an_acceptance_card_is_the_owners_in_today_and_moves_with_handed_over_wo
     let view = super::today::today(&engine.db, &engine.manager, super::clock::now()).await.0;
     let card = view.needs.iter().find(|r| r.kind == "acceptance").expect("the acceptance card needs the owner");
     assert_eq!(card.bot_id, Some(made.bot.id));
-    assert!(!view.needs.iter().any(|r| r.task_id == Some(w.task.id)), "{:#?}", view.needs);
+    assert!(!view.needs.iter().any(|r| r.kind == "task" && r.task_id == Some(w.task.id)), "{:#?}", view.needs);
+    assert_eq!((card.task_id, card.dispatch_id), (Some(w.task.id), Some(w.d.id)), "it stands for its task");
 
     // The worker is deleted, its work handed over: the round and its card
     // are the primary's, and the owner answers it there.
@@ -11950,6 +11951,119 @@ async fn an_acceptance_card_is_the_owners_in_today_and_moves_with_handed_over_wo
     assert_eq!((notice.bot_id, notice.state), (Some(primary), crate::db::entities::personal_agent_notice::NoticeState::Open));
     engine.act_on_notice(notice.id, "accept").await.unwrap();
     assert_eq!(rounds_of(&engine, w.d.id).await[0].state, VerificationState::Accepted);
+}
+
+/// One row in Today for a piece of work (C1): its check under way stands in
+/// its task's row; an acceptance the owner can act on stands for its task,
+/// the board's review row of it folded in (the earliest time kept) and a
+/// merge queued meanwhile said on it; one they can no longer act on is not
+/// listed — the brief, which reads the same rows, follows.
+#[tokio::test]
+async fn one_row_in_today_stands_for_a_piece_of_work_under_acceptance() {
+    use sea_orm::{ActiveModelTrait, Set};
+    let (engine, tmp) = configured().await;
+    let w = work_in_review(&engine, &tmp).await;
+    let conn = &engine.db.conn;
+    let today = || async { super::today::today(&engine.db, &engine.manager, super::clock::now()).await.0 };
+    engine.acceptance_tick().await;
+    let r = rounds_of(&engine, w.d.id).await.remove(0);
+    let check = r.check_dispatch_id.unwrap();
+    let view = today().await;
+    let task = view.watching.iter().find(|x| x.task_id == Some(w.task.id)).expect("its task is watched");
+    assert_eq!((task.check_dispatch_id, task.round, task.state.as_deref()), (Some(check), Some(1), Some("checking")));
+    assert!(!view.watching.iter().any(|x| x.kind == "dispatch" && x.dispatch_id == Some(check)), "{:#?}", view.watching);
+
+    // The owner's to decide; their own board review shows too once
+    // acceptance is off for new rounds: one row, the earliest time.
+    finish_check(&engine, check, "VERDICT: FAIL\n- evidence: it breaks the API").await;
+    let out = call(
+        &engine,
+        "acceptance_decide",
+        json!({ "dispatch_id": w.d.id, "decision": "ask_owner", "question": "Keep the old API?",
+                "message": "Keep the old API." }),
+    )
+    .await;
+    assert!(out.ok, "{}", out.text);
+    set_pref(&engine, "auto_accept", json!("off")).await;
+    let view = today().await;
+    let mine: Vec<_> = view.needs.iter().filter(|x| x.task_id == Some(w.task.id)).collect();
+    assert_eq!(mine.len(), 1, "{:#?}", view.needs);
+    assert_eq!((mine[0].kind, mine[0].dispatch_id, mine[0].queued), ("acceptance", Some(w.d.id), false));
+    let task_now = crate::db::service::work_task_service::get_model(conn, w.task.id).await.unwrap();
+    assert!(mine[0].at <= task_now.updated_at, "the earliest of the two");
+    assert!(view.stale_acceptance.is_empty());
+    // A merge queued meanwhile: still the owner's, said so; not watched apart.
+    let mut am: work_task_entity::ActiveModel = task_now.clone().into();
+    am.pending_merge = Set(Some(r#"{"queued_at":"2026-11-22T10:00:00Z"}"#.into()));
+    am.update(conn).await.unwrap();
+    let view = today().await;
+    let row = view.needs.iter().find(|x| x.task_id == Some(w.task.id)).unwrap();
+    assert!(row.queued);
+    assert!(!view.watching.iter().any(|x| x.task_id == Some(w.task.id)), "{:#?}", view.watching);
+
+    // The run moved on under the ask: nothing to decide on it any more —
+    // not listed, its card named stale; the task is as the board has it.
+    let mut am: work_task_entity::ActiveModel = task_now.into();
+    am.pending_merge = Set(None);
+    am.update(conn).await.unwrap();
+    bump_run(&engine, w.task.id).await;
+    let card_row = svc::get_notice(conn, rounds_of(&engine, w.d.id).await[0].notice_id.unwrap())
+        .await
+        .unwrap()
+        .unwrap()
+        .timeline_id
+        .unwrap();
+    let view = today().await;
+    assert!(!view.needs.iter().any(|x| x.kind == "acceptance"), "{:#?}", view.needs);
+    assert_eq!(view.stale_acceptance, vec![card_row]);
+    let board = view.needs.iter().find(|x| x.task_id == Some(w.task.id)).expect("the board's review row");
+    assert_eq!(board.kind, "task");
+
+    // A check to run again (void) can be acted on whatever run it was for —
+    // as after a merge that failed back to review: its card stands for the
+    // task, which is not also watched as being checked.
+    set_pref(&engine, "auto_accept", json!("on")).await;
+    let r = rounds_of(&engine, w.d.id).await.remove(0);
+    let mut am: crate::db::entities::personal_agent_verification::ActiveModel = r.into();
+    am.state = Set(crate::db::entities::personal_agent_verification::VerificationState::Void);
+    am.update(conn).await.unwrap();
+    let view = today().await;
+    let mine: Vec<_> = view.needs.iter().filter(|x| x.task_id == Some(w.task.id)).collect();
+    assert_eq!(mine.len(), 1, "{:#?}", view.needs);
+    assert_eq!(mine[0].kind, "acceptance");
+    assert!(view.stale_acceptance.is_empty());
+    assert!(!view.watching.iter().any(|x| x.task_id == Some(w.task.id)), "{:#?}", view.watching);
+}
+
+/// A reminder in Today stands as its card from this firing does (C1): open,
+/// it waits on the owner; handed to its assistant — between the two writes
+/// of the hand-over too — it is watched.
+#[tokio::test]
+async fn a_reminder_handed_to_its_assistant_is_watched_not_waiting_on_the_owner() {
+    let (engine, _tmp) = configured().await;
+    let out = call(&engine, "item_update", json!({ "kind": "reminder", "summary": "Renew the domain", "due": "1m" })).await;
+    let id = out.data["item_id"].as_i64().unwrap() as i32;
+    let at = super::clock::now() + chrono::Duration::minutes(2);
+    engine.fire_due_at(at).await;
+    let card = reminder_rows(&engine, id).await.remove(0);
+    let key = format!("reminder:{id}");
+    let view = super::today::today(&engine.db, &engine.manager, at).await.0;
+    let row = view.needs.iter().find(|r| r.key == key).expect("it waits on the owner");
+    assert_eq!(row.row_id, Some(card.id));
+    // The card says "handed" before the notice and the matter do.
+    let mut data = data_of(&card);
+    data["state"] = json!("handed");
+    svc::update_row_data(&engine.db.conn, card.id, None, Some(data)).await.unwrap();
+    let view = super::today::today(&engine.db, &engine.manager, at).await.0;
+    assert!(!view.needs.iter().any(|r| r.key == key), "{:#?}", view.needs);
+    let row = view.watching.iter().find(|r| r.key == key).expect("watched");
+    assert_eq!((row.state.as_deref(), row.row_id, row.level), (Some("handed"), Some(card.id), None));
+    // Put off with no set time: the matter's own, its card's moment over.
+    engine.settle_item(id, "snooze", None).await.unwrap();
+    let view = super::today::today(&engine.db, &engine.manager, at).await.0;
+    assert!(!view.needs.iter().chain(&view.watching).any(|r| r.key == key), "{:#?}", view.watching);
+    let item = svc::get_item(&engine.db.conn, id).await.unwrap().unwrap();
+    assert_eq!(item.waits_for, Some(WaitsFor::Time));
 }
 
 // ── 2.2: the team from the conversation ─────────────────────────────────────

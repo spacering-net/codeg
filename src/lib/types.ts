@@ -3218,6 +3218,11 @@ export interface TodayRow {
    *  `names` they use, to word it as the card does (its `title` names a
    *  setting by its key). */
   changes?: { changes: unknown; names: unknown } | null
+  /** A board task being checked: the check's own work and its round (C1). */
+  check_dispatch_id?: number | null
+  round?: number | null
+  /** An acceptance waiting on the owner whose task is queued to merge. */
+  queued?: boolean
 }
 
 /** "Today": every assistant's, in four groups. */
@@ -3233,6 +3238,8 @@ export interface PersonalAgentToday {
   dispatches: DispatchInfo[]
   /** The morning brief or the wrap-up being prepared (6.4). */
   brief?: TodayBrief | null
+  /** Rows of open acceptance cards nothing can be done on any more (C1). */
+  stale_acceptance?: number[]
 }
 
 /** A morning brief or a wrap-up "today" mentions. */
