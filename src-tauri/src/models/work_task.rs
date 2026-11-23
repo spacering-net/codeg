@@ -264,6 +264,8 @@ pub struct WorkTaskConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkTaskConversationSelection {
     pub conversation_id: i32,
+    /// The conversation's folder (the task's worktree), for opening it.
+    pub folder_id: i32,
     /// The conversation's agent (a task with a conversation keeps it).
     pub agent_type: String,
     /// Config option values (model, effort, …) by option id.

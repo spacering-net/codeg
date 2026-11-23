@@ -6373,7 +6373,7 @@
     "baseBranch": "Basis-Branch",
     "baseBranchDefault": "Aktueller Branch beim Start der Aufgabe",
     "baseBranchHint": "Die Aufgabe zweigt von diesem Branch ab und wird beim Mergen wieder dorthin übernommen.",
-    "agentInheritedHint": "Aus den Aufgaben-Einstellungen geerbt — Änderungen gelten nur für diese Aufgabe",
+    "agentInheritedHint": "Aus den Aufgabeneinstellungen — wird mit dieser Aufgabe gespeichert",
     "agentNoDefaultHint": "Kein Standard-Agent in den Aufgaben-Einstellungen — der ausgewählte Agent wird mit der Aufgabe gespeichert",
     "agentInheritedUnavailableHint": "{agent} aus den Aufgaben-Einstellungen ist nicht verfügbar — der ausgewählte Agent wird mit der Aufgabe gespeichert",
     "agentOverrideReset": "Wieder erben",
@@ -6580,7 +6580,18 @@
     "deliverPrCommitMessageLabel": "Commit-Nachricht",
     "deliverPrUncommittedHint": "Soll der Agent sie selbst committen, brich ab und schick die Aufgabe für eine weitere Runde zurück.",
     "deliverPrCommitSubmit": "Committen, pushen und öffnen",
-    "deliverPrCommitPushSubmit": "Committen und pushen"
+    "deliverPrCommitPushSubmit": "Committen und pushen",
+    "agentLockedHint": "Diese Aufgabe hat bereits eine Unterhaltung — ihr Agent kann nicht geändert werden",
+    "conversationSelectionTitle": "Modell und Optionen dieser Unterhaltung",
+    "conversationSelectionHint": "Ändere sie in der Unterhaltung; der nächste Neuversuch, die Rückgabe oder das Mergen setzt sie damit fort.",
+    "conversationSelectionOpen": "Unterhaltung zum Ändern öffnen",
+    "conversationSelectionLoading": "Wird geladen…",
+    "conversationSelectionUnavailable": "Von diesem Server nicht verfügbar",
+    "conversationSelectionEmpty": "Standardwerte des Agenten",
+    "conversationSelectionLegacy": "Noch nicht gespeichert — die Unterhaltung übernimmt diese ab ihrer nächsten Verbindung",
+    "conversationSelectionStarting": "Die Aufgabe startet gerade — versuche es erneut, sobald sie läuft",
+    "conversationSelectionReplaced": "Der Agent dieser Aufgabe unterscheidet sich von dem ihrer Unterhaltung: Der nächste Lauf startet eine neue Unterhaltung mit den Einstellungen unten.",
+    "settingsAgentFrozenHint": "Aufgaben behalten den Agenten und die Optionen, mit denen sie erstellt wurden — eine Änderung hier gilt für danach erstellte Aufgaben."
   },
   "CustomSkillsSettings": {
     "loading": "Benutzerdefinierte Skills werden geladen…",

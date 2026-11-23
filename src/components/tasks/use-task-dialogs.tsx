@@ -23,7 +23,10 @@ import { TaskCancelDialog } from "./task-cancel-dialog"
 import { TaskCompleteDialog } from "./task-complete-dialog"
 import { TaskDeliverPrDialog } from "./task-deliver-pr-dialog"
 import { TaskDetailSheet } from "./task-detail-sheet"
-import { TaskEditorDialog } from "./task-editor-dialog"
+import {
+  TaskEditorDialog,
+  type TaskEditorSubmitFlags,
+} from "./task-editor-dialog"
 import { TaskFollowUpDialog } from "./task-follow-up-dialog"
 import { TaskMergeDialog } from "./task-merge-dialog"
 import { TaskRestartDialog, type TaskRestartKind } from "./task-restart-dialog"
@@ -153,8 +156,8 @@ export function useTaskDialogs({
   }, [])
 
   const submitEditor = useCallback(
-    async (draft: WorkTaskDraft) => {
-      if (editorTask) await workTaskUpdate(editorTask.id, draft)
+    async (draft: WorkTaskDraft, flags?: TaskEditorSubmitFlags) => {
+      if (editorTask) await workTaskUpdate(editorTask.id, draft, flags)
       else await workTaskCreate(draft)
       setEditorOpen(false)
       void refetch()

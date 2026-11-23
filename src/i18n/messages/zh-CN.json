@@ -6373,7 +6373,7 @@
     "baseBranch": "基准分支",
     "baseBranchDefault": "任务开始时的当前分支",
     "baseBranchHint": "任务从该分支拉出工作树，合并时也落回该分支。",
-    "agentInheritedHint": "继承自任务设置，修改后仅对本任务生效",
+    "agentInheritedHint": "来自任务设置——随任务保存",
     "agentNoDefaultHint": "任务设置中没有默认 agent，当前选中的 agent 将随任务保存",
     "agentInheritedUnavailableHint": "任务设置中的 {agent} 不可用，当前选中的 agent 将随任务保存",
     "agentOverrideReset": "恢复继承",
@@ -6580,7 +6580,18 @@
     "deliverPrCommitMessageLabel": "提交信息",
     "deliverPrUncommittedHint": "想让智能体自己提交的话，取消后把任务退回再跑一轮。",
     "deliverPrCommitSubmit": "提交、推送并创建",
-    "deliverPrCommitPushSubmit": "提交并推送"
+    "deliverPrCommitPushSubmit": "提交并推送",
+    "agentLockedHint": "此任务已产生会话，不能更换智能体",
+    "conversationSelectionTitle": "此会话的模型与选项",
+    "conversationSelectionHint": "请在会话中修改；下次重试、退回或合并会沿用此会话及这些设置。",
+    "conversationSelectionOpen": "在会话中修改",
+    "conversationSelectionLoading": "加载中…",
+    "conversationSelectionUnavailable": "当前服务器不提供此信息",
+    "conversationSelectionEmpty": "智能体默认",
+    "conversationSelectionLegacy": "尚未记录——会话下次连接时会固定为这些设置",
+    "conversationSelectionStarting": "任务正在启动，请在运行后再试",
+    "conversationSelectionReplaced": "此任务的智能体与其会话不同：下次运行会用下面的设置开启新会话。",
+    "settingsAgentFrozenHint": "任务会保留创建时的智能体和选项——此处的修改只影响之后创建的任务。"
   },
   "CustomSkillsSettings": {
     "loading": "正在加载自定义技能…",

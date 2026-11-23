@@ -6373,7 +6373,7 @@
     "baseBranch": "기준 브랜치",
     "baseBranchDefault": "작업이 시작될 때의 현재 브랜치",
     "baseBranchHint": "작업은 이 브랜치에서 갈라져 나오고, 병합도 이 브랜치로 돌아갑니다.",
-    "agentInheritedHint": "작업 설정에서 상속됨 — 변경하면 이 작업에만 적용됩니다",
+    "agentInheritedHint": "작업 설정에서 가져옴 — 이 작업에 저장됩니다",
     "agentNoDefaultHint": "작업 설정에 기본 에이전트가 없습니다 — 선택한 에이전트가 이 작업에 저장됩니다",
     "agentInheritedUnavailableHint": "작업 설정의 기본 에이전트({agent})를 사용할 수 없습니다 — 선택한 에이전트가 이 작업에 저장됩니다",
     "agentOverrideReset": "상속으로 되돌리기",
@@ -6580,7 +6580,18 @@
     "deliverPrCommitMessageLabel": "커밋 메시지",
     "deliverPrUncommittedHint": "에이전트가 직접 커밋하게 하려면 취소하고 작업을 되돌려 한 번 더 실행하세요.",
     "deliverPrCommitSubmit": "커밋, 푸시 후 생성",
-    "deliverPrCommitPushSubmit": "커밋 후 푸시"
+    "deliverPrCommitPushSubmit": "커밋 후 푸시",
+    "agentLockedHint": "이 작업에는 이미 대화가 있어 에이전트를 바꿀 수 없습니다",
+    "conversationSelectionTitle": "이 대화의 모델 및 옵션",
+    "conversationSelectionHint": "대화에서 변경하세요. 다음 재시도·반려·병합은 이 대화를 해당 설정으로 이어갑니다.",
+    "conversationSelectionOpen": "대화를 열어 변경",
+    "conversationSelectionLoading": "불러오는 중…",
+    "conversationSelectionUnavailable": "이 서버에서는 제공되지 않습니다",
+    "conversationSelectionEmpty": "에이전트 기본값",
+    "conversationSelectionLegacy": "아직 기록되지 않음 — 다음 연결 시 대화가 이 설정으로 고정됩니다",
+    "conversationSelectionStarting": "작업을 시작하는 중입니다 — 실행된 후 다시 시도하세요",
+    "conversationSelectionReplaced": "이 작업의 에이전트가 대화의 에이전트와 다릅니다. 다음 실행은 아래 설정으로 새 대화를 시작합니다.",
+    "settingsAgentFrozenHint": "작업은 생성 시의 에이전트와 옵션을 유지합니다 — 여기서 바꾸면 이후에 만드는 작업에 적용됩니다."
   },
   "CustomSkillsSettings": {
     "loading": "사용자 지정 스킬 불러오는 중…",

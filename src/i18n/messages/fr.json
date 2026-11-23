@@ -6373,7 +6373,7 @@
     "baseBranch": "Branche de base",
     "baseBranchDefault": "Branche actuelle au démarrage de la tâche",
     "baseBranchHint": "La tâche part de cette branche, et la fusion l’y ramène.",
-    "agentInheritedHint": "Hérité des réglages des tâches — modifiez-le pour personnaliser cette tâche",
+    "agentInheritedHint": "Depuis les paramètres des tâches — enregistré avec cette tâche",
     "agentNoDefaultHint": "Aucun agent par défaut dans les réglages des tâches — l'agent sélectionné sera enregistré avec la tâche",
     "agentInheritedUnavailableHint": "L'agent {agent} des réglages des tâches n'est pas disponible — l'agent sélectionné sera enregistré avec la tâche",
     "agentOverrideReset": "Revenir à l'héritage",
@@ -6580,7 +6580,18 @@
     "deliverPrCommitMessageLabel": "Message de commit",
     "deliverPrUncommittedHint": "Pour que l'agent les commite lui-même, annulez et renvoyez la tâche pour un autre tour.",
     "deliverPrCommitSubmit": "Commiter, pousser et ouvrir",
-    "deliverPrCommitPushSubmit": "Commiter et pousser"
+    "deliverPrCommitPushSubmit": "Commiter et pousser",
+    "agentLockedHint": "Cette tâche a déjà une conversation : son agent ne peut pas être changé",
+    "conversationSelectionTitle": "Modèle et options de cette conversation",
+    "conversationSelectionHint": "Modifiez-les dans la conversation ; la prochaine relance, le retour ou la fusion la poursuit avec eux.",
+    "conversationSelectionOpen": "Ouvrir la conversation pour modifier",
+    "conversationSelectionLoading": "Chargement…",
+    "conversationSelectionUnavailable": "Non disponible depuis ce serveur",
+    "conversationSelectionEmpty": "Valeurs par défaut de l'agent",
+    "conversationSelectionLegacy": "Pas encore enregistré : la conversation les conserve dès sa prochaine connexion",
+    "conversationSelectionStarting": "La tâche démarre : réessayez une fois qu'elle est en cours",
+    "conversationSelectionReplaced": "L'agent de cette tâche diffère de celui de sa conversation : sa prochaine exécution démarre une nouvelle conversation avec les paramètres ci-dessous.",
+    "settingsAgentFrozenHint": "Les tâches conservent l'agent et les options de leur création : une modification ici s'applique aux tâches créées ensuite."
   },
   "CustomSkillsSettings": {
     "loading": "Chargement des compétences personnalisées…",

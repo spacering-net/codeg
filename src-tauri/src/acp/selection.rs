@@ -133,7 +133,11 @@ impl SelectionPersister {
                     mode_id: Some(mode),
                     explicit: false,
                 },
-                |s| !s.selection_finalized && !s.composer_mode_touched && s.composer_mode_id.is_none(),
+                |s| {
+                    !s.selection_finalized
+                        && !s.composer_mode_touched
+                        && s.composer_mode_id.is_none()
+                },
             )
             .await;
         }

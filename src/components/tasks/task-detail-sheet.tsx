@@ -33,6 +33,7 @@ import {
   ListX,
   Loader2,
   MessageSquareReply,
+  MessageSquareShare,
   MessageSquareText,
   Pencil,
   Play,
@@ -95,6 +96,10 @@ import {
   type TaskMessageComposerHandle,
 } from "./task-message-composer"
 import { TaskTranscriptDialog } from "./task-transcript-dialog"
+import {
+  taskConversationSettling,
+  useOpenTaskConversation,
+} from "./use-open-task-conversation"
 import {
   duplicateActiveSource,
   duplicateActiveSourceLabel,
@@ -273,6 +278,12 @@ export function TaskDetailSheet({
   const [sessionOpen, setSessionOpen] = useState(false)
   const [diffFile, setDiffFile] = useState<string | null | false>(false)
   const [busy, setBusy] = useState(false)
+  // "Open conversation to change" (codeg#1179): the task's model / options
+  // are its conversation's own, changed with that conversation's selectors —
+  // also from review, before Return / Merge continue it. Resolves the CURRENT
+  // binding at click time; disabled while the binding may still change.
+  const openTaskConversation = useOpenTaskConversation()
+  const [openingConversation, setOpeningConversation] = useState(false)
   /** Synchronous in-flight latch for the follow-up send (see submitFollowUp). */
   const submittingRef = useRef(false)
   const reqRef = useRef(0)
@@ -1476,6 +1487,25 @@ export function TaskDetailSheet({
                   label={t("actionViewSession")}
                   busy={false}
                   onClick={() => setSessionOpen(true)}
+                />
+              ) : null}
+              {task.conversation_id != null && !archived ? (
+                <FooterAction
+                  icon={MessageSquareShare}
+                  label={t("conversationSelectionOpen")}
+                  busy={openingConversation || taskConversationSettling(task)}
+                  onClick={() => {
+                    setOpeningConversation(true)
+                    openTaskConversation(task.id)
+                      .then((result) => {
+                        if (result === "opened") onOpenChange(false)
+                        else if (result === "starting")
+                          toast.info(t("conversationSelectionStarting"))
+                        else toast.info(t("conversationSelectionUnavailable"))
+                      })
+                      .catch((e: unknown) => toast.error(toErrorMessage(e)))
+                      .finally(() => setOpeningConversation(false))
+                  }}
                 />
               ) : null}
               {canEdit ? (

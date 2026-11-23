@@ -110,6 +110,7 @@ async fn conversation_selection_of(
     };
     Ok(Some(crate::models::work_task::WorkTaskConversationSelection {
         conversation_id: cid,
+        folder_id: row.folder_id,
         agent_type: row.agent_type,
         config_values,
         legacy,
