@@ -331,8 +331,9 @@ export function loadMessageInputDraftV2(draftKey: string): LoadedDraftV2 {
           // silently discard the WHOLE doc (losing the user's text and badges).
           // A draft already in the plain-text schema passes through untouched.
           const doc = sanitizeComposerDraftDoc(parsed.doc)
-          if (retainsDraftInMemory(draftKey))
+          if (retainsDraftInMemory(draftKey)) {
             inMemoryDraftDocs.set(draftKey, doc)
+          }
           return { kind: "doc", doc }
         }
       }
