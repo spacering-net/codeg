@@ -148,7 +148,8 @@ pub fn resolve_fork_point(
 }
 
 /// A missing anchor can describe the tail of a live transcript. For a named
-/// historical Codex turn, only fall back to the tail if it really is the tail.
+/// historical Codex turn, only fall back to the tail if it really is the tail
+/// (see [`is_thread_tail`]).
 pub(super) fn requested_fork_point(
     turns: &[MessageTurn],
     turn_id: &str,
@@ -160,13 +161,30 @@ pub(super) fn requested_fork_point(
         && turn_id
             .strip_prefix("turn-")
             .is_some_and(|n| n.parse::<usize>().is_ok())
-        && !turns.last().is_some_and(|tail| tail.id == turn_id)
+        && !is_thread_tail(turns, turn_id)
     {
         return Err(AcpError::protocol(format!(
             "Cannot locate the selected Codex fork point {turn_id}"
         )));
     }
     Ok(point)
+}
+
+/// Whether a tail fork lands on `turn_id`: nothing the agent carries on from
+/// follows it. Mirrors the UI's `markThreadTail`, which steps over a failed
+/// round's closing line and over turns that render nothing, so the reply
+/// before them is still offered "fork from here" as the tail.
+fn is_thread_tail(turns: &[MessageTurn], turn_id: &str) -> bool {
+    let Some(idx) = turns.iter().position(|t| t.id == turn_id) else {
+        return false;
+    };
+    turns[idx + 1..].iter().all(|t| {
+        t.blocks.is_empty()
+            || (matches!(t.role, TurnRole::System)
+                && t.blocks
+                    .iter()
+                    .all(|b| matches!(b, ContentBlock::TurnError { .. })))
+    })
 }
 
 impl ForkPoint {
@@ -705,6 +723,35 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// A failed round's closing line (and a turn with nothing to render) is
+    /// stepped over by the UI's tail marker, so the text-less reply before it
+    /// is still the tail and must still tail-fork, as it did before.
+    #[test]
+    fn codex_tail_forks_an_unnamed_reply_before_a_failed_rounds_closing_line() {
+        let failure = MessageTurn {
+            role: TurnRole::System,
+            blocks: vec![ContentBlock::TurnError {
+                message: "API Error: 503".into(),
+            }],
+            ..turn("turn-1", TurnRole::System, "", None)
+        };
+        let empty = MessageTurn {
+            blocks: vec![],
+            ..turn("turn-2", TurnRole::Assistant, "", None)
+        };
+        let unnamed = turn("turn-0", TurnRole::Assistant, "", None);
+        let tail = [unnamed.clone(), failure.clone(), empty];
+        assert!(requested_fork_point(&tail, "turn-0", AgentType::Codex)
+            .unwrap()
+            .is_none());
+        let later = [
+            unnamed,
+            failure,
+            turn("turn-2", TurnRole::User, "later", None),
+        ];
+        assert!(requested_fork_point(&later, "turn-0", AgentType::Codex).is_err());
     }
 
     #[test]
