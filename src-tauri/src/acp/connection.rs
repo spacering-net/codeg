@@ -6117,10 +6117,10 @@ const HERMES_MODE_OPTION_ID: &str = "mode";
 const HERMES_SYNTHESIZED_OPTION_IDS: &[&str] = &[HERMES_MODEL_OPTION_ID, HERMES_MODE_OPTION_ID];
 
 /// Hermes lists its models in the session reply's legacy `models` (verified
-/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7, 0.23.0 and 0.23.1): every signed-in provider's
-/// models and every named endpoint's (`providers:` in config.yaml, codeg's own
-/// `custom:codeg` among them), with `provider:model` ids —
-/// `openrouter:anthropic/claude-opus-5.5`, `custom:codeg:glm-5.2`. Through
+/// against 0.21.6, 0.22.2, 0.22.6, 0.22.7, 0.23.0, 0.23.1 and 0.23.3): every
+/// signed-in provider's models and every named endpoint's (`providers:` in
+/// config.yaml, codeg's own `custom:codeg` among them), with `provider:model`
+/// ids — `openrouter:anthropic/claude-opus-5.5`, `custom:codeg:glm-5.2`. Through
 /// 0.22.2 that is the only place: it sends no `configOptions`, and takes a
 /// switch only as `session/set_model`, its `session/set_config_option` storing
 /// whatever it is sent and answering an empty list. From 0.22.6 (0.23.1 is the
@@ -7968,7 +7968,7 @@ async fn send_new_session_capturing_models(
 /// state and never reads them back: the config it starts each session with
 /// carries no MCP servers, and the SDK connects only the servers in cline's own
 /// `cline_mcp_settings.json` and its plugins. Checked in the source of every
-/// release from 3.0.55 through 3.0.74, and live on 3.0.71 through 3.0.74: a
+/// release from 3.0.55 through 3.0.75, and live on 3.0.71 through 3.0.75: a
 /// stdio server sent on `session/new` is never started, while one in the settings
 /// file is, and its tools reach the model. User servers still reach Cline,
 /// through that file (see [`agent_reads_own_mcp_config`]); the codeg-mcp
@@ -9494,6 +9494,8 @@ async fn run_connection(
                 steering_policy_agent(agent_type, init_resp.agent_info.as_ref());
             let antigravity_interactions =
                 speaks_antigravity_interactions(agent_type, init_resp.agent_info.as_ref());
+            let antigravity_skip_cancels_turn = antigravity_interactions
+                && antigravity_skip_cancels_turn(init_resp.agent_info.as_ref());
             tracing::info!(
                 "[ACP][{}] steering: advertised={}, agent={:?}, agent_version={:?}, policy={}{}, native={}",
                 agent_type,
@@ -9637,6 +9639,7 @@ async fn run_connection(
                 s.native_steering_available = native_steering_available;
                 s.codex_user_input_shape = codex_user_input_shape;
                 s.antigravity_interactions = antigravity_interactions;
+                s.antigravity_skip_cancels_turn = antigravity_skip_cancels_turn;
                 if !native_antigravity_task_store(init_resp.agent_info.as_ref()) {
                     s.antigravity_sessions_dir = None;
                 }
@@ -10994,6 +10997,16 @@ async fn try_bridge_pi_select_ask(
 /// received" update for that id is then dropped so it cannot overwrite the
 /// answer.
 ///
+/// On an adapter that reports 1.5.1 or later
+/// (`SessionState::antigravity_skip_cancels_turn`), a skipped question (or an
+/// answer that names none of the options) also stops the turn, the way the
+/// user's Stop does ([`crate::acp::question::SessionQuestionAccess::cancel_turn`]).
+/// Through 1.5.0 Antigravity took the cancelled answer as "skipped" and let the
+/// model go on; from 1.5.2 its question hook raises `AntigravityCancelledError`
+/// for it, since ACP cancels a permission request only when the turn is
+/// cancelled, and then waits for that cancel: without it the turn hangs, closed
+/// question and all, until Stop.
+///
 /// `Err(responder)` hands the request back for the ordinary permission path:
 /// every other request, an interaction the card cannot show faithfully, the
 /// ask feature switched off, or an ask already pending on the connection.
@@ -11074,6 +11087,7 @@ async fn try_bridge_antigravity_ask(
     let questions = Arc::clone(questions);
     let connection_id = connection_id.to_string();
     let question_id = registered.question_id;
+    let skip_cancels_turn = state.read().await.antigravity_skip_cancels_turn;
 
     tokio::spawn(async move {
         let answer = tokio::select! {
@@ -11097,6 +11111,7 @@ async fn try_bridge_antigravity_ask(
                 record_antigravity_answer_card(&state, &emitter, tool_call_id, &ask.spec, &recorded)
                     .await;
 
+                let skipped = option_id.is_none();
                 let response_outcome = match option_id {
                     Some(id) => {
                         RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id))
@@ -11104,6 +11119,9 @@ async fn try_bridge_antigravity_ask(
                     None => RequestPermissionOutcome::Cancelled,
                 };
                 let _ = responder.respond(RequestPermissionResponse::new(response_outcome));
+                if skipped && skip_cancels_turn {
+                    questions.cancel_turn(&connection_id).await;
+                }
             }
             None => {
                 questions
@@ -20570,6 +20588,18 @@ fn speaks_antigravity_interactions(
     }
 }
 
+/// Whether the running antigravity-acp takes a declined question as the end of
+/// the turn (see [`try_bridge_antigravity_ask`]): 1.5.2 does, 1.5.0 let the
+/// model go on, and 1.5.1 was never published. Judged by the `agentInfo.version`
+/// it reports at `initialize` (a plain version since 1.2.1), because the running
+/// adapter is not necessarily the pinned one (an older cached install, a custom
+/// agent); one that reports no parseable version keeps the old behaviour.
+fn antigravity_skip_cancels_turn(
+    agent_info: Option<&agent_client_protocol::schema::v1::Implementation>,
+) -> bool {
+    agent_info.is_some_and(|info| version_at_least(info.version.trim(), "1.5.1"))
+}
+
 /// codex-acp 1.12.0 swapped the question and the short tab header between a
 /// `request_user_input` property's `title` and `description`. Both generations
 /// emit both strings, so the FORM cannot be dated — but the adapter that built
@@ -21494,9 +21524,9 @@ fn grok_meta_marks_ask_user(
 /// answered card the bridge recorded, and so must be dropped. Consumes the
 /// record.
 ///
-/// Measured against antigravity-acp 1.4.1, 1.4.3, 1.4.4, 1.4.5 and 1.5.0: each
-/// question opens a `tool_call` (`interaction_<hex>`, titled with the question,
-/// `rawInput: {}`, `pending`), is asked through `session/request_permission`
+/// Measured against antigravity-acp 1.4.1, 1.4.3, 1.4.4, 1.4.5, 1.5.0 and
+/// 1.5.2: each question opens a `tool_call` (`interaction_<hex>`, titled with
+/// the question, `rawInput: {}`, `pending`), is asked through `session/request_permission`
 /// under the same id, and is closed by a `tool_call_update` carrying only
 /// `status` and a fixed `rawOutput` ("Response received" / "Interaction
 /// cancelled"). The server emits no frame for the model's `ask_question` call
@@ -52517,6 +52547,19 @@ mod tests {
 
     struct AntigravityTestAnswer {
         decline: bool,
+        /// Turns stopped through [`SessionQuestionAccess::cancel_turn`].
+        stopped: Arc<std::sync::atomic::AtomicUsize>,
+        stop: Arc<tokio::sync::Notify>,
+    }
+
+    impl AntigravityTestAnswer {
+        fn new(decline: bool) -> Self {
+            Self {
+                decline,
+                stopped: Arc::default(),
+                stop: Arc::default(),
+            }
+        }
     }
 
     #[async_trait::async_trait]
@@ -52545,16 +52588,37 @@ mod tests {
         }
         async fn cancel_question(&self, _connection_id: &str, _question_id: &str) {}
         async fn cancel_questions_by_parent(&self, _connection_id: &str) {}
+        async fn cancel_turn(&self, connection_id: &str) {
+            assert_eq!(connection_id, "conn-test");
+            self.stopped
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.stop.notify_one();
+        }
+    }
+
+    #[test]
+    fn antigravity_skip_cancels_turn_from_1_5_1() {
+        use agent_client_protocol::schema::v1::Implementation;
+        let agy = |version: &str| Implementation::new(ANTIGRAVITY_ACP_AGENT_NAME, version);
+        assert!(antigravity_skip_cancels_turn(Some(&agy("1.5.2"))));
+        assert!(antigravity_skip_cancels_turn(Some(&agy("1.5.1"))));
+        assert!(antigravity_skip_cancels_turn(Some(&agy("1.6.0"))));
+        assert!(!antigravity_skip_cancels_turn(Some(&agy("1.5.0"))));
+        assert!(!antigravity_skip_cancels_turn(Some(&agy("agy_acp_server_1.1.1"))));
+        assert!(!antigravity_skip_cancels_turn(None));
     }
 
     #[tokio::test]
     async fn antigravity_interaction_round_trip_preserves_choice_and_gates() {
         use agent_client_protocol::Channel;
         // (agent, the `agentInfo.name` its adapter reported at initialize, ask
-        // feature on, user declines, bridged)
-        for (agent_type, adapter, enabled, decline, bridged) in [
-            (AgentType::Antigravity, None, true, false, true),
-            (AgentType::Antigravity, None, true, true, true),
+        // feature on, user declines, a declined question stops the turn
+        // (antigravity-acp 1.5.1+), bridged)
+        for (agent_type, adapter, enabled, decline, skip_cancels, bridged) in [
+            (AgentType::Antigravity, None, true, false, true, true),
+            (AgentType::Antigravity, None, true, true, true, true),
+            // Through 1.5.0 a declined question lets the turn go on.
+            (AgentType::Antigravity, None, true, true, false, true),
             // A custom agent running antigravity-acp (a second account, say).
             (
                 AgentType::Custom("antigravity-b"),
@@ -52562,15 +52626,16 @@ mod tests {
                 true,
                 false,
                 true,
+                true,
             ),
             // Any other custom adapter keeps its look-alike ids on the approval
             // card, as does one that reported no `agentInfo`.
-            (AgentType::Custom("acme"), Some("acme-acp"), true, false, false),
-            (AgentType::Custom("antigravity-b"), None, true, false, false),
+            (AgentType::Custom("acme"), Some("acme-acp"), true, false, false, false),
+            (AgentType::Custom("antigravity-b"), None, true, false, false, false),
             // The ask feature's kill switch keeps the approval card, as it does
             // for every other native ask bridge.
-            (AgentType::Antigravity, None, false, false, false),
-            (AgentType::Codex, None, true, false, false),
+            (AgentType::Antigravity, None, false, false, true, false),
+            (AgentType::Codex, None, true, false, false, false),
         ] {
             let (client_end, agent_end) = Channel::duplex();
             let mut session = SessionState::new(
@@ -52588,13 +52653,19 @@ mod tests {
                 session.antigravity_interactions =
                     speaks_antigravity_interactions(agent_type, adapter.as_ref());
             }
+            session.antigravity_skip_cancels_turn = skip_cancels;
             let state = Arc::new(RwLock::new(session));
             let config = crate::acp::question::QuestionRuntimeConfig::new();
             config
                 .set(crate::acp::question::QuestionConfig { enabled })
                 .await;
+            let answers = Arc::new(AntigravityTestAnswer::new(decline));
+            let (stopped, stop) = (Arc::clone(&answers.stopped), Arc::clone(&answers.stop));
             let access: Option<(Arc<dyn crate::acp::question::SessionQuestionAccess>, _)> =
-                Some((Arc::new(AntigravityTestAnswer { decline }), config));
+                Some((answers, config));
+            // A skipped question also stops the turn on antigravity-acp 1.5.1+
+            // (1.5.2 waits for that cancel); a picked one never does.
+            let expected_stops = if bridged && decline && skip_cancels { 2 } else { 0 };
             let agent = tokio::spawn(Agent.builder().connect_with(
                 agent_end,
                 async move |cx: ConnectionTo<Client>| {
@@ -52671,8 +52742,23 @@ mod tests {
                 .expect("native request must receive its answer")
                 .unwrap()
                 .unwrap();
+            // The bridge stops the turn right after it answers, so wait for
+            // the expected stops before the client goes away; aborting the
+            // client then ends every bridge task, so no stray stop can come
+            // after the count.
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while stopped.load(std::sync::atomic::Ordering::SeqCst) < expected_stops {
+                    stop.notified().await;
+                }
+            })
+            .await
+            .expect("a declined question stops the turn");
             client.abort();
             let state = state.read().await;
+            assert_eq!(
+                stopped.load(std::sync::atomic::Ordering::SeqCst),
+                expected_stops
+            );
             let events = state.recent_events_after(0).unwrap_or_default();
             let cards: Vec<_> = events
                 .iter()

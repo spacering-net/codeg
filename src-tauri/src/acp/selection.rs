@@ -78,6 +78,11 @@ impl SelectionPersister {
         let _ = self.db.set(db);
     }
 
+    /// The database [`Self::install_db`] installed, if bootstrap has run.
+    pub(crate) fn db(&self) -> Option<&DatabaseConnection> {
+        self.db.get()
+    }
+
     /// Hold the persister mutex, e.g. while reading a row's selection at
     /// connect, so a reconnect never reads mid-write.
     pub(crate) async fn lock(&self) -> MutexGuard<'_, SelectionOwners> {

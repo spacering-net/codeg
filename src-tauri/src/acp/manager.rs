@@ -5270,6 +5270,20 @@ impl SessionQuestionAccess for ConnectionManagerQuestionLookup {
             .cancel_questions_by_parent(parent_connection_id)
             .await
     }
+
+    async fn cancel_turn(&self, connection_id: &str) {
+        // The database the lifecycle installed at bootstrap; there is no other
+        // way to reach it from inside a connection.
+        let Some(db) = self.manager.selection.db().cloned() else {
+            tracing::warn!(
+                "[ACP] cannot stop the turn conn={connection_id}: no database installed"
+            );
+            return;
+        };
+        if let Err(e) = self.manager.cancel(&db, connection_id).await {
+            tracing::warn!("[ACP] stopping the turn failed conn={connection_id}: {e}");
+        }
+    }
 }
 
 /// Production impl of [`SessionPlanApprovalAccess`] for the Grok `exit_plan_mode`

@@ -652,6 +652,10 @@ pub struct SessionState {
     /// the id prefix alone says nothing about who minted it
     /// (`connection.rs::speaks_antigravity_interactions`). Backend-only.
     pub antigravity_interactions: bool,
+    /// Whether a declined bridged Antigravity question stops the turn: the
+    /// running adapter reported 1.5.1 or later at initialize
+    /// (`connection.rs::antigravity_skip_cancels_turn`). Backend-only.
+    pub antigravity_skip_cancels_turn: bool,
     /// Configured Gemini home for this launch's trajectory (backend only).
     pub(crate) antigravity_sessions_dir: Option<std::path::PathBuf>,
     /// A transiently unreadable task DB at the foreground boundary. Passive
@@ -1023,6 +1027,7 @@ impl SessionState {
             result_tool_available: false,
             antigravity_answered_interactions: BTreeSet::new(),
             antigravity_interactions: agent_type == AgentType::Antigravity,
+            antigravity_skip_cancels_turn: false,
             antigravity_sessions_dir: None,
             antigravity_reconcile_at: None,
             native_steering_available: false,

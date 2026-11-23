@@ -432,12 +432,15 @@ struct AntigravityAskOption {
 }
 
 /// `exa.cortex_pb.AskQuestionEntry`: one question of an `ask_question` step and
-/// the user's answer to it. Checked against the 1.4.1, 1.4.3, 1.4.4, 1.4.5 and
-/// 1.5.0 descriptors and live runs: options are numbered `"1"`, `"2"`, …; a
+/// the user's answer to it. Checked against the 1.4.1, 1.4.3, 1.4.4, 1.4.5,
+/// 1.5.0 and 1.5.2 descriptors and live runs: options are numbered `"1"`, `"2"`, …; a
 /// question the user dismissed (or never reached, once an earlier one was dismissed) is
 /// `skipped` with nothing chosen; a multi-select question is still answered
 /// with one option, because the ACP server asks it as a single-choice
-/// permission request.
+/// permission request. From 1.5.2 a dismissed question ends the turn, and the
+/// step is stored `CORTEX_STEP_STATUS_CANCELED` with nothing chosen and no
+/// `skipped` (a Stop while the question waits stores the same; 1.5.0 stored no
+/// step for that).
 #[derive(Clone, PartialEq, ::prost::Message)]
 struct AntigravityAskItem {
     #[prost(string, tag = "1")]
@@ -586,6 +589,8 @@ struct Step {
 }
 
 const STEP_STATUS_DONE: i32 = 3;
+/// `CORTEX_STEP_STATUS_CANCELED`.
+const STEP_STATUS_CANCELED: i32 = 6;
 const STEP_STATUS_ERROR: i32 = 7;
 
 impl Step {
@@ -1583,11 +1588,13 @@ fn step_outcome(step: &Step) -> Option<StepOutcome> {
                 })
             })
             .collect();
-        // Dismissing the card skips every question with nothing chosen; record
-        // that as the live bridge does (a decline), not as "no selection".
+        // Dismissing the card skips every question with nothing chosen (from
+        // 1.5.2: cancels the step with nothing chosen); record that as the live
+        // bridge does (a decline), not as "no selection".
+        let cancelled = step.status == STEP_STATUS_CANCELED;
         let declined = !ask.items.is_empty()
             && ask.items.iter().all(|item| {
-                item.skipped
+                (item.skipped || cancelled)
                     && item.chosen_ids.is_empty()
                     && item.write_in_response.trim().is_empty()
             });
@@ -2411,9 +2418,16 @@ mod tests {
     /// Round-trip one `ask_question` step (`Step` field 154) through the store
     /// and return the tool call's name and its result envelope.
     fn ask_step_outcome(items: Vec<AntigravityAskItem>) -> (String, serde_json::Value) {
+        ask_step_outcome_with_status(STEP_STATUS_DONE, items)
+    }
+
+    fn ask_step_outcome_with_status(
+        status: i32,
+        items: Vec<AntigravityAskItem>,
+    ) -> (String, serde_json::Value) {
         let dir = tempfile::tempdir().unwrap();
         let step = Step {
-            status: 3,
+            status,
             metadata: Some(StepMetadata {
                 created_at: ts(1_700_000_000),
                 tool_call: Some(ChatToolCall {
@@ -2546,5 +2560,33 @@ mod tests {
             serde_json::json!(["Frontend"])
         );
         assert_eq!(partly["answers"][1]["selected"], serde_json::json!([]));
+    }
+
+    /// 1.5.2 stores a dismissed (or stopped) question as a cancelled step with
+    /// nothing chosen and no `skipped`: still a decline, not "no selection". A
+    /// cancelled step that kept an earlier answer keeps it.
+    #[test]
+    fn antigravity_ask_question_outcome_reads_a_cancelled_step_as_declined() {
+        let (_, cancelled) = ask_step_outcome_with_status(
+            STEP_STATUS_CANCELED,
+            vec![ask_item("Which area first?", &["Backend", "Frontend"], &[])],
+        );
+        assert_eq!(
+            cancelled,
+            serde_json::json!({ "answers": [], "declined": true })
+        );
+
+        let (_, partly) = ask_step_outcome_with_status(
+            STEP_STATUS_CANCELED,
+            vec![
+                ask_item("Which area first?", &["Backend", "Frontend"], &["2"]),
+                ask_item("Pick tags", &["Alpha", "Beta"], &[]),
+            ],
+        );
+        assert_eq!(partly["declined"], false);
+        assert_eq!(
+            partly["answers"][0]["selected"],
+            serde_json::json!(["Frontend"])
+        );
     }
 }
