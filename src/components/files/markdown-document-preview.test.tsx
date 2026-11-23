@@ -348,4 +348,38 @@ describe("MarkdownDocumentPreview local images", () => {
     expect(container.textContent).toContain("![c](./img/c.png)")
     expect(mocks.readFileBase64).not.toHaveBeenCalled()
   })
+
+  it("masks only real fences: prose tildes mask nothing, nested fences mask whole", async () => {
+    const nested = [
+      "````md",
+      "```html",
+      '<img src="//localhost:8080/logo.png">',
+      "```",
+      "![n](./img/n.png)",
+      "````",
+    ].join("\n")
+    const { container } = renderDocument(
+      [
+        "The separator is ~~~ in this example.",
+        "",
+        "![logo](./assets/logo.png)",
+        "",
+        "Use ~~~ as the closing separator.",
+        "",
+        nested,
+      ].join("\n")
+    )
+
+    await waitFor(() =>
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(
+        "data:image/png;base64,QUFB"
+      )
+    )
+    expect(mocks.readFileBase64.mock.calls.map(([path]) => path)).toEqual([
+      "/repo/docs/assets/logo.png",
+    ])
+    expect(container.querySelector("pre")?.textContent).toBe(
+      nested.split("\n").slice(1, -1).join("")
+    )
+  })
 })

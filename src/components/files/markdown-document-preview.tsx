@@ -67,6 +67,18 @@ function joinUnder(base: string, relative: string): string {
 }
 
 /**
+ * Fenced code blocks and inline code spans of a Markdown DOCUMENT. Stricter
+ * than the chat's `CODE_SPANS`, which is unanchored: here a fence opens only
+ * at the start of a line (up to three spaces of indent; a backtick fence's
+ * info string has no backtick) and closes only on a line holding a run of the
+ * same character at least as long — so `~~~` mentioned in prose masks
+ * nothing, and a ```` fence wrapping a ``` example is masked whole. An
+ * unclosed fence runs to the end of the document, as in CommonMark.
+ */
+const DOCUMENT_CODE =
+  /^ {0,3}(`{3,})[^`\n]*(?:\n[\s\S]*?)?(?:\n {0,3}\1`*[ \t]*(?=\n|$)|(?![\s\S]))|^ {0,3}(~{3,})[^\n]*(?:\n[\s\S]*?)?(?:\n {0,3}\2~*[ \t]*(?=\n|$)|(?![\s\S]))|`[^`\n]+`/gm
+
+/**
  * Pre-resolve local paths in markdown image/link syntax before Streamdown.
  *
  * rehype-harden resolves "../foo" via `new URL("../foo", "http://example.com")`
@@ -91,9 +103,10 @@ function joinUnder(base: string, relative: string): string {
  * Fenced code blocks and inline code are masked first: their bytes are what
  * the author means to show (and what Copy Code hands out), not references.
  * This is a source-level pass, not a Markdown parser: indented code blocks,
- * fences nested in longer fences and multi-line reference definitions are
- * not recognized, so those keep the pre-existing behavior (rewritten, or for
- * a protocol-relative destination, host-stripped by rehype-harden).
+ * fences inside list items / blockquotes and multi-line reference
+ * definitions are not recognized, so those keep the pre-existing behavior
+ * (rewritten, or for a protocol-relative destination, host-stripped by
+ * rehype-harden).
  *
  * Known limitation: documents living under a Windows UNC root
  * ("//server/share/…") lose the double-slash prefix in this pipeline (the
@@ -145,7 +158,7 @@ function preprocessMarkdownPaths(
     return "./" + resolveAgainst(fileDir, pathPart) + fragment
   }
 
-  const { masked, restore } = maskLiteralSpans(content)
+  const { masked, restore } = maskLiteralSpans(content, DOCUMENT_CODE)
 
   // Pre-resolve image paths: ![alt](url) or ![alt](url "title")
   let result = masked.replace(
