@@ -313,8 +313,12 @@ impl Reader {
                 now.duration_since(self.last_step_change_at) < lease
                     || self.revisit.iter().any(|idx| idx > notice_idx)
             });
+            // Bounded like a running task: a follow-up that starts a command of
+            // its own leaves a non-terminal row behind the notice, which must
+            // not keep this finished task counted past the keep-alive.
             if status != "cancelled"
-                && (processing || (!notified.contains(id) && now.duration_since(seen) < lease))
+                && now.duration_since(seen) < lease
+                && (processing || !notified.contains(id))
             {
                 tasks.push(task.clone());
             }
@@ -629,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn a_notification_without_a_follow_up_expires_but_a_running_step_keeps_its_lease() {
+    fn a_notification_without_a_follow_up_expires_and_a_running_step_holds_it_within_the_lease() {
         let tmp = tempfile::tempdir().unwrap();
         let writer = db(&tmp.path().join("session.db"));
         let mut reader = Reader::new(tmp.path().into(), None, "session".into());
@@ -649,9 +653,16 @@ mod tests {
             Some(AcpEvent::BackgroundActivity { outstanding: 1, .. })
         ));
         let lease = background_keepalive_max_age().to_std().unwrap();
+        // The store has been quiet for longer than the lease, but the step
+        // after the notice is still running: the task still counts.
+        reader.last_step_change_at -= lease + Duration::from_secs(1);
+        let _ = reader.report(false, Instant::now()).unwrap();
+        assert_eq!(reader.last_tasks.len(), 1);
+        // Not past the keep-alive, though: a row that never finishes (a
+        // command the follow-up started) must not pin the finished task.
         let after_lease = Instant::now() + lease + Duration::from_secs(1);
         let _ = reader.report(false, after_lease).unwrap();
-        assert_eq!(reader.last_tasks.len(), 1);
+        assert!(reader.last_tasks.is_empty());
         put(
             &writer,
             3,
