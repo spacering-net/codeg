@@ -228,6 +228,10 @@ function TaskEditorBody({
   const replacesConversation =
     conversationSelection?.replaces_conversation === true
   const selectionReadOnly = bound && !replacesConversation
+  // Opened from review (a legacy mismatched-agent task, whose Return / Merge
+  // start a new conversation with the task's tuple): only that tuple changes;
+  // the work order is kept exactly as stored.
+  const selectorOnly = task?.status === "review"
 
   // Saved blueprints (global). Applying one reseeds the composer via a key
   // bump — RichComposer only reads defaultText on mount.
@@ -399,6 +403,31 @@ function TaskEditorBody({
     }
 
     setSaving(true)
+    if (selectorOnly && task != null) {
+      try {
+        const built = await buildConfig(true)
+        const stored = task.config ?? built
+        await onSubmit(
+          {
+            folder_id: task.folder_id,
+            title: task.title,
+            config: {
+              ...stored,
+              agent_type: built.agent_type,
+              mode_id: built.mode_id,
+              config_values: built.config_values,
+              label_snapshot: built.label_snapshot,
+            },
+          },
+          { selectionUntouched: false, selectionReset: false }
+        )
+      } catch (e) {
+        setError(toErrorMessage(e))
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
     try {
       // What the selectors SHOW is what the task keeps (codeg#1179); only
       // when no agent is shown at all does the server resolve one.
@@ -508,8 +537,14 @@ function TaskEditorBody({
       </DialogHeader>
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3">
+        {selectorOnly ? (
+          <p className="text-xs text-muted-foreground" role="note">
+            {t("selectorOnlyHint")}
+          </p>
+        ) : null}
         <input
           value={title}
+          disabled={selectorOnly}
           onChange={(e) => setTitle(e.target.value)}
           placeholder={t("titlePlaceholder")}
           aria-label={t("titleLabel")}

@@ -6591,7 +6591,9 @@
     "conversationSelectionLegacy": "Pas encore enregistré : la conversation les conserve dès sa prochaine connexion",
     "conversationSelectionStarting": "La tâche démarre : réessayez une fois qu'elle est en cours",
     "conversationSelectionReplaced": "L'agent de cette tâche diffère de celui de sa conversation : sa prochaine exécution démarre une nouvelle conversation avec les paramètres ci-dessous.",
-    "settingsAgentFrozenHint": "Les tâches conservent l'agent et les options de leur création : une modification ici s'applique aux tâches créées ensuite."
+    "settingsAgentFrozenHint": "Les tâches conservent l'agent et les options de leur création : une modification ici s'applique aux tâches créées ensuite.",
+    "actionEditTaskConfig": "Modifier la configuration de la tâche",
+    "selectorOnlyHint": "En revue, seules les options de l'agent peuvent changer ; la description et le titre restent inchangés."
   },
   "CustomSkillsSettings": {
     "loading": "Chargement des compétences personnalisées…",

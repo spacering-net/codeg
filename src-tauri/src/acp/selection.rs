@@ -229,17 +229,27 @@ impl SelectionPersister {
     pub async fn finalize(&self, conn_id: &str, state: &Arc<RwLock<SessionState>>) {
         state.write().await.selection_finalized = true;
         let mut owners = self.owners.lock().await;
-        let (row, snapshot) = {
+        let (row, linked, snapshot) = {
             let s = state.read().await;
             let row = s.conversation_id.or(s.selection_conversation_id);
             let settled = s.selectors_ready && !s.selectors_settling;
-            (row, settled.then(|| selection_snapshot(&s)))
+            (
+                row,
+                s.conversation_id.is_some(),
+                settled.then(|| selection_snapshot(&s)),
+            )
         };
         let Some(row) = row else {
             return;
         };
-        if owners.get(&row).map(String::as_str) != Some(conn_id) {
-            return;
+        match owners.get(&row) {
+            Some(owner) if owner == conn_id => {}
+            // Linked by a prompt whose `ConversationLinked` the lifecycle
+            // worker had not processed yet when the loop ended (it grants the
+            // authority): nobody else holds the row, so this connection is
+            // its writer — otherwise a draft's first selection would be lost.
+            None if linked => {}
+            _ => return,
         }
         if let (Some(db), Some(snapshot)) = (self.db.get(), snapshot) {
             if let Err(e) = conversation_service::set_selector_state(db, row, &snapshot).await {

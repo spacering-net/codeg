@@ -1247,11 +1247,16 @@ pub async fn update_with(
     let txn = conn.begin().await?;
     // Write first: claim the writer lock before reading (see
     // `persist_fork_outcome` for why a read-first transaction can fail).
-    work_task::Entity::update_many()
+    let claimed = work_task::Entity::update_many()
         .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
         .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::DeletedAt.is_null())
         .exec(&txn)
         .await?;
+    if claimed.rows_affected != 1 {
+        txn.rollback().await?;
+        return Err(DbError::NotFound(format!("work task {id}")));
+    }
     let row = work_task::Entity::find_by_id(id)
         .one(&txn)
         .await?
@@ -1332,7 +1337,9 @@ pub async fn update_with(
     };
     if bound {
         if let Some(req) = requested.as_ref() {
-            if req.agent_type.is_some() && req.agent_type != locked_agent {
+            // Including a reset that resolves to NO agent: a bound task keeps
+            // the agent it has.
+            if req.agent_type != locked_agent {
                 return Err(DbError::Validation(
                     "this task already has a conversation — its agent can't be changed".into(),
                 ));
@@ -1836,6 +1843,23 @@ pub async fn requeue_canceled(
 ) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
+    // Claim first (write-first), then freeze the conversation the requeue is
+    // about to drop, so reopening it never applies the new-conversation
+    // default (codeg#1179).
+    let claimed = work_task::Entity::update_many()
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Canceled))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(&txn)
+        .await?;
+    if claimed.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    if let Some(task) = work_task::Entity::find_by_id(id).one(&txn).await? {
+        freeze_outgoing_task_conversation(&txn, &task, None).await?;
+    }
     let res = work_task::Entity::update_many()
         .col_expr(
             work_task::Column::Status,
@@ -2096,24 +2120,25 @@ async fn claim_binding<C: ConnectionTrait>(
         return Ok(false);
     }
     if let Some(task) = work_task::Entity::find_by_id(id).one(txn).await? {
-        freeze_outgoing_task_conversation(txn, &task, new_conversation_id).await?;
+        freeze_outgoing_task_conversation(txn, &task, Some(new_conversation_id)).await?;
     }
     Ok(true)
 }
 
 /// A task's conversation is being replaced (resume fallback, legacy agent
-/// mismatch): give the outgoing conversation a selection of its own if it has
+/// mismatch) or dropped (`requeue_canceled`, `new_conversation_id: None`):
+/// give the outgoing conversation a selection of its own if it has
 /// none, so reopening it never applies the new-conversation default — the
 /// task's tuple when it names that conversation's agent, else an empty one
 /// (replay nothing; the agent's restored selection is kept at its next bind).
 pub async fn freeze_outgoing_task_conversation<C: ConnectionTrait>(
     txn: &C,
     task: &work_task::Model,
-    new_conversation_id: i32,
+    new_conversation_id: Option<i32>,
 ) -> Result<(), DbError> {
     let Some(old) = task
         .conversation_id
-        .filter(|old| *old != new_conversation_id)
+        .filter(|old| Some(*old) != new_conversation_id)
     else {
         return Ok(());
     };

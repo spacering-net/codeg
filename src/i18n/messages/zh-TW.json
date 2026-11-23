@@ -6591,7 +6591,9 @@
     "conversationSelectionLegacy": "尚未記錄——對話下次連線時會固定為這些設定",
     "conversationSelectionStarting": "任務正在啟動，請在執行後再試",
     "conversationSelectionReplaced": "此任務的智慧體與其對話不同：下次執行會用下面的設定開啟新對話。",
-    "settingsAgentFrozenHint": "任務會保留建立時的智慧體和選項——此處的修改只影響之後建立的任務。"
+    "settingsAgentFrozenHint": "任務會保留建立時的智慧體和選項——此處的修改只影響之後建立的任務。",
+    "actionEditTaskConfig": "編輯任務設定",
+    "selectorOnlyHint": "審閱中只能修改智慧體選項，任務描述和標題保持不變。"
   },
   "CustomSkillsSettings": {
     "loading": "正在載入自訂技能…",

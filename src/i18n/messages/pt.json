@@ -6591,7 +6591,9 @@
     "conversationSelectionLegacy": "Ainda não registrado — a conversa os mantém a partir da próxima conexão",
     "conversationSelectionStarting": "A tarefa está iniciando — tente novamente quando estiver em execução",
     "conversationSelectionReplaced": "O agente desta tarefa difere do da conversa: a próxima execução inicia uma nova conversa com as configurações abaixo.",
-    "settingsAgentFrozenHint": "As tarefas mantêm o agente e as opções com que foram criadas — uma alteração aqui vale para as tarefas criadas depois."
+    "settingsAgentFrozenHint": "As tarefas mantêm o agente e as opções com que foram criadas — uma alteração aqui vale para as tarefas criadas depois.",
+    "actionEditTaskConfig": "Editar a configuração da tarefa",
+    "selectorOnlyHint": "Em revisão, só as opções do agente podem mudar; a descrição e o título permanecem."
   },
   "CustomSkillsSettings": {
     "loading": "Carregando habilidades personalizadas…",

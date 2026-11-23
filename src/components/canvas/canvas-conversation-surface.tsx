@@ -604,9 +604,12 @@ export function CanvasConversationSurface({
         // An existing conversation: record the pick on its connection (the
         // backend persists it on the row); the send applies it. Never the
         // new-conversation default.
-        connRef.current
-          .setComposerMode(nextModeId)
-          .catch((e: unknown) => console.error("[canvas] setComposerMode:", e))
+        connRef.current.setComposerMode(nextModeId).catch((e: unknown) => {
+          // An older server without the composer record: keep the pick
+          // locally, as before — the send applies it.
+          console.error("[canvas] setComposerMode:", e)
+          setModeId(nextModeId)
+        })
         return
       }
       setModeId(nextModeId)
@@ -908,7 +911,7 @@ export function CanvasConversationSurface({
     createdConversationId != null || conversationId != null
       ? connIsForOtherAgent
         ? null
-        : conn.composerModeId
+        : (conn.composerModeId ?? modeId)
       : modeId
   const selectedModeId = useMemo(() => {
     if (connectionModes.length === 0) return null

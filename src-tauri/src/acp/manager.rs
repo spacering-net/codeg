@@ -2586,8 +2586,13 @@ impl ConnectionManager {
                 let original_session_id = protocol_result.original_session_id;
 
                 // The re-pointed row is written only while this connection
-                // holds its selection write authority (`acp::selection`).
-                let write_current = selection.owns(conversation_id, &conn_id_for_task).await;
+                // holds its selection write authority (`acp::selection`) —
+                // checked and written under the persister lock, so a newer
+                // writer cannot bind and save in between.
+                let owners = selection.lock().await;
+                let write_current = owners
+                    .get(&conversation_id)
+                    .is_some_and(|owner| owner == &conn_id_for_task);
                 let sibling_id = Self::persist_fork_outcome(
                     &db_conn,
                     conversation_id,
@@ -2596,7 +2601,9 @@ impl ConnectionManager {
                     Some(protocol_result.inherited_selection.to_json()),
                     write_current,
                 )
-                .await?;
+                .await;
+                drop(owners);
+                let sibling_id = sibling_id?;
 
                 // Fork mutates the sidebar in two ways the rest of the system
                 // never sees otherwise: the current row's title (`[Fork] …`) and

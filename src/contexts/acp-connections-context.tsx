@@ -8302,10 +8302,23 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // Selector setters still in flight per contextKey. A setter's IPC returns
   // once its command is enqueued on the connection, and the prompt goes
   // through the same queue — so a prompt issued after every earlier setter's
-  // IPC returned runs with what the composer showed (codeg#1179).
+  // IPC returned runs with what the composer showed (codeg#1179). Setters for
+  // one contextKey are also issued one after another: two independent
+  // requests (the web transport) could otherwise reach the backend out of
+  // order and leave an earlier pick applied.
   const inflightSettersRef = useRef(new Map<string, Set<Promise<unknown>>>())
+  const setterTailRef = useRef(new Map<string, Promise<unknown>>())
   const trackSetter = useCallback(
-    <T,>(contextKey: string, p: Promise<T>): Promise<T> => {
+    <T,>(contextKey: string, run: () => Promise<T>): Promise<T> => {
+      const prev = setterTailRef.current.get(contextKey) ?? Promise.resolve()
+      const p = prev.catch(() => {}).then(run)
+      const tail = p.catch(() => {})
+      setterTailRef.current.set(contextKey, tail)
+      void tail.then(() => {
+        if (setterTailRef.current.get(contextKey) === tail) {
+          setterTailRef.current.delete(contextKey)
+        }
+      })
       let set = inflightSettersRef.current.get(contextKey)
       if (!set) {
         set = new Set()
@@ -8372,7 +8385,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       const conn = storeRef.current.connections.get(contextKey)
       if (!conn) return
       lastActivityRef.current.set(contextKey, Date.now())
-      await trackSetter(contextKey, acpSetMode(conn.connectionId, modeId))
+      await trackSetter(contextKey, () => acpSetMode(conn.connectionId, modeId))
     },
     [trackSetter]
   )
@@ -8399,8 +8412,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         saveConfigPreference(conn.agentType, configId, valueId)
       }
       lastActivityRef.current.set(contextKey, Date.now())
-      await trackSetter(
-        contextKey,
+      await trackSetter(contextKey, () =>
         acpSetConfigOption(conn.connectionId, configId, valueId)
       )
     },

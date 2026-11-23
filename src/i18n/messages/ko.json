@@ -6591,7 +6591,9 @@
     "conversationSelectionLegacy": "아직 기록되지 않음 — 다음 연결 시 대화가 이 설정으로 고정됩니다",
     "conversationSelectionStarting": "작업을 시작하는 중입니다 — 실행된 후 다시 시도하세요",
     "conversationSelectionReplaced": "이 작업의 에이전트가 대화의 에이전트와 다릅니다. 다음 실행은 아래 설정으로 새 대화를 시작합니다.",
-    "settingsAgentFrozenHint": "작업은 생성 시의 에이전트와 옵션을 유지합니다 — 여기서 바꾸면 이후에 만드는 작업에 적용됩니다."
+    "settingsAgentFrozenHint": "작업은 생성 시의 에이전트와 옵션을 유지합니다 — 여기서 바꾸면 이후에 만드는 작업에 적용됩니다.",
+    "actionEditTaskConfig": "작업 설정 편집",
+    "selectorOnlyHint": "검토 중에는 에이전트 옵션만 바꿀 수 있으며 설명과 제목은 그대로입니다."
   },
   "CustomSkillsSettings": {
     "loading": "사용자 지정 스킬 불러오는 중…",

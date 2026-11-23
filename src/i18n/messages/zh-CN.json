@@ -6591,7 +6591,9 @@
     "conversationSelectionLegacy": "尚未记录——会话下次连接时会固定为这些设置",
     "conversationSelectionStarting": "任务正在启动，请在运行后再试",
     "conversationSelectionReplaced": "此任务的智能体与其会话不同：下次运行会用下面的设置开启新会话。",
-    "settingsAgentFrozenHint": "任务会保留创建时的智能体和选项——此处的修改只影响之后创建的任务。"
+    "settingsAgentFrozenHint": "任务会保留创建时的智能体和选项——此处的修改只影响之后创建的任务。",
+    "actionEditTaskConfig": "编辑任务配置",
+    "selectorOnlyHint": "审阅中只能修改智能体选项，任务描述和标题保持不变。"
   },
   "CustomSkillsSettings": {
     "loading": "正在加载自定义技能…",

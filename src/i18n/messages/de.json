@@ -6591,7 +6591,9 @@
     "conversationSelectionLegacy": "Noch nicht gespeichert — die Unterhaltung übernimmt diese ab ihrer nächsten Verbindung",
     "conversationSelectionStarting": "Die Aufgabe startet gerade — versuche es erneut, sobald sie läuft",
     "conversationSelectionReplaced": "Der Agent dieser Aufgabe unterscheidet sich von dem ihrer Unterhaltung: Der nächste Lauf startet eine neue Unterhaltung mit den Einstellungen unten.",
-    "settingsAgentFrozenHint": "Aufgaben behalten den Agenten und die Optionen, mit denen sie erstellt wurden — eine Änderung hier gilt für danach erstellte Aufgaben."
+    "settingsAgentFrozenHint": "Aufgaben behalten den Agenten und die Optionen, mit denen sie erstellt wurden — eine Änderung hier gilt für danach erstellte Aufgaben.",
+    "actionEditTaskConfig": "Aufgabenkonfiguration bearbeiten",
+    "selectorOnlyHint": "In der Prüfung lassen sich nur die Agentenoptionen ändern; Beschreibung und Titel bleiben unverändert."
   },
   "CustomSkillsSettings": {
     "loading": "Benutzerdefinierte Skills werden geladen…",

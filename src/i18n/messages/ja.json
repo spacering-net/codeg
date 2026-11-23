@@ -6591,7 +6591,9 @@
     "conversationSelectionLegacy": "未記録 — 次の接続時に会話がこの設定で固定されます",
     "conversationSelectionStarting": "タスクを開始しています — 実行中になってからもう一度お試しください",
     "conversationSelectionReplaced": "このタスクのエージェントは会話のものと異なります。次の実行では以下の設定で新しい会話を開始します。",
-    "settingsAgentFrozenHint": "タスクは作成時のエージェントとオプションを保持します — ここでの変更はこの後に作成するタスクに適用されます。"
+    "settingsAgentFrozenHint": "タスクは作成時のエージェントとオプションを保持します — ここでの変更はこの後に作成するタスクに適用されます。",
+    "actionEditTaskConfig": "タスク設定を編集",
+    "selectorOnlyHint": "レビュー中はエージェントのオプションのみ変更でき、説明とタイトルはそのままです。"
   },
   "CustomSkillsSettings": {
     "loading": "カスタムスキルを読み込み中…",

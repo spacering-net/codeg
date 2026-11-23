@@ -6591,7 +6591,9 @@
     "conversationSelectionLegacy": "Aún no registrado: la conversación los conserva desde su próxima conexión",
     "conversationSelectionStarting": "La tarea se está iniciando: vuelve a intentarlo cuando esté en ejecución",
     "conversationSelectionReplaced": "El agente de esta tarea difiere del de su conversación: su próxima ejecución inicia una conversación nueva con la configuración de abajo.",
-    "settingsAgentFrozenHint": "Las tareas conservan el agente y las opciones con que se crearon: un cambio aquí se aplica a las tareas creadas después."
+    "settingsAgentFrozenHint": "Las tareas conservan el agente y las opciones con que se crearon: un cambio aquí se aplica a las tareas creadas después.",
+    "actionEditTaskConfig": "Editar la configuración de la tarea",
+    "selectorOnlyHint": "En revisión solo pueden cambiar las opciones del agente; la descripción y el título se mantienen."
   },
   "CustomSkillsSettings": {
     "loading": "Cargando habilidades personalizadas…",

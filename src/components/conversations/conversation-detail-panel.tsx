@@ -798,10 +798,12 @@ const ConversationTabView = memo(function ConversationTabView({
   // A persisted conversation follows the backend's record of the composer's
   // pending pick; a draft its local pick (codeg#1179).
   const isPersistedConversation = dbConversationId != null
+  // `modeId` stays null for a persisted conversation, except as the fallback
+  // when the server predates the composer record (the send applies it then).
   const composerPick = isPersistedConversation
     ? connIsForOtherAgent
       ? null
-      : conn.composerModeId
+      : (conn.composerModeId ?? modeId)
     : modeId
   const selectedModeId = useMemo(() => {
     if (connectionModes.length === 0) return null
@@ -1292,7 +1294,13 @@ const ConversationTabView = memo(function ConversationTabView({
         if (!pick || pick === appliedModeIdRef.current) return
         handOver = connRef.current
           .setComposerMode(pick, { initial: true })
+          // Recorded (or vetoed in favour of another surface's pick): the
+          // connection's record is the source from now on.
+          .then(() => {
+            if (mountedRef.current) setModeId(null)
+          })
           .catch((e: unknown) =>
+            // An older server: keep the local pick, the send applies it.
             console.error("[ConversationTabView] composer hand-over:", e)
           )
       }
@@ -1647,11 +1655,12 @@ const ConversationTabView = memo(function ConversationTabView({
         // An existing conversation: record the pick on its connection (the
         // backend persists it on the row and every attached client follows);
         // the send applies it. Never the new-conversation default.
-        connRef.current
-          .setComposerMode(newModeId)
-          .catch((e: unknown) =>
-            console.error("[ConversationTabView] setComposerMode:", e)
-          )
+        connRef.current.setComposerMode(newModeId).catch((e: unknown) => {
+          // An older server without the composer record: keep the pick
+          // locally, as before — the send applies it.
+          console.error("[ConversationTabView] setComposerMode:", e)
+          setModeId(newModeId)
+        })
         return
       }
       setModeId(newModeId)

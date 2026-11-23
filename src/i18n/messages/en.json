@@ -6591,7 +6591,9 @@
     "conversationSelectionLegacy": "Not recorded yet — the conversation keeps these from its next connect",
     "conversationSelectionStarting": "The task is starting — try again once it is running",
     "conversationSelectionReplaced": "This task's agent differs from its conversation's: its next run starts a new conversation with the settings below.",
-    "settingsAgentFrozenHint": "Tasks keep the agent and options they were created with — a change here applies to tasks created afterwards."
+    "settingsAgentFrozenHint": "Tasks keep the agent and options they were created with — a change here applies to tasks created afterwards.",
+    "actionEditTaskConfig": "Edit task config",
+    "selectorOnlyHint": "In review only the agent options can change; the brief and title stay as they are."
   },
   "CustomSkillsSettings": {
     "loading": "Loading custom skills…",

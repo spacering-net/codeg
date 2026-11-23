@@ -49,6 +49,7 @@ import {
   workTaskChangedFiles,
   workTaskCleanup,
   workTaskDefer,
+  workTaskGet,
   workTaskDelete,
   workTaskDiff,
   workTaskEvents,
@@ -150,6 +151,7 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import type {
+  WorkTaskConversationSelection,
   AgentType,
   PromptInputBlock,
   WorkTask,
@@ -284,6 +286,32 @@ export function TaskDetailSheet({
   // binding at click time; disabled while the binding may still change.
   const openTaskConversation = useOpenTaskConversation()
   const [openingConversation, setOpeningConversation] = useState(false)
+  // The bound conversation's own selection, read fresh (the board row does
+  // not carry it), and re-read when the binding or the status moves — an
+  // inline retry can re-link the task while the sheet stays open.
+  const [conversationSelection, setConversationSelection] =
+    useState<WorkTaskConversationSelection | null>(null)
+  const selTaskId = task?.id ?? null
+  const selConversationId = task?.conversation_id ?? null
+  const selStatus = task?.status ?? null
+  useEffect(() => {
+    if (!open || selTaskId == null || selConversationId == null) {
+      setConversationSelection(null)
+      return
+    }
+    let cancelled = false
+    workTaskGet(selTaskId)
+      .then((row) => {
+        if (!cancelled)
+          setConversationSelection(row.conversation_selection ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setConversationSelection(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, selTaskId, selConversationId, selStatus])
   /** Synchronous in-flight latch for the follow-up send (see submitFollowUp). */
   const submittingRef = useRef(false)
   const reqRef = useRef(0)
@@ -427,15 +455,32 @@ export function TaskDetailSheet({
   // Snapshot first (it carries the model the run actually used); otherwise the
   // resolved agent's display name, so a task that simply follows the folder's
   // defaults still names its agent beside the icon.
+  //
+  // A task with a conversation runs that conversation's own selection
+  // (codeg#1179), so its model is the conversation's once known — the
+  // snapshot's label only while it names that same value.
   const agentLabel = useMemo(() => {
     const snap = task?.config?.label_snapshot
     const name =
       snap?.agent_label ??
       (agentType ? (getAgentLabel(agentType) ?? agentType) : null)
     if (!name) return null
-    const model = snap?.config_labels?.model
+    const sel =
+      conversationSelection && !conversationSelection.replaces_conversation
+        ? conversationSelection
+        : null
+    const snapModel = snap?.config_labels?.model
+    const convModel = sel?.config_values?.model
+    const model =
+      convModel == null
+        ? sel
+          ? null
+          : snapModel
+        : convModel === task?.config?.config_values?.model && snapModel
+          ? snapModel
+          : convModel
     return model ? `${name} · ${model}` : name
-  }, [task, agentType])
+  }, [task, agentType, conversationSelection])
 
   // The project's forge remote, for an ordinary reviewed task that could be
   // delivered to a pull request. Read again whenever the sheet opens on one:
@@ -1489,7 +1534,23 @@ export function TaskDetailSheet({
                   onClick={() => setSessionOpen(true)}
                 />
               ) : null}
-              {task.conversation_id != null && !archived ? (
+              {task.conversation_id != null &&
+              !archived &&
+              conversationSelection?.replaces_conversation === true &&
+              task.status === "review" ? (
+                // A legacy task whose agent changed while bound: Return /
+                // Merge start a NEW conversation with the task's own tuple,
+                // so that tuple is what to change (agent locked).
+                <FooterAction
+                  icon={Pencil}
+                  label={t("actionEditTaskConfig")}
+                  busy={busy}
+                  onClick={() => onEdit(task)}
+                />
+              ) : null}
+              {task.conversation_id != null &&
+              !archived &&
+              conversationSelection?.replaces_conversation !== true ? (
                 <FooterAction
                   icon={MessageSquareShare}
                   label={t("conversationSelectionOpen")}
