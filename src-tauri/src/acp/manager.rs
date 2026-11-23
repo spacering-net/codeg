@@ -497,6 +497,9 @@ pub struct ConnectionManager {
     /// to-do task's retry still resumes its session wherever the task put it.
     /// Bounded by the number of conversations moved in one process lifetime.
     relocated: Arc<std::sync::Mutex<std::collections::HashSet<i32>>>,
+    /// Per-conversation selection persistence: the serialized persister and
+    /// the one-writer-per-row authority map (see `acp::selection`).
+    pub(crate) selection: Arc<crate::acp::selection::SelectionPersister>,
 }
 
 /// A parked `ask_user_question` awaiting its answer. The `sender` resolves the
@@ -696,6 +699,7 @@ impl ConnectionManager {
             question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
             relocated: Arc::new(std::sync::Mutex::new(Default::default())),
+            selection: Arc::new(crate::acp::selection::SelectionPersister::default()),
         }
     }
 
@@ -715,6 +719,7 @@ impl ConnectionManager {
             question_registration: self.question_registration.clone(),
             pending_plan_approvals: self.pending_plan_approvals.clone(),
             relocated: self.relocated.clone(),
+            selection: self.selection.clone(),
         }
     }
 
@@ -770,6 +775,7 @@ impl ConnectionManager {
             question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
             relocated: Arc::new(std::sync::Mutex::new(Default::default())),
+            selection: Arc::new(crate::acp::selection::SelectionPersister::default()),
         }
     }
 
@@ -1051,6 +1057,7 @@ impl ConnectionManager {
             self.delegation_snapshot(),
             self.terminal_shell_config.clone(),
             cli_root,
+            Some(self.selection.clone()),
         )
         .await?;
 
@@ -2556,6 +2563,7 @@ impl ConnectionManager {
         // caller; the result is harmlessly discarded if the caller is gone.
         let db_conn = db.conn.clone();
         let conn_id_for_task = conn_id.to_string();
+        let selection = self.selection.clone();
         let handle = tokio::spawn(async move {
             // Holding the owned guard for the whole task is what shields the
             // persistence from caller cancellation.
@@ -2577,11 +2585,16 @@ impl ConnectionManager {
                 let forked_session_id = protocol_result.forked_session_id;
                 let original_session_id = protocol_result.original_session_id;
 
+                // The re-pointed row is written only while this connection
+                // holds its selection write authority (`acp::selection`).
+                let write_current = selection.owns(conversation_id, &conn_id_for_task).await;
                 let sibling_id = Self::persist_fork_outcome(
                     &db_conn,
                     conversation_id,
                     forked_session_id.clone(),
                     original_session_id.clone(),
+                    Some(protocol_result.inherited_selection.to_json()),
+                    write_current,
                 )
                 .await?;
 
@@ -2679,6 +2692,12 @@ impl ConnectionManager {
         conversation_id: i32,
         forked_session_id: String,
         original_session_id: String,
+        // The selection the fork actually inherited (JSON
+        // `ConversationSelection`), read in the connection loop. The sibling
+        // always gets it — whichever path created it — and the re-pointed row
+        // gets it when `write_current` (the connection owns its selection).
+        inherited_selection: Option<String>,
+        write_current: bool,
     ) -> Result<i32, AcpError> {
         use sea_orm::sea_query::Expr;
         use sea_orm::{ColumnTrait, QueryFilter};
@@ -2790,6 +2809,9 @@ impl ConnectionManager {
                     }
                     active.external_id = Set(Some(forked_session_id));
                     active.updated_at = Set(now);
+                    if write_current && inherited_selection.is_some() {
+                        active.selector_state = Set(inherited_selection.clone());
+                    }
                     active.update(txn).await?;
 
                     // The lifecycle subscriber may have got here first. Its
@@ -2816,6 +2838,17 @@ impl ConnectionManager {
                         .one(txn)
                         .await?
                     {
+                        // Adopted sibling: it copied whatever the column held
+                        // when the lifecycle path split it off, which may
+                        // predate the last pick — give it what the fork
+                        // really inherited.
+                        if let Some(sel) = inherited_selection.clone() {
+                            conversation::Entity::update_many()
+                                .col_expr(conversation::Column::SelectorState, Expr::value(sel))
+                                .filter(conversation::Column::Id.eq(existing.id))
+                                .exec(txn)
+                                .await?;
+                        }
                         return Ok(existing.id);
                     }
 
@@ -2844,6 +2877,7 @@ impl ConnectionManager {
                         assistant_id: Set(None),
                         assistant_snapshot: Set(None),
                         source: Set(source),
+                        selector_state: Set(inherited_selection.clone()),
                     };
                     let inserted = sibling.insert(txn).await?;
                     // The sibling keeps the pre-fork history under the
@@ -3538,6 +3572,46 @@ impl ConnectionManager {
             });
         }
         out
+    }
+
+    /// Install the database the selection persister writes to. Called once at
+    /// bootstrap (`lifecycle_subscriber_task`).
+    pub fn install_selection_db(&self, db: sea_orm::DatabaseConnection) {
+        self.selection.install_db(db);
+    }
+
+    /// Bind a connection to an existing conversation row so its selection is
+    /// persisted there before the first prompt links it (see
+    /// `acp::selection::SelectionPersister::bind`).
+    pub async fn bind_selection_conversation(
+        &self,
+        conn_id: &str,
+        row_id: i32,
+        stored_composer_mode_id: Option<String>,
+    ) -> Result<(), AcpError> {
+        let (state, emitter) = self
+            .get_state_and_emitter(conn_id)
+            .await
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        self.selection
+            .bind(conn_id, &state, &emitter, row_id, stored_composer_mode_id)
+            .await
+    }
+
+    /// Record the composer's pending mode pick on a connection, without
+    /// talking to the agent (see `acp::selection::set_composer_mode`).
+    pub async fn set_composer_mode(
+        &self,
+        conn_id: &str,
+        mode_id: Option<String>,
+        initial: bool,
+    ) -> Result<bool, AcpError> {
+        let (state, emitter) = self
+            .get_state_and_emitter(conn_id)
+            .await
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        crate::acp::selection::set_composer_mode(conn_id, &state, &emitter, mode_id, initial)
+            .await
     }
 
     /// Clone the `Arc<RwLock<SessionState>>` for a given connection id so the
@@ -7542,6 +7616,7 @@ mod tests {
                 let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                     forked_session_id: "session-S2".into(),
                     original_session_id: "session-S1".into(),
+                    inherited_selection: Default::default(),
                 }));
             }
             rx // keep the receiver alive
@@ -9316,6 +9391,7 @@ mod tests {
                     let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                         forked_session_id: forked.clone(),
                         original_session_id: original.clone(),
+                        inherited_selection: Default::default(),
                     }));
                     return;
                 }
@@ -10105,6 +10181,7 @@ mod tests {
                     let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                         forked_session_id: "session-S2".to_string(),
                         original_session_id: "session-S1".to_string(),
+                        inherited_selection: Default::default(),
                     }));
                     return;
                 }

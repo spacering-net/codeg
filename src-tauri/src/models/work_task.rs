@@ -244,6 +244,15 @@ pub struct WorkTaskConfig {
     /// editing this afterwards cannot re-base a task that already ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
+    /// `true` = the selector tuple above (`agent_type` / `mode_id` /
+    /// `config_values` / `label_snapshot`) is the task's own, fixed when it
+    /// was created or explicitly edited, and is never re-resolved from the
+    /// folder's task settings. `false` for every task from before this
+    /// existed: it is resolved once at its next launch and stamped frozen.
+    /// Server-owned — `work_task_service::update` derives it and never takes
+    /// it from a client payload.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_config_frozen: bool,
 }
 
 /// The one recognized [`WorkTaskConfig::deliverable`] value.

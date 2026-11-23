@@ -1150,6 +1150,10 @@ pub fn build_router_with_srn(
             post(handlers::acp::acp_set_config_option),
         )
         .route(
+            "/acp_set_composer_mode",
+            post(handlers::acp::acp_set_composer_mode),
+        )
+        .route(
             "/acp_goal_control",
             post(handlers::acp::acp_goal_control),
         )

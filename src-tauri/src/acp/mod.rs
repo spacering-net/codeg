@@ -54,6 +54,7 @@ pub mod remote_registry;
 pub(crate) mod reported_usage;
 pub mod result_tool;
 pub mod scratch_dir;
+pub mod selection;
 pub mod service_error;
 pub mod session_info;
 pub mod session_title;

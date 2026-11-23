@@ -553,6 +553,102 @@ pub async fn attention_count(conn: &DatabaseConnection) -> Result<u64, DbError> 
     Ok(count)
 }
 
+// ── agent config ────────────────────────────────────────────────────────────
+
+/// A task's agent + mode + config option values.
+pub type AgentTuple = (
+    Option<String>,
+    Option<String>,
+    std::collections::BTreeMap<String, String>,
+);
+
+/// Layered agent config: the task's own explicit tuple wins wholesale (kept
+/// verbatim); else the folder's task settings agent with its mode/options;
+/// else the folder's default agent WITH the task settings' mode/options.
+pub fn layer_agent_config(
+    cfg: &WorkTaskConfig,
+    settings: &WorkTaskFolderSettings,
+    folder_default_agent: Option<String>,
+) -> AgentTuple {
+    if let Some(agent) = cfg.agent_type.clone() {
+        return (Some(agent), cfg.mode_id.clone(), cfg.config_values.clone());
+    }
+    if let Some(agent) = settings.default_agent_type.clone() {
+        return (
+            Some(agent),
+            settings.mode_id.clone(),
+            settings.config_values.clone(),
+        );
+    }
+    (
+        folder_default_agent,
+        settings.mode_id.clone(),
+        settings.config_values.clone(),
+    )
+}
+
+/// The tuple a task runs with: verbatim when it is frozen (its own, possibly
+/// "no agent"), else resolved from the folder's task settings exactly like
+/// [`layer_agent_config`]. Shared by the engine, the create paths and the
+/// legacy backfill.
+pub async fn resolve_agent_config<C: ConnectionTrait>(
+    conn: &C,
+    folder_id: i32,
+    cfg: &WorkTaskConfig,
+) -> Result<AgentTuple, DbError> {
+    if cfg.agent_config_frozen {
+        return Ok((
+            cfg.agent_type.clone(),
+            cfg.mode_id.clone(),
+            cfg.config_values.clone(),
+        ));
+    }
+    let settings = settings_get_effective(conn, folder_id).await?;
+    let folder_default = folder::Entity::find_by_id(folder_id)
+        .one(conn)
+        .await?
+        .and_then(|f| f.default_agent_type);
+    Ok(layer_agent_config(cfg, &settings, folder_default))
+}
+
+/// Freeze a config that is not frozen yet: replace its selector tuple with
+/// the resolved one and stamp the marker. An explicit tuple is kept verbatim;
+/// nothing resolvable still freezes with no agent, so a later folder-settings
+/// change never configures the task silently. The label snapshot follows the
+/// source of the tuple.
+pub async fn freeze_agent_config<C: ConnectionTrait>(
+    conn: &C,
+    folder_id: i32,
+    cfg: &mut WorkTaskConfig,
+) -> Result<(), DbError> {
+    if cfg.agent_config_frozen {
+        return Ok(());
+    }
+    if cfg.agent_type.is_none() {
+        let settings = settings_get_effective(conn, folder_id).await?;
+        let (agent, mode, values) = resolve_agent_config(conn, folder_id, cfg).await?;
+        cfg.label_snapshot = if settings.default_agent_type.is_some() {
+            settings.label_snapshot.clone()
+        } else {
+            None
+        };
+        cfg.agent_type = agent;
+        cfg.mode_id = mode;
+        cfg.config_values = values;
+    }
+    cfg.agent_config_frozen = true;
+    Ok(())
+}
+
+/// The selector part of a task config, for "did the client change it?"
+fn selector_tuple(cfg: &WorkTaskConfig) -> AgentTuple {
+    (
+        cfg.agent_type.clone(),
+        cfg.mode_id.clone(),
+        cfg.config_values.clone(),
+    )
+}
+
 // ── CRUD ────────────────────────────────────────────────────────────────────
 
 fn parse_config(config: &serde_json::Value) -> WorkTaskConfig {
@@ -3303,8 +3399,8 @@ pub async fn boot_reconcile_interrupted(conn: &DatabaseConnection) -> Result<u64
 
 // ── per-folder settings ─────────────────────────────────────────────────────
 
-pub async fn settings_get(
-    conn: &DatabaseConnection,
+pub async fn settings_get<C: ConnectionTrait>(
+    conn: &C,
     folder_id: i32,
 ) -> Result<WorkTaskFolderSettings, DbError> {
     let row = work_task_settings::Entity::find()
@@ -3353,8 +3449,8 @@ pub const GLOBAL_SETTINGS_FOLDER_ID: i32 = 0;
 /// (`folder_id = 0`), then to the built-in defaults. Deliberately not a
 /// field-by-field merge — one save detaches the folder from the global row
 /// entirely, which keeps the behavior predictable.
-pub async fn settings_get_effective(
-    conn: &DatabaseConnection,
+pub async fn settings_get_effective<C: ConnectionTrait>(
+    conn: &C,
     folder_id: i32,
 ) -> Result<WorkTaskFolderSettings, DbError> {
     let own = work_task_settings::Entity::find()

@@ -1980,8 +1980,9 @@ async fn record_turn_end(
 /// `preferred_config_values` (a select's value id; `"true"`/`"false"` for a
 /// boolean — see `config_option_already_holds`).
 ///
-/// Used to carry a session's selectors across a fork.
-fn current_config_option_values(
+/// Used to carry a session's selectors across a fork, and as the
+/// conversation's stored selection (`acp::selection`).
+pub(crate) fn current_config_option_values(
     opts: &[SessionConfigOptionInfo],
 ) -> BTreeMap<String, String> {
     opts.iter()
@@ -2787,6 +2788,7 @@ pub async fn spawn_agent_connection(
     delegation_injection: Option<DelegationInjection>,
     terminal_shell_config: TerminalShellRuntimeConfig,
     cli_root: Option<crate::cli_run::RootSeed>,
+    selection: Option<Arc<crate::acp::selection::SelectionPersister>>,
 ) -> Result<tokio::sync::oneshot::Receiver<()>, AcpError> {
     // Use the same cwd for launch settings, the subprocess and session/new.
     let launch_cwd = resolve_working_dir(working_dir.as_deref());
@@ -3048,6 +3050,14 @@ pub async fn spawn_agent_connection(
             stderr_tail,
         )
         .await;
+
+        // The loop has ended and every command queued before the disconnect
+        // was applied: close the selection admission barrier and flush the
+        // conversation's final selection with the state this driver owns —
+        // not from the lifecycle worker, which may never have cached it.
+        if let Some(selection) = selection.as_ref() {
+            selection.finalize(&conn_id, &state_clone).await;
+        }
 
         // Revoke the per-launch token + cascade cancel any still-pending
         // delegations AND questions owned by this parent connection. All are
@@ -13567,11 +13577,17 @@ async fn handle_fork_or_exit(
     // Reply protocol-level result to manager.fork_session, which will combine
     // it with the freshly-created sibling row id to produce the wire ForkResultInfo.
     let original_session_id = fork_info.original_session_id;
+    let inherited_selection = crate::models::ConversationSelection {
+        mode_id: inherited_mode_id.clone(),
+        composer_mode_id: state.read().await.composer_mode_id.clone(),
+        config_values: inherited_config_values.clone(),
+    };
     let _ = fork_info
         .reply
         .send(Ok(crate::acp::types::ForkProtocolResult {
             forked_session_id: new_sid.clone(),
             original_session_id: original_session_id.clone(),
+            inherited_selection,
         }));
 
     // Make the forked session REAL on the agent before anything prompts on it.
