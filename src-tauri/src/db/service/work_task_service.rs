@@ -1189,6 +1189,12 @@ pub struct WorkTaskUpdateFlags {
     /// freeze that.
     #[serde(default)]
     pub selection_reset: bool,
+    /// Only the selector tuple is edited (the review-time editor of a legacy
+    /// replaced-agent task): refused unless the title, folder and work order
+    /// still equal the CURRENT row's, so a stale dialog can never write an
+    /// older brief back.
+    #[serde(default)]
+    pub selector_only: bool,
 }
 
 pub async fn update(
@@ -1286,15 +1292,20 @@ pub async fn update_with(
         row.status,
         WorkTaskStatus::Todo | WorkTaskStatus::Failed | WorkTaskStatus::Canceled
     );
-    let selector_only_review_edit = row.status == WorkTaskStatus::Review
-        && mismatched
-        && draft.folder_id == row.folder_id
+    let work_order_unchanged = draft.folder_id == row.folder_id
         && draft.title.trim() == row.title
         && work_order_part(&draft.config)
             == work_order_part(
                 &serde_json::from_str::<serde_json::Value>(&row.config)
                     .unwrap_or(serde_json::Value::Null),
             );
+    if flags.selector_only && !work_order_unchanged {
+        return Err(DbError::Validation(
+            "the task changed since the editor opened — reopen it to edit".into(),
+        ));
+    }
+    let selector_only_review_edit =
+        row.status == WorkTaskStatus::Review && mismatched && work_order_unchanged;
     if !editable && !selector_only_review_edit {
         return Err(DbError::Validation(
             "only todo, failed, or canceled tasks can be edited".into(),
@@ -6748,5 +6759,231 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    // ── codeg#1179: frozen task configs and bound tasks ────────────────────
+
+    async fn settings_with(db: &crate::db::AppDatabase, folder_id: i32, agent: &str, model: &str) {
+        let mut st = WorkTaskFolderSettings::default();
+        st.default_agent_type = Some(agent.to_string());
+        st.config_values.insert("model".into(), model.into());
+        settings_set(&db.conn, folder_id, &st).await.unwrap();
+    }
+
+    fn cfg_of(info: &WorkTaskInfo) -> WorkTaskConfig {
+        serde_json::from_value(info.config.clone()).unwrap()
+    }
+
+    async fn bind_conversation(
+        db: &crate::db::AppDatabase,
+        task_id: i32,
+        folder_id: i32,
+        agent: crate::models::AgentType,
+    ) -> i32 {
+        let conv = crate::db::service::conversation_service::create(
+            &db.conn, folder_id, agent, None, None,
+        )
+        .await
+        .unwrap();
+        work_task::Entity::update_many()
+            .col_expr(work_task::Column::ConversationId, Expr::value(Some(conv.id)))
+            .filter(work_task::Column::Id.eq(task_id))
+            .exec(&db.conn)
+            .await
+            .unwrap();
+        conv.id
+    }
+
+    #[tokio::test]
+    async fn a_created_task_keeps_its_settings_when_they_change_later() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-freeze").await;
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let cfg = cfg_of(&t);
+        assert!(cfg.agent_config_frozen);
+        assert_eq!(cfg.agent_type.as_deref(), Some("codex"));
+        assert_eq!(cfg.config_values.get("model").map(String::as_str), Some("gpt-a"));
+
+        settings_with(&db, folder_id, "claude_code", "opus").await;
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        let now = backfill_frozen_config(&db.conn, &row).await.unwrap().unwrap();
+        assert_eq!(now.agent_type.as_deref(), Some("codex"));
+        assert_eq!(now.config_values.get("model").map(String::as_str), Some("gpt-a"));
+    }
+
+    #[tokio::test]
+    async fn nothing_resolvable_still_freezes_with_no_agent() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-none").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let cfg = cfg_of(&t);
+        assert!(cfg.agent_config_frozen);
+        assert_eq!(cfg.agent_type, None);
+        // Settings added afterwards never configure it silently.
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let (agent, _, _) = resolve_agent_config(&db.conn, folder_id, &cfg).await.unwrap();
+        assert_eq!(agent, None);
+    }
+
+    #[tokio::test]
+    async fn a_legacy_task_is_frozen_at_launch_and_loses_to_a_concurrent_edit() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-legacy").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        // Make it look pre-upgrade: no tuple, no marker.
+        work_task::Entity::update_many()
+            .col_expr(
+                work_task::Column::Config,
+                Expr::value(
+                    serde_json::json!({
+                        "display_text": "do the thing",
+                        "prompt_blocks": [{ "type": "text", "text": "do the thing" }],
+                    })
+                    .to_string(),
+                ),
+            )
+            .filter(work_task::Column::Id.eq(t.id))
+            .exec(&db.conn)
+            .await
+            .unwrap();
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let row = get_model(&db.conn, t.id).await.unwrap();
+
+        // A concurrent edit changed the stored config: the write-back loses.
+        let mut raced = row.clone();
+        raced.config = "{}".into();
+        assert!(backfill_frozen_config(&db.conn, &raced).await.unwrap().is_none());
+
+        let frozen = backfill_frozen_config(&db.conn, &row).await.unwrap().unwrap();
+        assert!(frozen.agent_config_frozen);
+        assert_eq!(frozen.agent_type.as_deref(), Some("codex"));
+        let stored: WorkTaskConfig =
+            serde_json::from_str(&get_model(&db.conn, t.id).await.unwrap().config).unwrap();
+        assert!(stored.agent_config_frozen);
+    }
+
+    #[tokio::test]
+    async fn an_untouched_or_ambiguous_edit_keeps_the_current_tuple() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-untouched").await;
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+
+        // Flagged untouched: the stale dialog's tuple is ignored.
+        let mut stale = draft(folder_id, "renamed");
+        stale.config["agent_type"] = serde_json::json!("claude_code");
+        let flags = WorkTaskUpdateFlags {
+            selection_untouched: true,
+            selection_reset: false,
+            ..Default::default()
+        };
+        let u = update_with(&db.conn, t.id, stale, flags).await.unwrap();
+        assert_eq!(u.title, "renamed");
+        assert_eq!(cfg_of(&u).agent_type.as_deref(), Some("codex"));
+        assert!(cfg_of(&u).agent_config_frozen);
+
+        // An old client's unflagged `agent_type: null` save: kept too.
+        let u = update(&db.conn, t.id, draft(folder_id, "again")).await.unwrap();
+        assert_eq!(cfg_of(&u).agent_type.as_deref(), Some("codex"));
+        assert!(cfg_of(&u).agent_config_frozen);
+
+        // An explicit other tuple is a change, saved frozen.
+        let mut explicit = draft(folder_id, "again");
+        explicit.config["agent_type"] = serde_json::json!("claude_code");
+        let u = update(&db.conn, t.id, explicit).await.unwrap();
+        assert_eq!(cfg_of(&u).agent_type.as_deref(), Some("claude_code"));
+        assert!(cfg_of(&u).agent_config_frozen);
+
+        // A reset resolves the folder's settings now.
+        let reset = WorkTaskUpdateFlags {
+            selection_untouched: false,
+            selection_reset: true,
+            ..Default::default()
+        };
+        let u = update_with(&db.conn, t.id, draft(folder_id, "again"), reset)
+            .await
+            .unwrap();
+        assert_eq!(cfg_of(&u).agent_type.as_deref(), Some("codex"));
+    }
+
+    #[tokio::test]
+    async fn a_bound_task_keeps_its_agent_and_tuple() {
+        use crate::models::AgentType;
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-bound").await;
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        bind_conversation(&db, t.id, folder_id, AgentType::Codex).await;
+
+        let mut other_agent = draft(folder_id, "t");
+        other_agent.config["agent_type"] = serde_json::json!("claude_code");
+        assert!(matches!(
+            update(&db.conn, t.id, other_agent).await,
+            Err(DbError::Validation(_))
+        ));
+
+        // Same agent, other model: kept verbatim (changed in the conversation).
+        let mut other_model = draft(folder_id, "t2");
+        other_model.config["agent_type"] = serde_json::json!("codex");
+        other_model.config["config_values"] = serde_json::json!({ "model": "gpt-b" });
+        let u = update(&db.conn, t.id, other_model).await.unwrap();
+        assert_eq!(u.title, "t2");
+        assert_eq!(
+            cfg_of(&u).config_values.get("model").map(String::as_str),
+            Some("gpt-a")
+        );
+
+        // A reset resolving to another agent (or none) is refused.
+        settings_with(&db, folder_id, "claude_code", "opus").await;
+        let reset = WorkTaskUpdateFlags {
+            selection_untouched: false,
+            selection_reset: true,
+            ..Default::default()
+        };
+        assert!(update_with(&db.conn, t.id, draft(folder_id, "t"), reset)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_deleted_task_cannot_be_edited() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-deleted").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        assert!(soft_delete(&db.conn, t.id, WorkTaskStatus::Todo).await.unwrap());
+        assert!(matches!(
+            update(&db.conn, t.id, draft(folder_id, "x")).await,
+            Err(DbError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_replaced_conversation_keeps_a_selection_of_its_own() {
+        use crate::models::AgentType;
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-1179-outgoing").await;
+        settings_with(&db, folder_id, "codex", "gpt-a").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        let old = bind_conversation(&db, t.id, folder_id, AgentType::Codex).await;
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        freeze_outgoing_task_conversation(&db.conn, &row, Some(old + 1000))
+            .await
+            .unwrap();
+        let sel = crate::db::service::conversation_service::get_selector_state(&db.conn, old)
+            .await
+            .unwrap()
+            .expect("frozen");
+        assert_eq!(sel.config_values.get("model").map(String::as_str), Some("gpt-a"));
+
+        // Another agent's conversation gets an empty one (replay nothing).
+        let other = bind_conversation(&db, t.id, folder_id, AgentType::ClaudeCode).await;
+        let row = get_model(&db.conn, t.id).await.unwrap();
+        freeze_outgoing_task_conversation(&db.conn, &row, None).await.unwrap();
+        let sel = crate::db::service::conversation_service::get_selector_state(&db.conn, other)
+            .await
+            .unwrap()
+            .expect("frozen");
+        assert_eq!(sel, crate::models::ConversationSelection::default());
     }
 }

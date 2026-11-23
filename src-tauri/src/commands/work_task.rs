@@ -1094,6 +1094,7 @@ pub async fn work_task_update(
     draft: WorkTaskDraft,
     selection_untouched: Option<bool>,
     selection_reset: Option<bool>,
+    selector_only: Option<bool>,
 ) -> Result<WorkTaskInfo, DbError> {
     work_task_update_core(
         &EventEmitter::Tauri(app),
@@ -1104,6 +1105,7 @@ pub async fn work_task_update(
         work_task_service::WorkTaskUpdateFlags {
             selection_untouched: selection_untouched.unwrap_or(false),
             selection_reset: selection_reset.unwrap_or(false),
+            selector_only: selector_only.unwrap_or(false),
         },
     )
     .await

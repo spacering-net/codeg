@@ -52,6 +52,8 @@ pub struct UpdateParams {
     pub selection_untouched: bool,
     #[serde(default)]
     pub selection_reset: bool,
+    #[serde(default)]
+    pub selector_only: bool,
 }
 
 #[derive(Deserialize)]
@@ -295,6 +297,7 @@ pub async fn work_task_update(
         crate::db::service::work_task_service::WorkTaskUpdateFlags {
             selection_untouched: params.selection_untouched,
             selection_reset: params.selection_reset,
+            selector_only: params.selector_only,
         },
     )
     .await

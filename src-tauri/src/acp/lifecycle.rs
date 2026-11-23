@@ -3216,15 +3216,11 @@ async fn connection_worker_loop(
         );
         if persists_selection {
             if let Some((state, emitter)) = selection_handle.as_ref() {
-                if let AcpEvent::ConversationLinked {
-                    conversation_id, ..
-                } = &envelope.payload
-                {
-                    manager
-                        .selection
-                        .take_authority_on_link(&connection_id, state, *conversation_id)
-                        .await;
-                }
+                // (A link's write authority is taken at the link itself, in
+                // `send_prompt_linked_full` / `fork_session` — never here,
+                // where a delayed event could take it back from a newer
+                // binder.)
+                //
                 // Before the broker forward on `TurnComplete`, so a delegation
                 // child is persisted before the broker can disconnect it.
                 manager

@@ -1291,7 +1291,13 @@ const ConversationTabView = memo(function ConversationTabView({
       // agent's mode reached it.
       const handOverDraftMode = () => {
         const pick = draftModeIdRef.current
-        if (!pick || pick === appliedModeIdRef.current) return
+        if (!pick || pick === appliedModeIdRef.current) {
+          // Nothing pending: the persisted conversation follows its
+          // connection from here; a leftover local pick would resurface as
+          // a stale fallback once a later pick is cleared.
+          setModeId(null)
+          return
+        }
         handOver = connRef.current
           .setComposerMode(pick, { initial: true })
           // Recorded (or vetoed in favour of another surface's pick): the

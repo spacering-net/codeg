@@ -1697,6 +1697,7 @@ impl ConnectionManager {
             let task_emitter = emitter.clone();
             let task_conn_id = conn_id.to_string();
             let task_delegation = delegation.clone();
+            let task_selection = self.selection.clone();
             let handle = tokio::spawn(async move {
                 // Holding the owned guard for the whole task is what shields the
                 // bind + publication from caller cancellation.
@@ -1831,6 +1832,14 @@ impl ConnectionManager {
                     // Bound (or nothing to bind). NOW the link is real, so
                     // announce it: this is the write that makes `already_linked`
                     // true for every subsequent prompt on this connection.
+                    //
+                    // The connection becomes the row's selection writer here,
+                    // synchronously — not when the lifecycle worker gets to the
+                    // event, which may be after the connection ended
+                    // (codeg#1179).
+                    task_selection
+                        .take_authority_on_link(&task_conn_id, &task_state, linked_conversation_id)
+                        .await;
                     emit_with_state(
                         &task_state,
                         &task_emitter,
@@ -2465,6 +2474,9 @@ impl ConnectionManager {
         // below then rejects, unchanged).
         if state_arc.read().await.conversation_id.is_none() {
             if let (Some(cid), Some(fid)) = (link_conversation_id, link_folder_id) {
+                self.selection
+                    .take_authority_on_link(conn_id, &state_arc, cid)
+                    .await;
                 emit_with_state(
                     &state_arc,
                     &emitter,

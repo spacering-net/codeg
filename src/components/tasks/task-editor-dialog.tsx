@@ -55,6 +55,7 @@ import { taskConversationSettling } from "./use-open-task-conversation"
 export interface TaskEditorSubmitFlags {
   selectionUntouched?: boolean
   selectionReset?: boolean
+  selectorOnly?: boolean
 }
 
 interface TaskEditorDialogProps {
@@ -419,7 +420,13 @@ function TaskEditorBody({
               label_snapshot: built.label_snapshot,
             },
           },
-          { selectionUntouched: false, selectionReset: false }
+          // Untouched → the server keeps the CURRENT tuple; either way it
+          // refuses if the work order moved since this dialog opened.
+          {
+            selectionUntouched: !selectionTouched,
+            selectionReset: false,
+            selectorOnly: true,
+          }
         )
       } catch (e) {
         setError(toErrorMessage(e))

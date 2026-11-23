@@ -7980,6 +7980,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   )
   connectRef.current = connect
 
+  // Selector setters per contextKey (see `trackSetter`).
+  const inflightSettersRef = useRef(new Map<string, Set<Promise<unknown>>>())
+  const setterTailRef = useRef(new Map<string, Promise<unknown>>())
+
   const disconnect = useCallback(
     async (contextKey: string): Promise<boolean> => {
       pendingConnectRequestsRef.current.delete(contextKey)
@@ -8043,6 +8047,19 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // a caller that announces "restarted" on one of those would be wrong —
       // the follow-up connect can re-attach to the process it believed it had
       // replaced. Report which happened and let the caller decide.
+      // A pick still queued behind a slow earlier setter must reach the
+      // agent before the connection goes, or the conversation's stored
+      // selection ends on the earlier pick (codeg#1179). Bounded: a hung
+      // setter never holds a close.
+      const pendingSetters = [
+        ...(inflightSettersRef.current.get(contextKey) ?? []),
+      ]
+      if (pendingSetters.length > 0) {
+        await Promise.race([
+          Promise.allSettled(pendingSetters),
+          new Promise((resolve) => setTimeout(resolve, 5000)),
+        ])
+      }
       let tornDown = true
       await acpDisconnect(conn.connectionId).catch((error: unknown) => {
         if (isConnectionGoneError(error)) return
@@ -8306,8 +8323,6 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
   // one contextKey are also issued one after another: two independent
   // requests (the web transport) could otherwise reach the backend out of
   // order and leave an earlier pick applied.
-  const inflightSettersRef = useRef(new Map<string, Set<Promise<unknown>>>())
-  const setterTailRef = useRef(new Map<string, Promise<unknown>>())
   const trackSetter = useCallback(
     <T,>(contextKey: string, run: () => Promise<T>): Promise<T> => {
       const prev = setterTailRef.current.get(contextKey) ?? Promise.resolve()

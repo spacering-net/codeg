@@ -4112,13 +4112,20 @@ export async function workTaskUpdate(
   /** How the server treats the selector tuple (codeg#1179): untouched keeps
    *  the CURRENT row's, reset re-resolves the folder's task settings now.
    *  Older servers ignore both and apply the draft as sent. */
-  flags?: { selectionUntouched?: boolean; selectionReset?: boolean }
+  flags?: {
+    selectionUntouched?: boolean
+    selectionReset?: boolean
+    /** Only the selector tuple changes; refused if the task's title, folder
+     *  or brief moved since the dialog opened. */
+    selectorOnly?: boolean
+  }
 ): Promise<WorkTask> {
   return getTransport().call("work_task_update", {
     id,
     draft: { ...draft, config: stripUploadedTaskConfig(draft.config) },
     selectionUntouched: flags?.selectionUntouched ?? false,
     selectionReset: flags?.selectionReset ?? false,
+    selectorOnly: flags?.selectorOnly ?? false,
   })
 }
 

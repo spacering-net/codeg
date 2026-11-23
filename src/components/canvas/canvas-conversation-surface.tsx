@@ -742,9 +742,15 @@ export function CanvasConversationSurface({
           // composer record in the same step that publishes the row id.
           {
             const pick = draftModeIdRef.current
-            if (pick && pick !== appliedModeIdRef.current) {
+            if (!pick || pick === appliedModeIdRef.current) {
+              // Nothing pending: follow the connection from here.
+              setModeId(null)
+            } else {
               handOver = connRef.current
                 .setComposerMode(pick, { initial: true })
+                // Recorded or vetoed: the connection's record rules now; an
+                // older server keeps the local pick (the send applies it).
+                .then(() => setModeId(null))
                 .catch((e: unknown) =>
                   console.error("[canvas] composer hand-over:", e)
                 )
