@@ -3909,9 +3909,10 @@ impl TaskEngine {
 
     /// Boot pass: re-measure the counters of every task sitting in review.
     ///
-    /// They were snapshotted when the run settled and nothing rewrites them
-    /// afterwards, so a row can outlive the state it describes — a worktree the
-    /// user committed to (or reverted) in the meantime, and rows written before
+    /// While the app runs, a settle writes them and a turn outside the engine
+    /// or a refused completion corrects them; nothing does while it is closed,
+    /// so a row can outlive the state it describes — a worktree the user
+    /// committed to (or reverted) in the meantime, and rows written before
     /// [`own_work_anchor`] existed, which credited a pull-request task with the
     /// pull request's own change set and cost it the "complete" button. The
     /// counters decide which acceptance the board offers, so the correction has
@@ -3926,6 +3927,11 @@ impl TaskEngine {
         else {
             return;
         };
+        // The post-review passes wait until EVERY row is re-measured: each
+        // ends in a folder-wide merge pump, and a pump started mid-scan could
+        // land a later row on the counters and light it had before the app
+        // closed — once it is merging, this scan skips it.
+        let mut refreshed = Vec::new();
         for task in rows {
             let refresh = self.refresh_review_task(task.id, false).await;
             if refresh.stats_changed {
@@ -3937,7 +3943,10 @@ impl TaskEngine {
                     refresh.stats.2
                 );
             }
-            self.after_content_refresh(task.id, refresh);
+            refreshed.push((task.id, refresh));
+        }
+        for (task_id, refresh) in refreshed {
+            self.after_content_refresh(task_id, refresh);
         }
     }
 
@@ -4428,6 +4437,19 @@ impl TaskEngine {
                 .await
                 .map_err(|e| e.to_string())?;
             if fresh.run_seq != task.run_seq || !auto_merge_candidate(&fresh, &settings) {
+                return Err(AUTO_MERGE_NO_LONGER_ELIGIBLE.to_string());
+            }
+            // Someone is still working in the task's session or worktree — a
+            // reply sent from the conversation list, say. Landing now would
+            // take half-done work, and the merge launch would reuse that busy
+            // connection, have its prompt refused, and drop the user's session.
+            // The turn's end re-measures the task and pumps again (and the
+            // reconcile tick catches anything that leaves untouched).
+            if self
+                .manager
+                .has_turn_in_flight_for(fresh.conversation_id, fresh.worktree_folder_id)
+                .await
+            {
                 return Err(AUTO_MERGE_NO_LONGER_ELIGIBLE.to_string());
             }
         }
@@ -14586,7 +14608,8 @@ mod tests {
     async fn a_turn_outside_a_round_clears_and_re_runs_the_preflight() {
         let f = delivery_fixture(FakeForge::default()).await;
         stale_empty_review_row(&f, Some(41)).await;
-        with_preflight(&f, "true").await;
+        // `exit 0` succeeds under both `sh -c` and `cmd.exe /C`.
+        with_preflight(&f, "exit 0").await;
         // Counters already right: only the content could have changed.
         f.engine.refresh_review_task(f.task_id, false).await;
         set_light(&f, "passed").await;
@@ -14640,7 +14663,7 @@ mod tests {
     async fn the_boot_pass_clears_the_light_of_a_row_it_corrects() {
         let f = delivery_fixture(FakeForge::default()).await;
         stale_empty_review_row(&f, None).await;
-        with_preflight(&f, "false").await;
+        with_preflight(&f, "exit 1").await;
         set_light(&f, "passed").await;
 
         let refresh = f.engine.refresh_review_task(f.task_id, false).await;
@@ -14694,7 +14717,7 @@ mod tests {
         use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
         let f = delivery_fixture(FakeForge::default()).await;
         stale_empty_review_row(&f, None).await;
-        with_preflight(&f, "true").await;
+        with_preflight(&f, "exit 0").await;
         let mut active = row(&f.engine, f.task_id).await.into_active_model();
         active.files_changed = Set(Some(1));
         active.update(&f.engine.db.conn).await.expect("counters");
@@ -14731,6 +14754,48 @@ mod tests {
         let after = row(&f.engine, f.task_id).await;
         assert_eq!(after.status, WorkTaskStatus::Review);
         assert!(after.last_error.is_none(), "no banner for a benign skip");
+    }
+
+    /// An unattended landing waits while someone is still working in the
+    /// task's session — or in its worktree from another conversation: landing
+    /// would take half-done work, and the merge launch would reuse the busy
+    /// connection and drop it when its prompt is refused. Skipped benignly;
+    /// the turn's end pumps again.
+    #[tokio::test]
+    async fn an_auto_merge_waits_for_a_turn_in_the_tasks_session_or_worktree() {
+        use sea_orm::{ActiveModelTrait, IntoActiveModel, Set};
+        let f = delivery_fixture(FakeForge::default()).await;
+        stale_empty_review_row(&f, Some(41)).await;
+        let mut active = row(&f.engine, f.task_id).await.into_active_model();
+        active.files_changed = Set(Some(1));
+        active.update(&f.engine.db.conn).await.expect("counters");
+        let wt_folder = row(&f.engine, f.task_id).await.worktree_folder_id;
+        assert!(auto_merge_candidate(
+            &row(&f.engine, f.task_id).await,
+            &WorkTaskFolderSettings::default()
+        ));
+
+        for (conn, conversation, folder) in [
+            ("the-session", Some(41), None),
+            ("in-the-worktree", Some(99), wt_folder),
+        ] {
+            foreign_connection(&f, conn, conversation, folder).await;
+            let state = f.engine.manager.get_state(conn).await.expect("state");
+            state.write().await.turn_in_flight = true;
+
+            let refused = f
+                .engine
+                .merge_task(f.task_id, None, true, None, true)
+                .await
+                .expect_err("no landing under a live turn");
+
+            assert_eq!(refused, AUTO_MERGE_NO_LONGER_ELIGIBLE, "{conn}");
+            assert_eq!(
+                row(&f.engine, f.task_id).await.status,
+                WorkTaskStatus::Review
+            );
+            state.write().await.turn_in_flight = false;
+        }
     }
 
     /// The comment is the reply the user accepted, then the link and the
