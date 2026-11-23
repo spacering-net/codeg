@@ -579,6 +579,16 @@ pub enum AcpEvent {
     ForkSupported { supported: bool },
     /// Current session mode changed
     ModeChanged { mode_id: String },
+    /// The composer's pending mode pick for this connection changed (see
+    /// `SessionState::composer_mode_id`). Never sent to the agent: a tab
+    /// applies it at its next send. `mode_id: None` clears it — emitted once
+    /// the agent's current mode reached the pick. `explicit` marks a user's
+    /// own pick (vs a draft's one-time hand-over or a reconnect's restore).
+    ComposerModeChanged {
+        mode_id: Option<String>,
+        #[serde(default)]
+        explicit: bool,
+    },
     /// Agent reported plan update for current turn
     PlanUpdate { entries: Vec<PlanEntryInfo> },
     /// Connection status changed
@@ -2432,6 +2442,10 @@ pub struct RemoteControlInfo {
 pub struct ForkProtocolResult {
     pub forked_session_id: String,
     pub original_session_id: String,
+    /// The selection the fork actually inherited, read in the connection loop
+    /// after every setter queued before the fork was applied. Written to both
+    /// the re-pointed row and the sibling (`persist_fork_outcome`).
+    pub inherited_selection: crate::models::ConversationSelection,
 }
 
 #[derive(Debug, Clone, Serialize)]

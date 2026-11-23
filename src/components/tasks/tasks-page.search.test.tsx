@@ -35,6 +35,7 @@ vi.mock("@/stores/app-workspace-store", () => {
   return { useAppWorkspaceStore: useStore }
 })
 vi.mock("@/lib/api", () => ({
+  workTaskGet: vi.fn().mockRejectedValue(new Error("not in this test")),
   workTaskArchive: vi.fn(),
   workTaskCreate: vi.fn(),
   workTaskMergeUnqueue: vi.fn(),

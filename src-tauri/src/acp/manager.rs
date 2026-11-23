@@ -497,6 +497,9 @@ pub struct ConnectionManager {
     /// to-do task's retry still resumes its session wherever the task put it.
     /// Bounded by the number of conversations moved in one process lifetime.
     relocated: Arc<std::sync::Mutex<std::collections::HashSet<i32>>>,
+    /// Per-conversation selection persistence: the serialized persister and
+    /// the one-writer-per-row authority map (see `acp::selection`).
+    pub(crate) selection: Arc<crate::acp::selection::SelectionPersister>,
 }
 
 /// A parked `ask_user_question` awaiting its answer. The `sender` resolves the
@@ -696,6 +699,7 @@ impl ConnectionManager {
             question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
             relocated: Arc::new(std::sync::Mutex::new(Default::default())),
+            selection: Arc::new(crate::acp::selection::SelectionPersister::default()),
         }
     }
 
@@ -715,6 +719,7 @@ impl ConnectionManager {
             question_registration: self.question_registration.clone(),
             pending_plan_approvals: self.pending_plan_approvals.clone(),
             relocated: self.relocated.clone(),
+            selection: self.selection.clone(),
         }
     }
 
@@ -770,6 +775,7 @@ impl ConnectionManager {
             question_registration: Arc::new(Mutex::new(())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
             relocated: Arc::new(std::sync::Mutex::new(Default::default())),
+            selection: Arc::new(crate::acp::selection::SelectionPersister::default()),
         }
     }
 
@@ -1051,6 +1057,7 @@ impl ConnectionManager {
             self.delegation_snapshot(),
             self.terminal_shell_config.clone(),
             cli_root,
+            Some(self.selection.clone()),
         )
         .await?;
 
@@ -1201,8 +1208,8 @@ impl ConnectionManager {
         };
         let mut disconnected = 0;
         for id in to_disconnect {
-            tracing::info!("[ACP] idle sweep disconnecting connection={}", id);
-            if self.disconnect(&id).await.is_ok() {
+            if matches!(self.release_idle(&id, now - timeout).await, Ok(true)) {
+                tracing::info!("[ACP] idle sweep disconnected connection={}", id);
                 disconnected += 1;
             }
         }
@@ -1690,6 +1697,7 @@ impl ConnectionManager {
             let task_emitter = emitter.clone();
             let task_conn_id = conn_id.to_string();
             let task_delegation = delegation.clone();
+            let task_selection = self.selection.clone();
             let handle = tokio::spawn(async move {
                 // Holding the owned guard for the whole task is what shields the
                 // bind + publication from caller cancellation.
@@ -1824,6 +1832,14 @@ impl ConnectionManager {
                     // Bound (or nothing to bind). NOW the link is real, so
                     // announce it: this is the write that makes `already_linked`
                     // true for every subsequent prompt on this connection.
+                    //
+                    // The connection becomes the row's selection writer here,
+                    // synchronously — not when the lifecycle worker gets to the
+                    // event, which may be after the connection ended
+                    // (codeg#1179).
+                    task_selection
+                        .take_authority_on_link(&task_conn_id, &task_state, linked_conversation_id)
+                        .await;
                     emit_with_state(
                         &task_state,
                         &task_emitter,
@@ -2458,6 +2474,9 @@ impl ConnectionManager {
         // below then rejects, unchanged).
         if state_arc.read().await.conversation_id.is_none() {
             if let (Some(cid), Some(fid)) = (link_conversation_id, link_folder_id) {
+                self.selection
+                    .take_authority_on_link(conn_id, &state_arc, cid)
+                    .await;
                 emit_with_state(
                     &state_arc,
                     &emitter,
@@ -2556,6 +2575,7 @@ impl ConnectionManager {
         // caller; the result is harmlessly discarded if the caller is gone.
         let db_conn = db.conn.clone();
         let conn_id_for_task = conn_id.to_string();
+        let selection = self.selection.clone();
         let handle = tokio::spawn(async move {
             // Holding the owned guard for the whole task is what shields the
             // persistence from caller cancellation.
@@ -2577,13 +2597,25 @@ impl ConnectionManager {
                 let forked_session_id = protocol_result.forked_session_id;
                 let original_session_id = protocol_result.original_session_id;
 
+                // The re-pointed row is written only while this connection
+                // holds its selection write authority (`acp::selection`) —
+                // checked and written under the persister lock, so a newer
+                // writer cannot bind and save in between.
+                let owners = selection.lock().await;
+                let write_current = owners
+                    .get(&conversation_id)
+                    .is_some_and(|owner| owner == &conn_id_for_task);
                 let sibling_id = Self::persist_fork_outcome(
                     &db_conn,
                     conversation_id,
                     forked_session_id.clone(),
                     original_session_id.clone(),
+                    Some(protocol_result.inherited_selection.to_json()),
+                    write_current,
                 )
-                .await?;
+                .await;
+                drop(owners);
+                let sibling_id = sibling_id?;
 
                 // Fork mutates the sidebar in two ways the rest of the system
                 // never sees otherwise: the current row's title (`[Fork] …`) and
@@ -2679,6 +2711,12 @@ impl ConnectionManager {
         conversation_id: i32,
         forked_session_id: String,
         original_session_id: String,
+        // The selection the fork actually inherited (JSON
+        // `ConversationSelection`), read in the connection loop. The sibling
+        // always gets it — whichever path created it — and the re-pointed row
+        // gets it when `write_current` (the connection owns its selection).
+        inherited_selection: Option<String>,
+        write_current: bool,
     ) -> Result<i32, AcpError> {
         use sea_orm::sea_query::Expr;
         use sea_orm::{ColumnTrait, QueryFilter};
@@ -2790,6 +2828,9 @@ impl ConnectionManager {
                     }
                     active.external_id = Set(Some(forked_session_id));
                     active.updated_at = Set(now);
+                    if write_current && inherited_selection.is_some() {
+                        active.selector_state = Set(inherited_selection.clone());
+                    }
                     active.update(txn).await?;
 
                     // The lifecycle subscriber may have got here first. Its
@@ -2816,6 +2857,17 @@ impl ConnectionManager {
                         .one(txn)
                         .await?
                     {
+                        // Adopted sibling: it copied whatever the column held
+                        // when the lifecycle path split it off, which may
+                        // predate the last pick — give it what the fork
+                        // really inherited.
+                        if let Some(sel) = inherited_selection.clone() {
+                            conversation::Entity::update_many()
+                                .col_expr(conversation::Column::SelectorState, Expr::value(sel))
+                                .filter(conversation::Column::Id.eq(existing.id))
+                                .exec(txn)
+                                .await?;
+                        }
                         return Ok(existing.id);
                     }
 
@@ -2844,6 +2896,7 @@ impl ConnectionManager {
                         assistant_id: Set(None),
                         assistant_snapshot: Set(None),
                         source: Set(source),
+                        selector_state: Set(inherited_selection.clone()),
                     };
                     let inserted = sibling.insert(txn).await?;
                     // The sibling keeps the pre-fork history under the
@@ -2864,11 +2917,48 @@ impl ConnectionManager {
     }
 
     pub async fn disconnect(&self, conn_id: &str) -> Result<(), AcpError> {
+        self.remove_connection(conn_id, None).await.map(|_| ())
+    }
+
+    /// Passive releases recheck the authoritative state while removing the
+    /// entry. A client can be one background frame behind, and a selected
+    /// sweep victim can have received a prompt in the meantime.
+    pub(crate) async fn release_idle(
+        &self,
+        conn_id: &str,
+        deadline: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, AcpError> {
+        self.remove_connection(conn_id, Some(deadline)).await
+    }
+
+    async fn remove_connection(
+        &self,
+        conn_id: &str,
+        idle_before: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<bool, AcpError> {
         let removed = {
             // The map lock is held ACROSS the handoff into `draining`, and
             // readers take it in the same order, so an observer can never see
             // the connection in neither place.
             let mut connections = self.connections.lock().await;
+            if let (Some(deadline), Some(conn)) = (idle_before, connections.get(conn_id)) {
+                let Ok(state) = conn.state.try_read() else {
+                    return Ok(false);
+                };
+                // Closing an unclaimed tab may still cancel an unused handshake.
+                // A sweep selects connected sessions first and also rechecks
+                // its original inactivity deadline below.
+                if state.status == ConnectionStatus::Prompting
+                    || state.turn_in_flight
+                    || state.last_activity_at > deadline
+                    || teardown_blocker(&state, chrono::Utc::now(), |id| {
+                        connections.contains_key(id)
+                    })
+                    .is_some()
+                {
+                    return Ok(false);
+                }
+            }
             let removed = connections.remove(conn_id);
             if let Some(conn) = &removed {
                 self.park_draining(conn).await;
@@ -2884,7 +2974,7 @@ impl ConnectionManager {
             // did. Cancelled, it stops and drops the receiver instead.
             conn.handshake.cancel();
             let _ = conn.cmd_tx.send(ConnectionCommand::Disconnect).await;
-            Ok(())
+            Ok(true)
         } else {
             Err(AcpError::ConnectionNotFound(conn_id.into()))
         }
@@ -3487,6 +3577,39 @@ impl ConnectionManager {
         result
     }
 
+    /// Whether any live connection bound to `conversation_id`, or running in
+    /// `folder_id`, has a turn going right now — prompted and not yet
+    /// complete. Either id may be absent; with both absent nothing matches.
+    /// Used by the work-task engine to hold an unattended merge off a task
+    /// whose session (or worktree) someone is still working in.
+    pub async fn has_turn_in_flight_for(
+        &self,
+        conversation_id: Option<i32>,
+        folder_id: Option<i32>,
+    ) -> bool {
+        if conversation_id.is_none() && folder_id.is_none() {
+            return false;
+        }
+        let states = {
+            let connections = self.connections.lock().await;
+            connections
+                .values()
+                .map(|connection| Arc::clone(&connection.state))
+                .collect::<Vec<_>>()
+        };
+        for state in states {
+            let state = state.read().await;
+            let bound = (conversation_id.is_some() && state.conversation_id == conversation_id)
+                || (folder_id.is_some() && state.folder_id == folder_id);
+            if bound
+                && (state.turn_in_flight || matches!(state.status, ConnectionStatus::Prompting))
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Raw per-connection rows for the pet panel's active-session list.
     /// "Active" = the connection is currently `Prompting`, awaiting a
     /// permission, or in an `Error` state — the sessions a user would want to
@@ -3538,6 +3661,46 @@ impl ConnectionManager {
             });
         }
         out
+    }
+
+    /// Install the database the selection persister writes to. Called once at
+    /// bootstrap (`lifecycle_subscriber_task`).
+    pub fn install_selection_db(&self, db: sea_orm::DatabaseConnection) {
+        self.selection.install_db(db);
+    }
+
+    /// Bind a connection to an existing conversation row so its selection is
+    /// persisted there before the first prompt links it (see
+    /// `acp::selection::SelectionPersister::bind`).
+    pub async fn bind_selection_conversation(
+        &self,
+        conn_id: &str,
+        row_id: i32,
+        stored_composer_mode_id: Option<String>,
+    ) -> Result<(), AcpError> {
+        let (state, emitter) = self
+            .get_state_and_emitter(conn_id)
+            .await
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        self.selection
+            .bind(conn_id, &state, &emitter, row_id, stored_composer_mode_id)
+            .await
+    }
+
+    /// Record the composer's pending mode pick on a connection, without
+    /// talking to the agent (see `acp::selection::set_composer_mode`).
+    pub async fn set_composer_mode(
+        &self,
+        conn_id: &str,
+        mode_id: Option<String>,
+        initial: bool,
+    ) -> Result<bool, AcpError> {
+        let (state, emitter) = self
+            .get_state_and_emitter(conn_id)
+            .await
+            .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+        crate::acp::selection::set_composer_mode(conn_id, &state, &emitter, mode_id, initial)
+            .await
     }
 
     /// Clone the `Arc<RwLock<SessionState>>` for a given connection id so the
@@ -7542,6 +7705,7 @@ mod tests {
                 let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                     forked_session_id: "session-S2".into(),
                     original_session_id: "session-S1".into(),
+                    inherited_selection: Default::default(),
                 }));
             }
             rx // keep the receiver alive
@@ -8859,6 +9023,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn passive_release_rechecks_an_antigravity_task_while_explicit_disconnect_still_stops_it()
+    {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(
+            &mgr,
+            "agy",
+            AgentType::Antigravity,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        let state = mgr.get_state("agy").await.unwrap();
+        backdate_last_activity(&mgr, "agy", 600).await;
+        state.write().await.antigravity_reconcile_at = Some(chrono::Utc::now());
+        assert!(!mgr.release_idle("agy", chrono::Utc::now()).await.unwrap());
+        assert_eq!(mgr.sweep_idle(Duration::from_secs(180)).await, 0);
+        {
+            let mut state = state.write().await;
+            state.antigravity_reconcile_at = None;
+            state.background_outstanding = 1;
+            state.background_activity_at = Some(chrono::Utc::now());
+        }
+        assert!(!mgr.release_idle("agy", chrono::Utc::now()).await.unwrap());
+        mgr.disconnect("agy").await.unwrap();
+        assert!(mgr.get_state("agy").await.is_none());
+
+        insert_fake_connection(
+            &mgr, "opening", AgentType::Antigravity, None, EventEmitter::Noop,
+        )
+        .await;
+        let opening = mgr.get_state("opening").await.unwrap();
+        opening.write().await.status = ConnectionStatus::Connecting;
+        assert!(mgr.release_idle("opening", chrono::Utc::now()).await.unwrap());
+    }
+
+    #[tokio::test]
     async fn sweep_idle_skips_active_background_work() {
         let mgr = ConnectionManager::new();
         insert_fake_connection(
@@ -9316,6 +9516,7 @@ mod tests {
                     let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                         forked_session_id: forked.clone(),
                         original_session_id: original.clone(),
+                        inherited_selection: Default::default(),
                     }));
                     return;
                 }
@@ -10105,6 +10306,7 @@ mod tests {
                     let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                         forked_session_id: "session-S2".to_string(),
                         original_session_id: "session-S1".to_string(),
+                        inherited_selection: Default::default(),
                     }));
                     return;
                 }
