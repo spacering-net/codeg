@@ -14,6 +14,7 @@ import {
 import { toErrorMessage } from "@/lib/app-error"
 import type { WorkTask, WorkTaskDraft } from "@/lib/types"
 import {
+  hasNothingToMerge,
   isAnotherTaskMerging,
   isDeferred,
   isMergeQueued,
@@ -118,6 +119,19 @@ export function useTaskDialogs({
         : (tasks.find((task) => task.id === mergeTask.id) ?? null),
     [tasks, mergeTask]
   )
+  // Whether the task behind the open complete dialog still has nothing to
+  // merge, read off the LIVE row. The dialog keeps the captured `completeTask`
+  // for the same reason the merge dialog does (its form re-seeds whenever that
+  // object changes — an unchecked "delete the worktree" would come back
+  // checked on any refetch); this is the one thing it needs from the live row:
+  // once the counters show changes (re-measured after a turn outside the task,
+  // or by the refused completion itself), completing is no longer on offer.
+  // A row that vanished from the list leaves the dialog to its own devices.
+  const completeStillApplies = useMemo(() => {
+    if (completeTask == null) return true
+    const live = tasks.find((task) => task.id === completeTask.id)
+    return live == null || hasNothingToMerge(live)
+  }, [tasks, completeTask])
   // The sheet renders the LIVE row from the provider so status flips (e.g.
   // merging → done) update in place while it is open.
   const detailTask = useMemo(
@@ -283,6 +297,7 @@ export function useTaskDialogs({
         open={completeOpen}
         onOpenChange={setCompleteOpen}
         task={completeTask}
+        stillApplies={completeStillApplies}
       />
       <TaskDeliverPrDialog
         open={deliverOpen}
