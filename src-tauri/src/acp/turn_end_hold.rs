@@ -87,8 +87,12 @@ impl HoldTiming {
 
 /// Whether this agent carries on by itself once its background work ends, so
 /// that keeping the connection up gets the work's result read. Claude Code
-/// and the native Antigravity CLI receive task notifications. Grok starts
-/// follow-up turns on its idle loop.
+/// starts a turn for every `<task-notification>`, and so does the native
+/// Antigravity CLI (the legacy 1.5.0 adapter has no task store, so its
+/// connections never count background work and never hold); Grok starts turns
+/// of its own on its idle loop. The others (codex's background terminals among
+/// them) wait to be prompted — keeping their connection up would only keep the
+/// run from settling, with nobody left to read what the work produced.
 pub(crate) fn agent_resumes_after_background_work(agent_type: AgentType) -> bool {
     matches!(
         agent_type,
@@ -111,9 +115,6 @@ pub(crate) fn busy_label(reason: ConnectionBusy) -> &'static str {
 /// What a connection is doing after its turn ended, read in one go.
 #[derive(Debug, Clone)]
 pub(crate) struct TurnEndProbe {
-    // agy's watcher explicitly renews a live native task even while silent.
-    // A run may outlast the usual hold cap while these confirmations arrive.
-    native_task_confirmed: bool,
     /// The first reason the run must not settle yet (see [`turn_end_blocker`]).
     pub blocker: Option<ConnectionBusy>,
     /// The two clocks the agent's background reports move: the transcript
@@ -292,9 +293,6 @@ pub(crate) fn probe(
         return None;
     }
     Some(TurnEndProbe {
-        native_task_confirmed: agent_type == AgentType::Antigravity
-            && state.background_outstanding > 0
-            && state.has_active_background_work(now),
         blocker: turn_end_blocker(state, agent_type, now, child_live),
         activity: (state.background_activity_at, state.async_task_activity_at),
         last_background_reply: state.last_background_reply.clone(),
@@ -488,7 +486,7 @@ pub(crate) async fn wait_until_settled(
     timing: HoldTiming,
     stop: &CancellationToken,
 ) -> HoldResult {
-    let mut last_confirmation = tokio::time::Instant::now();
+    let started = tokio::time::Instant::now();
     let mut quiet_since: Option<tokio::time::Instant> = None;
     let mut last: Option<TurnEndProbe> = None;
     loop {
@@ -513,9 +511,6 @@ pub(crate) async fn wait_until_settled(
         let moved = last
             .as_ref()
             .is_some_and(|prev| prev.activity != probe.activity);
-        if probe.native_task_confirmed && moved {
-            last_confirmation = now;
-        }
         let busy = probe.blocker.is_some() || moved;
         last = Some(probe);
         if busy {
@@ -526,7 +521,7 @@ pub(crate) async fn wait_until_settled(
                 last,
             };
         }
-        if now.duration_since(last_confirmation) >= timing.cap {
+        if now.duration_since(started) >= timing.cap {
             return HoldResult {
                 outcome: HoldOutcome::TimedOut,
                 last,
@@ -883,7 +878,6 @@ mod tests {
         HoldResult {
             outcome: HoldOutcome::Drained,
             last: Some(TurnEndProbe {
-                native_task_confirmed: false,
                 blocker: None,
                 activity: (None, None),
                 last_background_reply: background.map(|(at, text)| (at, text.to_string())),

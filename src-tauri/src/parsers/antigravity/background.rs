@@ -225,6 +225,15 @@ impl Reader {
     }
 
     fn report(&mut self, foreground: bool, now: Instant) -> rusqlite::Result<Option<AcpEvent>> {
+        self.report_at(foreground, now, Utc::now())
+    }
+
+    fn report_at(
+        &mut self,
+        foreground: bool,
+        now: Instant,
+        wall_now: DateTime<Utc>,
+    ) -> rusqlite::Result<Option<AcpEvent>> {
         let mut notified = HashSet::new();
         // Keep the connection after the shell exits, while the planner reads
         // its native notification and possibly runs more tools.
@@ -263,7 +272,8 @@ impl Reader {
 
         let mut tasks = Vec::new();
         let mut settled = Vec::new();
-        let lease = background_keepalive_max_age().to_std().unwrap_or_default();
+        let max_age = background_keepalive_max_age();
+        let lease = max_age.to_std().unwrap_or_default();
         let mut new_settlements = Vec::new();
         for row in self.rows.values() {
             let Some(task) = &row.task else { continue };
@@ -272,7 +282,14 @@ impl Reader {
                 STEP_STATUS_DONE | STEP_STATUS_ERROR => "failed",
                 4..=6 | 12 => "cancelled",
                 _ => {
-                    tasks.push(task.clone());
+                    // Same bound as the Claude watcher: a command that never
+                    // ends (a dev server, a watch mode) stops counting once it
+                    // is older than the keep-alive, or the heartbeat below
+                    // would pin the connection and any held run forever.
+                    let age_ms = wall_now.timestamp_millis() - task.started_at_ms;
+                    if lease.is_zero() || age_ms < max_age.num_milliseconds() {
+                        tasks.push(task.clone());
+                    }
                     continue;
                 }
             };
@@ -652,6 +669,37 @@ mod tests {
                 .unwrap(),
             Some(AcpEvent::BackgroundActivity { outstanding: 0, .. })
         ));
+    }
+
+    #[test]
+    fn a_command_that_never_ends_stops_counting_past_the_keepalive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let writer = db(&tmp.path().join("session.db"));
+        let mut reader = Reader::new(tmp.path().into(), None, "session".into());
+        put(&writer, 0, task("dev-server", 2));
+        put(&writer, 1, answer("server is up"));
+        assert!(matches!(
+            reader.refresh(false).unwrap(),
+            Some(AcpEvent::BackgroundActivity { outstanding: 1, .. })
+        ));
+        let lease = background_keepalive_max_age();
+        let later = Utc::now() + lease + chrono::Duration::seconds(1);
+        // Still running in the store, but older than the keep-alive: dropped
+        // once (no settlement — it never ended), and no heartbeat after that.
+        let Some(AcpEvent::BackgroundActivity {
+            outstanding: 0,
+            settled,
+            ..
+        }) = reader.report_at(false, Instant::now(), later).unwrap()
+        else {
+            panic!("an expired task kept the connection")
+        };
+        assert!(settled.is_empty());
+        reader.last_emit -= Duration::from_secs(3601);
+        assert!(reader
+            .report_at(false, Instant::now(), later)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
